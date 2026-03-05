@@ -596,6 +596,9 @@ class PrimeContractorWorkflow:
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
         self.walkthrough: bool = walkthrough
+        # Kaizen prompt capture (REQ-KZ-200) — off by default, enabled via --kaizen flag
+        self._kaizen_enabled: bool = False
+        self._kaizen_prompt_dir: Optional[Path] = None
         # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
         self._validation_override: Optional[bool] = None  # None = use mode default
         self.strict_validation: bool = False
@@ -1776,10 +1779,401 @@ class PrimeContractorWorkflow:
     # Walkthrough Mode: Prompt Persistence
     # ------------------------------------------------------------------
 
+    # -----------------------------------------------------------------------
+    # Kaizen: Prompt Building and Persistence Helpers (REQ-KZ-200, 201, 202)
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _sanitize_feature_id(feature_id: str) -> str:
+        """Sanitize feature_id for safe use as a filesystem path component.
+
+        Removes path separators and dotdot sequences to prevent path traversal.
+        Collapses runs of non-alphanumeric characters (except .-_) to underscores.
+        Returns 'unknown' if the result would be empty.
+
+        Returns:
+            A filesystem-safe string usable as a single directory name.
+        """
+        import re as _re
+        # Strip leading/trailing whitespace and path separators
+        safe = feature_id.strip().strip("/\\")
+        # Remove any path separator components (dotdot protection)
+        safe = safe.replace("..", "").replace("/", "_").replace("\\", "_")
+        # Collapse runs of characters not safe in directory names
+        safe = _re.sub(r"[^\w.\-]", "_", safe)
+        safe = _re.sub(r"_+", "_", safe).strip("_")
+        return safe or "unknown"
+
+    def _build_phase_prompts(
+        self,
+        feature: "FeatureSpec",
+        gen_context: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Build all three LeadContractorWorkflow phase prompts as text.
+
+        Returns:
+            dict[str, str] mapping filename to content. Keys are:
+                - "spec_user_prompt.md"
+                - "spec_system_prompt.md"
+                - "draft_system_prompt.md"
+                - "draft_user_prompt.md"
+                - "review_system_prompt.md"
+                - "review_user_prompt.md"
+
+        Note: build_spec_prompt mutates a copy of gen_context, so the original
+        is passed through a dict() copy internally.
+        """
+        from ..implementation_engine import spec_builder
+        from ..implementation_engine.drafter import (
+            get_drafter_system_prompt,
+            build_output_format,
+            build_existing_files_section,
+        )
+        from ..implementation_engine.prompts import get_template
+
+        prompts: Dict[str, str] = {}
+
+        # --- Spec phase ---
+        try:
+            spec_prompt = spec_builder.build_spec_prompt(
+                task_description=feature.description,
+                context=dict(gen_context),  # copy — build_spec_prompt mutates context
+                output_format=None,
+            )
+        except Exception as exc:
+            spec_prompt = f"[Error building spec prompt: {exc}]"
+            logger.warning(
+                "Prompt build: spec prompt failed for '%s': %s", feature.name, exc,
+            )
+        prompts["spec_user_prompt.md"] = spec_prompt
+        prompts["spec_system_prompt.md"] = (
+            "# Spec System Prompt\n\nThe spec phase embeds the role directive "
+            "in the user prompt. There is no separate system prompt."
+        )
+
+        # --- Draft phase ---
+        existing_files = gen_context.get("existing_files")
+        draft_system = get_drafter_system_prompt(existing_files=existing_files)
+        prompts["draft_system_prompt.md"] = draft_system
+
+        is_edit = bool(existing_files)
+        template_key = "draft_edit" if is_edit else "draft"
+        try:
+            draft_template = get_template(template_key)
+        except Exception as exc:
+            draft_template = f"[Could not load template '{template_key}']"
+            logger.warning(
+                "Prompt build: draft template '%s' failed for '%s': %s",
+                template_key, feature.name, exc, exc_info=True,
+            )
+        existing_section = build_existing_files_section(existing_files=existing_files)
+        output_format = build_output_format(
+            target_files=feature.target_files,
+            existing_files=existing_files,
+        )
+        prompts["draft_user_prompt.md"] = (
+            f"# Draft User Prompt\n\n"
+            f"**Template:** `{template_key}`\n\n"
+            f"## Existing Files Section\n\n{existing_section}\n\n"
+            f"## Output Format\n\n{output_format}\n\n"
+            f"## Template (with placeholders)\n\n"
+            f"The `{{spec_output}}` placeholder will be replaced with "
+            f"the spec phase output.\n\n"
+            f"```\n{draft_template}\n```"
+        )
+
+        # --- Review phase ---
+        try:
+            review_system = get_template("review_system")
+        except Exception as exc:
+            review_system = "[Could not load review_system template]"
+            logger.warning(
+                "Prompt build: review_system failed for '%s': %s",
+                feature.name, exc, exc_info=True,
+            )
+        prompts["review_system_prompt.md"] = review_system
+
+        try:
+            review_template = get_template("review")
+        except Exception as exc:
+            review_template = "[Could not load review template]"
+            logger.warning(
+                "Prompt build: review template failed for '%s': %s",
+                feature.name, exc, exc_info=True,
+            )
+        prompts["review_user_prompt.md"] = (
+            f"# Review User Prompt\n\n"
+            f"**Template:** `review`\n\n"
+            f"The `{{spec_output}}` and `{{implementation}}` placeholders "
+            f"will be replaced with actual spec and draft outputs at runtime.\n\n"
+            f"```\n{review_template}\n```"
+        )
+
+        return prompts
+
+    def _write_prompt_files(
+        self,
+        output_dir: Path,
+        feature: "FeatureSpec",
+        prompts: Dict[str, str],
+        gen_context: Dict[str, Any],
+    ) -> None:
+        """Write prompt files and metadata.json to output_dir.
+
+        metadata.json schema (consumed by Layer 6 extract_prompt_characteristics):
+            {
+                "feature_id": str,
+                "feature_name": str,
+                "target_files": list[str],
+                "context_keys": list[str],       # keys in gen_context at capture time
+                "has_existing_files": bool,       # True if target files existed on disk
+                "target_file_count": int,         # len(target_files)
+                "execution_mode": str,
+                "lead_agent_spec": str,
+                "drafter_agent_spec": str,
+                "timestamp": str,                 # ISO-8601 UTC
+            }
+
+        Args:
+            output_dir: Directory to write into (must already exist or be createable).
+            feature: FeatureSpec being captured.
+            prompts: dict[filename, content] from _build_phase_prompts().
+            gen_context: Resolved gen_context for this feature (used for metadata only).
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename, content in prompts.items():
+            (output_dir / filename).write_text(content, encoding="utf-8")
+
+        is_edit = bool(gen_context.get("existing_files"))
+        agent_spec = str(getattr(self.code_generator, "lead_agent", None) or "unknown")
+        drafter_spec = str(getattr(self.code_generator, "drafter_agent", None) or "unknown")
+
+        metadata: Dict[str, Any] = {
+            "feature_id": feature.id,
+            "feature_name": feature.name,
+            "target_files": feature.target_files or [],
+            "target_file_count": len(feature.target_files or []),
+            "context_keys": list(gen_context.keys()),
+            "has_existing_files": is_edit,
+            "execution_mode": self.execution_mode,
+            "lead_agent_spec": agent_spec,
+            "drafter_agent_spec": drafter_spec,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        (output_dir / "metadata.json").write_text(
+            json.dumps(metadata, indent=2, default=str), encoding="utf-8",
+        )
+
+    def _persist_kaizen_prompts(
+        self,
+        feature: "FeatureSpec",
+        gen_context: Dict[str, Any],
+        result: Optional[Any] = None,
+    ) -> None:
+        """Persist real-run prompts and LLM responses for Kaizen analysis.
+
+        Captures six prompt files + metadata.json (REQ-KZ-200, 202) and,
+        when raw_response data is available in result.metadata, also writes
+        redacted response files (REQ-KZ-201).
+
+        Output path: {_kaizen_prompt_dir}/{run_id}/{sanitized_feature_id}/
+        The run_id subdirectory provides run isolation (R1-S1).
+        Failures are non-fatal — logged and silently swallowed.
+
+        Only called when self._kaizen_enabled is True.
+        """
+        if not self._kaizen_enabled or self._kaizen_prompt_dir is None:
+            return
+        try:
+            run_id = os.environ.get("KAIZEN_RUN_ID", "standalone")
+            safe_fid = self._sanitize_feature_id(feature.id)
+            prompt_dir = self._kaizen_prompt_dir / run_id / safe_fid
+            prompts = self._build_phase_prompts(feature, gen_context)
+            self._write_prompt_files(prompt_dir, feature, prompts, gen_context)
+            if result is not None:
+                self._capture_response_files(prompt_dir, feature, result)
+            logger.debug(
+                "Kaizen: persisted prompts for '%s' -> %s", feature.name, prompt_dir,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Kaizen: prompt persistence failed for '%s' (non-fatal): %s",
+                feature.name, exc,
+            )
+
+    # -----------------------------------------------------------------------
+    # Kaizen: Redaction and Response Capture (REQ-KZ-201, 204)
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _load_redaction_config() -> list:
+        """Load redaction patterns from KAIZEN_REDACTIONS env path (REQ-KZ-204).
+
+        Reads a JSON file whose path is in the KAIZEN_REDACTIONS env var.
+        Expected format: list of regex strings, or a dict with a 'patterns' key.
+        On any error (missing env, bad path, bad JSON, bad type) logs a warning
+        and returns an empty list (fail-safe, not fail-closed).
+
+        Returns:
+            List of raw regex pattern strings.
+        """
+        import re as _re
+        redactions_path = os.environ.get("KAIZEN_REDACTIONS", "").strip()
+        if not redactions_path:
+            return []
+        path = Path(redactions_path)
+        if not path.is_file():
+            logger.warning(
+                "Kaizen: KAIZEN_REDACTIONS points to missing file '%s' — no redaction applied",
+                redactions_path,
+            )
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Kaizen: failed to parse KAIZEN_REDACTIONS file '%s': %s — no redaction applied",
+                redactions_path, exc,
+            )
+            return []
+        if isinstance(raw, dict):
+            raw = raw.get("patterns", [])
+        if not isinstance(raw, list):
+            logger.warning(
+                "Kaizen: KAIZEN_REDACTIONS must be a JSON list or {patterns:[...]} — got %s",
+                type(raw).__name__,
+            )
+            return []
+        # Validate each entry is a compilable regex string
+        patterns: list = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                logger.warning("Kaizen: skipping non-string pattern %r in redaction config", entry)
+                continue
+            try:
+                _re.compile(entry)  # validate only; compiled lazily in _apply_redaction
+            except _re.error as exc:
+                logger.warning("Kaizen: invalid redaction pattern %r: %s", entry, exc)
+                continue
+            patterns.append(entry)
+        return patterns
+
+    @staticmethod
+    def _apply_redaction(text: str, patterns: list) -> str:
+        """Apply redaction patterns to text, replacing matches with [REDACTED] (REQ-KZ-204).
+
+        Args:
+            text: The raw text to redact.
+            patterns: List of raw regex strings from _load_redaction_config().
+                      An empty list is a no-op.
+
+        Returns:
+            Redacted string. The original is not mutated.
+        """
+        if not patterns:
+            return text
+        import re as _re
+        result = text
+        for raw_pattern in patterns:
+            try:
+                result = _re.sub(raw_pattern, "[REDACTED]", result)
+            except _re.error as exc:
+                # Pattern compiled successfully at load time; sub errors are defensive
+                logger.warning("Kaizen: redaction pattern %r failed during apply: %s", raw_pattern, exc)
+        return result
+
+    #: Maximum bytes to write for a single raw response (2 MB — REQ-KZ-201)
+    _KAIZEN_RESPONSE_MAX_BYTES: int = 2 * 1024 * 1024
+    #: Sentinel appended when a response is truncated (REQ-KZ-201)
+    _KAIZEN_TRUNCATION_SENTINEL: str = "\n\n[KAIZEN: response truncated — exceeded 2 MiB capture limit]"
+
+    def _capture_response_files(
+        self,
+        prompt_dir: Path,
+        feature: "FeatureSpec",
+        result: Any,
+    ) -> None:
+        """Write raw LLM response file(s) from result.metadata (REQ-KZ-201, 204).
+
+        Reads result.metadata.get('raw_response') or per-phase keys
+        ('spec_raw_response', 'draft_raw_response', 'review_raw_response').
+        Applies:
+          - Encoding guard: any bytes decoded as UTF-8 replacing errors (R2-S9)
+          - 2 MiB size guard with truncation sentinel (REQ-KZ-201)
+          - Redaction before write (R2-S3)
+        Writes a sidecar .meta.json with truncated/size info alongside each response.
+
+        Failures are non-fatal — swallowed by the caller's try/except.
+        """
+        metadata: Dict[str, Any] = getattr(result, "metadata", {}) or {}
+        redaction_patterns = self._load_redaction_config()
+
+        # Support per-phase keys and a single aggregate key
+        phase_keys = {
+            "spec": metadata.get("spec_raw_response"),
+            "draft": metadata.get("draft_raw_response"),
+            "review": metadata.get("review_raw_response"),
+        }
+        # Fall back to single aggregate response if no per-phase data
+        if not any(v for v in phase_keys.values()):
+            aggregate = metadata.get("raw_response")
+            if aggregate is not None:
+                phase_keys = {"draft": aggregate}  # attribute to draft phase by convention
+
+        for phase, raw in phase_keys.items():
+            if raw is None:
+                continue
+
+            # --- Encoding guard (R2-S9) ---
+            if isinstance(raw, bytes):
+                text = raw.decode("utf-8", errors="replace")
+            elif isinstance(raw, str):
+                # Round-trip through bytes to normalize surrogates / replacement chars
+                text = raw.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+            else:
+                logger.warning(
+                    "Kaizen: raw_response for phase '%s' of '%s' has unexpected type %s — skipping",
+                    phase, feature.name, type(raw).__name__,
+                )
+                continue
+
+            # --- 2 MiB size guard (REQ-KZ-201) ---
+            raw_bytes = text.encode("utf-8")
+            truncated = len(raw_bytes) > self._KAIZEN_RESPONSE_MAX_BYTES
+            if truncated:
+                # Truncate at byte boundary, decode back
+                text = raw_bytes[: self._KAIZEN_RESPONSE_MAX_BYTES].decode(
+                    "utf-8", errors="replace"
+                ) + self._KAIZEN_TRUNCATION_SENTINEL
+
+            # --- Redaction before write (R2-S3) ---
+            text = self._apply_redaction(text, redaction_patterns)
+
+            # Write response file
+            response_path = prompt_dir / f"{phase}_response.md"
+            response_path.write_text(text, encoding="utf-8")
+
+            # Write sidecar meta
+            meta_path = prompt_dir / f"{phase}_response.meta.json"
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "phase": phase,
+                        "feature_id": feature.id,
+                        "original_bytes": len(raw_bytes),
+                        "captured_bytes": len(text.encode("utf-8")),
+                        "truncated": truncated,
+                        "redaction_patterns_applied": len(redaction_patterns),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
     def _persist_walkthrough_prompts(
         self,
         feature: FeatureSpec,
-        gen_context: Dict[str, Any],
     ) -> None:
         """Persist all LLM prompts for a feature without making LLM calls.
 
@@ -2138,6 +2532,8 @@ class PrimeContractorWorkflow:
                     feature.metadata["_generation_result_metadata"] = result.metadata
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
                 logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
+                # Kaizen: persist real-run prompts + responses (REQ-KZ-200, 201) — non-fatal
+                self._persist_kaizen_prompts(feature, gen_context, result=result)
                 # Micro Prime dry-run: classification-only, skip integration
                 if result.metadata and result.metadata.get("dry_run"):
                     self.queue.complete_feature(feature.id)
