@@ -603,3 +603,98 @@ class TestCloudAgentSpecFromCloud:
         # Cloud agent was called (not skipped due to no fallback)
         mock_agent.generate.assert_called_once()
         assert result.metadata["element_escalation_count"] == 1
+
+
+class TestClassElementSkipped:
+    """Tests that class-level elements are skipped during cloud escalation."""
+
+    def test_class_element_not_sent_to_cloud(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """Class elements are skipped — their methods are handled individually."""
+        from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
+        from startd8.utils.code_manifest import ElementKind, Signature
+
+        # Build a manifest with a class element escalated
+        class_element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="MyClass",
+            signature=Signature(params=[], return_annotation=""),
+        )
+        method_element = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="get_value",
+            signature=Signature(
+                params=[
+                    {"name": "self"},
+                    {"name": "key", "annotation": "str"},
+                ],
+                return_annotation="int",
+            ),
+            parent_class="MyClass",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/mypackage/utils.py",
+            imports=[],
+            elements=[class_element, method_element],
+        )
+        manifest = MagicMock()
+        manifest.file_specs = {"src/mypackage/utils.py": file_spec}
+
+        # Both elements escalated, one local success (constant) to trigger
+        # element-level escalation path
+        partial = FileResult(file_path="src/mypackage/utils.py")
+        partial.element_results = [
+            ElementResult(
+                element_name="DEFAULT_TIMEOUT",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.TRIVIAL,
+                success=True,
+                code="30",
+                template_used=True,
+            ),
+            ElementResult(
+                element_name="MyClass",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Class element",
+                ),
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="complex method",
+                ),
+            ),
+        ]
+        partial.filled_skeleton = sample_skeleton
+
+        mock_agent = _make_mock_cloud_agent("return len(key)")
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
+            output_dir=tmp_path,
+        )
+
+        with patch.object(gen._engine, "process_file", return_value=partial), \
+             patch("startd8.micro_prime.prime_adapter.urlopen",
+                   return_value=_make_ollama_mock()), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.MicroPrimeCodeGenerator._get_cloud_agent",
+                 return_value=mock_agent,
+             ):
+            result = gen.generate("Implement", {}, ["src/mypackage/utils.py"])
+
+        # Cloud agent called only once — for get_value, NOT for MyClass
+        mock_agent.generate.assert_called_once()
+        prompt = mock_agent.generate.call_args[0][0]
+        assert "get_value" in prompt

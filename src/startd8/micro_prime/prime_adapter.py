@@ -11,6 +11,7 @@ import ast
 import dataclasses
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.error import URLError
@@ -37,6 +38,7 @@ from startd8.micro_prime.models import (
     MicroPrimeConfig,
     TierClassification,
 )
+from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
 
@@ -396,6 +398,32 @@ class MicroPrimeCodeGenerator:
                         fp, exc_info=True,
                     )
 
+        # Post-generation file-level repair (lint + import completion)
+        if generated_files:
+            self._run_post_generation_repair(generated_files)
+
+        # Compute effective file count based on element fill rate.
+        # Files where <min_element_fill_rate of elements were filled are
+        # considered incomplete and excluded from the success check.
+        effective_file_count = 0
+        incomplete_files: list[str] = []
+        for file_path in written_file_paths:
+            fr = file_results_by_path.get(file_path)
+            if fr is None:
+                effective_file_count += 1
+                continue
+            total = len(fr.element_results)
+            filled = sum(1 for er in fr.element_results if er.success)
+            rate = filled / total if total > 0 else 1.0
+            if rate >= self._config.min_element_fill_rate:
+                effective_file_count += 1
+            else:
+                incomplete_files.append(file_path)
+                logger.warning(
+                    "File %s has low element fill rate: %d/%d (%.0f%%) — marking as incomplete",
+                    file_path, filled, total, rate * 100,
+                )
+
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
         if escalated_files and self._fallback is not None:
@@ -406,7 +434,7 @@ class MicroPrimeCodeGenerator:
             total_input += fallback_result.input_tokens
             total_output += fallback_result.output_tokens
             return GenerationResult(
-                success=fallback_result.success,
+                success=fallback_result.success and effective_file_count > 0,
                 generated_files=generated_files,
                 input_tokens=total_input,
                 output_tokens=total_output,
@@ -414,6 +442,8 @@ class MicroPrimeCodeGenerator:
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
                     "micro_prime_files_written": local_file_count,
+                    "effective_file_count": effective_file_count,
+                    "incomplete_files": incomplete_files,
                     "fallback_files_delegated": len(escalated_files),
                     "fallback_files_written": len(fallback_result.generated_files),
                     "micro_prime_elements": local_element_count,
@@ -433,7 +463,7 @@ class MicroPrimeCodeGenerator:
             )
 
         return GenerationResult(
-            success=local_file_count > 0,
+            success=effective_file_count > 0,
             generated_files=generated_files,
             input_tokens=total_input,
             output_tokens=total_output,
@@ -442,6 +472,8 @@ class MicroPrimeCodeGenerator:
             metadata={
                 "micro_prime_only": element_escalation_count == 0,
                 "micro_prime_files_written": local_file_count,
+                "effective_file_count": effective_file_count,
+                "incomplete_files": incomplete_files,
                 "micro_prime_elements": local_element_count,
                 "micro_prime_template_hits": template_count,
                 "micro_prime_ollama_generations": ollama_count,
@@ -455,6 +487,79 @@ class MicroPrimeCodeGenerator:
                 ],
             },
         )
+
+    def _run_post_generation_repair(self, generated_files: list[Path]) -> int:
+        """Run lint + syntax checks and auto-repair generated files.
+
+        Uses the shared repair pipeline (``IntegrationCheckpoint`` +
+        ``run_file_repair``) to fix F821/import/syntax errors in generated
+        output.  Returns the number of files repaired, or 0 if checks pass
+        or repair is unavailable.
+        """
+        if not generated_files:
+            return 0
+
+        try:
+            from startd8.contractors.checkpoint import IntegrationCheckpoint
+            from startd8.repair.config import RepairConfig
+            from startd8.repair.diagnostics import parse_checkpoint_diagnostics
+            from startd8.repair.orchestrator import run_file_repair
+        except ImportError:
+            logger.debug(
+                "Repair infrastructure not available, skipping post-generation repair",
+            )
+            return 0
+
+        try:
+            checkpoint = IntegrationCheckpoint(project_root=self._output_dir)
+            results = []
+            results.append(checkpoint.check_syntax(generated_files))
+            results.append(checkpoint.check_lint(generated_files))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning(
+                "Post-generation checkpoint failed, skipping repair: %s", exc,
+            )
+            return 0
+
+        diagnostics = parse_checkpoint_diagnostics(results)
+        if not diagnostics:
+            logger.debug("Post-generation checks passed — no repair needed")
+            return 0
+
+        logger.info(
+            "Post-generation repair: %d diagnostic(s) found in %d file(s)",
+            len(diagnostics), len(generated_files),
+        )
+
+        files_dict = {}
+        for fp in generated_files:
+            try:
+                files_dict[fp] = fp.read_text(encoding="utf-8")
+            except OSError:
+                logger.warning("Cannot read %s for repair, skipping", fp)
+
+        if not files_dict:
+            return 0
+
+        try:
+            outcome = run_file_repair(
+                files_dict, diagnostics, RepairConfig(), self._output_dir,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.warning("Post-generation repair failed: %s", exc)
+            return 0
+
+        repaired_count = 0
+        for fp, content in outcome.repaired_files.items():
+            try:
+                fp.write_text(content, encoding="utf-8")
+                repaired_count += 1
+            except OSError:
+                logger.warning("Cannot write repaired file %s", fp)
+
+        if repaired_count:
+            logger.info("Post-generation repair: %d file(s) repaired", repaired_count)
+        return repaired_count
 
     def _dry_run_classify(
         self,
@@ -881,6 +986,16 @@ class MicroPrimeCodeGenerator:
         spliced_count = 0
 
         for er, spec in escalated_elements:
+            # Class elements don't have raise NotImplementedError stubs —
+            # their methods are handled as separate elements.  Splicing a
+            # class body would overwrite locally-filled methods.
+            if spec.kind == ElementKind.CLASS:
+                logger.debug(
+                    "Skipping class element %s — methods handled individually",
+                    er.element_name,
+                )
+                continue
+
             try:
                 contracts = self._engine._get_element_contracts(
                     spec, file_spec, manifest,
