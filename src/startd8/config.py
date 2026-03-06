@@ -32,8 +32,12 @@ class ConfigManager:
     def _ensure_config_dir(self):
         """Create config directory if it doesn't exist"""
         self.config_dir.mkdir(parents=True, exist_ok=True)
-        # Set restrictive permissions (owner only)
-        os.chmod(self.config_dir, stat.S_IRWXU)
+        # Set restrictive permissions (owner only). In constrained or
+        # sandboxed environments this may fail; config reads should still work.
+        try:
+            os.chmod(self.config_dir, stat.S_IRWXU)
+        except OSError:
+            pass
     
     def _load_config(self) -> Dict[str, Any]:
         """Load configuration from file"""
@@ -52,7 +56,10 @@ class ConfigManager:
         with open(self.config_file, 'w') as f:
             json.dump(self._config, f, indent=2)
         # Set restrictive permissions (owner only)
-        os.chmod(self.config_file, stat.S_IRUSR | stat.S_IWUSR)
+        try:
+            os.chmod(self.config_file, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
     
     def _default_config(self) -> Dict[str, Any]:
         """Get default configuration"""
@@ -534,5 +541,4 @@ def get_config_manager(config_dir: Optional[Path] = None) -> ConfigManager:
         _config_manager = ConfigManager(config_dir)
     
     return _config_manager
-
 

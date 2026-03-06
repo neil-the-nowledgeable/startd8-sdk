@@ -4651,8 +4651,9 @@ class JsonFileStateStore(StateStore):
             self.logger.debug(f"Saved state for plan {plan_id}")
 
         except Exception as e:
-            self.logger.error(f"Error saving state for plan {plan_id}: {e}")
-            raise
+            # State persistence is best-effort: execution correctness should not
+            # fail solely because resume state cannot be written.
+            self.logger.warning(f"Error saving state for plan {plan_id}: {e}")
         finally:
             if tmp_path is not None and os.path.exists(tmp_path):
                 try:
