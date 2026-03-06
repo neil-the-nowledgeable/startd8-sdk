@@ -48,25 +48,30 @@ from startd8.contractors.artisan_phases.self_consistency import (
     validate_protocol_fidelity,
 )
 from startd8.contractors.context_seed.core import (
-    _HAS_OTEL,
     _build_provenance_links,
     _capture_task_span_context,
     _coerce_optional_float,
-    _compute_ccd_task_metadata,
     _compute_design_results_hash,
-    _compute_manifest_file_checksums,
-    _extract_design_target_files,
-    _extract_referenced_elements,
-    _extract_structural_delta,
     _log_task_boundary_complete,
     _log_task_boundary_start,
     _log_task_timing,
+    HandlerConfig,
+)
+from startd8.contractors.context_seed.tracing import _HAS_OTEL, _phase_tracer
+from startd8.contractors.context_seed.design_support import (
+    _classify_complexity_tier,
+    _compute_ccd_task_metadata,
+    _compute_manifest_file_checksums,
+    _detect_cross_file_edges,
+    _extract_complexity_signals,
+    _extract_design_target_files,
+    _extract_referenced_elements,
+    _extract_structural_delta,
     _normalize_target_path,
-    _phase_tracer,
+    _set_default_complexity_metadata,
     build_shared_file_manifest,
     compute_critical_path_tasks,
     compute_lane_to_file_mapping,
-    HandlerConfig,
 )
 from startd8.contractors.design_collision import check_lane_collisions
 from startd8.contractors.forensic_log import (
@@ -2315,247 +2320,3 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 # Complexity-Driven Model Router (CMR) — REQ-CMR-010, REQ-CMR-011
 # ============================================================================
 
-
-def _detect_cross_file_edges(
-    target_files: list[str],
-    manifest_registry: Any,
-    flatten_fn: Any,
-) -> bool:
-    """Check whether any target files have call edges to each other (C1 extract).
-
-    Delegates to ``startd8.complexity.signals.detect_cross_file_edges``.
-
-    Args:
-        target_files: List of relative file paths (must have len > 1).
-        manifest_registry: ManifestRegistry with call_graph() method.
-        flatten_fn: The ``_flatten_elements`` helper from manifest_registry.
-
-    Returns:
-        ``True`` if any element in one target file calls an element in another.
-    """
-    from startd8.complexity.signals import (
-        detect_cross_file_edges as _shared_detect,
-    )
-
-    return _shared_detect(target_files, manifest_registry, flatten_fn)
-
-
-def _extract_complexity_signals(
-    chunk: Any,
-    manifest_registry: Any,
-) -> "TaskComplexitySignals":
-    """Extract complexity signals from chunk metadata and manifest registry.
-
-    Reads from existing enrichment data (``_call_graph_callers``,
-    ``_edit_mode``, ``estimated_loc``) and queries the registry for
-    ``has_dynamic_dispatch``, ``is_closure``, ``unresolved_calls``,
-    ``mro_depth``.
-
-    Args:
-        chunk: A ``DevelopmentChunk``-like object with ``metadata`` dict
-            and ``file_targets`` list.
-        manifest_registry: A ``ManifestRegistry`` instance, or ``None``
-            when manifest data is unavailable.
-
-    Returns:
-        A ``TaskComplexitySignals`` with all fields populated from available
-        data, falling back to safe defaults on any extraction failure.
-
-    Never raises — all lookups wrapped in try/except (REQ-CMR-010).
-    """
-    from startd8.contractors.artisan_phases.development import TaskComplexitySignals
-
-    meta = getattr(chunk, "metadata", {}) or {}
-    _chunk_id = getattr(chunk, "chunk_id", "?")
-
-    # --- Signals from chunk metadata (populated by earlier enrichment) ---
-    blast_radius = 0
-    caller_count = 0
-    has_cross_file_edges = False
-    manifest_coverage = "none"
-    cg_callers = []
-
-    try:
-        cg_callers = meta.get("_call_graph_callers", [])
-        if cg_callers:
-            blast_radius = max(
-                (entry.get("blast_radius", 0) for entry in cg_callers),
-                default=0,
-            )
-            caller_count = sum(
-                len(entry.get("direct_callers", []))
-                for entry in cg_callers
-            )
-    except (TypeError, AttributeError) as exc:
-        logger.debug("CMR: call graph caller extraction failed for %s: %s", _chunk_id, exc)
-
-    # Edit mode from classification (normalized at extraction boundary)
-    edit_mode = "unknown"
-    try:
-        edit_mode_dict = meta.get("_edit_mode")
-        if edit_mode_dict and isinstance(edit_mode_dict, dict):
-            edit_mode = str(edit_mode_dict.get("mode", "unknown")).strip().lower()
-        elif isinstance(edit_mode_dict, str):
-            edit_mode = edit_mode_dict.strip().lower()
-    except (TypeError, AttributeError) as exc:
-        logger.debug("CMR: edit mode extraction failed for %s: %s", _chunk_id, exc)
-
-    # Estimated LOC from seed task
-    estimated_loc = 0
-    try:
-        estimated_loc = int(meta.get("estimated_loc", 0) or 0)
-    except (ValueError, TypeError):
-        logger.debug("estimated_loc coercion failed", exc_info=True)
-
-    # Target file count
-    target_files = getattr(chunk, "file_targets", []) or []
-    target_file_count = max(len(target_files), 1)
-
-    # --- Signals from manifest registry (Phase 5/6 data) ---
-    has_dynamic_dispatch = False
-    is_closure = False
-    mro_depth = 0
-    unresolved_call_count = 0
-
-    manifests_found = 0
-    if manifest_registry is not None:
-        # Single import of _flatten_elements for reuse (R1)
-        try:
-            from startd8.utils.manifest_registry import _flatten_elements
-        except ImportError:
-            logger.debug("CMR: manifest_registry import failed for %s", _chunk_id)
-            _flatten_elements = None  # type: ignore[assignment]
-
-        if _flatten_elements is not None:
-            try:
-                for tf in target_files:
-                    manifest = manifest_registry.get(tf)
-                    if manifest is None:
-                        continue
-                    manifests_found += 1
-                    try:
-                        elements = _flatten_elements(manifest.elements)
-                    except (TypeError, AttributeError) as exc:
-                        logger.debug("CMR: element flattening failed for %s in %s: %s", tf, _chunk_id, exc)
-                        continue
-
-                    for elem in elements:
-                        # Dynamic dispatch + unresolved call detection
-                        try:
-                            cg = getattr(elem, "call_graph", None)
-                            if cg is not None:
-                                for call in getattr(cg, "calls", []):
-                                    if getattr(call, "is_dynamic", False):
-                                        has_dynamic_dispatch = True
-                                        break
-                                unresolved_call_count += sum(
-                                    1 for c in getattr(cg, "calls", [])
-                                    if getattr(c, "target_fqn", None) is None
-                                )
-                        except (TypeError, AttributeError) as exc:
-                            logger.debug("CMR: call graph inspection failed for element in %s: %s", _chunk_id, exc)
-
-                        # Closure detection
-                        if getattr(elem, "is_closure", False):
-                            is_closure = True
-
-                        # MRO depth (Phase 5)
-                        try:
-                            inspect_info = getattr(elem, "inspect_info", None)
-                            if inspect_info is not None:
-                                depth = getattr(inspect_info, "mro_depth", 0) or 0
-                                mro_depth = max(mro_depth, depth)
-                        except (TypeError, AttributeError) as exc:
-                            logger.debug("CMR: MRO depth extraction failed for element in %s: %s", _chunk_id, exc)
-
-                # Cross-file call edges (C1: extracted helper)
-                if len(target_files) > 1:
-                    has_cross_file_edges = _detect_cross_file_edges(
-                        target_files, manifest_registry, _flatten_elements,
-                    )
-            except Exception:
-                logger.debug("CMR: manifest signal extraction failed for %s", _chunk_id, exc_info=True)
-
-    # Simplified confidence signal: binary manifest coverage.
-    manifest_coverage = (
-        "full"
-        if manifest_registry is not None
-        and target_files
-        and manifests_found == len(target_files)
-        else "none"
-    )
-
-    return TaskComplexitySignals(
-        blast_radius=blast_radius,
-        caller_count=caller_count,
-        has_dynamic_dispatch=has_dynamic_dispatch,
-        is_closure=is_closure,
-        estimated_loc=estimated_loc,
-        target_file_count=target_file_count,
-        edit_mode=edit_mode,
-        mro_depth=mro_depth,
-        unresolved_call_count=unresolved_call_count,
-        has_cross_file_edges=has_cross_file_edges,
-        manifest_coverage=manifest_coverage,
-    )
-
-
-def _classify_complexity_tier(
-    signals: "TaskComplexitySignals",
-    config: "HandlerConfig",
-) -> "TaskComplexityTier":
-    """Classify a task into a complexity tier (REQ-CMR-011).
-
-    Delegates to the shared ``startd8.complexity`` module and maps the
-    4-tier result back to the Artisan 3-tier enum.
-
-    Args:
-        signals: Complexity signals extracted from chunk metadata and
-            manifest registry.
-        config: Handler configuration with tier threshold fields.
-
-    Returns:
-        The classified ``TaskComplexityTier``.
-    """
-    from startd8.complexity import (
-        ComplexityRoutingConfig,
-        ComplexityTier,
-        TaskComplexitySignals as SharedSignals,
-        classify_tier,
-    )
-    from startd8.contractors.artisan_phases.development import TaskComplexityTier
-
-    # Convert Artisan signals → shared signals via dict round-trip
-    shared_signals = SharedSignals(**signals.to_dict())
-    shared_config = ComplexityRoutingConfig.from_handler_config(config)
-
-    shared_tier, _reason = classify_tier(shared_signals, shared_config)
-
-    # Map shared 4-tier → Artisan 3-tier
-    _tier_map = {
-        ComplexityTier.TRIVIAL: TaskComplexityTier.TIER_1,
-        ComplexityTier.SIMPLE: TaskComplexityTier.TIER_1,
-        ComplexityTier.MODERATE: TaskComplexityTier.TIER_2,
-        ComplexityTier.COMPLEX: TaskComplexityTier.TIER_3,
-    }
-    return _tier_map[shared_tier]
-
-
-def _set_default_complexity_metadata(
-    chunk: Any,
-    *,
-    force: bool,
-) -> None:
-    """Set Tier 2 fallback metadata in one place."""
-    from startd8.contractors.artisan_phases.development import (
-        TaskComplexitySignals,
-        TaskComplexityTier,
-    )
-
-    if force:
-        chunk.metadata["_complexity_tier"] = TaskComplexityTier.TIER_2.value
-        chunk.metadata["_complexity_signals"] = TaskComplexitySignals().to_dict()
-        return
-
-    chunk.metadata.setdefault("_complexity_tier", TaskComplexityTier.TIER_2.value)
-    chunk.metadata.setdefault("_complexity_signals", TaskComplexitySignals().to_dict())
