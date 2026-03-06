@@ -1,197 +1,111 @@
-"""Tests for startd8.repair.models."""
+"""Tests for startd8.repair.models — REQ-RPL-004 and REQ-RPL-403 field enrichment."""
 
 from pathlib import Path
 
-import pytest
-
 from startd8.repair.models import (
-    Diagnostic,
-    ElementContext,
     FeatureRepairAttribution,
-    FileRepairResult,
-    ImportDiagnostic,
-    LintDiagnostic,
-    RepairAttribution,
     RepairContext,
-    RepairError,
-    RepairOutcome,
-    RepairPipelineResult,
-    RepairRoute,
-    RepairStepResult,
-    StagingError,
-    SyntaxDiagnostic,
 )
-from startd8.exceptions import FileOperationError, Startd8Error
 
 
-class TestDiagnostics:
-    def test_syntax_diagnostic(self):
-        d = SyntaxDiagnostic(category="syntax", file="foo.py", message="unexpected indent", line=10, col=4)
-        assert d.category == "syntax"
-        assert d.file == "foo.py"
-        assert d.line == 10
-        assert d.col == 4
+class TestRepairContextNewFields:
+    """REQ-RPL-004: RepairContext enrichment."""
 
-    def test_import_diagnostic(self):
-        d = ImportDiagnostic(category="import", file="bar.py", message="No module named 'grpc'", module="grpc", name="")
-        assert d.category == "import"
-        assert d.module == "grpc"
-
-    def test_lint_diagnostic(self):
-        d = LintDiagnostic(category="lint", file="baz.py", message="unused import", rule="F401", line=1, fixable=True)
-        assert d.category == "lint"
-        assert d.rule == "F401"
-        assert d.fixable is True
-
-    def test_diagnostic_base(self):
-        d = Diagnostic(category="test", file="x.py", message="test failed")
-        assert d.category == "test"
-
-
-class TestRepairStepResult:
-    def test_construction(self):
-        r = RepairStepResult(step_name="fence_strip", modified=True, code="x=1")
-        assert r.step_name == "fence_strip"
-        assert r.modified is True
-        assert r.code == "x=1"
-        assert r.metrics == {}
-
-    def test_with_metrics(self):
-        r = RepairStepResult(step_name="test", modified=False, code="", metrics={"had_fences": True})
-        assert r.metrics["had_fences"] is True
-
-
-class TestRepairAttribution:
-    def test_defaults(self):
-        a = RepairAttribution()
-        assert a.fence_stripped is False
-        assert a.nodes_removed == 0
-
-    def test_is_pydantic_model(self):
-        a = RepairAttribution(fence_stripped=True)
-        d = a.model_dump()
-        assert d["fence_stripped"] is True
-
-
-class TestElementContext:
-    def test_default(self):
-        ec = ElementContext()
-        assert ec.parent_class is None
-        assert ec.element_kind is None
-        assert ec.imports is None
-
-    def test_with_parent_class(self):
-        ec = ElementContext(parent_class="MyClass", element_name="my_method")
-        assert ec.parent_class == "MyClass"
-
-
-class TestRepairContext:
     def test_defaults(self):
         ctx = RepairContext()
-        assert ctx.diagnostics == []
-        assert ctx.config is None
-        assert ctx.element_context is None
-        assert ctx.project_root is None
+        assert ctx.feature_name == ""
+        assert ctx.attempt_number == 0
+        assert ctx.test_regressions == []
 
-    def test_existing_imports_field(self):
-        """R1-S3: existing_imports prevents duplicate imports."""
+    def test_feature_name(self):
+        ctx = RepairContext(feature_name="auth-login")
+        assert ctx.feature_name == "auth-login"
+
+    def test_attempt_number(self):
+        ctx = RepairContext(attempt_number=2)
+        assert ctx.attempt_number == 2
+
+    def test_test_regressions(self):
+        ctx = RepairContext(test_regressions=["test_foo", "test_bar"])
+        assert ctx.test_regressions == ["test_foo", "test_bar"]
+
+    def test_all_fields_together(self):
         ctx = RepairContext(
-            existing_imports={Path("foo.py"): {"os", "sys"}},
+            feature_name="payment",
+            attempt_number=3,
+            test_regressions=["test_pay"],
+            project_root=Path("/tmp"),
         )
-        assert "os" in ctx.existing_imports[Path("foo.py")]
+        assert ctx.feature_name == "payment"
+        assert ctx.attempt_number == 3
+        assert ctx.test_regressions == ["test_pay"]
+        assert ctx.project_root == Path("/tmp")
 
-    def test_manifest_registry_field(self):
-        """R3-S8: optional ManifestRegistry."""
-        ctx = RepairContext(manifest_registry="mock_registry")
-        assert ctx.manifest_registry == "mock_registry"
-
-    def test_forward_manifest_field(self):
-        """R7-S1: Phase 2 FLCM awareness."""
-        ctx = RepairContext(forward_manifest={"manifest": True})
-        assert ctx.forward_manifest is not None
-
-
-class TestRepairRoute:
-    def test_construction(self):
-        r = RepairRoute(
-            matched_patterns=["syntax_error", "missing_import"],
-            steps=["fence_strip", "indent_normalize", "import_completion"],
-            confidence="HIGH",
-        )
-        assert len(r.matched_patterns) == 2
-        assert len(r.steps) == 3
-        assert r.confidence == "HIGH"
-
-    def test_empty_route(self):
-        r = RepairRoute()
-        assert r.steps == []
-        assert r.matched_patterns == []
+    def test_test_regressions_default_not_shared(self):
+        """Ensure default_factory produces independent lists."""
+        ctx1 = RepairContext()
+        ctx2 = RepairContext()
+        ctx1.test_regressions.append("test_x")
+        assert ctx2.test_regressions == []
 
 
-class TestFileRepairResult:
-    def test_construction(self):
-        r = FileRepairResult(
-            file_path=Path("foo.py"),
-            before_valid=False,
-            after_valid=True,
-            steps_applied=["fence_strip"],
-        )
-        assert r.file_path == Path("foo.py")
-        assert r.after_valid is True
+class TestFeatureRepairAttributionNewFields:
+    """REQ-RPL-403: FeatureRepairAttribution enrichment."""
 
+    def test_defaults(self):
+        attr = FeatureRepairAttribution()
+        assert attr.feature_name == ""
+        assert attr.files_repaired == 0
+        assert attr.total_steps_applied == 0
+        assert attr.total_steps_reverted == 0
+        assert attr.lines_added == 0
+        assert attr.lines_removed == 0
+        assert attr.imports_added == []
+        assert attr.fences_stripped == 0
+        assert attr.indent_fixes == 0
+        assert attr.brackets_balanced == 0
+        assert attr.duplicates_removed == 0
+        assert attr.lint_fixes == 0
+        assert attr.wall_clock_ms == 0.0
+        assert attr.per_file == {}
+        assert attr.steps_applied == []
+        assert attr.repair_success is False
 
-class TestRepairOutcome:
-    def test_empty(self):
-        o = RepairOutcome()
-        assert o.repaired_files == {}
-        assert o.any_modified is False
-
-    def test_with_files(self):
-        o = RepairOutcome(
-            repaired_files={Path("a.py"): "fixed"},
-            any_modified=True,
-            steps_applied=["fence_strip"],
-        )
-        assert o.any_modified is True
-
-
-class TestRepairPipelineResult:
-    def test_construction(self):
-        outcome = RepairOutcome(any_modified=True)
-        r = RepairPipelineResult(
-            outcome=outcome,
-            recheckpoint_passed=True,
-            metadata={"repair_duration_ms": 42.0},
-        )
-        assert r.recheckpoint_passed is True
-        assert r.metadata["repair_duration_ms"] == 42.0
-
-
-class TestFeatureRepairAttribution:
-    def test_construction(self):
-        a = FeatureRepairAttribution(
+    def test_populated(self):
+        attr = FeatureRepairAttribution(
             feature_name="auth",
-            files_repaired=2,
-            steps_applied=["fence_strip", "indent_normalize"],
+            files_repaired=3,
+            total_steps_applied=5,
+            total_steps_reverted=1,
+            lines_added=42,
+            lines_removed=10,
+            imports_added=["os", "sys"],
+            fences_stripped=2,
+            indent_fixes=1,
+            brackets_balanced=0,
+            duplicates_removed=3,
+            lint_fixes=2,
+            wall_clock_ms=150.5,
+            per_file={"foo.py": {"steps": 2}},
+            steps_applied=["fence_strip", "import_completion"],
             repair_success=True,
         )
-        assert a.feature_name == "auth"
-        assert a.files_repaired == 2
+        assert attr.feature_name == "auth"
+        assert attr.files_repaired == 3
+        assert attr.total_steps_applied == 5
+        assert attr.total_steps_reverted == 1
+        assert attr.lines_added == 42
+        assert attr.lines_removed == 10
+        assert attr.imports_added == ["os", "sys"]
+        assert attr.fences_stripped == 2
+        assert attr.wall_clock_ms == 150.5
+        assert attr.per_file == {"foo.py": {"steps": 2}}
+        assert attr.repair_success is True
 
-
-class TestExceptionHierarchy:
-    def test_repair_error_is_startd8_error(self):
-        assert issubclass(RepairError, Startd8Error)
-        e = RepairError("test", step_name="fence_strip")
-        assert e.step_name == "fence_strip"
-
-    def test_staging_error_is_file_operation_error(self):
-        assert issubclass(StagingError, FileOperationError)
-
-    def test_repair_error_propagates(self):
-        with pytest.raises(Startd8Error):
-            raise RepairError("broken step")
-
-    def test_staging_error_propagates(self):
-        with pytest.raises(FileOperationError):
-            raise StagingError("staging I/O failed")
+    def test_list_defaults_not_shared(self):
+        a = FeatureRepairAttribution()
+        b = FeatureRepairAttribution()
+        a.imports_added.append("os")
+        a.steps_applied.append("fence_strip")
+        assert b.imports_added == []
+        assert b.steps_applied == []

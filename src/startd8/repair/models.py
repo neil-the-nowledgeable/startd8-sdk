@@ -129,12 +129,23 @@ class RepairAttribution(BaseModel):
 
 @dataclass
 class FeatureRepairAttribution:
-    """Feature-level repair attribution for contractor pipelines."""
+    """Feature-level repair attribution for contractor pipelines (REQ-RPL-403)."""
 
     feature_name: str = ""
     files_repaired: int = 0
+    total_steps_applied: int = 0
+    total_steps_reverted: int = 0
+    lines_added: int = 0
+    lines_removed: int = 0
+    imports_added: List[str] = field(default_factory=list)
+    fences_stripped: int = 0
+    indent_fixes: int = 0
+    brackets_balanced: int = 0
+    duplicates_removed: int = 0
+    lint_fixes: int = 0
+    wall_clock_ms: float = 0.0
+    per_file: Dict[str, Any] = field(default_factory=dict)
     steps_applied: List[str] = field(default_factory=list)
-    repair_duration_ms: float = 0.0
     repair_success: bool = False
 
 
@@ -165,6 +176,9 @@ class RepairContext:
     manifest_registry: Optional[Any] = None  # R3-S8
     forward_manifest: Optional[Any] = None  # R7-S1 (Phase 2)
     service_metadata: Optional[Dict[str, Any]] = None  # R7-S6 (Phase 2)
+    feature_name: str = ""  # REQ-RPL-004: feature being repaired
+    attempt_number: int = 0  # REQ-RPL-004: for circuit breaker tracking
+    test_regressions: List[str] = field(default_factory=list)  # REQ-RPL-004: test names for skip decision
 
 
 # ═══════════════════════════════════════════════════════════════════════════

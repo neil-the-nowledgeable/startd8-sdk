@@ -433,3 +433,257 @@ class TestRepairWithMockedPipeline:
         # (Full integrate() requires extensive mocking of merge/snapshot/etc.)
         assert engine._repair_config.repair_enabled is True
         assert mock_classify.call_count == 0  # Not called yet since we didn't run integrate()
+
+
+class _FakeStagingContext:
+    """Context manager stub for create_staging in cost/attribution tests."""
+    def __init__(self, files, *args, **kwargs):
+        self.files = files
+        self.paths = list(files.keys())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def write_repaired(self, files):
+        pass
+
+    def apply_atomic(self):
+        pass
+
+
+class _FakeStepResult:
+    """Minimal step result for attribution tests."""
+    def __init__(self, step_name="fence_strip", modified=True, code="", metrics=None):
+        self.step_name = step_name
+        self.modified = modified
+        self.code = code
+        self.metrics = metrics or {}
+
+
+class _FakeFileRepairResult:
+    """Minimal file repair result for attribution tests."""
+    def __init__(self, file_path, steps_applied=None, step_results=None):
+        self.file_path = file_path
+        self.before_valid = False
+        self.after_valid = True
+        self.steps_applied = steps_applied or []
+        self.step_results = step_results or []
+
+
+class _FakeRepairOutcome:
+    """Minimal RepairOutcome for attribution tests."""
+    def __init__(self, repaired_files=None, file_results=None,
+                 steps_applied=None, any_modified=False):
+        self.repaired_files = repaired_files or {}
+        self.file_results = file_results or []
+        self.steps_applied = steps_applied or []
+        self.route = None
+        self.any_modified = any_modified
+
+
+class TestCostAvoidanceTracking:
+    """REQ-RPL-501: Cost avoidance metadata on successful repair."""
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.create_staging")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_cost_avoided_set_on_success(
+        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
+    ):
+        """After successful repair, metadata should contain repair_cost_avoided_usd."""
+        from startd8.contractors.checkpoint import CheckpointStatus
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+
+        fpath = tmp_path / "test.py"
+        fpath.write_text("```python\nx = 1\n```", encoding="utf-8")
+
+        repaired_content = "x = 1\n"
+        outcome = _FakeRepairOutcome(
+            repaired_files={fpath: repaired_content},
+            file_results=[_FakeFileRepairResult(
+                file_path=fpath,
+                steps_applied=["fence_strip"],
+                step_results=[_FakeStepResult(step_name="fence_strip", modified=True)],
+            )],
+            steps_applied=["fence_strip"],
+            any_modified=True,
+        )
+
+        mock_classify.return_value = "syntax"
+        mock_parse.return_value = []
+        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
+        mock_repair.return_value = outcome
+
+        # After repair, re-checkpoint passes
+        passing = MagicMock()
+        passing.status = CheckpointStatus.PASSED
+        passing.name = "Syntax Check"
+        checkpoint.run_all_checkpoints.return_value = [passing]
+        checkpoint.summarize_results.return_value = True
+
+        failed = MagicMock()
+        failed.name = "Syntax Check"
+        failed.status = CheckpointStatus.FAILED
+        failed.errors = ["SyntaxError"]
+        failed.message = "syntax error"
+
+        metadata: Dict[str, Any] = {}
+        results, success = engine._attempt_repair(
+            [failed], [fpath], _FakeUnit(), attempt=1,
+            result_obj_metadata=metadata,
+        )
+
+        assert success is True
+        assert "repair_cost_avoided_usd" in metadata
+        assert metadata["repair_cost_avoided_usd"] == 0.75
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.create_staging")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_no_cost_avoided_on_failure(
+        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
+    ):
+        """On failed repair, no cost_avoided key should be set."""
+        from startd8.contractors.checkpoint import CheckpointStatus
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+
+        fpath = tmp_path / "test.py"
+        fpath.write_text("x = (\n", encoding="utf-8")
+
+        outcome = _FakeRepairOutcome(any_modified=False)
+        mock_classify.return_value = "syntax"
+        mock_parse.return_value = []
+        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
+        mock_repair.return_value = outcome
+
+        failed = MagicMock()
+        failed.name = "Syntax Check"
+        failed.status = CheckpointStatus.FAILED
+        failed.errors = ["SyntaxError"]
+        failed.message = "syntax error"
+
+        metadata: Dict[str, Any] = {}
+        results, success = engine._attempt_repair(
+            [failed], [fpath], _FakeUnit(), attempt=1,
+            result_obj_metadata=metadata,
+        )
+
+        assert success is False
+        assert "repair_cost_avoided_usd" not in metadata
+
+
+class TestHandoffAttribution:
+    """REQ-RPL-303: Repair attribution in result metadata for handoff."""
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.create_staging")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_repairs_metadata_structure(
+        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
+    ):
+        """On success, metadata['repairs'] should contain per-file entries."""
+        from startd8.contractors.checkpoint import CheckpointStatus
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+
+        fpath = tmp_path / "test.py"
+        original = "```python\nx = 1\n```"
+        fpath.write_text(original, encoding="utf-8")
+
+        repaired_content = "x = 1\n"
+        fake_step = _FakeStepResult(
+            step_name="fence_strip", modified=True, code=repaired_content,
+        )
+        outcome = _FakeRepairOutcome(
+            repaired_files={fpath: repaired_content},
+            file_results=[_FakeFileRepairResult(
+                file_path=fpath,
+                steps_applied=["fence_strip"],
+                step_results=[fake_step],
+            )],
+            steps_applied=["fence_strip"],
+            any_modified=True,
+        )
+
+        mock_classify.return_value = "syntax"
+        mock_parse.return_value = []
+        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
+        mock_repair.return_value = outcome
+
+        passing = MagicMock()
+        passing.status = CheckpointStatus.PASSED
+        passing.name = "Syntax Check"
+        checkpoint.run_all_checkpoints.return_value = [passing]
+        checkpoint.summarize_results.return_value = True
+
+        failed = MagicMock()
+        failed.name = "Syntax Check"
+        failed.status = CheckpointStatus.FAILED
+        failed.errors = ["SyntaxError"]
+        failed.message = "syntax error"
+
+        metadata: Dict[str, Any] = {}
+        results, success = engine._attempt_repair(
+            [failed], [fpath], _FakeUnit(), attempt=1,
+            result_obj_metadata=metadata,
+        )
+
+        assert success is True
+        assert "repairs" in metadata
+        repairs = metadata["repairs"]
+        assert len(repairs) == 1
+        assert repairs[0]["file"] == str(fpath)
+        assert "fence_strip" in repairs[0]["steps"]
+        assert "lines_modified" in repairs[0]
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.create_staging")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_no_repairs_on_failure(
+        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
+    ):
+        """On failure, no repairs key should be present."""
+        from startd8.contractors.checkpoint import CheckpointStatus
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+
+        fpath = tmp_path / "test.py"
+        fpath.write_text("x = (\n", encoding="utf-8")
+
+        outcome = _FakeRepairOutcome(any_modified=False)
+        mock_classify.return_value = "syntax"
+        mock_parse.return_value = []
+        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
+        mock_repair.return_value = outcome
+
+        failed = MagicMock()
+        failed.name = "Syntax Check"
+        failed.status = CheckpointStatus.FAILED
+        failed.errors = ["SyntaxError"]
+        failed.message = "syntax error"
+
+        metadata: Dict[str, Any] = {}
+        results, success = engine._attempt_repair(
+            [failed], [fpath], _FakeUnit(), attempt=1,
+            result_obj_metadata=metadata,
+        )
+
+        assert success is False
+        assert "repairs" not in metadata

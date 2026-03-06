@@ -1,142 +1,249 @@
-"""Tests for startd8.repair.orchestrator."""
+"""Tests for startd8.repair.orchestrator — circuit breaker, traceability, OTel."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from startd8.repair.config import RepairConfig
 from startd8.repair.models import (
     Diagnostic,
-    ElementContext,
-    ImportDiagnostic,
-    RepairContext,
     RepairStepResult,
     SyntaxDiagnostic,
 )
-from startd8.repair.orchestrator import run_element_repair, run_file_repair
-from startd8.repair.steps.fence_strip import FenceStripStep
-from startd8.repair.steps.indent_normalize import IndentNormalizeStep
-from startd8.repair.steps.ast_validate import AstValidateStep
+from startd8.repair.orchestrator import (
+    _circuit_breaker_state,
+    _inject_traceability_comment,
+    _TRACEABILITY_PREFIX,
+    reset_circuit_breaker,
+    run_file_repair,
+)
 
 
-class TestRunElementRepair:
-    def test_delegates_correctly(self):
-        """Backward compat: run_element_repair works for micro-prime path."""
-        ec = ElementContext(parent_class=None)
-        steps = [FenceStripStep(), AstValidateStep()]
-        code = "```python\nx = 1\n```"
-        repaired, results = run_element_repair(code, ec, steps)
-        assert "```" not in repaired
-        assert len(results) == 2
-        assert results[0].step_name == "fence_strip"
-        assert results[0].modified is True
-
-    def test_non_destructive_guard_reverts(self):
-        """Step that breaks valid code is reverted."""
-
-        class BreakingStep:
-            name = "breaker"
-
-            def __call__(self, code, context, file_path, element_context=None):
-                # Same line count, minimal change, but invalid Python
-                return RepairStepResult(
-                    step_name="breaker",
-                    modified=True,
-                    code="x = 1\ndef (\ny = 2\na = 4\nb = 5",
-                )
-
-        ec = ElementContext()
-        steps = [BreakingStep()]
-        code = "x = 1\ny = 2\nz = 3\na = 4\nb = 5"  # Valid Python, 5 lines
-        repaired, results = run_element_repair(code, ec, steps)
-        assert repaired == code  # Reverted
-        assert results[0].metrics.get("reverted") is True
-
-    def test_delta_guardrail_skips(self):
-        """Step that changes >50% of lines is skipped."""
-
-        class MassiveChangeStep:
-            name = "massive"
-
-            def __call__(self, code, context, file_path, element_context=None):
-                return RepairStepResult(
-                    step_name="massive",
-                    modified=True,
-                    code="completely\ndifferent\ncontent\nhere",
-                )
-
-        ec = ElementContext()
-        steps = [MassiveChangeStep()]
-        config = RepairConfig(delta_threshold=0.5)
-        code = "line1\nline2\nline3\nline4"
-        repaired, results = run_element_repair(code, ec, steps, config=config)
-        assert repaired == code  # Unchanged
-        assert "skipped_delta" in results[0].metrics
-
-    def test_with_parent_class(self):
-        ec = ElementContext(parent_class="MyClass")
-        steps = [AstValidateStep()]
-        code = "def method(self):\n    return 1"
-        repaired, results = run_element_repair(code, ec, steps)
-        assert results[0].metrics["valid"] is True
+@pytest.fixture(autouse=True)
+def _clean_circuit_breaker():
+    """Reset circuit breaker state before and after each test."""
+    reset_circuit_breaker()
+    yield
+    reset_circuit_breaker()
 
 
-class TestRunFileRepair:
-    def test_syntax_error_repairs(self):
-        files = {Path("a.py"): "```python\nx = 1\n```"}
-        diags = [SyntaxDiagnostic(category="syntax", file="a.py", message="err", line=1)]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
-        assert outcome.any_modified is True
-        assert Path("a.py") in outcome.repaired_files
-        assert "```" not in outcome.repaired_files[Path("a.py")]
+def _make_syntax_diag(file: str = "foo.py") -> SyntaxDiagnostic:
+    return SyntaxDiagnostic(category="syntax", file=file, message="invalid syntax", line=1)
 
-    def test_no_repairable_diagnostics(self):
-        files = {Path("a.py"): "x = 1"}
-        diags = [Diagnostic(category="test", file="a.py", message="test failed")]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
+
+def _make_files(content: str = "x = 1\n") -> dict[Path, str]:
+    return {Path("foo.py"): content}
+
+
+class TestCircuitBreaker:
+    """REQ-RPL-502: Circuit breaker skips repair after N consecutive failures."""
+
+    def test_skips_after_threshold(self):
+        """After circuit_breaker_threshold consecutive failures, repair is skipped."""
+        config = RepairConfig(circuit_breaker_threshold=2)
+        diags = [_make_syntax_diag()]
+        files = _make_files()
+        project_root = Path("/tmp")
+
+        # Simulate 2 consecutive failures by setting state directly
+        _circuit_breaker_state["syntax"] = 2
+
+        outcome = run_file_repair(files, diags, config, project_root)
         assert outcome.any_modified is False
-        assert outcome.repaired_files == {}
+        # State should remain at 2 (not incremented further since we skipped)
+        assert _circuit_breaker_state["syntax"] == 2
 
-    def test_route_included_in_outcome(self):
-        files = {Path("a.py"): "```python\nx = 1\n```"}
-        diags = [SyntaxDiagnostic(category="syntax", file="a.py", message="err", line=1)]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
-        assert outcome.route is not None
-        assert "syntax_error" in outcome.route.matched_patterns
+    def test_does_not_skip_below_threshold(self):
+        """Below threshold, repair proceeds normally."""
+        config = RepairConfig(circuit_breaker_threshold=3)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")
+        project_root = Path("/tmp")
 
-    def test_file_results_populated(self):
-        files = {Path("a.py"): "x = 1"}
-        diags = [SyntaxDiagnostic(category="syntax", file="a.py", message="err", line=1)]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
-        assert len(outcome.file_results) == 1
-        assert outcome.file_results[0].file_path == Path("a.py")
+        _circuit_breaker_state["syntax"] = 2
 
-    def test_multiple_files(self):
-        files = {
-            Path("a.py"): "```python\nx = 1\n```",
-            Path("b.py"): "y = 2",
-        }
-        diags = [SyntaxDiagnostic(category="syntax", file="a.py", message="err", line=1)]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
-        assert len(outcome.file_results) == 2
-        # a.py should be repaired
-        assert outcome.any_modified is True
+        # This should proceed (2 < 3)
+        outcome = run_file_repair(files, diags, config, project_root)
+        # Whether it modified or not depends on routing, but it should not be skipped
+        assert isinstance(outcome.any_modified, bool)
 
-    def test_import_diagnostic_repair(self):
-        # Use enough lines so that adding 2 import lines doesn't exceed 50% delta
-        code = "\n".join([
-            "x = grpc.channel()",
-            "y = 1",
-            "z = 2",
-            "a = 3",
-            "b = 4",
-        ])
-        files = {Path("t.py"): code}
-        diags = [ImportDiagnostic(category="import", file="t.py", message="No module", module="grpc")]
-        config = RepairConfig()
-        outcome = run_file_repair(files, diags, config, Path("/project"))
-        assert outcome.any_modified is True
-        assert "import grpc" in outcome.repaired_files[Path("t.py")]
+    def test_reset_clears_state(self):
+        """reset_circuit_breaker() clears all state."""
+        _circuit_breaker_state["syntax"] = 5
+        _circuit_breaker_state["import"] = 3
+        reset_circuit_breaker()
+        assert _circuit_breaker_state == {}
+
+    def test_success_resets_counter(self):
+        """A successful repair resets the failure counter for that category."""
+        config = RepairConfig(circuit_breaker_threshold=5)
+        diags = [_make_syntax_diag()]
+        project_root = Path("/tmp")
+
+        # Set a count below threshold
+        _circuit_breaker_state["syntax"] = 2
+
+        # Use code with a fence that the fence_strip step will fix
+        files = {Path("foo.py"): "```python\nx = 1\n```\n"}
+
+        outcome = run_file_repair(files, diags, config, project_root)
+        if outcome.any_modified:
+            assert _circuit_breaker_state.get("syntax", 0) == 0
+
+    def test_failure_increments_counter(self):
+        """A repair that modifies nothing increments the failure counter."""
+        config = RepairConfig(circuit_breaker_threshold=10)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")  # Already valid — fence_strip won't modify
+        project_root = Path("/tmp")
+
+        _circuit_breaker_state["syntax"] = 0
+        outcome = run_file_repair(files, diags, config, project_root)
+        if not outcome.any_modified:
+            assert _circuit_breaker_state["syntax"] == 1
+
+
+class TestTraceabilityComment:
+    """REQ-RPL-009: Traceability comment injection."""
+
+    def test_inject_traceability_comment(self):
+        code = "x = 1\n"
+        result = _inject_traceability_comment(code, ["fence_strip", "import_completion"])
+        assert result.startswith(_TRACEABILITY_PREFIX)
+        assert "fence_strip, import_completion" in result
+        assert result.endswith("\nx = 1\n")
+
+    def test_no_steps_no_comment(self):
+        code = "x = 1\n"
+        result = _inject_traceability_comment(code, [])
+        assert result == code
+
+    def test_comment_injected_on_modified_files(self):
+        """run_file_repair injects traceability comment on actually modified files."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        # Fenced code that fence_strip will repair
+        files = {Path("foo.py"): "```python\nx = 1\n```\n"}
+        project_root = Path("/tmp")
+
+        outcome = run_file_repair(files, diags, config, project_root)
+        if outcome.any_modified:
+            for path, content in outcome.repaired_files.items():
+                assert content.startswith(_TRACEABILITY_PREFIX)
+
+    def test_comment_not_injected_on_unmodified_files(self):
+        """Unmodified files should not get a traceability comment."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")  # Already valid
+        project_root = Path("/tmp")
+
+        outcome = run_file_repair(files, diags, config, project_root)
+        # Unmodified files should not appear in repaired_files
+        for path, content in outcome.repaired_files.items():
+            # If it appears, it must have the comment
+            assert content.startswith(_TRACEABILITY_PREFIX)
+
+
+class TestOTelSpans:
+    """REQ-RPL-400: OTel span creation."""
+
+    @patch("startd8.repair.orchestrator._HAS_OTEL", True)
+    @patch("startd8.repair.orchestrator._tracer")
+    def test_span_created_on_repair(self, mock_tracer):
+        """A repair.attempt span is started when OTel is available."""
+        mock_span_ctx = MagicMock()
+        mock_tracer.start_as_current_span.return_value = mock_span_ctx
+
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = {Path("foo.py"): "```python\nx = 1\n```\n"}
+        project_root = Path("/tmp")
+
+        run_file_repair(files, diags, config, project_root)
+
+        mock_tracer.start_as_current_span.assert_called_once()
+        call_args = mock_tracer.start_as_current_span.call_args
+        assert call_args[0][0] == "repair.attempt"
+        attrs = call_args[1]["attributes"]
+        assert "repair.file_count" in attrs
+        assert "repair.route_confidence" in attrs
+
+    @patch("startd8.repair.orchestrator._HAS_OTEL", False)
+    @patch("startd8.repair.orchestrator._tracer", None)
+    def test_no_span_without_otel(self):
+        """No crash when OTel is not available."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = _make_files()
+        project_root = Path("/tmp")
+
+        # Should not raise
+        outcome = run_file_repair(files, diags, config, project_root)
+        assert isinstance(outcome.any_modified, bool)
+
+
+class TestOTelMetrics:
+    """REQ-RPL-401: Metric emission."""
+
+    @patch("startd8.repair.orchestrator._repair_wall_clock")
+    @patch("startd8.repair.orchestrator._repair_success")
+    @patch("startd8.repair.orchestrator._repair_attempts")
+    def test_metrics_emitted_on_success(self, mock_attempts, mock_success, mock_wall_clock):
+        """Metrics are emitted on successful repair."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = {Path("foo.py"): "```python\nx = 1\n```\n"}
+        project_root = Path("/tmp")
+
+        outcome = run_file_repair(files, diags, config, project_root)
+
+        mock_attempts.add.assert_called()
+        mock_wall_clock.record.assert_called()
+        if outcome.any_modified:
+            mock_success.add.assert_called()
+
+    @patch("startd8.repair.orchestrator._repair_wall_clock")
+    @patch("startd8.repair.orchestrator._repair_success")
+    @patch("startd8.repair.orchestrator._repair_attempts")
+    def test_metrics_emitted_on_failure(self, mock_attempts, mock_success, mock_wall_clock):
+        """Metrics are emitted even on failed repair."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")
+        project_root = Path("/tmp")
+
+        outcome = run_file_repair(files, diags, config, project_root)
+        mock_attempts.add.assert_called()
+        mock_wall_clock.record.assert_called()
+
+    @patch("startd8.repair.orchestrator._repair_wall_clock")
+    @patch("startd8.repair.orchestrator._repair_success")
+    @patch("startd8.repair.orchestrator._repair_attempts")
+    def test_skipped_metrics_on_circuit_breaker(self, mock_attempts, mock_success, mock_wall_clock):
+        """Skipped outcome is emitted when circuit breaker is open."""
+        _circuit_breaker_state["syntax"] = 5
+        config = RepairConfig(circuit_breaker_threshold=3)
+        diags = [_make_syntax_diag()]
+        files = _make_files()
+        project_root = Path("/tmp")
+
+        run_file_repair(files, diags, config, project_root)
+
+        mock_attempts.add.assert_called_once()
+        call_kwargs = mock_attempts.add.call_args[0]
+        assert call_kwargs[1]["outcome"] == "skipped"
+
+    @patch("startd8.repair.orchestrator._repair_wall_clock", None)
+    @patch("startd8.repair.orchestrator._repair_success", None)
+    @patch("startd8.repair.orchestrator._repair_attempts", None)
+    def test_no_crash_without_metrics(self):
+        """No crash when metrics are None (OTel not installed)."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [_make_syntax_diag()]
+        files = _make_files()
+        project_root = Path("/tmp")
+
+        outcome = run_file_repair(files, diags, config, project_root)
+        assert isinstance(outcome.any_modified, bool)

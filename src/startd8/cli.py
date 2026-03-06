@@ -2623,6 +2623,146 @@ def dashboard_delete(
         console.print("[dim]No local artifacts found to delete.[/dim]")
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Repair command (REQ-RPL-205)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@app.command("repair")
+def repair(
+    files: List[Path] = typer.Argument(..., help="Python files to repair"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be repaired without modifying files"
+    ),
+):
+    """Run deterministic repair on local Python files.
+
+    Detects syntax errors (via ast.parse) and lint issues (via ruff) then
+    applies the shared repair pipeline to fix them.
+
+    Examples:
+
+        startd8 repair src/mymodule/broken.py
+
+        startd8 repair --dry-run src/mymodule/*.py
+    """
+    import ast as _ast
+
+    from .repair.config import RepairConfig
+    from .repair.models import Diagnostic, SyntaxDiagnostic, LintDiagnostic
+    from .repair.orchestrator import run_file_repair
+
+    # Validate files exist
+    valid_files: list[Path] = []
+    for f in files:
+        resolved = f.resolve()
+        if not resolved.is_file():
+            console.print(f"[yellow]Warning: skipping non-existent file: {f}[/yellow]")
+            continue
+        if resolved.suffix != ".py":
+            console.print(f"[yellow]Warning: skipping non-Python file: {f}[/yellow]")
+            continue
+        valid_files.append(resolved)
+
+    if not valid_files:
+        console.print("[red]No valid Python files to repair.[/red]")
+        raise typer.Exit(1)
+
+    # Build file map and diagnostics
+    files_map: dict[Path, str] = {}
+    diagnostics: list[Diagnostic] = []
+
+    for fpath in valid_files:
+        content = fpath.read_text(encoding="utf-8")
+        files_map[fpath] = content
+
+        # Detect syntax errors via ast.parse
+        try:
+            _ast.parse(content)
+        except SyntaxError as exc:
+            msg = exc.msg or "SyntaxError"
+            if exc.lineno:
+                msg += f" (line {exc.lineno})"
+            diagnostics.append(SyntaxDiagnostic(
+                category="syntax",
+                file=str(fpath),
+                message=msg,
+                line=exc.lineno or 0,
+                col=exc.offset or 0,
+            ))
+
+        # Optionally detect lint issues via ruff
+        try:
+            import subprocess as _sp
+            result = _sp.run(
+                ["python3", "-m", "ruff", "check", "--output-format=text", str(fpath)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.stdout.strip():
+                import re as _re
+                for line in result.stdout.strip().splitlines():
+                    m = _re.match(
+                        r"(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<rule>\w+)\s+(?P<message>.+)",
+                        line,
+                    )
+                    if m:
+                        diagnostics.append(LintDiagnostic(
+                            category="lint",
+                            file=str(fpath),
+                            message=m.group("message"),
+                            rule=m.group("rule"),
+                            line=int(m.group("line")),
+                            fixable=True,
+                        ))
+        except (FileNotFoundError, OSError, _sp.TimeoutExpired):
+            pass  # ruff not available — syntax-only repair
+
+    if not diagnostics:
+        console.print("[green]All files are clean -- no repairs needed.[/green]")
+        return
+
+    config = RepairConfig(repair_enabled=True)
+    project_root = Path.cwd()
+
+    outcome = run_file_repair(files_map, diagnostics, config, project_root)
+
+    # Results table
+    table = Table(title="Repair Results")
+    table.add_column("File", style="cyan")
+    table.add_column("Before Valid", justify="center")
+    table.add_column("After Valid", justify="center")
+    table.add_column("Steps Applied")
+    table.add_column("Modified", justify="center")
+
+    for fr in outcome.file_results:
+        before = "[green]yes[/green]" if fr.before_valid else "[red]no[/red]"
+        after = "[green]yes[/green]" if fr.after_valid else "[red]no[/red]"
+        steps = ", ".join(fr.steps_applied) if fr.steps_applied else "[dim]none[/dim]"
+        modified = "[green]yes[/green]" if fr.steps_applied else "[dim]no[/dim]"
+        table.add_row(fr.file_path.name, before, after, steps, modified)
+
+    console.print(table)
+
+    if dry_run:
+        console.print("\n[yellow][DRY RUN] No files were modified.[/yellow]")
+        if outcome.repaired_files:
+            console.print(f"  Would modify {len(outcome.repaired_files)} file(s):")
+            for fpath in outcome.repaired_files:
+                console.print(f"    - {fpath}")
+        return
+
+    # Write repaired content back
+    written = 0
+    for fpath, content in outcome.repaired_files.items():
+        fpath.write_text(content, encoding="utf-8")
+        written += 1
+
+    if written:
+        console.print(f"\n[green]Repaired {written} file(s).[/green]")
+    else:
+        console.print("\n[dim]No files needed modification.[/dim]")
+
+
 if __name__ == "__main__":
     app()
 

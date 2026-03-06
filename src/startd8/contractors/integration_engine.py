@@ -647,6 +647,13 @@ class IntegrationEngine:
         route diagnostics correctly.  Import repair is excluded because
         generated files are not yet under ``src_dirs``.
 
+        REQ-RPL-302 execution order note: This method runs in step 3
+        (pre-validate), BEFORE the merge loop (step 4). The post-merge
+        repair path (``_attempt_repair``) runs in step 6, AFTER the
+        merge AND AFTER the ruff auto-fix. Both paths are guarded by
+        ``repair_config.repair_enabled`` and additionally
+        ``pre_checkpoint_repair`` controls this pre-merge path.
+
         Returns a replacement ``CheckpointResult`` from re-running
         ``pre_validate`` after successful repair, or ``None`` if repair
         was not attempted or failed.
@@ -857,6 +864,41 @@ class IntegrationEngine:
                         truncation_skipped
                     )
 
+                # REQ-RPL-501: Cost avoidance tracking
+                if repair_success:
+                    estimated_regen_cost = getattr(
+                        self._repair_config,
+                        "estimated_regen_cost_usd",
+                        0.75,  # midpoint of $0.50-$1.00 range
+                    )
+                    result_obj_metadata[
+                        "repair_cost_avoided_usd"
+                    ] = estimated_regen_cost
+
+                    # REQ-RPL-303: Handoff attribution (P2)
+                    result_obj_metadata["repairs"] = [
+                        {
+                            "file": str(fpath),
+                            "steps": [
+                                r.step_name
+                                for r in (
+                                    fr.step_results
+                                    if hasattr(fr, "step_results")
+                                    else []
+                                )
+                                if r.modified
+                            ],
+                            "lines_modified": len(
+                                content.splitlines()
+                            ) - len(
+                                files_to_repair.get(fpath, "").splitlines()
+                            ),
+                        }
+                        for fpath, content in outcome.repaired_files.items()
+                        for fr in outcome.file_results
+                        if fr.file_path == fpath
+                    ]
+
                 # R3-S5: EventBus emission
                 try:
                     from ..events import Event, EventBus, EventType
@@ -874,6 +916,21 @@ class IntegrationEngine:
                     logger.debug(
                         "EventBus repair emission skipped: %s", ebus_exc,
                     )
+
+                # REQ-RPL-501: Cost avoidance event emission
+                if repair_success:
+                    try:
+                        from ..events import Event, EventBus, EventType
+                        EventBus.emit(Event(
+                            type=EventType.PIPELINE_STEP_COMPLETE,
+                            source="repair.cost_avoided",
+                            data={
+                                "cost_avoided_usd": estimated_regen_cost,
+                                "feature_name": unit.name,
+                            },
+                        ))
+                    except (ImportError, AttributeError, TypeError):
+                        pass  # advisory
 
         except Exception as exc:
             # R2-S5 + R3-S7: Defensive guard
@@ -1259,22 +1316,85 @@ class IntegrationEngine:
                                 "override_source": override_source,
                             })
                         else:
-                            msg = (
-                                f"Size regression blocked: {source_path.name} has "
-                                f"{source_lines} lines but target has {target_lines} "
-                                f"lines ({ratio:.0%} < "
-                                f"{effective_threshold:.0%} threshold). "
-                                f"Use --force-rewrite to override."
-                            )
-                            logger.error(msg, extra={"unit_id": unit.id})
-                            warnings.append(msg)
-                            skipped_files.append({
-                                "path": str(source_path),
-                                "reason": "size_regression",
-                                "source_lines": source_lines,
-                                "target_lines": target_lines,
-                                "ratio": ratio,
-                            })
+                            # REQ-RPL-301: Attempt merge-based repair for
+                            # size regressions when repair is enabled.
+                            _merge_repaired = False
+                            if (
+                                self._repair_config is not None
+                                and getattr(
+                                    self._repair_config,
+                                    "repair_enabled",
+                                    False,
+                                )
+                            ):
+                                try:
+                                    import difflib
+
+                                    gen_lines = source_content_text.splitlines(
+                                        keepends=True,
+                                    )
+                                    tgt_lines = target_content.splitlines(
+                                        keepends=True,
+                                    )
+                                    # Check if generated is a subset (only
+                                    # additions relative to target, no
+                                    # contradictions — all generated lines
+                                    # appear in target).
+                                    matcher = difflib.SequenceMatcher(
+                                        None, tgt_lines, gen_lines,
+                                    )
+                                    opcodes = matcher.get_opcodes()
+                                    has_replace = any(
+                                        tag == "replace"
+                                        for tag, *_ in opcodes
+                                    )
+                                    if not has_replace:
+                                        # Generated is a pure subset — merge
+                                        # by keeping the target (which is the
+                                        # superset).
+                                        result_obj_metadata.setdefault(
+                                            "merge_repair_advisory", [],
+                                        ).append({
+                                            "path": str(source_path),
+                                            "source_lines": source_lines,
+                                            "target_lines": target_lines,
+                                            "ratio": ratio,
+                                        })
+                                        logger.info(
+                                            "Size regression merge repair "
+                                            "(advisory): %s — generated is "
+                                            "a subset of target, keeping "
+                                            "target",
+                                            source_path.name,
+                                            extra={"unit_id": unit.id},
+                                        )
+                                        _merge_repaired = True
+                                        # Skip this file (keep target as-is)
+                                except Exception as _merge_exc:
+                                    logger.warning(
+                                        "Size regression merge repair "
+                                        "failed for %s: %s",
+                                        source_path.name, _merge_exc,
+                                        extra={"unit_id": unit.id},
+                                    )
+
+                            if not _merge_repaired:
+                                msg = (
+                                    f"Size regression blocked: {source_path.name} has "
+                                    f"{source_lines} lines but target has {target_lines} "
+                                    f"lines ({ratio:.0%} < "
+                                    f"{effective_threshold:.0%} threshold). "
+                                    f"Use --force-rewrite to override."
+                                )
+                                logger.error(msg, extra={"unit_id": unit.id})
+                                warnings.append(msg)
+                                skipped_files.append({
+                                    "path": str(source_path),
+                                    "reason": "size_regression",
+                                    "source_lines": source_lines,
+                                    "target_lines": target_lines,
+                                    "ratio": ratio,
+                                })
                             continue
                 except (OSError, UnicodeDecodeError) as exc:
                     logger.warning(

@@ -1,7 +1,11 @@
-"""Duplicate import removal repair step (REQ-RPL-104).
+"""Duplicate removal repair step (REQ-RPL-104).
 
 Removes semantically duplicate imports — imports that bind the same
 Python name into scope — keeping the first occurrence.
+
+Also removes duplicate function and class definitions at module-level
+scope, keeping the LAST definition (most likely the intended version
+per spec).
 """
 
 from __future__ import annotations
@@ -97,7 +101,31 @@ class DuplicateRemovalStep:
                         rewrites[node.lineno - 1] = new_line
                         imports_removed += len(dup_names)
 
-        if imports_removed == 0:
+        # ── Phase 2: Duplicate function / class definitions ──────────
+        # At module-level scope only, keep the LAST definition.
+        defs_removed = 0
+        def_names: dict[str, list[ast.stmt]] = {}
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                def_names.setdefault(node.name, []).append(node)
+
+        for name, nodes in def_names.items():
+            if len(nodes) < 2:
+                continue
+            # Remove all but the last definition
+            for dup_node in nodes[:-1]:
+                end_lineno = dup_node.end_lineno or dup_node.lineno
+                for ln in range(dup_node.lineno - 1, end_lineno):
+                    removals.add(ln)
+                defs_removed += 1
+                logger.debug(
+                    "Removing duplicate %s '%s' at line %d from %s",
+                    type(dup_node).__name__, name, dup_node.lineno, file_path,
+                )
+
+        total_removed = imports_removed + defs_removed
+
+        if total_removed == 0:
             return RepairStepResult(
                 step_name=self.name, modified=False, code=code,
             )
@@ -113,13 +141,19 @@ class DuplicateRemovalStep:
         # Collapse runs of 3+ blank lines down to 2
         result_code = re.sub(r"\n{3,}", "\n\n", result_code)
 
-        logger.debug("Removed %d duplicate import(s) from %s", imports_removed, file_path)
+        if imports_removed:
+            logger.debug("Removed %d duplicate import(s) from %s", imports_removed, file_path)
+        if defs_removed:
+            logger.debug("Removed %d duplicate def/class(es) from %s", defs_removed, file_path)
 
         return RepairStepResult(
             step_name=self.name,
             modified=True,
             code=result_code,
-            metrics={"imports_removed": imports_removed},
+            metrics={
+                "imports_removed": imports_removed,
+                "defs_removed": defs_removed,
+            },
         )
 
 

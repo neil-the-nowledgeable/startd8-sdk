@@ -1,7 +1,10 @@
-"""Repair pipeline orchestration (REQ-RPL-001, 003, 006).
+"""Repair pipeline orchestration (REQ-RPL-001, 003, 006, 400, 401, 502).
 
 Phase 0 provides ``run_element_repair()`` for the micro-prime path.
 Phase 1 adds ``run_file_repair()`` for the contractor path.
+
+OTel spans and metrics are emitted when OpenTelemetry is installed;
+all instrumentation is guarded and degrades to no-ops otherwise.
 """
 
 from __future__ import annotations
@@ -36,6 +39,48 @@ try:
     _HAS_EVENTS = True
 except ImportError:
     _HAS_EVENTS = False
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OTel instrumentation (REQ-RPL-400, REQ-RPL-401)
+# ═══════════════════════════════════════════════════════════════════════════
+
+try:
+    from opentelemetry import trace
+    _tracer = trace.get_tracer(__name__)
+    _HAS_OTEL = True
+except ImportError:
+    _tracer = None
+    _HAS_OTEL = False
+
+try:
+    from opentelemetry import metrics
+    _meter = metrics.get_meter(__name__)
+    _repair_attempts = _meter.create_counter(
+        "repair_attempts_total", description="Total repair attempts",
+    )
+    _repair_success = _meter.create_counter(
+        "repair_success_total", description="Successful repairs",
+    )
+    _repair_steps_applied = _meter.create_counter(
+        "repair_steps_applied", description="Per-step application count",
+    )
+    _repair_wall_clock = _meter.create_histogram(
+        "repair_wall_clock_ms", description="Wall-clock time per repair",
+    )
+except ImportError:
+    _repair_attempts = _repair_success = _repair_steps_applied = _repair_wall_clock = None
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Circuit breaker (REQ-RPL-502)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# category -> consecutive failure count
+_circuit_breaker_state: dict[str, int] = {}
+
+
+def reset_circuit_breaker() -> None:
+    """Reset all circuit breaker state. Primarily for testing."""
+    _circuit_breaker_state.clear()
 
 
 def _emit_event(event_type: str, source: str, data: dict) -> None:
@@ -144,6 +189,25 @@ def _run_steps(
             else:
                 current = result.code
 
+        # Emit per-step OTel span event (REQ-RPL-400)
+        if _HAS_OTEL and _tracer is not None:
+            span = trace.get_current_span()
+            if span.is_recording():
+                outcome = "reverted" if reverted else ("applied" if result.modified else "no_change")
+                span.add_event(
+                    f"repair.step.{step_name}",
+                    attributes={
+                        "modified": result.modified,
+                        "reverted": reverted,
+                        "duration_ms": step_duration_ms,
+                    },
+                )
+
+        # Emit per-step metric (REQ-RPL-401)
+        if _repair_steps_applied is not None:
+            outcome = "reverted" if reverted else ("applied" if result.modified else "no_change")
+            _repair_steps_applied.add(1, {"step_name": step_name, "outcome": outcome})
+
         results.append(result)
 
         _emit_event(
@@ -199,6 +263,21 @@ def run_element_repair(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Traceability comment injection (REQ-RPL-009)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TRACEABILITY_PREFIX = "# [REPAIRED BY STARTD8: "
+
+
+def _inject_traceability_comment(code: str, step_names: List[str]) -> str:
+    """Inject a traceability header comment listing applied steps."""
+    if not step_names:
+        return code
+    comment = f"{_TRACEABILITY_PREFIX}{', '.join(step_names)}]"
+    return f"{comment}\n{code}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 1: Contractor entry point
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -213,8 +292,11 @@ def run_file_repair(
 
     Returns RepairOutcome (no re-checkpoint — engine drives that).
 
+    Includes circuit breaker (REQ-RPL-502), traceability comments
+    (REQ-RPL-009), OTel spans (REQ-RPL-400), and metrics (REQ-RPL-401).
+
     Args:
-        files: Map of file path → file content.
+        files: Map of file path -> file content.
         diagnostics: Parsed checkpoint diagnostics.
         config: Repair pipeline configuration.
         project_root: Project root for context.
@@ -222,59 +304,133 @@ def run_file_repair(
     Returns:
         RepairOutcome with repaired files, attribution, and step results.
     """
+    repair_start = time.monotonic()
+
     route = route_failures(diagnostics, config)
 
-    if not route.steps:
+    # Determine the error category for circuit breaker tracking
+    error_categories = sorted({d.category for d in diagnostics})
+    cb_key = "|".join(error_categories) if error_categories else "unknown"
+
+    # Circuit breaker check (REQ-RPL-502)
+    cb_count = _circuit_breaker_state.get(cb_key, 0)
+    if cb_count >= config.circuit_breaker_threshold:
+        logger.info(
+            "Circuit breaker open for category '%s' (%d consecutive failures, threshold %d) — skipping repair",
+            cb_key, cb_count, config.circuit_breaker_threshold,
+        )
+        duration_ms = (time.monotonic() - repair_start) * 1000
+        # Emit skipped metrics
+        if _repair_attempts is not None:
+            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_key})
+        if _repair_wall_clock is not None:
+            _repair_wall_clock.record(duration_ms)
         return RepairOutcome(
             route=route,
             any_modified=False,
         )
 
-    steps = create_steps_from_route(route)
-    repaired_files: dict[Path, str] = {}
-    file_results: list[FileRepairResult] = []
-    all_step_names: set[str] = set()
-    any_modified = False
-
-    for file_path, code in files.items():
-        # Build per-file diagnostics
-        file_diags = [
-            d for d in diagnostics
-            if d.file == str(file_path)
-            or d.file == file_path.name
-            or Path(d.file).name == file_path.name
-        ]
-
-        ctx = RepairContext(
-            diagnostics=file_diags,
-            config=config,
-            project_root=project_root,
+    if not route.steps:
+        duration_ms = (time.monotonic() - repair_start) * 1000
+        if _repair_attempts is not None:
+            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_key})
+        if _repair_wall_clock is not None:
+            _repair_wall_clock.record(duration_ms)
+        return RepairOutcome(
+            route=route,
+            any_modified=False,
         )
 
-        repaired, step_results = _run_steps(
-            code, steps, ctx, file_path, None, config,
+    # Start OTel span (REQ-RPL-400)
+    span_ctx = None
+    if _HAS_OTEL and _tracer is not None:
+        span_ctx = _tracer.start_as_current_span(
+            "repair.attempt",
+            attributes={
+                "repair.file_count": len(files),
+                "repair.route_confidence": route.confidence,
+            },
         )
+        span_ctx.__enter__()
 
-        modified = repaired != code
-        if modified:
-            repaired_files[file_path] = repaired
-            any_modified = True
+    try:
+        steps = create_steps_from_route(route)
+        repaired_files: dict[Path, str] = {}
+        file_results: list[FileRepairResult] = []
+        all_step_names: set[str] = set()
+        any_modified = False
 
-        applied = [r.step_name for r in step_results if r.modified]
-        all_step_names.update(applied)
+        for file_path, code in files.items():
+            # Build per-file diagnostics
+            file_diags = [
+                d for d in diagnostics
+                if d.file == str(file_path)
+                or d.file == file_path.name
+                or Path(d.file).name == file_path.name
+            ]
 
-        file_results.append(FileRepairResult(
-            file_path=file_path,
-            before_valid=_validator.validate(code),
-            after_valid=_validator.validate(repaired),
-            steps_applied=applied,
-            step_results=step_results,
-        ))
+            ctx = RepairContext(
+                diagnostics=file_diags,
+                config=config,
+                project_root=project_root,
+            )
 
-    return RepairOutcome(
-        repaired_files=repaired_files,
-        file_results=file_results,
-        steps_applied=sorted(all_step_names),
-        route=route,
-        any_modified=any_modified,
-    )
+            repaired, step_results = _run_steps(
+                code, steps, ctx, file_path, None, config,
+            )
+
+            modified = repaired != code
+            applied = [r.step_name for r in step_results if r.modified]
+
+            if modified:
+                # Inject traceability comment (REQ-RPL-009)
+                repaired = _inject_traceability_comment(repaired, applied)
+                repaired_files[file_path] = repaired
+                any_modified = True
+
+            all_step_names.update(applied)
+
+            file_results.append(FileRepairResult(
+                file_path=file_path,
+                before_valid=_validator.validate(code),
+                after_valid=_validator.validate(repaired),
+                steps_applied=applied,
+                step_results=step_results,
+            ))
+
+        # Update circuit breaker state
+        if any_modified:
+            # Success — reset counter for this category
+            _circuit_breaker_state[cb_key] = 0
+        else:
+            # Failure — increment
+            _circuit_breaker_state[cb_key] = cb_count + 1
+
+        duration_ms = (time.monotonic() - repair_start) * 1000
+        outcome_label = "success" if any_modified else "failure"
+
+        # Emit OTel metrics (REQ-RPL-401)
+        if _repair_attempts is not None:
+            _repair_attempts.add(1, {"outcome": outcome_label, "error_category": cb_key})
+        if any_modified and _repair_success is not None:
+            _repair_success.add(1, {"error_category": cb_key})
+        if _repair_wall_clock is not None:
+            _repair_wall_clock.record(duration_ms)
+
+        # Set span attributes for success
+        if _HAS_OTEL and _tracer is not None:
+            span = trace.get_current_span()
+            if span.is_recording():
+                span.set_attribute("repair.success", any_modified)
+                span.set_attribute("repair.feature_name", "")
+
+        return RepairOutcome(
+            repaired_files=repaired_files,
+            file_results=file_results,
+            steps_applied=sorted(all_step_names),
+            route=route,
+            any_modified=any_modified,
+        )
+    finally:
+        if span_ctx is not None:
+            span_ctx.__exit__(None, None, None)

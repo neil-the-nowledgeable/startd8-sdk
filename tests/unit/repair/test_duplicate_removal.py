@@ -67,3 +67,83 @@ class TestDuplicateRemovalStep:
 
     def test_protocol_name(self):
         assert self.step.name == "duplicate_removal"
+
+
+class TestDuplicateDefRemoval:
+    """Tests for duplicate function/class definition removal."""
+
+    def setup_method(self):
+        self.step = DuplicateRemovalStep()
+        self.ctx = RepairContext()
+        self.path = Path("<test>")
+
+    def test_duplicate_function_keeps_last(self):
+        code = (
+            "def foo():\n"
+            "    return 1\n"
+            "\n"
+            "def foo():\n"
+            "    return 2\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        assert result.modified is True
+        assert result.metrics["defs_removed"] == 1
+        assert result.code.count("def foo():") == 1
+        assert "return 2" in result.code
+        assert "return 1" not in result.code
+
+    def test_duplicate_class_keeps_last(self):
+        code = (
+            "class MyClass:\n"
+            "    x = 1\n"
+            "\n"
+            "class MyClass:\n"
+            "    x = 2\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        assert result.modified is True
+        assert result.metrics["defs_removed"] == 1
+        assert result.code.count("class MyClass:") == 1
+        assert "x = 2" in result.code
+        assert "x = 1" not in result.code
+
+    def test_no_duplicate_defs_unchanged(self):
+        code = (
+            "def foo():\n"
+            "    return 1\n"
+            "\n"
+            "def bar():\n"
+            "    return 2\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        assert result.modified is False
+
+    def test_nested_defs_not_touched(self):
+        """Only module-level duplicates are removed; nested defs are left alone."""
+        code = (
+            "class Outer:\n"
+            "    def method(self):\n"
+            "        return 1\n"
+            "    def method(self):\n"
+            "        return 2\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        # Nested defs are inside class body, not in tree.body
+        assert result.modified is False
+
+    def test_triple_duplicate_keeps_last(self):
+        code = (
+            "def foo():\n"
+            "    return 1\n"
+            "\n"
+            "def foo():\n"
+            "    return 2\n"
+            "\n"
+            "def foo():\n"
+            "    return 3\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        assert result.modified is True
+        assert result.metrics["defs_removed"] == 2
+        assert result.code.count("def foo():") == 1
+        assert "return 3" in result.code
