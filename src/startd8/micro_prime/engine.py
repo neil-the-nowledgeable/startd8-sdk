@@ -565,18 +565,11 @@ class MicroPrimeEngine:
         if manifest is None or not self._config.decomposition_enabled:
             return {"viable": False, "strategy": None, "sub_count": 0}
 
-        viable = self._decomposer.can_decompose(
-            element, file_spec, manifest, reason,
-        )
-        if not viable:
-            return {"viable": False, "strategy": None, "sub_count": 0}
-
-        # Try to get a plan for sub_count and strategy name
         plan = self._decomposer.decompose(
             element, file_spec, manifest, reason,
         )
         if plan is None:
-            return {"viable": True, "strategy": None, "sub_count": 0}
+            return {"viable": False, "strategy": None, "sub_count": 0}
 
         return {
             "viable": True,
@@ -813,6 +806,7 @@ class MicroPrimeEngine:
             sub_results[sub.name] = sub_result.code
 
         # All sub-elements succeeded — assemble
+        # TODO(Phase 2, REQ-MP-906): Emit assembly_time_ms as OTel histogram
         assemble_start = time.monotonic()
         assembled = self._decomposer.assemble(plan, sub_results, skeleton)
         assembly_time_ms = (time.monotonic() - assemble_start) * 1000

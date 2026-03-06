@@ -244,12 +244,6 @@ class ClassDecomposeStrategy:
         classification_signals: Optional[set[str]] = None,
     ) -> Optional[DecompositionPlan]:
         """Produce a decomposition plan for a class element."""
-        if not self.can_handle(
-            element, file_spec, manifest, classification_reason,
-            classification_signals,
-        ):
-            return None
-
         sub_elements: list[SubElement] = []
         uncertainty_signals: list[str] = []
         order = 0
