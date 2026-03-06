@@ -166,8 +166,8 @@ class TestClassDecomposeStrategy:
         assert len(plan.sub_elements) == 1
         assert plan.sub_elements[0].kind == "class_shell"
 
-    def test_init_in_manifest_not_added_to_plan(self, class_manifest):
-        """__init__ already in file_spec is NOT added to the decomposition plan."""
+    def test_init_in_manifest_added_to_plan(self, class_manifest):
+        """__init__ in file_spec is added to the decomposition plan."""
         class_elem = ForwardElementSpec(
             kind=ElementKind.CLASS,
             name="MyClass",
@@ -203,9 +203,11 @@ class TestClassDecomposeStrategy:
             class_elem, file_spec, class_manifest, "class definition",
         )
         assert plan is not None
-        # Only class_shell, no __init__ sub-element
-        assert len(plan.sub_elements) == 1
-        assert plan.sub_elements[0].kind == "class_shell"
+        # class_shell + __init__
+        assert len(plan.sub_elements) == 2
+        kinds = [s.kind for s in plan.sub_elements]
+        assert "class_shell" in kinds
+        assert "init" in kinds
 
 
 # ── Assembly Tests (REQ-MP-904) ─────────────────────────────────────
@@ -296,6 +298,48 @@ class TestClassComposeAssembly:
         )
         assert result is not None
         assert "FORMAT" in result
+
+    def test_assembly_with_init_wraps_method(self, class_element_with_methods):
+        """__init__ body is wrapped into a method definition."""
+        strategy = ClassDecomposeStrategy()
+        init_spec = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="__init__",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="name")],
+                return_annotation="None",
+            ),
+            parent_class=class_element_with_methods.name,
+        )
+        plan = DecompositionPlan(
+            original_element=class_element_with_methods,
+            sub_elements=[
+                SubElement(
+                    name="class_shell", kind="class_shell",
+                    prompt_context="", depends_on=[], assembly_order=0,
+                    element_spec=None, deterministic=True,
+                ),
+                SubElement(
+                    name="__init__", kind="init",
+                    prompt_context="", depends_on=["class_shell"],
+                    assembly_order=1, element_spec=init_spec,
+                ),
+            ],
+            strategy="class_decompose",
+            assembly_kind="class_compose",
+            confidence=1.0,
+        )
+        result = strategy.assemble(
+            plan,
+            {
+                "class_shell": "pass",
+                "__init__": "self.name = name",
+            },
+            "",
+        )
+        assert result is not None
+        assert "def __init__(self, name)" in result
+        assert "self.name = name" in result
 
 
 # ── Confidence Computation Tests (REQ-MP-900, R1-S6) ────────────────

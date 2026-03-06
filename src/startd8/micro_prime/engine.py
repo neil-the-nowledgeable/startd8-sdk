@@ -745,8 +745,17 @@ class MicroPrimeEngine:
                     output_tokens=total_output,
                 )
 
+            sub_spec = sub.element_spec
+            if sub.prompt_context:
+                doc_hint = (
+                    f"{sub_spec.docstring_hint}\nContext: {sub.prompt_context}"
+                    if sub_spec.docstring_hint
+                    else sub.prompt_context
+                )
+                sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
+
             sub_result = self._handle_simple(
-                sub.element_spec, file_spec, skeleton, contracts,
+                sub_spec, file_spec, skeleton, contracts,
                 file_path, f"sub-element of {element.name}",
                 design_doc_sections=design_doc_sections,
             )
@@ -754,6 +763,16 @@ class MicroPrimeEngine:
             total_output += sub_result.output_tokens
 
             if not sub_result.success or not sub_result.code:
+                self._consecutive_failures += 1
+                if (
+                    self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
+                    and not self._circuit_open
+                ):
+                    self._circuit_open = True
+                    logger.warning(
+                        "Circuit breaker tripped: %d consecutive sub-element failures",
+                        self._consecutive_failures,
+                    )
                 logger.warning(
                     "Sub-element %s failed — abandoning decomposition of %s",
                     sub.name, element.name,
@@ -783,6 +802,8 @@ class MicroPrimeEngine:
                     output_tokens=total_output,
                 )
 
+            # Successful sub-element resets the breaker counter.
+            self._consecutive_failures = 0
             sub_results[sub.name] = sub_result.code
 
         # All sub-elements succeeded — assemble

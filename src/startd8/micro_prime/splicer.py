@@ -12,7 +12,7 @@ from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec
 from startd8.logging_config import get_logger
-from startd8.utils.code_manifest import ElementKind
+from startd8.utils.code_manifest import ElementKind, Param, Signature
 
 logger = get_logger(__name__)
 
@@ -64,12 +64,10 @@ def splice_body_into_skeleton(
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         return _splice_constant(body, element, skeleton)
 
-    # Class shell elements are no-ops for splicing — the class declaration
-    # and structure are already in the skeleton.  Methods inside the class
-    # are separate elements that get their own splice calls.  Attempting to
-    # splice a class shell would destroy the first method's stub.
+    # Class elements may include class-level attributes or __init__ bodies
+    # assembled by the decomposer. Splice those into the class body.
     if element.kind == ElementKind.CLASS:
-        return skeleton
+        return _splice_class_body(body, element, skeleton)
 
     return _splice_function_body(body, element, skeleton)
 
@@ -126,6 +124,175 @@ def _splice_function_body(
     # Validate
     if not _validate_skeleton(result):
         logger.warning("Spliced skeleton failed AST validation for %s", element.name)
+        return None
+
+    return result
+
+
+def _splice_class_body(
+    body: str,
+    element: ForwardElementSpec,
+    skeleton: str,
+) -> Optional[str]:
+    """Splice class-level body lines into a class definition."""
+    lines = skeleton.splitlines()
+
+    try:
+        tree = ast.parse(skeleton)
+    except SyntaxError:
+        logger.warning("Could not parse skeleton while splicing class %s", element.name)
+        return None
+
+    class_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == element.name:
+            class_node = node
+            break
+    if class_node is None:
+        logger.warning("Could not find class %s in skeleton", element.name)
+        return None
+
+    # Determine insertion point (after docstring if present)
+    insert_line = class_node.lineno  # 1-based line number to insert after
+    doc_node = None
+    if class_node.body:
+        first = class_node.body[0]
+        if isinstance(first, ast.Expr) and isinstance(getattr(first, "value", None), ast.Constant):
+            if isinstance(first.value.value, str):
+                doc_node = first
+    if doc_node is not None and getattr(doc_node, "end_lineno", None):
+        insert_line = doc_node.end_lineno
+
+    # Detect class body indentation
+    class_line = lines[class_node.lineno - 1]
+    class_indent = class_line[: len(class_line) - len(class_line.lstrip())]
+    body_indent = class_indent + "    "
+
+    # Remove class-level NotImplementedError stubs
+    remove_ranges: list[tuple[int, int]] = []
+    has_non_stub_stmt = False
+    for stmt in class_node.body:
+        if doc_node is not None and stmt is doc_node:
+            continue
+        if isinstance(stmt, ast.Pass):
+            start = getattr(stmt, "lineno", None)
+            end = getattr(stmt, "end_lineno", None) or start
+            if start is not None:
+                remove_ranges.append((start - 1, end - 1))
+            continue
+        if _is_not_implemented_raise(stmt):
+            start = getattr(stmt, "lineno", None)
+            end = getattr(stmt, "end_lineno", None) or start
+            if start is not None:
+                remove_ranges.append((start - 1, end - 1))
+            continue
+        has_non_stub_stmt = True
+
+    # Apply removals from bottom to top so indices remain valid
+    insert_idx = insert_line
+    for start, end in sorted(remove_ranges, reverse=True):
+        del lines[start : end + 1]
+        if start < insert_idx:
+            insert_idx -= (end - start + 1)
+
+    # Split out __init__ block if present in assembled body
+    body_lines = body.splitlines()
+    init_block: Optional[list[str]] = None
+    init_start = None
+    init_indent = 0
+    for i, line in enumerate(body_lines):
+        stripped = line.lstrip()
+        if stripped.startswith(("def __init__(", "async def __init__(")):
+            init_start = i
+            init_indent = len(line) - len(stripped)
+            break
+    if init_start is not None:
+        block: list[str] = [body_lines[init_start]]
+        j = init_start + 1
+        while j < len(body_lines):
+            ln = body_lines[j]
+            if not ln.strip():
+                block.append(ln)
+                j += 1
+                continue
+            indent = len(ln) - len(ln.lstrip())
+            if indent > init_indent:
+                block.append(ln)
+                j += 1
+                continue
+            break
+        init_block = block
+        body_lines = body_lines[:init_start] + body_lines[j:]
+
+    # Build insertion lines for class-level attrs / other statements
+    body_str = "\n".join(body_lines).strip()
+    if not body_str or body_str == "pass":
+        if has_non_stub_stmt:
+            result = "\n".join(lines)
+            if not _validate_skeleton(result):
+                logger.warning("Spliced class failed AST validation for %s", element.name)
+                return None
+            # Still allow __init__ replacement below if present.
+            insert_lines: list[str] = []
+        else:
+            insert_lines = [f"{body_indent}pass"]
+    else:
+        insert_lines = [
+            f"{body_indent}{line}" if line.strip() else ""
+            for line in body_lines
+        ]
+
+    # Insert body after the docstring / class def line
+    lines = lines[:insert_idx] + insert_lines + lines[insert_idx:]
+    result = "\n".join(lines)
+    init_insert_idx = insert_idx + len(insert_lines)
+
+    # If __init__ block exists and class already defines __init__, replace its stub body.
+    if init_block:
+        has_init = any(
+            isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and stmt.name == "__init__"
+            for stmt in class_node.body
+        )
+        if has_init:
+            init_spec = ForwardElementSpec(
+                kind=ElementKind.METHOD,
+                name="__init__",
+                signature=Signature(
+                    params=[Param(name="self")],
+                    return_annotation="None",
+                ),
+                parent_class=element.name,
+            )
+            init_body = _extract_body("\n".join(init_block), init_spec)
+            def_idx = _find_def_line(
+                "__init__", ElementKind.METHOD, result.splitlines(),
+                parent_class=element.name,
+            )
+            if def_idx is not None:
+                stub_idx = _find_stub_after_def(result.splitlines(), def_idx)
+                if stub_idx is not None:
+                    res_lines = result.splitlines()
+                    stub_line = res_lines[stub_idx]
+                    stub_indent = stub_line[: len(stub_line) - len(stub_line.lstrip())]
+                    dedented = textwrap.dedent(init_body).splitlines()
+                    reindented = [
+                        stub_indent + line if line.strip() else ""
+                        for line in dedented
+                    ]
+                    res_lines = res_lines[:stub_idx] + reindented + res_lines[stub_idx + 1:]
+                    result = "\n".join(res_lines)
+        else:
+            # No __init__ in skeleton — insert the assembled __init__ block.
+            init_lines = [
+                f"{body_indent}{line}" if line.strip() else ""
+                for line in init_block
+            ]
+            res_lines = result.splitlines()
+            res_lines = res_lines[:init_insert_idx] + init_lines + res_lines[init_insert_idx:]
+            result = "\n".join(res_lines)
+
+    if not _validate_skeleton(result):
+        logger.warning("Spliced class failed AST validation for %s", element.name)
         return None
 
     return result

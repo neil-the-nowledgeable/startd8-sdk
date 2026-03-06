@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import re
+import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
@@ -23,7 +24,8 @@ from startd8.forward_manifest import (
 )
 from startd8.logging_config import get_logger
 from startd8.micro_prime.models import MicroPrimeConfig
-from startd8.utils.code_manifest import ElementKind
+from startd8.utils.code_manifest import ElementKind, Param, Signature
+from startd8.utils.file_assembler import DeterministicFileAssembler
 
 logger = get_logger(__name__)
 
@@ -201,9 +203,21 @@ class ClassDecomposeStrategy:
         sub_elements: list[SubElement] = []
         uncertainty_signals: list[str] = []
         order = 0
+        max_sub = self._config.max_sub_elements
+
+        def _append(sub: SubElement) -> bool:
+            """Append sub-element, enforcing max_sub_elements early."""
+            sub_elements.append(sub)
+            if len(sub_elements) > max_sub:
+                logger.debug(
+                    "Plan for %s rejected: %d sub-elements > max %d",
+                    element.name, len(sub_elements), max_sub,
+                )
+                return False
+            return True
 
         # 1. Class shell — always deterministic
-        sub_elements.append(SubElement(
+        if not _append(SubElement(
             name="class_shell",
             kind="class_shell",
             prompt_context="",
@@ -211,7 +225,8 @@ class ClassDecomposeStrategy:
             assembly_order=order,
             element_spec=None,  # Deterministic — extracted from skeleton
             deterministic=True,
-        ))
+        )):
+            return None
         order += 1
 
         # 2. Class-level attributes (constants/variables with parent_class == element.name)
@@ -220,36 +235,56 @@ class ClassDecomposeStrategy:
             if len(class_attrs) > 1:
                 uncertainty_signals.append("class_level_attrs_gt1")
             attr_names = ", ".join(a.name for a in class_attrs)
-            # NOTE: ForwardElementSpec validation disallows parent_class on
-            # CONSTANT kind. Use METHOD kind with a synthetic signature for the
-            # spec so it passes validation. The assembly strategy handles the
-            # actual class-scope placement.
-            sub_elements.append(SubElement(
+            # NOTE: ForwardElementSpec disallows parent_class on CONSTANT kinds.
+            # Use a METHOD spec with a minimal signature so validation passes.
+            # Assembly inserts the generated lines at class scope.
+            if not _append(SubElement(
                 name="_class_attributes",
                 kind="class_attr",
-                prompt_context=f"Class-level attributes for {element.name}: {attr_names}",
+                prompt_context=(
+                    f"Class-level attributes for {element.name}: {attr_names}. "
+                    "Output only assignment statements; do not use self."
+                ),
                 depends_on=["class_shell"],
                 assembly_order=order,
                 element_spec=ForwardElementSpec(
                     kind=ElementKind.METHOD,
                     name="_class_attributes",
                     parent_class=element.name,
+                    signature=Signature(
+                        params=[Param(name="self")],
+                        return_annotation="None",
+                    ),
                     docstring_hint=f"Class-level attributes for {element.name}.",
                 ),
-            ))
+            )):
+                return None
             order += 1
 
-        # 3. __init__ — only if NOT already in file_spec as a separate element.
-        # If __init__ IS in file_spec, the engine's normal loop handles it.
-        init_in_manifest = any(
-            e.name == "__init__" and e.parent_class == element.name
-            for e in file_spec.elements
+        # 3. __init__ — include if present in manifest, otherwise signal uncertainty.
+        init_spec = next(
+            (
+                e for e in file_spec.elements
+                if e.name == "__init__" and e.parent_class == element.name
+            ),
+            None,
         )
-        if not init_in_manifest:
-            # No __init__ in manifest and no class-level state → shell with pass suffices.
-            # If the class genuinely needs an __init__ not in the manifest,
-            # reject decomposition (manifest is source of truth).
-            pass
+        if init_spec is not None:
+            if not _append(SubElement(
+                name="__init__",
+                kind="init",
+                prompt_context=f"Initialize {element.name}.",
+                depends_on=["class_shell"],
+                assembly_order=order,
+                element_spec=init_spec,
+            )):
+                return None
+            order += 1
+        else:
+            uncertainty_signals.append("missing_init")
+
+        # If class has no __init__ in manifest and no class-level state,
+        # shell-only plan suffices.
 
         # Build plan
         dummy_plan = DecompositionPlan(
@@ -280,19 +315,51 @@ class ClassDecomposeStrategy:
             return None
 
         parts: list[str] = []
+        sub_map = {s.name: s for s in plan.sub_elements}
+        assembler = DeterministicFileAssembler()
 
         # Class attributes
         attr_code = sub_results.get("_class_attributes")
         if attr_code:
-            parts.append(attr_code)
+            parts.append(textwrap.dedent(attr_code).strip("\n"))
 
         # __init__ body
         init_code = sub_results.get("__init__")
         if init_code:
-            parts.append(init_code)
+            init_spec = sub_map.get("__init__")
+            if init_spec is None or init_spec.element_spec is None:
+                logger.warning(
+                    "Missing __init__ element_spec for %s",
+                    plan.original_element.name,
+                )
+                return None
+            spec = init_spec.element_spec
+            if spec.signature is None:
+                logger.warning(
+                    "Missing __init__ signature for %s",
+                    plan.original_element.name,
+                )
+                return None
+            prefix = "async def" if spec.kind in (
+                ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+            ) else "def"
+            sig = assembler._render_signature(spec.signature)
+            ret = ""
+            if spec.signature.return_annotation:
+                ret = f" -> {spec.signature.return_annotation}"
+            method_lines = [f"{prefix} {spec.name}{sig}{ret}:"]
+            if spec.docstring_hint:
+                method_lines.append(f'    """{spec.docstring_hint}"""')
+            body_lines = textwrap.dedent(init_code).splitlines()
+            if not body_lines:
+                body_lines = ["pass"]
+            method_lines.extend(
+                [f"    {line}" if line.strip() else "" for line in body_lines]
+            )
+            parts.append("\n".join(method_lines))
 
         if parts:
-            assembled = "\n".join(parts)
+            assembled = "\n\n".join(parts)
         else:
             # Shell only — return "pass" as the body token
             assembled = shell_code  # "pass"
