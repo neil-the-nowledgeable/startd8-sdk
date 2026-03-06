@@ -387,7 +387,8 @@ class TemplateRegistry:
         if not self._enabled:
             return None
         if file_spec is None:
-            return None
+            from startd8.forward_manifest import ForwardFileSpec
+            file_spec = ForwardFileSpec(file="", elements=[], imports=[])
         contracts = contracts or []
         return try_template_match_with_name(element, file_spec, contracts)
 
@@ -415,7 +416,8 @@ class TemplateRegistry:
         if not self._enabled:
             return False
         if file_spec is None:
-            return False
+            from startd8.forward_manifest import ForwardFileSpec
+            file_spec = ForwardFileSpec(file="", elements=[], imports=[])
         contracts = contracts or []
         return self._try_match(element, file_spec, contracts) is not None
 

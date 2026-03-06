@@ -215,15 +215,15 @@ class TestStructuralVerify:
 
     def test_valid_function(self, simple_function_element):
         code = "def get_name(self, key: str) -> str:\n    return key"
-        assert _structural_verify(code, simple_function_element) is True
+        assert _structural_verify(code, simple_function_element)[0] is True
 
     def test_invalid_syntax(self, simple_function_element):
         code = "def get_name(self, :\n    return"
-        assert _structural_verify(code, simple_function_element) is False
+        assert _structural_verify(code, simple_function_element)[0] is False
 
     def test_valid_constant(self, constant_element):
         code = "DEFAULT_TIMEOUT = 30"
-        assert _structural_verify(code, constant_element) is True
+        assert _structural_verify(code, constant_element)[0] is True
 
     def test_method_with_indentation(self):
         elem = ForwardElementSpec(
@@ -233,7 +233,7 @@ class TestStructuralVerify:
             signature=Signature(params=[Param(name="self")]),
         )
         code = "    def helper(self):\n        return 1"
-        assert _structural_verify(code, elem) is True
+        assert _structural_verify(code, elem)[0] is True
 
 
 class TestCompoundChain:
