@@ -367,9 +367,17 @@ def _splice_constant(
     """Splice a constant value into its skeleton placeholder."""
     lines = skeleton.splitlines()
 
+    search_start = 0
+    search_end = len(lines)
+    if element.parent_class:
+        class_range = _find_class_range(element.parent_class, lines)
+        if class_range is not None:
+            search_start, search_end = class_range
+
     # Find the line with the constant's NotImplementedError or placeholder
     target_idx = None
-    for i, line in enumerate(lines):
+    for i in range(search_start, search_end):
+        line = lines[i]
         stripped = line.strip()
         # Look for patterns like: MY_CONST = ... or MY_CONST: Type = ...
         # Use word-boundary check to avoid false-matching longer names
@@ -392,7 +400,8 @@ def _splice_constant(
 
     if target_idx is None:
         # Try finding by just the name at the start of a line
-        for i, line in enumerate(lines):
+        for i in range(search_start, search_end):
+            line = lines[i]
             stripped = line.strip()
             if stripped.startswith(f"{element.name} =") or stripped.startswith(f"{element.name}:"):
                 target_idx = i

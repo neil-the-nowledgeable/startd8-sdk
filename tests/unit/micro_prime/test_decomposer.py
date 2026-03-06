@@ -133,9 +133,8 @@ class TestClassDecomposeStrategy:
     def test_class_without_attrs_produces_shell_only(self, class_manifest):
         """Class with no class-level attributes produces shell-only plan.
 
-        NOTE: ForwardElementSpec validation disallows parent_class on CONSTANT
-        kind elements. Class-level attributes as separate manifest elements
-        require schema evolution. For Phase 1, _count_class_attrs returns 0.
+        NOTE: Class-level attributes are represented as CONSTANT/VARIABLE
+        elements with parent_class set to the owning class.
         """
         class_elem = ForwardElementSpec(
             kind=ElementKind.CLASS,

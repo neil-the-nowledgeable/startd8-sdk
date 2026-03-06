@@ -158,7 +158,13 @@ class ForwardElementSpec(BaseModel):
             ElementKind.PROPERTY,
         }
         class_kinds = {ElementKind.CLASS}
-        method_kinds = {ElementKind.METHOD, ElementKind.ASYNC_METHOD, ElementKind.PROPERTY}
+        method_kinds = {
+            ElementKind.METHOD,
+            ElementKind.ASYNC_METHOD,
+            ElementKind.PROPERTY,
+            ElementKind.CONSTANT,
+            ElementKind.VARIABLE,
+        }
 
         if self.kind in callable_kinds and self.signature is None:
             raise ValueError(
@@ -171,7 +177,7 @@ class ForwardElementSpec(BaseModel):
         if self.parent_class is not None and self.kind not in method_kinds:
             raise ValueError(
                 f"ForwardElementSpec with parent_class must be METHOD, "
-                f"ASYNC_METHOD, or PROPERTY, got '{self.kind.value}'"
+                f"ASYNC_METHOD, PROPERTY, CONSTANT, or VARIABLE, got '{self.kind.value}'"
             )
         if self.parent_class is not None and self.parent_class.count(".") > 1:
             raise ValueError(

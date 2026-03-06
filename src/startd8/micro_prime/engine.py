@@ -1433,11 +1433,15 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, st
 
     # For CLASS elements, verify the class name exists in the AST (R1-S3)
     if element.kind == ElementKind.CLASS:
+        if code.strip() == "pass":
+            return True, "class shell pass"
+        # Reject any remaining NotImplementedError stubs in class body.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Raise) and _is_not_implemented(node):
+                return False, "contains NotImplementedError"
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name == element.name:
                 return True, "class definition found"
-        if code.strip() == "pass":
-            return True, "class shell pass"
         # The assembled code from ModerateDecomposer is the body of the class. 
         # Since it successfully parsed via ast.parse(code) above, and assemble()
         # already verified it can reside inside a class block, we accept it.
