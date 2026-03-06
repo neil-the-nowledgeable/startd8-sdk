@@ -556,7 +556,6 @@ class MicroPrimeEngine:
         file_spec: ForwardFileSpec,
         manifest: Optional[ForwardManifest],
         reason: str,
-        classification_signals: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         """Lightweight decomposition viability check for dry-run reports.
 
@@ -567,14 +566,14 @@ class MicroPrimeEngine:
             return {"viable": False, "strategy": None, "sub_count": 0}
 
         viable = self._decomposer.can_decompose(
-            element, file_spec, manifest, reason, classification_signals,
+            element, file_spec, manifest, reason,
         )
         if not viable:
             return {"viable": False, "strategy": None, "sub_count": 0}
 
         # Try to get a plan for sub_count and strategy name
         plan = self._decomposer.decompose(
-            element, file_spec, manifest, reason, classification_signals,
+            element, file_spec, manifest, reason,
         )
         if plan is None:
             return {"viable": True, "strategy": None, "sub_count": 0}
@@ -597,9 +596,13 @@ class MicroPrimeEngine:
         file_path: str,
         reasoning: str = "",
         design_doc_sections: Optional[list[str]] = None,
-        classification_signals: Optional[set[str]] = None,
     ) -> ElementResult:
-        """Handle MODERATE tier: attempt decomposition, then escalate."""
+        """Handle MODERATE tier: attempt decomposition, then escalate.
+
+        Note: Phase 3 (FunctionChainStrategy) will need to add
+        classification_signals plumbing from the classifier through
+        _process_element_with_tier into this method.
+        """
         start_time = time.monotonic()
 
         # Circuit breaker gate (R1-S1)
@@ -657,7 +660,7 @@ class MicroPrimeEngine:
 
         # Single entry point (R3-S2)
         plan = self._decomposer.decompose(
-            element, file_spec, manifest, reasoning, classification_signals,
+            element, file_spec, manifest, reasoning,
         )
         if plan is None:
             return ElementResult(

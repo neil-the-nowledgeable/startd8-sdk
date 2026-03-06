@@ -236,8 +236,8 @@ class ClassDecomposeStrategy:
             if len(class_attrs) > 1:
                 uncertainty_signals.append("class_level_attrs_gt1")
             attr_names = ", ".join(a.name for a in class_attrs)
-            # NOTE: ForwardElementSpec disallows parent_class on CONSTANT kinds.
-            # Use a METHOD spec with a minimal signature so validation passes.
+            # Use a VARIABLE spec without parent_class to avoid the classifier's
+            # class-membership bonus (+2) that can push this to MODERATE tier.
             # Assembly inserts the generated lines at class scope.
             if not _append(SubElement(
                 name="_class_attributes",
@@ -249,13 +249,9 @@ class ClassDecomposeStrategy:
                 depends_on=["class_shell"],
                 assembly_order=order,
                 element_spec=ForwardElementSpec(
-                    kind=ElementKind.METHOD,
+                    kind=ElementKind.VARIABLE,
                     name="_class_attributes",
-                    parent_class=element.name,
-                    signature=Signature(
-                        params=[Param(name="self")],
-                        return_annotation="None",
-                    ),
+                    signature=None,
                     docstring_hint=f"Class-level attributes for {element.name}.",
                 ),
             )):
