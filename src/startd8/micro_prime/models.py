@@ -176,6 +176,13 @@ class MicroPrimeConfig(BaseModel):
     cloud_escalation_max_attempts: int = 1
     cloud_escalation_retry_strategy: str = "same_prompt"
     cloud_escalation_retry_max_chars: int = 512
+    # Semantic verification (REQ-MP-512)
+    semantic_verification_enabled: bool = False
+    semantic_verification_agent_spec: Optional[str] = None
+    semantic_verification_max_tokens: int = 256
+    semantic_verification_temperature: float = 0.0
+    semantic_verification_prompt_max_chars: int = 4000
+    semantic_verification_fn: Optional[Any] = Field(default=None, exclude=True)
     dry_run: bool = False
     # Classifier thresholds
     max_simple_imports: int = 8

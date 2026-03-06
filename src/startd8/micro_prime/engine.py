@@ -9,6 +9,7 @@ Routes elements through the local-first code generation pipeline:
 from __future__ import annotations
 
 import ast
+import json
 import time
 from typing import Any, Optional
 
@@ -144,6 +145,8 @@ class MicroPrimeEngine:
         self._current_manifest: Optional[ForwardManifest] = None
         # Cached Ollama agent (C-1: avoid re-creation per element)
         self._ollama_agent: Optional[Any] = None
+        # Cached semantic verification agent (optional)
+        self._semantic_agent: Optional[Any] = None
 
     @property
     def config(self) -> MicroPrimeConfig:
@@ -1115,6 +1118,45 @@ class MicroPrimeEngine:
                 ),
             )
 
+        # Optional semantic verification (REQ-MP-512)
+        if self._config.semantic_verification_enabled:
+            semantic_ok, semantic_reason = self._semantic_verify(
+                code, element, file_spec, contracts, skeleton,
+            )
+            if not semantic_ok:
+                return ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason=reasoning,
+                    success=False,
+                    code=code,
+                    repair_steps_applied=repair_steps,
+                    repair_attribution=repair_attribution,
+                    repair_recovered=repair_recovered,
+                    ast_valid_before_repair=ast_valid_before,
+                    ast_valid_after_repair=ast_valid_after,
+                    verification_verdict="fail",
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    escalation=build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        reason=EscalationReason.SEMANTIC_FAILURE,
+                        detail="Semantic verification failed",
+                        last_code=code,
+                        last_error=semantic_reason or "semantic_verification_failed",
+                        raw_output=raw_output,
+                        repaired_code=repaired_code or code,
+                        repair_steps=repair_steps,
+                        local_model=model_name,
+                        element_fqn=element_fqn,
+                    ),
+                )
+
         gen_time = (time.monotonic() - start_time) * 1000
 
         # Record as completed for few-shot
@@ -1178,6 +1220,81 @@ class MicroPrimeEngine:
             output_tokens = getattr(token_usage, "output", 0) or 0
 
         return code, input_tokens, output_tokens
+
+    def _semantic_verify(
+        self,
+        code: str,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        contracts: list[InterfaceContract],
+        skeleton: str,
+    ) -> tuple[bool, str]:
+        """Optional semantic verification hook (REQ-MP-512)."""
+        verifier = self._config.semantic_verification_fn
+        if verifier:
+            try:
+                return verifier(code, element, file_spec, contracts, skeleton)
+            except Exception as exc:
+                logger.warning("Semantic verifier failed: %s", exc)
+                return False, f"semantic verifier error: {exc}"
+
+        spec = self._config.semantic_verification_agent_spec
+        if not spec:
+            return True, "semantic verification skipped"
+
+        if self._semantic_agent is None:
+            from startd8.utils.agent_resolution import resolve_agent_spec
+
+            self._semantic_agent = resolve_agent_spec(
+                spec, max_tokens=self._config.semantic_verification_max_tokens,
+            )
+
+        prompt = [
+            "You are verifying generated code for a target element.",
+            f"Element: {element.name}",
+        ]
+        if element.parent_class:
+            prompt.append(f"Parent class: {element.parent_class}")
+        if element.signature:
+            prompt.append(f"Signature: {element.signature.signature_text}")
+        if element.docstring_hint:
+            prompt.append(f"Docstring hint: {element.docstring_hint}")
+        if contracts:
+            prompt.append("Binding constraints:")
+            for c in contracts:
+                if c.binding_text:
+                    prompt.append(f"- {c.binding_text}")
+        if skeleton:
+            skel = skeleton
+            if len(skel) > self._config.semantic_verification_prompt_max_chars:
+                skel = skel[: self._config.semantic_verification_prompt_max_chars] + "\n... [truncated]"
+            prompt.append("Skeleton context:")
+            prompt.append(skel)
+        prompt.append("Generated code:")
+        prompt.append("```python")
+        prompt.append(code)
+        prompt.append("```")
+        prompt.append(
+            "Return JSON: {\"pass\": true|false, \"reason\": \"short explanation\"}."
+        )
+
+        result_text, _time_ms, _tokens = self._semantic_agent.generate(
+            "\n".join(prompt),
+            temperature=self._config.semantic_verification_temperature,
+        )
+
+        try:
+            start = result_text.find("{")
+            end = result_text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise ValueError("no JSON object found")
+            payload = json.loads(result_text[start : end + 1])
+            passed = bool(payload.get("pass", False))
+            reason = str(payload.get("reason", "")) or "semantic verification result"
+            return passed, reason
+        except Exception as exc:
+            logger.warning("Semantic verification parse failed: %s", exc)
+            return False, "semantic verification parse failed"
 
     def _get_element_contracts(
         self,
