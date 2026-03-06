@@ -102,6 +102,98 @@ class GateEmitter:
         result_val = data.get("result", "unknown")
         logger.info("Emitted quality gate result: %s -> %s", gate_id, result_val)
 
+    # -- factory: generic quality gate ----------------------------------------
+
+    @classmethod
+    def quality_gate_result(
+        cls,
+        gate_name: str,
+        passed: bool,
+        details: Dict[str, Any],
+        workflow_id: str = "unknown",
+        trace_id: Optional[str] = None,
+    ) -> GateResult | Dict[str, Any]:
+        """Create a ``GateResult`` for an ad-hoc quality gate.
+
+        This is the generic factory used by call sites that don't fit one of
+        the specialised factories (``from_review_result``, etc.).  The
+        *gate_name* becomes the gate ID suffix, and *details* is flattened
+        into the evidence list.
+
+        Used by ``integration_engine.py`` for manifest breaking-change and
+        MRO-change gates.
+        """
+        reason = (
+            f"Gate '{gate_name}' passed"
+            if passed
+            else f"Gate '{gate_name}' failed"
+        )
+
+        # Build evidence from details dict
+        if CONTEXTCORE_AVAILABLE:
+            evidence: list[EvidenceItem] = []
+            for key, value in details.items():
+                evidence.append(
+                    EvidenceItem(
+                        type="detail",
+                        ref=f"gate://{gate_name}/{key}",
+                        description=str(value),
+                    )
+                )
+
+            phase_val = None
+            for candidate in ("INTEGRATE", "INTEGRATION", "IMPLEMENT"):
+                if hasattr(Phase, candidate):
+                    phase_val = getattr(Phase, candidate)
+                    break
+            if phase_val is None:
+                logger.warning(
+                    "GateEmitter: no matching Phase enum for integration gates, "
+                    "falling back to TEST_VALIDATE",
+                )
+                phase_val = Phase.TEST_VALIDATE
+
+            return GateResult(
+                schema_version="v1",
+                gate_id=f"artisan.{gate_name}",
+                trace_id=trace_id,
+                task_id=None,
+                phase=phase_val,
+                result=GateOutcome.PASS if passed else GateOutcome.FAIL,
+                severity=GateSeverity.INFO if passed else GateSeverity.WARNING,
+                reason=reason,
+                next_action="proceed" if passed else "investigate",
+                blocking=False,
+                evidence=evidence or None,
+                checked_at=cls._now(),
+            )
+
+        # Fallback dict -------------------------------------------------------
+        evidence_dicts: list[dict[str, str]] = []
+        for key, value in details.items():
+            evidence_dicts.append(
+                {
+                    "type": "detail",
+                    "ref": f"gate://{gate_name}/{key}",
+                    "description": str(value),
+                }
+            )
+
+        return {
+            "schema_version": "v1",
+            "gate_id": f"artisan.{gate_name}",
+            "trace_id": trace_id,
+            "task_id": None,
+            "phase": "INTEGRATE",
+            "result": "pass" if passed else "fail",
+            "severity": "info" if passed else "warning",
+            "reason": reason,
+            "next_action": "proceed" if passed else "investigate",
+            "blocking": False,
+            "evidence": evidence_dicts or None,
+            "checked_at": cls._now().isoformat(),
+        }
+
     # -- factory: review result ----------------------------------------------
 
     @classmethod
@@ -423,6 +515,10 @@ class GateEmitter:
                     phase_val = getattr(Phase, candidate)
                     break
             if phase_val is None:
+                logger.warning(
+                    "GateEmitter: no matching Phase enum for micro-prime gates, "
+                    "falling back to TEST_VALIDATE",
+                )
                 phase_val = Phase.TEST_VALIDATE
 
             evidence: list[EvidenceItem] = []
