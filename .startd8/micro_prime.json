@@ -1,0 +1,30 @@
+{
+  "cloud_agent_spec": "anthropic:claude-haiku-4-5-20251001",
+  "config": {
+    "provider": "ollama",
+    "model": "startd8-coder",
+    "temperature": 0.1,
+    "max_tokens": 2048,
+    "input_token_budget": 1024,
+    "templates_enabled": true,
+    "repair_enabled": true,
+    "few_shot_enabled": true,
+    "max_few_shot_examples": 2,
+    "min_element_fill_rate": 0.5,
+    "decomposition_enabled": true,
+    "class_decompose_enabled": true,
+    "function_chain_enabled": true,
+    "max_sub_elements": 5,
+    "max_helpers_per_function": 4,
+    "decomposition_confidence_threshold": 0.6,
+    "cloud_escalation_max_attempts": 3,
+    "cloud_escalation_retry_strategy": "same_prompt",
+    "cloud_escalation_retry_max_chars": 512,
+    "semantic_verification_enabled": false,
+    "semantic_verification_agent_spec": null,
+    "semantic_verification_max_tokens": 256,
+    "semantic_verification_temperature": 0.0,
+    "semantic_verification_prompt_max_chars": 4000,
+    "dry_run": false
+  }
+}

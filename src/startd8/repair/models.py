@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..exceptions import FileOperationError, Startd8Error
 
@@ -124,6 +124,7 @@ class RepairAttribution(BaseModel):
     return_type_restored: bool = False
     imports_added: int = 0
     imports_removed: int = 0
+    import_names: List[str] = Field(default_factory=list)
 
 
 @dataclass

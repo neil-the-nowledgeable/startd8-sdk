@@ -91,6 +91,7 @@ docs/.startd8/
 /.startd8/*
 !/.startd8/prompts/
 !/.startd8/prompts/**
+!/.startd8/micro_prime.json
 /.startd8/prompts/.*.lock
 
 # ---------------------------------------------------------------------------

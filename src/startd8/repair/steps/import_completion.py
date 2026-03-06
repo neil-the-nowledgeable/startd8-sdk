@@ -155,12 +155,16 @@ class ManifestImportCompletion:
 
         # Find manifest imports that provide used names but are missing
         missing_imports: list[str] = []
+        import_names: list[str] = []
         for imp in element_context.imports:
             if hasattr(imp, "kind") and imp.kind == "from":
                 for name in imp.names:
                     if name in used_names and name not in existing_imports:
                         names_str = ", ".join(imp.names)
                         missing_imports.append(f"from {imp.module} import {names_str}")
+                        for imp_name in imp.names:
+                            if imp_name not in import_names:
+                                import_names.append(imp_name)
                         existing_imports.update(imp.names)
                         break
             elif hasattr(imp, "module"):
@@ -169,6 +173,8 @@ class ManifestImportCompletion:
                 if effective_name in used_names and effective_name not in existing_imports:
                     alias_str = f" as {imp.alias}" if getattr(imp, "alias", None) else ""
                     missing_imports.append(f"import {imp.module}{alias_str}")
+                    if effective_name not in import_names:
+                        import_names.append(effective_name)
                     existing_imports.add(effective_name)
 
         if not missing_imports:
@@ -183,7 +189,10 @@ class ManifestImportCompletion:
             step_name=self.name,
             modified=True,
             code=new_code,
-            metrics={"imports_added": len(missing_imports)},
+            metrics={
+                "imports_added": len(missing_imports),
+                "import_names": import_names,
+            },
         )
 
 
@@ -233,6 +242,7 @@ class ErrorDrivenImportCompletion:
                 pass
 
         missing_imports: list[str] = []
+        import_names: list[str] = []
         for diag in import_diagnostics:
             module = diag.module
             if not module or module in existing:
@@ -249,10 +259,15 @@ class ErrorDrivenImportCompletion:
 
             if diag.name:
                 missing_imports.append(f"from {module} import {diag.name}")
+                if diag.name not in import_names:
+                    import_names.append(diag.name)
                 existing.add(diag.name)
             else:
                 missing_imports.append(f"import {module}")
-                existing.add(module.split(".")[0])
+                mod_base = module.split(".")[0]
+                if mod_base not in import_names:
+                    import_names.append(mod_base)
+                existing.add(mod_base)
 
         if not missing_imports:
             return RepairStepResult(
@@ -266,5 +281,8 @@ class ErrorDrivenImportCompletion:
             step_name=self.name,
             modified=True,
             code=new_code,
-            metrics={"imports_added": len(missing_imports)},
+            metrics={
+                "imports_added": len(missing_imports),
+                "import_names": import_names,
+            },
         )

@@ -31,6 +31,56 @@ _CLOUD_COST_PER_M_INPUT = 0.80   # $/1M input tokens (Haiku)
 _CLOUD_COST_PER_M_OUTPUT = 4.00  # $/1M output tokens (Haiku)
 
 
+def _tier_label(tier: TierClassification | str) -> str:
+    """Return normalized tier label for experiment schema output."""
+    if hasattr(tier, "value"):
+        value = getattr(tier, "value")
+    else:
+        value = str(tier)
+    return value.upper()
+
+
+def _element_metrics_to_schema(metrics: MicroPrimeElementMetrics) -> dict[str, Any]:
+    """Map per-element metrics to experiment schema (REQ-MP-603)."""
+    ast_valid = (
+        metrics.ast_valid_after_repair
+        if metrics.ast_valid_after_repair is not None
+        else metrics.success
+    )
+    tier_label = _tier_label(metrics.tier)
+    return {
+        "fqn": metrics.element_fqn or metrics.element_name,
+        "file": metrics.file_path,
+        "tier": tier_label,
+        "element_name": metrics.element_name,
+        "element_kind": metrics.element_kind,
+        "classification_reason": metrics.classification_reason,
+        "template_used": metrics.template_used,
+        "template_name": metrics.template_name,
+        "success": metrics.success,
+        "generation_time_ms": metrics.generation_time_ms,
+        "generation_tokens": metrics.generation_tokens,
+        "input_tokens": metrics.input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "model": metrics.model,
+        "repair_steps": list(metrics.repair_steps),
+        "repair_steps_applied": list(metrics.repair_steps),
+        "repair_recovered": metrics.repair_recovered,
+        "repair_attribution": (
+            metrics.repair_attribution.model_dump() if metrics.repair_attribution else None
+        ),
+        "ast_valid_before_repair": metrics.ast_valid_before_repair,
+        "ast_valid_after_repair": metrics.ast_valid_after_repair,
+        "ast_valid": ast_valid,
+        "verification": metrics.verification_verdict,
+        "verification_verdict": metrics.verification_verdict,
+        "escalated": metrics.escalated,
+        "escalation_reason": metrics.escalation_reason,
+        "api_file_import_bump": metrics.api_file_import_bump,
+        "api_element_adjustment": metrics.api_element_adjustment,
+    }
+
+
 class MetricsCollector:
     """Accumulates per-element metrics during an engine run (REQ-MP-600)."""
 
@@ -207,6 +257,14 @@ def generate_experiment_result(
         "imports_added": 0,
         "total_recovered": 0,
     }
+    recovered_by_step = {
+        "fence_stripped": 0,
+        "trimmed": 0,
+        "bare_wrapped": 0,
+        "indent_normalized": 0,
+        "signature_reconciled": 0,
+        "imports_added": 0,
+    }
 
     for fr in seed_result.file_results:
         for er in fr.element_results:
@@ -241,15 +299,27 @@ def generate_experiment_result(
                 attr = er.repair_attribution
                 if attr.fence_stripped:
                     repair_summary["fence_stripped"] += 1
+                    if er.repair_recovered:
+                        recovered_by_step["fence_stripped"] += 1
                 if attr.trimmed:
                     repair_summary["trimmed"] += 1
+                    if er.repair_recovered:
+                        recovered_by_step["trimmed"] += 1
                 if attr.bare_wrapped:
                     repair_summary["bare_wrapped"] += 1
+                    if er.repair_recovered:
+                        recovered_by_step["bare_wrapped"] += 1
                 if attr.indent_source:
                     repair_summary["indent_normalized"] += 1
+                    if er.repair_recovered:
+                        recovered_by_step["indent_normalized"] += 1
                 if attr.params_changed > 0 or attr.return_type_restored:
                     repair_summary["signature_reconciled"] += 1
+                    if er.repair_recovered:
+                        recovered_by_step["signature_reconciled"] += 1
                 repair_summary["imports_added"] += attr.imports_added
+                if attr.imports_added > 0 and er.repair_recovered:
+                    recovered_by_step["imports_added"] += 1
 
     summary = {
         "total_elements": seed_result.total_count,
@@ -275,13 +345,36 @@ def generate_experiment_result(
         },
     }
 
+    total_recovered = repair_summary["total_recovered"]
+    escalated_total = seed_result.escalated_count
+    repair_recovery_rate = (
+        total_recovered / (total_recovered + escalated_total)
+        if (total_recovered + escalated_total) > 0
+        else 0.0
+    )
+    most_effective_step: Optional[str] = None
+    if recovered_by_step:
+        max_recovered = max(recovered_by_step.values())
+        if max_recovered > 0:
+            top_steps = sorted(
+                step for step, count in recovered_by_step.items() if count == max_recovered
+            )
+            most_effective_step = top_steps[0] if top_steps else None
+
+    repair_summary["total_elements_repaired"] = total_recovered
+    repair_summary["repair_recovery_rate"] = repair_recovery_rate
+    repair_summary["most_effective_step"] = most_effective_step
+    repair_summary["recovered_by_step"] = recovered_by_step
+
     if collector is None:
         collector = MetricsCollector()
         for fr in seed_result.file_results:
             for er in fr.element_results:
                 collector.record(er)
 
-    elements = [m.model_dump() for m in collector.metrics]
+    elements = [_element_metrics_to_schema(m) for m in collector.metrics]
+    cost = cost_report.model_dump()
+    cost["local_inference_time_s"] = cost_report.local_inference_time_total_s
 
     return {
         "schema_version": "1.0.0",
@@ -290,6 +383,6 @@ def generate_experiment_result(
         "config": config.model_dump(),
         "summary": summary,
         "repair_summary": repair_summary,
-        "cost": cost_report.model_dump(),
+        "cost": cost,
         "elements": elements,
     }

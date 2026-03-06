@@ -356,3 +356,151 @@ class GateEmitter:
             "evidence": evidence_dicts or None,
             "checked_at": cls._now().isoformat(),
         }
+
+    # -- factory: micro-prime result ----------------------------------------
+
+    @classmethod
+    def from_micro_prime_result(
+        cls,
+        micro_prime_result: Any,
+        workflow_id: str,
+        trace_id: Optional[str] = None,
+    ) -> GateResult | Dict[str, Any]:
+        """Map a micro-prime pre-pass result to a ``GateResult``.
+
+        Accepts either a ``PrePassResult`` instance or a dict payload from
+        ``context['micro_prime_result']`` (REQ-MP-600).
+        """
+        metrics: dict[str, Any] = {}
+        escalated_elements: list[Any] = []
+        elements_filled = 0
+
+        if isinstance(micro_prime_result, dict):
+            metrics = micro_prime_result.get("metrics") or {}
+            escalated_elements = micro_prime_result.get("escalated_elements") or []
+            elements_filled = int(
+                micro_prime_result.get("elements_filled", metrics.get("local_success_count", 0))
+                or 0
+            )
+        else:
+            metrics = getattr(micro_prime_result, "metrics", {}) or {}
+            escalated_elements = getattr(micro_prime_result, "escalated_elements", []) or []
+            elements_filled = int(
+                getattr(micro_prime_result, "elements_filled", 0)
+                or metrics.get("local_success_count", 0)
+                or 0
+            )
+
+        total_elements = int(metrics.get("total_elements", 0) or 0)
+        if total_elements == 0:
+            total_elements = elements_filled + len(escalated_elements)
+        escalated_count = int(metrics.get("escalated_count", len(escalated_elements)) or 0)
+        success_rate = float(metrics.get("success_rate", 0.0) or 0.0)
+        template_count = int(metrics.get("template_count", 0) or 0)
+        savings_pct = metrics.get("savings_pct")
+
+        passed = total_elements == 0 or success_rate >= 0.5
+        reason = (
+            "Micro Prime did not process any elements"
+            if total_elements == 0
+            else (
+                f"Micro Prime filled {elements_filled}/{total_elements} elements locally "
+                f"({success_rate:.0%}); escalated {escalated_count}"
+            )
+        )
+
+        if CONTEXTCORE_AVAILABLE:
+            phase_val = None
+            for candidate in (
+                "IMPLEMENT",
+                "IMPLEMENTATION",
+                "DEVELOP",
+                "DEVELOPMENT",
+                "BUILD",
+                "EXECUTE",
+            ):
+                if hasattr(Phase, candidate):
+                    phase_val = getattr(Phase, candidate)
+                    break
+            if phase_val is None:
+                phase_val = Phase.TEST_VALIDATE
+
+            evidence: list[EvidenceItem] = []
+            evidence.append(
+                EvidenceItem(
+                    type="metric",
+                    ref="micro_prime://summary",
+                    description=reason,
+                )
+            )
+            if template_count:
+                evidence.append(
+                    EvidenceItem(
+                        type="metric",
+                        ref="micro_prime://templates",
+                        description=f"Templates used: {template_count}",
+                    )
+                )
+            if savings_pct is not None:
+                evidence.append(
+                    EvidenceItem(
+                        type="metric",
+                        ref="micro_prime://cost",
+                        description=f"Estimated savings: {float(savings_pct) * 100:.1f}%",
+                    )
+                )
+
+            return GateResult(
+                schema_version="v1",
+                gate_id=f"artisan.micro_prime.{workflow_id}",
+                trace_id=trace_id,
+                task_id=None,
+                phase=phase_val,
+                result=GateOutcome.PASS if passed else GateOutcome.FAIL,
+                severity=GateSeverity.INFO if passed else GateSeverity.WARNING,
+                reason=reason,
+                next_action="proceed",
+                blocking=False,
+                evidence=evidence or None,
+                checked_at=cls._now(),
+            )
+
+        # Fallback dict -------------------------------------------------------
+        evidence_dicts: list[dict[str, str]] = [
+            {
+                "type": "metric",
+                "ref": "micro_prime://summary",
+                "description": reason,
+            }
+        ]
+        if template_count:
+            evidence_dicts.append(
+                {
+                    "type": "metric",
+                    "ref": "micro_prime://templates",
+                    "description": f"Templates used: {template_count}",
+                }
+            )
+        if savings_pct is not None:
+            evidence_dicts.append(
+                {
+                    "type": "metric",
+                    "ref": "micro_prime://cost",
+                    "description": f"Estimated savings: {float(savings_pct) * 100:.1f}%",
+                }
+            )
+
+        return {
+            "schema_version": "v1",
+            "gate_id": f"artisan.micro_prime.{workflow_id}",
+            "trace_id": trace_id,
+            "task_id": None,
+            "phase": "IMPLEMENT",
+            "result": "pass" if passed else "fail",
+            "severity": "info" if passed else "warning",
+            "reason": reason,
+            "next_action": "proceed",
+            "blocking": False,
+            "evidence": evidence_dicts or None,
+            "checked_at": cls._now().isoformat(),
+        }

@@ -821,6 +821,17 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             return
 
         config = MicroPrimeConfig()
+        override = context.get("micro_prime_config")
+        if override:
+            try:
+                if isinstance(override, MicroPrimeConfig):
+                    config = override
+                elif isinstance(override, dict):
+                    config = MicroPrimeConfig(**override)
+            except Exception as exc:
+                logger.warning(
+                    "IMPLEMENT: invalid micro_prime_config override: %s", exc,
+                )
         pre_pass = MicroPrimePrePass(
             config=config,
             manifest=manifest,
@@ -840,6 +851,17 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         # Update skeletons with filled versions
         if result.filled_skeletons:
             context["skeletons"] = result.filled_skeletons
+
+        # Emit micro-prime quality gate result (REQ-MP-600 observability)
+        try:
+            gate_result = GateEmitter.from_micro_prime_result(
+                context["micro_prime_result"],
+                workflow_id=context.get("workflow_id", "unknown"),
+                trace_id=context.get("trace_id"),
+            )
+            GateEmitter.emit(gate_result)
+        except Exception as exc:
+            logger.warning("IMPLEMENT: failed to emit Micro Prime gate result: %s", exc)
 
         logger.info(
             "IMPLEMENT: Micro Prime pre-pass completed — %d local, %d escalated",
