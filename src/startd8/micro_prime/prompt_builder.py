@@ -98,8 +98,16 @@ def _build_function_prompt(
         )
 
     # Core instructions (REQ-MP-202)
+    def_line = None
+    for line in _build_element_stub(element).splitlines():
+        if line.strip().startswith("@"):
+            continue
+        def_line = line.strip()
+        break
+
     sections.extend([
         "# Task: Implement ONLY the function body shown in the skeleton below.",
+        "# Implement the function body.",
         "# Replace the `raise NotImplementedError` line with a working implementation.",
         f"# The body should be approximately {est_lines} lines.",
         "# Output ONLY the body lines (no `def`, no class, no docstring).",
@@ -108,6 +116,9 @@ def _build_function_prompt(
         "# Output ONLY Python code. No markdown fences, no explanations, no comments before or after.",
         "",
     ])
+    if def_line:
+        sections.append(f"# Target signature: `{def_line}`")
+        sections.append("")
 
     # Available imports (REQ-MP-201)
     if import_lines:

@@ -249,30 +249,30 @@ class TestRunRepairPipeline:
 
     def test_full_pipeline_valid_code(self, simple_function_element, sample_file_spec):
         code = "def get_name(self, key: str) -> str:\n    return key"
-        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
-        assert repaired == code  # Already valid, no changes needed
-        assert len(steps) == 9  # All 9 steps run
+        result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        assert result.code == code  # Already valid, no changes needed
+        assert len(result.step_results) == 9  # All 9 steps run
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
-        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
-        assert "```" not in repaired
-        assert "def get_name" in repaired
+        result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        assert "```" not in result.code
+        assert "def get_name" in result.code
 
     def test_non_destructive_guarantee(self, simple_function_element, sample_file_spec):
         """REQ-MP-406: If a step breaks valid code, revert."""
         code = "def get_name(self, key: str) -> str:\n    return key"
-        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         # The repaired code should still be valid
         try:
-            ast.parse(repaired)
+            ast.parse(result.code)
         except SyntaxError:
             pytest.fail("Repair pipeline broke valid code!")
 
     def test_pipeline_step_results_tracked(self, simple_function_element, sample_file_spec):
         code = "def get_name(self, key: str) -> str:\n    return key"
-        _, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
-        step_names = [s.step_name for s in steps]
+        result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        step_names = [s.step_name for s in result.step_results]
         assert "fence_strip" in step_names
         assert "ast_validate" in step_names
         assert len(step_names) == 9
@@ -469,8 +469,8 @@ class TestBuildRepairAttribution:
     def test_pipeline_returns_attribution(self, simple_function_element, sample_file_spec):
         """Full pipeline should produce step results usable by build_repair_attribution."""
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
-        _, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
-        attr = build_repair_attribution(steps)
+        result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        attr = build_repair_attribution(result.step_results)
         assert attr.fence_stripped is True
 
 

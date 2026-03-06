@@ -26,7 +26,7 @@ from startd8.forward_manifest import (
 from startd8.logging_config import get_logger
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 from startd8.micro_prime.templates import TemplateRegistry
-from startd8.utils.code_manifest import ElementKind, ParamKind
+from startd8.utils.code_manifest import ElementKind, ParamKind, _STDLIB_MODULES
 
 logger = get_logger(__name__)
 
@@ -309,7 +309,7 @@ def _check_api_dependencies(
     if file_import_bump > config.max_simple_imports:
         return (
             TierClassification.MODERATE,
-            f"file has {file_import_bump} external APIs (>{config.max_simple_imports})",
+            f"file has {file_import_bump} external imports (>{config.max_simple_imports})",
         )
 
     if elem_adjust >= 3:
@@ -344,19 +344,25 @@ def _import_complexity_bump(
     external_packages: set[str],
 ) -> int:
     """Count distinct external API packages in file imports (REQ-MP-501)."""
-    if not external_packages:
-        return 0
     external = set()
     for imp in file_spec.imports:
         module = imp.module
         root = module.split(".")[0]
+        if root in _STDLIB_MODULES:
+            continue
+        matched_pkg = None
         for pkg in external_packages:
             if module == pkg or module.startswith(pkg + "."):
-                external.add(pkg)
+                matched_pkg = pkg
                 break
             if root == pkg:
-                external.add(pkg)
+                matched_pkg = pkg
                 break
+        if matched_pkg:
+            external.add(matched_pkg)
+        else:
+            # Unknown non-stdlib import — treat as external.
+            external.add(root)
     return len(external)
 
 

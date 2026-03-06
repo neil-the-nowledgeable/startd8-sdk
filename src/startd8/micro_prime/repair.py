@@ -162,7 +162,19 @@ def _step_over_generation_trim(
         )
 
     trimmed = _slice_source_for_node(lines, target_node)
-    if trimmed and trimmed != code:
+    # Preserve leading non-future imports.
+    import_lines: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            import_lines.append(_slice_source_for_node(lines, node))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "__future__":
+                continue
+            import_lines.append(_slice_source_for_node(lines, node))
+    if import_lines:
+        trimmed = "\n".join([l for l in import_lines if l] + [trimmed])
+
+    if trimmed and trimmed.strip() != code.strip():
         return RepairStepResult(
             step_name="over_generation_trim",
             modified=True,
@@ -563,6 +575,10 @@ def build_repair_attribution(
 
         elif r.step_name == "import_completion":
             attr.imports_added = r.metrics.get("imports_added", 0)
+            import_names = r.metrics.get("import_names", []) or []
+            for name in import_names:
+                if name not in attr.import_names:
+                    attr.import_names.append(name)
 
         elif r.step_name == "duplicate_removal":
             attr.imports_removed = r.metrics.get("imports_removed", 0)
