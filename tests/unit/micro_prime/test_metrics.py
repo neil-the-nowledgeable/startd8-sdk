@@ -184,8 +184,11 @@ class TestGenerateExperimentResult:
         result = generate_experiment_result(
             sample_seed_result, config, "test-run-003",
         )
-        assert "total_elements" in result["summary"]
         assert result["summary"]["total_elements"] == 3
+        assert result["summary"]["trivial"]["count"] == 1
+        assert result["summary"]["simple"]["count"] == 1
+        assert result["summary"]["moderate"]["count"] == 1
+        assert result["summary"]["complex"]["count"] == 0
 
     def test_includes_timestamp(self, sample_seed_result):
         config = MicroPrimeConfig()
@@ -209,3 +212,13 @@ class TestGenerateExperimentResult:
         )
         assert len(result["elements"]) == 1
         assert result["elements"][0]["element_name"] == "test"
+
+    def test_includes_cost_and_repair_summary(self, sample_seed_result):
+        config = MicroPrimeConfig()
+        result = generate_experiment_result(
+            sample_seed_result, config, "test-run-006",
+        )
+        assert "cost" in result
+        assert "repair_summary" in result
+        assert "baseline_all_cloud_usd" in result["cost"]
+        assert "total_recovered" in result["repair_summary"]

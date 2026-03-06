@@ -60,12 +60,18 @@ class ElementResult:
     success: bool
     classification_reason: str = ""
     parent_class: Optional[str] = None
+    element_kind: Optional[str] = None
     code: Optional[str] = None
     escalation: Optional[EscalationResult] = None
     template_used: bool = False
     template_name: Optional[str] = None
     repair_steps_applied: list[str] = field(default_factory=list)
     repair_attribution: Optional[RepairAttribution] = None
+    repair_recovered: bool = False
+    ast_valid_before_repair: Optional[bool] = None
+    ast_valid_after_repair: Optional[bool] = None
+    verification_verdict: Optional[str] = None
+    model: Optional[str] = None
     cloud_retry_attempts: int = 0
     cloud_retry_success: bool = False
     cloud_retry_strategy: Optional[str] = None
@@ -132,6 +138,24 @@ class MicroPrimeConfig(BaseModel):
     few_shot_enabled: bool = True
     max_few_shot_examples: int = 2
     escalation_enabled: bool = True
+    external_api_packages: list[str] = [
+        # Network / RPC
+        "grpc", "grpcio", "httpx", "aiohttp", "requests",
+        # Web frameworks
+        "flask", "fastapi", "django", "starlette",
+        # Template engines
+        "jinja2", "mako",
+        # Cloud SDKs
+        "google.cloud", "google.auth", "google.api_core",
+        "boto3", "botocore",
+        "azure",
+        # Database / ORM
+        "sqlalchemy", "alembic", "asyncpg", "psycopg2",
+        # Task queues / caching
+        "celery", "redis", "kombu",
+        # Testing / load
+        "locust", "playwright",
+    ]
     cloud_escalation_max_attempts: int = 1
     cloud_escalation_retry_strategy: str = "same_prompt"
     cloud_escalation_retry_max_chars: int = 512
@@ -158,6 +182,8 @@ class MicroPrimeElementMetrics(BaseModel):
     """Per-element metrics for observability (REQ-MP-600)."""
 
     element_name: str
+    element_fqn: str = ""
+    element_kind: str = ""
     file_path: str
     tier: TierClassification
     success: bool
@@ -166,9 +192,16 @@ class MicroPrimeElementMetrics(BaseModel):
     template_name: Optional[str] = None
     repair_steps: list[str] = Field(default_factory=list)
     repair_attribution: Optional[RepairAttribution] = None
+    repair_recovered: bool = False
+    ast_valid_before_repair: Optional[bool] = None
+    ast_valid_after_repair: Optional[bool] = None
+    verification_verdict: Optional[str] = None
+    escalated: bool = False
     generation_time_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    generation_tokens: int = 0
+    model: Optional[str] = None
     escalation_reason: Optional[str] = None
 
 
@@ -178,6 +211,7 @@ class MicroPrimeCostReport(BaseModel):
     total_elements: int = 0
     trivial_count: int = 0
     simple_count: int = 0
+    simple_escalated_count: int = 0
     moderate_count: int = 0
     complex_count: int = 0
     local_success_count: int = 0
@@ -188,5 +222,11 @@ class MicroPrimeCostReport(BaseModel):
     estimated_local_cost_usd: float = 0.0
     estimated_cloud_savings_usd: float = 0.0
     success_rate: float = 0.0
+    baseline_all_cloud_usd: float = 0.0
+    actual_cloud_usd: float = 0.0
+    savings_usd: float = 0.0
+    savings_pct: float = 0.0
+    local_inference_time_total_s: float = 0.0
+    local_tokens_total: int = 0
     decomposed_count: int = 0
     decomposition_failure_count: int = 0

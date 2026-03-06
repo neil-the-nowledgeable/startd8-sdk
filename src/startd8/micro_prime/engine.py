@@ -22,6 +22,7 @@ from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.metrics import MetricsCollector
 from startd8.micro_prime.decomposer import ModerateDecomposer
+from startd8.micro_prime.context import MicroPrimeContext
 from startd8.micro_prime.models import (
     ElementResult,
     EscalationReason,
@@ -230,6 +231,7 @@ class MicroPrimeEngine:
                 tier=tier,
                 classification_reason=reasoning,
                 success=True,
+                verification_verdict="skipped",
             )
             self._metrics.record(result)
             return result
@@ -249,6 +251,7 @@ class MicroPrimeEngine:
                 tier=tier,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -287,6 +290,7 @@ class MicroPrimeEngine:
                 tier=tier,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -298,6 +302,7 @@ class MicroPrimeEngine:
 
         # Stamp parent_class for downstream spec lookup (e.g. cloud escalation)
         result.parent_class = element.parent_class
+        result.element_kind = element.kind.value
 
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
@@ -396,6 +401,21 @@ class MicroPrimeEngine:
         file_result.filled_skeleton = current_skeleton
         return file_result
 
+    def process_file_with_context(
+        self,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        context: MicroPrimeContext,
+        design_doc_sections: Optional[list[str]] = None,
+    ) -> FileResult:
+        """Process a file using normalized MicroPrimeContext (REQ-MP-509)."""
+        return self.process_file(
+            file_spec,
+            context.manifest,
+            skeleton,
+            design_doc_sections=design_doc_sections,
+        )
+
     def process_seed(
         self,
         manifest: ForwardManifest,
@@ -433,6 +453,14 @@ class MicroPrimeEngine:
                 seed_result.total_output_tokens += er.output_tokens
 
         return seed_result
+
+    def process_seed_with_context(
+        self,
+        skeletons: dict[str, str],
+        context: MicroPrimeContext,
+    ) -> SeedResult:
+        """Process a seed using normalized MicroPrimeContext (REQ-MP-509)."""
+        return self.process_seed(context.manifest, skeletons)
 
     def inspect_decomposition(
         self,
@@ -494,6 +522,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -511,6 +540,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -527,6 +557,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -547,6 +578,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -590,6 +622,7 @@ class MicroPrimeEngine:
                         tier=TierClassification.MODERATE,
                         classification_reason=reasoning,
                         success=False,
+                        verification_verdict="skipped",
                         escalation=build_escalation_context(
                             element_name=element.name,
                             file_path=file_path,
@@ -611,6 +644,7 @@ class MicroPrimeEngine:
                     tier=TierClassification.MODERATE,
                     classification_reason=reasoning,
                     success=False,
+                    verification_verdict="skipped",
                     escalation=build_escalation_context(
                         element_name=element.name,
                         file_path=file_path,
@@ -643,6 +677,7 @@ class MicroPrimeEngine:
                     tier=TierClassification.MODERATE,
                     classification_reason=reasoning,
                     success=False,
+                    verification_verdict="skipped",
                     escalation=build_escalation_context(
                         element_name=element.name,
                         file_path=file_path,
@@ -676,6 +711,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="skipped",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -697,6 +733,7 @@ class MicroPrimeEngine:
                 tier=TierClassification.MODERATE,
                 classification_reason=reasoning,
                 success=False,
+                verification_verdict="fail",
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -729,6 +766,7 @@ class MicroPrimeEngine:
             classification_reason=reasoning,
             success=True,
             code=assembled,
+            verification_verdict="pass",
             decomposition_metadata={
                 "strategy": plan.strategy,
                 "sub_elements": len(plan.sub_elements),
@@ -807,6 +845,8 @@ class MicroPrimeEngine:
             code=body,
             template_used=True,
             template_name=match.name,
+            model="template",
+            verification_verdict="skipped",
         )
 
     def _handle_simple(
@@ -821,6 +861,7 @@ class MicroPrimeEngine:
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
         start_time = time.monotonic()
+        model_name = f"{self._config.provider}:{self._config.model}"
 
         # Build few-shot examples
         few_shot = None
@@ -850,6 +891,11 @@ class MicroPrimeEngine:
                 tier=TierClassification.SIMPLE,
                 classification_reason=reasoning,
                 success=False,
+                repair_recovered=False,
+                ast_valid_before_repair=False,
+                ast_valid_after_repair=False,
+                verification_verdict="skipped",
+                model=model_name,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 escalation=build_escalation_context(
                     element_name=element.name,
@@ -867,6 +913,11 @@ class MicroPrimeEngine:
                 tier=TierClassification.SIMPLE,
                 classification_reason=reasoning,
                 success=False,
+                repair_recovered=False,
+                ast_valid_before_repair=False,
+                ast_valid_after_repair=False,
+                verification_verdict="skipped",
+                model=model_name,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -878,6 +929,10 @@ class MicroPrimeEngine:
                     detail="Empty response from Ollama",
                 ),
             )
+
+        ast_valid_before = _ast_parse_valid(code, element)
+        ast_valid_after = ast_valid_before
+        repair_recovered = False
 
         # Run repair pipeline
         repair_steps: list[str] = []
@@ -891,6 +946,8 @@ class MicroPrimeEngine:
             repair_attribution = build_repair_attribution(
                 repair_result.step_results,
             )
+            ast_valid_after = repair_result.ast_valid_after
+            repair_recovered = repair_result.repair_recovered
             if not repair_result.ast_valid:
                 return ElementResult(
                     element_name=element.name,
@@ -901,6 +958,11 @@ class MicroPrimeEngine:
                     code=code,
                     repair_steps_applied=repair_steps,
                     repair_attribution=repair_attribution,
+                    repair_recovered=repair_recovered,
+                    ast_valid_before_repair=ast_valid_before,
+                    ast_valid_after_repair=ast_valid_after,
+                    verification_verdict="fail",
+                    model=model_name,
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -926,6 +988,11 @@ class MicroPrimeEngine:
                 code=code,
                 repair_steps_applied=repair_steps,
                 repair_attribution=repair_attribution,
+                repair_recovered=repair_recovered,
+                ast_valid_before_repair=ast_valid_before,
+                ast_valid_after_repair=ast_valid_after,
+                verification_verdict="fail",
+                model=model_name,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -936,6 +1003,7 @@ class MicroPrimeEngine:
                     reason=EscalationReason.AST_FAILURE,
                     detail="Structural verification failed after repair",
                     last_code=code,
+                    last_error="structural_verification_failed",
                 ),
             )
 
@@ -962,6 +1030,11 @@ class MicroPrimeEngine:
             code=code,
             repair_steps_applied=repair_steps,
             repair_attribution=repair_attribution,
+            repair_recovered=repair_recovered,
+            ast_valid_before_repair=ast_valid_before,
+            ast_valid_after_repair=ast_valid_after,
+            verification_verdict="pass",
+            model=model_name,
             generation_time_ms=gen_time,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -1013,6 +1086,25 @@ class MicroPrimeEngine:
             ]
         # No source_contract_id — return empty rather than all contracts
         return []
+
+
+def _ast_parse_valid(code: str, element: ForwardElementSpec) -> bool:
+    """Return True if the code parses as a full element (method wrapper-aware)."""
+    is_method = bool(element.parent_class)
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        if is_method:
+            try:
+                import textwrap
+
+                wrapped = "class _Wrapper:\n" + textwrap.indent(code, "    ")
+                ast.parse(wrapped)
+                return True
+            except SyntaxError:
+                return False
+        return False
 
 
 def _structural_verify(code: str, element: ForwardElementSpec) -> bool:

@@ -60,6 +60,9 @@ class RepairResult:
     code: str
     steps_applied: list[str]
     ast_valid: bool
+    ast_valid_before: bool
+    ast_valid_after: bool
+    repair_recovered: bool
     metrics: dict[str, Any]
     step_results: list[RepairStepResult]
     last_error: Optional[str] = None
@@ -459,6 +462,7 @@ def run_repair_pipeline(
     results: list[RepairStepResult] = []
     current = code
     is_method = bool(element.parent_class)
+    ast_valid_before = _try_parse(current, is_method)
 
     for step_fn in _REPAIR_STEPS:
         was_valid_before = _try_parse(current, is_method)
@@ -492,11 +496,16 @@ def run_repair_pipeline(
 
     steps_applied = [r.step_name for r in results if r.modified]
     metrics = {r.step_name: r.metrics for r in results}
+    ast_valid_after = ast_valid
+    repair_recovered = (not ast_valid_before) and ast_valid_after
 
     return RepairResult(
         code=current,
         steps_applied=steps_applied,
         ast_valid=ast_valid,
+        ast_valid_before=ast_valid_before,
+        ast_valid_after=ast_valid_after,
+        repair_recovered=repair_recovered,
         metrics=metrics,
         step_results=results,
         last_error=last_error,
