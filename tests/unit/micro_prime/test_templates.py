@@ -36,7 +36,8 @@ class TestInitTemplate:
 
     def test_init_with_params(self, init_element):
         registry = TemplateRegistry()
-        body = registry.match(init_element)
+        match = registry.match(init_element)
+        body = match.code if match else None
         assert body is not None
         assert "self.name = name" in body
         assert "self.value = value" in body
@@ -49,13 +50,15 @@ class TestInitTemplate:
             parent_class="Empty",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert body == "pass"
 
     def test_init_body_is_valid_python(self, init_element):
         registry = TemplateRegistry()
-        body = registry.match(init_element)
+        match = registry.match(init_element)
+        body = match.code if match else None
         # Wrap in function and parse
         code = f"def __init__(self, name, value):\n"
         code += "\n".join(f"    {line}" for line in body.splitlines())
@@ -67,14 +70,16 @@ class TestReprTemplate:
 
     def test_repr_generates_fstring(self, repr_element):
         registry = TemplateRegistry()
-        body = registry.match(repr_element)
+        match = registry.match(repr_element)
+        body = match.code if match else None
         assert body is not None
         assert "return" in body
         assert "Config" in body
 
     def test_repr_is_valid_python(self, repr_element):
         registry = TemplateRegistry()
-        body = registry.match(repr_element)
+        match = registry.match(repr_element)
+        body = match.code if match else None
         code = f"def __repr__(self):\n    {body}"
         ast.parse(code)
 
@@ -90,7 +95,8 @@ class TestStrTemplate:
             parent_class="MyModel",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert "return" in body
 
@@ -109,7 +115,8 @@ class TestEqTemplate:
             parent_class="Item",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert "isinstance" in body
         assert "NotImplemented" in body
@@ -124,7 +131,8 @@ class TestEqTemplate:
             parent_class="Item",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         code = f"def __eq__(self, other):\n"
         code += "\n".join(f"    {line}" for line in body.splitlines())
         ast.parse(code)
@@ -144,7 +152,8 @@ class TestHashTemplate:
             parent_class="Item",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert "hash" in body
 
@@ -154,7 +163,8 @@ class TestConstantTemplate:
 
     def test_int_constant(self, constant_element):
         registry = TemplateRegistry()
-        body = registry.match(constant_element)
+        match = registry.match(constant_element)
+        body = match.code if match else None
         assert body is not None
         assert "DEFAULT_TIMEOUT" in body
         assert "0" in body
@@ -166,7 +176,8 @@ class TestConstantTemplate:
             signature=Signature(params=[], return_annotation="str"),
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert 'APP_NAME = ""' in body
 
@@ -177,7 +188,8 @@ class TestConstantTemplate:
             signature=Signature(params=[], return_annotation="Optional[str]"),
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is not None
         assert "MAYBE = None" in body
 
@@ -187,7 +199,8 @@ class TestConstantTemplate:
             name="UNKNOWN",
         )
         registry = TemplateRegistry()
-        body = registry.match(elem)
+        match = registry.match(elem)
+        body = match.code if match else None
         assert body is None
 
 
@@ -196,13 +209,15 @@ class TestPropertyTemplate:
 
     def test_property_template(self, property_element):
         registry = TemplateRegistry()
-        body = registry.match(property_element)
+        match = registry.match(property_element)
+        body = match.code if match else None
         assert body is not None
         assert "return self._total" in body
 
     def test_property_is_valid_python(self, property_element):
         registry = TemplateRegistry()
-        body = registry.match(property_element)
+        match = registry.match(property_element)
+        body = match.code if match else None
         code = f"def total(self):\n    {body}"
         ast.parse(code)
 
@@ -236,5 +251,6 @@ class TestASTValidation:
 
     def test_valid_template_passes(self, init_element):
         registry = TemplateRegistry()
-        body = registry.match(init_element)
+        match = registry.match(init_element)
+        body = match.code if match else None
         assert body is not None  # Would be None if AST validation failed

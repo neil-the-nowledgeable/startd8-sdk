@@ -230,6 +230,29 @@ def main() -> int:
         "--micro-prime-dry-run", action="store_true",
         help="Classify elements and check Ollama without generating code",
     )
+    parser.add_argument(
+        "--micro-prime-cloud-retry-attempts", type=int, default=None,
+        help=(
+            "Max attempts for cloud escalation per element "
+            "(default: 1)"
+        ),
+    )
+    parser.add_argument(
+        "--micro-prime-cloud-retry-strategy",
+        choices=["same_prompt", "append_error"],
+        default=None,
+        help=(
+            "Retry strategy for cloud escalation "
+            "(default: same_prompt)"
+        ),
+    )
+    parser.add_argument(
+        "--micro-prime-cloud-retry-max-chars", type=int, default=None,
+        help=(
+            "Max chars for appended retry context "
+            "(default: 512)"
+        ),
+    )
     # Post-generation repair pipeline (REQ-RPL-200) — enabled by default
     parser.add_argument(
         "--repair", action="store_true", default=True,
@@ -499,6 +522,18 @@ def main() -> int:
             mp_config_kwargs["templates_enabled"] = False
         if args.micro_prime_no_repair:
             mp_config_kwargs["repair_enabled"] = False
+        if args.micro_prime_cloud_retry_attempts is not None:
+            mp_config_kwargs["cloud_escalation_max_attempts"] = (
+                args.micro_prime_cloud_retry_attempts
+            )
+        if args.micro_prime_cloud_retry_strategy is not None:
+            mp_config_kwargs["cloud_escalation_retry_strategy"] = (
+                args.micro_prime_cloud_retry_strategy
+            )
+        if args.micro_prime_cloud_retry_max_chars is not None:
+            mp_config_kwargs["cloud_escalation_retry_max_chars"] = (
+                args.micro_prime_cloud_retry_max_chars
+            )
         if args.micro_prime_dry_run:
             mp_config_kwargs["dry_run"] = True
 

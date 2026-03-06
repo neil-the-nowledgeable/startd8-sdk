@@ -21,7 +21,8 @@ The Run 2 post-mortem and Mottainai analysis identified that the prime contracto
 | Generation Quality | REQ-PC-007–009 | 3 | 0 | 3 |
 | Result Caching and Staleness | REQ-PC-010–012 | 3 | 0 | 3 |
 | Observability | REQ-PC-013–014 | 2 | 0 | 2 |
-| **Total** | | **14** | **0** | **14** |
+| Micro Prime Escalation Reliability | REQ-PC-015–017 | 3 | 0 | 3 |
+| **Total** | | **17** | **0** | **17** |
 
 ---
 
@@ -266,6 +267,49 @@ The prime contractor MUST log which onboarding fields were injected and which we
 
 ---
 
+## Layer 6: Micro Prime Escalation Reliability (REQ-PC-015–017)
+
+These requirements apply only when `enable_micro_prime()` is active and the Prime workflow routes generation through `MicroPrimeCodeGenerator`.
+
+### REQ-PC-015: Configurable Cloud Escalation Retries
+
+**Status:** planned
+**Source files:** `src/startd8/micro_prime/prime_adapter.py`, `src/startd8/micro_prime/models.py`
+
+When an element is escalated to cloud generation (element-level escalation), the system SHALL retry the direct cloud generation call up to a configurable maximum.
+
+**Acceptance criteria:**
+- A new Micro Prime configuration value `cloud_escalation_max_attempts` MUST control the maximum attempts (default: 1).
+- Retries are per element and only trigger on: empty response, code extraction failure, or splice failure.
+- Retries MUST NOT re-run local Ollama generation or decomposition for the same element.
+- If all attempts fail, the element remains escalated and the workflow continues (no crash).
+
+### REQ-PC-016: Cache-Friendly Retry Strategy
+
+**Status:** planned
+**Source files:** `src/startd8/micro_prime/prime_adapter.py`, `src/startd8/micro_prime/models.py`
+
+Retry behavior SHALL support a cache-friendly prompt strategy while allowing error-informed retries when requested.
+
+**Acceptance criteria:**
+- A new configuration value `cloud_escalation_retry_strategy` MUST support at least:
+  - `same_prompt` (default): prompt and system prompt are byte-for-byte identical across attempts.
+  - `append_error`: a bounded failure summary and attempt number are appended for attempts >= 2.
+- If `same_prompt` is selected, no attempt-specific tokens are added that would defeat provider caching.
+- If `append_error` is selected, the added retry context MUST be capped to a fixed character budget (default: 512 chars) to avoid prompt bloat.
+
+### REQ-PC-017: Retry Telemetry and Repair Sequencing
+
+**Status:** planned
+**Source files:** `src/startd8/micro_prime/prime_adapter.py`, `src/startd8/micro_prime/models.py`
+
+The system SHALL record retry outcomes and ensure post-generation repair runs after the final splice.
+
+**Acceptance criteria:**
+- Per-element metadata MUST include: `cloud_retry_attempts`, `cloud_retry_success`, `cloud_retry_strategy`, and `cloud_retry_last_error` (if any).
+- `element_escalation_count` and cost accounting MUST reflect only successful cloud attempts.
+- Post-generation file repair (`_run_post_generation_repair`) MUST run once after the final retry/splice pass, not after each attempt.
+
 ## Traceability Matrix
 
 ### Requirement → Source File
@@ -277,6 +321,7 @@ The prime contractor MUST log which onboarding fields were injected and which we
 | REQ-PC-007..009 | `src/startd8/contractors/prime_contractor.py` | `artisan_phases/self_consistency.py` (shared validators) |
 | REQ-PC-010..012 | `src/startd8/contractors/prime_contractor.py` | `scripts/run_prime_workflow.py` |
 | REQ-PC-013..014 | `src/startd8/contractors/prime_contractor.py` | |
+| REQ-PC-015..017 | `src/startd8/micro_prime/prime_adapter.py` | `src/startd8/micro_prime/models.py` |
 
 ### Requirement → Mottainai Gap
 
@@ -301,6 +346,7 @@ The prime contractor MUST log which onboarding fields were injected and which we
 | 3. Validation | REQ-PC-007, 008, 009 | **High** | Parity with artisan Gate 3b |
 | 4. Caching + staleness | REQ-PC-010, 011, 012 | **Medium** | Prevents mixed-provenance output |
 | 5. Observability | REQ-PC-013, 014 | **Low** | Logging and cost tracking |
+| 6. Micro Prime escalation reliability | REQ-PC-015, 016, 017 | **Medium** | Improves cloud fallback success for escalated elements |
 
 ---
 
@@ -313,3 +359,4 @@ The prime contractor MUST log which onboarding fields were injected and which we
 | [`MOTTAINAI_FIX_PLAN.md`](../../../Processes/cap-dev-pipe-test/MOTTAINAI_FIX_PLAN.md) | Phase 3 remediation plan for Gaps 9-14 |
 | [`ARTISAN_RUN2_POSTMORTEM.md`](../../../Processes/cap-dev-pipe-test/design/ARTISAN_RUN2_POSTMORTEM.md) | Run 2 defect analysis (source for staleness and scope requirements) |
 | [`PIPELINE_REQUIREMENTS_INDEX.md`](../../../Processes/cap-dev-pipe-prod/PIPELINE_REQUIREMENTS_INDEX.md) | Pipeline requirements master index |
+| [`MICRO_PRIME_REQUIREMENTS.md`](../micro-prime/MICRO_PRIME_REQUIREMENTS.md) | Micro Prime subsystem requirements (local/escalation behavior) |

@@ -6,7 +6,9 @@ This module preserves the legacy import path.
 
 from __future__ import annotations
 
+from startd8.contractors.artisan_contractor import WorkflowPhase
 from startd8.contractors.context_seed.core import (  # noqa: F401
+    ArtisanIntegrationListener,
     ContextSeedHandlers,
     DesignPhaseHandler,
     EditModeClassification,
@@ -22,6 +24,7 @@ from startd8.contractors.context_seed.core import (  # noqa: F401
     SeedTask,
     SeedTaskUnit,
     TestPhaseHandler,
+    _PHASE_RESULT_KEYS,
     _build_provenance_links,
     _capture_task_span_context,
     _coerce_optional_float,
@@ -51,11 +54,21 @@ from startd8.contractors.context_seed.core import (  # noqa: F401
     compute_critical_path_tasks,
     compute_lane_to_file_mapping,
 )
+from startd8.contractors.context_seed.core import _CACHE_SCHEMA_VERSION  # noqa: F401
+from startd8.contractors.context_seed.design_support import (  # noqa: F401
+    _classify_complexity_tier,
+    _has_valid_extension,
+)
+from startd8.contractors.context_seed.tracing import (  # noqa: F401
+    _HAS_OTEL,
+    _phase_tracer,
+)
 
 __all__ = [
     "ContextSeedHandlers",
     "DesignPhaseHandler",
     "EditModeClassification",
+    "ArtisanIntegrationListener",
     "FinalizePhaseHandler",
     "HandlerConfig",
     "ImplementPhaseHandler",
@@ -68,6 +81,13 @@ __all__ = [
     "SeedTask",
     "SeedTaskUnit",
     "TestPhaseHandler",
+    "WorkflowPhase",
+    "_CACHE_SCHEMA_VERSION",
+    "_HAS_OTEL",
+    "_phase_tracer",
+    "_classify_complexity_tier",
+    "_has_valid_extension",
+    "_PHASE_RESULT_KEYS",
     "_build_provenance_links",
     "_capture_task_span_context",
     "_coerce_optional_float",

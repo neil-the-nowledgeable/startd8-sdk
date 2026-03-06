@@ -24,7 +24,7 @@ __all__ = [
 
 
 # Spec prompt section budgets
-PLAN_CONTEXT_MAX_CHARS: int = 16_384
+PLAN_CONTEXT_MAX_CHARS: int = 6_000
 ARCH_CONTEXT_MAX_CHARS: int = 4_096
 SPEC_CONTEXT_BUDGET_CHARS: int = 12_000
 

@@ -45,6 +45,17 @@ _pricing = PricingService()
 # ---------------------------------------------------------------------------
 
 
+def safe_json_dumps(obj: Any, indent: int = 2) -> str:
+    """JSON dumps that handles non-serializable objects gracefully."""
+    def default(o: Any) -> Any:
+        if hasattr(o, "dict"):
+            return o.dict()
+        if hasattr(o, "model_dump"):
+            return o.model_dump()
+        return str(o)
+    return json.dumps(obj, indent=indent, default=default)
+
+
 def format_context_value(value: Any) -> str:
     """Format a context value as a bullet list or string."""
     if isinstance(value, list):
@@ -72,8 +83,11 @@ def build_spec_context_section(
             f"classes/functions."
         )
 
+    # REQ-SPEC-102: Context budget management. 
+    # If context is massive, we should avoid dumping everything.
+    # However, for now, we just ensure it doesn't crash.
     context_str = (
-        json.dumps(context, indent=2) if context else "No additional context provided."
+        safe_json_dumps(context) if context else "No additional context provided."
     )
     if output_format:
         context_str += f"\n\nExpected Output Format:\n{output_format}"
@@ -158,7 +172,7 @@ def build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
     if not arch_ctx:
         return ""
     truncated = truncate_arch_context(arch_ctx, ARCH_CONTEXT_MAX_CHARS)
-    orig_len = len(json.dumps(arch_ctx) if isinstance(arch_ctx, dict) else str(arch_ctx))
+    orig_len = len(safe_json_dumps(arch_ctx) if isinstance(arch_ctx, (dict, list)) else str(arch_ctx))
     if len(truncated) < orig_len:
         logger.info(
             "Spec prompt: arch context truncated from %d to %d chars",
@@ -301,13 +315,12 @@ def build_spec_prompt(
         elif isinstance(critical_parameters, str):
             cp_str = critical_parameters
         else:
-            cp_str = json.dumps(critical_parameters, indent=2)
+            cp_str = safe_json_dumps(critical_parameters, indent=2)
         critical_parameters_section = (
             "\n## Critical Parameters (from requirements — include verbatim in spec)\n"
             f"{cp_str}\n"
         )
 
-    # --- Pop structured keys before context dump ---
     arch_ctx = context.pop("architectural_context", None)
     plan_ctx = context.pop("plan_context", None)
     project_obj = context.pop("project_objectives", None)
@@ -315,6 +328,8 @@ def build_spec_prompt(
     requirements_context = context.pop("requirements_context", None)
     protocol_guidance = context.pop("protocol_guidance", None)
     scope_boundary = context.pop("scope_boundary", None)
+    manifest_obj = context.pop("manifest", None)
+    raw_manifest = context.pop("forward_manifest", None)
 
     # --- Build sections ---
     target_files = context.get("target_files")

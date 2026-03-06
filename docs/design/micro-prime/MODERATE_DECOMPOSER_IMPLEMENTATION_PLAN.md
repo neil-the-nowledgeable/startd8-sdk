@@ -2,7 +2,56 @@
 
 > **Requirements:** [REQ-MP-9xx_MODERATE_DECOMPOSER.md](./REQ-MP-9xx_MODERATE_DECOMPOSER.md)
 > **Date:** 2026-03-05
+> **Updated:** 2026-03-05 (post-implementation audit)
 > **Validation target:** PI-001 `CustomJsonFormatter` — 5/5 elements local, $0.00
+
+---
+
+## Current State (as of commit `1ba622c`)
+
+Phase 1 class decomposition was partially implemented in a prior session. This section tracks what exists vs. what remains.
+
+### Already Implemented
+
+| Component | File | Status | Notes |
+|-----------|------|--------|-------|
+| `EscalationReason.DECOMPOSITION_FAILED` | `models.py:35` | Done | |
+| `EscalationReason.NOT_DECOMPOSABLE` | `models.py:36` | Done | |
+| `ElementResult.decomposition_metadata` | `models.py:71` | Done | `Optional[dict] = None` |
+| `MicroPrimeConfig` decomposer fields | `models.py:140-145` | Done | 6 fields: `decomposition_enabled`, `max_sub_elements`, `max_helpers_per_function`, `decomposition_confidence_threshold`, `class_decompose_enabled`, `function_chain_enabled` |
+| `MicroPrimeCostReport.decomposed_count` | `models.py:181` | Done | |
+| `MicroPrimeCostReport.decomposition_failure_count` | `models.py:182` | Done | |
+| `decomposer.py` module | `decomposer.py` (474 lines) | Done | `SubElement`, `DecompositionPlan`, `_compute_confidence`, `DecompositionStrategy` Protocol, `ClassDecomposeStrategy`, `ModerateDecomposer` |
+| `elif MODERATE` routing branch | `engine.py:274-279` | Done | Routes to `_handle_moderate` |
+| `_handle_moderate` method | `engine.py:472-747` | Done | Full flow: circuit breaker → null-guard → disabled check → decompose → sub-element loop → assemble → structural verify → cache |
+| `_extract_class_shell` method | `engine.py:749-768` | Done | AST-based, returns `"pass"` |
+| `inspect_decomposition` method | `engine.py:435-468` | Done | Dry-run viability check |
+| `self._decomposer` init | `engine.py:121` | Done | `ModerateDecomposer(config=self._config)` |
+| `self._current_manifest` threading | `engine.py:344` | Done | Set in `process_file()`, used by `_handle_moderate` |
+| Prime adapter metadata enrichment | `prime_adapter.py:250-318, 453-454, 480-481` | Done | `decomposed_count`, `decomposition_failures` tracked and emitted |
+| Postmortem serialization | `prime_adapter.py:81-102` | Done | `_serialize_file_result` uses `dataclasses.asdict` which includes `decomposition_metadata` |
+| Test fixtures (conftest.py) | `conftest.py:146-230` | Done | `class_element_with_methods`, `class_file_spec`, `class_skeleton`, `class_manifest` |
+| Unit tests (test_decomposer.py) | `test_decomposer.py` (609 lines) | Done | 22 tests covering strategy, assembly, confidence, engine integration |
+
+### Remaining Work
+
+| Component | File | Phase | Status | Notes |
+|-----------|------|-------|--------|-------|
+| Dry-run report decomposition annotation | `prime_adapter.py:_dry_run_classify` | 2 | **Not started** | `_dry_run_classify` (line 564) doesn't call `inspect_decomposition` for MODERATE elements; no `DECOMPOSABLE` annotation in report |
+| Dry-run report format update | `prime_adapter.py:_format_dry_run_report` | 2 | **Not started** | Summary line doesn't include decomposable count |
+| OTel metrics (6 counters/histograms) | `prime_adapter.py` or new `metrics.py` | 2 | **Not started** | `decomposition_attempted`, `_succeeded`, `_failed`, `_rejected`, `sub_elements_generated`, `decomposition_time_ms` |
+| `ClassificationSignal` enum | `classifier.py` | 3 | **Not started** | `classify_element` returns `tuple[TierClassification, str]` — no signal set |
+| `FunctionChainStrategy` | `decomposer.py` | 3 | **Not started** | Requires `ClassificationSignal`, responsibility parsing, synthetic spec construction, helper signature inference |
+| `_build_synthetic_spec` utility | `decomposer.py` | 3 | **Not started** | Module-level helper for both strategies |
+| Integration validation (PI-001) | Manual | 1 | **Not started** | Run against online-boutique-demo to validate end-to-end |
+
+### Corrected Assumptions
+
+| Plan Assumption | Reality | Impact |
+|----------------|---------|--------|
+| `_structural_verify` only checks CONSTANT/VARIABLE (R1-S3) | Already validates CLASS (line 1024-1031) and FUNCTION (line 1037-1043) | R1-S3 remediation is unnecessary — already done |
+| `manifest` passed as direct parameter to `_handle_moderate` | Uses `self._current_manifest` instance variable pattern (set in `process_file` line 344) | Plan's parameter approach was adopted, but `process_file` also sets the instance var |
+| `_dry_run_classify` routes MODERATE to escalation | Line 633: `else: file_escalated += 1` catches MODERATE without decomposition check | Dry-run report does NOT reflect decomposition viability for MODERATE elements |
 
 ---
 
@@ -38,171 +87,55 @@
 
 ---
 
-## Phase 1: Class Decomposition End-to-End
+## Phase 1: Class Decomposition End-to-End — COMPLETE
 
 **Goal:** `CustomJsonFormatter` (MODERATE class) is generated locally at $0.00.
 
-### Step 1.1 — Models: New Escalation Reasons + Config Fields
+**Status:** All code and tests implemented in commit `1ba622c`. See "Current State" section above for details.
 
-**File:** `micro_prime/models.py`
+### Step 1.1 — Models ✅ COMPLETE
 
-Add to `EscalationReason` enum (after `CIRCUIT_BREAKER`):
-
-```python
-DECOMPOSITION_FAILED = "decomposition_failed"
-NOT_DECOMPOSABLE = "not_decomposable"
-```
-
-Add to `ElementResult` (after existing fields):
-
-```python
-decomposition_metadata: Optional[dict] = None  # strategy, sub_elements, timing [R1-S1: moved from Step 2.3]
-```
-
-Add to `MicroPrimeCostReport` (REQ-MP-909, R1-S5 from requirements review):
-
-```python
-decomposed_count: int = 0
-decomposition_failure_count: int = 0
-```
-
-Add to `MicroPrimeConfig` (after `docstring_length_threshold`):
-
-```python
-# Decomposer settings (REQ-MP-908)
-decomposition_enabled: bool = True
-max_sub_elements: int = 5
-max_helpers_per_function: int = 4
-decomposition_confidence_threshold: float = 0.6
-class_decompose_enabled: bool = True
-function_chain_enabled: bool = True
-```
-
-**Verify:** `pytest tests/unit/micro_prime/test_models.py -x` — no regressions.
+All model changes already in `models.py`: `EscalationReason` members (lines 35-36), `ElementResult.decomposition_metadata` (line 71), `MicroPrimeCostReport` fields (lines 181-182), `MicroPrimeConfig` fields (lines 140-145).
 
 ---
 
-### Step 1.2 — Decomposer Module: Data Classes + Class Strategy
+### Step 1.2 — Decomposer Module ✅ COMPLETE
 
-**File:** `micro_prime/decomposer.py` (new)
+`decomposer.py` (474 lines) implemented with: `SubElement`, `DecompositionPlan`, `_compute_confidence`, `DecompositionStrategy` Protocol, `ClassDecomposeStrategy`, `ModerateDecomposer`. See source for full implementation.
 
-**Data classes** (REQ-MP-900):
+### Step 1.3 — Engine Integration ✅ COMPLETE
 
-```python
-@dataclass
-class SubElement:
-    name: str
-    kind: str                          # "class_shell", "init", "class_attr", "helper", "dispatch_body"
-    prompt_context: str
-    depends_on: list[str]
-    assembly_order: int
-    element_spec: Optional[ForwardElementSpec]   # Synthetic or existing (None for deterministic class_shell)
-    deterministic: bool = False        # True = extract from skeleton, no LLM
+`_handle_moderate` (engine.py:472-747), `_extract_class_shell` (engine.py:749-768), `inspect_decomposition` (engine.py:435-468), routing branch (engine.py:274-279), manifest threading via `self._current_manifest` (engine.py:344). Full flow with circuit breaker, null-guard, rollback, structural verification, and success cache.
 
-@dataclass
-class DecompositionPlan:
-    original_element: ForwardElementSpec
-    sub_elements: list[SubElement]
-    strategy: str
-    assembly_kind: str                 # "class_compose", "function_chain"
-    confidence: float
-```
+### Step 1.4 — Tests ✅ COMPLETE
 
-**Strategy protocol** (REQ-MP-907):
+22 tests in `test_decomposer.py` (609 lines) + fixtures in `conftest.py` (lines 146-230).
 
-```python
-class DecompositionStrategy(Protocol):
-    @property
-    def name(self) -> str: ...
-    def can_handle(self, element, file_spec, manifest, reason,
-                   classification_signals: Optional[set["ClassificationSignal"]] = None) -> bool: ...
-    def plan(self, element, file_spec, manifest, reason,
-             classification_signals: Optional[set["ClassificationSignal"]] = None) -> Optional[DecompositionPlan]: ...
-    def assemble(self, plan, sub_results, skeleton) -> Optional[str]: ...
-```
+### Step 1.5 — Prime Adapter Metadata ✅ COMPLETE
 
-**`ClassDecomposeStrategy`** (REQ-MP-901):
+Decomposition counts tracked (prime_adapter.py:250-318) and emitted in metadata dicts (lines 453-454, 480-481). Postmortem serialization via `dataclasses.asdict` includes `decomposition_metadata` automatically.
 
-`can_handle()` checks:
+### Step 1.6 — Integration Validation: NOT YET RUN
 
-0. `config.class_decompose_enabled` is True
-1. `element.kind == ElementKind.CLASS`
-2. Methods of this class already exist as separate elements in `file_spec.elements` (match by `parent_class == element.name`)
-3. No metaclass decorators (`ABCMeta`, `__init_subclass__`, `dataclass` with complex factories)
-4. At most 3 class-level attributes counted from `file_spec.elements` where `parent_class == element.name` and `kind in {ElementKind.CONSTANT, ElementKind.VARIABLE}`
+PI-001 has not been validated end-to-end against online-boutique-demo. This should be done before Phase 2.
 
-`plan()` produces:
-
-- 1 sub-element: `class_shell` with `deterministic=True`
-  - `element_spec`: synthetic `ForwardElementSpec(kind=CLASS, name=element.name, bases=element.bases)`
-  - `assembly_order: 0`
-- If class-level attributes exist in `file_spec.elements` (constants/variables with `parent_class == element.name`), add a `class_attr` sub-element
-  - Enforce the `<= 3` class-attribute constraint; otherwise reject decomposition
-  - Do not generate class-level attributes that are not present in the manifest
-  - `element_spec`: synthetic `ForwardElementSpec(kind=CONSTANT, name="_class_attributes", parent_class=element.name)`
-- If `__init__` IS in `file_spec.elements` with `parent_class == element.name`, it is a separate manifest element — the engine's normal element loop handles it. Do NOT add it to the decomposition plan. [R3-S1: inverted logic fix]
-- Only generate an `init` sub-element if the class genuinely needs one that is NOT in the manifest (e.g., inferred from class context). For Phase 1, this means: if `__init__` is absent from `file_spec.elements` AND the class has no class-level state, no `init` sub-element is needed (the shell with `pass` suffices). If the class needs an `__init__` that the manifest doesn't include, decomposition should be rejected (the manifest is the source of truth).
-
-`assemble()` (REQ-MP-904, `class_compose`):
-
-- The class shell is already in the skeleton (placed by `DeterministicFileAssembler`)
-- For `class_shell` sub-element: no action needed — the skeleton already has `class Foo(Base):` + docstring + `raise NotImplementedError`
-- For `class_attr` sub-element: splice or insert immediately after the docstring
-- For `__init__` sub-element: splice via existing `splice_body_into_skeleton()`; if a stub `__init__` exists, replace its body (do not duplicate)
-- Return the class declaration line through the end of the class body (AST `end_lineno`)
-- Validate with `ast.parse()`
-- Avoid duplicate definitions: always replace existing stubs instead of inserting additional class bodies or methods
-- Remove the placeholder `pass` when inserting `class_attr` or `__init__` so non-empty class bodies do not retain a stub
-
-**Key insight for `class_shell`:** The skeleton already contains the full class declaration. The `CustomJsonFormatter` class element's `raise NotImplementedError` stub in the skeleton just needs to be removed (or left — the methods, which are separate elements, will splice their bodies into the skeleton replacing their own stubs). So for a class where all methods are separate elements and there's no `__init__`, the "decomposition" is really just: **mark the class element as successfully handled** and let the normal method splicing do the rest.
-
-**Implementation detail:** The class element's `raise NotImplementedError` in the skeleton sits where class-level code would go. If there's no class-level code (no `__init__`, no class attributes), replace the stub with `pass`. If class-level attributes or `__init__` exist, remove the stub and let `class_attr`/`__init__` insertion populate the class body.
-
-**`ModerateDecomposer`** (REQ-MP-900):
-
-```python
-class ModerateDecomposer:
-    def __init__(self, strategies=None, config=None):
-        self._config = config or MicroPrimeConfig()
-        self._strategies = strategies or [ClassDecomposeStrategy(config=self._config)]
-
-    def can_decompose(
-        self, element, file_spec, manifest, reason,
-        classification_signals: Optional[set["ClassificationSignal"]] = None,
-    ) -> bool:
-        if not self._config.decomposition_enabled:
-            return False
-        return any(
-            s.can_handle(element, file_spec, manifest, reason, classification_signals)
-            for s in self._strategies
-        )
-
-    def decompose(
-        self, element, file_spec, manifest, reason,
-        classification_signals: Optional[set["ClassificationSignal"]] = None,
-    ) -> Optional[DecompositionPlan]:
-        for s in self._strategies:
-            if s.can_handle(element, file_spec, manifest, reason, classification_signals):
-                plan = s.plan(element, file_spec, manifest, reason, classification_signals)
-                if plan and len(plan.sub_elements) <= self._config.max_sub_elements:
-                    if plan.confidence >= self._config.decomposition_confidence_threshold:
-                        return plan
-        return None
-
-    def assemble(self, plan, sub_results, skeleton) -> Optional[str]:
-        for s in self._strategies:
-            if s.name == plan.strategy:
-                return s.assemble(plan, sub_results, skeleton)
-        return None
-```
-
-Note: Strategies should short-circuit before heavy work if they can predict `max_sub_elements` would be exceeded.
-
-**Verify:** Unit tests (step 1.4).
+**Expected outcome:**
+- `CustomJsonFormatter`: MODERATE, decomposed via `class_decompose`, success=True, code="pass"
+- `add_fields`, `format`, `getJSONLogger`, `get_logger`: SIMPLE, success=True (unchanged)
+- `micro_prime_only: true`, `micro_prime_elements: 5`, `micro_prime_decomposed_count: 1`
+- Total cost: $0.00
 
 ---
 
-### Step 1.3 — Engine Integration: `_handle_moderate`
+<!-- ============================================================ -->
+<!-- ARCHIVE: Original Step 1.3-1.5 plan text preserved below.    -->
+<!-- These steps are COMPLETE — kept for traceability only.        -->
+<!-- ============================================================ -->
+
+<details>
+<summary>Archived Step 1.3-1.5 (implemented — click to expand)</summary>
+
+### [ARCHIVED] Step 1.3 — Engine Integration: `_handle_moderate`
 
 **File:** `micro_prime/engine.py`
 

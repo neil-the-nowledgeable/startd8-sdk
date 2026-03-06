@@ -873,6 +873,48 @@ The pipeline SHALL implement a verification-gated escalation flow: generate loca
 
 ---
 
+### REQ-MP-513: Configurable Cloud Escalation Retries
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** REQ-MP-512
+
+When element-level cloud escalation is used, the system SHALL retry direct cloud generation up to a configurable maximum.
+
+**Acceptance criteria:**
+- A new Micro Prime configuration value `cloud_escalation_max_attempts` MUST control the maximum attempts (default: 1).
+- Retries are per element and only trigger on: empty response, code extraction failure, or splice failure.
+- Retries MUST NOT re-run local Ollama generation or decomposition for the same element.
+- If all attempts fail, the element remains escalated and the workflow continues (no crash).
+
+### REQ-MP-514: Cache-Friendly Retry Strategy
+
+**Status:** planned
+**Priority:** P1
+
+Retry behavior SHALL support a cache-friendly prompt strategy while allowing error-informed retries when requested.
+
+**Acceptance criteria:**
+- A new configuration value `cloud_escalation_retry_strategy` MUST support at least:
+  - `same_prompt` (default): prompt and system prompt are byte-for-byte identical across attempts.
+  - `append_error`: a bounded failure summary and attempt number are appended for attempts >= 2.
+- If `same_prompt` is selected, no attempt-specific tokens are added that would defeat provider caching.
+- If `append_error` is selected, the added retry context MUST be capped to a fixed character budget (default: 512 chars).
+
+### REQ-MP-515: Retry Telemetry and Repair Sequencing
+
+**Status:** planned
+**Priority:** P1
+
+The system SHALL record retry outcomes and ensure post-generation repair runs after the final retry/splice pass.
+
+**Acceptance criteria:**
+- Per-element metadata MUST include: `cloud_retry_attempts`, `cloud_retry_success`, `cloud_retry_strategy`, and `cloud_retry_last_error` (if any).
+- `element_escalation_count` and cost accounting MUST reflect only successful cloud attempts.
+- Post-generation file repair (`_run_post_generation_repair`) MUST run once after the final retry/splice pass, not after each attempt.
+
+---
+
 ## 9. Layer 6 — Observability & Metrics (REQ-MP-6xx)
 
 > Detailed requirements: [`REQ-MP-6xx_OBSERVABILITY.md`](./REQ-MP-6xx_OBSERVABILITY.md)
@@ -1249,6 +1291,9 @@ MicroPrimeEngine.process_elements()
 | REQ-MP-510 | `src/startd8/micro_prime/prime_adapter.py` | `tests/unit/micro_prime/test_prime_adapter.py` | planned |
 | REQ-MP-511 | `src/startd8/micro_prime/engine.py` | `tests/unit/micro_prime/test_element_gate.py` | planned |
 | REQ-MP-512 | `src/startd8/micro_prime/engine.py` | `tests/unit/micro_prime/test_escalation_flow.py` | planned |
+| REQ-MP-513 | `src/startd8/micro_prime/prime_adapter.py` | `tests/unit/micro_prime/test_prime_adapter.py` | planned |
+| REQ-MP-514 | `src/startd8/micro_prime/prime_adapter.py` | `tests/unit/micro_prime/test_prime_adapter.py` | planned |
+| REQ-MP-515 | `src/startd8/micro_prime/prime_adapter.py` | `tests/unit/micro_prime/test_prime_adapter.py` | planned |
 | REQ-MP-600 | `scripts/experiment_local_model_routing.py` | Experiment run | planned |
 | REQ-MP-601 | `src/startd8/utils/manifest_repair.py` | Unit test | planned |
 | REQ-MP-602 | `scripts/experiment_local_model_routing.py` | Experiment run | planned |
@@ -1353,7 +1398,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R1-F3 | Data | high | Refactor the Traceability Matrix to point at the new `src/startd8/micro_prime/` module layout and add an ownership/update rule to keep mappings current. | The matrix currently references several legacy files that conflict with the proposed package structure, making it unreliable for execution tracking. | Section 11, Traceability Matrix | Verify each REQ-MP row maps to an existing planned file and test artifact in the implementation plan. |
 | R1-F4 | Risks | high | Extend REQ-MP-503 with runtime health-failure handling (not just preflight), including mid-run Ollama outage behavior and fallback guarantees. | Preflight-only checks do not cover long runs where local model availability can change during execution. | Section 8, REQ-MP-503 | Validate a test scenario where Ollama becomes unavailable after preflight and elements still degrade safely to cloud routing. |
 | R1-F5 | Validation | medium | Add explicit compatibility rules for REQ-MP-603 result schema (`schema_version` bump policy and minimum supported reader versions). | The document requires a version field but does not define how version changes are managed or validated over time. | Section 9, REQ-MP-603 | Verify the schema section states backward-compatible vs breaking changes and the required version increment behavior. |
-| R1-F6 | Ops | high | Add requirements for local inference resource governance: max concurrent SIMPLE requests, per-element timeout, and queue/backpressure policy. | Without operational guardrails, local routing can starve CPU/RAM or introduce nondeterministic latency under load. | Section 8, Layer 5 (new REQ-MP-513 or extension to REQ-MP-500/503) | Verify load tests assert bounded concurrency and timeout behavior with deterministic fallback when limits are hit. |
+| R1-F6 | Ops | high | Add requirements for local inference resource governance: max concurrent SIMPLE requests, per-element timeout, and queue/backpressure policy. | Without operational guardrails, local routing can starve CPU/RAM or introduce nondeterministic latency under load. | Section 8, Layer 5 (new REQ-MP-516 or extension to REQ-MP-500/503) | Verify load tests assert bounded concurrency and timeout behavior with deterministic fallback when limits are hit. |
 | R1-F7 | Security | high | Add prompt and telemetry sanitization requirements to prevent secrets from `existing_files` or bindings leaking into logs/metrics/escalation payloads. | The design forwards rich context into prompts and escalation payloads but does not define redaction controls for sensitive data. | Section 8 (REQ-MP-502/509) and Section 9 (REQ-MP-600/603) | Validate tests that inject secret-like values and assert redaction/hashing before persistence or telemetry emission. |
 | R1-F8 | Architecture | medium | Add a source-of-truth requirement for shared utilities (`code_templates`, `manifest_repair`) to avoid long-term duplication between legacy utils and new `micro_prime` modules. | Both reuse and rewrite paths are described across docs; without a migration rule, drift and divergent fixes are likely. | Section 8, REQ-MP-506 and Section 13 related docs | Verify one canonical module is declared for each subsystem and any compatibility wrappers are explicitly temporary. |
 

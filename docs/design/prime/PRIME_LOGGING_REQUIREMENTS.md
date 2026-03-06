@@ -131,6 +131,18 @@ Log metrics for the nested `LeadContractorWorkflow` call.
 
 ---
 
+#### PC-L-402: Micro Prime Cloud Escalation Retry Logs
+
+**Status:** planned  
+Log each cloud escalation retry attempt when Micro Prime is enabled.
+
+**Acceptance criteria:**
+1. INFO per retry attempt: "Cloud escalation retry for {feature_id}.{element_name} (attempt {n}/{max}, strategy={strategy})".
+2. `extra` includes: `feature_id`, `file_path`, `element_name`, `attempt`, `max_attempts`, `strategy`, `reason`.
+3. WARNING on retry exhaustion with `reason` and `last_error` (if available).
+4. INFO on retry success with `attempt` and `splice_success`.
+
+
 ### Layer 5: Loki Correlation (PC-L-5xx)
 
 #### PC-L-500: Trace-Log Invariant
@@ -184,6 +196,7 @@ flowchart TD
 | PC-L-201 | `prime_contractor.py:process_feature()` |
 | PC-L-300/301 | `integration_engine.py:integrate()` |
 | PC-L-400 | `prime_contractor.py:develop_feature()` |
+| PC-L-402 | `micro_prime/prime_adapter.py:_escalate_elements_to_cloud()` |
 
 ---
 
