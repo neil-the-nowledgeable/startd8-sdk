@@ -755,6 +755,8 @@ class MicroPrimeEngine:
                     if sub_spec.docstring_hint
                     else sub.prompt_context
                 )
+                if len(doc_hint) > 512:
+                    doc_hint = doc_hint[:509] + "..."
                 sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
 
             sub_result = self._handle_simple(
@@ -805,8 +807,9 @@ class MicroPrimeEngine:
                     output_tokens=total_output,
                 )
 
-            # Successful sub-element resets the breaker counter.
-            self._consecutive_failures = 0
+            # Sub-element success does not reset the breaker — the outer
+            # _process_element_with_tier handles that based on the overall
+            # MODERATE result.
             sub_results[sub.name] = sub_result.code
 
         # All sub-elements succeeded — assemble
@@ -892,6 +895,7 @@ class MicroPrimeEngine:
             classification_reason=reasoning,
             success=True,
             code=assembled,
+            model=f"{self._config.provider}:{self._config.model}",
             verification_verdict="pass",
             decomposition_metadata={
                 "strategy": plan.strategy,
@@ -1076,6 +1080,7 @@ class MicroPrimeEngine:
         if self._config.repair_enabled:
             repair_result = run_repair_pipeline(
                 code, element, file_spec, skeleton_source=skeleton,
+                enabled_steps=self._config.repair_enabled_steps,
             )
             code = repair_result.code
             repair_steps = repair_result.steps_applied

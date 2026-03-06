@@ -12,7 +12,6 @@ Strategies:
 from __future__ import annotations
 
 import ast
-import re
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
@@ -25,8 +24,7 @@ from startd8.forward_manifest import (
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
-from startd8.utils.code_manifest import ElementKind, Param, Signature
-from startd8.utils.file_assembler import DeterministicFileAssembler
+from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 logger = get_logger(__name__)
 
@@ -141,6 +139,57 @@ class DecompositionStrategy(Protocol):
         sub_results: dict[str, str],
         skeleton: str,
     ) -> Optional[str]: ...
+
+
+# ── Signature rendering helper ────────────────────────────────────────
+
+
+def _render_signature_str(sig: Signature) -> str:
+    """Render a Signature to a parameter string, e.g. ``(self, name: str)``."""
+    parts: list[str] = []
+    saw_positional_only = False
+    saw_keyword_only = False
+
+    for param in sig.params:
+        rendered = param.name
+        if param.annotation:
+            rendered += f": {param.annotation}"
+        if param.default is not None:
+            rendered += f" = {param.default}"
+
+        if param.kind == ParamKind.POSITIONAL_ONLY:
+            saw_positional_only = True
+            parts.append(rendered)
+        elif param.kind == ParamKind.VAR_POSITIONAL:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(f"*{rendered}")
+            saw_keyword_only = True
+        elif param.kind == ParamKind.KEYWORD_ONLY:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            if not saw_keyword_only:
+                parts.append("*")
+                saw_keyword_only = True
+            parts.append(rendered)
+        elif param.kind == ParamKind.VAR_KEYWORD:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(f"**{rendered}")
+        else:
+            # POSITIONAL or KEYWORD
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(rendered)
+
+    if saw_positional_only:
+        parts.append("/")
+
+    return f"({', '.join(parts)})"
 
 
 # ── Class Decomposition Strategy (REQ-MP-901) ───────────────────────
@@ -306,14 +355,13 @@ class ClassDecomposeStrategy:
         For a shell-only class (no attrs/init), returns "pass" which the
         splicer uses to replace the class-scope `raise NotImplementedError`.
         """
-        # Start with the shell result
+        # Validate that the shell sub-element was generated
         shell_code = sub_results.get("class_shell")
         if shell_code is None:
             return None
 
         parts: list[str] = []
         sub_map = {s.name: s for s in plan.sub_elements}
-        assembler = DeterministicFileAssembler()
 
         # Class attributes
         attr_code = sub_results.get("_class_attributes")
@@ -340,7 +388,7 @@ class ClassDecomposeStrategy:
             prefix = "async def" if spec.kind in (
                 ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
             ) else "def"
-            sig = assembler._render_signature(spec.signature)
+            sig = _render_signature_str(spec.signature)
             ret = ""
             if spec.signature.return_annotation:
                 ret = f" -> {spec.signature.return_annotation}"
