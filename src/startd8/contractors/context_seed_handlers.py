@@ -6,6 +6,8 @@ This module preserves the legacy import path.
 
 from __future__ import annotations
 
+import subprocess  # noqa: F401 — re-exported for test patching
+
 from startd8.contractors.artisan_contractor import WorkflowPhase
 from startd8.contractors.context_seed.core import (  # noqa: F401
     ArtisanIntegrationListener,
@@ -57,8 +59,17 @@ from startd8.contractors.context_seed.core import (  # noqa: F401
 from startd8.contractors.context_seed.core import _CACHE_SCHEMA_VERSION  # noqa: F401
 from startd8.contractors.context_seed.design_support import (  # noqa: F401
     _classify_complexity_tier,
+    _compute_manifest_file_checksums,
     _has_valid_extension,
 )
+from startd8.contractors.context_seed.shared import (  # noqa: F401
+    _PCA_CONTEXT_FIELDS,
+)
+from startd8.utils.file_operations import atomic_write_json  # noqa: F401
+
+from startd8.logging_config import get_logger as _get_logger
+
+logger = _get_logger("startd8.contractors.context_seed_handlers")
 from startd8.contractors.context_seed.tracing import (  # noqa: F401
     _HAS_OTEL,
     _phase_tracer,
@@ -84,8 +95,12 @@ __all__ = [
     "WorkflowPhase",
     "_CACHE_SCHEMA_VERSION",
     "_HAS_OTEL",
+    "_PCA_CONTEXT_FIELDS",
+    "_compute_manifest_file_checksums",
     "_phase_tracer",
     "_classify_complexity_tier",
+    "atomic_write_json",
+    "logger",
     "_has_valid_extension",
     "_PHASE_RESULT_KEYS",
     "_build_provenance_links",
