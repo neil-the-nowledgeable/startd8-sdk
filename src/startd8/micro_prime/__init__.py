@@ -14,9 +14,11 @@ Public API::
 
 from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.engine import MicroPrimeEngine
+from startd8.micro_prime.context import MicroPrimeContext
 from startd8.micro_prime.models import (
     ElementResult,
     EscalationReason,
+    EscalationContext,
     EscalationResult,
     FileResult,
     MicroPrimeConfig,
@@ -30,10 +32,12 @@ from startd8.micro_prime.templates import TemplateRegistry
 
 __all__ = [
     "MicroPrimeEngine",
+    "MicroPrimeContext",
     "MicroPrimeConfig",
     "TierClassification",
     "ElementResult",
     "EscalationReason",
+    "EscalationContext",
     "EscalationResult",
     "FileResult",
     "SeedResult",

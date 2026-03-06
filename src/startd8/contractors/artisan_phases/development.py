@@ -1372,6 +1372,25 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 if fp not in gen_ctx.get("existing_files", {}):
                     gen_ctx.setdefault("existing_files", {})[fp] = content
 
+        # Micro Prime: include escalated element summary in retry feedback
+        mp_escalated = chunk.metadata.get("_micro_prime_escalated") or []
+        if mp_escalated:
+            lines = ["Micro Prime local attempt failed for:"]
+            for entry in mp_escalated[:25]:
+                element_name = entry.get("element_name", "unknown")
+                file_path = entry.get("file_path", "unknown")
+                reason = entry.get("reason", "unknown")
+                detail = entry.get("detail", "")
+                lines.append(f"- {file_path}:{element_name} ({reason}) — {detail}")
+            if len(mp_escalated) > 25:
+                lines.append(f"... and {len(mp_escalated) - 25} more")
+            mp_feedback = "\n".join(lines)
+            existing_last_error = gen_ctx.get("last_error") or ""
+            if existing_last_error:
+                gen_ctx["last_error"] = f"{existing_last_error}\n\n{mp_feedback}"
+            else:
+                gen_ctx["last_error"] = mp_feedback
+
         # Inject retry feedback from orchestrator context
         last_error = context.get("last_error")
         test_output = context.get("test_output")
@@ -1380,6 +1399,13 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "last_error": last_error,
                 "test_output": test_output,
             }
+            existing_last_error = gen_ctx.get("last_error") or ""
+            if existing_last_error:
+                gen_ctx["last_error"] = f"{existing_last_error}\n\n{last_error}"
+            else:
+                gen_ctx["last_error"] = last_error
+        if test_output:
+            gen_ctx["test_output"] = test_output
 
         # Inject domain constraints from DomainChecklist (if present)
         domain_constraints = context.get("domain_constraints")

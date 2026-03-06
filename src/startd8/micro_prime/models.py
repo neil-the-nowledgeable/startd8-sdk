@@ -27,6 +27,8 @@ class EscalationReason(str, Enum):
 
     AST_FAILURE = "ast_failure"
     STRUCTURAL_MISMATCH = "structural_mismatch"
+    SEMANTIC_FAILURE = "semantic_failure"
+    OLLAMA_UNAVAILABLE = "ollama_unavailable"
     TIER_TOO_HIGH = "tier_too_high"
     REPAIR_EXHAUSTED = "repair_exhausted"
     EMPTY_RESPONSE = "empty_response"
@@ -41,6 +43,18 @@ from startd8.repair.models import RepairAttribution, RepairStepResult  # noqa: F
 
 
 @dataclass
+class EscalationContext:
+    """Detailed context for cloud escalation (REQ-MP-502)."""
+
+    element_fqn: str = ""
+    local_model: str = ""
+    raw_output: str = ""
+    repair_steps_applied: list[str] = field(default_factory=list)
+    repaired_code: Optional[str] = None
+    error: str = ""
+
+
+@dataclass
 class EscalationResult:
     """Captures why an element was escalated to cloud processing."""
 
@@ -48,6 +62,7 @@ class EscalationResult:
     detail: str
     last_code: Optional[str] = None
     last_error: Optional[str] = None
+    context: Optional[EscalationContext] = None
 
 
 @dataclass
@@ -61,6 +76,8 @@ class ElementResult:
     classification_reason: str = ""
     parent_class: Optional[str] = None
     element_kind: Optional[str] = None
+    api_file_import_bump: int = 0
+    api_element_adjustment: int = 0
     code: Optional[str] = None
     escalation: Optional[EscalationResult] = None
     template_used: bool = False
@@ -184,6 +201,8 @@ class MicroPrimeElementMetrics(BaseModel):
     element_name: str
     element_fqn: str = ""
     element_kind: str = ""
+    api_file_import_bump: int = 0
+    api_element_adjustment: int = 0
     file_path: str
     tier: TierClassification
     success: bool

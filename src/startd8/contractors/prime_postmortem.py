@@ -130,6 +130,8 @@ _ERROR_PATTERNS: List[Tuple[re.Pattern, RootCause, PipelineStage]] = [
 _ESCALATION_MAP: Dict[str, Tuple[RootCause, PipelineStage]] = {
     "ast_failure": (RootCause.AST_FAILURE, PipelineStage.REPAIR),
     "structural_mismatch": (RootCause.SPLICER_MISMATCH, PipelineStage.SPLICER),
+    "semantic_failure": (RootCause.GENERATION_ERROR, PipelineStage.REPAIR),
+    "ollama_unavailable": (RootCause.OLLAMA_TIMEOUT, PipelineStage.OLLAMA_GENERATION),
     "tier_too_high": (RootCause.TIER_ESCALATION, PipelineStage.CLASSIFICATION),
     "repair_exhausted": (RootCause.REPAIR_EXHAUSTED, PipelineStage.REPAIR),
     "empty_response": (RootCause.OLLAMA_EMPTY_RESPONSE, PipelineStage.OLLAMA_GENERATION),
@@ -506,14 +508,30 @@ class PrimePostMortemEvaluator:
                     generation_time_ms=er.get("generation_time_ms", 0.0),
                 ))
 
-        # Requirement matching
-        requirement_score = 1.0 if success else 0.0
-        if seed_task and not success:
-            requirement_score = self._score_requirements(seed_task, feature_dict)
+        # Requirement matching — incorporate element-level success rate
+        # when micro-prime elements are present.
+        element_success_ratio = 1.0
+        if elements:
+            successful_elements = sum(1 for e in elements if e.success)
+            element_success_ratio = successful_elements / len(elements)
 
-        # Per-feature verdict
         if success:
+            # Feature status is "complete" but element failures should
+            # reduce the score proportionally.
+            requirement_score = element_success_ratio
+        elif seed_task:
+            requirement_score = self._score_requirements(seed_task, feature_dict)
+        else:
+            requirement_score = 0.0
+
+        # Per-feature verdict — element success ratio gates the verdict
+        # even when the feature status is "complete".
+        if success and element_success_ratio >= 0.8:
             verdict = "PASS"
+        elif success and element_success_ratio >= 0.5:
+            verdict = "PARTIAL"
+        elif success:
+            verdict = "FAIL:low_element_fill_rate"
         elif root_cause != RootCause.UNKNOWN:
             verdict = f"FAIL:{root_cause.value}"
         else:

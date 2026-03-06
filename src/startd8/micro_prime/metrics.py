@@ -50,6 +50,8 @@ class MetricsCollector:
                 element_name=result.element_name,
                 element_fqn=element_fqn,
                 element_kind=str(kind),
+                api_file_import_bump=result.api_file_import_bump,
+                api_element_adjustment=result.api_element_adjustment,
                 file_path=result.file_path,
                 tier=result.tier,
                 classification_reason=result.classification_reason,

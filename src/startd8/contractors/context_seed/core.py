@@ -96,7 +96,10 @@ from startd8.contractors.context_schema import (
 from startd8.contractors.context_seed.shared import (
     SeedTask,
     _ensure_context_loaded,
+    _load_enriched_seed,
     _log_context_completeness,
+    _parse_tasks,
+    _topological_sort,
     _track_onboarding_consumption,
 )
 from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler
@@ -109,6 +112,7 @@ from startd8.contractors.context_seed.design_support import (
     _extract_referenced_elements,
     _extract_structural_delta,
     _extract_complexity_signals,
+    _infer_path_prefix,
     _normalize_target_path,
     _set_default_complexity_metadata,
     build_shared_file_manifest,
@@ -830,6 +834,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             "filled_skeletons": result.filled_skeletons,
             "escalated_elements": result.escalated_elements,
             "metrics": result.metrics,
+            "element_metrics": result.element_metrics,
+            "elements_filled": result.elements_filled,
         }
         # Update skeletons with filled versions
         if result.filled_skeletons:

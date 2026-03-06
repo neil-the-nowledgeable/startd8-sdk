@@ -19,12 +19,13 @@ from startd8.forward_manifest import (
     InterfaceContract,
 )
 from startd8.logging_config import get_logger
-from startd8.micro_prime.classifier import classify_element
+from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.metrics import MetricsCollector
 from startd8.micro_prime.decomposer import ModerateDecomposer
 from startd8.micro_prime.context import MicroPrimeContext
 from startd8.micro_prime.models import (
     ElementResult,
+    EscalationContext,
     EscalationReason,
     EscalationResult,
     FileResult,
@@ -55,6 +56,11 @@ def build_escalation_context(
     detail: str,
     last_code: Optional[str] = None,
     last_error: Optional[str] = None,
+    raw_output: Optional[str] = None,
+    repaired_code: Optional[str] = None,
+    repair_steps: Optional[list[str]] = None,
+    local_model: Optional[str] = None,
+    element_fqn: Optional[str] = None,
 ) -> EscalationResult:
     """Build a reusable EscalationResult for element escalation.
 
@@ -73,11 +79,25 @@ def build_escalation_context(
     Returns:
         An EscalationResult populated with the provided context.
     """
+    if element_fqn is None:
+        element_fqn = element_name
+    context = None
+    if raw_output or repaired_code or repair_steps or local_model:
+        context = EscalationContext(
+            element_fqn=element_fqn,
+            local_model=local_model or "",
+            raw_output=raw_output or "",
+            repair_steps_applied=repair_steps or [],
+            repaired_code=repaired_code,
+            error=last_error or detail,
+        )
+
     return EscalationResult(
         reason=reason,
         detail=detail,
         last_code=last_code,
         last_error=last_error,
+        context=context,
     )
 
 
@@ -173,7 +193,7 @@ class MicroPrimeEngine:
         """
         element_contracts = contracts or []
 
-        tier, reasoning = classify_element(
+        tier, reasoning, details = classify_element_with_details(
             element, file_spec, element_contracts,
             template_registry=self._templates,
             config=self._config,
@@ -182,6 +202,8 @@ class MicroPrimeEngine:
         return self._process_element_with_tier(
             element, file_spec, skeleton, element_contracts,
             tier=tier, reasoning=reasoning,
+            api_file_import_bump=details.file_import_bump,
+            api_element_adjustment=details.element_api_adjustment,
             design_doc_sections=design_doc_sections,
         )
 
@@ -193,6 +215,9 @@ class MicroPrimeEngine:
         contracts: list[InterfaceContract],
         tier: TierClassification,
         reasoning: str,
+        api_file_import_bump: int = 0,
+        api_element_adjustment: int = 0,
+        ollama_available: bool = True,
         design_doc_sections: Optional[list[str]] = None,
     ) -> ElementResult:
         """Process a single element with a pre-computed tier classification.
@@ -232,6 +257,8 @@ class MicroPrimeEngine:
                 classification_reason=reasoning,
                 success=True,
                 verification_verdict="skipped",
+                api_file_import_bump=api_file_import_bump,
+                api_element_adjustment=api_element_adjustment,
             )
             self._metrics.record(result)
             return result
@@ -252,6 +279,8 @@ class MicroPrimeEngine:
                 classification_reason=reasoning,
                 success=False,
                 verification_verdict="skipped",
+                api_file_import_bump=api_file_import_bump,
+                api_element_adjustment=api_element_adjustment,
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -261,6 +290,35 @@ class MicroPrimeEngine:
                         f"Circuit breaker tripped after "
                         f"{self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures"
                     ),
+                ),
+            )
+            self._metrics.record(result)
+            return result
+
+        # Ollama availability gate (REQ-MP-503)
+        if not ollama_available and tier in (
+            TierClassification.SIMPLE,
+            TierClassification.MODERATE,
+        ):
+            logger.warning(
+                "Ollama unavailable — escalating %s (%s) without local attempt",
+                element.name, tier.value,
+            )
+            result = ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=tier,
+                classification_reason=reasoning,
+                success=False,
+                verification_verdict="skipped",
+                api_file_import_bump=api_file_import_bump,
+                api_element_adjustment=api_element_adjustment,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=tier,
+                    reason=EscalationReason.OLLAMA_UNAVAILABLE,
+                    detail="Ollama unavailable — local generation skipped",
                 ),
             )
             self._metrics.record(result)
@@ -303,6 +361,8 @@ class MicroPrimeEngine:
         # Stamp parent_class for downstream spec lookup (e.g. cloud escalation)
         result.parent_class = element.parent_class
         result.element_kind = element.kind.value
+        result.api_file_import_bump = api_file_import_bump
+        result.api_element_adjustment = api_element_adjustment
 
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
@@ -329,6 +389,7 @@ class MicroPrimeEngine:
         manifest: ForwardManifest,
         skeleton: str,
         design_doc_sections: Optional[list[str]] = None,
+        ollama_available: bool = True,
     ) -> FileResult:
         """Process all elements in a file.
 
@@ -356,25 +417,39 @@ class MicroPrimeEngine:
         # process_element() — each element is classified exactly once.
         classified: list[
             tuple[int, str, ForwardElementSpec, list[InterfaceContract],
-                  TierClassification, str]
+                  TierClassification, str, int, int]
         ] = []
 
         for element in file_spec.elements:
             contracts = self._get_element_contracts(element, file_spec, manifest)
-            tier, reasoning = classify_element(
+            tier, reasoning, details = classify_element_with_details(
                 element, file_spec, contracts,
                 template_registry=self._templates,
                 config=self._config,
             )
             priority = self._TIER_PRIORITY.get(tier, 2)
-            classified.append((priority, element.name, element, contracts, tier, reasoning))
+            classified.append(
+                (
+                    priority,
+                    element.name,
+                    element,
+                    contracts,
+                    tier,
+                    reasoning,
+                    details.file_import_bump,
+                    details.element_api_adjustment,
+                )
+            )
 
         classified.sort(key=lambda x: (x[0], x[1]))
 
-        for _, _, element, contracts, pre_tier, pre_reasoning in classified:
+        for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust in classified:
             result = self._process_element_with_tier(
                 element, file_spec, current_skeleton, contracts,
                 tier=pre_tier, reasoning=pre_reasoning,
+                api_file_import_bump=file_bump,
+                api_element_adjustment=elem_adjust,
+                ollama_available=ollama_available,
                 design_doc_sections=design_doc_sections,
             )
             file_result.element_results.append(result)
@@ -414,12 +489,14 @@ class MicroPrimeEngine:
             context.manifest,
             skeleton,
             design_doc_sections=design_doc_sections,
+            ollama_available=context.ollama_available,
         )
 
     def process_seed(
         self,
         manifest: ForwardManifest,
         skeletons: dict[str, str],
+        ollama_available: bool = True,
     ) -> SeedResult:
         """Process all elements across all files in a seed.
 
@@ -439,7 +516,10 @@ class MicroPrimeEngine:
                 logger.warning("No skeleton for %s, skipping", file_path)
                 continue
 
-            file_result = self.process_file(file_spec, manifest, skeleton)
+            file_result = self.process_file(
+                file_spec, manifest, skeleton,
+                ollama_available=ollama_available,
+            )
             seed_result.file_results.append(file_result)
 
         seed_result.total_generation_time_ms = (
@@ -460,7 +540,11 @@ class MicroPrimeEngine:
         context: MicroPrimeContext,
     ) -> SeedResult:
         """Process a seed using normalized MicroPrimeContext (REQ-MP-509)."""
-        return self.process_seed(context.manifest, skeletons)
+        return self.process_seed(
+            context.manifest,
+            skeletons,
+            ollama_available=context.ollama_available,
+        )
 
     def inspect_decomposition(
         self,
@@ -725,7 +809,8 @@ class MicroPrimeEngine:
             )
 
         # Structural verification (R3-S4)
-        if not _structural_verify(assembled, element):
+        structural_ok, structural_reason = _structural_verify(assembled, element)
+        if not structural_ok:
             self._completed = self._completed[:completed_len]
             return ElementResult(
                 element_name=element.name,
@@ -741,6 +826,7 @@ class MicroPrimeEngine:
                     reason=EscalationReason.DECOMPOSITION_FAILED,
                     detail="Assembled code failed structural verification",
                     last_code=assembled,
+                    last_error=structural_reason or "structural_verification_failed",
                 ),
                 generation_time_ms=gen_time,
                 input_tokens=total_input,
@@ -862,6 +948,10 @@ class MicroPrimeEngine:
         """Handle SIMPLE tier: local model generation + repair."""
         start_time = time.monotonic()
         model_name = f"{self._config.provider}:{self._config.model}"
+        element_fqn = (
+            f"{element.parent_class}.{element.name}"
+            if element.parent_class else element.name
+        )
 
         # Build few-shot examples
         few_shot = None
@@ -903,6 +993,8 @@ class MicroPrimeEngine:
                     tier=TierClassification.SIMPLE,
                     reason=EscalationReason.EMPTY_RESPONSE,
                     detail=str(e),
+                    local_model=model_name,
+                    element_fqn=element_fqn,
                 ),
             )
 
@@ -927,12 +1019,16 @@ class MicroPrimeEngine:
                     tier=TierClassification.SIMPLE,
                     reason=EscalationReason.EMPTY_RESPONSE,
                     detail="Empty response from Ollama",
+                    local_model=model_name,
+                    element_fqn=element_fqn,
                 ),
             )
 
+        raw_output = code
         ast_valid_before = _ast_parse_valid(code, element)
         ast_valid_after = ast_valid_before
         repair_recovered = False
+        repaired_code = None
 
         # Run repair pipeline
         repair_steps: list[str] = []
@@ -948,6 +1044,7 @@ class MicroPrimeEngine:
             )
             ast_valid_after = repair_result.ast_valid_after
             repair_recovered = repair_result.repair_recovered
+            repaired_code = code
             if not repair_result.ast_valid:
                 return ElementResult(
                     element_name=element.name,
@@ -974,11 +1071,17 @@ class MicroPrimeEngine:
                         detail="AST validation failed after repair",
                         last_code=code,
                         last_error=repair_result.last_error or "ast.parse() failed",
+                        raw_output=raw_output,
+                        repaired_code=repaired_code,
+                        repair_steps=repair_steps,
+                        local_model=model_name,
+                        element_fqn=element_fqn,
                     ),
                 )
 
         # Structural verification (REQ-MP-512)
-        if not _structural_verify(code, element):
+        structural_ok, structural_reason = _structural_verify(code, element)
+        if not structural_ok:
             return ElementResult(
                 element_name=element.name,
                 file_path=file_path,
@@ -1000,10 +1103,15 @@ class MicroPrimeEngine:
                     element_name=element.name,
                     file_path=file_path,
                     tier=TierClassification.SIMPLE,
-                    reason=EscalationReason.AST_FAILURE,
+                    reason=EscalationReason.STRUCTURAL_MISMATCH,
                     detail="Structural verification failed after repair",
                     last_code=code,
-                    last_error="structural_verification_failed",
+                    last_error=structural_reason or "structural_verification_failed",
+                    raw_output=raw_output,
+                    repaired_code=repaired_code or code,
+                    repair_steps=repair_steps,
+                    local_model=model_name,
+                    element_fqn=element_fqn,
                 ),
             )
 
@@ -1107,13 +1215,15 @@ def _ast_parse_valid(code: str, element: ForwardElementSpec) -> bool:
         return False
 
 
-def _structural_verify(code: str, element: ForwardElementSpec) -> bool:
+def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, str]:
     """Verify structural correctness of generated code.
 
     Checks:
     - AST parses successfully
-    - For functions: the target function exists in the AST
-    - For constants: the target assignment exists
+    - For functions: target function exists and body is non-empty
+    - For constants: target assignment exists
+    - No remaining NotImplementedError stubs
+    - Return statements present when return annotation is non-None
     """
     is_method = bool(element.parent_class)
 
@@ -1127,9 +1237,9 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> bool:
                 wrapped = "class _Wrapper:\n" + textwrap.indent(code, "    ")
                 tree = ast.parse(wrapped)
             except SyntaxError:
-                return False
+                return False, "ast.parse() failed"
         else:
-            return False
+            return False, "ast.parse() failed"
 
     # Check the target exists
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
@@ -1137,31 +1247,81 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> bool:
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name) and target.id == element.name:
-                        return True
+                        return True, "constant assignment found"
             elif isinstance(node, ast.AnnAssign):
                 if isinstance(node.target, ast.Name) and node.target.id == element.name:
-                    return True
-        # For constants, the code might just be a value expression
-        return True
+                    return True, "annotated assignment found"
+        return False, "constant assignment not found"
 
     # For CLASS elements, verify the class name exists in the AST (R1-S3)
     if element.kind == ElementKind.CLASS:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and node.name == element.name:
-                return True
-        # "pass" body is valid for class shells — check if it's just a pass statement
+                return True, "class definition found"
         if code.strip() == "pass":
-            return True
-        return False
+            return True, "class shell pass"
+        return False, "class definition not found"
 
     # For functions/methods: verify the target name exists in the AST.
-    # This catches cross-contamination where Ollama generates a body for
-    # a different function than the one requested.
-    target = element.name
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == target:
-                return True
-    # The repair pipeline's bare-statement-wrap may have wrapped the body
-    # under the correct name; if we reach here the name is missing.
+    target_node = None
+    if is_method and element.parent_class:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
+                        target_node = child
+                        break
+                if target_node is not None:
+                    break
+    else:
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
+                target_node = node
+                break
+
+    if target_node is None:
+        return False, "target function not found"
+
+    # Check for NotImplementedError stub
+    for node in ast.walk(target_node):
+        if isinstance(node, ast.Raise) and _is_not_implemented(node):
+            return False, "contains NotImplementedError"
+
+    # Check return statements for non-None annotations
+    if element.signature and element.signature.return_annotation:
+        ret_ann = element.signature.return_annotation
+        if ret_ann not in ("None", "none"):
+            has_return = any(
+                isinstance(n, ast.Return) and n.value is not None
+                for n in ast.walk(target_node)
+            )
+            if not has_return:
+                return False, f"missing return for -> {ret_ann}"
+
+    # Body must have at least one non-docstring statement
+    body_stmts = []
+    for stmt in target_node.body:
+        if isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
+            if isinstance(stmt.value.value, str):
+                continue
+        body_stmts.append(stmt)
+    if not body_stmts:
+        return False, "function body empty"
+
+    return True, "structural checks passed"
+
+
+def _is_not_implemented(node: ast.Raise) -> bool:
+    """Return True if a raise node corresponds to NotImplementedError."""
+    if node.exc is None:
+        return False
+    exc = node.exc
+    if isinstance(exc, ast.Call):
+        func = exc.func
+        if isinstance(func, ast.Name):
+            return func.id == "NotImplementedError"
+        if isinstance(func, ast.Attribute):
+            return func.attr == "NotImplementedError"
+    if isinstance(exc, ast.Name):
+        return exc.id == "NotImplementedError"
     return False

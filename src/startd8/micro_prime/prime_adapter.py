@@ -31,6 +31,7 @@ from startd8.forward_manifest import (
 )
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
+from startd8.micro_prime.context import MicroPrimeContext
 from startd8.micro_prime.engine import MicroPrimeEngine, _CODE_GEN_SYSTEM_PROMPT
 from startd8.micro_prime.models import (
     EscalationReason,
@@ -97,6 +98,14 @@ def _serialize_file_result(fr: Any) -> dict:
             reason = esc.get("reason", "")
             if isinstance(reason, str) and "." in reason:
                 esc["reason"] = reason.rsplit(".", 1)[-1].lower()
+            ctx = esc.get("context")
+            if isinstance(ctx, dict):
+                raw_output = ctx.get("raw_output")
+                if raw_output and len(raw_output) > 500:
+                    ctx["raw_output"] = raw_output[:500] + "... [truncated]"
+                repaired = ctx.get("repaired_code")
+                if repaired and len(repaired) > 500:
+                    ctx["repaired_code"] = repaired[:500] + "... [truncated]"
     # Drop filled_skeleton from serialization — too large for metadata
     result.pop("filled_skeleton", None)
     return result
@@ -229,11 +238,16 @@ class MicroPrimeCodeGenerator:
             return self._dry_run_classify(manifest, skeletons, target_files, ollama_ok)
 
         if not ollama_ok:
-            logger.info("Ollama unavailable — delegating all to fallback")
-            return self._delegate_to_fallback(task, context, target_files)
+            logger.info(
+                "Ollama unavailable — SIMPLE elements will be escalated to fallback",
+            )
+
+        mp_context = MicroPrimeContext.from_prime(
+            context, manifest, target_files, ollama_ok,
+        )
 
         # Existing target files for size-regression escalation guard
-        existing_files: Dict[str, str] = context.get("existing_files") or {}
+        existing_files: Dict[str, str] = mp_context.existing_file_contents
 
         # Process target files through the engine
         all_file_results: list = []
@@ -260,8 +274,8 @@ class MicroPrimeCodeGenerator:
 
             # REQ-DDS-002: Thread design_doc_sections to engine
             _dds = context.get("design_doc_sections") or []
-            file_result = self._engine.process_file(
-                file_spec, manifest, skeleton,
+            file_result = self._engine.process_file_with_context(
+                file_spec, skeleton, mp_context,
                 design_doc_sections=_dds if _dds else None,
             )
             all_file_results.append(file_result)
@@ -370,16 +384,30 @@ class MicroPrimeCodeGenerator:
             and (fr := file_results_by_path.get(fp))
             and fr.escalated_count > 0 and fr.success_count > 0
         ]
-        cloud_escalation_available = (
-            self._cloud_agent_spec is not None
-            or self._fallback is not None
-        )
-        if partial_escalation_candidates and not cloud_escalation_available:
-            logger.debug(
-                "Skipping element-level escalation for %d file(s) — no cloud agent or fallback configured",
+        cloud_escalation_available = self._cloud_agent_spec is not None
+        element_escalation_allowed = bool(ollama_ok)
+        if partial_escalation_candidates and self._fallback is not None and not cloud_escalation_available:
+            for fp in partial_escalation_candidates:
+                if fp not in escalated_files:
+                    escalated_files.append(fp)
+            logger.info(
+                "Element-level escalation disabled — delegating %d file(s) to fallback",
                 len(partial_escalation_candidates),
             )
-        if cloud_escalation_available:
+        if partial_escalation_candidates and not element_escalation_allowed:
+            for fp in partial_escalation_candidates:
+                if fp not in escalated_files:
+                    escalated_files.append(fp)
+            logger.info(
+                "Ollama unavailable — skipping element-level escalation for %d file(s)",
+                len(partial_escalation_candidates),
+            )
+        if partial_escalation_candidates and not cloud_escalation_available:
+            logger.debug(
+                "Skipping element-level escalation for %d file(s) — no cloud agent configured",
+                len(partial_escalation_candidates),
+            )
+        if cloud_escalation_available and element_escalation_allowed:
             for fp in partial_escalation_candidates:
                 fr = file_results_by_path[fp]
                 try:
@@ -432,8 +460,11 @@ class MicroPrimeCodeGenerator:
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
         if escalated_files and self._fallback is not None:
+            fallback_context = self._with_escalation_context(
+                context, all_file_results,
+            )
             fallback_result = self._delegate_to_fallback(
-                task, context, escalated_files,
+                task, fallback_context, escalated_files,
             )
             generated_files.extend(fallback_result.generated_files)
             total_input += fallback_result.input_tokens
@@ -496,6 +527,49 @@ class MicroPrimeCodeGenerator:
                 ],
             },
         )
+
+    def _with_escalation_context(
+        self,
+        context: Dict[str, Any],
+        file_results: list[FileResult],
+    ) -> Dict[str, Any]:
+        """Attach micro-prime escalation context for fallback prompts."""
+        feedback = self._format_escalation_feedback(file_results)
+        if not feedback:
+            return context
+        merged = dict(context)
+        existing = merged.get("last_error") or ""
+        if existing:
+            merged["last_error"] = f"{existing}\n\n{feedback}"
+        else:
+            merged["last_error"] = feedback
+        return merged
+
+    def _format_escalation_feedback(
+        self,
+        file_results: list[FileResult],
+        max_chars: int = 4000,
+    ) -> str:
+        """Summarize local failures for cloud fallback (REQ-MP-502)."""
+        lines: list[str] = ["Micro Prime local attempt failed for:"]
+        count = 0
+        for fr in file_results:
+            for er in fr.element_results:
+                if er.escalation is None:
+                    continue
+                count += 1
+                reason = er.escalation.reason.value
+                err = er.escalation.last_error or er.escalation.detail
+                lines.append(
+                    f"- {er.file_path}:{er.element_name} "
+                    f"({reason}) — {err}"
+                )
+        if count == 0:
+            return ""
+        text = "\n".join(lines)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... [truncated]"
+        return text
 
     def _run_post_generation_repair(self, generated_files: list[Path]) -> int:
         """Run lint + syntax checks and auto-repair generated files.
@@ -908,6 +982,10 @@ class MicroPrimeCodeGenerator:
         escalation_reason: str = "",
         last_error: str = "",
         retry_context: str = "",
+        last_code: str = "",
+        raw_output: str = "",
+        repaired_code: str = "",
+        repair_steps: Optional[list[str]] = None,
     ) -> Optional[tuple[str, int, int]]:
         """Single direct LLM call for one escalated element.
 
@@ -928,6 +1006,20 @@ class MicroPrimeCodeGenerator:
             prompt += f"\n# Previous error: {last_error}"
         if retry_context:
             prompt += f"\n\n# Retry context: {retry_context}"
+        if raw_output or repaired_code or last_code:
+            truncated = raw_output or last_code
+            if len(truncated) > 2000:
+                truncated = truncated[:2000] + "\n# ... [truncated]"
+            prompt += "\n\n# Prior local model attempt:"
+            prompt += "\n# Repair steps attempted: "
+            prompt += ", ".join(repair_steps or []) or "none"
+            prompt += "\n```python\n" + truncated + "\n```"
+            if repaired_code and repaired_code != truncated:
+                repaired = repaired_code
+                if len(repaired) > 2000:
+                    repaired = repaired[:2000] + "\n# ... [truncated]"
+                prompt += "\n\n# Repaired output:"
+                prompt += "\n```python\n" + repaired + "\n```"
 
         agent = self._get_cloud_agent()
         result_text, _time_ms, token_usage = agent.generate(
@@ -1043,6 +1135,19 @@ class MicroPrimeCodeGenerator:
                 escalation_reason = er.escalation.reason.value
                 prompt_error = er.escalation.last_error or ""
                 last_error = prompt_error
+                last_code = er.code or (er.escalation.last_code or "")
+                repair_steps = er.repair_steps_applied or []
+                raw_output = ""
+                repaired_code = ""
+                esc_ctx = er.escalation.context if er.escalation else None
+                if esc_ctx:
+                    raw_output = esc_ctx.raw_output or ""
+                    repaired_code = esc_ctx.repaired_code or ""
+                    if esc_ctx.repair_steps_applied:
+                        repair_steps = list(esc_ctx.repair_steps_applied)
+                    if esc_ctx.error:
+                        prompt_error = esc_ctx.error
+                        last_error = esc_ctx.error
 
                 attempts = 0
                 success = False
@@ -1073,6 +1178,10 @@ class MicroPrimeCodeGenerator:
                         escalation_reason=escalation_reason,
                         last_error=prompt_error or "",
                         retry_context=retry_context,
+                        last_code=last_code,
+                        raw_output=raw_output,
+                        repaired_code=repaired_code,
+                        repair_steps=repair_steps,
                     )
                     if gen_result is None:
                         last_error = "empty_response"
@@ -1081,8 +1190,6 @@ class MicroPrimeCodeGenerator:
                         break
 
                     code, inp_tokens, out_tokens = gen_result
-                    total_input += inp_tokens
-                    total_output += out_tokens
 
                     # Try AST extraction first (in case cloud returned full def)
                     kind_str = spec.kind.value
@@ -1101,6 +1208,8 @@ class MicroPrimeCodeGenerator:
                         updated_skeleton = spliced
                         spliced_count += 1
                         success = True
+                        total_input += inp_tokens
+                        total_output += out_tokens
                         break
 
                     last_error = "extraction_failed" if extraction_failed else "splice_failed"

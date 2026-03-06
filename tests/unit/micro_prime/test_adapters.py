@@ -1023,6 +1023,403 @@ class TestElementLevelEscalation:
         fallback.generate.assert_called_once()
 
 
+    def test_cloud_escalation_retry_same_prompt(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """Retries cloud escalation when direct call fails (same_prompt)."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        config = MicroPrimeConfig(
+            cloud_escalation_max_attempts=2,
+            cloud_escalation_retry_strategy="same_prompt",
+        )
+        gen = MicroPrimeCodeGenerator(
+            config=config,
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
+            output_dir=tmp_path,
+        )
+
+        partial_result = FileResult(file_path="src/mypackage/utils.py")
+        partial_result.element_results = [
+            ElementResult(
+                element_name="get_name",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.SIMPLE,
+                success=True,
+                code="return key.upper()",
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                    last_error="bad_local",
+                ),
+            ),
+        ]
+        partial_result.filled_skeleton = sample_skeleton
+
+        mock_direct = MagicMock(
+            side_effect=[None, ("return len(key)", 10, 5)],
+        )
+
+        with patch.object(gen._engine, "process_file", return_value=partial_result), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ), \
+             patch.object(
+                 gen, "_direct_cloud_generate", mock_direct,
+             ), \
+             patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert mock_direct.call_count == 2
+        retry_contexts = [
+            call.kwargs.get("retry_context", None)
+            for call in mock_direct.call_args_list
+        ]
+        assert retry_contexts == ["", ""]
+
+        er = partial_result.element_results[1]
+        assert er.cloud_retry_attempts == 2
+        assert er.cloud_retry_success is True
+        assert er.cloud_retry_strategy == "same_prompt"
+        assert er.cloud_retry_last_error == "empty_response"
+
+        assert result.metadata["element_escalation_attempt_count"] == 1
+        assert result.metadata["element_escalation_count"] == 1
+
+    def test_cloud_escalation_retry_append_error_truncates(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """Retry context is appended and truncated for append_error strategy."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        config = MicroPrimeConfig(
+            cloud_escalation_max_attempts=2,
+            cloud_escalation_retry_strategy="append_error",
+            cloud_escalation_retry_max_chars=10,
+        )
+        gen = MicroPrimeCodeGenerator(
+            config=config,
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
+            output_dir=tmp_path,
+        )
+
+        partial_result = FileResult(file_path="src/mypackage/utils.py")
+        partial_result.element_results = [
+            ElementResult(
+                element_name="get_name",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.SIMPLE,
+                success=True,
+                code="return key.upper()",
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                    last_error="bad_local",
+                ),
+            ),
+        ]
+        partial_result.filled_skeleton = sample_skeleton
+
+        mock_direct = MagicMock(
+            side_effect=[None, ("return len(key)", 10, 5)],
+        )
+
+        with patch.object(gen._engine, "process_file", return_value=partial_result), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ), \
+             patch.object(
+                 gen, "_direct_cloud_generate", mock_direct,
+             ), \
+             patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert mock_direct.call_count == 2
+        retry_contexts = [
+            call.kwargs.get("retry_context", None)
+            for call in mock_direct.call_args_list
+        ]
+        assert retry_contexts[0] == ""
+        assert retry_contexts[1]
+        assert len(retry_contexts[1]) <= 10
+
+        er = partial_result.element_results[1]
+        assert er.cloud_retry_attempts == 2
+        assert er.cloud_retry_success is True
+        assert er.cloud_retry_strategy == "append_error"
+
+        assert result.metadata["element_escalation_attempt_count"] == 1
+        assert result.metadata["element_escalation_count"] == 1
+
+
+class TestPostGenerationRepair:
+    """Tests for post-generation file-level repair."""
+
+    def _make_ollama_mock(self):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def test_repair_called_after_file_writes(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """_run_post_generation_repair is invoked on generated files."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ), patch.object(
+            gen, "_run_post_generation_repair", return_value=0,
+        ) as mock_repair:
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # Repair should have been called with the generated file paths
+        mock_repair.assert_called_once()
+        call_args = mock_repair.call_args[0][0]
+        assert len(call_args) >= 1
+        assert all(isinstance(p, Path) for p in call_args)
+
+    def test_repair_import_error_caught_gracefully(self, tmp_path):
+        """ImportError on repair imports is caught — generation is not blocked."""
+        gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text("x = 1\n")
+
+        with patch(
+            "builtins.__import__",
+            side_effect=lambda name, *a, **kw: (
+                __builtins__["__import__"](name, *a, **kw)
+                if not name.startswith("startd8.contractors.checkpoint")
+                else (_ for _ in ()).throw(ImportError("no checkpoint"))
+            ),
+        ):
+            # Use direct call — ImportError should be caught
+            result = gen._run_post_generation_repair([test_file])
+        assert result == 0
+
+    def test_repair_import_error_via_mock(self, tmp_path):
+        """ImportError on repair imports caught gracefully (mock approach)."""
+        gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
+        test_file = tmp_path / "test.py"
+        test_file.write_text("x = 1\n")
+
+        with patch.dict("sys.modules", {"startd8.contractors.checkpoint": None}):
+            result = gen._run_post_generation_repair([test_file])
+        assert result == 0
+
+    def test_repair_skipped_on_empty_files(self, tmp_path):
+        """No repair when generated_files is empty."""
+        gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
+        result = gen._run_post_generation_repair([])
+        assert result == 0
+
+
+class TestFillRateSuccessCriteria:
+    """Tests for element fill-rate success criteria."""
+
+    def _make_ollama_mock(self):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def _make_file_result(self, file_path, successes, failures):
+        """Create a FileResult with the specified success/failure counts."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        elements = []
+        for i in range(successes):
+            elements.append(ElementResult(
+                element_name=f"ok_{i}",
+                file_path=file_path,
+                tier=TierClassification.SIMPLE,
+                success=True,
+                code="pass",
+            ))
+        for i in range(failures):
+            elements.append(ElementResult(
+                element_name=f"fail_{i}",
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                ),
+            ))
+
+        fr = FileResult(file_path=file_path)
+        fr.element_results = elements
+        fr.filled_skeleton = "# skeleton\nclass Foo:\n    pass\n"
+        return fr
+
+    def test_low_fill_rate_returns_failure(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """1/10 elements → success=False (10% < 50% threshold)."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        fr = self._make_file_result("src/mypackage/utils.py", 1, 9)
+
+        with patch.object(gen._engine, "process_file", return_value=fr), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ), \
+             patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert result.success is False
+        assert "src/mypackage/utils.py" in result.metadata["incomplete_files"]
+
+    def test_high_fill_rate_returns_success(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """8/10 elements → success=True (80% >= 50% threshold)."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        fr = self._make_file_result("src/mypackage/utils.py", 8, 2)
+
+        with patch.object(gen._engine, "process_file", return_value=fr), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ), \
+             patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert result.success is True
+        assert result.metadata["incomplete_files"] == []
+
+    def test_boundary_fill_rate_returns_success(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """5/10 elements → success=True (50% == 50% threshold, >=)."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        fr = self._make_file_result("src/mypackage/utils.py", 5, 5)
+
+        with patch.object(gen._engine, "process_file", return_value=fr), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ), \
+             patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert result.success is True
+
+    def test_full_fill_rate_unchanged(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """100% fill rate still passes (existing behavior preserved)."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ), patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # Default engine processes elements — should succeed with default fill rate
+        assert result.metadata.get("effective_file_count") is not None
+
+    def test_metadata_includes_fill_rate_fields(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """Metadata contains effective_file_count and incomplete_files."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ), patch.object(gen, "_run_post_generation_repair", return_value=0):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        assert "effective_file_count" in result.metadata
+        assert "incomplete_files" in result.metadata
+
+
 class TestDesignDocSectionsPassedToEngine:
     """REQ-DDS-002: Adapter extracts design_doc_sections from context and forwards."""
 
