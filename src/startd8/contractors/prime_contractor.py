@@ -726,7 +726,22 @@ class PrimeContractorWorkflow:
             )
             return
 
-        mp_config = config or MicroPrimeConfig()
+        cloud_agent_spec = None
+        if config is None:
+            try:
+                from startd8.micro_prime.config_loader import (
+                    load_micro_prime_settings,
+                )
+                mp_config, cloud_agent_spec = load_micro_prime_settings(
+                    self.project_root,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Micro Prime config load failed (non-fatal): %s", exc,
+                )
+                mp_config = MicroPrimeConfig()
+        else:
+            mp_config = config or MicroPrimeConfig()
         self._original_code_generator = self.code_generator
 
         output_dir = (
@@ -738,13 +753,15 @@ class PrimeContractorWorkflow:
             config=mp_config,
             fallback=self._original_code_generator,
             output_dir=output_dir,
+            cloud_agent_spec=cloud_agent_spec,
         )
         self._micro_prime_enabled = True
         logger.info(
-            "Micro Prime enabled: model=%s, templates=%s, repair=%s",
+            "Micro Prime enabled: model=%s, templates=%s, repair=%s, cloud_escalation=%s",
             mp_config.model,
             mp_config.templates_enabled,
             mp_config.repair_enabled,
+            "enabled" if cloud_agent_spec else "disabled",
         )
 
     def disable_micro_prime(self) -> None:
@@ -2004,10 +2021,15 @@ class PrimeContractorWorkflow:
     def _apply_kaizen_hints(self, gen_context: Dict[str, Any]) -> None:
         """Inject kaizen prompt hints from _kaizen_config into gen_context (REQ-KZ-502).
 
+        Injects all hints regardless of their ``phase`` label, because
+        ``generator.generate()`` internally manages all phases (spec, draft, review)
+        in a single call; there is no per-phase injection point available here.
+        Future work could pass phase-specific contexts if the generator API exposes them.
+
         Deduplicates by SHA-256 content hash (truncated to 16 hex chars) and
-        caps at _MAX_KAIZEN_HINTS_PER_PHASE hints per phase.  Phase "all" applies
-        to every feature.  Hints are injected as gen_context["kaizen_hints"],
-        a newline-joined bullet list.
+        caps at _MAX_KAIZEN_HINTS_PER_PHASE hints per declared phase bucket to
+        avoid overwhelming the prompt.  Hints are injected as
+        gen_context[\"kaizen_hints\"], a newline-joined bullet list.
 
         Failures are non-fatal — logged and silently ignored.
         """
@@ -2071,8 +2093,16 @@ class PrimeContractorWorkflow:
             run_id = os.environ.get("KAIZEN_RUN_ID", "standalone")
             safe_fid = self._sanitize_feature_id(feature.id)
             prompt_dir = self._kaizen_prompt_dir / run_id / safe_fid
-            prompts = self._build_phase_prompts(feature, gen_context)
-            self._write_prompt_files(prompt_dir, feature, prompts, gen_context)
+
+            # REQ-KZ-BUG-004: Ensure context is JSON serializable (no raw ForwardManifest objects)
+            serializable_context = dict(gen_context)
+            for key in ["manifest", "forward_manifest"]:
+                val = serializable_context.get(key)
+                if val is not None and hasattr(val, "dict"):
+                    serializable_context[key] = val.dict()
+
+            prompts = self._build_phase_prompts(feature, serializable_context)
+            self._write_prompt_files(prompt_dir, feature, prompts, serializable_context)
             if result is not None:
                 self._capture_response_files(prompt_dir, feature, result)
             logger.debug(
@@ -2559,6 +2589,14 @@ class PrimeContractorWorkflow:
                 self._save_queue_state_with_mode()
                 return True
 
+            # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal, hints added to gen_context
+            if self._kaizen_config:
+                self._apply_kaizen_hints(gen_context)
+
+            # Kaizen: persist real-run prompts (REQ-KZ-200) — non-fatal
+            # Captured here even if cached, so we have the prompt for correlation analysis.
+            self._persist_kaizen_prompts(feature, gen_context, result=None)
+
             # Phase 4: Staleness detection — skip generation if cached result is current
             if not self._check_staleness(feature):
                 feature.status = FeatureStatus.GENERATED
@@ -2599,11 +2637,16 @@ class PrimeContractorWorkflow:
                         exc_info=True,
                     )
 
-            # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal, hints added to gen_context
-            if self._kaizen_config:
-                self._apply_kaizen_hints(gen_context)
+            result: GenerationResult = generator.generate(
+                task=feature.description,
+                context=gen_context,
+                target_files=feature.target_files,
+            )
 
-            result: GenerationResult = generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
+            # Kaizen: persist real-run prompts + responses (REQ-KZ-200, 201) — non-fatal
+            # Captured regardless of success/fail so we can analyze why it failed.
+            self._persist_kaizen_prompts(feature, gen_context, result=result)
+
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED
@@ -2618,8 +2661,7 @@ class PrimeContractorWorkflow:
                     feature.metadata["_generation_result_metadata"] = result.metadata
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
                 logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
-                # Kaizen: persist real-run prompts + responses (REQ-KZ-200, 201) — non-fatal
-                self._persist_kaizen_prompts(feature, gen_context, result=result)
+                
                 # Micro Prime dry-run: classification-only, skip integration
                 if result.metadata and result.metadata.get("dry_run"):
                     self.queue.complete_feature(feature.id)

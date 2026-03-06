@@ -468,9 +468,14 @@ class MicroPrimeCodeGenerator:
             )
             generated_files.extend(fallback_result.generated_files)
             total_input += fallback_result.input_tokens
-            total_output += fallback_result.output_tokens
+            # The generation is successful if the fallback succeeded AND
+            # either there were no locally-handled files, or the ones that
+            # were handled locally met the effective fill rate.
+            local_files_kept = sum(1 for fp in target_files if fp not in escalated_files)
+            local_success = True if local_files_kept == 0 else (effective_file_count > 0)
+            
             return GenerationResult(
-                success=fallback_result.success and effective_file_count > 0,
+                success=fallback_result.success and local_success,
                 generated_files=generated_files,
                 input_tokens=total_input,
                 output_tokens=total_output,
@@ -958,6 +963,44 @@ class MicroPrimeCodeGenerator:
                 return spec
         return DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
 
+    @staticmethod
+    def _resolve_cloud_agent_max_tokens(spec: str) -> Optional[int]:
+        """Resolve max_tokens for the cloud agent from user config.
+
+        Uses ~/.startd8/config.json model presets when available.
+        """
+        try:
+            from startd8.config import get_config_manager
+        except Exception:
+            return None
+
+        config_mgr = get_config_manager()
+        provider = ""
+        model = spec
+        if ":" in spec:
+            provider, model = spec.split(":", 1)
+        model_lower = model.lower()
+
+        # Map model name to config key.
+        key = None
+        if "haiku" in model_lower:
+            key = "haiku"
+        elif "sonnet" in model_lower or "opus" in model_lower:
+            key = "claude"
+        elif provider == "anthropic":
+            key = "claude"
+        elif "gpt-4" in model_lower or "gpt4" in model_lower:
+            key = "gpt4"
+
+        if not key:
+            return None
+
+        cfg = config_mgr.get_model_config(key)
+        max_tokens = cfg.get("max_tokens")
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            return max_tokens
+        return None
+
     def _get_cloud_agent(self) -> BaseAgent:
         """Lazily create a cloud agent for element-level escalation.
 
@@ -967,7 +1010,8 @@ class MicroPrimeCodeGenerator:
             from startd8.utils.agent_resolution import resolve_agent_spec
 
             spec = self._resolve_cloud_agent_spec()
-            self._cloud_agent = resolve_agent_spec(spec, max_tokens=4096)
+            max_tokens = self._resolve_cloud_agent_max_tokens(spec) or 4096
+            self._cloud_agent = resolve_agent_spec(spec, max_tokens=max_tokens)
             logger.debug("Cloud agent created: %s", spec)
 
         return self._cloud_agent
