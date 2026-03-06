@@ -23,7 +23,8 @@ from startd8.forward_manifest import (
     ForwardManifest,
 )
 from startd8.logging_config import get_logger
-from startd8.micro_prime.models import MicroPrimeConfig
+from startd8.micro_prime.classifier import classify_element_with_details
+from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 from startd8.utils.code_manifest import ElementKind, Param, Signature
 from startd8.utils.file_assembler import DeterministicFileAssembler
 
@@ -508,6 +509,29 @@ class ModerateDecomposer:
                     classification_signals,
                 )
                 if plan is None:
+                    continue
+                # Ensure all non-deterministic sub-elements are SIMPLE/TRIVIAL
+                sub_ok = True
+                for sub in plan.sub_elements:
+                    if sub.deterministic:
+                        continue
+                    if sub.element_spec is None:
+                        sub_ok = False
+                        break
+                    tier, _reason, _details = classify_element_with_details(
+                        sub.element_spec, file_spec, [], None, self._config,
+                    )
+                    if tier not in (
+                        TierClassification.SIMPLE,
+                        TierClassification.TRIVIAL,
+                    ):
+                        logger.debug(
+                            "Plan for %s rejected: sub-element %s classified %s",
+                            element.name, sub.name, tier.value,
+                        )
+                        sub_ok = False
+                        break
+                if not sub_ok:
                     continue
                 if len(plan.sub_elements) > self._config.max_sub_elements:
                     logger.debug(

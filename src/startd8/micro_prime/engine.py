@@ -863,6 +863,18 @@ class MicroPrimeEngine:
             element.name, len(sub_results), len(plan.sub_elements), gen_time,
         )
 
+        # Record as completed for few-shot (REQ-MP-903)
+        self._completed.append({
+            "element": {
+                "name": element.name,
+                "parent_class": element.parent_class,
+                "kind": element.kind,
+            },
+            "file_path": file_path,
+            "code": assembled,
+            "syntax_valid": True,
+        })
+
         # Record success for cache (R1-S7)
         moderate_fingerprint = (
             f"{element.parent_class or ''}:{element.name}"
