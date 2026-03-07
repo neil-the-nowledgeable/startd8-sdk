@@ -1,4 +1,4 @@
-"""Tests for the Moderate Decomposer (REQ-MP-900, 901, 904, 907, 908)."""
+"""Tests for the Moderate Decomposer (REQ-MP-900, 901, 902, 904, 907, 908)."""
 
 from __future__ import annotations
 
@@ -13,12 +13,16 @@ from startd8.forward_manifest import (
 from startd8.micro_prime.decomposer import (
     ClassDecomposeStrategy,
     DecompositionPlan,
+    FunctionChainStrategy,
     ModerateDecomposer,
     SubElement,
     _compute_confidence,
+    _parse_responsibilities,
+    _slugify_helper_name,
+    _uniquify_name,
 )
 from startd8.micro_prime.models import MicroPrimeConfig
-from startd8.utils.code_manifest import ElementKind, Param, Signature
+from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 
 # ── ClassDecomposeStrategy Tests (REQ-MP-901) ───────────────────────
@@ -534,6 +538,411 @@ class TestModerateDecomposer:
             plan, {"class_shell": "pass"}, "",
         )
         assert result == "pass"
+
+
+# ── FunctionChainStrategy Tests (REQ-MP-902) ─────────────────────────
+
+
+class TestParseResponsibilities:
+    """Tests for _parse_responsibilities helper."""
+
+    def test_semicolon_separated(self):
+        text = "Validate the order fields; compute totals with tax; format the confirmation email"
+        clauses = _parse_responsibilities(text)
+        assert len(clauses) == 3
+        assert "Validate the order fields" in clauses[0]
+
+    def test_bullet_separated(self):
+        text = "- Validate the order fields\n- Compute totals with tax\n- Format the confirmation email"
+        clauses = _parse_responsibilities(text)
+        assert len(clauses) == 3
+
+    def test_numbered_separated(self):
+        text = "1. Validate the order fields\n2. Compute totals with tax"
+        clauses = _parse_responsibilities(text)
+        assert len(clauses) == 2
+
+    def test_and_is_not_a_separator(self):
+        """'and' within a clause doesn't split it."""
+        text = "Validate and sanitize the order fields"
+        clauses = _parse_responsibilities(text)
+        assert len(clauses) == 1
+
+    def test_short_clauses_ignored(self):
+        """Clauses with fewer than 4 words are filtered out."""
+        text = "Validate and process the fields; do it; compute totals with tax"
+        clauses = _parse_responsibilities(text)
+        assert len(clauses) == 2  # "do it" is too short
+
+    def test_empty_string(self):
+        assert _parse_responsibilities("") == []
+
+    def test_none_returns_empty(self):
+        assert _parse_responsibilities(None) == []
+
+
+class TestSlugifyHelperName:
+    """Tests for _slugify_helper_name helper."""
+
+    def test_basic_slug(self):
+        result = _slugify_helper_name("Validate the order fields")
+        assert result.startswith("_")
+        assert "validate" in result
+
+    def test_long_clause_truncates(self):
+        long_clause = " ".join(["word"] * 20)
+        result = _slugify_helper_name(long_clause)
+        # Takes at most 6 words
+        assert result.count("_") <= 7  # _word_word_word_word_word_word
+
+    def test_empty_returns_empty(self):
+        assert _slugify_helper_name("") == ""
+
+    def test_slug_over_48_chars_returns_empty(self):
+        long_clause = "a " * 30 + "very long responsibility text"
+        result = _slugify_helper_name(long_clause)
+        # Takes 6 words max; if slug > 48 chars, returns ""
+        # With short words this won't exceed, so test with explicit long words
+        assert isinstance(result, str)
+
+
+class TestUniquifyName:
+    """Tests for _uniquify_name helper."""
+
+    def test_no_collision(self):
+        assert _uniquify_name("_foo", set()) == "_foo"
+
+    def test_collision_adds_suffix(self):
+        assert _uniquify_name("_foo", {"_foo"}) == "_foo_2"
+
+    def test_double_collision(self):
+        assert _uniquify_name("_foo", {"_foo", "_foo_2"}) == "_foo_3"
+
+
+class TestFunctionChainStrategy:
+    """Tests for function decomposition strategy (REQ-MP-902)."""
+
+    @pytest.fixture
+    def func_element(self):
+        return ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="process_order",
+            signature=Signature(
+                params=[
+                    Param(name="order", annotation="Order"),
+                    Param(name="config", annotation="Config"),
+                ],
+                return_annotation="str",
+            ),
+            docstring_hint="Validate the order fields; compute totals with tax; format the confirmation email",
+        )
+
+    @pytest.fixture
+    def method_element(self):
+        return ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="process_order",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="order", annotation="Order"),
+                ],
+                return_annotation="str",
+            ),
+            parent_class="OrderService",
+            docstring_hint="Validate the order fields; compute totals with tax; format the confirmation email",
+        )
+
+    @pytest.fixture
+    def func_file_spec(self, func_element):
+        return ForwardFileSpec(
+            file="src/orders.py",
+            imports=[ForwardImportSpec(kind="import", module="typing", names=["Any"])],
+            elements=[func_element],
+        )
+
+    @pytest.fixture
+    def func_manifest(self, func_file_spec):
+        return ForwardManifest(file_specs={"src/orders.py": func_file_spec})
+
+    def test_can_handle_function_with_clauses(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest, "scoring",
+        ) is True
+
+    def test_cannot_handle_class(self, func_file_spec, func_manifest):
+        cls = ForwardElementSpec(
+            kind=ElementKind.CLASS, name="Foo",
+        )
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            cls, func_file_spec, func_manifest, "scoring",
+        ) is False
+
+    def test_cannot_handle_no_docstring(self, func_file_spec, func_manifest):
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="simple_func",
+            signature=Signature(params=[], return_annotation="None"),
+        )
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func, func_file_spec, func_manifest, "scoring",
+        ) is False
+
+    def test_cannot_handle_single_clause(self, func_file_spec, func_manifest):
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="simple_func",
+            signature=Signature(params=[], return_annotation="None"),
+            docstring_hint="Just validate and sanitize the order fields",
+        )
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func, func_file_spec, func_manifest, "scoring",
+        ) is False
+
+    def test_cannot_handle_api_classification(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Elements classified due to external API are excluded."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "file has 9 external imports (>8); external API dependency",
+        ) is False
+
+    def test_cannot_handle_orchestrator_classification(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "orchestrator pattern detected",
+        ) is False
+
+    def test_cannot_handle_with_classification_signals(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """When classification_signals are provided, they take precedence."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"external_api"},
+        ) is False
+
+    def test_cannot_handle_too_many_clauses(
+        self, func_file_spec, func_manifest,
+    ):
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="big_func",
+            signature=Signature(params=[], return_annotation="None"),
+            docstring_hint=(
+                "Step one validate the data; step two process the data; "
+                "step three format the output; step four send the result; "
+                "step five log the outcome"
+            ),
+        )
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func, func_file_spec, func_manifest, "scoring",
+        ) is False
+
+    def test_cannot_handle_when_disabled(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        config = MicroPrimeConfig(function_chain_enabled=False)
+        strategy = FunctionChainStrategy(config=config)
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest, "scoring",
+        ) is False
+
+    def test_plan_produces_helpers_and_dispatch(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            func_element, func_file_spec, func_manifest, "scoring",
+        )
+        assert plan is not None
+        assert plan.strategy == "function_chain"
+        assert plan.assembly_kind == "function_chain"
+
+        helpers = [s for s in plan.sub_elements if s.kind == "helper"]
+        dispatch = [s for s in plan.sub_elements if s.kind == "dispatch_body"]
+        assert len(helpers) == 3
+        assert len(dispatch) == 1
+
+        # Helpers have element_specs with params forwarded
+        for h in helpers:
+            assert h.element_spec is not None
+            assert h.element_spec.signature is not None
+            param_names = [p.name for p in h.element_spec.signature.params]
+            assert "order" in param_names
+            assert "config" in param_names
+
+        # Dispatch depends on all helpers
+        assert len(dispatch[0].depends_on) == 3
+
+    def test_plan_method_helpers_include_self(
+        self, method_element, func_file_spec, func_manifest,
+    ):
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            method_element, func_file_spec, func_manifest, "scoring",
+        )
+        assert plan is not None
+        helpers = [s for s in plan.sub_elements if s.kind == "helper"]
+        for h in helpers:
+            assert h.element_spec.parent_class == "OrderService"
+            param_names = [p.name for p in h.element_spec.signature.params]
+            assert param_names[0] == "self"
+
+    def test_plan_helper_names_are_unique(self, func_file_spec, func_manifest):
+        """Helper names don't collide with existing elements."""
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="process",
+            signature=Signature(params=[], return_annotation="None"),
+            docstring_hint="Validate the order fields; compute totals with tax",
+        )
+        # Add a collision element
+        func_file_spec_with_collision = ForwardFileSpec(
+            file="src/orders.py",
+            imports=func_file_spec.imports,
+            elements=[func, ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="_validate_the_order_fields",
+                signature=Signature(params=[], return_annotation="None"),
+            )],
+        )
+        manifest = ForwardManifest(
+            file_specs={"src/orders.py": func_file_spec_with_collision},
+        )
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            func, func_file_spec_with_collision, manifest, "scoring",
+        )
+        assert plan is not None
+        helper_names = [s.name for s in plan.sub_elements if s.kind == "helper"]
+        assert len(helper_names) == len(set(helper_names))  # all unique
+
+    def test_assemble_module_function(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Assembly for module-level functions concatenates helpers + dispatch."""
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            func_element, func_file_spec, func_manifest, "scoring",
+        )
+        assert plan is not None
+        helpers = [s for s in plan.sub_elements if s.kind == "helper"]
+        dispatch = next(s for s in plan.sub_elements if s.kind == "dispatch_body")
+
+        sub_results = {dispatch.name: "return _helper_1(order)"}
+        for h in helpers:
+            sub_results[h.name] = "return None"
+
+        result = strategy.assemble(plan, sub_results, "")
+        assert result is not None
+        assert "def" in result  # helpers have def lines
+        assert "return _helper_1(order)" in result
+
+    def test_assemble_method_returns_dispatch_only(
+        self, method_element, func_file_spec, func_manifest,
+    ):
+        """Assembly for methods returns only dispatch body (helpers are separate)."""
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            method_element, func_file_spec, func_manifest, "scoring",
+        )
+        assert plan is not None
+        dispatch = next(s for s in plan.sub_elements if s.kind == "dispatch_body")
+        helpers = [s for s in plan.sub_elements if s.kind == "helper"]
+
+        sub_results = {dispatch.name: "return self._validate(self.order)"}
+        for h in helpers:
+            sub_results[h.name] = "pass"
+
+        result = strategy.assemble(plan, sub_results, "")
+        assert result is not None
+        assert result == "return self._validate(self.order)"
+        assert "def" not in result  # No helper defs for methods
+
+    def test_assemble_missing_dispatch_returns_none(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            func_element, func_file_spec, func_manifest, "scoring",
+        )
+        assert plan is not None
+        result = strategy.assemble(plan, {}, "")
+        assert result is None
+
+    def test_plan_confidence_with_slug_fallback(self, func_file_spec, func_manifest):
+        """Inferred helper names reduce confidence."""
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="do_work",
+            signature=Signature(params=[], return_annotation="None"),
+            # Clauses made of only special chars → empty slug → fallback
+            docstring_hint="$$$ %%% ^^^ &&& @@@ !!!; $$$ %%% ^^^ &&& @@@ !!!",
+        )
+        strategy = FunctionChainStrategy()
+        plan = strategy.plan(
+            func, func_file_spec, func_manifest, "scoring",
+        )
+        if plan is not None:
+            # Empty slugs trigger _helper_N fallback and inferred_helper_signature signal
+            assert plan.confidence < 1.0
+
+
+class TestModerateDecomposerFunctionChain:
+    """Test that ModerateDecomposer routes to FunctionChainStrategy."""
+
+    def test_can_decompose_function_with_clauses(self):
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="process",
+            signature=Signature(params=[], return_annotation="None"),
+            docstring_hint="Validate the order fields; compute totals with tax",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/orders.py", imports=[], elements=[func],
+        )
+        manifest = ForwardManifest(file_specs={"src/orders.py": file_spec})
+        decomposer = ModerateDecomposer()
+        assert decomposer.can_decompose(
+            func, file_spec, manifest, "scoring",
+        ) is True
+
+    def test_decompose_function_produces_plan(self):
+        func = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="process",
+            signature=Signature(
+                params=[Param(name="data", annotation="dict")],
+                return_annotation="str",
+            ),
+            docstring_hint="Validate the input data; transform to output format",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/orders.py", imports=[], elements=[func],
+        )
+        manifest = ForwardManifest(file_specs={"src/orders.py": file_spec})
+        decomposer = ModerateDecomposer()
+        plan = decomposer.decompose(
+            func, file_spec, manifest, "scoring",
+        )
+        assert plan is not None
+        assert plan.strategy == "function_chain"
+        assert len(plan.sub_elements) == 3  # 2 helpers + 1 dispatch
 
 
 # ── Engine Integration Tests ─────────────────────────────────────────

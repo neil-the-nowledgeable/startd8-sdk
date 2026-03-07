@@ -481,6 +481,337 @@ class ClassDecomposeStrategy:
         ]
 
 
+# ── Function Chain Strategy (REQ-MP-902) ─────────────────────────────
+
+# Reason substrings that indicate API/orchestrator classification (fallback
+# until ClassificationSignal enum is available — see REQ-MP-902 note).
+_API_ORCHESTRATOR_REASON_MARKERS = frozenset({
+    "external API",
+    "external imports",
+    "orchestrator",
+    "app/server instance",
+})
+
+# Python keywords and builtins that must not be used as helper names.
+import builtins as _builtins
+import keyword as _keyword
+
+_PYTHON_RESERVED = frozenset(
+    list(_keyword.kwlist)
+    + list(getattr(_keyword, "softkwlist", []))
+    + dir(_builtins)
+)
+
+# Responsibility clause separators (deterministic, no LLM).
+_CLAUSE_SEPARATORS_RE = None  # lazy-compiled
+
+
+def _compile_clause_re() -> "re.Pattern[str]":
+    global _CLAUSE_SEPARATORS_RE
+    if _CLAUSE_SEPARATORS_RE is None:
+        import re
+        _CLAUSE_SEPARATORS_RE = re.compile(
+            r"""
+            ;\s*                   # semicolons
+            | ^\s*[-*•]\s+         # bullet markers at line start
+            | ^\s*\d+[.)]\s+      # enumerated prefixes (1. or 1))
+            """,
+            re.MULTILINE | re.VERBOSE,
+        )
+    return _CLAUSE_SEPARATORS_RE
+
+
+def _parse_responsibilities(text: str) -> list[str]:
+    """Parse a docstring or design section into distinct responsibility clauses.
+
+    Deterministic parsing: splits on ``;``, bullet markers, or numbered
+    prefixes. Ignores clauses shorter than 4 words. ``"and"`` is NOT a
+    separator — it commonly appears within single responsibilities.
+    """
+    if not text:
+        return []
+    pattern = _compile_clause_re()
+    clauses = pattern.split(text)
+    result: list[str] = []
+    for clause in clauses:
+        cleaned = clause.strip().rstrip(".")
+        if len(cleaned.split()) >= 4:
+            result.append(cleaned)
+    return result
+
+
+def _slugify_helper_name(clause: str) -> str:
+    """Derive a helper function name from a responsibility clause.
+
+    Produces a snake_case slug prefixed with ``_``. Falls back to empty
+    string if the result is invalid (caller handles fallback).
+    """
+    import re
+    # Extract key verbs/nouns — take first 6 words, lowercase, strip non-alnum
+    words = re.sub(r"[^a-zA-Z0-9\s]", "", clause).lower().split()[:6]
+    slug = "_".join(words)
+    if not slug or slug in _PYTHON_RESERVED or len(slug) > 48:
+        return ""
+    return f"_{slug}"
+
+
+def _uniquify_name(
+    name: str,
+    existing: set[str],
+) -> str:
+    """Ensure ``name`` doesn't collide with ``existing`` names."""
+    if name not in existing:
+        return name
+    for suffix in range(2, 100):
+        candidate = f"{name}_{suffix}"
+        if candidate not in existing:
+            return candidate
+    return f"{name}_99"  # pragma: no cover
+
+
+class FunctionChainStrategy:
+    """Decomposes MODERATE functions into dispatch body + helper sub-functions (REQ-MP-902)."""
+
+    def __init__(self, config: Optional[MicroPrimeConfig] = None) -> None:
+        self._config = config or MicroPrimeConfig()
+
+    @property
+    def name(self) -> str:
+        return "function_chain"
+
+    def can_handle(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+    ) -> bool:
+        if not self._config.function_chain_enabled:
+            return False
+
+        # Must be a function or method
+        if element.kind not in (
+            ElementKind.FUNCTION, ElementKind.METHOD,
+            ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+        ):
+            return False
+
+        # Exclude API/orchestrator classifications
+        if classification_signals is not None:
+            disqualifying = {"external_api", "external_imports",
+                             "orchestrator", "app_server_instance"}
+            if classification_signals & disqualifying:
+                return False
+        else:
+            # Fallback: reason-string matching
+            reason_lower = classification_reason.lower()
+            if any(marker in reason_lower for marker in _API_ORCHESTRATOR_REASON_MARKERS):
+                logger.debug(
+                    "FunctionChain: %s excluded via reason-string fallback: %s",
+                    element.name, classification_reason,
+                )
+                return False
+
+        # Must have 2+ responsibilities in docstring
+        clauses = _parse_responsibilities(element.docstring_hint or "")
+        if len(clauses) < 2:
+            return False
+
+        # Must not exceed max helpers
+        if len(clauses) > self._config.max_helpers_per_function:
+            return False
+
+        return True
+
+    def plan(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+    ) -> Optional[DecompositionPlan]:
+        clauses = _parse_responsibilities(element.docstring_hint or "")
+        if len(clauses) < 2 or len(clauses) > self._config.max_helpers_per_function:
+            return None
+
+        # Collect existing names for uniquification
+        existing_names: set[str] = {e.name for e in file_spec.elements}
+        is_method = element.kind in (
+            ElementKind.METHOD, ElementKind.ASYNC_METHOD,
+        )
+        is_async = element.kind in (
+            ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+        )
+
+        sub_elements: list[SubElement] = []
+        uncertainty_signals: list[str] = []
+        helper_names: list[str] = []
+        order = 0
+
+        # Build helper sub-elements for each responsibility
+        for i, clause in enumerate(clauses):
+            slug = _slugify_helper_name(clause)
+            if not slug:
+                slug = f"_helper_{i + 1}"
+                uncertainty_signals.append("inferred_helper_signature")
+            helper_name = _uniquify_name(slug, existing_names)
+            existing_names.add(helper_name)
+            helper_names.append(helper_name)
+
+            # Build a synthetic element spec for the helper
+            helper_params: list[Param] = []
+            if is_method:
+                helper_params.append(Param(name="self", kind=ParamKind.POSITIONAL_ONLY))
+            # Forward the original function's non-self params
+            if element.signature:
+                for p in element.signature.params:
+                    if p.name in ("self", "cls"):
+                        continue
+                    helper_params.append(p)
+
+            helper_kind = (
+                ElementKind.ASYNC_METHOD if is_async and is_method
+                else ElementKind.METHOD if is_method
+                else ElementKind.ASYNC_FUNCTION if is_async
+                else ElementKind.FUNCTION
+            )
+
+            helper_spec = ForwardElementSpec(
+                kind=helper_kind,
+                name=helper_name,
+                signature=Signature(
+                    params=helper_params,
+                    return_annotation=None,
+                ),
+                parent_class=element.parent_class if is_method else None,
+                docstring_hint=clause,
+            )
+
+            sub_elements.append(SubElement(
+                name=helper_name,
+                kind="helper",
+                prompt_context=f"Implement: {clause}",
+                depends_on=[],
+                assembly_order=order,
+                element_spec=helper_spec,
+            ))
+            order += 1
+
+        # Dispatch body — calls helpers in sequence
+        helper_stubs = ", ".join(helper_names)
+        dispatch_context = (
+            f"Implement the body of {element.name} by calling these helpers "
+            f"in order: {helper_stubs}. "
+            f"Each helper handles one responsibility. "
+            f"Do NOT implement the helpers — just call them."
+        )
+
+        sub_elements.append(SubElement(
+            name=f"{element.name}_dispatch",
+            kind="dispatch_body",
+            prompt_context=dispatch_context,
+            depends_on=helper_names,
+            assembly_order=order,
+            element_spec=element,  # Reuse original spec for the dispatch body
+        ))
+
+        plan = DecompositionPlan(
+            original_element=element,
+            sub_elements=sub_elements,
+            strategy=self.name,
+            assembly_kind="function_chain",
+            confidence=0.0,
+        )
+        plan.confidence = _compute_confidence(plan, uncertainty_signals)
+        return plan
+
+    def assemble(
+        self,
+        plan: DecompositionPlan,
+        sub_results: dict[str, str],
+        skeleton: str,
+    ) -> Optional[str]:
+        """Assemble helpers + dispatch body into complete code.
+
+        For module-level functions: helper defs are concatenated, then the
+        dispatch body replaces the original function's NotImplementedError.
+        For methods: helpers are private methods on the same class; only the
+        dispatch body is returned (helpers are separate elements handled by
+        the splicer via their element_spec.parent_class).
+        """
+        # Collect helper definitions and the dispatch body
+        helpers: list[SubElement] = [
+            s for s in plan.sub_elements if s.kind == "helper"
+        ]
+        dispatch_sub = next(
+            (s for s in plan.sub_elements if s.kind == "dispatch_body"),
+            None,
+        )
+        if dispatch_sub is None:
+            return None
+
+        dispatch_code = sub_results.get(dispatch_sub.name)
+        if dispatch_code is None:
+            return None
+
+        is_method = plan.original_element.kind in (
+            ElementKind.METHOD, ElementKind.ASYNC_METHOD,
+        )
+
+        if is_method:
+            # For methods, helpers become separate class methods — the splicer
+            # handles them individually. Only return the dispatch body.
+            return dispatch_code
+
+        # For module-level functions, concatenate helper defs + dispatch body.
+        parts: list[str] = []
+        for helper in sorted(helpers, key=lambda h: h.assembly_order):
+            helper_code = sub_results.get(helper.name)
+            if helper_code is None:
+                return None
+            if helper.element_spec and helper.element_spec.signature:
+                is_async_helper = helper.element_spec.kind in (
+                    ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+                )
+                prefix = "async def" if is_async_helper else "def"
+                sig = _render_signature_str(helper.element_spec.signature)
+                ret = ""
+                if helper.element_spec.signature.return_annotation:
+                    ret = f" -> {helper.element_spec.signature.return_annotation}"
+                header = f"{prefix} {helper.name}{sig}{ret}:"
+                body = textwrap.dedent(helper_code).strip()
+                if not body:
+                    body = "pass"
+                indented = textwrap.indent(body, "    ")
+                if helper.element_spec.docstring_hint:
+                    parts.append(
+                        f"{header}\n"
+                        f'    """{helper.element_spec.docstring_hint}"""\n'
+                        f"{indented}"
+                    )
+                else:
+                    parts.append(f"{header}\n{indented}")
+
+        # Append the dispatch body (just the body, not a full def)
+        parts.append(textwrap.dedent(dispatch_code).strip())
+
+        assembled = "\n\n\n".join(parts)
+
+        # Validate
+        try:
+            ast.parse(assembled)
+        except SyntaxError:
+            logger.warning(
+                "Function chain assembly validation failed for %s",
+                plan.original_element.name,
+            )
+            return None
+
+        return assembled
+
+
 # ── Moderate Decomposer (REQ-MP-900) ────────────────────────────────
 
 
@@ -495,6 +826,7 @@ class ModerateDecomposer:
         self._config = config or MicroPrimeConfig()
         self._strategies: list[Any] = strategies or [
             ClassDecomposeStrategy(config=self._config),
+            FunctionChainStrategy(config=self._config),
         ]
 
     def can_decompose(

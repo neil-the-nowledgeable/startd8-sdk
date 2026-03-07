@@ -96,8 +96,8 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Observability & Metrics | REQ-MP-6xx | 4 | 4 | 0 | 0 |
 | Quick Wins & Acceleration | REQ-MP-7xx | 9 | 9 | 0 | 0 |
 | Shared Complexity Router | REQ-MP-8xx | — | — | 0 | — |
-| Moderate Decomposer | REQ-MP-9xx | 10 | 9 | 0 | 1 |
-| **Total** | | **63** | **62** | **0** | **1** |
+| Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
+| **Total** | | **63** | **63** | **0** | **0** |
 
 ---
 
@@ -1160,7 +1160,7 @@ Pre-escalation decomposition of MODERATE elements into SIMPLE sub-elements that 
 |----|------|----------|--------|
 | REQ-MP-900 | Moderate Decomposer Module | P0 | implemented |
 | REQ-MP-901 | Class Decomposition Strategy | P0 | implemented |
-| REQ-MP-902 | Function Decomposition Strategy | P1 | planned |
+| REQ-MP-902 | Function Decomposition Strategy | P1 | implemented |
 | REQ-MP-903 | Engine Integration — `_handle_moderate` | P0 | implemented |
 | REQ-MP-904 | Assembly Strategies | P0 | implemented |
 | REQ-MP-905 | Synthetic Element Spec Construction | P1 | implemented |

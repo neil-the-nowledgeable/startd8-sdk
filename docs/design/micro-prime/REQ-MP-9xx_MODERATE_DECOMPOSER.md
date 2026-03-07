@@ -174,7 +174,7 @@ In this case the decomposition plan has exactly 1 sub-element (the shell), which
 
 ### REQ-MP-902: Function Decomposition Strategy
 
-**Status:** planned
+**Status:** implemented
 **Priority:** P1
 **Depends on:** REQ-MP-900
 
