@@ -207,8 +207,12 @@ def main() -> int:
     )
     # Micro Prime local generation (REQ-MP-700)
     parser.add_argument(
-        "--micro-prime", action="store_true",
-        help="Enable Micro Prime as primary generator with LeadContractor fallback",
+        "--micro-prime", action="store_true", default=True,
+        help="Enable Micro Prime as primary generator with LeadContractor fallback (default: on)",
+    )
+    parser.add_argument(
+        "--no-micro-prime", action="store_true",
+        help="Disable Micro Prime (use LeadContractor only)",
     )
     parser.add_argument(
         "--micro-prime-model", default=None,
@@ -507,7 +511,9 @@ def main() -> int:
     # Wire Micro Prime via workflow API (REQ-MP-710)
     # Must be called BEFORE enable_complexity_routing() so the router
     # sees the wrapped generator.
-    # --micro-prime-dry-run implies --micro-prime
+    # --no-micro-prime overrides the default; --micro-prime-dry-run implies --micro-prime
+    if args.no_micro_prime:
+        args.micro_prime = False
     if args.micro_prime_dry_run:
         args.micro_prime = True
     if args.micro_prime:
