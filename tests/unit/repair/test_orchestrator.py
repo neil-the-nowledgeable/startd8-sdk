@@ -247,3 +247,46 @@ class TestOTelMetrics:
 
         outcome = run_file_repair(files, diags, config, project_root)
         assert isinstance(outcome.any_modified, bool)
+
+
+class TestPerStepTimeout:
+    """REQ-RPL-007 / acceptance 9.2.3: Per-step timeout enforcement."""
+
+    def test_slow_step_is_skipped_with_timeout_reason(self):
+        """A step that exceeds per_step_timeout_s is skipped with reason 'timeout'."""
+        import time as _time
+
+        from startd8.repair.models import RepairContext
+        from startd8.repair.orchestrator import _run_steps
+
+        class SlowStep:
+            name = "slow_step"
+
+            def __call__(self, code, context, file_path, element_context=None):
+                _time.sleep(5)
+                return RepairStepResult(
+                    step_name=self.name, modified=True, code="modified",
+                )
+
+        config = RepairConfig(per_step_timeout_s=0.5, total_timeout_s=10.0)
+        ctx = RepairContext(config=config)
+        repaired, results = _run_steps(
+            "x = 1\n", [SlowStep()], ctx, Path("foo.py"), None, config,
+        )
+
+        assert len(results) == 1
+        assert results[0].metrics.get("skipped_reason") == "timeout"
+        assert results[0].modified is False
+        assert repaired == "x = 1\n"
+
+
+class TestRecordCostAvoided:
+    """REQ-RPL-401/501: OTel cost avoidance counter."""
+
+    def test_record_cost_avoided_does_not_raise(self):
+        """record_cost_avoided is callable without error."""
+        from startd8.repair.orchestrator import record_cost_avoided
+
+        record_cost_avoided(1.5)
+        record_cost_avoided(0.0)
+        record_cost_avoided(-1.0)

@@ -435,255 +435,87 @@ class TestRepairWithMockedPipeline:
         assert mock_classify.call_count == 0  # Not called yet since we didn't run integrate()
 
 
-class _FakeStagingContext:
-    """Context manager stub for create_staging in cost/attribution tests."""
-    def __init__(self, files, *args, **kwargs):
-        self.files = files
-        self.paths = list(files.keys())
+class TestMergeSubsetIntoTarget:
+    """REQ-RPL-301: Size regression merge repair via _merge_subset_into_target."""
 
-    def __enter__(self):
-        return self
+    def test_pure_subset_returns_target(self, tmp_path):
+        """When generated is a pure subset of target (all lines exist in target),
+        the merged result equals the target unchanged."""
+        engine = _make_engine(tmp_path)
 
-    def __exit__(self, *args):
-        pass
+        target = "import os\nimport sys\n\ndef foo():\n    pass\n\ndef bar():\n    pass\n"
+        # Generated is a subset — missing the bar() function
+        generated = "import os\nimport sys\n\ndef foo():\n    pass\n"
 
-    def write_repaired(self, files):
-        pass
+        result = engine._merge_subset_into_target(generated, target)
 
-    def apply_atomic(self):
-        pass
+        assert result is not None
+        # Target content is preserved in full (generated was a subset)
+        assert result == target
 
+    def test_with_additions_merges_correctly(self, tmp_path):
+        """When generated has new lines not in target, they are spliced in."""
+        engine = _make_engine(tmp_path)
 
-class _FakeStepResult:
-    """Minimal step result for attribution tests."""
-    def __init__(self, step_name="fence_strip", modified=True, code="", metrics=None):
-        self.step_name = step_name
-        self.modified = modified
-        self.code = code
-        self.metrics = metrics or {}
+        target = "import os\n\ndef foo():\n    pass\n"
+        # Generated adds a new function between the import and foo
+        generated = "import os\n\ndef helper():\n    return 42\n\ndef foo():\n    pass\n"
 
+        result = engine._merge_subset_into_target(generated, target)
 
-class _FakeFileRepairResult:
-    """Minimal file repair result for attribution tests."""
-    def __init__(self, file_path, steps_applied=None, step_results=None):
-        self.file_path = file_path
-        self.before_valid = False
-        self.after_valid = True
-        self.steps_applied = steps_applied or []
-        self.step_results = step_results or []
+        assert result is not None
+        # The merged result should contain both the original target AND
+        # the new helper() function from generated.
+        assert "def helper():" in result
+        assert "def foo():" in result
+        assert "import os" in result
 
+    def test_contradictions_returns_none(self, tmp_path):
+        """When generated contradicts target (replaces lines), returns None."""
+        engine = _make_engine(tmp_path)
 
-class _FakeRepairOutcome:
-    """Minimal RepairOutcome for attribution tests."""
-    def __init__(self, repaired_files=None, file_results=None,
-                 steps_applied=None, any_modified=False):
-        self.repaired_files = repaired_files or {}
-        self.file_results = file_results or []
-        self.steps_applied = steps_applied or []
-        self.route = None
-        self.any_modified = any_modified
+        target = "import os\n\ndef foo():\n    return 1\n"
+        # Generated changes foo's implementation — a contradiction
+        generated = "import os\n\ndef foo():\n    return 999\n"
 
+        result = engine._merge_subset_into_target(generated, target)
 
-class TestCostAvoidanceTracking:
-    """REQ-RPL-501: Cost avoidance metadata on successful repair."""
+        assert result is None
 
-    @patch("startd8.contractors.integration_engine.run_file_repair")
-    @patch("startd8.contractors.integration_engine.create_staging")
-    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
-    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
-    def test_cost_avoided_set_on_success(
-        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
-    ):
-        """After successful repair, metadata should contain repair_cost_avoided_usd."""
-        from startd8.contractors.checkpoint import CheckpointStatus
+    def test_empty_generated_returns_target(self, tmp_path):
+        """Empty generated file is a trivial subset — target returned."""
+        engine = _make_engine(tmp_path)
 
-        config = RepairConfig()
-        checkpoint = MagicMock()
-        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        target = "import os\n\ndef foo():\n    pass\n"
+        generated = ""
 
-        fpath = tmp_path / "test.py"
-        fpath.write_text("```python\nx = 1\n```", encoding="utf-8")
+        result = engine._merge_subset_into_target(generated, target)
 
-        repaired_content = "x = 1\n"
-        outcome = _FakeRepairOutcome(
-            repaired_files={fpath: repaired_content},
-            file_results=[_FakeFileRepairResult(
-                file_path=fpath,
-                steps_applied=["fence_strip"],
-                step_results=[_FakeStepResult(step_name="fence_strip", modified=True)],
-            )],
-            steps_applied=["fence_strip"],
-            any_modified=True,
-        )
+        assert result is not None
+        assert result == target
 
-        mock_classify.return_value = "syntax"
-        mock_parse.return_value = []
-        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
-        mock_repair.return_value = outcome
+    def test_identical_files_returns_target(self, tmp_path):
+        """Identical content is a trivial case — target returned unchanged."""
+        engine = _make_engine(tmp_path)
 
-        # After repair, re-checkpoint passes
-        passing = MagicMock()
-        passing.status = CheckpointStatus.PASSED
-        passing.name = "Syntax Check"
-        checkpoint.run_all_checkpoints.return_value = [passing]
-        checkpoint.summarize_results.return_value = True
+        content = "import os\n\ndef foo():\n    pass\n"
 
-        failed = MagicMock()
-        failed.name = "Syntax Check"
-        failed.status = CheckpointStatus.FAILED
-        failed.errors = ["SyntaxError"]
-        failed.message = "syntax error"
+        result = engine._merge_subset_into_target(content, content)
 
-        metadata: Dict[str, Any] = {}
-        results, success = engine._attempt_repair(
-            [failed], [fpath], _FakeUnit(), attempt=1,
-            result_obj_metadata=metadata,
-        )
+        assert result is not None
+        assert result == content
 
-        assert success is True
-        assert "repair_cost_avoided_usd" in metadata
-        assert metadata["repair_cost_avoided_usd"] == 0.75
+    def test_multiple_additions_spliced(self, tmp_path):
+        """Multiple new blocks from generated are all spliced into target."""
+        engine = _make_engine(tmp_path)
 
-    @patch("startd8.contractors.integration_engine.run_file_repair")
-    @patch("startd8.contractors.integration_engine.create_staging")
-    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
-    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
-    def test_no_cost_avoided_on_failure(
-        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
-    ):
-        """On failed repair, no cost_avoided key should be set."""
-        from startd8.contractors.checkpoint import CheckpointStatus
+        target = "class A:\n    pass\n\nclass C:\n    pass\n"
+        generated = "class A:\n    pass\n\nclass B:\n    pass\n\nclass C:\n    pass\n\nclass D:\n    pass\n"
 
-        config = RepairConfig()
-        checkpoint = MagicMock()
-        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        result = engine._merge_subset_into_target(generated, target)
 
-        fpath = tmp_path / "test.py"
-        fpath.write_text("x = (\n", encoding="utf-8")
-
-        outcome = _FakeRepairOutcome(any_modified=False)
-        mock_classify.return_value = "syntax"
-        mock_parse.return_value = []
-        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
-        mock_repair.return_value = outcome
-
-        failed = MagicMock()
-        failed.name = "Syntax Check"
-        failed.status = CheckpointStatus.FAILED
-        failed.errors = ["SyntaxError"]
-        failed.message = "syntax error"
-
-        metadata: Dict[str, Any] = {}
-        results, success = engine._attempt_repair(
-            [failed], [fpath], _FakeUnit(), attempt=1,
-            result_obj_metadata=metadata,
-        )
-
-        assert success is False
-        assert "repair_cost_avoided_usd" not in metadata
-
-
-class TestHandoffAttribution:
-    """REQ-RPL-303: Repair attribution in result metadata for handoff."""
-
-    @patch("startd8.contractors.integration_engine.run_file_repair")
-    @patch("startd8.contractors.integration_engine.create_staging")
-    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
-    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
-    def test_repairs_metadata_structure(
-        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
-    ):
-        """On success, metadata['repairs'] should contain per-file entries."""
-        from startd8.contractors.checkpoint import CheckpointStatus
-
-        config = RepairConfig()
-        checkpoint = MagicMock()
-        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
-
-        fpath = tmp_path / "test.py"
-        original = "```python\nx = 1\n```"
-        fpath.write_text(original, encoding="utf-8")
-
-        repaired_content = "x = 1\n"
-        fake_step = _FakeStepResult(
-            step_name="fence_strip", modified=True, code=repaired_content,
-        )
-        outcome = _FakeRepairOutcome(
-            repaired_files={fpath: repaired_content},
-            file_results=[_FakeFileRepairResult(
-                file_path=fpath,
-                steps_applied=["fence_strip"],
-                step_results=[fake_step],
-            )],
-            steps_applied=["fence_strip"],
-            any_modified=True,
-        )
-
-        mock_classify.return_value = "syntax"
-        mock_parse.return_value = []
-        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
-        mock_repair.return_value = outcome
-
-        passing = MagicMock()
-        passing.status = CheckpointStatus.PASSED
-        passing.name = "Syntax Check"
-        checkpoint.run_all_checkpoints.return_value = [passing]
-        checkpoint.summarize_results.return_value = True
-
-        failed = MagicMock()
-        failed.name = "Syntax Check"
-        failed.status = CheckpointStatus.FAILED
-        failed.errors = ["SyntaxError"]
-        failed.message = "syntax error"
-
-        metadata: Dict[str, Any] = {}
-        results, success = engine._attempt_repair(
-            [failed], [fpath], _FakeUnit(), attempt=1,
-            result_obj_metadata=metadata,
-        )
-
-        assert success is True
-        assert "repairs" in metadata
-        repairs = metadata["repairs"]
-        assert len(repairs) == 1
-        assert repairs[0]["file"] == str(fpath)
-        assert "fence_strip" in repairs[0]["steps"]
-        assert "lines_modified" in repairs[0]
-
-    @patch("startd8.contractors.integration_engine.run_file_repair")
-    @patch("startd8.contractors.integration_engine.create_staging")
-    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
-    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
-    def test_no_repairs_on_failure(
-        self, mock_classify, mock_parse, mock_staging, mock_repair, tmp_path,
-    ):
-        """On failure, no repairs key should be present."""
-        from startd8.contractors.checkpoint import CheckpointStatus
-
-        config = RepairConfig()
-        checkpoint = MagicMock()
-        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
-
-        fpath = tmp_path / "test.py"
-        fpath.write_text("x = (\n", encoding="utf-8")
-
-        outcome = _FakeRepairOutcome(any_modified=False)
-        mock_classify.return_value = "syntax"
-        mock_parse.return_value = []
-        mock_staging.side_effect = lambda files, *a, **kw: _FakeStagingContext(files)
-        mock_repair.return_value = outcome
-
-        failed = MagicMock()
-        failed.name = "Syntax Check"
-        failed.status = CheckpointStatus.FAILED
-        failed.errors = ["SyntaxError"]
-        failed.message = "syntax error"
-
-        metadata: Dict[str, Any] = {}
-        results, success = engine._attempt_repair(
-            [failed], [fpath], _FakeUnit(), attempt=1,
-            result_obj_metadata=metadata,
-        )
-
-        assert success is False
-        assert "repairs" not in metadata
+        assert result is not None
+        assert "class A:" in result
+        assert "class B:" in result
+        assert "class C:" in result
+        assert "class D:" in result

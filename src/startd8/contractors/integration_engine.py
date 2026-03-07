@@ -875,6 +875,13 @@ class IntegrationEngine:
                         "repair_cost_avoided_usd"
                     ] = estimated_regen_cost
 
+                    # REQ-RPL-401/501: OTel cost avoidance counter
+                    try:
+                        from ..repair import record_cost_avoided
+                        record_cost_avoided(estimated_regen_cost)
+                    except ImportError:
+                        pass
+
                     # REQ-RPL-303: Handoff attribution (P2)
                     result_obj_metadata["repairs"] = [
                         {
@@ -961,6 +968,51 @@ class IntegrationEngine:
                 )
 
         return results, repair_success
+
+    # ------------------------------------------------------------------
+    # REQ-RPL-301: Size Regression Merge Repair
+    # ------------------------------------------------------------------
+
+    def _merge_subset_into_target(
+        self,
+        generated: str,
+        target: str,
+    ) -> Optional[str]:
+        """Attempt to merge generated content into target when generated is a subset.
+
+        Uses ``difflib.SequenceMatcher`` to determine whether the generated
+        file is a *subset* of the target (missing sections but not wrong
+        sections).  When the generated content only adds new lines that
+        don't contradict existing target lines, those additions are spliced
+        into the target at the appropriate positions.
+
+        Returns:
+            Merged content string on success, or ``None`` if a
+            contradiction is detected (generated deletes/replaces target
+            lines).
+        """
+        import difflib
+
+        gen_lines = generated.splitlines(keepends=True)
+        tgt_lines = target.splitlines(keepends=True)
+
+        sm = difflib.SequenceMatcher(None, tgt_lines, gen_lines, autojunk=False)
+        opcodes = sm.get_opcodes()
+
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == "replace":
+                return None
+
+        merged: list[str] = []
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == "equal":
+                merged.extend(tgt_lines[i1:i2])
+            elif tag == "delete":
+                merged.extend(tgt_lines[i1:i2])
+            elif tag == "insert":
+                merged.extend(gen_lines[j1:j2])
+
+        return "".join(merged)
 
     # ------------------------------------------------------------------
     # Git commit
@@ -1328,57 +1380,48 @@ class IntegrationEngine:
                                 )
                             ):
                                 try:
-                                    import difflib
-
-                                    gen_lines = source_content_text.splitlines(
-                                        keepends=True,
+                                    merged = self._merge_subset_into_target(
+                                        source_content_text, target_content,
                                     )
-                                    tgt_lines = target_content.splitlines(
-                                        keepends=True,
-                                    )
-                                    # Check if generated is a subset (only
-                                    # additions relative to target, no
-                                    # contradictions — all generated lines
-                                    # appear in target).
-                                    matcher = difflib.SequenceMatcher(
-                                        None, tgt_lines, gen_lines,
-                                    )
-                                    opcodes = matcher.get_opcodes()
-                                    has_replace = any(
-                                        tag == "replace"
-                                        for tag, *_ in opcodes
-                                    )
-                                    if not has_replace:
-                                        # Generated is a pure subset — merge
-                                        # by keeping the target (which is the
-                                        # superset).
+                                    if merged is not None:
+                                        target_path.write_text(
+                                            merged, encoding="utf-8",
+                                        )
                                         result_obj_metadata.setdefault(
                                             "merge_repair_advisory", [],
                                         ).append({
-                                            "path": str(source_path),
+                                            "file": str(target_path),
+                                            "action": "merged_subset",
+                                            "confidence": "LOW",
+                                            "requires_review": True,
                                             "source_lines": source_lines,
                                             "target_lines": target_lines,
                                             "ratio": ratio,
                                         })
                                         logger.info(
-                                            "Size regression merge repair "
-                                            "(advisory): %s — generated is "
-                                            "a subset of target, keeping "
-                                            "target",
+                                            "Size regression merge repair: "
+                                            "%s (%d/%d lines merged into "
+                                            "target)",
                                             source_path.name,
+                                            source_lines, target_lines,
                                             extra={"unit_id": unit.id},
                                         )
                                         _merge_repaired = True
-                                        # Skip this file (keep target as-is)
-                                except Exception as _merge_exc:
+                                except (OSError, UnicodeDecodeError, TypeError) as _merge_exc:
                                     logger.warning(
                                         "Size regression merge repair "
-                                        "failed for %s: %s",
+                                        "failed for %s: %s — falling "
+                                        "back to block",
                                         source_path.name, _merge_exc,
                                         extra={"unit_id": unit.id},
                                     )
 
-                            if not _merge_repaired:
+                            if _merge_repaired:
+                                integrated_files.append(target_path)
+                                listener.on_file_integrated(
+                                    unit, source_path, target_path,
+                                )
+                            else:
                                 msg = (
                                     f"Size regression blocked: {source_path.name} has "
                                     f"{source_lines} lines but target has {target_lines} "

@@ -1758,6 +1758,16 @@ class PrimeContractorWorkflow:
             if feature.error_message and self.code_generator:
                 logger.info("Feature '%s' has prior error — regenerating with feedback: %s", feature.name, feature.error_message, extra={'feature_name': feature.name, 'prior_error': feature.error_message})
                 prior_error = feature.error_message
+                # REQ-RPL-204: Enrich prior_error with structured repair context
+                if feature.metadata and feature.metadata.get("_repair_context"):
+                    rc = feature.metadata.pop("_repair_context")
+                    prior_error += (
+                        f"\n\n[Structured repair context]\n"
+                        f"Steps applied: {rc.get('repair_steps_applied', [])}\n"
+                        f"Files modified: {rc.get('repair_files_modified', [])}\n"
+                        f"Duration: {rc.get('repair_duration_ms', 0):.0f}ms\n"
+                        f"Error: {rc.get('repair_error', 'N/A')}"
+                    )
                 feature.error_message = None
                 feature.status = FeatureStatus.PENDING
                 # REQ-RPL-500: Tier escalation — if error-informed regen already
@@ -2867,9 +2877,29 @@ class PrimeContractorWorkflow:
                 self.on_feature_complete(feature)
             return True
         else:
-            # REQ-RPL-204: If repair was attempted but failed, enrich
-            # error context for subsequent LLM retry
+            # REQ-RPL-204: Structured repair context for retry enrichment
             if result.metadata.get("repair_attempted") and not result.metadata.get("repair_success"):
+                repair_context = {
+                    "repair_attempted": True,
+                    "repair_steps_applied": result.metadata.get("repair_steps", []),
+                    "repair_files_modified": result.metadata.get("repair_files_modified", []),
+                    "repair_duration_ms": result.metadata.get("repair_duration_ms", 0),
+                    "repair_error": result.metadata.get("repair_error"),
+                }
+                # Sanitize diagnostic strings
+                try:
+                    from ..repair.diagnostics import sanitize_diagnostic
+                    for key in ("repair_error",):
+                        if repair_context.get(key):
+                            repair_context[key] = sanitize_diagnostic(str(repair_context[key]))
+                except ImportError:
+                    pass
+
+                if feature.metadata is None:
+                    feature.metadata = {}
+                feature.metadata["_repair_context"] = repair_context
+
+                # Backward-compatible string error_message
                 repair_detail = (
                     f"Repair attempted (steps: {result.metadata.get('repair_steps', [])}) "
                     f"but failed"

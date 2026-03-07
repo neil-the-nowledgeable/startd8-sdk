@@ -9,6 +9,7 @@ all instrumentation is guarded and degrades to no-ops otherwise.
 
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -68,8 +69,24 @@ try:
     _repair_wall_clock = _meter.create_histogram(
         "repair_wall_clock_ms", description="Wall-clock time per repair",
     )
+    _repair_cost_avoided = _meter.create_counter(
+        "repair_cost_avoided_usd",
+        description="Estimated regeneration cost avoided by repair",
+    )
 except ImportError:
     _repair_attempts = _repair_success = _repair_steps_applied = _repair_wall_clock = None
+    _repair_cost_avoided = None
+
+
+def record_cost_avoided(amount: float) -> None:
+    """Increment the ``repair_cost_avoided_usd`` OTel counter.
+
+    Called by integration_engine when repair succeeds to track ROI.
+    No-op when OTel is not configured or amount <= 0.
+    """
+    if _repair_cost_avoided is not None and amount > 0:
+        _repair_cost_avoided.add(amount)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Circuit breaker (REQ-RPL-502)
@@ -189,7 +206,21 @@ def _run_steps(
         was_valid_before = _validator.validate(current, is_method)
 
         try:
-            result = step(current, context, file_path, element_context)
+            # Per-step timeout enforcement (REQ-RPL-007 / acceptance 9.2.3)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(step, current, context, file_path, element_context)
+                result = future.result(timeout=config.per_step_timeout_s)
+        except concurrent.futures.TimeoutError:
+            logger.debug(
+                "Repair step '%s' timed out after %.1fs",
+                step_name, config.per_step_timeout_s,
+            )
+            result = RepairStepResult(
+                step_name=step_name,
+                modified=False,
+                code=current,
+                metrics={"skipped_reason": "timeout"},
+            )
         except RepairError as exc:
             logger.debug("Repair step '%s' raised RepairError: %s", step_name, exc)
             result = RepairStepResult(
@@ -235,24 +266,34 @@ def _run_steps(
             else:
                 current = result.code
 
+        # Determine step outcome for OTel
+        skipped_reason = result.metrics.get("skipped_reason")
+        if skipped_reason:
+            step_outcome = "skipped"
+        elif reverted:
+            step_outcome = "reverted"
+        elif result.modified:
+            step_outcome = "applied"
+        else:
+            step_outcome = "no_change"
+
         # Emit per-step OTel span event (REQ-RPL-400)
         if _HAS_OTEL and _tracer is not None:
             span = trace.get_current_span()
             if span.is_recording():
-                outcome = "reverted" if reverted else ("applied" if result.modified else "no_change")
                 span.add_event(
                     f"repair.step.{step_name}",
                     attributes={
                         "modified": result.modified,
                         "reverted": reverted,
                         "duration_ms": step_duration_ms,
+                        **({"skipped_reason": skipped_reason} if skipped_reason else {}),
                     },
                 )
 
         # Emit per-step metric (REQ-RPL-401)
         if _repair_steps_applied is not None:
-            outcome = "reverted" if reverted else ("applied" if result.modified else "no_change")
-            _repair_steps_applied.add(1, {"step_name": step_name, "outcome": outcome})
+            _repair_steps_applied.add(1, {"step_name": step_name, "outcome": step_outcome})
 
         results.append(result)
 

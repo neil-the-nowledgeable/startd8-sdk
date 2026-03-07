@@ -44,6 +44,10 @@ def _sanitize(text: str) -> str:
     return "\n".join(sanitized)
 
 
+# Public alias for cross-module consumption (REQ-RPL-204).
+sanitize_diagnostic = _sanitize
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Regex parsers per checkpoint type
 # ═══════════════════════════════════════════════════════════════════════════
