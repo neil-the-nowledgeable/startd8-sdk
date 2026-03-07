@@ -876,6 +876,119 @@ class _ASTPatternVisitor(ast.NodeVisitor):
         return None
 
 
+def _build_behavioral_contracts(
+    relpath: str,
+    visitor: _ASTPatternVisitor,
+    feature_ids: list[str],
+    seen_ids: set[str],
+    source_ref: str,
+    source_label: str,
+) -> list[InterfaceContract]:
+    """Convert ``_ASTPatternVisitor`` findings into behavioral contracts.
+
+    Shared by ``ReferenceASTExtractor`` (scans external reference files) and
+    ``SourceReconciler`` (scans the project's own existing files).
+
+    Args:
+        relpath: Relative file path for provenance.
+        visitor: Populated ``_ASTPatternVisitor`` instance.
+        feature_ids: Task IDs to scope the contracts to.
+        seen_ids: Mutable set of already-emitted contract IDs (dedup).
+        source_ref: Value for ``source_reference`` (e.g. ``"reference-ast"``
+            or ``"source-ast"``).
+        source_label: Human-readable label for descriptions (e.g.
+            ``"reference"`` or ``"existing source"``).
+    """
+    contracts: list[InterfaceContract] = []
+    stem = Path(relpath).stem
+    # Prefix for contract IDs — distinguish reference-ast from source-ast
+    id_tag = "ref" if source_ref == "reference-ast" else "src"
+
+    # --- FORMULA contracts ---
+    for target_name, field_name, value_repr in visitor.formulas:
+        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.FORMULA]}-{id_tag}-{stem}-{field_name}"
+        if contract_id in seen_ids:
+            continue
+        seen_ids.add(contract_id)
+        contracts.append(_make_contract(
+            contract_id=contract_id,
+            category=ContractCategory.FORMULA,
+            confidence=ContractConfidence.EXPLICIT,
+            description=(
+                f"{target_name}['{field_name}'] must use {value_repr} "
+                f"(from {source_label} {relpath})"
+            ),
+            formula=f"{target_name}['{field_name}'] = {value_repr}",
+            source_reference=source_ref,
+            applicable_task_ids=feature_ids,
+        ))
+
+    # --- RENDER_PATTERN contracts ---
+    for call_name, string_arg in visitor.render_patterns:
+        short_name = call_name.rsplit(".", 1)[-1]
+        arg_hash = hex(hash(string_arg) & 0xFFFF)[2:]
+        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.RENDER_PATTERN]}-{id_tag}-{stem}-{short_name}-{arg_hash}"
+        if contract_id in seen_ids:
+            continue
+        seen_ids.add(contract_id)
+        contracts.append(_make_contract(
+            contract_id=contract_id,
+            category=ContractCategory.RENDER_PATTERN,
+            confidence=ContractConfidence.EXPLICIT,
+            description=(
+                f"{call_name}() must receive '{string_arg}' "
+                f"(from {source_label} {relpath})"
+            ),
+            pattern=string_arg,
+            source_reference=source_ref,
+            applicable_task_ids=feature_ids,
+        ))
+
+    # --- CONFIG_KEY contracts ---
+    for env_var, default in visitor.config_keys:
+        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.CONFIG_KEY]}-{id_tag}-{env_var}"
+        if contract_id in seen_ids:
+            continue
+        seen_ids.add(contract_id)
+        desc = f"Environment variable {env_var}"
+        if default is not None:
+            desc += f" (default: {default})"
+        desc += f" (from {source_label} {relpath})"
+        contracts.append(_make_contract(
+            contract_id=contract_id,
+            category=ContractCategory.CONFIG_KEY,
+            confidence=ContractConfidence.EXPLICIT,
+            description=desc,
+            env_var=env_var,
+            constant_value=default,
+            source_reference=source_ref,
+            applicable_task_ids=feature_ids,
+        ))
+
+    # --- INFRASTRUCTURE contracts ---
+    for constructor_name, kwarg_names in visitor.infra_calls:
+        short_name = constructor_name.rsplit(".", 1)[-1]
+        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE]}-{id_tag}-{short_name}"
+        if contract_id in seen_ids:
+            continue
+        seen_ids.add(contract_id)
+        desc = f"Use {constructor_name}"
+        if kwarg_names:
+            desc += f" with kwargs: {', '.join(kwarg_names)}"
+        desc += f" (from {source_label} {relpath})"
+        contracts.append(_make_contract(
+            contract_id=contract_id,
+            category=ContractCategory.INFRASTRUCTURE,
+            confidence=ContractConfidence.EXPLICIT,
+            description=desc,
+            dependency=short_name,
+            source_reference=source_ref,
+            applicable_task_ids=feature_ids,
+        ))
+
+    return contracts
+
+
 class ReferenceASTExtractor:
     """Extract behavioral contracts from reference source files.
 
@@ -931,8 +1044,10 @@ class ReferenceASTExtractor:
             visitor = _ASTPatternVisitor()
             visitor.visit(tree)
 
-            file_contracts = self._build_contracts(
+            file_contracts = _build_behavioral_contracts(
                 relpath, visitor, feature_ids, seen_ids,
+                source_ref="reference-ast",
+                source_label="reference",
             )
             contracts.extend(file_contracts)
 
@@ -947,102 +1062,6 @@ class ReferenceASTExtractor:
                 sum(1 for c in contracts if c.category == ContractCategory.CONFIG_KEY),
                 sum(1 for c in contracts if c.category == ContractCategory.INFRASTRUCTURE),
             )
-
-        return contracts
-
-    def _build_contracts(
-        self,
-        relpath: str,
-        visitor: _ASTPatternVisitor,
-        feature_ids: list[str],
-        seen_ids: set[str],
-    ) -> list[InterfaceContract]:
-        """Convert visitor findings into InterfaceContracts."""
-        contracts: list[InterfaceContract] = []
-        stem = Path(relpath).stem
-
-        # --- FORMULA contracts ---
-        for target_name, field_name, value_repr in visitor.formulas:
-            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.FORMULA]}-{stem}-{field_name}"
-            if contract_id in seen_ids:
-                continue
-            seen_ids.add(contract_id)
-            contracts.append(_make_contract(
-                contract_id=contract_id,
-                category=ContractCategory.FORMULA,
-                confidence=ContractConfidence.EXPLICIT,
-                description=(
-                    f"{target_name}['{field_name}'] must use {value_repr} "
-                    f"(from reference {relpath})"
-                ),
-                formula=f"{target_name}['{field_name}'] = {value_repr}",
-                source_reference="reference-ast",
-                applicable_task_ids=feature_ids,
-            ))
-
-        # --- RENDER_PATTERN contracts ---
-        for call_name, string_arg in visitor.render_patterns:
-            short_name = call_name.rsplit(".", 1)[-1]
-            # Use hash of string arg for uniqueness (format strings can be long)
-            arg_hash = hex(hash(string_arg) & 0xFFFF)[2:]
-            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.RENDER_PATTERN]}-{stem}-{short_name}-{arg_hash}"
-            if contract_id in seen_ids:
-                continue
-            seen_ids.add(contract_id)
-            contracts.append(_make_contract(
-                contract_id=contract_id,
-                category=ContractCategory.RENDER_PATTERN,
-                confidence=ContractConfidence.EXPLICIT,
-                description=(
-                    f"{call_name}() must receive '{string_arg}' "
-                    f"(from reference {relpath})"
-                ),
-                pattern=string_arg,
-                source_reference="reference-ast",
-                applicable_task_ids=feature_ids,
-            ))
-
-        # --- CONFIG_KEY contracts ---
-        for env_var, default in visitor.config_keys:
-            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.CONFIG_KEY]}-{env_var}"
-            if contract_id in seen_ids:
-                continue
-            seen_ids.add(contract_id)
-            desc = f"Environment variable {env_var}"
-            if default is not None:
-                desc += f" (default: {default})"
-            desc += f" (from reference {relpath})"
-            contracts.append(_make_contract(
-                contract_id=contract_id,
-                category=ContractCategory.CONFIG_KEY,
-                confidence=ContractConfidence.EXPLICIT,
-                description=desc,
-                env_var=env_var,
-                constant_value=default,
-                source_reference="reference-ast",
-                applicable_task_ids=feature_ids,
-            ))
-
-        # --- INFRASTRUCTURE contracts ---
-        for constructor_name, kwarg_names in visitor.infra_calls:
-            short_name = constructor_name.rsplit(".", 1)[-1]
-            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE]}-ref-{short_name}"
-            if contract_id in seen_ids:
-                continue
-            seen_ids.add(contract_id)
-            desc = f"Use {constructor_name}"
-            if kwarg_names:
-                desc += f" with kwargs: {', '.join(kwarg_names)}"
-            desc += f" (from reference {relpath})"
-            contracts.append(_make_contract(
-                contract_id=contract_id,
-                category=ContractCategory.INFRASTRUCTURE,
-                confidence=ContractConfidence.EXPLICIT,
-                description=desc,
-                dependency=short_name,
-                source_reference="reference-ast",
-                applicable_task_ids=feature_ids,
-            ))
 
         return contracts
 
@@ -1098,6 +1117,7 @@ class ReconciliationStats:
     imports_added: int = 0
     imports_skipped: int = 0
     dependencies_added: int = 0
+    behavioral_contracts_added: int = 0
     wall_clock_ms: float = 0.0
     file_fingerprints: dict[str, str] = field(default_factory=dict)
 
@@ -1116,6 +1136,7 @@ class SourceReconciler:
         target_files: Optional[list[str]] = None,
         config: Optional[SourceReconcileConfig] = None,
         design_doc_sections: Optional[dict[str, list[str]]] = None,
+        features: Optional[list[ParsedFeature]] = None,
     ) -> ReconciliationStats:
         """Run SOURCE_RECONCILE on existing target files.
 
@@ -1127,6 +1148,10 @@ class SourceReconciler:
             config: Reconciliation configuration.
             design_doc_sections: Per-file design doc sections for docstring
                 enrichment (REQ-DDS-004). Keys are file paths.
+            features: Optional parsed features for behavioral contract
+                extraction. When provided, Python files in the project are
+                also scanned for FORMULA, RENDER_PATTERN, CONFIG_KEY, and
+                INFRASTRUCTURE patterns that should be followed by new code.
 
         Returns:
             ReconciliationStats with counts of added/skipped items.
@@ -1156,6 +1181,19 @@ class SourceReconciler:
                 cached_fingerprints, already_reconciled, design_doc_sections,
             )
 
+        # Behavioral contract extraction from existing project files
+        if features:
+            behavioral = self._extract_behavioral_contracts(
+                features, project_root, config, stats,
+            )
+            if behavioral:
+                # Append to manifest contracts (merger dedup already happened,
+                # so use contract_id set to avoid duplicates with existing contracts)
+                existing_ids = {c.contract_id for c in manifest.contracts}
+                new_contracts = [c for c in behavioral if c.contract_id not in existing_ids]
+                manifest.contracts.extend(new_contracts)
+                stats.behavioral_contracts_added = len(new_contracts)
+
         # [R1-S6] Provenance + [R3-S6] timing
         stats.wall_clock_ms = (time.monotonic() - start) * 1000
         manifest.metadata["reconcile_stats"] = {
@@ -1168,6 +1206,7 @@ class SourceReconciler:
             "imports_added": stats.imports_added,
             "imports_skipped": stats.imports_skipped,
             "dependencies_added": stats.dependencies_added,
+            "behavioral_contracts_added": stats.behavioral_contracts_added,
             "wall_clock_ms": stats.wall_clock_ms,
         }
         manifest.metadata["file_fingerprints"] = dict(stats.file_fingerprints)
@@ -1179,6 +1218,102 @@ class SourceReconciler:
             )
 
         return stats
+
+    @staticmethod
+    def _extract_behavioral_contracts(
+        features: list[ParsedFeature],
+        project_root: Path,
+        config: SourceReconcileConfig,
+        stats: ReconciliationStats,
+    ) -> list[InterfaceContract]:
+        """Extract behavioral contracts from existing Python files in the project.
+
+        Scans files that are NOT target files of any feature (i.e., existing
+        sibling files) to discover patterns that new code should follow.
+        Also scans target files that already exist (editing an existing file).
+        """
+        contracts: list[InterfaceContract] = []
+        seen_ids: set[str] = set()
+
+        # Build map of all Python files to their associated feature IDs
+        # For behavioral extraction, scan ALL existing .py files in directories
+        # that contain target files — sibling files establish patterns
+        target_dirs: set[str] = set()
+        file_features: dict[str, list[str]] = {}
+        for feat in features:
+            for tf in feat.target_files:
+                if tf.endswith(".py"):
+                    file_features.setdefault(tf, []).append(feat.feature_id)
+                    parent = str(Path(tf).parent)
+                    if parent != ".":
+                        target_dirs.add(parent)
+
+        # Scan existing Python files in target directories
+        scanned: set[str] = set()
+        for target_dir in sorted(target_dirs):
+            dir_path = project_root / target_dir
+            if not dir_path.is_dir():
+                continue
+            for py_file in sorted(dir_path.glob("*.py")):
+                if py_file.is_symlink():
+                    continue
+                relpath = str(py_file.relative_to(project_root))
+                if relpath in scanned:
+                    continue
+                scanned.add(relpath)
+
+                # Skip files matching exclude patterns
+                if any(fnmatch.fnmatch(relpath, pat) for pat in config.exclude_patterns):
+                    continue
+
+                try:
+                    if py_file.stat().st_size > config.max_file_size_bytes:
+                        continue
+                    source = py_file.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                try:
+                    tree = ast.parse(source, filename=relpath)
+                except SyntaxError:
+                    continue
+
+                visitor = _ASTPatternVisitor()
+                visitor.visit(tree)
+
+                # Determine which features these contracts apply to:
+                # If the file IS a target file, scope to that feature.
+                # If it's a sibling, scope to all features in the same directory.
+                if relpath in file_features:
+                    applicable_ids = file_features[relpath]
+                else:
+                    applicable_ids = [
+                        fid
+                        for tf, fids in file_features.items()
+                        if str(Path(tf).parent) == target_dir
+                        for fid in fids
+                    ]
+
+                file_contracts = _build_behavioral_contracts(
+                    relpath, visitor, applicable_ids, seen_ids,
+                    source_ref="source-ast",
+                    source_label="existing source",
+                )
+                contracts.extend(file_contracts)
+
+        if contracts:
+            logger.info(
+                "SOURCE_RECONCILE behavioral: %d contracts from %d files "
+                "(formula=%d, pattern=%d, config=%d, infra=%d)",
+                len(contracts),
+                len(scanned),
+                sum(1 for c in contracts if c.category == ContractCategory.FORMULA),
+                sum(1 for c in contracts if c.category == ContractCategory.RENDER_PATTERN),
+                sum(1 for c in contracts if c.category == ContractCategory.CONFIG_KEY),
+                sum(1 for c in contracts if c.category == ContractCategory.INFRASTRUCTURE),
+            )
+
+        return contracts
 
     def _reconcile_file(
         self,
@@ -1653,17 +1788,22 @@ def extract_forward_contracts(
             manifest.stages_completed.append("REFERENCE_AST")
 
         # SOURCE_RECONCILE: enrich with AST-derived elements from existing files
+        # Also extracts behavioral contracts when features are provided
         if project_root is not None:
             all_targets = list({
                 f for feat in features for f in feat.target_files
             })
             reconciler = SourceReconciler()
-            stats = reconciler.reconcile(manifest, project_root, all_targets)
+            stats = reconciler.reconcile(
+                manifest, project_root, all_targets, features=features,
+            )
             manifest.stages_completed.append("SOURCE_RECONCILE")
             logger.info(
-                "SOURCE_RECONCILE: +%d elements, +%d imports from %d files",
+                "SOURCE_RECONCILE: +%d elements, +%d imports, "
+                "+%d behavioral contracts from %d files",
                 stats.elements_added,
                 stats.imports_added,
+                stats.behavioral_contracts_added,
                 stats.files_scanned,
             )
 
