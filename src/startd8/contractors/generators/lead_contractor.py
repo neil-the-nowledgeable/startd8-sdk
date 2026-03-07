@@ -378,6 +378,19 @@ class LeadContractorCodeGenerator:
                 ),
                 "artifact_dir": str(self.output_dir / ".artifacts"),
             }
+            # Forward raw LLM responses for Kaizen capture (REQ-KZ-201)
+            if lc_summary.get("spec_raw"):
+                gen_metadata["spec_raw_response"] = lc_summary["spec_raw"]
+            drafts_raw = lc_summary.get("drafts_raw", [])
+            if drafts_raw:
+                gen_metadata["draft_raw_response"] = drafts_raw[-1].get(
+                    "implementation", ""
+                )
+            reviews_raw = lc_summary.get("reviews_raw", [])
+            if reviews_raw:
+                gen_metadata["review_raw_response"] = reviews_raw[-1].get(
+                    "review_text", ""
+                )
             # Upstream truncation signal (secondary — Gate 4 works independently)
             upstream_summary = (result.output or {}).get("summary") or {}
             if isinstance(upstream_summary, dict) and upstream_summary.get("was_truncated"):
