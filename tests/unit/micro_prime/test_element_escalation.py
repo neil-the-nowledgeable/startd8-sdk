@@ -444,8 +444,8 @@ class TestElementEscalation:
                    return_value=_make_ollama_mock()):
             result = gen.generate("Implement", {}, ["src/mypackage/utils.py"])
 
-        # Should succeed with local work only — no crash
-        assert result.success is True
+        # No crash, but stubs remain — success is false
+        assert result.success is False
         assert result.metadata["element_escalation_count"] == 0
         assert result.cost_usd == 0.0
 

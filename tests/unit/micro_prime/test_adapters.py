@@ -331,11 +331,11 @@ class TestOutputFileWriting:
         gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
         assert gen._output_dir == tmp_path
 
-    def test_writes_file_to_disk(self, tmp_path, sample_manifest, sample_skeleton):
+    def test_writes_file_to_disk(self, tmp_path, sample_manifest, filled_skeleton):
         """Generated files are written to output_dir / file_path."""
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
             output_dir=tmp_path,
         )
         result = gen.generate(
@@ -347,22 +347,22 @@ class TestOutputFileWriting:
         content = expected_path.read_text(encoding="utf-8")
         assert len(content) > 0
 
-    def test_creates_parent_directories(self, tmp_path, sample_manifest, sample_skeleton):
+    def test_creates_parent_directories(self, tmp_path, sample_manifest, filled_skeleton):
         """Parent directories are created automatically."""
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
             output_dir=tmp_path,
         )
         gen.generate("Implement utils", {}, ["src/mypackage/utils.py"])
 
         assert (tmp_path / "src" / "mypackage").is_dir()
 
-    def test_generated_files_contain_absolute_paths(self, tmp_path, sample_manifest, sample_skeleton):
+    def test_generated_files_contain_absolute_paths(self, tmp_path, sample_manifest, filled_skeleton):
         """GenerationResult.generated_files contains resolved Path objects."""
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
             output_dir=tmp_path,
         )
         result = gen.generate(
@@ -374,8 +374,46 @@ class TestOutputFileWriting:
             # Path should be under output_dir
             assert str(p).startswith(str(tmp_path))
 
-    def test_metadata_tracks_local_file_count(self, tmp_path, sample_manifest, sample_skeleton):
+    def test_metadata_tracks_local_file_count(self, tmp_path, sample_manifest, filled_skeleton):
         """Metadata includes micro_prime_files_written count."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils", {}, ["src/mypackage/utils.py"],
+        )
+
+        assert "micro_prime_files_written" in result.metadata
+
+    def test_stub_skeleton_escalated_to_fallback(self, tmp_path, sample_manifest, sample_skeleton):
+        """Skeletons with stubs are escalated to fallback and removed from disk."""
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[tmp_path / "fb.py"],
+            input_tokens=50,
+            output_tokens=100,
+            model="fallback",
+            cost_usd=0.01,
+        )
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils", {}, ["src/mypackage/utils.py"],
+        )
+
+        expected_path = tmp_path / "src/mypackage/utils.py"
+        assert not expected_path.exists(), "Skeleton with stubs should be removed when fallback available"
+        fallback.generate.assert_called_once()
+
+    def test_stub_skeleton_kept_without_fallback(self, tmp_path, sample_manifest, sample_skeleton):
+        """Without fallback, stubs are kept on disk but result reports failure."""
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
             skeletons={"src/mypackage/utils.py": sample_skeleton},
@@ -385,7 +423,9 @@ class TestOutputFileWriting:
             "Implement utils", {}, ["src/mypackage/utils.py"],
         )
 
-        assert "micro_prime_files_written" in result.metadata
+        expected_path = tmp_path / "src/mypackage/utils.py"
+        # File kept (Mottainai), but success is false
+        assert not result.success
 
     def test_fallback_files_not_rewritten(self, tmp_path, sample_manifest):
         """Files delegated to fallback are NOT written by the adapter."""
@@ -417,7 +457,7 @@ class TestOutputFileWriting:
         # Metadata tracks both sources
         assert result.metadata["fallback_files_written"] == 1
 
-    def test_metadata_mixed_local_and_fallback(self, tmp_path, sample_manifest, sample_skeleton):
+    def test_metadata_mixed_local_and_fallback(self, tmp_path, sample_manifest, filled_skeleton):
         """Metadata correctly separates local vs fallback file counts."""
         fallback = MagicMock()
         fallback.generate.return_value = MagicMock(
@@ -430,7 +470,7 @@ class TestOutputFileWriting:
 
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
             fallback=fallback,
             output_dir=tmp_path,
         )
@@ -882,12 +922,11 @@ class TestElementLevelEscalation:
         mock_response.__exit__ = MagicMock(return_value=False)
         return mock_response
 
-    def test_partial_success_keeps_skeleton(
+    def test_partial_success_with_stubs_escalates_to_fallback(
         self, tmp_path, sample_manifest, sample_skeleton,
     ):
-        """When some elements succeed locally, the file is NOT sent to
-        file-level fallback. Element-level escalation uses direct cloud
-        LLM calls per element (REQ-MP-505/512)."""
+        """When some elements succeed locally but stubs remain, the file
+        is escalated to fallback rather than writing a partial skeleton."""
         from startd8.micro_prime.models import (
             ElementResult,
             EscalationResult,
@@ -896,17 +935,20 @@ class TestElementLevelEscalation:
             TierClassification,
         )
 
-        # Mock cloud agent returns body code for get_value
-        mock_agent = MagicMock()
-        mock_token_usage = MagicMock()
-        mock_token_usage.input = 150
-        mock_token_usage.output = 50
-        mock_agent.generate.return_value = ("return len(key)", 100, mock_token_usage)
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[tmp_path / "fb.py"],
+            input_tokens=50,
+            output_tokens=100,
+            model="fallback",
+            cost_usd=0.01,
+        )
 
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
             skeletons={"src/mypackage/utils.py": sample_skeleton},
-            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
+            fallback=fallback,
             output_dir=tmp_path,
         )
 
@@ -931,7 +973,94 @@ class TestElementLevelEscalation:
                 ),
             ),
         ]
-        partial_result.filled_skeleton = sample_skeleton  # has some fills
+        partial_result.filled_skeleton = sample_skeleton  # stubs remain
+
+        with patch.object(gen._engine, "process_file", return_value=partial_result), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # File with remaining stubs is escalated to fallback
+        fallback.generate.assert_called_once()
+        # Skeleton file NOT written to disk
+        assert not (tmp_path / "src/mypackage/utils.py").exists()
+
+    def test_partial_success_cloud_fills_remaining_stub(
+        self, tmp_path, sample_manifest,
+    ):
+        """When some elements succeed locally and one is escalated, the
+        cloud fills the remaining stub. Element-level escalation uses
+        direct cloud LLM calls per element (REQ-MP-505/512)."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        # Partially-filled skeleton: get_name implemented, get_value still stubbed
+        partial_skeleton = '''# [STARTD8-SKELETON]
+from __future__ import annotations
+from typing import Optional, List
+from pathlib import Path
+import json
+
+
+DEFAULT_TIMEOUT: int = 30
+
+
+class MyClass:
+    """My class."""
+
+    def get_name(self, key: str) -> str:
+        """Return the name for the given key."""
+        return str(key)
+
+    def get_value(self, key: str) -> int:
+        """Return the value for the given key."""
+        raise NotImplementedError
+'''
+
+        mock_agent = MagicMock()
+        mock_token_usage = MagicMock()
+        mock_token_usage.input = 150
+        mock_token_usage.output = 50
+        mock_agent.generate.return_value = ("        return len(key)", 100, mock_token_usage)
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": partial_skeleton},
+            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
+            output_dir=tmp_path,
+        )
+
+        # Mock engine to return mixed results: 1 success + 1 escalated
+        partial_result = FileResult(file_path="src/mypackage/utils.py")
+        partial_result.element_results = [
+            ElementResult(
+                element_name="get_name",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.SIMPLE,
+                success=True,
+                code="return str(key)",
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                ),
+            ),
+        ]
+        partial_result.filled_skeleton = partial_skeleton
 
         with patch.object(gen._engine, "process_file", return_value=partial_result), \
              patch(
@@ -946,13 +1075,13 @@ class TestElementLevelEscalation:
                 "Implement utils", {}, ["src/mypackage/utils.py"],
             )
 
-        # Cloud agent called directly for the escalated element
-        mock_agent.generate.assert_called_once()
-        call_prompt = mock_agent.generate.call_args[0][0]
-        assert "get_value" in call_prompt  # targeted element in prompt
-        assert "tier_too_high" in call_prompt  # escalation reason forwarded
-        # File was written locally
-        assert len(result.generated_files) == 1
+        # Cloud agent called for the escalated element
+        assert mock_agent.generate.call_count >= 1
+        call_prompt = mock_agent.generate.call_args_list[0][0][0]
+        assert "get_value" in call_prompt
+        assert "tier_too_high" in call_prompt
+        # File was written (cloud splice filled the stub)
+        assert len(result.generated_files) >= 1
         assert result.metadata["element_escalation_count"] == 1
 
     def test_zero_success_delegates_to_fallback(
@@ -1197,12 +1326,12 @@ class TestPostGenerationRepair:
         return mock_response
 
     def test_repair_called_after_file_writes(
-        self, tmp_path, sample_manifest, sample_skeleton,
+        self, tmp_path, sample_manifest, filled_skeleton,
     ):
         """_run_post_generation_repair is invoked on generated files."""
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": filled_skeleton},
             output_dir=tmp_path,
         )
 

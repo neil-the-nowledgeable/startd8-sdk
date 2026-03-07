@@ -215,7 +215,7 @@ class MicroPrimeEngine:
         self._consecutive_failures: int = 0
         self._circuit_open: bool = False
         # Element fingerprint success cache (R3-S4)
-        self._success_cache: set[str] = set()
+        self._success_cache: dict[str, Optional[str]] = {}
         # Decomposer for MODERATE elements (REQ-MP-900)
         self._decomposer = ModerateDecomposer(config=self._config)
         # Manifest reference for _handle_moderate (set by process_file, None for process_element)
@@ -244,7 +244,7 @@ class MicroPrimeEngine:
 
     def clear_cache(self) -> None:
         """Clear the element fingerprint success cache."""
-        self._success_cache.clear()
+        self._success_cache.clear()  # dict[fingerprint, code]
 
     def process_element(
         self,
@@ -327,8 +327,10 @@ class MicroPrimeEngine:
         # Step 1a: Check success cache (R3-S4) — skip re-generation
         fingerprint = f"{element.parent_class or ''}:{element.name}:{file_path}:{tier.value}"
         if fingerprint in self._success_cache:
+            cached_code = self._success_cache[fingerprint]
             logger.debug(
-                "Cache hit for %s — returning cached success", fingerprint,
+                "Cache hit for %s — returning cached success (code=%s)",
+                fingerprint, "present" if cached_code else "none",
             )
             result = ElementResult(
                 element_name=element.name,
@@ -336,6 +338,7 @@ class MicroPrimeEngine:
                 tier=tier,
                 classification_reason=reasoning,
                 success=True,
+                code=cached_code,
                 verification_verdict="skipped",
                 api_file_import_bump=api_file_import_bump,
                 api_element_adjustment=api_element_adjustment,
@@ -447,7 +450,7 @@ class MicroPrimeEngine:
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
             self._consecutive_failures = 0
-            self._success_cache.add(fingerprint)
+            self._success_cache[fingerprint] = result.code
         elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
             self._consecutive_failures += 1
             if (
@@ -551,6 +554,27 @@ class MicroPrimeEngine:
                         reason=EscalationReason.STRUCTURAL_MISMATCH,
                         detail="Body splicing into skeleton failed",
                         last_code=result.code,
+                    )
+
+        # Post-splice stub detection: if any `raise NotImplementedError`
+        # stubs remain, the skeleton is incomplete.  Mark remaining stub
+        # elements as failed so the fill-rate gate in prime_adapter catches
+        # partial skeletons instead of writing them to disk.
+        if "raise NotImplementedError" in current_skeleton:
+            for er in file_result.element_results:
+                if er.success and not er.code:
+                    # Cache-hit with no code — splice was skipped
+                    er.success = False
+                    er.escalation = build_escalation_context(
+                        element_name=er.element_name,
+                        file_path=file_spec.file,
+                        tier=er.tier,
+                        reason=EscalationReason.STRUCTURAL_MISMATCH,
+                        detail="Element had no code (cache hit without code); skeleton stub remains",
+                    )
+                    logger.warning(
+                        "Stub remains for %s after splice loop — marking as failed",
+                        er.element_name,
                     )
 
         file_result.filled_skeleton = current_skeleton
@@ -965,7 +989,7 @@ class MicroPrimeEngine:
             f"{element.parent_class or ''}:{element.name}"
             f":{file_path}:{TierClassification.MODERATE.value}"
         )
-        self._success_cache.add(moderate_fingerprint)
+        self._success_cache[moderate_fingerprint] = assembled
 
         return ElementResult(
             element_name=element.name,

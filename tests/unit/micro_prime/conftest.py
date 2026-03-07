@@ -320,6 +320,32 @@ class MyClass:
 
 
 @pytest.fixture
+def filled_skeleton() -> str:
+    """A skeleton with stubs replaced by implementations (for file-write tests)."""
+    return '''# [STARTD8-SKELETON]
+from __future__ import annotations
+from typing import Optional, List
+from pathlib import Path
+import json
+
+
+DEFAULT_TIMEOUT: int = 30
+
+
+class MyClass:
+    """My class."""
+
+    def get_name(self, key: str) -> str:
+        """Return the name for the given key."""
+        return str(key)
+
+    def get_value(self, key: str) -> int:
+        """Return the value for the given key."""
+        return len(key)
+'''
+
+
+@pytest.fixture
 def sample_manifest(sample_file_spec, sample_contracts) -> ForwardManifest:
     """A sample forward manifest."""
     return ForwardManifest(

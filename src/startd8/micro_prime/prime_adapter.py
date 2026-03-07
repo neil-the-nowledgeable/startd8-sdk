@@ -435,12 +435,58 @@ class MicroPrimeCodeGenerator:
         if generated_files:
             self._run_post_generation_repair(generated_files)
 
+        # Post-assembly stub detection: files that still contain
+        # `raise NotImplementedError` stubs after all generation and
+        # element-level cloud escalation are incomplete.  Remove them
+        # from generated_files and escalate to fallback.
+        # Only check files that had elements processed (skip files where
+        # the engine produced no element results — e.g. passthrough).
+        stub_escalated: list[str] = []
+        for file_path in list(written_file_paths):
+            fr = file_results_by_path.get(file_path)
+            if fr is None or not fr.filled_skeleton or not fr.element_results:
+                continue
+            output_path = self._output_dir / file_path
+            # Re-read from disk in case post-generation repair modified it
+            try:
+                content = output_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "raise NotImplementedError" in content:
+                if self._fallback is not None:
+                    logger.warning(
+                        "Micro Prime skeleton for %s still contains "
+                        "`raise NotImplementedError` stubs — escalating to fallback",
+                        file_path,
+                    )
+                    stub_escalated.append(file_path)
+                    written_file_paths.discard(file_path)
+                    generated_files[:] = [p for p in generated_files if p != output_path]
+                    escalated_files.append(file_path)
+                    try:
+                        output_path.unlink()
+                    except OSError:
+                        pass
+                else:
+                    # No fallback available — keep the partial file but
+                    # exclude from effective count so success=false.
+                    logger.warning(
+                        "Micro Prime skeleton for %s still contains "
+                        "`raise NotImplementedError` stubs (no fallback available)",
+                        file_path,
+                    )
+                    stub_escalated.append(file_path)
+
         # Compute effective file count based on element fill rate.
         # Files where <min_element_fill_rate of elements were filled are
         # considered incomplete and excluded from the success check.
+        # Files with remaining stubs (stub_escalated) are always excluded.
         effective_file_count = 0
         incomplete_files: list[str] = []
         for file_path in written_file_paths:
+            if file_path in stub_escalated:
+                incomplete_files.append(file_path)
+                continue
             fr = file_results_by_path.get(file_path)
             if fr is None:
                 effective_file_count += 1
