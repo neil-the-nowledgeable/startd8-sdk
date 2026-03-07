@@ -713,6 +713,20 @@ class MicroPrimeCodeGenerator:
                     if templates else False
                 )
 
+                # Decomposition viability for MODERATE elements (REQ-MP-906a, REQ-MP-909)
+                decomposable = False
+                decompose_strategy = None
+                if tier == TierClassification.MODERATE and self._config.decomposition_enabled:
+                    decomposable = self._engine._decomposer.can_decompose(
+                        element, file_spec, manifest, reason,
+                    )
+                    if decomposable:
+                        # Identify which strategy would handle it
+                        for s in self._engine._decomposer._strategies:
+                            if s.can_handle(element, file_spec, manifest, reason):
+                                decompose_strategy = s.name
+                                break
+
                 # Routing: TRIVIAL with template works without Ollama;
                 # SIMPLE requires Ollama; MODERATE/COMPLEX always escalate.
                 if tier == TierClassification.TRIVIAL and template_hit:
@@ -721,16 +735,23 @@ class MicroPrimeCodeGenerator:
                 elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE) and ollama_available:
                     file_local += 1
                     total_local += 1
+                elif tier == TierClassification.MODERATE and decomposable and ollama_available:
+                    file_local += 1
+                    total_local += 1
                 else:
                     file_escalated += 1
                     total_escalated += 1
 
-                elements_info.append({
+                elem_entry: dict[str, Any] = {
                     "name": element.name,
                     "tier": tier.value.upper(),
                     "reason": reason,
                     "template_hit": template_hit,
-                })
+                }
+                if decomposable:
+                    elem_entry["decomposable"] = True
+                    elem_entry["decompose_strategy"] = decompose_strategy
+                elements_info.append(elem_entry)
 
             per_file.append({
                 "file": file_path,
@@ -808,11 +829,17 @@ class MicroPrimeCodeGenerator:
                 line = f"    {el['tier']:<10} {el['name']:<35} {el['reason']}"
                 if el["template_hit"]:
                     line += "  [template]"
+                if el.get("decomposable"):
+                    line += f"  [decomposable: {el.get('decompose_strategy', '?')}]"
                 lines.append(line)
-            lines.append(
-                f"    -> {pf['local']} local, "
-                f"{pf['escalated']} escalated"
+
+            decomposable_count = sum(
+                1 for el in pf.get("elements", []) if el.get("decomposable")
             )
+            summary = f"    -> {pf['local']} local, {pf['escalated']} escalated"
+            if decomposable_count:
+                summary += f", {decomposable_count} decomposable"
+            lines.append(summary)
             lines.append("")
 
         file_count = sum(1 for p in per_file if not p.get("skipped"))
@@ -824,8 +851,16 @@ class MicroPrimeCodeGenerator:
         lines.append(
             f"    SIMPLE:   {tier_totals[TierClassification.SIMPLE]:>3}  (Ollama local)"
         )
+        total_decomposable = sum(
+            1 for pf in per_file
+            for el in pf.get("elements", [])
+            if el.get("decomposable")
+        )
+        mod_label = "(cloud fallback)"
+        if total_decomposable:
+            mod_label = f"({total_decomposable} decomposable -> local, rest cloud)"
         lines.append(
-            f"    MODERATE: {tier_totals[TierClassification.MODERATE]:>3}  (cloud fallback)"
+            f"    MODERATE: {tier_totals[TierClassification.MODERATE]:>3}  {mod_label}"
         )
         lines.append(
             f"    COMPLEX:  {tier_totals[TierClassification.COMPLEX]:>3}  (cloud fallback)"

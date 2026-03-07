@@ -43,6 +43,82 @@ from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
 
+# OTel decomposition metrics (REQ-MP-906) — optional dependency
+try:
+    from opentelemetry import metrics as otel_metrics
+
+    _meter = otel_metrics.get_meter("startd8.micro_prime")
+    _decomp_attempted = _meter.create_counter(
+        "micro_prime.decomposition_attempted",
+        description="Decomposition plans created",
+    )
+    _decomp_succeeded = _meter.create_counter(
+        "micro_prime.decomposition_succeeded",
+        description="Decomposition plans where all sub-elements succeeded",
+    )
+    _decomp_failed = _meter.create_counter(
+        "micro_prime.decomposition_failed",
+        description="Decomposition plans abandoned (sub-element or assembly failure)",
+    )
+    _decomp_rejected = _meter.create_counter(
+        "micro_prime.decomposition_rejected",
+        description="Elements where decompose() returned None",
+    )
+    _sub_elements_generated = _meter.create_counter(
+        "micro_prime.sub_elements_generated",
+        description="Individual sub-element generation attempts",
+    )
+    _decomp_time_ms = _meter.create_histogram(
+        "micro_prime.decomposition_time_ms",
+        description="End-to-end time for decompose + generate + assemble",
+        unit="ms",
+    )
+except ImportError:
+    _decomp_attempted = None
+    _decomp_succeeded = None
+    _decomp_failed = None
+    _decomp_rejected = None
+    _sub_elements_generated = None
+    _decomp_time_ms = None
+
+
+def _record_decomp_attempted(strategy: str, file_path: str) -> None:
+    if _decomp_attempted is not None:
+        _decomp_attempted.add(1, {"strategy": strategy, "file_path": file_path})
+
+
+def _record_decomp_succeeded(strategy: str, file_path: str) -> None:
+    if _decomp_succeeded is not None:
+        _decomp_succeeded.add(1, {"strategy": strategy, "file_path": file_path})
+
+
+def _record_decomp_failed(
+    strategy: str, file_path: str, failure_reason: str,
+) -> None:
+    if _decomp_failed is not None:
+        _decomp_failed.add(1, {
+            "strategy": strategy, "file_path": file_path,
+            "failure_reason": failure_reason,
+        })
+
+
+def _record_decomp_rejected(file_path: str, rejection_reason: str) -> None:
+    if _decomp_rejected is not None:
+        _decomp_rejected.add(1, {
+            "file_path": file_path, "rejection_reason": rejection_reason,
+        })
+
+
+def _record_sub_element(strategy: str, tier: str) -> None:
+    if _sub_elements_generated is not None:
+        _sub_elements_generated.add(1, {"strategy": strategy, "tier": tier})
+
+
+def _record_decomp_time(strategy: str, duration_ms: float) -> None:
+    if _decomp_time_ms is not None:
+        _decomp_time_ms.record(duration_ms, {"strategy": strategy})
+
+
 _CODE_GEN_SYSTEM_PROMPT = (
     "You are an expert Python developer. Generate ONLY the requested function body. "
     "Do NOT include markdown fences, explanations, or any text outside the code. "
@@ -656,6 +732,7 @@ class MicroPrimeEngine:
             element, file_spec, manifest, reasoning,
         )
         if plan is None:
+            _record_decomp_rejected(file_path, "no_strategy")
             return ElementResult(
                 element_name=element.name,
                 file_path=file_path,
@@ -676,6 +753,7 @@ class MicroPrimeEngine:
             "Decomposing %s (MODERATE) via %s: %d sub-elements",
             element.name, plan.strategy, len(plan.sub_elements),
         )
+        _record_decomp_attempted(plan.strategy, file_path)
 
         # Generate each sub-element
         sub_results: dict[str, str] = {}
@@ -699,6 +777,7 @@ class MicroPrimeEngine:
                         "Shell extraction failed for %s, abandoning decomposition",
                         element.name,
                     )
+                    _record_decomp_failed(plan.strategy, file_path, "shell_extraction")
                     self._completed = self._completed[:completed_len]
                     return ElementResult(
                         element_name=element.name,
@@ -752,6 +831,7 @@ class MicroPrimeEngine:
                     doc_hint = doc_hint[:509] + "..."
                 sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
 
+            _record_sub_element(plan.strategy, "simple")
             sub_result = self._handle_simple(
                 sub_spec, file_spec, skeleton, contracts,
                 file_path, f"sub-element of {element.name}",
@@ -775,6 +855,7 @@ class MicroPrimeEngine:
                     "Sub-element %s failed — abandoning decomposition of %s",
                     sub.name, element.name,
                 )
+                _record_decomp_failed(plan.strategy, file_path, "sub_element_failed")
                 self._completed = self._completed[:completed_len]
                 return ElementResult(
                     element_name=element.name,
@@ -813,6 +894,7 @@ class MicroPrimeEngine:
         gen_time = (time.monotonic() - start_time) * 1000
 
         if assembled is None:
+            _record_decomp_failed(plan.strategy, file_path, "assembly_failed")
             self._completed = self._completed[:completed_len]
             return ElementResult(
                 element_name=element.name,
@@ -836,6 +918,7 @@ class MicroPrimeEngine:
         # Structural verification (R3-S4)
         structural_ok, structural_reason = _structural_verify(assembled, element)
         if not structural_ok:
+            _record_decomp_failed(plan.strategy, file_path, "structural_verification")
             self._completed = self._completed[:completed_len]
             return ElementResult(
                 element_name=element.name,
@@ -862,6 +945,8 @@ class MicroPrimeEngine:
             "Decomposition succeeded for %s: %d/%d sub-elements, %.0fms",
             element.name, len(sub_results), len(plan.sub_elements), gen_time,
         )
+        _record_decomp_succeeded(plan.strategy, file_path)
+        _record_decomp_time(plan.strategy, gen_time)
 
         # Record as completed for few-shot (REQ-MP-903)
         self._completed.append({
@@ -1074,7 +1159,6 @@ class MicroPrimeEngine:
         if self._config.repair_enabled:
             repair_result = run_repair_pipeline(
                 code, element, file_spec, skeleton_source=skeleton,
-                enabled_steps=self._config.repair_enabled_steps,
             )
             code = repair_result.code
             repair_steps = repair_result.steps_applied

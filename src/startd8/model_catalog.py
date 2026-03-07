@@ -335,6 +335,12 @@ def get_latest_model(
             "fast": Models.MISTRAL_SMALL_LATEST,
             "mini": Models.MISTRAL_SMALL_LATEST,
         },
+        "ollama": {
+            "flagship": Models.STARTD8_CODER,
+            "balanced": Models.STARTD8_CODER,
+            "fast": Models.STARTD8_CODER,
+            "mini": Models.STARTD8_CODER,
+        },
     }
 
     provider_map = tier_map.get(provider.lower())
