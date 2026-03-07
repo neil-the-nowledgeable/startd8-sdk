@@ -286,3 +286,50 @@ def persist_diagnostic(diag: IngestionDiagnostic, output_dir: Path) -> None:
         logger.info("Kaizen diagnostic written to %s", path)
     except OSError as err:
         logger.warning("Kaizen diagnostic write failed: %s", err)
+
+
+# ── Prompt-response capture (Phase 1, REQ-KPI-2xx) ──────────────────
+
+
+_DEFAULT_MAX_BYTES = 2 * 1024 * 1024  # 2 MiB
+
+
+def _write_with_limit(path: Path, text: str, max_bytes: int) -> None:
+    """Write text to *path*, truncating if encoded size exceeds *max_bytes*."""
+    encoded = text.encode("utf-8")
+    if len(encoded) > max_bytes:
+        truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+        path.write_text(
+            truncated
+            + f"\n<!-- TRUNCATED at {max_bytes} bytes"
+            + f" (original: {len(encoded)}) -->",
+            encoding="utf-8",
+        )
+    else:
+        path.write_text(text, encoding="utf-8")
+
+
+def persist_prompt_response(
+    output_dir: Path,
+    phase: str,
+    prompt: str,
+    response: str,
+    *,
+    max_bytes: int = _DEFAULT_MAX_BYTES,
+) -> None:
+    """Persist full prompt and response text for a phase.
+
+    Files are written to ``<output_dir>/kaizen-prompts/<phase>_prompt.txt``
+    and ``<phase>_response.txt``.
+
+    Advisory — never raises on I/O failure.
+    """
+    kaizen_dir = output_dir / "kaizen-prompts"
+    try:
+        kaizen_dir.mkdir(parents=True, exist_ok=True)
+        _write_with_limit(kaizen_dir / f"{phase}_prompt.txt", prompt, max_bytes)
+        _write_with_limit(kaizen_dir / f"{phase}_response.txt", response, max_bytes)
+        logger.debug("Kaizen prompt capture: %s (%d+%d bytes)",
+                      phase, len(prompt), len(response))
+    except OSError as err:
+        logger.warning("Kaizen prompt capture failed for %s: %s", phase, err)

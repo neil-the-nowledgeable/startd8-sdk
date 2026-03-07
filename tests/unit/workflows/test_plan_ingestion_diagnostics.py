@@ -20,6 +20,7 @@ from startd8.workflows.builtin.plan_ingestion_diagnostics import (
     compute_seed_quality,
     compute_task_density,
     persist_diagnostic,
+    persist_prompt_response,
 )
 
 
@@ -266,3 +267,39 @@ class TestPersistDiagnostic:
         # Path that cannot be created
         persist_diagnostic(diag, Path("/nonexistent/deeply/nested/path"))
         # No exception raised — advisory persistence
+
+
+# ── persist_prompt_response (Phase 1) ────────────────────────────────
+
+
+class TestPersistPromptResponse:
+    def test_creates_files(self, tmp_path: Path):
+        persist_prompt_response(tmp_path, "parse", "prompt text", "response text")
+        kaizen_dir = tmp_path / "kaizen-prompts"
+        assert (kaizen_dir / "parse_prompt.txt").read_text() == "prompt text"
+        assert (kaizen_dir / "parse_response.txt").read_text() == "response text"
+
+    def test_truncation(self, tmp_path: Path):
+        big_text = "x" * 5000
+        persist_prompt_response(tmp_path, "assess", big_text, "short", max_bytes=1000)
+        prompt_path = tmp_path / "kaizen-prompts" / "assess_prompt.txt"
+        content = prompt_path.read_text()
+        assert len(content) < 5000
+        assert "TRUNCATED at 1000 bytes" in content
+        # Response should not be truncated
+        resp_path = tmp_path / "kaizen-prompts" / "assess_response.txt"
+        assert resp_path.read_text() == "short"
+
+    def test_advisory_no_raise(self):
+        """I/O failure must not raise."""
+        persist_prompt_response(
+            Path("/nonexistent/deeply/nested"), "parse", "p", "r",
+        )
+        # No exception raised
+
+    def test_multiple_phases(self, tmp_path: Path):
+        persist_prompt_response(tmp_path, "parse", "p1", "r1")
+        persist_prompt_response(tmp_path, "assess", "p2", "r2")
+        persist_prompt_response(tmp_path, "transform", "p3", "r3")
+        kaizen_dir = tmp_path / "kaizen-prompts"
+        assert len(list(kaizen_dir.iterdir())) == 6  # 3 phases × 2 files

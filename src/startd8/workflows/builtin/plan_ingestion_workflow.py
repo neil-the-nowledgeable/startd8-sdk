@@ -48,6 +48,7 @@ from .plan_ingestion_diagnostics import (
     compute_seed_quality,
     compute_task_density,
     persist_diagnostic,
+    persist_prompt_response,
 )
 from .plan_ingestion_models import (
     ArtisanContextSeed,
@@ -1327,6 +1328,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                     default=True,
                     description="Fallback to deterministic parse/assess/transform when LLM output is invalid",
                 ),
+                WorkflowInput(
+                    name="kaizen",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Enable Kaizen prompt capture — writes full prompts and responses to kaizen-prompts/",
+                ),
             ],
         )
 
@@ -1481,6 +1489,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             _llm_span.set_attribute("llm.cost_usd", cost)
         _llm_ctx.__exit__(None, None, None)
 
+        if getattr(self, "_kaizen_capture", False):
+            persist_prompt_response(self._kaizen_output_dir, "parse", prompt, response_text)
+
         try:
             data = _extract_json_from_response(response_text)
         except (json.JSONDecodeError, ValueError) as exc:
@@ -1622,6 +1633,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             _llm_span.set_attribute("llm.cost_usd", cost)
         _llm_ctx.__exit__(None, None, None)
 
+        if getattr(self, "_kaizen_capture", False):
+            persist_prompt_response(self._kaizen_output_dir, "assess", prompt, response_text)
+
         try:
             data = _extract_json_from_response(response_text)
         except (json.JSONDecodeError, ValueError) as exc:
@@ -1751,6 +1765,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             _llm_span.set_attribute("llm.tokens_output", out_tok)
             _llm_span.set_attribute("llm.cost_usd", cost)
         _llm_ctx.__exit__(None, None, None)
+
+        if getattr(self, "_kaizen_capture", False):
+            persist_prompt_response(self._kaizen_output_dir, "transform", prompt, response_text)
 
         # Extract content from potential code fences
         content = extract_code_from_response(
@@ -3940,6 +3957,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
         timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
         retry_config = RetryConfig(max_attempts=llm_max_attempts)
+        kaizen_capture = _as_bool(config.get("kaizen"), False)
+        self._kaizen_capture = kaizen_capture
+        self._kaizen_output_dir = output_dir
 
         # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
         try:
