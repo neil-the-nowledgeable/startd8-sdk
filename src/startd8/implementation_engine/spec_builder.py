@@ -300,6 +300,17 @@ def build_spec_prompt(
     # --- Forward contracts ---
     forward_contracts = context.pop("forward_contracts", None)
     forward_element_specs = context.pop("forward_element_specs", None)
+
+    # --- Design doc sections (A5: parity with Micro Prime REQ-DDS-001) ---
+    design_doc_sections = context.pop("design_doc_sections", None)
+    design_doc_section = ""
+    if design_doc_sections and isinstance(design_doc_sections, list):
+        dds_items = "\n".join(f"- {s}" for s in design_doc_sections)
+        design_doc_section = (
+            "\n## Implementation Context (design emphasis)\n"
+            f"{dds_items}\n"
+        )
+
     forward_contracts_section = ""
     if forward_contracts and isinstance(forward_contracts, str) and forward_contracts.strip():
         forward_contracts_section = (
@@ -311,6 +322,8 @@ def build_spec_prompt(
             "\n## Expected Code Elements (signatures, classes, bases)\n"
             f"{forward_element_specs.strip()}\n"
         )
+    if design_doc_section:
+        forward_contracts_section += design_doc_section
 
     # --- Critical parameters ---
     critical_parameters = context.pop("critical_parameters", None)

@@ -580,8 +580,8 @@ def _format_forward_element_specs(
     """Format ForwardElementSpec data from the manifest for prompt injection.
 
     Produces a Markdown block listing each element's kind, name, signature,
-    bases, and return type — the same data that Micro Prime's prompt_builder
-    consumes but that the Lead Contractor path previously lacked.
+    bases, return type, decorators, visibility, docstring hint, and parameter
+    kinds — the same data that Micro Prime's prompt_builder consumes.
 
     Returns an empty string if no specs are found.
     """
@@ -598,25 +598,87 @@ def _format_forward_element_specs(
             kind_label = elem.kind.value
             sig_str = ""
             if elem.signature:
-                params = []
-                for p in elem.signature.params:
-                    part = p.name
-                    if p.annotation:
-                        part = f"{p.name}: {p.annotation}"
-                    if p.default:
-                        part = f"{part} = {p.default}"
-                    params.append(part)
-                sig_str = f"({', '.join(params)})"
-                if elem.signature.return_annotation:
-                    sig_str = f"{sig_str} -> {elem.signature.return_annotation}"
+                sig_str = _format_signature_with_kinds(elem.signature)
 
             bases_str = ""
             if elem.bases:
                 bases_str = f" extends {', '.join(elem.bases)}"
 
-            lines.append(f"- **{kind_label}** `{elem.name}{sig_str}`{bases_str}")
+            # Decorators (A1)
+            decorators_str = ""
+            if elem.decorators:
+                decorators_str = " " + " ".join(f"`@{d}`" for d in elem.decorators)
+
+            # Visibility (A2) — only annotate non-public
+            visibility_str = ""
+            if hasattr(elem, "visibility") and elem.visibility and elem.visibility.value != "public":
+                visibility_str = f" [{elem.visibility.value}]"
+
+            lines.append(
+                f"- **{kind_label}** `{elem.name}{sig_str}`{bases_str}"
+                f"{decorators_str}{visibility_str}"
+            )
+
+            # Docstring hint (A3)
+            if elem.docstring_hint:
+                lines.append(f"  - _{elem.docstring_hint}_")
 
     return "\n".join(lines) if lines else ""
+
+
+def _format_signature_with_kinds(sig: object) -> str:
+    """Format a Signature rendering positional-only and keyword-only markers.
+
+    Renders ``/`` after positional-only params and ``*`` before keyword-only
+    params, matching Python's canonical syntax.
+    """
+    params = getattr(sig, "params", [])
+    if not params:
+        ret = getattr(sig, "return_annotation", None)
+        return f"() -> {ret}" if ret else "()"
+
+    parts: list[str] = []
+    saw_positional_only = False
+    saw_keyword_only = False
+    for p in params:
+        kind_val = getattr(p.kind, "value", None) if hasattr(p, "kind") else None
+
+        # Insert / after positional-only group ends
+        if saw_positional_only and kind_val != "positional_only":
+            parts.append("/")
+            saw_positional_only = False
+
+        # Insert * before first keyword-only param
+        if kind_val == "keyword_only" and not saw_keyword_only:
+            parts.append("*")
+            saw_keyword_only = True
+
+        if kind_val == "positional_only":
+            saw_positional_only = True
+
+        # Build param string
+        if kind_val == "var_positional":
+            part = f"*{p.name}"
+        elif kind_val == "var_keyword":
+            part = f"**{p.name}"
+        else:
+            part = p.name
+
+        if p.annotation:
+            part = f"{part}: {p.annotation}"
+        if p.default:
+            part = f"{part} = {p.default}"
+        parts.append(part)
+
+    # Trailing / if all params were positional-only
+    if saw_positional_only:
+        parts.append("/")
+
+    sig_str = f"({', '.join(parts)})"
+    ret = getattr(sig, "return_annotation", None)
+    if ret:
+        sig_str = f"{sig_str} -> {ret}"
+    return sig_str
 
 
 # ──────────────────────────────────────────────────────────────────────────
