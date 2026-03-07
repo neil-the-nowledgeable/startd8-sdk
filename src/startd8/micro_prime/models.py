@@ -198,6 +198,9 @@ class MicroPrimeConfig(BaseModel):
     decomposition_confidence_threshold: float = 0.6
     class_decompose_enabled: bool = True
     function_chain_enabled: bool = True
+    # Simple decomposer gate (Phase 1, Step 6)
+    enable_simple_decomposer: bool = False
+    simple_decomposer_confidence_threshold: float = 0.6
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

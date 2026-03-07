@@ -154,6 +154,9 @@ class ForwardElementSpec(BaseModel):
     type_annotation: Optional[str] = None
     value_repr: Optional[str] = None
 
+    # Decomposition provenance (REQ: Phase 1, Step 8)
+    decomposition_source: Optional[str] = None  # "simple", "moderate", "copy"
+
     @field_validator("parent_class", mode="before")
     @classmethod
     def _normalize_parent_class(cls, v: Optional[str]) -> Optional[str]:

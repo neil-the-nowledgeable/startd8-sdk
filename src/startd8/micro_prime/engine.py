@@ -25,6 +25,7 @@ from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.metrics import MetricsCollector
 from startd8.micro_prime.decomposer import ModerateDecomposer
 from startd8.micro_prime.context import MicroPrimeContext
+from startd8.complexity.models import RejectionReason
 from startd8.micro_prime.models import (
     ElementResult,
     EscalationContext,
@@ -701,6 +702,11 @@ class MicroPrimeEngine:
         """
         start_time = time.monotonic()
 
+        # Leaf-only constraint (Phase 1, Step 7): decomposed sub-elements
+        # must never re-enter the decomposer.
+        if element.decomposition_source is not None:
+            raise RuntimeError("Recursive decomposition blocked")
+
         # Circuit breaker gate (R1-S1)
         if self._circuit_open:
             return ElementResult(
@@ -774,6 +780,9 @@ class MicroPrimeEngine:
                     reason=EscalationReason.NOT_DECOMPOSABLE,
                     detail="No decomposition strategy applies",
                 ),
+                decomposition_metadata={
+                    "rejection_reason": RejectionReason.NO_TEMPLATE_MATCH.value,
+                },
             )
 
         logger.info(
@@ -820,6 +829,9 @@ class MicroPrimeEngine:
                             reason=EscalationReason.DECOMPOSITION_FAILED,
                             detail="Shell extraction failed",
                         ),
+                        decomposition_metadata={
+                            "rejection_reason": RejectionReason.SKELETON_MISMATCH.value,
+                        },
                         generation_time_ms=(time.monotonic() - start_time) * 1000,
                         input_tokens=total_input,
                         output_tokens=total_output,
@@ -842,6 +854,9 @@ class MicroPrimeEngine:
                         reason=EscalationReason.DECOMPOSITION_FAILED,
                         detail=f"Missing element_spec for sub-element {sub.name}",
                     ),
+                    decomposition_metadata={
+                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
+                    },
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
                     input_tokens=total_input,
                     output_tokens=total_output,
@@ -903,6 +918,9 @@ class MicroPrimeEngine:
                             if sub_result.escalation else None
                         ),
                     ),
+                    decomposition_metadata={
+                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
+                    },
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
                     input_tokens=total_input,
                     output_tokens=total_output,
@@ -937,6 +955,9 @@ class MicroPrimeEngine:
                     reason=EscalationReason.DECOMPOSITION_FAILED,
                     detail="Assembly failed",
                 ),
+                decomposition_metadata={
+                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
+                },
                 generation_time_ms=gen_time,
                 input_tokens=total_input,
                 output_tokens=total_output,
@@ -963,6 +984,9 @@ class MicroPrimeEngine:
                     last_code=assembled,
                     last_error=structural_reason or "structural_verification_failed",
                 ),
+                decomposition_metadata={
+                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
+                },
                 generation_time_ms=gen_time,
                 input_tokens=total_input,
                 output_tokens=total_output,
@@ -1121,7 +1145,7 @@ class MicroPrimeEngine:
                 "code": template_match.code,
                 "syntax_valid": True,
             })
-            return ElementResult(
+            result = ElementResult(
                 element_name=element.name,
                 file_path=file_path,
                 tier=TierClassification.SIMPLE,
@@ -1133,6 +1157,8 @@ class MicroPrimeEngine:
                 model="template",
                 verification_verdict="skipped",
             )
+            self._metrics.record(result)
+            return result
 
         # Build few-shot examples
         few_shot = None

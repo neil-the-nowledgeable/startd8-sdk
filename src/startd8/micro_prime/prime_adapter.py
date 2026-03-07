@@ -335,6 +335,17 @@ class MicroPrimeCodeGenerator:
                         escalated_files.append(file_path)
                         continue
 
+                # Phase 1, Step 9: ast.parse syntax gate before writing
+                try:
+                    ast.parse(file_result.filled_skeleton)
+                except SyntaxError as syn_err:
+                    logger.warning(
+                        "Micro Prime ast.parse gate failed for %s: %s — skipping write",
+                        file_path, syn_err,
+                    )
+                    escalated_files.append(file_path)
+                    continue
+
                 # REQ-MP-703: Write filled skeleton to disk
                 output_path = self._output_dir / file_path
                 output_path.parent.mkdir(parents=True, exist_ok=True)
