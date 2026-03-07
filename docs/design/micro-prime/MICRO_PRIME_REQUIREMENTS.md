@@ -23,10 +23,11 @@
 10. [Layer 7 — Quick Wins & Acceleration (REQ-MP-7xx)](#10-layer-7--quick-wins--acceleration-req-mp-7xx)
 11. [Layer 8 — Shared Complexity Router (REQ-MP-8xx)](#11-layer-8--shared-complexity-router-req-mp-8xx)
 12. [Layer 9 — Moderate Decomposer (REQ-MP-9xx)](#12-layer-9--moderate-decomposer-req-mp-9xx)
-13. [Data Flow](#13-data-flow)
-14. [Traceability Matrix](#14-traceability-matrix)
-15. [Verification Strategy](#15-verification-strategy)
-16. [Related Documents](#16-related-documents)
+13. [Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)](#13-layer-10--simple--trivial-decomposer-req-mp-10xx)
+14. [Data Flow](#14-data-flow)
+15. [Traceability Matrix](#15-traceability-matrix)
+16. [Verification Strategy](#16-verification-strategy)
+17. [Related Documents](#17-related-documents)
 
 ---
 
@@ -95,9 +96,10 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Routing & Integration | REQ-MP-5xx | 16 | 16 | 0 | 0 |
 | Observability & Metrics | REQ-MP-6xx | 4 | 4 | 0 | 0 |
 | Quick Wins & Acceleration | REQ-MP-7xx | 9 | 9 | 0 | 0 |
-| Shared Complexity Router | REQ-MP-8xx | — | — | 0 | — |
+| Shared Complexity Router | REQ-MP-8xx | 9 | 9 | 0 | 0 |
 | Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
-| **Total** | | **63** | **63** | **0** | **0** |
+| Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 0 | 0 | 10 |
+| **Total** | | **82** | **72** | **0** | **10** |
 
 ---
 
@@ -1146,6 +1148,20 @@ Per-element import gate uses three signals: binding constraints referencing exte
 
 Extracts Artisan's complexity routing into a shared module, creating a unified 4-tier classification system across all code generation paths.
 
+### Summary of Requirements
+
+| ID | Name | Priority | Status |
+|----|------|----------|--------|
+| REQ-MP-800 | TaskComplexitySignals Extraction | P0 | implemented |
+| REQ-MP-801 | Unified Tier Classification | P0 | implemented |
+| REQ-MP-802 | ComplexityRoutingConfig | P0 | implemented |
+| REQ-MP-803 | Complexity Router | P0 | implemented |
+| REQ-MP-804 | Prime Contractor Integration | P0 | implemented |
+| REQ-MP-805 | Artisan Refactor to Shared Module | P1 | implemented |
+| REQ-MP-806 | Micro Prime Classifier Bridge | P1 | implemented |
+| REQ-MP-807 | Feature-Level Signal Extraction | P0 | implemented |
+| REQ-MP-808 | Observability | P2 | implemented |
+
 ---
 
 ## 12. Layer 9 — Moderate Decomposer (REQ-MP-9xx)
@@ -1171,7 +1187,114 @@ Pre-escalation decomposition of MODERATE elements into SIMPLE sub-elements that 
 
 ---
 
-## 13. Data Flow
+## 13. Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)
+
+> Detailed design: [`SIMPLE_TO_TRIVIAL_DECOMPOSER_FEASIBILITY.md`](./SIMPLE_TO_TRIVIAL_DECOMPOSER_FEASIBILITY.md), [`SIMPLE_TO_TRIVIAL_DECOMPOSER_IMPLEMENTATION_PLAN.md`](./SIMPLE_TO_TRIVIAL_DECOMPOSER_IMPLEMENTATION_PLAN.md)
+
+Extends the deterministic assembly surface to eliminate LLM calls for two additional categories: (a) identical-copy file duplication detected during plan ingestion, and (b) class elements whose sub-elements are all TRIVIAL (template-matched). Introduces `AssemblyStrategy` enum for explicit routing, `CopySource` detection, and template-first short-circuiting in `_handle_simple`.
+
+### Summary of Requirements
+
+| ID | Name | Priority | Status |
+|----|------|----------|--------|
+| REQ-MP-1000 | Copy Detection Module | P0 | planned |
+| REQ-MP-1001 | Copy Source Schema Fields | P0 | planned |
+| REQ-MP-1002 | Prime Contractor Copy Early-Exit | P0 | planned |
+| REQ-MP-1003 | Copy-and-Modify Predecessor Injection | P1 | planned |
+| REQ-MP-1004 | Assembly Strategy Enum | P0 | planned |
+| REQ-MP-1005 | All-TRIVIAL Class Decomposition | P0 | planned |
+| REQ-MP-1006 | Template-First Short-Circuit in `_handle_simple` | P1 | planned |
+| REQ-MP-1007 | Post-Assembly File-Level Validation Gate | P1 | planned |
+| REQ-MP-1008 | Simple Decomposer Observability | P1 | planned |
+| REQ-MP-1009 | Simple Decomposer Report | P2 | planned |
+
+### REQ-MP-1000: Copy Detection Module
+
+**Priority:** P0 | **Status:** planned
+
+New module `src/startd8/contractors/copy_detection.py` that detects tasks whose description indicates byte-identical duplication of a predecessor's output.
+
+**Acceptance criteria:**
+
+1. `detect_copy_task(feature: FeatureSpec) -> Optional[CopySource]` scans `feature.description` for duplication signals ("identical copy", "duplicated identically", "exact copy", "same as", "mirror of").
+2. Requires `len(feature.dependencies) == 1` for unambiguous copy source.
+3. Fallback inference: if `copy_source_file` is not explicitly set but predecessor has exactly one `target_files` entry, infer from it. Multiple `target_files` → reject.
+4. Path traversal guard: `Path.resolve()` + `is_relative_to()` blocks `../../` escape.
+5. Narrow exception discipline: `ValueError` for signal parsing, `KeyError`/`AttributeError` for missing fields. No bare `except Exception`.
+6. Logging: DEBUG for entry/exit, INFO for strategy selection, WARNING for fallback triggers.
+
+### REQ-MP-1001: Copy Source Schema Fields
+
+**Priority:** P0 | **Status:** planned
+
+Add `copy_source_task_id: Optional[str] = None` and `copy_source_file: Optional[str] = None` to `FeatureSpec` in `contractors/queue.py`. Populate during plan ingestion when copy detection signals are present. Existing tests must pass without modification (new fields are optional with `None` defaults).
+
+### REQ-MP-1002: Prime Contractor Copy Early-Exit
+
+**Priority:** P0 | **Status:** planned
+
+In `PrimeContractorWorkflow.develop_feature()`, add an early exit as the first conditional before code generation:
+
+1. If `feature.copy_source_task_id is not None`, look up predecessor by ID.
+2. If predecessor `status != FeatureStatus.COMPLETE`, raise `ValueError`.
+3. Read predecessor output with 30-second timeout via `ThreadPoolExecutor`.
+4. Write to `feature.target_files[0]` with configurable overwrite policy (`copy_overwrite: bool = True`). When `False`, use `open(..., "xb")` for TOCTOU-safe exclusive creation.
+5. SHA-256 verify source == target. Predecessor file must remain accessible until verification completes.
+6. Return `GenerationResult(success=True, cost_usd=0.0, metadata={"strategy": "file_copy"})`.
+
+### REQ-MP-1003: Copy-and-Modify Predecessor Injection
+
+**Priority:** P1 | **Status:** planned
+
+When duplication signal + modification signal detected ("with changes", "adapted for", "modified to"), set `strategy="copy_and_modify"` and inject predecessor output as `{reference_implementation}` in the spec prompt. Prompt-budget guard: measure token count against configurable budget (default: 2000 tokens), apply tiered compression if exceeded (strip comments/docstrings → truncate with marker).
+
+### REQ-MP-1004: Assembly Strategy Enum
+
+**Priority:** P0 | **Status:** planned
+
+Add `AssemblyStrategy(str, Enum)` to `complexity/models.py` with values: `FILE_COPY`, `COPY_AND_MODIFY`, `TEMPLATE`, `SIMPLE_DECOMPOSE`, `LLM_SIMPLE`, `LLM_MODERATE`, `ESCALATE`. Each strategy maps to exactly one handler with no overlap. Record as OTel span attribute `assembly.strategy`.
+
+### REQ-MP-1005: All-TRIVIAL Class Decomposition
+
+**Priority:** P0 | **Status:** planned
+
+Extend `ClassDecomposeStrategy` in the Moderate Decomposer: after `plan()` produces sub-elements, check if every sub-element passes `template_registry.is_trivial()`. If all are TRIVIAL, set `sub_element.deterministic = True` for each, render via templates, and assemble without LLM. `ClassDecomposeStrategy.__init__` accepts optional `template_registry: Optional[TemplateRegistry] = None` parameter.
+
+All-or-nothing: assemble in memory; if any sub-element fails, fall back to `_handle_simple` with `RejectionReason` context. `ast.parse()` syntax gate before writing to disk.
+
+### REQ-MP-1006: Template-First Short-Circuit in `_handle_simple`
+
+**Priority:** P1 | **Status:** planned
+
+Before invoking Ollama in `_handle_simple`, try `template_registry.is_trivial()`. If it matches, render and return immediately (zero LLM). This catches cases where template expansion makes previously-SIMPLE elements directly TRIVIAL.
+
+### REQ-MP-1007: Post-Assembly File-Level Validation Gate
+
+**Priority:** P1 | **Status:** planned
+
+After splice, run file-level validation using static analysis only (`ast.parse` + string search):
+
+1. No `[STARTD8-SKELETON]` markers remain → FAIL
+2. No nested duplicate function/class definitions at same scope → FAIL
+3. Required functions/classes from `ForwardFileSpec.elements` present → WARN (configurable severity)
+
+On FAIL: rollback splice, record `RejectionReason.RENDER_CONTRACT_VIOLATION`, escalate.
+
+### REQ-MP-1008: Simple Decomposer Observability
+
+**Priority:** P1 | **Status:** planned
+
+OTel counters on meter `startd8.micro_prime`: `micro_prime.simple_decompose_attempted`, `micro_prime.simple_decompose_succeeded`, `micro_prime.simple_decompose_rejected`. Prime contractor counters: `prime.file_copy_tasks`, `prime.file_copy_cost_saved_usd`. `RejectionReason` enum for bounded rejection taxonomy.
+
+### REQ-MP-1009: Simple Decomposer Report
+
+**Priority:** P2 | **Status:** planned
+
+JSON report at `.startd8/reports/simple-decomposer.json` as typed `@dataclass` (`SimpleDecomposerReport`) with `_meta` (schema_version, sdk_version, python_version), attempted/succeeded/rejected counts, rejection_reasons map, template_coverage map, cost_savings estimate. Advisory file I/O: `try/except OSError` with warning log — never fail generation due to report write error.
+
+---
+
+## 14. Data Flow
 
 ### 11.1 Dual Entry Points
 
@@ -1250,7 +1373,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 14. Traceability Matrix
+## 15. Traceability Matrix
 
 | Requirement | Implementation File | Test File | Status |
 |------------|-------------------|-----------|--------|
@@ -1310,7 +1433,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 15. Verification Strategy
+## 16. Verification Strategy
 
 ### 13.1 Experiment Rounds (Pre-Integration)
 
@@ -1341,7 +1464,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 16. Related Documents
+## 17. Related Documents
 
 | Document | Relationship |
 |----------|-------------|
