@@ -288,11 +288,13 @@ class TestQualityGateSkip:
 class TestQualityGateEdgeCases:
     """Edge cases: empty output, non-dict output, non-gate phases."""
 
-    def test_none_output_no_crash(self):
+    def test_none_output_raises_gate_error(self):
+        from startd8.contractors.artisan_contractor import QualityGateError
+
         wf = _make_workflow("block")
         pr = _make_phase_result(WorkflowPhase.TEST, output=None)
-        # Should not raise (no output to inspect)
-        wf._check_quality_gate(WorkflowPhase.TEST, pr)
+        with pytest.raises(QualityGateError, match="None or non-dict"):
+            wf._check_quality_gate(WorkflowPhase.TEST, pr)
 
     def test_non_test_review_phase_ignored(self):
         wf = _make_workflow("block")

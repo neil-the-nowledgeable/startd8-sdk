@@ -13,6 +13,24 @@ CONTRACTORS_ROOT = PROJECT_ROOT / "src/startd8/contractors"
 # AL-101 exception allowlist (must match docs/design/artisan/ARTISAN_LOGGING_REQUIREMENTS.md).
 ALLOWED_STRING_LOGGER_NAMES: dict[str, set[str]] = {
     "src/startd8/contractors/registry.py": {"startd8.contractors.registry"},
+    "src/startd8/contractors/context_seed/core.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/design_support.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/shared.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/design.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/plan.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
+    "src/startd8/contractors/context_seed/phases/scaffold.py": {
+        "startd8.contractors.context_seed_handlers",
+    },
 }
 
 

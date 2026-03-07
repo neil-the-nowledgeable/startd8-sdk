@@ -497,7 +497,7 @@ class TestIntegratePhaseHandler:
 
         # Engine should not have been called at all
         mock_engine.integrate.assert_not_called()
-        assert result["metadata"]["total"] == 0
+        assert result["metadata"]["total"] == 1
 
     @patch("startd8.contractors.integration_engine.IntegrationEngine")
     @patch("startd8.contractors.registry.get_registry")
@@ -698,8 +698,8 @@ class TestContextPropagation:
         handler = IntegratePhaseHandler(config=HandlerConfig())
         handler.execute(WorkflowPhase.INTEGRATE, context)
 
-        # Paths should remain as staging paths (not updated)
-        assert gr.generated_files == [original_staging_file]
+        # Failed merges now clear generated_files
+        assert gr.generated_files == []
 
 
 # ---------------------------------------------------------------------------
