@@ -383,12 +383,42 @@ def list_models_by_capability(capability: str) -> List[str]:
     ]
 
 
+# Tier escalation order: mini → fast → balanced → flagship
+_TIER_ESCALATION = ["mini", "fast", "balanced", "flagship"]
+
+
+def get_escalation_target(agent_spec: str) -> Optional[str]:
+    """Return the next-tier-up agent spec for escalation, or None if already flagship.
+
+    Args:
+        agent_spec: Current agent spec (e.g. "anthropic:claude-sonnet-4-6").
+
+    Returns:
+        Escalated agent spec, or None if no escalation is possible.
+    """
+    if ":" not in agent_spec:
+        return None
+    provider, model_id = agent_spec.split(":", 1)
+    info = _MODEL_REGISTRY.get(model_id)
+    if info is None:
+        return None
+    try:
+        current_idx = _TIER_ESCALATION.index(info.tier)
+    except ValueError:
+        return None
+    if current_idx >= len(_TIER_ESCALATION) - 1:
+        return None  # Already flagship
+    next_tier = _TIER_ESCALATION[current_idx + 1]
+    return get_latest_model(provider, tier=next_tier)
+
+
 __all__ = [
     "Models",
     "ModelInfo",
     "get_model_info",
     "is_known_model",
     "get_latest_model",
+    "get_escalation_target",
     "list_models_by_tier",
     "list_models_by_capability",
 ]
