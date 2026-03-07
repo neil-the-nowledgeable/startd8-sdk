@@ -313,8 +313,33 @@ class ASTMergeStrategy:
                     f"before re-running."
                 )
 
+            # Auto-replace: when the source is a complete standalone file whose
+            # class/function names overlap significantly with the target,
+            # additive merge would discard the source's updated definitions
+            # (keeping target's stale versions) and duplicate "other" nodes.
+            # Switch to replace mode to avoid garbled output.
+            effective_mode = self.merge_mode
+            if effective_mode == "additive" and source_defs > 0:
+                source_names = {
+                    n.name for n in source_tree.body
+                    if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                }
+                target_names = {
+                    n.name for n in target_tree.body
+                    if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                }
+                overlap = source_names & target_names
+                if len(overlap) > len(source_names) * 0.5:
+                    logger.info(
+                        "AST merge auto-switching to replace mode for %s: "
+                        "%d/%d source definitions overlap with target (%s)",
+                        target.name, len(overlap), len(source_names),
+                        ", ".join(sorted(overlap)),
+                    )
+                    effective_mode = "replace"
+
             # Replace mode: overwrite target with source (like SimpleMergeStrategy)
-            if self.merge_mode == "replace":
+            if effective_mode == "replace":
                 if backup:
                     backup_path = target.with_suffix(target.suffix + self.backup_suffix)
                     shutil.copy2(target, backup_path)

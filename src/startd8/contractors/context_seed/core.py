@@ -8092,6 +8092,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 for fpath in gen_result.generated_files:
                     try:
                         if not fpath.exists():
+                            logger.warning(
+                                "REVIEW: file %s listed in generated_files "
+                                "does not exist on disk — skipping "
+                                "(may have been cleaned up before review)",
+                                fpath,
+                            )
                             continue
                         # Check if this file is a downstream stub
                         rel_path = str(fpath)

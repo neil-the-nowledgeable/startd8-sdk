@@ -401,7 +401,7 @@ No spurious files for micro-prime-only features (PI-002, PI-004, PI-006) — the
 | Priority | Items | Theme |
 |---|---|---|
 | **Critical** | INV-1, INV-6 | Micro-prime assembly + false success reporting |
-| **High** | INV-2, INV-4, INV-5 | Skipped elements, garbled merge, review targets wrong file |
+| **High** | INV-2, INV-4, INV-5 | Skipped elements, garbled merge (FIXED: auto-replace), review file warnings (FIXED) |
 | **Medium** | INV-3, INV-7, INV-8 | Spurious files, Ollama over-generation, wrong function |
 | **Low** | INV-9, INV-10, INV-11 | Cross-feature review, kaizen path bug, unknown agent spec |
 
@@ -471,7 +471,7 @@ All paths relative to `/Users/neilyashinsky/Documents/dev/online-boutique-demo/.
 | INV-1 | Critical | **FIXED** | Success cache now stores generated code (`dict[str, Optional[str]]`). Post-splice stub detection marks code-less cache hits as failed when stubs remain. | `270189e` |
 | INV-2 | High | **FIXED** | `_success_cache` changed from `set` → `dict` to carry code through cache hits. Cache-hit results now populate `result.code`. | `270189e` |
 | INV-3 | Medium | **FIXED** | `_derive_target_from_source()` now matches source filename against `unit.target_files` before falling back to bare filename at project root. | `076b3e2` |
-| INV-4 | Medium | **DEFERRED** | Requires new review prompt section builder + cross-feature context wiring in PrimeContractor. Design doc recommended. | — |
-| INV-5 | Low | **ALREADY FIXED** | Current `kaizen-correlation.py` has correct path logic (`"standalone"` subdirectory). Error output was from a prior version. Re-run correlation to refresh. | — |
+| INV-4 | High | **FIXED** | `ASTMergeStrategy` auto-detects when source class/function names overlap target >50% and switches to "replace" mode, preventing garbled additive merge of complete standalone files. | `TBD` |
+| INV-5 | High | **FIXED** | Review phase now logs warnings when generated files are missing from disk instead of silently skipping, making staging cleanup / checkpoint path issues visible. | `TBD` |
 | INV-6 | Critical | **FIXED** | Post-assembly stub detection gate: files with remaining `raise NotImplementedError` are escalated to fallback (if available) or excluded from `effective_file_count` (Mottainai — keep partial file, report `success=false`). | `270189e` |
 | INV-7 | Low | **NOT ADDRESSED** | Model quality issue with `startd8-coder`. Nested duplicate function pattern tracked for prompt/tier threshold tuning. | — |
