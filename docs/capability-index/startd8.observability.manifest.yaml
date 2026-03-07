@@ -12,11 +12,12 @@
 # preserved during regeneration.
 
 manifest_id: startd8.observability
-version: "1.1.0"
+version: "1.2.0"
 description: |
   Observability surface manifest for the StartD8 SDK.
   Declares all metrics, spans, events, dashboard references, SLO templates,
   and alert templates emitted by the SDK's instrumented modules.
+  v1.2.0: Added repair pipeline metrics, span, and per-file frequency tracking (REQ-RPL-402).
   v1.1.0: Added 4 artisan contractor/phase runner span patterns.
 
 resource_attributes:
@@ -29,7 +30,7 @@ resource_attributes:
   - io.contextcore.business.criticality
 
 # ==============================================================================
-# METRICS (12 total — 7 session, 4 cost, 1 event bridge)
+# METRICS (17 total — 7 session, 4 cost, 1 event bridge, 5 repair)
 # ==============================================================================
 
 metrics:
@@ -177,8 +178,65 @@ metrics:
       panel_type: timeseries
       query: "rate(startd8_events_total[5m])"
 
+  # --- Repair pipeline (REQ-RPL-402, meter: startd8.repair) -----------------
+
+  - name: repair_attempts_total
+    instrument: counter
+    unit: attempts
+    description: "Total repair attempts"
+    meter: startd8.repair
+    source_file: src/startd8/repair/orchestrator.py
+    labels: [outcome, error_category]
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(repair_attempts_total[5m])"
+
+  - name: repair_success_total
+    instrument: counter
+    unit: repairs
+    description: "Successful repairs"
+    meter: startd8.repair
+    source_file: src/startd8/repair/orchestrator.py
+    labels: [error_category]
+    dashboard_hints:
+      panel_type: stat
+      query: "sum(repair_success_total)"
+
+  - name: repair_steps_applied
+    instrument: counter
+    unit: steps
+    description: "Per-step application count"
+    meter: startd8.repair
+    source_file: src/startd8/repair/orchestrator.py
+    labels: [step_name, outcome]
+    dashboard_hints:
+      panel_type: timeseries
+      query: "sum by (step_name, outcome) (rate(repair_steps_applied[5m]))"
+
+  - name: repair_wall_clock_ms
+    instrument: histogram
+    unit: ms
+    description: "Wall-clock time per repair attempt"
+    meter: startd8.repair
+    source_file: src/startd8/repair/orchestrator.py
+    labels: []
+    dashboard_hints:
+      panel_type: histogram
+      query: "histogram_quantile(0.95, rate(repair_wall_clock_ms_bucket[5m]))"
+
+  - name: repair_cost_avoided_usd
+    instrument: counter
+    unit: USD
+    description: "Estimated regeneration cost avoided by repair"
+    meter: startd8.repair
+    source_file: src/startd8/repair/orchestrator.py
+    labels: []
+    dashboard_hints:
+      panel_type: stat
+      query: "sum(repair_cost_avoided_usd)"
+
 # ==============================================================================
-# SPANS (9 patterns)
+# SPANS (10 patterns)
 # ==============================================================================
 
 spans:
@@ -277,6 +335,17 @@ spans:
     attributes:
       - project.id
       - agent.id
+
+  - name_pattern: "repair.attempt"
+    kind: INTERNAL
+    source_file: src/startd8/repair/orchestrator.py
+    attributes:
+      - repair.feature_name
+      - repair.file_count
+      - repair.route_confidence
+      - repair.success
+    events:
+      - "repair.step.{step_name}"
 
 # ==============================================================================
 # EVENT TYPES (42 total)

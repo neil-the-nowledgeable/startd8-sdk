@@ -30,6 +30,7 @@ _INSTRUMENTED_MODULES = [
     ("startd8.contractors.adapters.contextcore", "src/startd8/contractors/adapters/contextcore.py"),
     ("startd8.contractors.artisan_contractor", "src/startd8/contractors/artisan_contractor.py"),
     ("startd8.contractors.artisan_phases.runner", "src/startd8/contractors/artisan_phases/runner.py"),
+    ("startd8.repair.orchestrator", "src/startd8/repair/orchestrator.py"),
 ]
 
 # Event type → category mapping (derived from EventType enum grouping).

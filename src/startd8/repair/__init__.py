@@ -30,6 +30,7 @@ from .models import (
     SyntaxDiagnostic,
 )
 from .orchestrator import (
+    get_repair_frequency,
     get_step_effectiveness,
     reset_circuit_breaker,
     reset_step_effectiveness,
@@ -61,6 +62,7 @@ __all__ = [
     "StepEffectiveness",
     "StepValidator",
     "SyntaxDiagnostic",
+    "get_repair_frequency",
     "get_step_effectiveness",
     "reset_circuit_breaker",
     "reset_step_effectiveness",

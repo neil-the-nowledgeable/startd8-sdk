@@ -1,4 +1,4 @@
-"""Repair pipeline orchestration (REQ-RPL-001, 003, 006, 400, 401, 502).
+"""Repair pipeline orchestration (REQ-RPL-001, 003, 006, 400, 401, 402, 502).
 
 Phase 0 provides ``run_element_repair()`` for the micro-prime path.
 Phase 1 adds ``run_file_repair()`` for the contractor path.
@@ -606,7 +606,148 @@ def run_file_repair(
         except Exception:  # noqa: BLE001
             pass
 
+        # Per-file repair frequency (REQ-RPL-402) — advisory
+        if any_modified:
+            try:
+                _update_repair_frequency(repaired_files, project_root)
+            except Exception:  # noqa: BLE001
+                pass
+
         return outcome
     finally:
         if span_ctx is not None:
             span_ctx.__exit__(None, None, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Per-file repair frequency tracking (REQ-RPL-402)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_REPAIR_FREQUENCY_FILE = "repair_frequency.json"
+
+
+def _update_repair_frequency(
+    repaired_files: Dict[Path, str],
+    project_root: Path,
+) -> None:
+    """Increment per-file repair counts and timestamps.
+
+    Persists ``repair_frequency.json`` to ``.startd8/repair/`` for offline
+    analysis.  Files with high repair frequency are candidates for manual
+    refactoring (the LLM consistently produces repairable-but-not-clean
+    output for these paths).
+    """
+    import json
+
+    freq_dir = project_root / ".startd8" / "repair"
+    freq_path = freq_dir / _REPAIR_FREQUENCY_FILE
+
+    # Load existing frequency data
+    freq: dict[str, dict] = {}
+    try:
+        if freq_path.exists():
+            freq = json.loads(freq_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        freq = {}
+
+    now = int(time.time())
+    for file_path in repaired_files:
+        key = str(file_path)
+        entry = freq.get(key, {"repair_count": 0, "first_repair_epoch": now})
+        entry["repair_count"] = entry.get("repair_count", 0) + 1
+        entry["last_repair_epoch"] = now
+        if "first_repair_epoch" not in entry:
+            entry["first_repair_epoch"] = now
+        freq[key] = entry
+
+    try:
+        freq_dir.mkdir(parents=True, exist_ok=True)
+        freq_path.write_text(
+            json.dumps(freq, indent=2, sort_keys=True), encoding="utf-8",
+        )
+    except OSError:
+        logger.debug("Failed to persist repair frequency to %s", freq_path)
+
+
+def get_repair_frequency(project_root: Path) -> Dict[str, dict]:
+    """Load the per-file repair frequency data.
+
+    Returns:
+        Dict mapping file path strings to dicts with ``repair_count``,
+        ``first_repair_epoch``, and ``last_repair_epoch`` keys.
+        Empty dict if no frequency data exists.
+    """
+    import json
+
+    freq_path = project_root / ".startd8" / "repair" / _REPAIR_FREQUENCY_FILE
+    try:
+        if freq_path.exists():
+            return json.loads(freq_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Manifest attribution (REQ-RPL-402)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_OTEL_DESCRIPTORS: dict = {
+    "metrics": [
+        {
+            "name": "repair_attempts_total",
+            "instrument": "counter",
+            "unit": "attempts",
+            "description": "Total repair attempts",
+            "meter": "startd8.repair",
+            "labels": ["outcome", "error_category"],
+        },
+        {
+            "name": "repair_success_total",
+            "instrument": "counter",
+            "unit": "repairs",
+            "description": "Successful repairs",
+            "meter": "startd8.repair",
+            "labels": ["error_category"],
+        },
+        {
+            "name": "repair_steps_applied",
+            "instrument": "counter",
+            "unit": "steps",
+            "description": "Per-step application count",
+            "meter": "startd8.repair",
+            "labels": ["step_name", "outcome"],
+        },
+        {
+            "name": "repair_wall_clock_ms",
+            "instrument": "histogram",
+            "unit": "ms",
+            "description": "Wall-clock time per repair attempt",
+            "meter": "startd8.repair",
+            "labels": [],
+        },
+        {
+            "name": "repair_cost_avoided_usd",
+            "instrument": "counter",
+            "unit": "USD",
+            "description": "Estimated regeneration cost avoided by repair",
+            "meter": "startd8.repair",
+            "labels": [],
+        },
+    ],
+    "spans": [
+        {
+            "name_pattern": "repair.attempt",
+            "kind": "INTERNAL",
+            "attributes": [
+                "repair.feature_name",
+                "repair.file_count",
+                "repair.route_confidence",
+                "repair.success",
+            ],
+            "events": [
+                "repair.step.{step_name}",
+            ],
+        },
+    ],
+}
