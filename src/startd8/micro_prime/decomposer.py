@@ -12,6 +12,10 @@ Strategies:
 from __future__ import annotations
 
 import ast
+import builtins as _builtins
+import functools
+import keyword as _keyword
+import re
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
@@ -483,8 +487,18 @@ class ClassDecomposeStrategy:
 
 # ── Function Chain Strategy (REQ-MP-902) ─────────────────────────────
 
+
+def _is_method(element: ForwardElementSpec) -> bool:
+    return element.kind in (ElementKind.METHOD, ElementKind.ASYNC_METHOD)
+
+
+def _is_async(element: ForwardElementSpec) -> bool:
+    return element.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD)
+
+
 # Reason substrings that indicate API/orchestrator classification (fallback
 # until ClassificationSignal enum is available — see REQ-MP-902 note).
+# Values are lowercase — compared against reason_lower at match site.
 _API_ORCHESTRATOR_REASON_MARKERS = frozenset({
     "external API",
     "external imports",
@@ -493,9 +507,6 @@ _API_ORCHESTRATOR_REASON_MARKERS = frozenset({
 })
 
 # Python keywords and builtins that must not be used as helper names.
-import builtins as _builtins
-import keyword as _keyword
-
 _PYTHON_RESERVED = frozenset(
     list(_keyword.kwlist)
     + list(getattr(_keyword, "softkwlist", []))
@@ -503,25 +514,21 @@ _PYTHON_RESERVED = frozenset(
 )
 
 # Responsibility clause separators (deterministic, no LLM).
-_CLAUSE_SEPARATORS_RE = None  # lazy-compiled
 
 
+@functools.lru_cache(maxsize=1)
 def _compile_clause_re() -> "re.Pattern[str]":
-    global _CLAUSE_SEPARATORS_RE
-    if _CLAUSE_SEPARATORS_RE is None:
-        import re
-        _CLAUSE_SEPARATORS_RE = re.compile(
-            r"""
-            ;\s*                   # semicolons
-            | ^\s*[-*•]\s+         # bullet markers at line start
-            | ^\s*\d+[.)]\s+      # enumerated prefixes (1. or 1))
-            """,
-            re.MULTILINE | re.VERBOSE,
-        )
-    return _CLAUSE_SEPARATORS_RE
+    return re.compile(
+        r"""
+        ;\s*                   # semicolons
+        | ^\s*[-*•]\s+         # bullet markers at line start
+        | ^\s*\d+[.)]\s+      # enumerated prefixes (1. or 1))
+        """,
+        re.MULTILINE | re.VERBOSE,
+    )
 
 
-def _parse_responsibilities(text: str) -> list[str]:
+def _parse_responsibilities(text: Optional[str]) -> list[str]:
     """Parse a docstring or design section into distinct responsibility clauses.
 
     Deterministic parsing: splits on ``;``, bullet markers, or numbered
@@ -546,7 +553,6 @@ def _slugify_helper_name(clause: str) -> str:
     Produces a snake_case slug prefixed with ``_``. Falls back to empty
     string if the result is invalid (caller handles fallback).
     """
-    import re
     # Extract key verbs/nouns — take first 6 words, lowercase, strip non-alnum
     words = re.sub(r"[^a-zA-Z0-9\s]", "", clause).lower().split()[:6]
     slug = "_".join(words)
@@ -567,6 +573,29 @@ def _uniquify_name(
         if candidate not in existing:
             return candidate
     return f"{name}_99"  # pragma: no cover
+
+
+def _render_helper_def(helper: SubElement, helper_code: str) -> Optional[str]:
+    """Render a helper SubElement + its generated code into a full function def."""
+    if not (helper.element_spec and helper.element_spec.signature):
+        return None
+    prefix = "async def" if _is_async(helper.element_spec) else "def"
+    sig = _render_signature_str(helper.element_spec.signature)
+    ret = ""
+    if helper.element_spec.signature.return_annotation:
+        ret = f" -> {helper.element_spec.signature.return_annotation}"
+    header = f"{prefix} {helper.name}{sig}{ret}:"
+    body = textwrap.dedent(helper_code).strip()
+    if not body:
+        body = "pass"
+    indented = textwrap.indent(body, "    ")
+    if helper.element_spec.docstring_hint:
+        return (
+            f"{header}\n"
+            f'    """{helper.element_spec.docstring_hint}"""\n'
+            f"{indented}"
+        )
+    return f"{header}\n{indented}"
 
 
 class FunctionChainStrategy:
@@ -591,10 +620,9 @@ class FunctionChainStrategy:
             return False
 
         # Must be a function or method
-        if element.kind not in (
-            ElementKind.FUNCTION, ElementKind.METHOD,
-            ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-        ):
+        if not (_is_method(element) or element.kind in (
+            ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION,
+        )):
             return False
 
         # Exclude API/orchestrator classifications
@@ -632,18 +660,15 @@ class FunctionChainStrategy:
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
     ) -> Optional[DecompositionPlan]:
+        # Intentionally re-validates clauses for direct-call safety (without can_handle).
         clauses = _parse_responsibilities(element.docstring_hint or "")
         if len(clauses) < 2 or len(clauses) > self._config.max_helpers_per_function:
             return None
 
         # Collect existing names for uniquification
         existing_names: set[str] = {e.name for e in file_spec.elements}
-        is_method = element.kind in (
-            ElementKind.METHOD, ElementKind.ASYNC_METHOD,
-        )
-        is_async = element.kind in (
-            ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-        )
+        method = _is_method(element)
+        async_ = _is_async(element)
 
         sub_elements: list[SubElement] = []
         uncertainty_signals: list[str] = []
@@ -662,7 +687,7 @@ class FunctionChainStrategy:
 
             # Build a synthetic element spec for the helper
             helper_params: list[Param] = []
-            if is_method:
+            if method:
                 helper_params.append(Param(name="self", kind=ParamKind.POSITIONAL_ONLY))
             # Forward the original function's non-self params
             if element.signature:
@@ -672,9 +697,9 @@ class FunctionChainStrategy:
                     helper_params.append(p)
 
             helper_kind = (
-                ElementKind.ASYNC_METHOD if is_async and is_method
-                else ElementKind.METHOD if is_method
-                else ElementKind.ASYNC_FUNCTION if is_async
+                ElementKind.ASYNC_METHOD if async_ and method
+                else ElementKind.METHOD if method
+                else ElementKind.ASYNC_FUNCTION if async_
                 else ElementKind.FUNCTION
             )
 
@@ -685,7 +710,7 @@ class FunctionChainStrategy:
                     params=helper_params,
                     return_annotation=None,
                 ),
-                parent_class=element.parent_class if is_method else None,
+                parent_class=element.parent_class if method else None,
                 docstring_hint=clause,
             )
 
@@ -756,11 +781,7 @@ class FunctionChainStrategy:
         if dispatch_code is None:
             return None
 
-        is_method = plan.original_element.kind in (
-            ElementKind.METHOD, ElementKind.ASYNC_METHOD,
-        )
-
-        if is_method:
+        if _is_method(plan.original_element):
             # For methods, helpers become separate class methods — the splicer
             # handles them individually. Only return the dispatch body.
             return dispatch_code
@@ -771,28 +792,9 @@ class FunctionChainStrategy:
             helper_code = sub_results.get(helper.name)
             if helper_code is None:
                 return None
-            if helper.element_spec and helper.element_spec.signature:
-                is_async_helper = helper.element_spec.kind in (
-                    ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-                )
-                prefix = "async def" if is_async_helper else "def"
-                sig = _render_signature_str(helper.element_spec.signature)
-                ret = ""
-                if helper.element_spec.signature.return_annotation:
-                    ret = f" -> {helper.element_spec.signature.return_annotation}"
-                header = f"{prefix} {helper.name}{sig}{ret}:"
-                body = textwrap.dedent(helper_code).strip()
-                if not body:
-                    body = "pass"
-                indented = textwrap.indent(body, "    ")
-                if helper.element_spec.docstring_hint:
-                    parts.append(
-                        f"{header}\n"
-                        f'    """{helper.element_spec.docstring_hint}"""\n'
-                        f"{indented}"
-                    )
-                else:
-                    parts.append(f"{header}\n{indented}")
+            rendered = _render_helper_def(helper, helper_code)
+            if rendered is not None:
+                parts.append(rendered)
 
         # Append the dispatch body (just the body, not a full def)
         parts.append(textwrap.dedent(dispatch_code).strip())
@@ -806,6 +808,7 @@ class FunctionChainStrategy:
             logger.warning(
                 "Function chain assembly validation failed for %s",
                 plan.original_element.name,
+                exc_info=True,
             )
             return None
 
