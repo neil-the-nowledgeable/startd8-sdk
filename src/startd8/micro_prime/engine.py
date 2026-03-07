@@ -1262,95 +1262,65 @@ class MicroPrimeEngine:
             design_doc_sections=design_doc_sections,
         )
 
-        # Generate via Ollama
-        try:
-            code, input_tokens, output_tokens = self._generate_ollama(prompt)
-        except Exception as e:
-            logger.warning("Ollama generation failed for %s: %s", element.name, e)
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.SIMPLE,
-                classification_reason=reasoning,
-                success=False,
-                repair_recovered=False,
-                ast_valid_before_repair=False,
-                ast_valid_after_repair=False,
-                verification_verdict="skipped",
-                model=model_name,
-                generation_time_ms=(time.monotonic() - start_time) * 1000,
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    reason=EscalationReason.EMPTY_RESPONSE,
-                    detail=str(e),
-                    local_model=model_name,
-                    element_fqn=element_fqn,
-                ),
-            )
+        # Generate via Ollama with local retry
+        max_local_attempts = self._config.local_max_attempts
+        last_escalation_result = None
+        input_tokens = 0
+        output_tokens = 0
 
-        if not code or not code.strip():
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.SIMPLE,
-                classification_reason=reasoning,
-                success=False,
-                repair_recovered=False,
-                ast_valid_before_repair=False,
-                ast_valid_after_repair=False,
-                verification_verdict="skipped",
-                model=model_name,
-                generation_time_ms=(time.monotonic() - start_time) * 1000,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    reason=EscalationReason.EMPTY_RESPONSE,
-                    detail="Empty response from Ollama",
-                    local_model=model_name,
-                    element_fqn=element_fqn,
-                ),
-            )
+        for local_attempt in range(1, max_local_attempts + 1):
+            is_last_attempt = local_attempt == max_local_attempts
 
-        raw_output = code
-        ast_valid_before = _ast_parse_valid(code, element)
-        ast_valid_after = ast_valid_before
-        repair_recovered = False
-        repaired_code = None
-
-        # Run repair pipeline
-        repair_steps: list[str] = []
-        repair_attribution = None
-        if self._config.repair_enabled:
-            repair_result = run_repair_pipeline(
-                code, element, file_spec, skeleton_source=skeleton,
-            )
-            code = repair_result.code
-            repair_steps = repair_result.steps_applied
-            repair_attribution = build_repair_attribution(
-                repair_result.step_results,
-            )
-            ast_valid_after = repair_result.ast_valid_after
-            repair_recovered = repair_result.repair_recovered
-            repaired_code = code
-            if not repair_result.ast_valid:
-                return ElementResult(
+            try:
+                code, attempt_in_tokens, attempt_out_tokens = self._generate_ollama(prompt)
+                input_tokens += attempt_in_tokens
+                output_tokens += attempt_out_tokens
+            except Exception as e:
+                logger.warning(
+                    "Ollama generation failed for %s (attempt %d/%d): %s",
+                    element.name, local_attempt, max_local_attempts, e,
+                )
+                last_escalation_result = ElementResult(
                     element_name=element.name,
                     file_path=file_path,
                     tier=TierClassification.SIMPLE,
                     classification_reason=reasoning,
                     success=False,
-                    code=code,
-                    repair_steps_applied=repair_steps,
-                    repair_attribution=repair_attribution,
-                    repair_recovered=repair_recovered,
-                    ast_valid_before_repair=ast_valid_before,
-                    ast_valid_after_repair=ast_valid_after,
-                    verification_verdict="fail",
+                    repair_recovered=False,
+                    ast_valid_before_repair=False,
+                    ast_valid_after_repair=False,
+                    verification_verdict="skipped",
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    escalation=build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        reason=EscalationReason.EMPTY_RESPONSE,
+                        detail=str(e),
+                        local_model=model_name,
+                        element_fqn=element_fqn,
+                    ),
+                )
+                if is_last_attempt:
+                    return last_escalation_result
+                continue
+
+            if not code or not code.strip():
+                logger.warning(
+                    "Empty Ollama response for %s (attempt %d/%d)",
+                    element.name, local_attempt, max_local_attempts,
+                )
+                last_escalation_result = ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason=reasoning,
+                    success=False,
+                    repair_recovered=False,
+                    ast_valid_before_repair=False,
+                    ast_valid_after_repair=False,
+                    verification_verdict="skipped",
                     model=model_name,
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
                     input_tokens=input_tokens,
@@ -1359,17 +1329,85 @@ class MicroPrimeEngine:
                         element_name=element.name,
                         file_path=file_path,
                         tier=TierClassification.SIMPLE,
-                        reason=EscalationReason.AST_FAILURE,
-                        detail="AST validation failed after repair",
-                        last_code=code,
-                        last_error=repair_result.last_error or "ast.parse() failed",
-                        raw_output=raw_output,
-                        repaired_code=repaired_code,
-                        repair_steps=repair_steps,
+                        reason=EscalationReason.EMPTY_RESPONSE,
+                        detail="Empty response from Ollama",
                         local_model=model_name,
                         element_fqn=element_fqn,
                     ),
                 )
+                if is_last_attempt:
+                    return last_escalation_result
+                continue
+
+            raw_output = code
+            ast_valid_before = _ast_parse_valid(code, element)
+            ast_valid_after = ast_valid_before
+            repair_recovered = False
+            repaired_code = None
+
+            # Run repair pipeline
+            repair_steps: list[str] = []
+            repair_attribution = None
+            if self._config.repair_enabled:
+                repair_result = run_repair_pipeline(
+                    code, element, file_spec, skeleton_source=skeleton,
+                )
+                code = repair_result.code
+                repair_steps = repair_result.steps_applied
+                repair_attribution = build_repair_attribution(
+                    repair_result.step_results,
+                )
+                ast_valid_after = repair_result.ast_valid_after
+                repair_recovered = repair_result.repair_recovered
+                repaired_code = code
+                if not repair_result.ast_valid:
+                    logger.warning(
+                        "AST invalid after repair for %s (attempt %d/%d)",
+                        element.name, local_attempt, max_local_attempts,
+                    )
+                    last_escalation_result = ElementResult(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        classification_reason=reasoning,
+                        success=False,
+                        code=code,
+                        repair_steps_applied=repair_steps,
+                        repair_attribution=repair_attribution,
+                        repair_recovered=repair_recovered,
+                        ast_valid_before_repair=ast_valid_before,
+                        ast_valid_after_repair=ast_valid_after,
+                        verification_verdict="fail",
+                        model=model_name,
+                        generation_time_ms=(time.monotonic() - start_time) * 1000,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        escalation=build_escalation_context(
+                            element_name=element.name,
+                            file_path=file_path,
+                            tier=TierClassification.SIMPLE,
+                            reason=EscalationReason.AST_FAILURE,
+                            detail="AST validation failed after repair",
+                            last_code=code,
+                            last_error=repair_result.last_error or "ast.parse() failed",
+                            raw_output=raw_output,
+                            repaired_code=repaired_code,
+                            repair_steps=repair_steps,
+                            local_model=model_name,
+                            element_fqn=element_fqn,
+                        ),
+                    )
+                    if is_last_attempt:
+                        return last_escalation_result
+                    continue
+
+            # Generation + repair succeeded, break out of retry loop
+            if local_attempt > 1:
+                logger.info(
+                    "Ollama succeeded for %s on attempt %d/%d",
+                    element.name, local_attempt, max_local_attempts,
+                )
+            break
 
         # Structural verification (REQ-MP-512)
         structural_ok, structural_reason = _structural_verify(code, element)

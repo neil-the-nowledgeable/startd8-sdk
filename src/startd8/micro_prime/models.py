@@ -173,6 +173,7 @@ class MicroPrimeConfig(BaseModel):
         # Testing / load
         "locust", "playwright",
     ]
+    local_max_attempts: int = 2
     cloud_escalation_max_attempts: int = 3
     cloud_escalation_retry_strategy: str = "same_prompt"
     cloud_escalation_retry_max_chars: int = 512
