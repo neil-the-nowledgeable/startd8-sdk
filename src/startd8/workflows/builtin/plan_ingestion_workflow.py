@@ -39,6 +39,16 @@ from ...utils.file_operations import atomic_write, atomic_write_json
 from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
+from .plan_ingestion_diagnostics import (
+    PhaseDiagnostic,
+    build_diagnostic,
+    compute_assess_quality,
+    compute_parse_quality,
+    compute_refine_quality,
+    compute_seed_quality,
+    compute_task_density,
+    persist_diagnostic,
+)
 from .plan_ingestion_models import (
     ArtisanContextSeed,
     ComplexityScore,
@@ -1516,6 +1526,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             cost=cost,
         )
 
+        _code_fallback = "```" not in response_text
         step = StepResult(
             step_name="parse",
             agent_name=agent.name,
@@ -1525,6 +1536,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
+            metadata={"code_extraction_fallback": _code_fallback},
         )
 
         return parsed, step
@@ -1654,6 +1666,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             cost=cost,
         )
 
+        _code_fallback = "```" not in response_text
         step = StepResult(
             step_name="assess",
             agent_name=agent.name,
@@ -1663,6 +1676,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
+            metadata={"code_extraction_fallback": _code_fallback},
         )
 
         return score, step
@@ -1772,6 +1786,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         out_path = output_dir / out_filename
         atomic_write(out_path, content)
 
+        _code_fallback = "```" not in response_text
         _output_msg = f"Wrote {out_path}"
         if _md_quality_warning:
             _output_msg += f" [warning: {_md_quality_warning}]"
@@ -1784,6 +1799,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
+            metadata={"code_extraction_fallback": _code_fallback},
         )
 
         return out_path, step
@@ -4519,6 +4535,83 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # Save final state
             _save_state()
+
+            # --- Kaizen diagnostic report (REQ-KPI-1xx, 3xx) ---
+            _diag_phase_map: Dict[str, PhaseDiagnostic] = {}
+            for _s in steps:
+                _phase_name = _s.step_name.split(":")[0]  # strip sub-tags like "assess:quality-override"
+                if _phase_name in _diag_phase_map:
+                    # Accumulate cost/tokens for multi-step phases (e.g. refine)
+                    existing = _diag_phase_map[_phase_name]
+                    existing.time_ms += _s.time_ms
+                    existing.input_tokens += _s.input_tokens
+                    existing.output_tokens += _s.output_tokens
+                    existing.cost_usd += _s.cost
+                    if _s.error:
+                        existing.success = False
+                else:
+                    _diag_phase_map[_phase_name] = PhaseDiagnostic(
+                        phase=_phase_name,
+                        success=_s.error is None,
+                        time_ms=_s.time_ms,
+                        input_tokens=_s.input_tokens,
+                        output_tokens=_s.output_tokens,
+                        cost_usd=_s.cost,
+                        code_extraction_fallback=_s.metadata.get(
+                            "code_extraction_fallback", False,
+                        ),
+                    )
+
+            # Attach quality signals to phase diagnostics
+            if "parse" in _diag_phase_map and parsed_plan is not None:
+                _diag_phase_map["parse"].quality_signals = compute_parse_quality(
+                    parsed_plan.features,
+                    parsed_plan.dependency_graph,
+                    parsed_plan.mentioned_files,
+                )
+            if "assess" in _diag_phase_map and complexity is not None:
+                _dims = [
+                    complexity.feature_count, complexity.cross_file_deps,
+                    complexity.api_surface, complexity.test_complexity,
+                    complexity.integration_depth, complexity.domain_novelty,
+                    complexity.ambiguity,
+                ]
+                _diag_phase_map["assess"].quality_signals = compute_assess_quality(
+                    complexity.composite, route.value, threshold, _dims,
+                )
+            if "refine" in _diag_phase_map:
+                _diag_phase_map["refine"].quality_signals = compute_refine_quality(
+                    review_output,
+                )
+
+            # Seed quality (artisan only — read seed JSON back)
+            _seed_score = 0.0
+            _seed_warnings: List[str] = []
+            if emit_result.context_seed_path and emit_result.context_seed_path.exists():
+                try:
+                    _seed_dict = json.loads(
+                        emit_result.context_seed_path.read_text(encoding="utf-8")
+                    )
+                    _seed_score, _seed_warnings = compute_seed_quality(_seed_dict)
+                except (OSError, json.JSONDecodeError) as _seed_err:
+                    logger.debug("Kaizen: seed quality read failed: %s", _seed_err)
+
+            # Task density
+            _task_density = compute_task_density(emit_result.tasks)
+
+            _plan_checksum = sha256(plan_text.encode()).hexdigest()[:16]
+            _diag = build_diagnostic(
+                run_timestamp=started_at.isoformat(),
+                plan_source=str(plan_path),
+                plan_checksum=_plan_checksum,
+                route=route.value,
+                overall_success=True,
+                phase_diagnostics=_diag_phase_map,
+                seed_quality_score=_seed_score,
+                quality_warnings=_seed_warnings,
+                task_density=_task_density,
+            )
+            persist_diagnostic(_diag, output_dir)
 
             completed_at = datetime.now(timezone.utc)
             total_ms = int((completed_at - started_at).total_seconds() * 1000)

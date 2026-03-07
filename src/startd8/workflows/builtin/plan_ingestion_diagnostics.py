@@ -1,0 +1,288 @@
+"""Plan Ingestion Diagnostics — Kaizen Phase 0 (REQ-KPI-1xx, 3xx).
+
+Typed dataclasses and deterministic quality metrics for the plan ingestion
+pipeline.  Produces ``plan-ingestion-diagnostic.json`` with per-phase metrics
+and a composite seed quality score.
+
+Advisory persistence — I/O failures never block a successful ingestion run.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from ...logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+# ── Dataclasses ──────────────────────────────────────────────────────
+
+
+@dataclass
+class PhaseDiagnostic:
+    """Per-phase diagnostic metrics."""
+
+    phase: str = ""
+    success: bool = True
+    time_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    code_extraction_fallback: bool = False
+    quality_signals: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class TaskDensity:
+    """Per-task description density metrics."""
+
+    task_id: str = ""
+    description_chars: int = 0
+    description_lines: int = 0
+    has_code_examples: bool = False
+    has_requirements_refs: bool = False
+
+
+@dataclass
+class IngestionDiagnostic:
+    """Complete diagnostic report for a plan ingestion run."""
+
+    schema_version: str = "1.0.0"
+    run_timestamp: str = ""
+    plan_source: str = ""
+    plan_checksum: str = ""
+    route: str = ""
+    overall_success: bool = False
+    phases: Dict[str, PhaseDiagnostic] = field(default_factory=dict)
+    totals: Dict[str, Any] = field(default_factory=dict)
+    seed_quality_score: float = 0.0
+    quality_warnings: List[str] = field(default_factory=list)
+    task_density: List[TaskDensity] = field(default_factory=list)
+
+
+# ── Quality metric functions ─────────────────────────────────────────
+
+
+def compute_parse_quality(
+    features: list,
+    dependency_graph: Dict[str, Any],
+    mentioned_files: list,
+) -> Dict[str, Any]:
+    """Compute PARSE phase quality signals (REQ-KPI-300).
+
+    Args:
+        features: List of ParsedFeature (or similar with .target_files, etc.)
+        dependency_graph: Feature dependency graph dict.
+        mentioned_files: Files mentioned in the plan.
+    """
+    total = len(features) or 1
+    return {
+        "features_extracted": len(features),
+        "files_mentioned": len(mentioned_files),
+        "features_with_targets": sum(
+            1 for f in features if getattr(f, "target_files", None)
+        ),
+        "features_with_deps": sum(
+            1 for f in features if getattr(f, "dependencies", None)
+        ),
+        "multi_file_features": sum(
+            1 for f in features if len(getattr(f, "target_files", []) or []) > 1
+        ),
+        "features_with_signatures": sum(
+            1 for f in features if getattr(f, "api_signatures", None)
+        ),
+        "dep_graph_coverage": round(len(dependency_graph) / total, 3),
+    }
+
+
+def compute_assess_quality(
+    composite: int,
+    route_value: str,
+    threshold: int,
+    dimensions: List[int],
+) -> Dict[str, Any]:
+    """Compute ASSESS phase quality signals (REQ-KPI-301).
+
+    Args:
+        composite: Composite complexity score.
+        route_value: Route decision string ("prime" or "artisan").
+        threshold: Complexity threshold used for routing.
+        dimensions: List of dimensional scores (7 or 8 values).
+    """
+    return {
+        "composite_score": composite,
+        "route_decision": route_value,
+        "route_margin": abs(composite - threshold),
+        "dimension_spread": (max(dimensions) - min(dimensions)) if dimensions else 0,
+    }
+
+
+def compute_seed_quality(
+    seed_dict: Dict[str, Any],
+    schema_valid: bool = True,
+) -> Tuple[float, List[str]]:
+    """Compute weighted seed quality score and warnings (REQ-KPI-302).
+
+    Returns:
+        (score, warnings) where score is 0.0–1.0.
+    """
+    tasks = seed_dict.get("tasks", [])
+    total = len(tasks) or 1
+
+    # Task description coverage (weight 0.3)
+    tasks_with_desc = sum(
+        1 for t in tasks
+        if t.get("config", {}).get("task_description")
+    )
+    desc_ratio = tasks_with_desc / total
+
+    # Target file coverage (weight 0.3)
+    tasks_with_targets = sum(
+        1 for t in tasks
+        if t.get("config", {}).get("context", {}).get("target_files")
+    )
+    target_ratio = tasks_with_targets / total
+
+    # Schema validity (weight 0.2)
+    schema_score = 1.0 if schema_valid else 0.0
+
+    # Field coverage (weight 0.2) — 6 optional enrichment fields
+    _OPTIONAL_FIELDS = [
+        "architectural_context", "design_calibration", "service_metadata",
+        "onboarding", "context_files", "project_metadata",
+    ]
+    warnings: List[str] = []
+    for fld in _OPTIONAL_FIELDS:
+        if not seed_dict.get(fld):
+            warnings.append(f"no {fld}")
+    coverage_score = max(0.0, 1.0 - len(warnings) / len(_OPTIONAL_FIELDS))
+
+    # Additional structural warnings
+    if not tasks:
+        warnings.insert(0, "seed has no tasks")
+    tasks_missing_desc = total - tasks_with_desc
+    if tasks_missing_desc > 0:
+        warnings.append(f"{tasks_missing_desc}/{len(tasks)} task(s) missing description")
+    tasks_missing_targets = total - tasks_with_targets
+    if tasks_missing_targets > 0:
+        warnings.append(
+            f"{tasks_missing_targets}/{len(tasks)} task(s) missing target_files"
+        )
+
+    score = round(
+        0.3 * desc_ratio
+        + 0.3 * target_ratio
+        + 0.2 * schema_score
+        + 0.2 * coverage_score,
+        4,
+    )
+    return score, warnings
+
+
+def compute_refine_quality(review_output: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute REFINE phase quality signals (REQ-KPI-304)."""
+    if not review_output:
+        return {
+            "rounds_completed": 0,
+            "suggestions_total": 0,
+            "suggestions_accepted": 0,
+            "suggestions_rejected": 0,
+            "acceptance_rate": 0.0,
+        }
+    triage = review_output.get("triage") or {}
+    accepted = len(triage.get("accepted", []))
+    rejected = len(triage.get("rejected", []))
+    total = accepted + rejected
+    return {
+        "rounds_completed": review_output.get("rounds_completed", 0),
+        "suggestions_total": total,
+        "suggestions_accepted": accepted,
+        "suggestions_rejected": rejected,
+        "acceptance_rate": round(accepted / total, 3) if total else 0.0,
+    }
+
+
+_REQ_PATTERN = re.compile(r"\bREQ[-_]?\w+", re.IGNORECASE)
+
+
+def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:
+    """Compute per-task description density (REQ-KPI-303)."""
+    results = []
+    for t in tasks:
+        desc = t.get("config", {}).get("task_description", "") or ""
+        results.append(TaskDensity(
+            task_id=t.get("task_id", ""),
+            description_chars=len(desc),
+            description_lines=desc.count("\n") + 1 if desc else 0,
+            has_code_examples="```" in desc,
+            has_requirements_refs=bool(_REQ_PATTERN.search(desc)),
+        ))
+    return results
+
+
+# ── Assembly ─────────────────────────────────────────────────────────
+
+
+def build_diagnostic(
+    *,
+    run_timestamp: str,
+    plan_source: str,
+    plan_checksum: str,
+    route: str,
+    overall_success: bool,
+    phase_diagnostics: Dict[str, PhaseDiagnostic],
+    seed_quality_score: float = 0.0,
+    quality_warnings: Optional[List[str]] = None,
+    task_density: Optional[List[TaskDensity]] = None,
+) -> IngestionDiagnostic:
+    """Assemble a complete diagnostic report."""
+    totals: Dict[str, Any] = {
+        "time_ms": sum(p.time_ms for p in phase_diagnostics.values()),
+        "cost_usd": round(
+            sum(p.cost_usd for p in phase_diagnostics.values()), 6
+        ),
+        "input_tokens": sum(p.input_tokens for p in phase_diagnostics.values()),
+        "output_tokens": sum(p.output_tokens for p in phase_diagnostics.values()),
+        "llm_calls": sum(
+            1 for p in phase_diagnostics.values()
+            if p.phase in ("parse", "assess", "transform") and p.success
+        ),
+    }
+    return IngestionDiagnostic(
+        run_timestamp=run_timestamp,
+        plan_source=plan_source,
+        plan_checksum=plan_checksum,
+        route=route,
+        overall_success=overall_success,
+        phases=phase_diagnostics,
+        totals=totals,
+        seed_quality_score=seed_quality_score,
+        quality_warnings=quality_warnings or [],
+        task_density=task_density or [],
+    )
+
+
+# ── Persistence ──────────────────────────────────────────────────────
+
+
+def persist_diagnostic(diag: IngestionDiagnostic, output_dir: Path) -> None:
+    """Write diagnostic report to ``plan-ingestion-diagnostic.json``.
+
+    Advisory — never raises on I/O failure.
+    """
+    try:
+        path = output_dir / "plan-ingestion-diagnostic.json"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(asdict(diag), indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        logger.info("Kaizen diagnostic written to %s", path)
+    except OSError as err:
+        logger.warning("Kaizen diagnostic write failed: %s", err)

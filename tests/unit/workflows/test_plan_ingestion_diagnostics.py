@@ -1,0 +1,268 @@
+"""Tests for plan_ingestion_diagnostics — Kaizen Phase 0 (REQ-KPI-1xx, 3xx)."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import pytest
+
+from startd8.workflows.builtin.plan_ingestion_diagnostics import (
+    IngestionDiagnostic,
+    PhaseDiagnostic,
+    TaskDensity,
+    build_diagnostic,
+    compute_assess_quality,
+    compute_parse_quality,
+    compute_refine_quality,
+    compute_seed_quality,
+    compute_task_density,
+    persist_diagnostic,
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class _FakeFeature:
+    target_files: List[str]
+    dependencies: List[str]
+    api_signatures: List[str]
+
+
+def _make_seed(
+    *,
+    tasks: Optional[List[Dict[str, Any]]] = None,
+    architectural_context: Optional[str] = None,
+    design_calibration: Optional[str] = None,
+    service_metadata: Optional[str] = None,
+    onboarding: Optional[str] = None,
+    context_files: Optional[list] = None,
+    project_metadata: Optional[str] = None,
+) -> Dict[str, Any]:
+    return {
+        "tasks": tasks or [],
+        "architectural_context": architectural_context,
+        "design_calibration": design_calibration,
+        "service_metadata": service_metadata,
+        "onboarding": onboarding,
+        "context_files": context_files,
+        "project_metadata": project_metadata,
+    }
+
+
+# ── compute_parse_quality ────────────────────────────────────────────
+
+
+class TestComputeParseQuality:
+    def test_empty_features(self):
+        result = compute_parse_quality([], {}, [])
+        assert result["features_extracted"] == 0
+        assert result["dep_graph_coverage"] == 0.0
+
+    def test_with_features(self):
+        features = [
+            _FakeFeature(target_files=["a.py"], dependencies=["F-2"], api_signatures=["def foo()"]),
+            _FakeFeature(target_files=["b.py", "c.py"], dependencies=[], api_signatures=[]),
+        ]
+        dep_graph = {"F-1": ["F-2"]}
+        result = compute_parse_quality(features, dep_graph, ["a.py", "b.py"])
+        assert result["features_extracted"] == 2
+        assert result["files_mentioned"] == 2
+        assert result["features_with_targets"] == 2
+        assert result["features_with_deps"] == 1
+        assert result["multi_file_features"] == 1
+        assert result["features_with_signatures"] == 1
+        assert result["dep_graph_coverage"] == 0.5
+
+
+# ── compute_assess_quality ───────────────────────────────────────────
+
+
+class TestComputeAssessQuality:
+    def test_basic(self):
+        result = compute_assess_quality(
+            composite=55, route_value="artisan", threshold=40, dimensions=[3, 7, 5, 8, 6, 9, 4],
+        )
+        assert result["composite_score"] == 55
+        assert result["route_decision"] == "artisan"
+        assert result["route_margin"] == 15
+        assert result["dimension_spread"] == 6  # 9 - 3
+
+    def test_empty_dimensions(self):
+        result = compute_assess_quality(30, "prime", 40, [])
+        assert result["dimension_spread"] == 0
+
+
+# ── compute_seed_quality ─────────────────────────────────────────────
+
+
+class TestComputeSeedQuality:
+    def test_perfect_seed(self):
+        tasks = [
+            {
+                "config": {
+                    "task_description": "Build the widget",
+                    "context": {"target_files": ["widget.py"]},
+                },
+            },
+        ]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="MVC",
+            design_calibration="standard",
+            service_metadata="v1",
+            onboarding="docs",
+            context_files=["a.py"],
+            project_metadata="proj",
+        )
+        score, warnings = compute_seed_quality(seed)
+        assert score == 1.0
+        assert warnings == []
+
+    def test_empty_seed(self):
+        score, warnings = compute_seed_quality(_make_seed())
+        # 0.3*0 + 0.3*0 + 0.2*1 (schema valid) + 0.2*0 = 0.2
+        assert score == pytest.approx(0.2, abs=0.01)
+        assert "seed has no tasks" in warnings
+
+    def test_partial_coverage(self):
+        tasks = [
+            {"config": {"task_description": "A task", "context": {}}},
+            {"config": {"task_description": "", "context": {"target_files": ["x.py"]}}},
+        ]
+        seed = _make_seed(tasks=tasks, architectural_context="ctx")
+        score, warnings = compute_seed_quality(seed)
+        # desc_ratio=0.5, target_ratio=0.5, schema=1.0, coverage=1/6 fields → ~0.633
+        assert 0.4 < score < 0.8
+        assert any("missing description" in w for w in warnings)
+        assert any("missing target_files" in w for w in warnings)
+
+    def test_schema_invalid(self):
+        tasks = [{"config": {"task_description": "t", "context": {"target_files": ["f"]}}}]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        score, _ = compute_seed_quality(seed, schema_valid=False)
+        # 0.3 + 0.3 + 0.0 + 0.2 = 0.8 (schema penalty)
+        assert score == pytest.approx(0.8, abs=0.01)
+
+
+# ── compute_refine_quality ───────────────────────────────────────────
+
+
+class TestComputeRefineQuality:
+    def test_no_review(self):
+        result = compute_refine_quality(None)
+        assert result["rounds_completed"] == 0
+        assert result["acceptance_rate"] == 0.0
+
+    def test_with_triage(self):
+        review = {
+            "rounds_completed": 2,
+            "triage": {
+                "accepted": ["s1", "s2", "s3"],
+                "rejected": ["s4"],
+            },
+        }
+        result = compute_refine_quality(review)
+        assert result["suggestions_total"] == 4
+        assert result["suggestions_accepted"] == 3
+        assert result["acceptance_rate"] == 0.75
+
+
+# ── compute_task_density ─────────────────────────────────────────────
+
+
+class TestComputeTaskDensity:
+    def test_basic(self):
+        tasks = [
+            {
+                "task_id": "T-001",
+                "config": {
+                    "task_description": "Build REQ-001 widget\n```python\nfoo()```",
+                },
+            },
+            {
+                "task_id": "T-002",
+                "config": {"task_description": "Simple task"},
+            },
+        ]
+        result = compute_task_density(tasks)
+        assert len(result) == 2
+        assert result[0].task_id == "T-001"
+        assert result[0].has_code_examples is True
+        assert result[0].has_requirements_refs is True
+        assert result[0].description_lines == 3  # 2 newlines → 3 lines
+        assert result[1].has_code_examples is False
+        assert result[1].has_requirements_refs is False
+
+
+# ── build_diagnostic ─────────────────────────────────────────────────
+
+
+class TestBuildDiagnostic:
+    def test_assembly(self):
+        phases = {
+            "parse": PhaseDiagnostic(phase="parse", time_ms=100, cost_usd=0.01,
+                                      input_tokens=500, output_tokens=200),
+            "assess": PhaseDiagnostic(phase="assess", time_ms=50, cost_usd=0.005,
+                                       input_tokens=300, output_tokens=100),
+        }
+        diag = build_diagnostic(
+            run_timestamp="2026-03-07T00:00:00Z",
+            plan_source="/tmp/plan.md",
+            plan_checksum="abc123",
+            route="artisan",
+            overall_success=True,
+            phase_diagnostics=phases,
+            seed_quality_score=0.85,
+            quality_warnings=["no onboarding"],
+        )
+        assert diag.schema_version == "1.0.0"
+        assert diag.totals["time_ms"] == 150
+        assert diag.totals["cost_usd"] == pytest.approx(0.015, abs=1e-6)
+        assert diag.totals["input_tokens"] == 800
+        assert diag.seed_quality_score == 0.85
+        assert diag.quality_warnings == ["no onboarding"]
+
+
+# ── persist_diagnostic ───────────────────────────────────────────────
+
+
+class TestPersistDiagnostic:
+    def test_writes_json(self, tmp_path: Path):
+        diag = build_diagnostic(
+            run_timestamp="2026-03-07T00:00:00Z",
+            plan_source="plan.md",
+            plan_checksum="abc",
+            route="prime",
+            overall_success=True,
+            phase_diagnostics={},
+        )
+        persist_diagnostic(diag, tmp_path)
+        out = tmp_path / "plan-ingestion-diagnostic.json"
+        assert out.exists()
+        data = json.loads(out.read_text())
+        assert data["schema_version"] == "1.0.0"
+        assert data["route"] == "prime"
+
+    def test_advisory_no_raise_on_bad_path(self):
+        """I/O failure must not raise."""
+        diag = build_diagnostic(
+            run_timestamp="t",
+            plan_source="p",
+            plan_checksum="c",
+            route="prime",
+            overall_success=True,
+            phase_diagnostics={},
+        )
+        # Path that cannot be created
+        persist_diagnostic(diag, Path("/nonexistent/deeply/nested/path"))
+        # No exception raised — advisory persistence
