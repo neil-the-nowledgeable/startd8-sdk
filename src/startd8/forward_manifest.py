@@ -111,13 +111,13 @@ class InterfaceContract(BaseModel):
 class ForwardElementSpec(BaseModel):
     """Forward-looking element specification that bridges to code_manifest.Element.
 
-    Represents a single code element (function, class, method, property) that
-    the design phase expects to exist after code generation.  Validated via
-    ``_validate_kind_fields`` to enforce invariants (e.g., callables must have
-    a signature, only classes may have bases).
+    Represents a single code element (function, class, method, property,
+    constant, variable) that the design phase expects to exist after code
+    generation.  Validated via ``_validate_kind_fields`` to enforce invariants
+    (e.g., callables must have a signature, only classes may have bases).
 
     Attributes:
-        kind: Element kind (function, class, method, etc.).
+        kind: Element kind (function, class, method, constant, variable, etc.).
         name: Element name as it should appear in source.
         signature: Required for callable kinds; ``None`` for classes/constants.
         bases: Base classes (only valid for ``CLASS`` kind).
@@ -126,6 +126,11 @@ class ForwardElementSpec(BaseModel):
         docstring_hint: Suggested docstring content for the element.
         parent_class: Owning class name for methods and properties.
         source_contract_id: ID of the InterfaceContract that produced this spec.
+        is_static: Whether the callable is a ``@staticmethod``.
+        is_classmethod: Whether the callable is a ``@classmethod``.
+        is_abstract: Whether the callable is abstract (``@abstractmethod``).
+        type_annotation: Type annotation string for constants/variables.
+        value_repr: Representative value for constants (e.g., ``"3.14"``).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -382,6 +387,28 @@ class ContractViolation:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _format_endpoint_schema_parts(
+    req_schema: object, resp_schema: object,
+) -> list[str]:
+    """Format request/response schema fields into binding text parts.
+
+    Defensively accesses field dicts per [O11Y Leg 8 #3] existence→type→access.
+    """
+    parts: list[str] = []
+    for label, schema in (("request_fields", req_schema), ("response_fields", resp_schema)):
+        if not isinstance(schema, dict):
+            continue
+        fields = schema.get("fields", [])
+        if not fields or not isinstance(fields, list):
+            continue
+        field_names = ", ".join(
+            f.get("name", "?") for f in fields[:5] if isinstance(f, dict)
+        )
+        if field_names:
+            parts.append(f"{label}=[{field_names}]")
+    return parts
+
+
 def compute_binding_text(contract: InterfaceContract) -> str:
     """Compute a compact binding-text string from an InterfaceContract.
 
@@ -405,16 +432,9 @@ def compute_binding_text(contract: InterfaceContract) -> str:
             parts.append(f"base={contract.base_class}")
     elif cat == ContractCategory.API_ENDPOINT and contract.endpoint:
         parts.append(f"endpoint={contract.endpoint}")
-        if isinstance(contract.request_schema, dict):
-            req_fields = contract.request_schema.get("fields", [])
-            if req_fields:
-                field_names = ", ".join(f["name"] for f in req_fields[:5])
-                parts.append(f"request_fields=[{field_names}]")
-        if isinstance(contract.response_schema, dict):
-            resp_fields = contract.response_schema.get("fields", [])
-            if resp_fields:
-                field_names = ", ".join(f["name"] for f in resp_fields[:5])
-                parts.append(f"response_fields=[{field_names}]")
+        parts.extend(_format_endpoint_schema_parts(
+            contract.request_schema, contract.response_schema,
+        ))
     elif cat == ContractCategory.CONFIG_KEY and contract.env_var:
         parts.append(f"env_var={contract.env_var}")
     elif cat == ContractCategory.IMPORT_PATH and contract.import_path:

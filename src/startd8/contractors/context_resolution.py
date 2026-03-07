@@ -599,11 +599,11 @@ def _format_forward_element_specs(
 
             # Callable modifiers (B1)
             modifiers: list[str] = []
-            if getattr(elem, "is_static", False):
+            if elem.is_static:
                 modifiers.append("static")
-            if getattr(elem, "is_classmethod", False):
+            if elem.is_classmethod:
                 modifiers.append("classmethod")
-            if getattr(elem, "is_abstract", False):
+            if elem.is_abstract:
                 modifiers.append("abstract")
             modifier_str = " ".join(modifiers) + " " if modifiers else ""
 
@@ -613,13 +613,11 @@ def _format_forward_element_specs(
 
             # Constant/variable rendering (B3)
             assign_str = ""
-            if not sig_str and elem.kind.value in ("constant", "variable"):
-                type_ann = getattr(elem, "type_annotation", None)
-                value = getattr(elem, "value_repr", None)
-                if type_ann:
-                    assign_str = f": {type_ann}"
-                if value:
-                    assign_str += f" = {value}"
+            if not sig_str and kind_label in ("constant", "variable"):
+                if elem.type_annotation:
+                    assign_str = f": {elem.type_annotation}"
+                if elem.value_repr:
+                    assign_str += f" = {elem.value_repr}"
 
             bases_str = ""
             if elem.bases:
@@ -632,7 +630,7 @@ def _format_forward_element_specs(
 
             # Visibility (A2) — only annotate non-public
             visibility_str = ""
-            if hasattr(elem, "visibility") and elem.visibility and elem.visibility.value != "public":
+            if elem.visibility and elem.visibility.value != "public":
                 visibility_str = f" [{elem.visibility.value}]"
 
             lines.append(
@@ -662,7 +660,7 @@ def _format_signature_with_kinds(sig: object) -> str:
     saw_positional_only = False
     saw_keyword_only = False
     for p in params:
-        kind_val = getattr(p.kind, "value", None) if hasattr(p, "kind") else None
+        kind_val = p.kind.value if hasattr(p, "kind") else None
 
         # Insert / after positional-only group ends
         if saw_positional_only and kind_val != "positional_only":

@@ -281,6 +281,29 @@ def _format_signature_for_binding(
     return result
 
 
+def _format_schema_field_parts(
+    req_schema: object, resp_schema: object,
+) -> list[str]:
+    """Format request/response schema fields into binding text parts.
+
+    Defensively accesses field dicts per [O11Y Leg 8 #3] existence→type→access.
+    Returns an empty list if neither schema has fields.
+    """
+    parts: list[str] = []
+    for label, schema in (("request_fields", req_schema), ("response_fields", resp_schema)):
+        if not isinstance(schema, dict):
+            continue
+        fields = schema.get("fields", [])
+        if not fields or not isinstance(fields, list):
+            continue
+        field_names = ", ".join(
+            f.get("name", "?") for f in fields[:5] if isinstance(f, dict)
+        )
+        if field_names:
+            parts.append(f"{label}=[{field_names}]")
+    return parts
+
+
 def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
     """Compute binding_text directly from kwargs without creating a partial model.
 
@@ -309,18 +332,9 @@ def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
             parts.append(f"base={kwargs['base_class']}")
     elif cat == ContractCategory.API_ENDPOINT and kwargs.get("endpoint"):
         parts.append(f"endpoint={kwargs['endpoint']}")
-        # Include request/response type names when available (B4)
-        req_schema = kwargs.get("request_schema")
-        resp_schema = kwargs.get("response_schema")
-        if isinstance(req_schema, dict) or isinstance(resp_schema, dict):
-            req_fields = req_schema.get("fields", []) if isinstance(req_schema, dict) else []
-            resp_fields = resp_schema.get("fields", []) if isinstance(resp_schema, dict) else []
-            if req_fields:
-                field_names = ", ".join(f["name"] for f in req_fields[:5])
-                parts.append(f"request_fields=[{field_names}]")
-            if resp_fields:
-                field_names = ", ".join(f["name"] for f in resp_fields[:5])
-                parts.append(f"response_fields=[{field_names}]")
+        parts.extend(_format_schema_field_parts(
+            kwargs.get("request_schema"), kwargs.get("response_schema"),
+        ))
     elif cat == ContractCategory.CONFIG_KEY and kwargs.get("env_var"):
         parts.append(f"env_var={kwargs['env_var']}")
     elif cat == ContractCategory.IMPORT_PATH and kwargs.get("import_path"):
@@ -765,7 +779,7 @@ class ProtoExtractor:
 
                 description = (
                     f"gRPC RPC method: {name}"
-                    f"({req_type}) returns ({resp_type})"
+                    f" ({req_type}) returns ({resp_type})"
                 )
 
                 contracts.append(
