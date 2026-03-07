@@ -299,11 +299,17 @@ def build_spec_prompt(
 
     # --- Forward contracts ---
     forward_contracts = context.pop("forward_contracts", None)
+    forward_element_specs = context.pop("forward_element_specs", None)
     forward_contracts_section = ""
     if forward_contracts and isinstance(forward_contracts, str) and forward_contracts.strip():
         forward_contracts_section = (
             "\n## Interface Contract Bindings (must enforce)\n"
             f"{forward_contracts.strip()}\n"
+        )
+    if forward_element_specs and isinstance(forward_element_specs, str) and forward_element_specs.strip():
+        forward_contracts_section += (
+            "\n## Expected Code Elements (signatures, classes, bases)\n"
+            f"{forward_element_specs.strip()}\n"
         )
 
     # --- Critical parameters ---

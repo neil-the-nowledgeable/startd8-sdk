@@ -212,10 +212,72 @@ def _parse_python_signature(sig_str: str) -> Optional[Signature]:
 def _extract_function_name(sig_str: str) -> Optional[str]:
     """Extract the function name from a signature string."""
     cleaned = _strip_def_prefix(sig_str)
+    # Skip class definitions — handled by _parse_class_signature
+    if cleaned.startswith("Class ") or cleaned.startswith("class "):
+        return None
     paren_idx = cleaned.find("(")
     if paren_idx < 1:
         return None
     return cleaned[:paren_idx].strip()
+
+
+def _parse_class_signature(
+    sig_str: str,
+) -> Optional[tuple[str, list[str]]]:
+    """Parse a class signature like ``Class X(Base1, Base2)`` or ``class X(Base)``.
+
+    Returns ``(class_name, [base_classes])`` or ``None`` on parse failure.
+    """
+    cleaned = sig_str.strip()
+    for prefix in ("Class ", "class "):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+            break
+    else:
+        return None
+
+    paren_idx = cleaned.find("(")
+    if paren_idx < 1:
+        # Class with no bases: "Class Foo"
+        name = cleaned.strip()
+        return (name, []) if name else None
+
+    class_name = cleaned[:paren_idx].strip()
+    if not class_name:
+        return None
+
+    close_paren = cleaned.find(")", paren_idx)
+    if close_paren < 0:
+        bases_str = cleaned[paren_idx + 1:]
+    else:
+        bases_str = cleaned[paren_idx + 1: close_paren]
+
+    bases = [b.strip() for b in bases_str.split(",") if b.strip()]
+    return (class_name, bases)
+
+
+def _format_signature_for_binding(
+    func_name: str, sig: Optional[Signature]
+) -> str:
+    """Format a function name with its parsed signature for binding text.
+
+    Returns e.g. ``getJSONLogger(name: str) -> logging.Logger`` when a
+    parsed signature is available, or just ``func_name`` otherwise.
+    """
+    if sig is None:
+        return func_name
+    params = []
+    for p in sig.params:
+        part = p.name
+        if p.annotation:
+            part = f"{p.name}: {p.annotation}"
+        if p.default:
+            part = f"{part} = {p.default}"
+        params.append(part)
+    result = f"{func_name}({', '.join(params)})"
+    if sig.return_annotation:
+        result = f"{result} -> {sig.return_annotation}"
+    return result
 
 
 def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
@@ -236,6 +298,9 @@ def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
 
     cat = kwargs.get("category")
     if cat == ContractCategory.FUNCTION_NAME and kwargs.get("function_name"):
+        # Use the description which now contains the full signature via
+        # _format_signature_for_binding (e.g., "Function add_fields(self, ...) -> None from API signature")
+        # For the binding key, include the function name
         parts.append(f"function={kwargs['function_name']}")
     elif cat == ContractCategory.CLASS_NAME and kwargs.get("class_name"):
         parts.append(f"class={kwargs['class_name']}")
@@ -358,6 +423,43 @@ class DeterministicExtractor:
         total_signatures = len(feature.api_signatures)
         skipped_signatures = 0
         for sig_str in feature.api_signatures:
+            # --- Try class signature first ---
+            class_parsed = _parse_class_signature(sig_str)
+            if class_parsed:
+                class_name, bases = class_parsed
+                abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                contract_id = f"flcm-{abbrev}-{class_name}"
+                base_class_str = bases[0] if bases else None
+
+                contract = _make_contract(
+                    contract_id=contract_id,
+                    category=ContractCategory.CLASS_NAME,
+                    confidence=ContractConfidence.INFERRED,
+                    description=(
+                        f"Class {class_name} extending {', '.join(bases)}"
+                        if bases
+                        else f"Class {class_name} from API signature"
+                    ),
+                    class_name=class_name,
+                    base_class=base_class_str,
+                    source_reference="deterministic",
+                    applicable_task_ids=[feature.feature_id],
+                )
+                contracts.append(contract)
+
+                # Build ForwardElementSpec with kind=CLASS and bases
+                if feature.target_files:
+                    target_file = feature.target_files[0]
+                    spec = ForwardElementSpec(
+                        kind=ElementKind.CLASS,
+                        name=class_name,
+                        bases=bases,
+                        source_contract_id=contract_id,
+                    )
+                    file_elements.setdefault(target_file, []).append(spec)
+                continue
+
+            # --- Try function/method signature ---
             func_name = _extract_function_name(sig_str)
             if not func_name:
                 skipped_signatures += 1
@@ -371,11 +473,15 @@ class DeterministicExtractor:
             abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
             contract_id = f"flcm-{abbrev}-{func_name}"
 
+            # Build richer description with signature detail when parseable
+            parsed_sig = _parse_python_signature(sig_str)
+            sig_text = _format_signature_for_binding(func_name, parsed_sig)
+
             contract = _make_contract(
                 contract_id=contract_id,
                 category=ContractCategory.FUNCTION_NAME,
                 confidence=ContractConfidence.INFERRED,
-                description=f"Function {func_name} from API signature",
+                description=f"Function {sig_text} from API signature",
                 function_name=func_name,
                 source_reference="deterministic",
                 applicable_task_ids=[feature.feature_id],
@@ -383,7 +489,6 @@ class DeterministicExtractor:
             contracts.append(contract)
 
             # Build ForwardElementSpec for the target file
-            parsed_sig = _parse_python_signature(sig_str)
             if parsed_sig and feature.target_files:
                 target_file = feature.target_files[0]
 

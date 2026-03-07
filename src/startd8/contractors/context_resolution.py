@@ -570,6 +570,56 @@ class ValidatorRegistry:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Forward Element Spec Formatting (Lead Contractor parity with Micro Prime)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _format_forward_element_specs(
+    fm: object, task_id: str, target_files: list[str]
+) -> str:
+    """Format ForwardElementSpec data from the manifest for prompt injection.
+
+    Produces a Markdown block listing each element's kind, name, signature,
+    bases, and return type — the same data that Micro Prime's prompt_builder
+    consumes but that the Lead Contractor path previously lacked.
+
+    Returns an empty string if no specs are found.
+    """
+    file_specs = fm.file_specs_for_task(task_id, target_files)  # type: ignore[union-attr]
+    if not file_specs:
+        return ""
+
+    lines: list[str] = []
+    for path, fspec in file_specs.items():
+        if not fspec.elements:
+            continue
+        lines.append(f"### {path}")
+        for elem in fspec.elements:
+            kind_label = elem.kind.value
+            sig_str = ""
+            if elem.signature:
+                params = []
+                for p in elem.signature.params:
+                    part = p.name
+                    if p.annotation:
+                        part = f"{p.name}: {p.annotation}"
+                    if p.default:
+                        part = f"{part} = {p.default}"
+                    params.append(part)
+                sig_str = f"({', '.join(params)})"
+                if elem.signature.return_annotation:
+                    sig_str = f"{sig_str} -> {elem.signature.return_annotation}"
+
+            bases_str = ""
+            if elem.bases:
+                bases_str = f" extends {', '.join(elem.bases)}"
+
+            lines.append(f"- **{kind_label}** `{elem.name}{sig_str}`{bases_str}")
+
+    return "\n".join(lines) if lines else ""
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Strategy Classes
 # ──────────────────────────────────────────────────────────────────────────
 
@@ -687,6 +737,14 @@ class StandaloneContextStrategy(ContextStrategy):
         target_files = feature_data.get("target_files") or []
         if target_files:
             gen_context["target_file"] = target_files[0]
+
+        # Inject ForwardElementSpec data for Lead Contractor parity with Micro Prime
+        if fm and hasattr(fm, "file_specs_for_task") and target_files:
+            element_specs = _format_forward_element_specs(
+                fm, feature_data.get("id", ""), target_files
+            )
+            if element_specs:
+                gen_context["forward_element_specs"] = element_specs
 
         if domain_constraints is not None:
             gen_context["domain_constraints"] = domain_constraints
@@ -861,6 +919,14 @@ class PipelineContextStrategy(ContextStrategy):
         target_files = feature_data.get("target_files") or []
         if target_files:
             gen_context["target_file"] = target_files[0]
+
+        # Inject ForwardElementSpec data for Lead Contractor parity with Micro Prime
+        if fm and hasattr(fm, "file_specs_for_task") and target_files:
+            element_specs = _format_forward_element_specs(
+                fm, feature_data.get("id", ""), target_files
+            )
+            if element_specs:
+                gen_context["forward_element_specs"] = element_specs
 
         # Domain constraints (same base logic, formatted for pipeline)
         if domain_constraints is not None:
