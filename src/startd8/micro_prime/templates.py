@@ -37,6 +37,27 @@ logger = get_logger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Render contract (R4-S2)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# All templates MUST emit **body-only** code (no ``def`` line, no ``class``
+# line).  The splicer (``splicer.py``) handles:
+#   1. Locating the ``raise NotImplementedError`` stub in the skeleton
+#   2. Determining the stub's indentation
+#   3. Re-indenting the template output to match
+#
+# Rules:
+#   - Return the function/method body lines only, zero-indented
+#   - For constants/variables: return the full assignment (``NAME = value``)
+#   - For class boilerplate: return field declarations, zero-indented
+#   - No trailing newline required (splicer adds newlines during splice)
+#   - Multi-line bodies use ``\n`` to separate lines (not indent — splicer
+#     applies indentation)
+#
+# The ``_validate_ast`` function verifies each output is valid Python by
+# wrapping body-only code in ``def _check():`` before ``ast.parse()``.
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Template entry + registry helpers (REQ-MP-300)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -551,6 +572,7 @@ def try_template_match_with_name(
     element: ForwardElementSpec,
     file_spec: ForwardFileSpec,
     contracts: list[InterfaceContract],
+    extra_templates: Optional[list[CodeTemplate]] = None,
 ) -> Optional[TemplateMatch]:
     """Try to match and render a template; return TemplateMatch or None."""
     # Name sanitization guard (R5-S7): reject elements with unsafe names
@@ -558,7 +580,8 @@ def try_template_match_with_name(
         logger.debug("Unsafe element name rejected: %r", element.name)
         return None
 
-    for template in TEMPLATES:
+    templates_to_try = extra_templates if extra_templates is not None else TEMPLATES
+    for template in templates_to_try:
         if not _safe_match(template, element, file_spec, contracts):
             continue
         body = _safe_render(template, element, file_spec, contracts)
@@ -581,6 +604,11 @@ def try_template_match_with_name(
     return None
 
 
+# Templates that require explicit opt-in via the relaxed allowlist (R1-S7).
+# These are not included in the default TEMPLATES list.
+RELAXED_TEMPLATES: list[CodeTemplate] = []
+
+
 class TemplateRegistry:
     """Registry of deterministic code templates for trivial elements.
 
@@ -589,10 +617,18 @@ class TemplateRegistry:
 
     Args:
         enabled: Whether template matching is active (REQ-MP-303).
+        relaxed_allowlist: Optional set of relaxed template names to enable.
+            Only templates whose name appears in this set are active.
+            Default ``None`` = no relaxed templates (R1-S7).
     """
 
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        enabled: bool = True,
+        relaxed_allowlist: Optional[frozenset[str]] = None,
+    ) -> None:
         self._enabled = enabled
+        self._relaxed_allowlist = relaxed_allowlist or frozenset()
 
     @property
     def enabled(self) -> bool:
@@ -601,6 +637,21 @@ class TemplateRegistry:
     @enabled.setter
     def enabled(self, value: bool) -> None:
         self._enabled = value
+
+    @property
+    def relaxed_allowlist(self) -> frozenset[str]:
+        """Currently enabled relaxed template names."""
+        return self._relaxed_allowlist
+
+    def _active_templates(self) -> list[CodeTemplate]:
+        """Return the list of active templates (standard + allowlisted relaxed)."""
+        if not self._relaxed_allowlist:
+            return TEMPLATES
+        allowed = [
+            t for t in RELAXED_TEMPLATES
+            if t.name in self._relaxed_allowlist
+        ]
+        return TEMPLATES + allowed
 
     def match(
         self,
@@ -626,7 +677,10 @@ class TemplateRegistry:
             from startd8.forward_manifest import ForwardFileSpec
             file_spec = ForwardFileSpec(file="", elements=[], imports=[])
         contracts = contracts or []
-        return try_template_match_with_name(element, file_spec, contracts)
+        return try_template_match_with_name(
+            element, file_spec, contracts,
+            extra_templates=self._active_templates() if self._relaxed_allowlist else None,
+        )
 
     def _try_match(
         self,
@@ -637,7 +691,7 @@ class TemplateRegistry:
         """Internal matching logic — returns template or None."""
         if file_spec is None:
             return None
-        for template in TEMPLATES:
+        for template in self._active_templates():
             if _safe_match(template, element, file_spec, contracts):
                 return template
         return None

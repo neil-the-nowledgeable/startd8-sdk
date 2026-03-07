@@ -8,6 +8,7 @@ import pytest
 
 from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec, ForwardImportSpec
 from startd8.micro_prime.templates import (
+    RELAXED_TEMPLATES,
     TemplateRegistry,
     _is_dfa_stub,
     _is_safe_identifier,
@@ -795,3 +796,163 @@ class TestQuickWinPack:
         )
         registry = TemplateRegistry()
         assert registry.match(elem) is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 2 low-priority: Render contract + Relaxed allowlist (R4-S2, R1-S7)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRenderContract:
+    """Snapshot tests for render contract (R4-S2).
+
+    Templates must emit body-only code. The splicer handles indentation.
+    """
+
+    def test_init_body_only_no_def_line(self):
+        """__init__ template must NOT include 'def __init__'."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="__init__",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="name", annotation="str"),
+                    Param(name="value", annotation="int"),
+                ],
+            ),
+            parent_class="Config",
+        )
+        registry = TemplateRegistry()
+        match = registry.match(elem)
+        assert match is not None
+        assert not match.code.startswith("def ")
+
+    def test_validation_body_only(self):
+        """Validation template must NOT include 'def validate_'."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="validate_input",
+            signature=Signature(
+                params=[Param(name="data", annotation="str")],
+            ),
+        )
+        registry = TemplateRegistry()
+        match = registry.match(elem)
+        assert match is not None
+        assert not match.code.startswith("def ")
+
+    def test_constant_is_full_assignment(self):
+        """Constants emit full assignment (NAME = value), not body-only."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.CONSTANT,
+            name="MAX_SIZE",
+            signature=Signature(params=[], return_annotation="int"),
+        )
+        registry = TemplateRegistry()
+        match = registry.match(elem)
+        assert match is not None
+        assert match.code.startswith("MAX_SIZE")
+
+    def test_snapshot_class_with_two_methods(self):
+        """Snapshot: class with __init__ + __repr__ produces correct output."""
+        init_elem = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="__init__",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="x", annotation="int"),
+                    Param(name="y", annotation="int"),
+                ],
+            ),
+            parent_class="Point",
+        )
+        repr_elem = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="__repr__",
+            signature=Signature(params=[Param(name="self")]),
+            parent_class="Point",
+        )
+        registry = TemplateRegistry()
+        init_match = registry.match(init_elem)
+        repr_match = registry.match(repr_elem)
+
+        # Simulate splicing into a class skeleton
+        skeleton = (
+            "class Point:\n"
+            "    def __init__(self, x: int, y: int):\n"
+            "        raise NotImplementedError\n"
+            "\n"
+            "    def __repr__(self):\n"
+            "        raise NotImplementedError\n"
+        )
+
+        # Verify both outputs are body-only and valid Python when indented
+        for match, sig in [(init_match, "self, x, y"), (repr_match, "self")]:
+            assert match is not None
+            indented = "\n".join(f"        {line}" for line in match.code.splitlines())
+            code = f"class Point:\n    def _check({sig}):\n{indented}\n"
+            ast.parse(code)  # Must not raise
+
+    def test_dataclass_fields_zero_indented(self):
+        """Dataclass template output is zero-indented."""
+        file_spec = ForwardFileSpec(
+            file="src/model.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(
+                    kind=ElementKind.CLASS,
+                    name="Item",
+                    decorators=["dataclass"],
+                ),
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD,
+                    name="__init__",
+                    signature=Signature(
+                        params=[
+                            Param(name="self"),
+                            Param(name="id", annotation="int"),
+                            Param(name="name", annotation="str"),
+                        ],
+                    ),
+                    parent_class="Item",
+                ),
+            ],
+        )
+        class_elem = file_spec.elements[0]
+        registry = TemplateRegistry()
+        match = registry.match(class_elem, file_spec=file_spec)
+        assert match is not None
+        # First line must start at column 0
+        first_line = match.code.splitlines()[0]
+        assert first_line == first_line.lstrip()
+
+
+class TestRelaxedAllowlist:
+    """Tests for relaxed template allowlist (R1-S7)."""
+
+    def test_default_no_relaxed_templates(self):
+        """Default registry uses no relaxed templates."""
+        registry = TemplateRegistry()
+        assert registry.relaxed_allowlist == frozenset()
+
+    def test_relaxed_allowlist_empty_by_default(self):
+        """RELAXED_TEMPLATES list exists but is empty by default."""
+        assert isinstance(RELAXED_TEMPLATES, list)
+        # Currently no relaxed templates defined
+        assert len(RELAXED_TEMPLATES) == 0
+
+    def test_allowlist_does_not_affect_standard_templates(self, init_element):
+        """Standard templates work regardless of allowlist."""
+        registry = TemplateRegistry(relaxed_allowlist=frozenset({"nonexistent"}))
+        match = registry.match(init_element)
+        assert match is not None
+
+    def test_is_trivial_uses_active_templates(self, init_element):
+        """is_trivial respects the active template list."""
+        registry = TemplateRegistry()
+        assert registry.is_trivial(init_element) is True
+        # With relaxed allowlist set to something, standard still works
+        registry2 = TemplateRegistry(relaxed_allowlist=frozenset({"foo"}))
+        assert registry2.is_trivial(init_element) is True
