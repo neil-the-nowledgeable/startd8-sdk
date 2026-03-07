@@ -12,6 +12,7 @@ import pytest
 from startd8.workflows.builtin.plan_ingestion_diagnostics import (
     IngestionDiagnostic,
     PhaseDiagnostic,
+    PlanIngestionKaizenConfig,
     TaskDensity,
     build_diagnostic,
     compute_assess_quality,
@@ -19,6 +20,7 @@ from startd8.workflows.builtin.plan_ingestion_diagnostics import (
     compute_refine_quality,
     compute_seed_quality,
     compute_task_density,
+    load_kaizen_config,
     persist_diagnostic,
     persist_prompt_response,
 )
@@ -303,3 +305,129 @@ class TestPersistPromptResponse:
         persist_prompt_response(tmp_path, "transform", "p3", "r3")
         kaizen_dir = tmp_path / "kaizen-prompts"
         assert len(list(kaizen_dir.iterdir())) == 6  # 3 phases × 2 files
+
+
+# ── load_kaizen_config (Phase 2) ─────────────────────────────────────
+
+
+class TestLoadKaizenConfig:
+    def test_full_config(self, tmp_path: Path):
+        cfg = {
+            "plan_ingestion_kaizen": {
+                "parse_prompt_suffix": "\nAlways use code fences.",
+                "assess_prompt_suffix": "\nBe conservative.",
+                "transform_prompt_suffix": "\nUse headings.",
+                "complexity_threshold_override": 50,
+            }
+        }
+        p = tmp_path / "kaizen.json"
+        p.write_text(json.dumps(cfg))
+        result = load_kaizen_config(p)
+        assert result.parse_prompt_suffix == "\nAlways use code fences."
+        assert result.assess_prompt_suffix == "\nBe conservative."
+        assert result.transform_prompt_suffix == "\nUse headings."
+        assert result.complexity_threshold_override == 50
+
+    def test_empty_config(self, tmp_path: Path):
+        p = tmp_path / "kaizen.json"
+        p.write_text("{}")
+        result = load_kaizen_config(p)
+        assert result.parse_prompt_suffix == ""
+        assert result.complexity_threshold_override is None
+
+    def test_unknown_keys_ignored(self, tmp_path: Path):
+        cfg = {
+            "plan_ingestion_kaizen": {
+                "parse_prompt_suffix": "test",
+                "unknown_field": "ignored",
+            }
+        }
+        p = tmp_path / "kaizen.json"
+        p.write_text(json.dumps(cfg))
+        result = load_kaizen_config(p)
+        assert result.parse_prompt_suffix == "test"
+        assert not hasattr(result, "unknown_field")
+
+    def test_partial_config(self, tmp_path: Path):
+        cfg = {"plan_ingestion_kaizen": {"complexity_threshold_override": 30}}
+        p = tmp_path / "kaizen.json"
+        p.write_text(json.dumps(cfg))
+        result = load_kaizen_config(p)
+        assert result.complexity_threshold_override == 30
+        assert result.parse_prompt_suffix == ""
+
+
+# ── Cross-run trend script (Phase 2) ────────────────────────────────
+
+
+class TestPlanIngestionTrends:
+    def test_discover_and_format(self, tmp_path: Path):
+        """End-to-end: create 2 diagnostic files, run trend analysis."""
+        from scripts.plan_ingestion_trends import (
+            discover_diagnostics,
+            extract_metrics,
+            format_table,
+        )
+
+        # Create two run directories with diagnostic files
+        for i, ts in enumerate(["2026-03-01T10:00:00Z", "2026-03-02T10:00:00Z"]):
+            run_dir = tmp_path / f"run-{i}"
+            run_dir.mkdir()
+            diag = {
+                "schema_version": "1.0.0",
+                "run_timestamp": ts,
+                "route": "artisan",
+                "overall_success": True,
+                "phases": {
+                    "parse": {
+                        "quality_signals": {"features_extracted": 3 + i},
+                        "code_extraction_fallback": i == 0,
+                    },
+                    "assess": {
+                        "quality_signals": {"composite_score": 45, "route_margin": 5},
+                    },
+                },
+                "totals": {"cost_usd": 0.01 * (i + 1), "time_ms": 5000},
+                "seed_quality_score": 0.7 + i * 0.1,
+                "quality_warnings": ["warn"] if i == 0 else [],
+            }
+            (run_dir / "plan-ingestion-diagnostic.json").write_text(
+                json.dumps(diag)
+            )
+
+        diagnostics = discover_diagnostics(tmp_path)
+        assert len(diagnostics) == 2
+
+        metrics = [extract_metrics(d) for d in diagnostics]
+        assert metrics[0]["features"] == 3
+        assert metrics[1]["features"] == 4
+        assert metrics[0]["fallbacks"] == 1
+        assert metrics[1]["fallbacks"] == 0
+
+        table = format_table(metrics)
+        assert "artisan" in table
+        assert "seed" in table.lower() or "Seed" in table
+
+    def test_empty_dir(self, tmp_path: Path):
+        from scripts.plan_ingestion_trends import discover_diagnostics
+        assert discover_diagnostics(tmp_path) == []
+
+    def test_main_json_output(self, tmp_path: Path):
+        from scripts.plan_ingestion_trends import main
+
+        run_dir = tmp_path / "run-0"
+        run_dir.mkdir()
+        diag = {
+            "schema_version": "1.0.0",
+            "run_timestamp": "2026-03-01T10:00:00Z",
+            "route": "prime",
+            "overall_success": True,
+            "phases": {},
+            "totals": {},
+            "seed_quality_score": 0.5,
+            "quality_warnings": [],
+        }
+        (run_dir / "plan-ingestion-diagnostic.json").write_text(json.dumps(diag))
+
+        rc = main(["--runs-dir", str(tmp_path), "--json"])
+        assert rc == 0

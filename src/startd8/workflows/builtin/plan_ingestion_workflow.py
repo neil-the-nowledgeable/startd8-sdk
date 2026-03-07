@@ -41,12 +41,14 @@ from ...utils.token_usage import token_usage_input, token_usage_output, token_us
 
 from .plan_ingestion_diagnostics import (
     PhaseDiagnostic,
+    PlanIngestionKaizenConfig,
     build_diagnostic,
     compute_assess_quality,
     compute_parse_quality,
     compute_refine_quality,
     compute_seed_quality,
     compute_task_density,
+    load_kaizen_config,
     persist_diagnostic,
     persist_prompt_response,
 )
@@ -1335,6 +1337,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                     default=False,
                     description="Enable Kaizen prompt capture — writes full prompts and responses to kaizen-prompts/",
                 ),
+                WorkflowInput(
+                    name="kaizen_config_path",
+                    type="file",
+                    required=False,
+                    description="Path to Kaizen config JSON with prompt suffixes and threshold overrides",
+                ),
             ],
         )
 
@@ -1457,6 +1465,8 @@ class PlanIngestionWorkflow(WorkflowBase):
     ) -> Tuple[Optional[ParsedPlan], StepResult]:
         t0 = time.time()
         prompt = _PARSE_PROMPT.format(plan_text=plan_text)
+        if getattr(self, "_kaizen_config", None) and self._kaizen_config.parse_prompt_suffix:
+            prompt += self._kaizen_config.parse_prompt_suffix
 
         _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.parse")
         _llm_span = _llm_ctx.__enter__()
@@ -1601,6 +1611,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             file_count=len(parsed_plan.mentioned_files),
             threshold=threshold,
         )
+        if getattr(self, "_kaizen_config", None) and self._kaizen_config.assess_prompt_suffix:
+            prompt += self._kaizen_config.assess_prompt_suffix
 
         _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.assess")
         _llm_span = _llm_ctx.__enter__()
@@ -1734,6 +1746,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 dependency_graph=json.dumps(parsed_plan.dependency_graph),
             )
             out_filename = "PLAN-ingested.md"
+
+        if getattr(self, "_kaizen_config", None) and self._kaizen_config.transform_prompt_suffix:
+            prompt += self._kaizen_config.transform_prompt_suffix
 
         _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.transform")
         _llm_span = _llm_ctx.__enter__()
@@ -3960,6 +3975,22 @@ class PlanIngestionWorkflow(WorkflowBase):
         kaizen_capture = _as_bool(config.get("kaizen"), False)
         self._kaizen_capture = kaizen_capture
         self._kaizen_output_dir = output_dir
+
+        # Kaizen config: prompt suffixes + threshold override (REQ-KPI-500)
+        self._kaizen_config: Optional[PlanIngestionKaizenConfig] = None
+        _kaizen_config_path = config.get("kaizen_config_path")
+        if _kaizen_config_path:
+            _kp = Path(str(_kaizen_config_path)).expanduser()
+            if _kp.is_file():
+                try:
+                    self._kaizen_config = load_kaizen_config(_kp)
+                    logger.info("Kaizen config loaded from %s", _kp)
+                except (OSError, json.JSONDecodeError, TypeError) as _kc_err:
+                    logger.warning("Kaizen config load failed: %s", _kc_err)
+
+        if self._kaizen_config and self._kaizen_config.complexity_threshold_override is not None:
+            threshold = self._kaizen_config.complexity_threshold_override
+            logger.info("Kaizen: complexity threshold overridden to %d", threshold)
 
         # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
         try:

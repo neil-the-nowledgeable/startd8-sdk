@@ -66,6 +66,38 @@ class IngestionDiagnostic:
     task_density: List[TaskDensity] = field(default_factory=list)
 
 
+@dataclass
+class PlanIngestionKaizenConfig:
+    """Kaizen overrides for plan ingestion runs (REQ-KPI-500)."""
+
+    parse_prompt_suffix: str = ""
+    assess_prompt_suffix: str = ""
+    transform_prompt_suffix: str = ""
+    complexity_threshold_override: Optional[int] = None
+
+
+def load_kaizen_config(path: Path) -> PlanIngestionKaizenConfig:
+    """Load kaizen config from a JSON file.
+
+    Expected format::
+
+        {
+            "plan_ingestion_kaizen": {
+                "parse_prompt_suffix": "...",
+                "complexity_threshold_override": 50
+            }
+        }
+
+    Unknown keys are silently ignored.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    section = data.get("plan_ingestion_kaizen", {})
+    known = {f for f in PlanIngestionKaizenConfig.__dataclass_fields__}
+    return PlanIngestionKaizenConfig(**{
+        k: v for k, v in section.items() if k in known
+    })
+
+
 # ── Quality metric functions ─────────────────────────────────────────
 
 
