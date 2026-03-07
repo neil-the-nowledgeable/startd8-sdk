@@ -1154,6 +1154,99 @@ class PrimeContractorWorkflow:
         state_dict["execution_mode"] = self.execution_mode
         return state_dict
 
+    def _handle_file_copy(self, feature: FeatureSpec) -> Optional[GenerationResult]:
+        """Handle file-copy tasks by copying predecessor output (REQ-MP-1002)."""
+        import concurrent.futures
+        import hashlib
+
+        from .copy_detection import validate_copy_path
+
+        predecessor_id = feature.copy_source_task_id
+        # Look up predecessor
+        predecessor = self.queue.get_feature(predecessor_id)
+        if predecessor is None:
+            raise ValueError(f"Copy source task '{predecessor_id}' not found in queue")
+        if predecessor.status != FeatureStatus.COMPLETE:
+            raise ValueError(
+                f"Copy source task '{predecessor_id}' not complete "
+                f"(status={predecessor.status.value})"
+            )
+
+        # Determine source file
+        source_file = feature.copy_source_file
+        if source_file is None:
+            if len(predecessor.generated_files) == 1:
+                source_file = predecessor.generated_files[0]
+            else:
+                raise ValueError(
+                    f"Cannot infer copy source: predecessor '{predecessor_id}' "
+                    f"has {len(predecessor.generated_files)} generated files"
+                )
+
+        # Validate path
+        workspace = str(self.project_root)
+        source_path = validate_copy_path(source_file, workspace)
+
+        # Read with timeout
+        def _read_file():
+            return source_path.read_bytes()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_read_file)
+            try:
+                source_content = future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError(
+                    f"Reading copy source '{source_file}' timed out after 30s"
+                )
+
+        # Write target
+        if not feature.target_files:
+            raise ValueError(f"Feature '{feature.name}' has no target_files for copy")
+        target_path = Path(self.project_root) / feature.target_files[0]
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        copy_overwrite = (
+            feature.metadata.get("copy_overwrite", True)
+            if feature.metadata
+            else True
+        )
+        if copy_overwrite:
+            target_path.write_bytes(source_content)
+        else:
+            # TOCTOU-safe exclusive creation
+            try:
+                with open(target_path, "xb") as f:
+                    f.write(source_content)
+            except FileExistsError:
+                raise FileExistsError(
+                    f"Target '{target_path}' already exists and copy_overwrite=False"
+                )
+
+        # SHA-256 verify
+        source_hash = hashlib.sha256(source_content).hexdigest()
+        target_hash = hashlib.sha256(target_path.read_bytes()).hexdigest()
+        if source_hash != target_hash:
+            raise OSError(
+                f"SHA-256 mismatch after copy: source={source_hash}, "
+                f"target={target_hash}"
+            )
+
+        return GenerationResult(
+            success=True,
+            generated_files=[target_path],
+            cost_usd=0.0,
+            input_tokens=0,
+            output_tokens=0,
+            iterations=0,
+            model="",
+            metadata={
+                "strategy": "file_copy",
+                "copy_source_task_id": predecessor_id,
+                "sha256": source_hash,
+            },
+        )
+
     def _save_queue_state_with_mode(self) -> None:
         """Save queue state with execution_mode injected.
 
@@ -2549,6 +2642,26 @@ class PrimeContractorWorkflow:
             self.queue.fail_feature(feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}")
             return False
         self.queue.start_feature(feature.id)
+        # Phase 0 (REQ-MP-1002): File copy early-exit for identical-copy tasks
+        if feature.copy_source_task_id is not None:
+            try:
+                copy_result = self._handle_file_copy(feature)
+                if copy_result is not None:
+                    feature.generated_files = [str(f) for f in copy_result.generated_files]
+                    feature.status = FeatureStatus.GENERATED
+                    self._save_queue_state_with_mode()
+                    self.total_cost_usd += copy_result.cost_usd  # 0.0
+                    logger.info(
+                        "File copy completed for '%s' from predecessor '%s': cost=$0.00",
+                        feature.name, feature.copy_source_task_id,
+                    )
+                    return True
+            except (ValueError, FileNotFoundError, TimeoutError, OSError) as exc:
+                logger.error(
+                    "File copy failed for '%s': %s", feature.name, exc,
+                )
+                self.queue.fail_feature(feature.id, f"File copy failed: {exc}")
+                return False
         if self.dry_run:
             logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
             simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
@@ -3014,6 +3127,25 @@ class PrimeContractorWorkflow:
             }
         )
         self.instrumentor.emit_insight(insight_type='workflow_completed', summary=f'Workflow complete: {features_succeeded}/{features_processed} succeeded', confidence=1.0, processed=features_processed, succeeded=features_succeeded, failed=features_failed, total_cost_usd=self.total_cost_usd)
+
+        # Log tier distribution if complexity routing was active
+        if self._complexity_routing_enabled:
+            try:
+                from startd8.complexity import ComplexityTier, log_tier_distribution
+
+                tiers = []
+                for f in self.queue.features.values():
+                    tier_val = (f.metadata or {}).get("_complexity_tier")
+                    if tier_val:
+                        try:
+                            tiers.append(ComplexityTier(tier_val))
+                        except ValueError:
+                            pass
+                if tiers:
+                    log_tier_distribution(tiers)
+            except Exception:
+                logger.debug("Tier distribution logging failed", exc_info=True)
+
         # Phase 4: Write generation manifest (pipeline mode only)
         result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
         self._write_generation_manifest(result_dict)

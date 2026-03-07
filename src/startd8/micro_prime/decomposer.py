@@ -202,8 +202,9 @@ def _render_signature_str(sig: Signature) -> str:
 class ClassDecomposeStrategy:
     """Decomposes MODERATE class elements into shell + optional attrs/init."""
 
-    def __init__(self, config: Optional[MicroPrimeConfig] = None) -> None:
+    def __init__(self, config: Optional[MicroPrimeConfig] = None, template_registry: Optional[Any] = None) -> None:
         self._config = config or MicroPrimeConfig()
+        self._template_registry = template_registry
 
     @property
     def name(self) -> str:
@@ -339,6 +340,29 @@ class ClassDecomposeStrategy:
             confidence=0.0,  # Set below
         )
         dummy_plan.confidence = _compute_confidence(dummy_plan, uncertainty_signals)
+
+        # REQ-MP-1005: If all non-deterministic sub-elements are TRIVIAL (template-matched),
+        # mark them deterministic and skip LLM entirely.
+        templates = getattr(self, "_template_registry", None)
+        if templates is not None:
+            all_trivial = True
+            for sub in dummy_plan.sub_elements:
+                if sub.deterministic:
+                    continue
+                if sub.element_spec is None:
+                    all_trivial = False
+                    break
+                if not templates.is_trivial(sub.element_spec):
+                    all_trivial = False
+                    break
+            if all_trivial:
+                for sub in dummy_plan.sub_elements:
+                    if not sub.deterministic:
+                        sub.deterministic = True
+                logger.info(
+                    "All sub-elements TRIVIAL for %s — marking deterministic",
+                    element.name,
+                )
 
         return dummy_plan
 
@@ -825,10 +849,12 @@ class ModerateDecomposer:
         self,
         strategies: Optional[list[Any]] = None,
         config: Optional[MicroPrimeConfig] = None,
+        template_registry: Optional[Any] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
+        self._template_registry = template_registry
         self._strategies: list[Any] = strategies or [
-            ClassDecomposeStrategy(config=self._config),
+            ClassDecomposeStrategy(config=self._config, template_registry=template_registry),
             FunctionChainStrategy(config=self._config),
         ]
 

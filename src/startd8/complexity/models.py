@@ -74,6 +74,32 @@ class TaskComplexitySignals:
         return asdict(self)
 
 
+class AssemblyStrategy(str, Enum):
+    """Assembly strategy for element generation routing.
+
+    Each strategy maps to exactly one handler, no overlap.
+    """
+
+    FILE_COPY = "file_copy"
+    COPY_AND_MODIFY = "copy_and_modify"
+    TEMPLATE = "template"
+    SIMPLE_DECOMPOSE = "simple_decompose"
+    LLM_SIMPLE = "llm_simple"
+    LLM_MODERATE = "llm_moderate"
+    ESCALATE = "escalate"
+
+
+class RejectionReason(str, Enum):
+    """Bounded set of reasons for rejecting deterministic assembly."""
+
+    NO_TEMPLATE_MATCH = "no_template_match"
+    SKELETON_MISMATCH = "skeleton_mismatch"
+    UNSAFE_DECORATOR = "unsafe_decorator"
+    RENDER_CONTRACT_VIOLATION = "render_contract_violation"
+    SYNTAX_ERROR = "syntax_error"
+    EMPTY_OUTPUT = "empty_output"
+
+
 @dataclass
 class ComplexityRoutingConfig:
     """Threshold configuration for complexity classification.

@@ -217,7 +217,7 @@ class MicroPrimeEngine:
         # Element fingerprint success cache (R3-S4)
         self._success_cache: dict[str, Optional[str]] = {}
         # Decomposer for MODERATE elements (REQ-MP-900)
-        self._decomposer = ModerateDecomposer(config=self._config)
+        self._decomposer = ModerateDecomposer(config=self._config, template_registry=self._templates)
         # Manifest reference for _handle_moderate (set by process_file, None for process_element)
         self._current_manifest: Optional[ForwardManifest] = None
         # Cached Ollama agent (C-1: avoid re-creation per element)
@@ -1102,6 +1102,37 @@ class MicroPrimeEngine:
             f"{element.parent_class}.{element.name}"
             if element.parent_class else element.name
         )
+
+        # REQ-MP-1006: Template-first short-circuit — if element matches a template,
+        # render immediately without invoking Ollama.
+        template_match = self._templates.match(element, file_spec, contracts)
+        if template_match is not None:
+            logger.info(
+                "Template short-circuit in _handle_simple for %s (template=%s)",
+                element.name, template_match.name,
+            )
+            self._completed.append({
+                "element": {
+                    "name": element.name,
+                    "parent_class": element.parent_class,
+                    "kind": element.kind,
+                },
+                "file_path": file_path,
+                "code": template_match.code,
+                "syntax_valid": True,
+            })
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.SIMPLE,
+                classification_reason=reasoning,
+                success=True,
+                code=template_match.code,
+                template_used=True,
+                template_name=template_match.name,
+                model="template",
+                verification_verdict="skipped",
+            )
 
         # Build few-shot examples
         few_shot = None

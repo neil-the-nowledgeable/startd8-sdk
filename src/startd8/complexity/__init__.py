@@ -5,16 +5,31 @@ Artisan, Prime Contractor, and Micro Prime subsystems.
 """
 
 from .classifier import classify_tier, log_tier_distribution
-from .models import ComplexityRoutingConfig, ComplexityTier, TaskComplexitySignals
+from .models import (
+    AssemblyStrategy,
+    ComplexityRoutingConfig,
+    ComplexityTier,
+    RejectionReason,
+    TaskComplexitySignals,
+)
 from .router import ComplexityRouter
-from .signals import detect_cross_file_edges, extract_signals_from_feature
+from .signals import (
+    detect_cross_file_edges,
+    extract_signals_from_chunk,
+    extract_signals_from_element,
+    extract_signals_from_feature,
+)
 
 __all__ = [
+    "AssemblyStrategy",
     "ComplexityTier",
+    "RejectionReason",
     "TaskComplexitySignals",
     "ComplexityRoutingConfig",
     "classify_tier",
     "extract_signals_from_feature",
+    "extract_signals_from_chunk",
+    "extract_signals_from_element",
     "detect_cross_file_edges",
     "ComplexityRouter",
     "log_tier_distribution",
