@@ -3458,12 +3458,20 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if "shared_contracts:" in plan_text:
                         yaml_text = plan_text
 
+                # Layer 2: reference_root for behavioral AST contracts
+                reference_root: Optional[Path] = None
+                if project_metadata and project_metadata.get("reference_root"):
+                    ref_candidate = Path(str(project_metadata["reference_root"]))
+                    if ref_candidate.is_dir():
+                        reference_root = ref_candidate
+
                 forward_manifest = extract_forward_contracts(
                     features,
                     yaml_text=yaml_text,
                     proto_dir=proto_dir,
                     tentative_contracts=tentative_contracts,
                     project_root=project_root,
+                    reference_root=reference_root,
                 )
 
                 forward_manifest_dict = forward_manifest.model_dump()

@@ -69,6 +69,7 @@ _CATEGORY_ABBREV: dict[ContractCategory, str] = {
 _SOURCE_PRECEDENCE: dict[str, int] = {
     "source-ast": 0,       # AST-derived from existing files — fills gaps only
     "deterministic": 1,
+    "reference-ast": 2,    # Behavioral contracts from reference source files
     "proto": 2,
     "human-yaml": 3,
 }
@@ -765,6 +766,288 @@ class ProtoExtractor:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# REFERENCE_AST — Behavioral contracts from reference source files
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _ASTPatternVisitor(ast.NodeVisitor):
+    """Walk a Python AST and collect behavioral patterns.
+
+    Extracts:
+    - FORMULA: ``dict_obj[key] = expr`` assignments (behavioral field assignments)
+    - RENDER_PATTERN: calls with string literal arguments (format strings, templates)
+    - CONFIG_KEY: ``os.environ[key]``, ``os.environ.get(key)``, ``os.getenv(key)``
+    - INFRASTRUCTURE: calls to known infrastructure constructors
+    """
+
+    # Constructor names that indicate infrastructure setup
+    _INFRA_CONSTRUCTORS: frozenset[str] = frozenset({
+        "TracerProvider", "OTLPSpanExporter", "BatchSpanProcessor",
+        "ConsoleSpanExporter", "OTLPMetricExporter",
+        "GrpcInstrumentorServer", "GrpcInstrumentorClient",
+        "select_autoescape", "FileSystemLoader",
+        "Environment",  # Jinja2
+    })
+
+    def __init__(self) -> None:
+        self.formulas: list[tuple[str, str, str]] = []  # (target, field, value_repr)
+        self.render_patterns: list[tuple[str, str]] = []  # (call_name, string_arg)
+        self.config_keys: list[tuple[str, Optional[str]]] = []  # (env_var, default)
+        self.infra_calls: list[tuple[str, list[str]]] = []  # (constructor, [kwarg_names])
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Detect ``dict_obj[key] = value`` patterns (FORMULA)."""
+        for target in node.targets:
+            if isinstance(target, ast.Subscript) and isinstance(target.slice, ast.Constant):
+                key = target.slice.value
+                if isinstance(key, str):
+                    # Target name: unparse the object being subscripted
+                    try:
+                        target_name = ast.unparse(target.value)
+                    except Exception:
+                        target_name = "?"
+                    try:
+                        value_repr = ast.unparse(node.value)
+                    except Exception:
+                        value_repr = "?"
+                    self.formulas.append((target_name, str(key), value_repr))
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Detect string-arg calls (RENDER_PATTERN), env var access (CONFIG_KEY),
+        and infrastructure constructors (INFRASTRUCTURE)."""
+        call_name = self._call_name(node)
+        if not call_name:
+            self.generic_visit(node)
+            return
+
+        # --- CONFIG_KEY: os.environ["X"], os.environ.get("X"), os.getenv("X") ---
+        if call_name in ("os.environ.get", "os.getenv"):
+            if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                default = None
+                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                    default = str(node.args[1].value)
+                self.config_keys.append((node.args[0].value, default))
+
+        # --- INFRASTRUCTURE: known constructor calls ---
+        short_name = call_name.rsplit(".", 1)[-1]
+        if short_name in self._INFRA_CONSTRUCTORS:
+            kwarg_names = [kw.arg for kw in node.keywords if kw.arg]
+            # Also capture positional string args as render patterns
+            for arg in node.args:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and len(arg.value) > 3:
+                    self.render_patterns.append((call_name, arg.value))
+            self.infra_calls.append((call_name, kwarg_names))
+
+        # --- RENDER_PATTERN: any call with a string literal arg containing % or { ---
+        elif node.args:
+            for arg in node.args:
+                if (
+                    isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str)
+                    and len(arg.value) > 3
+                    and ("%" in arg.value or "{" in arg.value)
+                ):
+                    self.render_patterns.append((call_name, arg.value))
+
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        """Detect ``os.environ["X"]`` (CONFIG_KEY)."""
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            try:
+                obj_name = ast.unparse(node.value)
+            except Exception:
+                obj_name = ""
+            if obj_name == "os.environ":
+                self.config_keys.append((node.slice.value, None))
+        self.generic_visit(node)
+
+    @staticmethod
+    def _call_name(node: ast.Call) -> Optional[str]:
+        """Extract the dotted call name from a Call node."""
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        if isinstance(node.func, ast.Attribute):
+            try:
+                return ast.unparse(node.func)
+            except Exception:
+                return None
+        return None
+
+
+class ReferenceASTExtractor:
+    """Extract behavioral contracts from reference source files.
+
+    Layer 2 defense: produces FORMULA, RENDER_PATTERN, CONFIG_KEY, and
+    INFRASTRUCTURE contracts from Python AST analysis of reference files.
+    These contracts prescribe *how* code should behave, not just *what*
+    structural elements exist.
+
+    Requires a ``reference_root`` directory containing Python files at
+    the same relative paths as ``ParsedFeature.target_files``.
+    """
+
+    def __init__(self, max_file_size: int = 500_000) -> None:
+        self._max_file_size = max_file_size
+
+    def extract(
+        self,
+        features: list[ParsedFeature],
+        reference_root: Path,
+    ) -> list[InterfaceContract]:
+        """Scan reference source files and return behavioral contracts.
+
+        Only Python files (``.py``) are analyzed. Non-Python target files
+        and missing files are silently skipped.
+        """
+        contracts: list[InterfaceContract] = []
+        seen_ids: set[str] = set()
+
+        # Collect unique (relpath, feature_ids) pairs
+        file_features: dict[str, list[str]] = {}
+        for feat in features:
+            for tf in feat.target_files:
+                if tf.endswith(".py"):
+                    file_features.setdefault(tf, []).append(feat.feature_id)
+
+        for relpath, feature_ids in file_features.items():
+            filepath = reference_root / relpath
+            if not filepath.is_file():
+                continue
+            try:
+                if filepath.stat().st_size > self._max_file_size:
+                    continue
+                source = filepath.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            try:
+                tree = ast.parse(source, filename=str(relpath))
+            except SyntaxError:
+                logger.debug("Reference AST parse failed: %s", relpath)
+                continue
+
+            visitor = _ASTPatternVisitor()
+            visitor.visit(tree)
+
+            file_contracts = self._build_contracts(
+                relpath, visitor, feature_ids, seen_ids,
+            )
+            contracts.extend(file_contracts)
+
+        if contracts:
+            logger.info(
+                "REFERENCE_AST: %d behavioral contracts from %d files "
+                "(formula=%d, pattern=%d, config=%d, infra=%d)",
+                len(contracts),
+                len(file_features),
+                sum(1 for c in contracts if c.category == ContractCategory.FORMULA),
+                sum(1 for c in contracts if c.category == ContractCategory.RENDER_PATTERN),
+                sum(1 for c in contracts if c.category == ContractCategory.CONFIG_KEY),
+                sum(1 for c in contracts if c.category == ContractCategory.INFRASTRUCTURE),
+            )
+
+        return contracts
+
+    def _build_contracts(
+        self,
+        relpath: str,
+        visitor: _ASTPatternVisitor,
+        feature_ids: list[str],
+        seen_ids: set[str],
+    ) -> list[InterfaceContract]:
+        """Convert visitor findings into InterfaceContracts."""
+        contracts: list[InterfaceContract] = []
+        stem = Path(relpath).stem
+
+        # --- FORMULA contracts ---
+        for target_name, field_name, value_repr in visitor.formulas:
+            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.FORMULA]}-{stem}-{field_name}"
+            if contract_id in seen_ids:
+                continue
+            seen_ids.add(contract_id)
+            contracts.append(_make_contract(
+                contract_id=contract_id,
+                category=ContractCategory.FORMULA,
+                confidence=ContractConfidence.EXPLICIT,
+                description=(
+                    f"{target_name}['{field_name}'] must use {value_repr} "
+                    f"(from reference {relpath})"
+                ),
+                formula=f"{target_name}['{field_name}'] = {value_repr}",
+                source_reference="reference-ast",
+                applicable_task_ids=feature_ids,
+            ))
+
+        # --- RENDER_PATTERN contracts ---
+        for call_name, string_arg in visitor.render_patterns:
+            short_name = call_name.rsplit(".", 1)[-1]
+            # Use hash of string arg for uniqueness (format strings can be long)
+            arg_hash = hex(hash(string_arg) & 0xFFFF)[2:]
+            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.RENDER_PATTERN]}-{stem}-{short_name}-{arg_hash}"
+            if contract_id in seen_ids:
+                continue
+            seen_ids.add(contract_id)
+            contracts.append(_make_contract(
+                contract_id=contract_id,
+                category=ContractCategory.RENDER_PATTERN,
+                confidence=ContractConfidence.EXPLICIT,
+                description=(
+                    f"{call_name}() must receive '{string_arg}' "
+                    f"(from reference {relpath})"
+                ),
+                pattern=string_arg,
+                source_reference="reference-ast",
+                applicable_task_ids=feature_ids,
+            ))
+
+        # --- CONFIG_KEY contracts ---
+        for env_var, default in visitor.config_keys:
+            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.CONFIG_KEY]}-{env_var}"
+            if contract_id in seen_ids:
+                continue
+            seen_ids.add(contract_id)
+            desc = f"Environment variable {env_var}"
+            if default is not None:
+                desc += f" (default: {default})"
+            desc += f" (from reference {relpath})"
+            contracts.append(_make_contract(
+                contract_id=contract_id,
+                category=ContractCategory.CONFIG_KEY,
+                confidence=ContractConfidence.EXPLICIT,
+                description=desc,
+                env_var=env_var,
+                constant_value=default,
+                source_reference="reference-ast",
+                applicable_task_ids=feature_ids,
+            ))
+
+        # --- INFRASTRUCTURE contracts ---
+        for constructor_name, kwarg_names in visitor.infra_calls:
+            short_name = constructor_name.rsplit(".", 1)[-1]
+            contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE]}-ref-{short_name}"
+            if contract_id in seen_ids:
+                continue
+            seen_ids.add(contract_id)
+            desc = f"Use {constructor_name}"
+            if kwarg_names:
+                desc += f" with kwargs: {', '.join(kwarg_names)}"
+            desc += f" (from reference {relpath})"
+            contracts.append(_make_contract(
+                contract_id=contract_id,
+                category=ContractCategory.INFRASTRUCTURE,
+                confidence=ContractConfidence.EXPLICIT,
+                description=desc,
+                dependency=short_name,
+                source_reference="reference-ast",
+                applicable_task_ids=feature_ids,
+            ))
+
+        return contracts
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SOURCE_RECONCILE — AST-enriched ForwardManifest
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1306,6 +1589,7 @@ def extract_forward_contracts(
     tentative_contracts: Optional[list[InterfaceContract]] = None,
     project_root: Optional[Path] = None,
     prior_file_specs: Optional[dict[str, ForwardFileSpec]] = None,
+    reference_root: Optional[Path] = None,
 ) -> ForwardManifest:
     """Orchestrate all extractors and merge into a ``ForwardManifest``.
 
@@ -1325,6 +1609,11 @@ def extract_forward_contracts(
     prior_file_specs:
         Optional file specs from a prior enriched manifest for field-level
         supplement of plan-derived specs.
+    reference_root:
+        Optional directory containing reference source files. When provided,
+        triggers REFERENCE_AST extraction to produce behavioral contracts
+        (FORMULA, RENDER_PATTERN, CONFIG_KEY, INFRASTRUCTURE) from Python
+        AST analysis of existing reference implementations.
     """
     try:
         det = DeterministicExtractor()
@@ -1340,10 +1629,17 @@ def extract_forward_contracts(
         if proto_dir is not None:
             proto_contracts = ProtoExtractor().extract(proto_dir)
 
+        ref_contracts: list[InterfaceContract] = []
+        if reference_root is not None:
+            ref_root = Path(reference_root)
+            if ref_root.is_dir():
+                ref_contracts = ReferenceASTExtractor().extract(features, ref_root)
+
         contract_lists: list[list[InterfaceContract]] = [
             det_contracts,
             yaml_contracts,
             proto_contracts,
+            ref_contracts,
         ]
         if tentative_contracts:
             contract_lists.append(tentative_contracts)
@@ -1353,6 +1649,8 @@ def extract_forward_contracts(
 
         # Record stage completion
         manifest.stages_completed.append("EXTRACT")
+        if ref_contracts:
+            manifest.stages_completed.append("REFERENCE_AST")
 
         # SOURCE_RECONCILE: enrich with AST-derived elements from existing files
         if project_root is not None:
@@ -1386,6 +1684,7 @@ __all__ = [
     "DeterministicExtractor",
     "HumanYamlExtractor",
     "ProtoExtractor",
+    "ReferenceASTExtractor",
     "ManifestMerger",
     "SourceReconciler",
     "SourceReconcileConfig",
