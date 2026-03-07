@@ -47,7 +47,7 @@ Each phase also generates a captured LLM output:
 - **`{phase}_response.meta.json`**: Describes if the LLM output exceeded the 2 MiB capture threshold and got truncated.
 
 > [!WARNING]
-> **Missing Response Files**: If you see user/system prompts but **no** response file (e.g., `draft_response.md` is missing), this indicates the LLM generation process suffered a hard fault—such as a network timeout, an empty response from Ollama, or an unrecoverable structural syntax crash before the response could be persisted.
+> **Missing Response Files**: If you see user/system prompts but **no** response file (e.g., `draft_response.md` is missing), this may indicate either: (a) the LLM generation process suffered a hard fault (network timeout, empty response, syntax crash), or (b) the code generator did not forward raw responses via `GenerationResult.metadata` keys (`spec_raw_response`, `draft_raw_response`, `review_raw_response`). As of v0.5.0, the `LeadContractorGenerator` populates these keys from the workflow summary.
 
 ## 4. Analyzing Aggregated Metrics
 

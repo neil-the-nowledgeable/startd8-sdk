@@ -1,9 +1,9 @@
 # Kaizen for Prime Contractor — Requirements
 
-> **Version:** 0.4.0
+> **Version:** 0.5.0
 > **Status:** DRAFT
-> **Date:** 2026-03-05
-> **Scope:** Systematic continuous improvement of PrimeContractorWorkflow effectiveness through run-over-run analysis, implemented via cap-dev-pipe orchestration
+> **Date:** 2026-03-07
+> **Scope:** Systematic continuous improvement of PrimeContractorWorkflow effectiveness through run-over-run analysis. Core kaizen logic (metrics, index, retention) lives in startd8-sdk; cap-dev-pipe invokes it but is not required
 > **Design Principle:** [KAIZEN_DESIGN_PRINCIPLE.md](../../design-princples/KAIZEN_DESIGN_PRINCIPLE.md)
 > **Depends on:** [PRIME_CONTRACTOR_PROMPT_AUDIT_FINDINGS.md](../PRIME_CONTRACTOR_PROMPT_AUDIT_FINDINGS.md), cap-dev-pipe orchestration scripts, existing post-mortem system (`prime_postmortem.py`), walkthrough mode
 > **Implementation Home:** `~/Documents/dev/cap-dev-pipe/` (pipeline orchestration) + `~/Documents/dev/startd8-sdk/` (SDK analysis modules)
@@ -92,14 +92,14 @@ Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`.
 | REQ-KZ-102 | Post-mortem summary display | cap-dev-pipe | PLANNED | K-5a |
 | **Layer 2 — Prompt-Response Pairing** | | | | |
 | REQ-KZ-200 | Prompt persistence during real runs | startd8-sdk | PLANNED | K-1 |
-| REQ-KZ-201 | Response persistence alongside prompts | startd8-sdk | PLANNED | K-1 |
+| REQ-KZ-201 | Response persistence alongside prompts | startd8-sdk | IMPLEMENTED | K-1 |
 | REQ-KZ-202 | Archive prompt directory into run dir | cap-dev-pipe | PLANNED | K-1 |
 | REQ-KZ-203 | Reuse existing walkthrough persistence code | startd8-sdk | PLANNED | K-1 |
 | REQ-KZ-204 | Prompt/response redaction & opt-out | startd8-sdk | PLANNED | K-1 |
 | **Layer 3 — Run Metrics & Archive Index** | | | | |
-| REQ-KZ-300 | Per-run metrics extraction | cap-dev-pipe | PLANNED | K-5b |
-| REQ-KZ-301 | Archive index file | cap-dev-pipe | PLANNED | K-5b |
-| REQ-KZ-302 | Retention policy | cap-dev-pipe | PLANNED | K-5b |
+| REQ-KZ-300 | Per-run metrics extraction | startd8-sdk | IMPLEMENTED | K-5b |
+| REQ-KZ-301 | Archive index file | startd8-sdk | IMPLEMENTED | K-5b |
+| REQ-KZ-302 | Retention policy | startd8-sdk | IMPLEMENTED | K-5b |
 | **Layer 4 — Cross-Run Aggregation** | | | | |
 | REQ-KZ-400 | Cross-run trend script | cap-dev-pipe | PLANNED | K-2 |
 | REQ-KZ-401 | Failure pattern persistence | cap-dev-pipe | PLANNED | K-2 |
@@ -189,12 +189,7 @@ When a `--kaizen` flag (or kaizen config file) is active, the Prime Contractor S
 
 For each LLM phase (spec, draft, review), the raw LLM response text SHALL be persisted alongside the corresponding prompt files as `{phase}_response.md`.
 
-**SDK modification required:** `GenerationResult` (in `contractors/protocols.py`) currently has `success`, `generated_files`, `error`, `input_tokens`, `output_tokens`, `cost_usd`, `iterations`, `model`, and `metadata` fields — but **no raw response text field**. The response text is available upstream in the `CodeGenerator` call chain before it is parsed into `GenerationResult`. To capture it, either:
-
-1. **Preferred:** Add an optional `raw_response: str | None = None` field to `GenerationResult` and populate it in the code generator, or
-2. **Alternative:** Capture the response at the `CodeGenerator.generate()` call site, before the result is packaged into `GenerationResult`.
-
-The response is then written to disk alongside the prompt via one `Path.write_text()` call per phase.
+**Implementation (2026-03-07):** Raw responses are forwarded via `GenerationResult.metadata` using per-phase keys (`spec_raw_response`, `draft_raw_response`, `review_raw_response`). The `LeadContractorGenerator` populates these from the workflow's `lc_summary` (`spec_raw`, `drafts_raw[-1].implementation`, `reviews_raw[-1].review_text`). The `PrimeContractorWorkflow._capture_response_files()` method reads these keys and writes `{phase}_response.md` files alongside the prompts.
 
 **Size guard:** If a response exceeds a configurable limit (default 2 MB), persist a truncated version with a clear sentinel line (e.g., `<!-- TRUNCATED -->`) and record the original byte count in a sidecar JSON (`{phase}_response.meta.json`) to avoid oversized archives.
 
@@ -285,40 +280,36 @@ After post-mortem completes, `run-prime-contractor.sh` SHALL extract key metrics
 
 ### REQ-KZ-301: Archive Index File
 
-`run-atomic.sh` Phase 5 SHALL append a summary entry to `pipeline-output/{project}/kaizen-index.json`:
+`run_prime_postmortem.py --update-index` SHALL append a summary entry to `pipeline-output/{project}/kaizen-index.json`:
 
 ```json
 {
   "schema_version": "1.0",
-  "project": "online-boutique-python",
-  "updated_at": "2026-03-05T14:31:00Z",
   "runs": [
     {
       "run_id": "run-003-20260305T1430",
-      "route": "prime",
-      "timestamp": "2026-03-05T14:30:00Z",
-      "kaizen_enabled": true,
+      "timestamp": "20260305T1430",
+      "run_dir": "/path/to/run-003-20260305T1430",
+      "metrics_path": "/path/to/run-003-20260305T1430/plan-ingestion/kaizen-metrics.json",
       "success_rate": 0.85,
-      "total_cost_usd": 0.42,
-      "verdict": "PARTIAL",
-      "metrics_path": "run-003-20260305T1430/plan-ingestion/kaizen-metrics.json",
-      "postmortem_path": "run-003-20260305T1430/plan-ingestion/prime-postmortem-report.json"
+      "total_features": 6,
+      "kaizen_enabled": true
     }
   ]
 }
 ```
 
-**Leverages:** `run-atomic.sh` already writes `run-metadata.json` and updates the `latest` symlink in Phase 5. Adding a JSON append to the index follows the same pattern.
+**Implementation (2026-03-07):** Moved from inline Python in `run-atomic.sh` / `run-prime-contractor.sh` into `scripts/run_prime_postmortem.py` via `_update_kaizen_index()`. The SDK derives `run_id` from `run-metadata.json` (via `_resolve_run_id()`), falling back to `KAIZEN_RUN_ID` env var then directory name. This makes kaizen index management independent of cap-dev-pipe shell scripts. The pipeline base directory is resolved via `_resolve_pipeline_base()` which walks up from the output directory.
 
-**Implementation:** A small inline Python snippet invoked from `run-atomic.sh` that reads the metrics file and appends to the index with atomic rename. **Constraint:** Must use only stdlib modules (`json`, `pathlib`, `sys`) since it runs inline in `run-atomic.sh` before SDK venv activation is guaranteed for all routes.
+**Idempotency:** If an entry with the same `run_id` already exists, it is replaced in place (no duplicates). Writes use atomic tmp+rename.
 
-**Idempotency:** If an entry with the same `run_id` already exists, replace it in place (do not append duplicates).
+**Symlink safety:** `_resolve_run_id()` never returns `"latest"` — it reads the real run directory name from `run-metadata.json` or resolves the symlink target.
 
 ### REQ-KZ-302: Retention Policy
 
-A `--kaizen-keep N` flag on `run-atomic.sh` (default: 20) SHALL prune index entries and archive directories for runs older than the Nth most recent. Pruning runs in Phase 5 after the new entry is appended.
+A `--kaizen-keep N` flag on `run_prime_postmortem.py` (default: 20, range: 5–200) SHALL prune index entries and archive directories for runs older than the Nth most recent. Pruning runs after the new entry is appended.
 
-**Constraint:** If a pruned run was the `latest` symlink target, update `latest` to the next most recent retained run. Also remove any archived `kaizen-prompts` directory under the pruned run to keep disk usage bounded.
+**Implementation (2026-03-07):** Integrated into `_update_kaizen_index()` in `scripts/run_prime_postmortem.py`. Clamped to [5, 200] range. Only prunes directories whose name starts with `run-` (safety guard). Cap-dev-pipe passes `--kaizen-keep` from `${KAIZEN_KEEP:-20}` env var.
 
 ---
 
@@ -521,10 +512,10 @@ A script `cap-dev-pipe/run-kaizen-correlation.sh` SHALL compute correlations bet
 | REQ-KZ-101 | `run_prime_postmortem.py --output-dir` | Already writes to specified output dir |
 | REQ-KZ-102 | `run-artisan.sh:374-386` | Exact display pattern to replicate for prime |
 | REQ-KZ-200 | `_persist_walkthrough_prompts()` | Reuse prompt serialization logic |
-| REQ-KZ-201 | `CodeGenerator` call chain | Response text available upstream before `GenerationResult` packaging (requires adding `raw_response` field or capturing at call site) |
+| REQ-KZ-201 | `LeadContractorGenerator.generate()` → `gen_metadata` | Raw responses forwarded via `spec_raw_response` / `draft_raw_response` / `review_raw_response` metadata keys |
 | REQ-KZ-202 | `run-atomic.sh:510-517` | State archiving pattern to extend |
 | REQ-KZ-300 | `PostMortemReport` fields | Metrics already computed — just extract |
-| REQ-KZ-301 | `run-metadata.json` write pattern | `run-atomic.sh:277-288` JSON write pattern |
+| REQ-KZ-301 | `_update_kaizen_index()` in `run_prime_postmortem.py` | Derives run_id from `run-metadata.json` via `_resolve_run_id()` |
 | REQ-KZ-400 | `run-compare.sh:429-590` | Report generation structural template |
 | REQ-KZ-401 | `PostMortemReport.cross_feature_patterns` | Per-run pattern detection |
 | REQ-KZ-502 | `--contractor-arg` / `PRIME_CONTRACTOR_EXTRA_ARGS` | Existing flag passthrough mechanism |
@@ -552,7 +543,7 @@ A script `cap-dev-pipe/run-kaizen-correlation.sh` SHALL compute correlations bet
 | Test | Validates |
 |------|-----------|
 | `test_prompt_persisted_real_run` | REQ-KZ-200: Prompts written during non-walkthrough runs |
-| `test_response_alongside_prompt` | REQ-KZ-201: Response files present in prompt directory |
+| `test_response_alongside_prompt` | REQ-KZ-201: Response files present when `gen_metadata` contains `{phase}_raw_response` keys |
 | `test_walkthrough_code_reused` | REQ-KZ-203: No duplication of walkthrough persistence logic |
 | `test_redaction_rules_applied` | REQ-KZ-204: Redaction patterns applied before write |
 | `test_redaction_invalid_disables_persistence` | REQ-KZ-204: Invalid redaction config disables persistence |
@@ -566,18 +557,19 @@ A script `cap-dev-pipe/run-kaizen-correlation.sh` SHALL compute correlations bet
 | Test | Validates |
 |------|-----------|
 | `test_prime_postmortem_in_pipeline` | REQ-KZ-100-102: Post-mortem runs and displays after prime contractor |
-| `test_kaizen_index_append` | REQ-KZ-301: Index updated with each run |
-| `test_kaizen_index_idempotent` | REQ-KZ-301: Re-running a run updates entry, no duplicates |
+| `test_kaizen_index_append` | REQ-KZ-301: `--update-index` appends run entry via `_update_kaizen_index()` |
+| `test_kaizen_index_idempotent` | REQ-KZ-301: Re-running a run replaces entry in place, no duplicates |
+| `test_kaizen_index_resolve_run_id` | REQ-KZ-301: `_resolve_run_id()` reads `run-metadata.json`, never returns `"latest"` |
 | `test_kaizen_trends_multi_run` | REQ-KZ-400: Trend computed across multiple archived runs |
 | `test_no_kaizen_flag` | REQ-KZ-503: `--no-kaizen` disables config injection |
 | `test_walkthrough_then_real_prompts_match` | REQ-KZ-203: Prompts captured in walkthrough match real-run captures |
 
 ### Implementation Order
 
-1. **Layer 1** (REQ-KZ-100–102) — Prime post-mortem parity. Changes only `run-prime-contractor.sh` (~20 lines). Zero SDK changes. Immediate value.
-2. **Layer 3** (REQ-KZ-300–302) — Run metrics & index. Adds `--emit-metrics` to SDK script + index management in `run-atomic.sh`. Enables all downstream analysis.
-3. **Layer 4** (REQ-KZ-400–402) — Cross-run trends. New cap-dev-pipe script. Pure analysis, no pipeline behavior changes.
-4. **Layer 2** (REQ-KZ-200–203) — Prompt-response pairing. SDK refactor of `_persist_walkthrough_prompts()` + cap-dev-pipe archiving.
+1. **Layer 1** (REQ-KZ-100–102) — Prime post-mortem parity. ✅ IMPLEMENTED.
+2. **Layer 3** (REQ-KZ-300–302) — Run metrics & index. ✅ IMPLEMENTED. `--emit-metrics`, `--update-index`, `--kaizen-keep` in `run_prime_postmortem.py`. Index management moved from cap-dev-pipe to SDK (2026-03-07).
+3. **Layer 4** (REQ-KZ-400–402) — Cross-run trends. Cap-dev-pipe scripts (`kaizen-trends.py`, `kaizen-correlation.py`). Partially implemented.
+4. **Layer 2** (REQ-KZ-200–204) — Prompt-response pairing. REQ-KZ-201 ✅ IMPLEMENTED (response forwarding via `gen_metadata`). REQ-KZ-200, 202–204 in progress.
 5. **Layer 5** (REQ-KZ-500–504) — Feedback loop. Requires both SDK and cap-dev-pipe changes.
 6. **Layer 6** (REQ-KZ-600–601) — Correlation analysis. Depends on Layer 2 + 3 data.
 
