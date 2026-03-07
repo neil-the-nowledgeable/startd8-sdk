@@ -320,13 +320,12 @@ class TestSafetyGuards:
 
     def test_no_regression_guard_skips_stub(self):
         """Template output that equals a DFA stub should be skipped (R5-S4)."""
-        # An empty __init__ returns "pass" which is a stub — but "pass" for
-        # empty __init__ is actually correct, so the dunder_method template
-        # is exempted by the fact that "pass" for __init__(self) is valid.
-        # Test with a constant that would produce stub-like output.
-        registry = TemplateRegistry()
-        # A regular function won't match templates, so this is indirect.
-        # The guard is tested via _is_dfa_stub directly above.
+        # "pass" for a non-dunder element is a DFA stub — verify it's rejected
+        assert _is_dfa_stub("pass", element_name="process") is True
+        # "pass" for a dunder is valid — verify it's allowed
+        assert _is_dfa_stub("pass", element_name="__init__") is False
+        # Other stubs are always rejected regardless of element name
+        assert _is_dfa_stub("raise NotImplementedError", element_name="__init__") is True
 
     def test_unsafe_element_name_rejected(self):
         """Element with unsafe name should not match any template (R5-S7)."""

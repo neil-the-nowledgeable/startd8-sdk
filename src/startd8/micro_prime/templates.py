@@ -109,7 +109,7 @@ def _safe_render(
     try:
         return template.render_fn(element, file_spec, contracts)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.debug("Template render_fn failed for %s: %s", template.name, exc)
+        logger.info("Template render_fn failed for %s: %s", template.name, exc)
         return None
 
 
@@ -122,8 +122,6 @@ def _is_safe_identifier(name: str) -> bool:
         isinstance(name, str)
         and name.isidentifier()
         and not keyword.iskeyword(name)
-        and "\n" not in name
-        and "\r" not in name
     )
 
 
@@ -174,6 +172,7 @@ def _template_init(elem: ForwardElementSpec) -> Optional[str]:
     """Generate __init__ that stores all parameters as instance attributes.
 
     Handles plain params, params with defaults, *args, and **kwargs.
+    Returns None if any parameter name fails ``_is_safe_identifier``.
     """
     if not elem.signature:
         return None
@@ -312,6 +311,16 @@ def _is_simple_validation_match(
     return len(params) == 1
 
 
+def _find_init_child(
+    class_name: str, file_spec: ForwardFileSpec,
+) -> Optional[ForwardElementSpec]:
+    """Find the ``__init__`` child element of *class_name* in *file_spec*."""
+    for e in file_spec.elements:
+        if e.parent_class == class_name and e.name == "__init__":
+            return e
+    return None
+
+
 def _template_dataclass_boilerplate(
     elem: ForwardElementSpec,
     file_spec: ForwardFileSpec,
@@ -323,16 +332,8 @@ def _template_dataclass_boilerplate(
     renders typed field assignments from child method signatures or the class's
     own metadata.
     """
-    # Collect child elements (methods/properties) of this class from file_spec
-    children = [
-        e for e in file_spec.elements
-        if e.parent_class == elem.name and e.name == "__init__"
-    ]
-    if not children:
-        return None
-
-    init_elem = children[0]
-    if not init_elem.signature:
+    init_elem = _find_init_child(elem.name, file_spec)
+    if init_elem is None or not init_elem.signature:
         return None
 
     params = [
@@ -374,14 +375,11 @@ def _is_dataclass_boilerplate_match(
     if not is_dataclass and not is_pydantic:
         return False
     # Must have an __init__ child with params in the file_spec
-    children = [
-        e for e in file_spec.elements
-        if e.parent_class == elem.name and e.name == "__init__"
-    ]
-    if not children or not children[0].signature:
+    init_child = _find_init_child(elem.name, file_spec)
+    if init_child is None or not init_child.signature:
         return False
     params = [
-        p for p in children[0].signature.params if p.name not in ("self", "cls")
+        p for p in init_child.signature.params if p.name not in ("self", "cls")
     ]
     return len(params) > 0
 
@@ -396,7 +394,7 @@ def _coerce_constant_value(value: str) -> str:
     try:
         parsed = ast.literal_eval(value)
         return repr(parsed)
-    except Exception:
+    except (ValueError, SyntaxError):
         return repr(value)
 
 
@@ -679,7 +677,7 @@ class TemplateRegistry:
         contracts = contracts or []
         return try_template_match_with_name(
             element, file_spec, contracts,
-            extra_templates=self._active_templates() if self._relaxed_allowlist else None,
+            extra_templates=self._active_templates(),
         )
 
     def _try_match(
