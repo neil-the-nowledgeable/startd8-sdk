@@ -2,12 +2,25 @@
 
 Provides deterministic code templates for common patterns like ``__init__``,
 ``__repr__``, ``__eq__``, ``__hash__``, constants, app instances, type aliases,
-and simple properties. These bypass LLM generation entirely.
+simple properties, validation patterns, and dataclass boilerplate.
+These bypass LLM generation entirely.
+
+Phase 2 additions (REQ-MP-310–313):
+- ``init_with_defaults``: ``__init__`` with optional params (defaults)
+- ``init_varargs``: ``__init__`` with ``*args``/``**kwargs``
+- ``simple_validation``: ``if not x: raise ValueError(...)``
+- ``dataclass_boilerplate``: typed fields → class body for dataclass/Pydantic models
+
+Safety guards (R4-S7, R5-S7, R2-S7, R5-S4):
+- Name sanitization via ``_is_safe_identifier()``
+- Safe literal serialization via ``repr()``
+- No-regression guard: reject if output equals DFA stub
 """
 
 from __future__ import annotations
 
 import ast
+import keyword
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -18,7 +31,7 @@ from startd8.forward_manifest import (
     InterfaceContract,
 )
 from startd8.logging_config import get_logger
-from startd8.utils.code_manifest import ElementKind
+from startd8.utils.code_manifest import ElementKind, ParamKind
 
 logger = get_logger(__name__)
 
@@ -79,18 +92,95 @@ def _safe_render(
         return None
 
 
+def _is_safe_identifier(name: str) -> bool:
+    """Check that *name* is a valid Python identifier with no injection risk (R5-S7, R2-S7).
+
+    Rejects names containing whitespace, non-identifier characters, or Python keywords.
+    """
+    return (
+        isinstance(name, str)
+        and name.isidentifier()
+        and not keyword.iskeyword(name)
+        and "\n" not in name
+        and "\r" not in name
+    )
+
+
+_DFA_STUB_PATTERNS = frozenset({
+    "raise NotImplementedError",
+    "raise NotImplementedError()",
+    "...",
+})
+
+# "pass" is a valid body for empty __init__ — handled separately
+_DFA_STUB_PASS = "pass"
+
+
+def _is_dfa_stub(code: str, *, element_name: str = "") -> bool:
+    """Check whether *code* is equivalent to a DFA stub placeholder (R5-S4).
+
+    Returns True if the output is no better than what DFA already provides.
+    ``pass`` is exempted for dunder methods where it is semantically correct
+    (e.g., empty ``__init__``).
+    """
+    stripped = code.strip()
+    if stripped in _DFA_STUB_PATTERNS:
+        return True
+    if stripped == _DFA_STUB_PASS:
+        # "pass" is valid for empty __init__, __del__, etc.
+        return not element_name.startswith("__")
+    return False
+
+
+def _safe_default_repr(default: str) -> str:
+    """Safely serialize a default value for use in templates (R4-S7).
+
+    Uses ``ast.literal_eval`` + ``repr`` round-trip to prevent injection
+    from malicious manifest values.
+    """
+    try:
+        parsed = ast.literal_eval(default)
+        return repr(parsed)
+    except (ValueError, SyntaxError):
+        # Not a literal — return the raw string only if it's a safe identifier
+        # (e.g. ``None``, ``True``, ``False``, or a constant name).
+        if default in ("None", "True", "False") or _is_safe_identifier(default):
+            return default
+        return repr(default)
+
+
 def _template_init(elem: ForwardElementSpec) -> Optional[str]:
-    """Generate __init__ that stores all parameters as instance attributes."""
+    """Generate __init__ that stores all parameters as instance attributes.
+
+    Handles plain params, params with defaults, *args, and **kwargs.
+    """
     if not elem.signature:
         return None
     params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
     if not params:
         # Empty __init__ — no assignments needed
         return "pass"
-    lines = []
-    for p in params:
+
+    has_varargs = any(p.kind == ParamKind.VAR_POSITIONAL for p in params)
+    has_kwargs = any(p.kind == ParamKind.VAR_KEYWORD for p in params)
+    regular_params = [
+        p for p in params
+        if p.kind not in (ParamKind.VAR_POSITIONAL, ParamKind.VAR_KEYWORD)
+    ]
+
+    lines: list[str] = []
+    for p in regular_params:
+        if not _is_safe_identifier(p.name):
+            return None
         lines.append(f"self.{p.name} = {p.name}")
-    return "\n".join(lines)
+
+    # Store *args / **kwargs (REQ-MP-311)
+    if has_varargs:
+        lines.append("self._args = args")
+    if has_kwargs:
+        lines.append("self._kwargs = kwargs")
+
+    return "\n".join(lines) if lines else "pass"
 
 
 def _template_repr(elem: ForwardElementSpec) -> Optional[str]:
@@ -150,6 +240,129 @@ def _template_property_getter(elem: ForwardElementSpec) -> Optional[str]:
     """Generate a simple property getter returning self._name."""
     attr_name = elem.name.lstrip("_")
     return f"return self._{attr_name}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 2 template generators (REQ-MP-310–313)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _template_simple_validation(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Generate simple validation pattern: ``if not x: raise ValueError(...)`` (REQ-MP-312).
+
+    Matches functions/methods with exactly one non-self parameter and a name
+    starting with ``validate_`` or ``check_``.
+    """
+    if not elem.signature:
+        return None
+    params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+    if len(params) != 1:
+        return None
+    param = params[0]
+    if not _is_safe_identifier(param.name):
+        return None
+    param_name = param.name
+    return (
+        f"if not {param_name}:\n"
+        f"    raise ValueError({repr(f'{param_name} must not be empty')})"
+    )
+
+
+def _is_simple_validation_match(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> bool:
+    """Check if element is a simple validation function."""
+    if elem.kind not in (
+        ElementKind.FUNCTION, ElementKind.METHOD,
+        ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+    ):
+        return False
+    if not elem.name.startswith(("validate_", "check_")):
+        return False
+    if not elem.signature:
+        return False
+    params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+    return len(params) == 1
+
+
+def _template_dataclass_boilerplate(
+    elem: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Generate typed field declarations for dataclass/Pydantic models (REQ-MP-313, R6-S3).
+
+    Matches CLASS elements with ``dataclass`` or ``BaseModel`` indicators and
+    renders typed field assignments from child method signatures or the class's
+    own metadata.
+    """
+    # Collect child elements (methods/properties) of this class from file_spec
+    children = [
+        e for e in file_spec.elements
+        if e.parent_class == elem.name and e.name == "__init__"
+    ]
+    if not children:
+        return None
+
+    init_elem = children[0]
+    if not init_elem.signature:
+        return None
+
+    params = [
+        p for p in init_elem.signature.params if p.name not in ("self", "cls")
+    ]
+    if not params:
+        return None
+
+    lines: list[str] = []
+    for p in params:
+        if not _is_safe_identifier(p.name):
+            return None
+        if p.annotation:
+            if p.default is not None:
+                lines.append(f"{p.name}: {p.annotation} = {_safe_default_repr(p.default)}")
+            else:
+                lines.append(f"{p.name}: {p.annotation}")
+        else:
+            if p.default is not None:
+                lines.append(f"{p.name} = {_safe_default_repr(p.default)}")
+            else:
+                # Untyped, no default — skip (can't generate safe field)
+                return None
+
+    return "\n".join(lines) if lines else None
+
+
+def _is_dataclass_boilerplate_match(
+    elem: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> bool:
+    """Check if element is a dataclass/Pydantic model with typed fields."""
+    if elem.kind != ElementKind.CLASS:
+        return False
+    # Must have dataclass decorator or BaseModel in bases
+    is_dataclass = "dataclass" in elem.decorators
+    is_pydantic = any("BaseModel" in b for b in elem.bases)
+    if not is_dataclass and not is_pydantic:
+        return False
+    # Must have an __init__ child with params in the file_spec
+    children = [
+        e for e in file_spec.elements
+        if e.parent_class == elem.name and e.name == "__init__"
+    ]
+    if not children or not children[0].signature:
+        return False
+    params = [
+        p for p in children[0].signature.params if p.name not in ("self", "cls")
+    ]
+    return len(params) > 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -310,6 +523,17 @@ TEMPLATES: list[CodeTemplate] = [
         ),
         render_fn=lambda e, f, c: _template_constant(e) or "",
     ),
+    # Phase 2 templates (REQ-MP-310–313)
+    CodeTemplate(
+        name="simple_validation",
+        match_fn=_is_simple_validation_match,
+        render_fn=_template_simple_validation,
+    ),
+    CodeTemplate(
+        name="dataclass_boilerplate",
+        match_fn=_is_dataclass_boilerplate_match,
+        render_fn=_template_dataclass_boilerplate,
+    ),
 ]
 
 
@@ -329,11 +553,23 @@ def try_template_match_with_name(
     contracts: list[InterfaceContract],
 ) -> Optional[TemplateMatch]:
     """Try to match and render a template; return TemplateMatch or None."""
+    # Name sanitization guard (R5-S7): reject elements with unsafe names
+    if not _is_safe_identifier(element.name.lstrip("_")):
+        logger.debug("Unsafe element name rejected: %r", element.name)
+        return None
+
     for template in TEMPLATES:
         if not _safe_match(template, element, file_spec, contracts):
             continue
         body = _safe_render(template, element, file_spec, contracts)
         if not body:
+            continue
+        # No-regression guard (R5-S4): reject if output equals DFA stub
+        if _is_dfa_stub(body, element_name=element.name):
+            logger.debug(
+                "Template %s output for %s is a DFA stub — skipping",
+                template.name, element.name,
+            )
             continue
         if not _validate_ast(body, element):
             logger.warning(
