@@ -23,6 +23,7 @@ from .models import (
     RepairError,
     RepairOutcome,
     RepairStepResult,
+    StepEffectiveness,
 )
 from .protocol import AstParseValidator, RepairStep
 from .routing import create_steps_from_route, route_failures
@@ -81,6 +82,51 @@ _circuit_breaker_state: dict[str, int] = {}
 def reset_circuit_breaker() -> None:
     """Reset all circuit breaker state. Primarily for testing."""
     _circuit_breaker_state.clear()
+
+
+# Step effectiveness tracking (REQ-RPL-503)
+_step_effectiveness: dict[str, StepEffectiveness] = {}
+
+_EFFECTIVENESS_WARN_THRESHOLD = 0.05
+
+
+def get_step_effectiveness() -> dict[str, StepEffectiveness]:
+    """Return a copy of the step effectiveness tracker."""
+    return dict(_step_effectiveness)
+
+
+def reset_step_effectiveness() -> None:
+    """Reset step effectiveness state. Primarily for testing."""
+    _step_effectiveness.clear()
+
+
+def _update_step_effectiveness(
+    step_results: List[RepairStepResult],
+    repair_succeeded: bool,
+) -> None:
+    """Update per-step effectiveness counters."""
+    for r in step_results:
+        se = _step_effectiveness.get(r.step_name)
+        if se is None:
+            se = StepEffectiveness(step_name=r.step_name)
+            _step_effectiveness[r.step_name] = se
+        se.attempts += 1
+        if r.modified:
+            if r.metrics.get("reverted"):
+                se.reverts += 1
+            else:
+                se.modifications += 1
+        if repair_succeeded and r.modified and not r.metrics.get("reverted"):
+            se.contributed_to_success += 1
+        # Warn if effectiveness drops below threshold
+        if se.attempts >= 20 and se.effectiveness_rate < _EFFECTIVENESS_WARN_THRESHOLD:
+            logger.warning(
+                "Repair step '%s' effectiveness %.1f%% below threshold %.1f%% "
+                "(%d attempts, %d contributed to success)",
+                r.step_name, se.effectiveness_rate * 100,
+                _EFFECTIVENESS_WARN_THRESHOLD * 100,
+                se.attempts, se.contributed_to_success,
+            )
 
 
 def _emit_event(event_type: str, source: str, data: dict) -> None:
@@ -278,6 +324,69 @@ def _inject_traceability_comment(code: str, step_names: List[str]) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Repair attempt artifact persistence (REQ-RPL-404)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _persist_repair_artifact(
+    outcome: "RepairOutcome",
+    diagnostics: List[Diagnostic],
+    route: "RepairRoute",
+    project_root: Path,
+    feature_name: str = "",
+) -> Optional[Path]:
+    """Persist repair_attempt.json for offline debugging.
+
+    Returns the artifact path, or None if persistence fails.
+    """
+    import json
+
+    artifact_dir = project_root / ".startd8" / "repair" / "artifacts"
+    try:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    timestamp = int(time.time() * 1000)
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in feature_name) or "unnamed"
+    artifact_path = artifact_dir / f"repair_attempt_{safe_name}_{timestamp}.json"
+
+    payload = {
+        "feature_name": feature_name,
+        "timestamp_ms": timestamp,
+        "route": {
+            "matched_patterns": route.matched_patterns,
+            "steps": route.steps,
+            "confidence": route.confidence,
+        },
+        "diagnostics": [
+            {"category": d.category, "file": d.file, "message": d.message[:500]}
+            for d in diagnostics
+        ],
+        "files_repaired": [str(p) for p in outcome.repaired_files],
+        "steps_applied": outcome.steps_applied,
+        "any_modified": outcome.any_modified,
+        "file_results": [
+            {
+                "file": str(fr.file_path),
+                "success": fr.success,
+                "before_valid": fr.before_valid,
+                "after_valid": fr.after_valid,
+                "steps_applied": fr.steps_applied,
+            }
+            for fr in outcome.file_results
+        ],
+    }
+
+    try:
+        artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return artifact_path
+    except OSError:
+        logger.debug("Failed to persist repair artifact to %s", artifact_path)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 1: Contractor entry point
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -390,10 +499,15 @@ def run_file_repair(
 
             all_step_names.update(applied)
 
+            before_valid = _validator.validate(code)
+            after_valid = _validator.validate(repaired)
             file_results.append(FileRepairResult(
                 file_path=file_path,
-                before_valid=_validator.validate(code),
-                after_valid=_validator.validate(repaired),
+                success=modified and after_valid,
+                original_code=code,
+                repaired_code=repaired if modified else "",
+                before_valid=before_valid,
+                after_valid=after_valid,
                 steps_applied=applied,
                 step_results=step_results,
             ))
@@ -424,13 +538,29 @@ def run_file_repair(
                 span.set_attribute("repair.success", any_modified)
                 span.set_attribute("repair.feature_name", "")
 
-        return RepairOutcome(
+        # Update step effectiveness tracking (REQ-RPL-503)
+        all_step_results = [
+            sr for fr in file_results for sr in fr.step_results
+        ]
+        _update_step_effectiveness(all_step_results, any_modified)
+
+        outcome = RepairOutcome(
             repaired_files=repaired_files,
             file_results=file_results,
             steps_applied=sorted(all_step_names),
             route=route,
             any_modified=any_modified,
         )
+
+        # Persist repair artifact (REQ-RPL-404) — advisory, never blocks
+        try:
+            _persist_repair_artifact(
+                outcome, diagnostics, route, project_root,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        return outcome
     finally:
         if span_ctx is not None:
             span_ctx.__exit__(None, None, None)

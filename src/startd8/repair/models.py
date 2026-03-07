@@ -200,6 +200,9 @@ class FileRepairResult:
     """Per-file repair outcome."""
 
     file_path: Path
+    success: bool = False
+    original_code: str = ""
+    repaired_code: str = ""
     before_valid: bool = False
     after_valid: bool = False
     steps_applied: List[str] = field(default_factory=list)
@@ -230,3 +233,18 @@ class RepairPipelineResult:
     recheckpoint_passed: bool = False
     recheckpoint_results: List[Any] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StepEffectiveness:
+    """Per-step success rate tracking for cost-benefit analysis (REQ-RPL-503)."""
+
+    step_name: str
+    attempts: int = 0
+    modifications: int = 0
+    reverts: int = 0
+    contributed_to_success: int = 0
+
+    @property
+    def effectiveness_rate(self) -> float:
+        return self.contributed_to_success / self.attempts if self.attempts > 0 else 0.0

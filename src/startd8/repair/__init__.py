@@ -26,9 +26,16 @@ from .models import (
     RepairRoute,
     RepairStepResult,
     StagingError,
+    StepEffectiveness,
     SyntaxDiagnostic,
 )
-from .orchestrator import reset_circuit_breaker, run_element_repair, run_file_repair
+from .orchestrator import (
+    get_step_effectiveness,
+    reset_circuit_breaker,
+    reset_step_effectiveness,
+    run_element_repair,
+    run_file_repair,
+)
 from .protocol import AstParseValidator, PipelineValidator, RepairStep, StepValidator
 from .routing import route_failures
 
@@ -51,9 +58,12 @@ __all__ = [
     "RepairStep",
     "RepairStepResult",
     "StagingError",
+    "StepEffectiveness",
     "StepValidator",
     "SyntaxDiagnostic",
+    "get_step_effectiveness",
     "reset_circuit_breaker",
+    "reset_step_effectiveness",
     "route_failures",
     "run_element_repair",
     "run_file_repair",
