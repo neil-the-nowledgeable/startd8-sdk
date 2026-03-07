@@ -1759,8 +1759,8 @@ class PrimeContractorWorkflow:
                 logger.info("Feature '%s' has prior error — regenerating with feedback: %s", feature.name, feature.error_message, extra={'feature_name': feature.name, 'prior_error': feature.error_message})
                 prior_error = feature.error_message
                 # REQ-RPL-204: Enrich prior_error with structured repair context
-                if feature.metadata and feature.metadata.get("_repair_context"):
-                    rc = feature.metadata.pop("_repair_context")
+                rc = (feature.metadata or {}).pop("_repair_context", None)
+                if rc:
                     prior_error += (
                         f"\n\n[Structured repair context]\n"
                         f"Steps applied: {rc.get('repair_steps_applied', [])}\n"
@@ -2883,17 +2883,18 @@ class PrimeContractorWorkflow:
                     "repair_attempted": True,
                     "repair_steps_applied": result.metadata.get("repair_steps", []),
                     "repair_files_modified": result.metadata.get("repair_files_modified", []),
-                    "repair_duration_ms": result.metadata.get("repair_duration_ms", 0),
+                    "repair_duration_ms": result.metadata.get("repair_duration_ms") or 0,
                     "repair_error": result.metadata.get("repair_error"),
                 }
                 # Sanitize diagnostic strings
                 try:
                     from ..repair.diagnostics import sanitize_diagnostic
-                    for key in ("repair_error",):
-                        if repair_context.get(key):
-                            repair_context[key] = sanitize_diagnostic(str(repair_context[key]))
+                    if repair_context.get("repair_error"):
+                        repair_context["repair_error"] = sanitize_diagnostic(
+                            str(repair_context["repair_error"]),
+                        )
                 except ImportError:
-                    pass
+                    logger.debug("repair.diagnostics not available — skipping sanitization")
 
                 if feature.metadata is None:
                     feature.metadata = {}

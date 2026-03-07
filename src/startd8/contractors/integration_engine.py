@@ -869,7 +869,7 @@ class IntegrationEngine:
                     estimated_regen_cost = getattr(
                         self._repair_config,
                         "estimated_regen_cost_usd",
-                        0.75,  # midpoint of $0.50-$1.00 range
+                        0.75,  # static estimate; midpoint of $0.50-$1.00 regen range
                     )
                     result_obj_metadata[
                         "repair_cost_avoided_usd"
@@ -880,7 +880,7 @@ class IntegrationEngine:
                         from ..repair import record_cost_avoided
                         record_cost_avoided(estimated_regen_cost)
                     except ImportError:
-                        pass
+                        logger.debug("repair.record_cost_avoided not available — skipping OTel cost counter")
 
                     # REQ-RPL-303: Handoff attribution (P2)
                     result_obj_metadata["repairs"] = [
@@ -989,25 +989,23 @@ class IntegrationEngine:
         Returns:
             Merged content string on success, or ``None`` if a
             contradiction is detected (generated deletes/replaces target
-            lines).
+            lines), or if either input is empty.
         """
+        if not target:
+            return None
+
         import difflib
 
         gen_lines = generated.splitlines(keepends=True)
         tgt_lines = target.splitlines(keepends=True)
 
         sm = difflib.SequenceMatcher(None, tgt_lines, gen_lines, autojunk=False)
-        opcodes = sm.get_opcodes()
-
-        for tag, i1, i2, j1, j2 in opcodes:
-            if tag == "replace":
-                return None
 
         merged: list[str] = []
-        for tag, i1, i2, j1, j2 in opcodes:
-            if tag == "equal":
-                merged.extend(tgt_lines[i1:i2])
-            elif tag == "delete":
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "replace":
+                return None
+            elif tag in ("equal", "delete"):
                 merged.extend(tgt_lines[i1:i2])
             elif tag == "insert":
                 merged.extend(gen_lines[j1:j2])

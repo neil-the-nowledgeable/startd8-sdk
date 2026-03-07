@@ -83,6 +83,9 @@ def record_cost_avoided(amount: float) -> None:
 
     Called by integration_engine when repair succeeds to track ROI.
     No-op when OTel is not configured or amount <= 0.
+
+    Args:
+        amount: Estimated USD cost of regeneration that was avoided.
     """
     if _repair_cost_avoided is not None and amount > 0:
         _repair_cost_avoided.add(amount)
@@ -192,121 +195,123 @@ def _run_steps(
     current = code
     total_start = time.monotonic()
 
-    for step in steps:
-        # Total timeout check
-        elapsed = time.monotonic() - total_start
-        if elapsed >= config.total_timeout_s:
-            logger.debug("Repair total timeout (%.1fs) reached", config.total_timeout_s)
-            break
+    # Single executor for all steps — avoids per-step thread pool overhead.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        for step in steps:
+            # Total timeout check
+            elapsed = time.monotonic() - total_start
+            if elapsed >= config.total_timeout_s:
+                logger.debug("Repair total timeout (%.1fs) reached", config.total_timeout_s)
+                break
 
-        step_name = getattr(step, "name", step.__class__.__name__)
-        _emit_event("PIPELINE_STEP_START", "repair", {"step_name": step_name})
+            step_name = getattr(step, "name", step.__class__.__name__)
+            _emit_event("PIPELINE_STEP_START", "repair", {"step_name": step_name})
 
-        step_start = time.monotonic()
-        was_valid_before = _validator.validate(current, is_method)
+            step_start = time.monotonic()
+            was_valid_before = _validator.validate(current, is_method)
 
-        try:
-            # Per-step timeout enforcement (REQ-RPL-007 / acceptance 9.2.3)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                # Per-step timeout enforcement (REQ-RPL-007 / acceptance 9.2.3)
                 future = pool.submit(step, current, context, file_path, element_context)
                 result = future.result(timeout=config.per_step_timeout_s)
-        except concurrent.futures.TimeoutError:
-            logger.debug(
-                "Repair step '%s' timed out after %.1fs",
-                step_name, config.per_step_timeout_s,
-            )
-            result = RepairStepResult(
-                step_name=step_name,
-                modified=False,
-                code=current,
-                metrics={"skipped_reason": "timeout"},
-            )
-        except RepairError as exc:
-            logger.debug("Repair step '%s' raised RepairError: %s", step_name, exc)
-            result = RepairStepResult(
-                step_name=step_name,
-                modified=False,
-                code=current,
-                metrics={"error": str(exc)},
-            )
-        except Exception as exc:  # noqa: BLE001 — intentional fallback; RepairError caught above
-            logger.debug("Repair step '%s' failed: %s", step_name, exc)
-            result = RepairStepResult(
-                step_name=step_name,
-                modified=False,
-                code=current,
-                metrics={"error": str(exc)},
-            )
-
-        step_duration_ms = (time.monotonic() - step_start) * 1000
-        reverted = False
-
-        if result.modified:
-            # Delta guardrail (REQ-RPL-007/R5-S1) — only when code was
-            # already valid. Invalid code may need drastic repair.
-            delta = _delta_fraction(current, result.code)
-            if was_valid_before and delta > config.delta_threshold:
-                logger.debug(
-                    "Repair step '%s' changed %.0f%% of lines (threshold %.0f%%) — skipped",
-                    step_name, delta * 100, config.delta_threshold * 100,
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                logger.warning(
+                    "Repair step '%s' timed out after %.1fs — orphaned thread may still be running",
+                    step_name, config.per_step_timeout_s,
                 )
-                result.modified = False
-                result.code = current
-                result.metrics["skipped_delta"] = delta
-
-            # Non-destructive guard
-            elif was_valid_before and not _validator.validate(result.code, is_method):
-                logger.debug(
-                    "Repair step '%s' broke valid code — reverting", step_name,
+                result = RepairStepResult(
+                    step_name=step_name,
+                    modified=False,
+                    code=current,
+                    metrics={"skipped_reason": "timeout"},
                 )
-                result.modified = False
-                result.code = current
-                result.metrics["reverted"] = True
-                reverted = True
+            except RepairError as exc:
+                logger.debug("Repair step '%s' raised RepairError: %s", step_name, exc)
+                result = RepairStepResult(
+                    step_name=step_name,
+                    modified=False,
+                    code=current,
+                    metrics={"error": str(exc)},
+                )
+            except Exception as exc:  # noqa: BLE001 — intentional fallback; RepairError caught above
+                logger.debug("Repair step '%s' failed: %s", step_name, exc)
+                result = RepairStepResult(
+                    step_name=step_name,
+                    modified=False,
+                    code=current,
+                    metrics={"error": str(exc)},
+                )
+
+            step_duration_ms = (time.monotonic() - step_start) * 1000
+            reverted = False
+
+            if result.modified:
+                # Delta guardrail (REQ-RPL-007/R5-S1) — only when code was
+                # already valid. Invalid code may need drastic repair.
+                delta = _delta_fraction(current, result.code)
+                if was_valid_before and delta > config.delta_threshold:
+                    logger.debug(
+                        "Repair step '%s' changed %.0f%% of lines (threshold %.0f%%) — skipped",
+                        step_name, delta * 100, config.delta_threshold * 100,
+                    )
+                    result.modified = False
+                    result.code = current
+                    result.metrics["skipped_delta"] = delta
+
+                # Non-destructive guard
+                elif was_valid_before and not _validator.validate(result.code, is_method):
+                    logger.debug(
+                        "Repair step '%s' broke valid code — reverting", step_name,
+                    )
+                    result.modified = False
+                    result.code = current
+                    result.metrics["reverted"] = True
+                    reverted = True
+                else:
+                    current = result.code
+
+            # Determine step outcome for OTel
+            skipped_reason = result.metrics.get("skipped_reason")
+            if skipped_reason:
+                step_outcome = "skipped"
+            elif reverted:
+                step_outcome = "reverted"
+            elif result.modified:
+                step_outcome = "applied"
             else:
-                current = result.code
+                step_outcome = "no_change"
 
-        # Determine step outcome for OTel
-        skipped_reason = result.metrics.get("skipped_reason")
-        if skipped_reason:
-            step_outcome = "skipped"
-        elif reverted:
-            step_outcome = "reverted"
-        elif result.modified:
-            step_outcome = "applied"
-        else:
-            step_outcome = "no_change"
+            # Emit per-step OTel span event (REQ-RPL-400)
+            if _HAS_OTEL and _tracer is not None:
+                span = trace.get_current_span()
+                if span.is_recording():
+                    span.add_event(
+                        f"repair.step.{step_name}",
+                        attributes={
+                            "modified": result.modified,
+                            "reverted": reverted,
+                            "duration_ms": step_duration_ms,
+                            **({"skipped_reason": skipped_reason} if skipped_reason else {}),
+                        },
+                    )
 
-        # Emit per-step OTel span event (REQ-RPL-400)
-        if _HAS_OTEL and _tracer is not None:
-            span = trace.get_current_span()
-            if span.is_recording():
-                span.add_event(
-                    f"repair.step.{step_name}",
-                    attributes={
-                        "modified": result.modified,
-                        "reverted": reverted,
-                        "duration_ms": step_duration_ms,
-                        **({"skipped_reason": skipped_reason} if skipped_reason else {}),
-                    },
-                )
+            # Emit per-step metric (REQ-RPL-401)
+            if _repair_steps_applied is not None:
+                _repair_steps_applied.add(1, {"step_name": step_name, "outcome": step_outcome})
 
-        # Emit per-step metric (REQ-RPL-401)
-        if _repair_steps_applied is not None:
-            _repair_steps_applied.add(1, {"step_name": step_name, "outcome": step_outcome})
+            results.append(result)
 
-        results.append(result)
-
-        _emit_event(
-            "PIPELINE_STEP_RETRY" if reverted else "PIPELINE_STEP_COMPLETE",
-            "repair",
-            {
-                "step_name": step_name,
-                "reverted": reverted,
-                "duration_ms": step_duration_ms,
-                "modified": result.modified,
-            },
-        )
+            _emit_event(
+                "PIPELINE_STEP_RETRY" if reverted else "PIPELINE_STEP_COMPLETE",
+                "repair",
+                {
+                    "step_name": step_name,
+                    "reverted": reverted,
+                    "duration_ms": step_duration_ms,
+                    "modified": result.modified,
+                },
+            )
 
     return current, results
 
