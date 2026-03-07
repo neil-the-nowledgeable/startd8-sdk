@@ -3798,6 +3798,39 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             seed_dict = seed.to_dict()
+
+            # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)
+            _sq_score, _sq_warnings = compute_seed_quality(seed_dict)
+            _parse_q = {}
+            if parsed_plan is not None:
+                _parse_q = compute_parse_quality(
+                    parsed_plan.features,
+                    parsed_plan.dependency_graph,
+                    parsed_plan.mentioned_files,
+                )
+            _assess_q = {}
+            if complexity is not None:
+                _dims = [
+                    complexity.feature_count, complexity.cross_file_deps,
+                    complexity.api_surface, complexity.test_complexity,
+                    complexity.integration_depth, complexity.domain_novelty,
+                    complexity.ambiguity,
+                ]
+                _assess_q = compute_assess_quality(
+                    complexity.composite,
+                    route.value,
+                    getattr(self, "_complexity_threshold", 40),
+                    _dims,
+                )
+            seed_dict["_ingestion_quality"] = {
+                "seed_quality_score": _sq_score,
+                "features_extracted": _parse_q.get("features_extracted", 0),
+                "multi_file_features": _parse_q.get("multi_file_features", 0),
+                "route_margin": _assess_q.get("route_margin", 0),
+                "field_coverage_warnings": _sq_warnings,
+                "diagnostic_report_path": "plan-ingestion-diagnostic.json",
+            }
+
             if not _validate_context_seed(seed_dict):
                 seed_dict["_schema_valid"] = False
             _log_seed_coverage(seed_dict)
@@ -3991,6 +4024,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         if self._kaizen_config and self._kaizen_config.complexity_threshold_override is not None:
             threshold = self._kaizen_config.complexity_threshold_override
             logger.info("Kaizen: complexity threshold overridden to %d", threshold)
+        self._complexity_threshold = threshold
 
         # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
         try:

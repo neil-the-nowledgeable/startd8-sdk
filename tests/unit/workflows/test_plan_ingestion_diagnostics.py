@@ -431,3 +431,87 @@ class TestPlanIngestionTrends:
 
         rc = main(["--runs-dir", str(tmp_path), "--json"])
         assert rc == 0
+
+
+# ── Seed quality injection + gate (Phase 3) ──────────────────────────
+
+
+def _make_seed_with_quality(score: float, warnings: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Create a minimal seed dict with _ingestion_quality block."""
+    return {
+        "tasks": [],
+        "_ingestion_quality": {
+            "seed_quality_score": score,
+            "features_extracted": 3,
+            "multi_file_features": 1,
+            "route_margin": 10,
+            "field_coverage_warnings": warnings or [],
+            "diagnostic_report_path": "plan-ingestion-diagnostic.json",
+        },
+    }
+
+
+class TestIngestionQualityInSeed:
+    def test_quality_block_structure(self):
+        seed = _make_seed_with_quality(0.85, ["no onboarding"])
+        q = seed["_ingestion_quality"]
+        assert q["seed_quality_score"] == 0.85
+        assert q["features_extracted"] == 3
+        assert q["multi_file_features"] == 1
+        assert q["route_margin"] == 10
+        assert q["field_coverage_warnings"] == ["no onboarding"]
+        assert q["diagnostic_report_path"] == "plan-ingestion-diagnostic.json"
+
+
+class TestCheckSeedQuality:
+    def test_passes_high_score(self, tmp_path: Path):
+        from scripts.check_seed_quality import check_seed_quality
+
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(_make_seed_with_quality(0.9)))
+        passes, score, warnings = check_seed_quality(seed_path, threshold=0.5)
+        assert passes is True
+        assert score == 0.9
+
+    def test_warns_low_score(self, tmp_path: Path):
+        from scripts.check_seed_quality import check_seed_quality
+
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(
+            _make_seed_with_quality(0.3, ["no architectural_context", "no onboarding"])
+        ))
+        passes, score, warnings = check_seed_quality(seed_path, threshold=0.5)
+        assert passes is False
+        assert score == 0.3
+        assert len(warnings) == 2
+
+    def test_main_exit_code_ok(self, tmp_path: Path):
+        from scripts.check_seed_quality import main
+
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(_make_seed_with_quality(0.9)))
+        rc = main([str(seed_path), "--threshold", "0.5"])
+        assert rc == 0
+
+    def test_main_exit_code_warn(self, tmp_path: Path):
+        from scripts.check_seed_quality import main
+
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(_make_seed_with_quality(0.3)))
+        rc = main([str(seed_path), "--threshold", "0.5"])
+        assert rc == 1
+
+    def test_main_missing_file(self, tmp_path: Path):
+        from scripts.check_seed_quality import main
+
+        rc = main([str(tmp_path / "nonexistent.json")])
+        assert rc == 2
+
+    def test_no_quality_block_defaults_to_pass(self, tmp_path: Path):
+        from scripts.check_seed_quality import check_seed_quality
+
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps({"tasks": []}))
+        passes, score, warnings = check_seed_quality(seed_path, threshold=0.5)
+        assert passes is True
+        assert score == 1.0  # default when block missing
