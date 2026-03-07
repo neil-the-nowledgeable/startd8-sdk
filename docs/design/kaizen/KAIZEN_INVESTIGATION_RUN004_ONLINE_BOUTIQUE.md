@@ -471,7 +471,7 @@ All paths relative to `/Users/neilyashinsky/Documents/dev/online-boutique-demo/.
 | INV-1 | Critical | **FIXED** | Success cache now stores generated code (`dict[str, Optional[str]]`). Post-splice stub detection marks code-less cache hits as failed when stubs remain. | `270189e` |
 | INV-2 | High | **FIXED** | `_success_cache` changed from `set` → `dict` to carry code through cache hits. Cache-hit results now populate `result.code`. | `270189e` |
 | INV-3 | Medium | **FIXED** | `_derive_target_from_source()` now matches source filename against `unit.target_files` before falling back to bare filename at project root. | `076b3e2` |
-| INV-4 | High | **FIXED** | `ASTMergeStrategy` auto-detects when source class/function names overlap target >50% and switches to "replace" mode, preventing garbled additive merge of complete standalone files. | `TBD` |
-| INV-5 | High | **FIXED** | Review phase now logs warnings when generated files are missing from disk instead of silently skipping, making staging cleanup / checkpoint path issues visible. | `TBD` |
+| INV-4 | High | **FIXED** | `ASTMergeStrategy` auto-detects when source class/function names overlap target >50% and switches to "replace" mode, preventing garbled additive merge of complete standalone files. | `a89f060` |
+| INV-5 | High | **FIXED** | Review phase now logs warnings when generated files are missing from disk instead of silently skipping, making staging cleanup / checkpoint path issues visible. | `a89f060` |
 | INV-6 | Critical | **FIXED** | Post-assembly stub detection gate: files with remaining `raise NotImplementedError` are escalated to fallback (if available) or excluded from `effective_file_count` (Mottainai — keep partial file, report `success=false`). | `270189e` |
 | INV-7 | Low | **NOT ADDRESSED** | Model quality issue with `startd8-coder`. Nested duplicate function pattern tracked for prompt/tier threshold tuning. | — |
