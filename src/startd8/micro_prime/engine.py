@@ -556,11 +556,14 @@ class MicroPrimeEngine:
                         last_code=result.code,
                     )
 
-        # Post-splice stub detection: if any `raise NotImplementedError`
-        # stubs remain, the skeleton is incomplete.  Mark remaining stub
-        # elements as failed so the fill-rate gate in prime_adapter catches
-        # partial skeletons instead of writing them to disk.
-        if "raise NotImplementedError" in current_skeleton:
+        # Post-splice defect detection: if skeleton markers or
+        # `raise NotImplementedError` stubs remain, the skeleton is
+        # incomplete.  Mark remaining stub elements as failed so the
+        # fill-rate gate in prime_adapter catches partial skeletons
+        # instead of writing them to disk.
+        _has_stubs = "raise NotImplementedError" in current_skeleton
+        _has_marker = "# [STARTD8-SKELETON]" in current_skeleton
+        if _has_stubs or _has_marker:
             for er in file_result.element_results:
                 if er.success and not er.code:
                     # Cache-hit with no code — splice was skipped

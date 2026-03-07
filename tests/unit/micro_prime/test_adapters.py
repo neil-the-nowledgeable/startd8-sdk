@@ -1574,3 +1574,64 @@ class TestDesignDocSectionsPassedToEngine:
                 call_kwargs = mock_pf.call_args
                 # Check that design_doc_sections was passed
                 assert call_kwargs.kwargs.get("design_doc_sections") == sections
+
+
+class TestDetectAssemblyDefect:
+    """Tests for the _detect_assembly_defect helper."""
+
+    def test_clean_file_returns_none(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = "def greet():\n    return 'hello'\n"
+        assert _detect_assembly_defect(code, "greet.py") is None
+
+    def test_detects_not_implemented_stubs(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = "def greet():\n    raise NotImplementedError\n"
+        result = _detect_assembly_defect(code, "greet.py")
+        assert result is not None
+        assert "NotImplementedError" in result
+
+    def test_detects_skeleton_marker(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = "# [STARTD8-SKELETON]\ndef greet():\n    return 'hello'\n"
+        result = _detect_assembly_defect(code, "greet.py")
+        assert result is not None
+        assert "SKELETON" in result
+
+    def test_detects_nested_duplicate_function(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = (
+            "def foo():\n"
+            "    import os\n"
+            "    def foo():\n"
+            "        return 1\n"
+        )
+        result = _detect_assembly_defect(code, "foo.py")
+        assert result is not None
+        assert "nested duplicate" in result
+        assert "foo" in result
+
+    def test_allows_differently_named_nested_function(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = "def foo():\n    def bar():\n        return 1\n    return bar()\n"
+        assert _detect_assembly_defect(code, "foo.py") is None
+
+    def test_syntax_error_returns_defect(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = "def foo(\n"  # invalid syntax
+        result = _detect_assembly_defect(code, "foo.py")
+        assert result is not None
+        assert "SyntaxError" in result
+
+    def test_non_python_skips_ast_checks(self) -> None:
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        # Non-.py file with nested function text should not trigger AST check
+        code = "def foo():\n    def foo():\n        pass\n"
+        assert _detect_assembly_defect(code, "foo.html") is None

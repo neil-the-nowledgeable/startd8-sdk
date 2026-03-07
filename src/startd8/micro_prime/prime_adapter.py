@@ -159,6 +159,42 @@ def _extract_element_from_generated(
     return None
 
 
+_SKELETON_MARKER = "# [STARTD8-SKELETON]"
+
+
+def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
+    """Return a human-readable defect description, or ``None`` if clean.
+
+    Checks for three classes of assembly defect:
+    1. Remaining ``raise NotImplementedError`` stubs
+    2. ``[STARTD8-SKELETON]`` markers (skeleton was never fully assembled)
+    3. Nested duplicate function definitions (Ollama over-generation artifact)
+    """
+    if "raise NotImplementedError" in content:
+        return "remaining `raise NotImplementedError` stubs"
+    if _SKELETON_MARKER in content:
+        return "`[STARTD8-SKELETON]` marker still present"
+    # Nested duplicate: a function whose body contains a def with the same name
+    if file_path.endswith(".py"):
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return "file does not parse (SyntaxError)"
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for child in ast.walk(node):
+                    if (
+                        child is not node
+                        and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and child.name == node.name
+                    ):
+                        return (
+                            f"nested duplicate function `{node.name}` "
+                            f"(Ollama over-generation)"
+                        )
+    return None
+
+
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
 
@@ -435,12 +471,12 @@ class MicroPrimeCodeGenerator:
         if generated_files:
             self._run_post_generation_repair(generated_files)
 
-        # Post-assembly stub detection: files that still contain
-        # `raise NotImplementedError` stubs after all generation and
-        # element-level cloud escalation are incomplete.  Remove them
-        # from generated_files and escalate to fallback.
-        # Only check files that had elements processed (skip files where
-        # the engine produced no element results — e.g. passthrough).
+        # Post-assembly file-level validation: detect files that are
+        # structurally incomplete even when all elements pass individually.
+        # Checks: (1) remaining `raise NotImplementedError` stubs,
+        # (2) `[STARTD8-SKELETON]` markers, (3) nested duplicate functions.
+        # Incomplete files are escalated to fallback or excluded from
+        # effective count.
         stub_escalated: list[str] = []
         for file_path in list(written_file_paths):
             fr = file_results_by_path.get(file_path)
@@ -452,12 +488,15 @@ class MicroPrimeCodeGenerator:
                 content = output_path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            if "raise NotImplementedError" in content:
+
+            # Check for assembly defects
+            defect = _detect_assembly_defect(content, file_path)
+            if defect is not None:
                 if self._fallback is not None:
                     logger.warning(
-                        "Micro Prime skeleton for %s still contains "
-                        "`raise NotImplementedError` stubs — escalating to fallback",
-                        file_path,
+                        "Micro Prime file %s has assembly defect: %s "
+                        "— escalating to fallback",
+                        file_path, defect,
                     )
                     stub_escalated.append(file_path)
                     written_file_paths.discard(file_path)
@@ -471,9 +510,9 @@ class MicroPrimeCodeGenerator:
                     # No fallback available — keep the partial file but
                     # exclude from effective count so success=false.
                     logger.warning(
-                        "Micro Prime skeleton for %s still contains "
-                        "`raise NotImplementedError` stubs (no fallback available)",
-                        file_path,
+                        "Micro Prime file %s has assembly defect: %s "
+                        "(no fallback available)",
+                        file_path, defect,
                     )
                     stub_escalated.append(file_path)
 
