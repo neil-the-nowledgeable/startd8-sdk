@@ -1331,6 +1331,14 @@ class PlanIngestionWorkflow(WorkflowBase):
                     description="Fallback to deterministic parse/assess/transform when LLM output is invalid",
                 ),
                 WorkflowInput(
+                    name="force_regenerate",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Exclude target files from SOURCE_RECONCILE AST parsing (INV-12). "
+                    "Prevents prior-run output from inflating the ForwardManifest.",
+                ),
+                WorkflowInput(
                     name="kaizen",
                     type="boolean",
                     required=False,
@@ -3473,6 +3481,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         review_output: Optional[Dict[str, Any]] = None,
         project_metadata: Optional[Dict[str, Any]] = None,
         project_root: Optional[Path] = None,
+        force_regenerate: bool = False,
     ) -> EmitResult:
         from startd8.forward_manifest_extractor import extract_forward_contracts
 
@@ -3520,6 +3529,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     tentative_contracts=tentative_contracts,
                     project_root=project_root,
                     reference_root=reference_root,
+                    force_regenerate=force_regenerate,
                 )
 
                 forward_manifest_dict = forward_manifest.model_dump()
@@ -4574,6 +4584,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 review_output=review_output,
                 project_metadata=project_metadata,
                 project_root=_emit_project_root,
+                force_regenerate=config.get("force_regenerate", False),
             )
 
             # Emit deterministic traceability report for downstream auditing.
