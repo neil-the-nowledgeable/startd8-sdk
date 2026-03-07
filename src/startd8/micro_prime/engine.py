@@ -74,6 +74,19 @@ try:
         description="End-to-end time for decompose + generate + assemble",
         unit="ms",
     )
+    # Phase 3: Simple decompose OTel counters
+    _simple_decompose_attempted = _meter.create_counter(
+        "micro_prime.simple_decompose_attempted",
+        description="SIMPLE function body decomposition attempts",
+    )
+    _simple_decompose_succeeded = _meter.create_counter(
+        "micro_prime.simple_decompose_succeeded",
+        description="SIMPLE function body decompositions that produced code",
+    )
+    _simple_decompose_rejected = _meter.create_counter(
+        "micro_prime.simple_decompose_rejected",
+        description="SIMPLE function body decompositions that fell back to LLM",
+    )
 except ImportError:
     _decomp_attempted = None
     _decomp_succeeded = None
@@ -81,6 +94,9 @@ except ImportError:
     _decomp_rejected = None
     _sub_elements_generated = None
     _decomp_time_ms = None
+    _simple_decompose_attempted = None
+    _simple_decompose_succeeded = None
+    _simple_decompose_rejected = None
 
 
 def _record_decomp_attempted(strategy: str, file_path: str) -> None:
@@ -118,6 +134,22 @@ def _record_sub_element(strategy: str, tier: str) -> None:
 def _record_decomp_time(strategy: str, duration_ms: float) -> None:
     if _decomp_time_ms is not None:
         _decomp_time_ms.record(duration_ms, {"strategy": strategy})
+
+
+
+def _record_simple_decompose_attempted(file_path: str) -> None:
+    if _simple_decompose_attempted is not None:
+        _simple_decompose_attempted.add(1, {"file_path": file_path})
+
+
+def _record_simple_decompose_succeeded(file_path: str) -> None:
+    if _simple_decompose_succeeded is not None:
+        _simple_decompose_succeeded.add(1, {"file_path": file_path})
+
+
+def _record_simple_decompose_rejected(file_path: str) -> None:
+    if _simple_decompose_rejected is not None:
+        _simple_decompose_rejected.add(1, {"file_path": file_path})
 
 
 _CODE_GEN_SYSTEM_PROMPT = (
@@ -219,6 +251,14 @@ class MicroPrimeEngine:
         self._success_cache: dict[str, Optional[str]] = {}
         # Decomposer for MODERATE elements (REQ-MP-900)
         self._decomposer = ModerateDecomposer(config=self._config, template_registry=self._templates)
+        # Phase 3: Function-body decomposer for SIMPLE elements (lazy import, Leg 11 #55)
+        self._function_body_decomposer: Optional[Any] = None
+        if self._config.enable_simple_decomposer:
+            from startd8.micro_prime.clause_mapper import FunctionBodyDecomposer
+            self._function_body_decomposer = FunctionBodyDecomposer(
+                template_registry=self._templates,
+                confidence_threshold=self._config.simple_decomposer_confidence_threshold,
+            )
         # Manifest reference for _handle_moderate (set by process_file, None for process_element)
         self._current_manifest: Optional[ForwardManifest] = None
         # Cached Ollama agent (C-1: avoid re-creation per element)
@@ -1159,6 +1199,51 @@ class MicroPrimeEngine:
             )
             self._metrics.record(result)
             return result
+
+        # Phase 3: Function-body decomposition — try to decompose SIMPLE function
+        # into template-renderable clauses before falling back to Ollama.
+        decomposer = getattr(self, "_function_body_decomposer", None)
+        if self._config.enable_simple_decomposer and decomposer is not None:
+            _record_simple_decompose_attempted(file_path)
+            decomposed_code = decomposer.try_decompose(
+                element, file_spec, contracts,
+            )
+            if decomposed_code is not None:
+                logger.info(
+                    "Function-body decomposition succeeded for %s (0 LLM calls)",
+                    element.name,
+                )
+                _record_simple_decompose_succeeded(file_path)
+                self._completed.append({
+                    "element": {
+                        "name": element.name,
+                        "parent_class": element.parent_class,
+                        "kind": element.kind,
+                    },
+                    "file_path": file_path,
+                    "code": decomposed_code,
+                    "syntax_valid": True,
+                })
+                result = ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason=reasoning,
+                    success=True,
+                    code=decomposed_code,
+                    template_used=True,
+                    template_name="function_body_decompose",
+                    model="template",
+                    verification_verdict="skipped",
+                    decomposition_metadata={
+                        "strategy": "function_body_decompose",
+                        "llm_calls": 0,
+                    },
+                )
+                self._metrics.record(result)
+                return result
+            else:
+                _record_simple_decompose_rejected(file_path)
 
         # Build few-shot examples
         few_shot = None
