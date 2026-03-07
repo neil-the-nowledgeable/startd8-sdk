@@ -596,9 +596,30 @@ def _format_forward_element_specs(
         lines.append(f"### {path}")
         for elem in fspec.elements:
             kind_label = elem.kind.value
+
+            # Callable modifiers (B1)
+            modifiers: list[str] = []
+            if getattr(elem, "is_static", False):
+                modifiers.append("static")
+            if getattr(elem, "is_classmethod", False):
+                modifiers.append("classmethod")
+            if getattr(elem, "is_abstract", False):
+                modifiers.append("abstract")
+            modifier_str = " ".join(modifiers) + " " if modifiers else ""
+
             sig_str = ""
             if elem.signature:
                 sig_str = _format_signature_with_kinds(elem.signature)
+
+            # Constant/variable rendering (B3)
+            assign_str = ""
+            if not sig_str and elem.kind.value in ("constant", "variable"):
+                type_ann = getattr(elem, "type_annotation", None)
+                value = getattr(elem, "value_repr", None)
+                if type_ann:
+                    assign_str = f": {type_ann}"
+                if value:
+                    assign_str += f" = {value}"
 
             bases_str = ""
             if elem.bases:
@@ -615,7 +636,7 @@ def _format_forward_element_specs(
                 visibility_str = f" [{elem.visibility.value}]"
 
             lines.append(
-                f"- **{kind_label}** `{elem.name}{sig_str}`{bases_str}"
+                f"- **{modifier_str}{kind_label}** `{elem.name}{sig_str}{assign_str}`{bases_str}"
                 f"{decorators_str}{visibility_str}"
             )
 

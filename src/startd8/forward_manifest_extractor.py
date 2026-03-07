@@ -309,6 +309,18 @@ def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
             parts.append(f"base={kwargs['base_class']}")
     elif cat == ContractCategory.API_ENDPOINT and kwargs.get("endpoint"):
         parts.append(f"endpoint={kwargs['endpoint']}")
+        # Include request/response type names when available (B4)
+        req_schema = kwargs.get("request_schema")
+        resp_schema = kwargs.get("response_schema")
+        if isinstance(req_schema, dict) or isinstance(resp_schema, dict):
+            req_fields = req_schema.get("fields", []) if isinstance(req_schema, dict) else []
+            resp_fields = resp_schema.get("fields", []) if isinstance(resp_schema, dict) else []
+            if req_fields:
+                field_names = ", ".join(f["name"] for f in req_fields[:5])
+                parts.append(f"request_fields=[{field_names}]")
+            if resp_fields:
+                field_names = ", ".join(f["name"] for f in resp_fields[:5])
+                parts.append(f"response_fields=[{field_names}]")
     elif cat == ContractCategory.CONFIG_KEY and kwargs.get("env_var"):
         parts.append(f"env_var={kwargs['env_var']}")
     elif cat == ContractCategory.IMPORT_PATH and kwargs.get("import_path"):
@@ -701,8 +713,14 @@ class ProtoExtractor:
     """Extract contracts from ``.proto`` files."""
 
     _SERVICE_RE = re.compile(r"service\s+(\w+)\s*\{")
-    _RPC_RE = re.compile(r"rpc\s+(\w+)\s*\(")
+    _RPC_RE = re.compile(
+        r"rpc\s+(\w+)\s*\(\s*(\w+)\s*\)\s*returns\s*\(\s*(\w+)\s*\)"
+    )
     _MESSAGE_RE = re.compile(r"message\s+(\w+)\s*\{")
+    _FIELD_RE = re.compile(
+        r"^\s*(?:repeated\s+|optional\s+|map<\w+,\s*\w+>\s+)?(\w+)\s+(\w+)\s*=\s*(\d+)",
+        re.MULTILINE,
+    )
 
     def extract(self, proto_dir: Optional[Path]) -> list[InterfaceContract]:
         """Scan proto_dir for .proto files and extract contracts."""
@@ -716,6 +734,9 @@ class ProtoExtractor:
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("Cannot read %s: %s", proto_file, exc)
                 continue
+
+            # Parse message field schemas for B4 enrichment
+            message_fields = self._parse_message_fields(content)
 
             # Services → CLASS_NAME
             for match in self._SERVICE_RE.finditer(content):
@@ -732,17 +753,30 @@ class ProtoExtractor:
                     )
                 )
 
-            # RPCs → API_ENDPOINT
+            # RPCs → API_ENDPOINT with request/response schemas (B4)
             for match in self._RPC_RE.finditer(content):
                 name = match.group(1)
+                req_type = match.group(2)
+                resp_type = match.group(3)
                 abbrev = _CATEGORY_ABBREV[ContractCategory.API_ENDPOINT]
+
+                req_schema = message_fields.get(req_type)
+                resp_schema = message_fields.get(resp_type)
+
+                description = (
+                    f"gRPC RPC method: {name}"
+                    f"({req_type}) returns ({resp_type})"
+                )
+
                 contracts.append(
                     _make_contract(
                         contract_id=f"flcm-{abbrev}-rpc-{name}",
                         category=ContractCategory.API_ENDPOINT,
                         confidence=ContractConfidence.EXPLICIT,
-                        description=f"gRPC RPC method: {name}",
+                        description=description,
                         endpoint=name,
+                        request_schema=req_schema,
+                        response_schema=resp_schema,
                         source_reference="proto",
                     )
                 )
@@ -763,6 +797,40 @@ class ProtoExtractor:
                 )
 
         return contracts
+
+    def _parse_message_fields(
+        self, content: str
+    ) -> dict[str, dict[str, list[dict[str, str]]]]:
+        """Parse message definitions into field schemas.
+
+        Returns a dict mapping message name to a schema dict with a
+        ``fields`` key listing each field's type, name, and number.
+        """
+        schemas: dict[str, dict[str, list[dict[str, str]]]] = {}
+        for msg_match in self._MESSAGE_RE.finditer(content):
+            msg_name = msg_match.group(1)
+            # Find the message body (from opening brace to matching close)
+            start = msg_match.end()
+            brace_depth = 1
+            pos = start
+            while pos < len(content) and brace_depth > 0:
+                if content[pos] == "{":
+                    brace_depth += 1
+                elif content[pos] == "}":
+                    brace_depth -= 1
+                pos += 1
+            body = content[start:pos - 1] if pos > start else ""
+
+            fields: list[dict[str, str]] = []
+            for field_match in self._FIELD_RE.finditer(body):
+                fields.append({
+                    "type": field_match.group(1),
+                    "name": field_match.group(2),
+                    "number": field_match.group(3),
+                })
+            if fields:
+                schemas[msg_name] = {"fields": fields}
+        return schemas
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1429,9 +1497,6 @@ class SourceReconciler:
 
         # Process top-level elements from AST
         for element in file_manifest.elements:
-            # Skip CONSTANT/VARIABLE — no callable signature
-            if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-                continue
 
             # Rich provenance ID: flcm-ast-{relpath}:{start_line}:{fqn}
             source_id = (
@@ -1461,11 +1526,9 @@ class SourceReconciler:
             else:
                 stats.elements_skipped += 1
 
-            # Process class children (methods)
+            # Process class children (methods, constants, variables)
             if element.kind == ElementKind.CLASS:
                 for child in element.children:
-                    if child.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-                        continue
                     child_key = (element.name, child.name)
                     if child_key not in existing_element_keys:
                         child_source_id = (

@@ -140,6 +140,15 @@ class ForwardElementSpec(BaseModel):
     parent_class: Optional[str] = None
     source_contract_id: Optional[str] = None
 
+    # Callable modifiers (bridged from Element)
+    is_static: bool = False
+    is_classmethod: bool = False
+    is_abstract: bool = False
+
+    # Assignment fields (for CONSTANT/VARIABLE kinds)
+    type_annotation: Optional[str] = None
+    value_repr: Optional[str] = None
+
     @field_validator("parent_class", mode="before")
     @classmethod
     def _normalize_parent_class(cls, v: Optional[str]) -> Optional[str]:
@@ -199,6 +208,11 @@ class ForwardElementSpec(BaseModel):
             visibility=self.visibility,
             decorators=list(self.decorators),
             docstring=self.docstring_hint,
+            is_static=self.is_static,
+            is_classmethod=self.is_classmethod,
+            is_abstract=self.is_abstract,
+            type_annotation=self.type_annotation,
+            value_repr=self.value_repr,
         )
 
 
@@ -391,6 +405,16 @@ def compute_binding_text(contract: InterfaceContract) -> str:
             parts.append(f"base={contract.base_class}")
     elif cat == ContractCategory.API_ENDPOINT and contract.endpoint:
         parts.append(f"endpoint={contract.endpoint}")
+        if isinstance(contract.request_schema, dict):
+            req_fields = contract.request_schema.get("fields", [])
+            if req_fields:
+                field_names = ", ".join(f["name"] for f in req_fields[:5])
+                parts.append(f"request_fields=[{field_names}]")
+        if isinstance(contract.response_schema, dict):
+            resp_fields = contract.response_schema.get("fields", [])
+            if resp_fields:
+                field_names = ", ".join(f["name"] for f in resp_fields[:5])
+                parts.append(f"response_fields=[{field_names}]")
     elif cat == ContractCategory.CONFIG_KEY and contract.env_var:
         parts.append(f"env_var={contract.env_var}")
     elif cat == ContractCategory.IMPORT_PATH and contract.import_path:
@@ -419,7 +443,8 @@ def forward_element_spec_from_element(
 ) -> ForwardElementSpec:
     """Convert an AST ``Element`` to a ``ForwardElementSpec``.
 
-    Skips CONSTANT/VARIABLE kinds (no signature for callables).
+    Supports all element kinds including CONSTANT/VARIABLE (which carry
+    ``type_annotation`` and ``value_repr`` instead of a signature).
     Derives ``parent_class`` from ``element.fqn`` if dotted.
 
     Args:
@@ -429,34 +454,19 @@ def forward_element_spec_from_element(
 
     Returns:
         A validated ``ForwardElementSpec``.
-
-    Raises:
-        ValueError: If the element kind is CONSTANT or VARIABLE.
     """
-    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-        raise ValueError(
-            f"Cannot convert {element.kind.value} element '{element.name}' "
-            "to ForwardElementSpec (no callable signature)"
-        )
-
-    # Derive parent_class only for method/property kinds.
-    # For top-level elements, fqn includes module path (e.g. "app.main.func")
-    # which is NOT a parent class. Only method-like elements nested in a class
-    # should have parent_class set. The SourceReconciler overrides this for
-    # class children, but we do a best-effort here: if the kind is METHOD-like
-    # and the fqn contains a dot, use the last dotted component before the name.
+    # Derive parent_class only for method/property/constant/variable kinds.
     parent_class: Optional[str] = None
-    method_kinds = {
+    nested_kinds = {
         ElementKind.METHOD,
         ElementKind.ASYNC_METHOD,
         ElementKind.PROPERTY,
+        ElementKind.CONSTANT,
+        ElementKind.VARIABLE,
     }
-    if element.kind in method_kinds and "." in element.fqn:
-        # Extract just the immediate parent (class name), not the full module path
-        # e.g. "app.main.MyClass.get_data" → "MyClass"
+    if element.kind in nested_kinds and "." in element.fqn:
         parts = element.fqn.rsplit(".", 1)
         if parts[0]:
-            # Take the last component of the prefix as the class name
             parent_class = parts[0].rsplit(".", 1)[-1]
 
     return ForwardElementSpec(
@@ -469,6 +479,11 @@ def forward_element_spec_from_element(
         docstring_hint=element.docstring,
         parent_class=parent_class,
         source_contract_id=source_contract_id,
+        is_static=element.is_static,
+        is_classmethod=element.is_classmethod,
+        is_abstract=element.is_abstract,
+        type_annotation=element.type_annotation,
+        value_repr=element.value_repr,
     )
 
 
