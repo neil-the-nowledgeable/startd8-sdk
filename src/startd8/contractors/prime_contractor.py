@@ -1154,8 +1154,19 @@ class PrimeContractorWorkflow:
         state_dict["execution_mode"] = self.execution_mode
         return state_dict
 
+    _FILE_COPY_READ_TIMEOUT_S: int = 30
+
     def _handle_file_copy(self, feature: FeatureSpec) -> Optional[GenerationResult]:
-        """Handle file-copy tasks by copying predecessor output (REQ-MP-1002)."""
+        """Handle file-copy tasks by copying predecessor output (REQ-MP-1002).
+
+        Raises:
+            ValueError: If predecessor not found, not complete, source file
+                cannot be inferred, or target_files is empty.
+            FileNotFoundError: If the source file does not exist on disk.
+            FileExistsError: If target exists and ``copy_overwrite=False``.
+            TimeoutError: If reading the source file exceeds the timeout.
+            OSError: If SHA-256 verification fails after write.
+        """
         import concurrent.futures
         import hashlib
 
@@ -1194,15 +1205,18 @@ class PrimeContractorWorkflow:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_read_file)
             try:
-                source_content = future.result(timeout=30)
+                source_content = future.result(timeout=self._FILE_COPY_READ_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
                 raise TimeoutError(
-                    f"Reading copy source '{source_file}' timed out after 30s"
+                    f"Reading copy source '{source_file}' timed out after "
+                    f"{self._FILE_COPY_READ_TIMEOUT_S}s"
                 )
 
         # Write target
         if not feature.target_files:
-            raise ValueError(f"Feature '{feature.name}' has no target_files for copy")
+            raise ValueError(
+                f"Feature '{feature.id}' ('{feature.name}') has no target_files for copy"
+            )
         target_path = Path(self.project_root) / feature.target_files[0]
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2659,6 +2673,7 @@ class PrimeContractorWorkflow:
             except (ValueError, FileNotFoundError, TimeoutError, OSError) as exc:
                 logger.error(
                     "File copy failed for '%s': %s", feature.name, exc,
+                    exc_info=True,
                 )
                 self.queue.fail_feature(feature.id, f"File copy failed: {exc}")
                 return False

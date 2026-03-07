@@ -8,10 +8,9 @@ to bypass LLM generation when a task simply duplicates a predecessor's output.
 Requirements: REQ-MP-1000, REQ-MP-1001.
 """
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from startd8.logging_config import get_logger
 
@@ -44,11 +43,23 @@ class CopySource:
     workspace_root: str = ""
 
 
-def detect_copy_task(feature, predecessor: "Optional[object]" = None) -> Optional[CopySource]:
+def _infer_source_file(
+    feature: Any, predecessor: Optional[Any],
+) -> Optional[str]:
+    """Infer source file from explicit field or predecessor's single target."""
+    source_file = getattr(feature, "copy_source_file", None)
+    if source_file is None and predecessor is not None:
+        target_files = getattr(predecessor, "target_files", [])
+        if len(target_files) == 1:
+            source_file = target_files[0]
+    return source_file
+
+
+def detect_copy_task(feature: Any, predecessor: Optional[Any] = None) -> Optional[CopySource]:
     """Detect whether *feature* is an identical-copy task.
 
     Args:
-        feature: A ``FeatureSpec`` instance.
+        feature: A ``FeatureSpec``-like object (duck-typed).
         predecessor: Optional predecessor ``FeatureSpec`` used for fallback
             inference of ``copy_source_file`` when not explicitly set.
 
@@ -57,11 +68,7 @@ def detect_copy_task(feature, predecessor: "Optional[object]" = None) -> Optiona
     """
     # If copy_source_task_id is already set, trust it.
     if feature.copy_source_task_id is not None:
-        source_file = feature.copy_source_file
-        if source_file is None and predecessor is not None:
-            target_files = getattr(predecessor, "target_files", [])
-            if len(target_files) == 1:
-                source_file = target_files[0]
+        source_file = _infer_source_file(feature, predecessor)
         return CopySource(
             predecessor_id=feature.copy_source_task_id,
             source_file=source_file or "",
@@ -96,13 +103,7 @@ def detect_copy_task(feature, predecessor: "Optional[object]" = None) -> Optiona
         return None
 
     predecessor_id = dependencies[0]
-
-    # Infer source file from predecessor if not explicitly set.
-    source_file = feature.copy_source_file
-    if source_file is None and predecessor is not None:
-        target_files = getattr(predecessor, "target_files", [])
-        if len(target_files) == 1:
-            source_file = target_files[0]
+    source_file = _infer_source_file(feature, predecessor)
 
     return CopySource(
         predecessor_id=predecessor_id,
