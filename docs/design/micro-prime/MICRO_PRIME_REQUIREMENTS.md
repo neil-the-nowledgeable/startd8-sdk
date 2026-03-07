@@ -23,11 +23,13 @@
 10. [Layer 7 — Quick Wins & Acceleration (REQ-MP-7xx)](#10-layer-7--quick-wins--acceleration-req-mp-7xx)
 11. [Layer 8 — Shared Complexity Router (REQ-MP-8xx)](#11-layer-8--shared-complexity-router-req-mp-8xx)
 12. [Layer 9 — Moderate Decomposer (REQ-MP-9xx)](#12-layer-9--moderate-decomposer-req-mp-9xx)
-13. [Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)](#13-layer-10--simple--trivial-decomposer-req-mp-10xx)
-14. [Data Flow](#14-data-flow)
-15. [Traceability Matrix](#15-traceability-matrix)
-16. [Verification Strategy](#16-verification-strategy)
-17. [Related Documents](#17-related-documents)
+13. [Layer 9.5 — Recursive Decomposition Core (REQ-MP-910)](#13-layer-95--recursive-decomposition-core-req-mp-910)
+14. [Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)](#14-layer-10--simple--trivial-decomposer-req-mp-10xx)
+15. [Layer 11 — Element Registry (REQ-MP-11xx)](#15-layer-11--element-registry-req-mp-11xx)
+16. [Data Flow](#16-data-flow)
+17. [Traceability Matrix](#17-traceability-matrix)
+18. [Verification Strategy](#18-verification-strategy)
+19. [Related Documents](#19-related-documents)
 
 ---
 
@@ -98,8 +100,10 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Quick Wins & Acceleration | REQ-MP-7xx | 9 | 9 | 0 | 0 |
 | Shared Complexity Router | REQ-MP-8xx | 9 | 9 | 0 | 0 |
 | Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
+| Recursive Decomposition Core | REQ-MP-910 | 6 | 0 | 0 | 6 |
 | Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 0 | 0 | 10 |
-| **Total** | | **82** | **72** | **0** | **10** |
+| Element Registry | REQ-MP-11xx | 10 | 0 | 0 | 10 |
+| **Total** | | **98** | **72** | **0** | **26** |
 
 ---
 
@@ -1187,7 +1191,11 @@ Pre-escalation decomposition of MODERATE elements into SIMPLE sub-elements that 
 
 ---
 
-## 13. Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)
+## 13. Layer 9.5 — Recursive Decomposition Core (REQ-MP-910)
+
+> Detailed requirements: [`REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md`](./REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md)
+
+## 14. Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)
 
 > Detailed design: [`SIMPLE_TO_TRIVIAL_DECOMPOSER_FEASIBILITY.md`](./SIMPLE_TO_TRIVIAL_DECOMPOSER_FEASIBILITY.md), [`SIMPLE_TO_TRIVIAL_DECOMPOSER_IMPLEMENTATION_PLAN.md`](./SIMPLE_TO_TRIVIAL_DECOMPOSER_IMPLEMENTATION_PLAN.md)
 
@@ -1294,7 +1302,31 @@ JSON report at `.startd8/reports/simple-decomposer.json` as typed `@dataclass` (
 
 ---
 
-## 14. Data Flow
+## 15. Layer 11 — Element Registry (REQ-MP-11xx)
+
+> Detailed requirements: [`REQ-MP-11xx_ELEMENT_REGISTRY.md`](./REQ-MP-11xx_ELEMENT_REGISTRY.md)
+> Review: [`forward-manifest-element-registry-gap-2026-03-07.md`](../../reviews/forward-manifest-element-registry-gap-2026-03-07.md)
+
+Persistent, index-addressable element store that closes the cross-task element reuse gap identified in the [Mottainai Design Principle](../../design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md) review. Elements are created early via the forward manifest (`flcm-*` IDs) but not persisted in a way that supports O(1) retrieval or cross-task sharing. This layer adds: `ForwardManifest.get_element_by_id()` lazy index, `ElementRegistry` persistence at `.startd8/state/elements/`, engine/adapter integration for check-before-generate, skeleton-derived element specs for features without `api_signatures`, and DFA pre-fill from prior generations.
+
+### Summary of Requirements
+
+| ID | Name | Priority | Status |
+|----|------|----------|--------|
+| REQ-MP-1100 | Core Element Registry | P0 | planned |
+| REQ-MP-1101 | ForwardManifest Element Index | P0 | planned |
+| REQ-MP-1102 | Engine Registry Integration | P0 | planned |
+| REQ-MP-1103 | Adapter Registry Integration | P1 | planned |
+| REQ-MP-1104 | Skeleton-Derived Element Specs | P1 | planned |
+| REQ-MP-1105 | Cross-Task Element Lookup | P1 | planned |
+| REQ-MP-1106 | DFA Registry Pre-Fill | P2 | planned |
+| REQ-MP-1107 | Element Registry Observability | P2 | planned |
+| REQ-MP-1108 | Element Staleness & Invalidation | P2 | planned |
+| REQ-MP-1109 | Element Registry CLI Report | P3 | planned |
+
+---
+
+## 16. Data Flow
 
 ### 11.1 Dual Entry Points
 
@@ -1373,7 +1405,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 15. Traceability Matrix
+## 17. Traceability Matrix
 
 | Requirement | Implementation File | Test File | Status |
 |------------|-------------------|-----------|--------|
@@ -1433,7 +1465,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 16. Verification Strategy
+## 18. Verification Strategy
 
 ### 13.1 Experiment Rounds (Pre-Integration)
 
@@ -1464,7 +1496,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 17. Related Documents
+## 19. Related Documents
 
 | Document | Relationship |
 |----------|-------------|
@@ -1477,6 +1509,8 @@ MicroPrimeEngine.process_elements()
 | `src/startd8/utils/file_assembler.py` | Implementation — DeterministicFileAssembler |
 | `src/startd8/utils/code_extraction.py` | Implementation — extract_code_from_response, STUB_SENTINEL |
 | [MICRO_PRIME_IMPLEMENTATION_PLAN.md](./MICRO_PRIME_IMPLEMENTATION_PLAN.md) | Implementation plan — phased build order, package structure, existing assets |
+| [REQ-MP-11xx_ELEMENT_REGISTRY.md](./REQ-MP-11xx_ELEMENT_REGISTRY.md) | Layer 11 — persistent element registry for cross-task reuse and O(1) element lookup |
+| [forward-manifest-element-registry-gap-2026-03-07.md](../../reviews/forward-manifest-element-registry-gap-2026-03-07.md) | Review that identified the structural gap motivating Layer 11 |
 | `scripts/experiment_local_model_routing.py` | Experiment script — source for extraction targets (REQ-MP-701) |
 | `src/startd8/model_catalog.py` | Model registry — target for Ollama provider section (REQ-MP-707) |
 

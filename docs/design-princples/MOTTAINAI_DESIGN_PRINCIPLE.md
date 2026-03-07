@@ -459,6 +459,8 @@ When designing new pipeline stages or modifying existing ones:
 | [`startd8.artisan.functional-requirements.yaml`](../capability-index/startd8.artisan.functional-requirements.yaml) (AR-900..AR-908) | Formal requirements for Mottainai compliance within the artisan 8-phase pipeline — maps Gaps 17–36 to testable acceptance criteria |
 | [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) | Closes Gaps 5 and 13 — forwards REFINE triage, apply, and area coverage output through the seed to downstream consumers |
 | [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) (AR-813..AR-825) | Closes Gaps 37–39 — FINALIZE resilience, truncation enforcement, module resolution fidelity |
+| [Element Registry Requirements](../design/micro-prime/REQ-MP-11xx_ELEMENT_REGISTRY.md) (REQ-MP-1100..1109) | Closes the element-level reuse gap — persistent, indexed element store enabling cross-task element sharing (Rules 1, 2, 4, 5) |
+| [Element Registry Gap Review](reviews/forward-manifest-element-registry-gap-2026-03-07.md) | Investigation that identified the structural gap: elements ID'd but not persistently indexed for retrieval or cross-task reuse |
 
 ---
 
@@ -474,3 +476,4 @@ When designing new pipeline stages or modifying existing ones:
 | 2026-02-21 | Artisan Internal Audit: added Gaps 17–36 (20 intra-pipeline violations across 3 anti-patterns: serialize-and-forget, compute-but-don't-forward, inject-but-don't-validate). A-15 addressed by AR-127/AR-128 |
 | 2026-02-21 | Added [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) to close Gaps 5 and 13 — REFINE triage/apply/config forwarding through the seed, informed by ContextCore propagation contract model |
 | 2026-02-23 | PI-012/PI-013 failure analysis: added Gaps 37–39 (FINALIZE crash destroys manifest, truncated code overwrites production files, SCAFFOLD module inventory not forwarded). Formalized as AR-813..AR-825 in [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) |
+| 2026-03-07 | Element Registry gap review: elements ID'd via forward manifest (`flcm-*` IDs) but not persistently indexed — no cross-task reuse, no O(1) lookup, no element-level cache. Formalized as REQ-MP-1100..1109 in [Element Registry Requirements](../design/micro-prime/REQ-MP-11xx_ELEMENT_REGISTRY.md). Violates Rules 1, 2, 4, 5 |
