@@ -421,6 +421,22 @@ class IntegrationEngine:
                         extra={"unit_id": unit.id},
                     )
                     return self.project_root / source_path.name
+        # Fallback: try to match the source filename against known target
+        # files in the unit.  If a target file shares the same basename,
+        # reuse its directory structure instead of writing to project root.
+        src_name = source_path.name
+        for tf in unit.target_files:
+            if Path(tf).name == src_name:
+                try:
+                    matched = sanitize_path(tf, base_dir=self.project_root)
+                    logger.info(
+                        "Derived target for %s from matching target_file entry: %s",
+                        source_path, matched,
+                        extra={"unit_id": unit.id},
+                    )
+                    return matched
+                except (ValueError, OSError):
+                    pass
         logger.warning(
             "Could not derive relative path for %s — using filename only",
             source_path,
