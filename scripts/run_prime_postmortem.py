@@ -507,6 +507,17 @@ def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP) -> 
         except (json.JSONDecodeError, OSError):
             pass
 
+    # Resolve kaizen_prompts_path (REQ-KZ-301): check known subdirectory
+    # patterns under the run's kaizen-prompts directory.
+    kaizen_prompts_base = output_dir / "kaizen-prompts"
+    if kaizen_prompts_base.is_dir():
+        # Prefer {run_id}/ subdirectory, fall back to standalone/
+        for subdir_name in (run_id, "standalone"):
+            candidate = kaizen_prompts_base / subdir_name
+            if candidate.is_dir():
+                entry["kaizen_prompts_path"] = str(candidate)
+                break
+
     index["runs"].append(entry)
 
     # Sort by timestamp, newest first for retention
