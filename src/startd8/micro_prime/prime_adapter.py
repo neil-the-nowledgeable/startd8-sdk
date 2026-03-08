@@ -66,9 +66,11 @@ except ImportError:
 
 
 # Size-regression threshold: if filled skeleton is below this ratio of the
-# existing target file, escalate to the fallback generator.  Matches the
-# integration engine's _INTEGRATION_SIZE_REGRESSION_THRESHOLD.
-_SIZE_REGRESSION_THRESHOLD = 0.60
+# existing target file (by semantic line count), escalate to the fallback
+# generator.  Uses semantic lines (non-blank, non-comment, non-docstring)
+# to avoid penalising lean Ollama output against verbose cloud-generated
+# files that have rich docstrings and inline comments.
+_SIZE_REGRESSION_THRESHOLD = 0.55
 _MIN_EXISTING_LINES = 50
 
 # ElementKind values that map to ast.FunctionDef / ast.AsyncFunctionDef
@@ -160,6 +162,45 @@ def _extract_element_from_generated(
 
 
 _SKELETON_MARKER = "# [STARTD8-SKELETON]"
+
+
+def _semantic_line_count(source: str) -> int:
+    """Count semantic lines in Python source (non-blank, non-comment, non-docstring).
+
+    Normalises the comparison between lean Ollama-assembled code and verbose
+    cloud-generated code by ignoring differences in docstring/comment density.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Fallback to raw non-blank lines if source doesn't parse
+        return sum(1 for line in source.splitlines() if line.strip())
+
+    # Collect line ranges occupied by docstrings (module, class, function)
+    docstring_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if (
+                node.body
+                and isinstance(node.body[0], ast.Expr)
+                and isinstance(getattr(node.body[0], "value", None), ast.Constant)
+                and isinstance(node.body[0].value.value, str)
+            ):
+                ds = node.body[0]
+                for ln in range(ds.lineno, (ds.end_lineno or ds.lineno) + 1):
+                    docstring_lines.add(ln)
+
+    count = 0
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if i in docstring_lines:
+            continue
+        count += 1
+    return count
 
 
 def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
@@ -321,16 +362,20 @@ class MicroPrimeCodeGenerator:
                 # Size-regression escalation guard: if the filled skeleton is
                 # significantly smaller than the existing target file, escalate
                 # to the fallback generator instead of writing a tiny skeleton.
+                # Uses semantic line count (non-blank, non-comment) to avoid
+                # penalising lean Ollama output against verbose cloud-generated
+                # files with rich docstrings and inline comments.
                 existing_content = existing_files.get(file_path, "")
                 if existing_content:
-                    filled_lines = file_result.filled_skeleton.count("\n") + 1
-                    existing_lines = existing_content.count("\n") + 1
-                    ratio = filled_lines / existing_lines if existing_lines > 0 else 1.0
-                    if ratio < _SIZE_REGRESSION_THRESHOLD and existing_lines >= _MIN_EXISTING_LINES:
+                    filled_sem = _semantic_line_count(file_result.filled_skeleton)
+                    existing_sem = _semantic_line_count(existing_content)
+                    existing_raw = existing_content.count("\n") + 1
+                    ratio = filled_sem / existing_sem if existing_sem > 0 else 1.0
+                    if ratio < _SIZE_REGRESSION_THRESHOLD and existing_raw >= _MIN_EXISTING_LINES:
                         logger.warning(
-                            "Micro Prime size-regression guard: %s has %d lines "
-                            "vs %d existing (%.0f%%) — escalating to fallback",
-                            file_path, filled_lines, existing_lines, ratio * 100,
+                            "Micro Prime size-regression guard: %s has %d semantic "
+                            "lines vs %d existing (%.0f%%) — escalating to fallback",
+                            file_path, filled_sem, existing_sem, ratio * 100,
                         )
                         escalated_files.append(file_path)
                         continue
