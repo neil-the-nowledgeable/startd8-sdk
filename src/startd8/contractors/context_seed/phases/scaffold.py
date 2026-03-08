@@ -17,6 +17,17 @@ from startd8.logging_config import get_logger
 
 logger = get_logger("startd8.contractors.context_seed_handlers")
 
+# FR-MPA-008: Pre-assembly OTel metrics (optional dependency)
+try:
+    from opentelemetry import metrics as _otel_metrics
+    _mpa_meter = _otel_metrics.get_meter("startd8.mottainai")
+    _mpa_skeleton_forwarded = _mpa_meter.create_counter(
+        "mottainai.skeleton_sources_forwarded",
+        description="Skeletons consumed from seed (vs. recomputed)",
+    )
+except ImportError:
+    _mpa_skeleton_forwarded = None
+
 
 def _check_stub_drift(
     emit_manifest: list[dict[str, Any]],
@@ -163,6 +174,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         file_stubs: list = []
         file_stubs_created = file_stubs_skipped = file_stubs_failed = 0
         assembly_degraded = False
+        render_specs: dict[str, str] = {}  # populated by DFA or pre-rendered
 
         try:
             forward_manifest = context.get("forward_manifest")
@@ -178,21 +190,47 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                     module_inventory=module_inventory,
                 )
 
-                # Recompute source text from ForwardManifest
-                render_result = assembler.render_specs(forward_manifest)
-                file_stubs.extend(
-                    r.model_dump() for r in render_result.failures
-                )
+                # FR-MPA-004: Consume pre-rendered skeleton_sources from EMIT
+                # instead of re-running render_specs() (Mottainai: don't
+                # discard artifacts already produced by earlier phases).
+                seed_artifacts = context.get("artifacts") or {}
+                pre_rendered = seed_artifacts.get("skeleton_sources")
 
-                # Validate against seed manifest for drift detection
-                stub_manifest = context.get("artifacts", {}).get("stub_manifest")
-                if stub_manifest and render_result.metadata:
-                    _check_stub_drift(stub_manifest, render_result.metadata)
+                if pre_rendered:
+                    # Use EMIT-phase skeletons directly
+                    render_specs = dict(pre_rendered)
+                    logger.info(
+                        "SCAFFOLD: reusing %d pre-rendered skeleton(s) from EMIT phase",
+                        len(render_specs),
+                    )
+                    # FR-MPA-008: Emit metric for skeleton reuse
+                    if _mpa_skeleton_forwarded is not None:
+                        _mpa_skeleton_forwarded.add(
+                            len(render_specs), {"phase": "scaffold"},
+                        )
+                else:
+                    # Fallback: re-render if seed lacks skeleton_sources
+                    # (backward compat with seeds produced before FR-MPA-001)
+                    render_result = assembler.render_specs(forward_manifest)
+                    render_specs = dict(render_result.specs) if render_result.specs else {}
+                    file_stubs.extend(
+                        r.model_dump() for r in render_result.failures
+                    )
+                    logger.info(
+                        "SCAFFOLD: no pre-rendered skeletons in seed — "
+                        "fell back to render_specs() (%d files)",
+                        len(render_specs),
+                    )
+
+                    # Validate against seed manifest for drift detection
+                    stub_manifest = seed_artifacts.get("stub_manifest")
+                    if stub_manifest and render_result.metadata:
+                        _check_stub_drift(stub_manifest, render_result.metadata)
 
                 # Materialize validated specs to disk
-                if render_result.specs:
+                if render_specs:
                     mat_results = assembler.materialize(
-                        render_result.specs, project_root, dry_run=False,
+                        render_specs, project_root, dry_run=False,
                     )
                     file_stubs.extend(r.model_dump() for r in mat_results)
 
@@ -217,6 +255,18 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                 exc_info=True,
             )
             assembly_degraded = True
+
+        # FR-MPA-004/007: Bridge skeleton sources into context["skeletons"]
+        # so the IMPLEMENT Micro Prime pre-pass can consume them without
+        # re-generating from scratch.
+        if not assembly_degraded and render_specs:
+            existing_skeletons = context.get("skeletons", {})
+            existing_skeletons.update(render_specs)
+            context["skeletons"] = existing_skeletons
+            logger.info(
+                "SCAFFOLD: populated context['skeletons'] with %d file(s)",
+                len(render_specs),
+            )
 
         output = {
             "directories_needed": sorted(dirs_needed),

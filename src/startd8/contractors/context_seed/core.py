@@ -1712,6 +1712,8 @@ class Test{class_name}:
         scaffold_output: dict[str, Any] | None = None,
         # Micro Prime pre-pass results for local-first skip / partial injection
         micro_prime_result: dict[str, Any] | None = None,
+        # FR-MPA-005: Pre-classified element tiers from ingestion for prompt narrowing
+        element_tiers: dict[str, dict[str, Any]] | None = None,
         **kwargs: Any,  # Allow forward_manifest via kwargs to avoid massive signature change
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
@@ -2292,6 +2294,31 @@ class Test{class_name}:
                         len(_task_skeleton_lines), task.task_id,
                     )
 
+            # FR-MPA-005: Compute per-task pre-filled vs. unfilled element lists
+            # from ingestion-time element_tiers, for prompt narrowing.
+            _pre_filled_elements: list[str] | None = None
+            _unfilled_elements: list[str] | None = None
+            if element_tiers:
+                _pf: list[str] = []
+                _uf: list[str] = []
+                for fp in effective_targets:
+                    file_tiers = element_tiers.get(fp, {})
+                    for qname, tier_info in file_tiers.items():
+                        if not isinstance(tier_info, dict):
+                            continue
+                        if tier_info.get("pre_filled"):
+                            src = tier_info.get("fill_source", "template")
+                            _pf.append(f"{qname} ({src})")
+                        else:
+                            _uf.append(qname)
+                if _pf or _uf:
+                    _pre_filled_elements = _pf or None
+                    _unfilled_elements = _uf or None
+                    logger.info(
+                        "IMPLEMENT: task %s — %d pre-filled, %d unfilled elements",
+                        task.task_id, len(_pf), len(_uf),
+                    )
+
             # Micro Prime pre-pass: determine if this chunk was fully filled locally
             _mp_complete = False
             _mp_skeletons: dict[str, str] | None = None
@@ -2366,6 +2393,9 @@ class Test{class_name}:
                     "skeleton_files_present": _skeleton_files_present,
                     # REQ-CMR-042: per-task override from seed JSON
                     "complexity_tier_override": task.complexity_tier_override,
+                    # FR-MPA-005: Pre-assembly prompt narrowing data
+                    "_pre_filled_elements": _pre_filled_elements,
+                    "_unfilled_elements": _unfilled_elements,
                     # Micro Prime pre-pass: per-chunk fill status
                     "_micro_prime_complete": _mp_complete,
                     "_micro_prime_filled_skeletons": _mp_skeletons if _mp_skeletons else None,
@@ -4330,6 +4360,11 @@ class Test{class_name}:
                 forward_manifest=context.get("forward_manifest"),
                 # Micro Prime pre-pass results
                 micro_prime_result=context.get("micro_prime_result"),
+                # FR-MPA-005: Pre-classified element tiers for prompt narrowing
+                element_tiers=(
+                    context.get("element_tiers")
+                    or context.get("artifacts", {}).get("element_tiers")
+                ),
             )
 
             # Phase 4: Enrich chunks with manifest context (IM-1 through IM-4)

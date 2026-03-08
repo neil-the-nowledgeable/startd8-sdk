@@ -671,11 +671,11 @@ class PrimeContractorWorkflow:
 
         # Build an escalated generator with the same settings
         try:
-            from .generators.lead_contractor import LeadContractorCodeGenerator
+            from .generators.lead_contractor import PrimaryContractorCodeGenerator
 
             drafter_spec = getattr(self.code_generator, "drafter_agent", None)
             self._pre_escalation_generator = self.code_generator
-            self.code_generator = LeadContractorCodeGenerator(
+            self.code_generator = PrimaryContractorCodeGenerator(
                 lead_agent=escalated_spec,
                 drafter_agent=str(drafter_spec) if drafter_spec else escalated_spec,
                 max_iterations=getattr(self.code_generator, "max_iterations", 3),
@@ -750,10 +750,10 @@ class PrimeContractorWorkflow:
         complex_generator = None
         if tier3_agent is not None:
             from startd8.contractors.generators import (
-                LeadContractorCodeGenerator,
+                PrimaryContractorCodeGenerator,
             )
 
-            complex_generator = LeadContractorCodeGenerator(
+            complex_generator = PrimaryContractorCodeGenerator(
                 lead_agent=tier3_agent,
                 output_dir=(
                     self.code_generator.output_dir
@@ -1621,6 +1621,17 @@ class PrimeContractorWorkflow:
                 )
             except Exception as exc:
                 logger.warning("Fallback SOURCE_RECONCILE failed: %s", exc, exc_info=True)
+
+        # FR-MPA-007: Extract pre-rendered skeleton sources from seed artifacts
+        # so MicroPrimeCodeGenerator can skip _generate_skeletons() fallback.
+        self._skeleton_sources: dict[str, str] = (
+            (seed_data.get("artifacts") or {}).get("skeleton_sources") or {}
+        )
+        if self._skeleton_sources:
+            logger.info(
+                "Loaded %d pre-rendered skeleton source(s) from seed",
+                len(self._skeleton_sources),
+            )
 
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
@@ -2906,6 +2917,11 @@ class PrimeContractorWorkflow:
             # REQ-MP-701: Forward deserialized ForwardManifest for Micro Prime
             if self._forward_manifest is not None:
                 gen_context["manifest"] = self._forward_manifest
+
+            # FR-MPA-007: Forward pre-rendered skeletons from seed so
+            # MicroPrimeCodeGenerator skips _generate_skeletons() fallback.
+            if self._skeleton_sources and "skeletons" not in gen_context:
+                gen_context["skeletons"] = dict(self._skeleton_sources)
 
             # REQ-DDS-002: Thread design_doc_sections from feature metadata
             _design_sections = feature.metadata.get("design_doc_sections", [])

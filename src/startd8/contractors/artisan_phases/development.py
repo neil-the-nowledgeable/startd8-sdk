@@ -86,6 +86,21 @@ except ImportError:
 
 _implement_tracer = _trace.get_tracer("startd8.artisan.implement") if _HAS_OTEL else _NoOpTracer()
 
+# FR-MPA-008: Pre-assembly OTel metrics (optional dependency)
+try:
+    from opentelemetry import metrics as _otel_metrics
+    _mpa_meter = _otel_metrics.get_meter("startd8.mottainai")
+    _mpa_prompt_narrowed = _mpa_meter.create_counter(
+        "mottainai.implement_prompt_narrowed",
+        description="Tasks receiving edit-mode prompts from pre-assembly",
+    )
+    _mpa_tokens_avoided = _mpa_meter.create_counter(
+        "mottainai.tokens_avoided_estimate",
+        description="Estimated input+output tokens saved by pre-assembly",
+    )
+except ImportError:
+    _mpa_prompt_narrowed = None
+    _mpa_tokens_avoided = None
 
 _log = get_logger(__name__)
 
@@ -360,6 +375,10 @@ class TaskComplexityTier(str, Enum):
         TIER_1: Haiku only — T2 refinement skipped (simple greenfield tasks)
         TIER_2: Haiku + T2 Sonnet — current default behavior
         TIER_3: Opus as T1 drafter — highest-capability model for complex edits
+
+    .. note::
+        The canonical signal dataclass is ``startd8.complexity.TaskComplexitySignals``.
+        ``TaskComplexitySignals`` below is a re-export for backward compatibility.
     """
 
     TIER_1 = "tier_1"
@@ -370,35 +389,9 @@ class TaskComplexityTier(str, Enum):
 # Default complexity tier used when no manifest data is available.
 _DEFAULT_COMPLEXITY_TIER = TaskComplexityTier.TIER_2
 
-
-@dataclass(frozen=True)
-class TaskComplexitySignals:
-    """Per-task complexity signals extracted from manifest data (REQ-CMR-001).
-
-    All fields use primitive types with safe defaults that classify as TIER_2
-    (the current default behavior) when no manifest data is available.
-    """
-
-    blast_radius: int = 0
-    caller_count: int = 0
-    has_dynamic_dispatch: bool = False
-    is_closure: bool = False
-    estimated_loc: int = 0
-    target_file_count: int = 1
-    edit_mode: str = "unknown"
-    mro_depth: int = 0
-    unresolved_call_count: int = 0
-    has_cross_file_edges: bool = False
-    manifest_coverage: str = "none"
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dict for JSON storage and forensic logging.
-
-        Uses ``dataclasses.asdict`` so new fields are automatically included.
-        """
-        from dataclasses import asdict
-
-        return asdict(self)
+# Re-export from shared module for backward compatibility (REQ-MP-805).
+# Existing code importing from this module continues to work unchanged.
+from startd8.complexity.models import TaskComplexitySignals as TaskComplexitySignals  # noqa: E402
 
 
 class ChunkStatus(str, Enum):
@@ -1164,8 +1157,8 @@ class LLMChunkExecutor(ChunkExecutor):
             return False, f"LLM execution error: {str(e)}"
 
 
-class LeadContractorChunkExecutor(ChunkExecutor):
-    """Chunk executor that wraps :class:`LeadContractorCodeGenerator`.
+class PrimaryContractorChunkExecutor(ChunkExecutor):
+    """Chunk executor that wraps :class:`PrimaryContractorCodeGenerator`.
 
     Bridges the synchronous ``generator.generate()`` call into the async
     ``ChunkExecutor`` interface using ``run_in_executor``.  Stores the
@@ -1179,7 +1172,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
     Example::
 
-        executor = LeadContractorChunkExecutor(
+        executor = PrimaryContractorChunkExecutor(
             lead_agent=VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
             drafter_agent=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
             output_dir=Path("my-project"),
@@ -1255,20 +1248,20 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     # ------------------------------------------------------------------
 
     def _resolve_generator(self) -> Any:
-        """Resolve or create the LeadContractorCodeGenerator (cached)."""
+        """Resolve or create the PrimaryContractorCodeGenerator (cached)."""
         if self._generator is not None:
             return self._generator
 
         from startd8.contractors.generators.lead_contractor import (
-            LeadContractorCodeGenerator,
+            PrimaryContractorCodeGenerator,
         )
 
         self.logger.info(
-            "Creating LeadContractorCodeGenerator (lead=%s, drafter=%s)",
+            "Creating PrimaryContractorCodeGenerator (lead=%s, drafter=%s)",
             self._lead_agent,
             self._drafter_agent,
         )
-        self._generator = LeadContractorCodeGenerator(
+        self._generator = PrimaryContractorCodeGenerator(
             lead_agent=self._lead_agent,
             drafter_agent=self._drafter_agent,
             max_iterations=self._max_iterations,
@@ -1495,6 +1488,16 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_manifest_context(chunk))            # Phase 4
         parts.extend(self._build_forward_contracts(chunk))           # Phase 5
         parts.extend(self._build_skeleton_guidance(chunk))           # Phase 6a
+        _pre_asm = self._build_pre_assembly_guidance(chunk)          # FR-MPA-005
+        if _pre_asm:
+            parts.extend(_pre_asm)
+            # FR-MPA-008: Emit OTel metrics for prompt narrowing (side-effect
+            # kept outside the pure @staticmethod for testability).
+            _pre_filled = chunk.metadata.get("_pre_filled_elements")
+            if _mpa_prompt_narrowed is not None:
+                _mpa_prompt_narrowed.add(1, {"phase": "implement"})
+            if _mpa_tokens_avoided is not None and _pre_filled:
+                _mpa_tokens_avoided.add(len(_pre_filled) * 80, {"phase": "implement"})
         parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing, _edit_mode))
@@ -1823,6 +1826,54 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             return [rendered]
         return []
 
+    # -- helper: pre-assembly narrowing (FR-MPA-005) -------------------------
+
+    @staticmethod
+    def _build_pre_assembly_guidance(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """FR-MPA-005: Narrow implementation scope when elements are pre-filled.
+
+        When ingestion-time pre-assembly has already filled trivial element
+        bodies (``__init__``, ``__repr__``, constants, etc.), inject a prompt
+        section listing what is already done and what still needs LLM work.
+        This reduces cloud LLM output tokens by ~15-25%.
+        """
+        pre_filled = chunk.metadata.get("_pre_filled_elements")
+        unfilled = chunk.metadata.get("_unfilled_elements")
+        if not pre_filled and not unfilled:
+            return []
+
+        lines: list[str] = []
+        lines.append("## Pre-Assembly Status")
+        lines.append("")
+
+        if pre_filled:
+            lines.append("### Pre-filled (do not modify):")
+            for elem in pre_filled:
+                lines.append(f"- {elem}")
+            lines.append("")
+
+        if unfilled:
+            lines.append("### To implement (fill method bodies):")
+            for elem in unfilled:
+                lines.append(f"- {elem}")
+            lines.append("")
+            lines.append(
+                "Implement ONLY the method bodies listed above. "
+                "The skeleton file already exists with correct imports, "
+                "class structure, and some method bodies pre-filled. "
+                "Do not modify pre-filled elements."
+            )
+        elif pre_filled:
+            lines.append(
+                "All elements in this file are pre-filled. "
+                "No additional implementation is needed — "
+                "verify correctness and return the file as-is."
+            )
+
+        return ["\n".join(lines)]
+
     # -- helper: manifest context (Phase 4) ---------------------------------
 
     @staticmethod
@@ -1944,7 +1995,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "current code manifest. These may be new elements to create, or "
                 "may indicate stale design references:\n"
             )
-            for ref in phantom_warnings[:LeadContractorChunkExecutor._MAX_PHANTOM_WARNINGS_SHOWN]:
+            for ref in phantom_warnings[:PrimaryContractorChunkExecutor._MAX_PHANTOM_WARNINGS_SHOWN]:
                 parts.append(f"  - `{ref}`")
             parts.append("")
 
@@ -1957,7 +2008,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if truncated_files:
             parts.append(
                 "**Note:** Structural context was truncated for some files "
-                f"({', '.join(f'`{f}`' for f in truncated_files[:LeadContractorChunkExecutor._MAX_TRUNCATED_FILES_SHOWN])}). "
+                f"({', '.join(f'`{f}`' for f in truncated_files[:PrimaryContractorChunkExecutor._MAX_TRUNCATED_FILES_SHOWN])}). "
                 "The actual file may contain additional elements not shown.\n"
             )
 
@@ -2245,7 +2296,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             target_set.add(clean)
             target_set.add(os.path.basename(clean))
 
-        ext_re = LeadContractorChunkExecutor._DESIGN_FILE_EXT_RE
+        ext_re = PrimaryContractorChunkExecutor._DESIGN_FILE_EXT_RE
 
         lines = design_doc.splitlines(keepends=True)
         result: List[str] = []
@@ -2323,7 +2374,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         # DF-1: Filter the design doc so code blocks for non-target files
         # are replaced with placeholders.  This prevents the drafter from
         # generating code for files outside its responsibility.
-        filtered_doc = LeadContractorChunkExecutor._filter_design_doc_for_targets(
+        filtered_doc = PrimaryContractorChunkExecutor._filter_design_doc_for_targets(
             design_doc, getattr(chunk, "file_targets", []),
         )
 
@@ -2400,8 +2451,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if arch_ctx and isinstance(arch_ctx, dict):
             objectives = arch_ctx.get("objectives")
             arch_constraints = arch_ctx.get("constraints")
-            _obj_stale = LeadContractorChunkExecutor._is_stale_context("objectives", objectives) if objectives else True
-            _con_stale = LeadContractorChunkExecutor._is_stale_context("constraints", arch_constraints) if arch_constraints else True
+            _obj_stale = PrimaryContractorChunkExecutor._is_stale_context("objectives", objectives) if objectives else True
+            _con_stale = PrimaryContractorChunkExecutor._is_stale_context("constraints", arch_constraints) if arch_constraints else True
             if _obj_stale and _con_stale:
                 _log.debug("AR-411: suppressed stale architectural_context (template defaults)")
             else:
@@ -2556,7 +2607,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     async def execute(
         self, chunk: DevelopmentChunk, context: Dict[str, Any]
     ) -> Tuple[bool, str]:
-        """Execute the chunk via LeadContractorCodeGenerator.
+        """Execute the chunk via PrimaryContractorCodeGenerator.
 
         Wraps the synchronous ``generator.generate()`` in a thread pool
         executor so it doesn't block the async event loop.
@@ -2757,16 +2808,20 @@ _EDIT_SYSTEM_FALLBACK: str = (
 )
 
 
-class ArtisanChunkExecutor(LeadContractorChunkExecutor):
+# Backward-compat alias (Phase 4 rename: Lead → Primary)
+LeadContractorChunkExecutor = PrimaryContractorChunkExecutor
+
+
+class ArtisanChunkExecutor(PrimaryContractorChunkExecutor):
     """Chunk executor using direct ``agenerate()`` calls.
 
     Inherits all prompt-building helpers from
-    :class:`LeadContractorChunkExecutor` (``_build_task_description``,
+    :class:`PrimaryContractorChunkExecutor` (``_build_task_description``,
     ``_build_generation_context``, and ~10 section helpers).
 
     Key differences from the parent:
     - Calls ``drafter.agenerate()`` directly instead of routing through
-      ``LeadContractorCodeGenerator`` (no lead/drafter review loop).
+      ``PrimaryContractorCodeGenerator`` (no lead/drafter review loop).
     - Adds search/replace edit block support for large existing files.
     - Constructor takes ``drafter_spec`` instead of ``code_generator``.
 
@@ -2917,7 +2972,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         if design_doc:
             file_targets = getattr(chunk, "file_targets", [])
             if file_targets:
-                design_doc = LeadContractorChunkExecutor._filter_design_doc_for_targets(
+                design_doc = PrimaryContractorChunkExecutor._filter_design_doc_for_targets(
                     design_doc, file_targets,
                 )
             parts.append("\n## Design Document")
@@ -3558,6 +3613,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         parts.extend(self._build_critical_parameters(chunk))
         parts.extend(self._build_forward_contracts_implement(chunk))
         parts.extend(self._build_skeleton_guidance(chunk))
+        parts.extend(self._build_pre_assembly_guidance(chunk))       # FR-MPA-005
         parts.extend(self._build_coding_standards())
         parts.extend(self._build_output_format(chunk))
         parts.extend(self._build_completeness_warning(chunk))
