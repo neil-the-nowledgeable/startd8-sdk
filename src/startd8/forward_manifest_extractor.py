@@ -99,13 +99,34 @@ def _unparse(node: Optional[ast.AST]) -> Optional[str]:
 
 
 def _strip_def_prefix(sig_str: str) -> str:
-    """Strip ``def `` or ``async def `` prefix from a signature string."""
+    """Strip leading keyword prefixes from a signature string.
+
+    Handles ``def ``, ``async def ``, and LLM-generated prefixes like
+    ``Method``, ``Function``, ``Property`` that appear in ``api_signatures``
+    output.  Matching is case-insensitive to cover ``Async Def``, ``METHOD``,
+    etc.
+    """
     cleaned = sig_str.strip()
-    if cleaned.startswith("async def "):
-        return cleaned[len("async def "):]
-    if cleaned.startswith("def "):
-        return cleaned[len("def "):]
+    lower = cleaned.lower()
+    # Longest prefixes first to avoid partial matches.
+    for prefix in (
+        "async def ",
+        "async method ",
+        "async function ",
+        "def ",
+        "method ",
+        "function ",
+        "property ",
+    ):
+        if lower.startswith(prefix):
+            return cleaned[len(prefix):]
     return cleaned
+
+
+def _detect_async_prefix(sig_str: str) -> bool:
+    """Return True if ``sig_str`` has an ``async`` keyword prefix."""
+    lower = sig_str.strip().lower()
+    return lower.startswith("async ")
 
 
 def _parse_python_signature(sig_str: str) -> Optional[Signature]:
@@ -207,7 +228,7 @@ def _extract_function_name(sig_str: str) -> Optional[str]:
     """Extract the function name from a signature string."""
     cleaned = _strip_def_prefix(sig_str)
     # Skip class definitions — handled by _parse_class_signature
-    if cleaned.startswith("Class ") or cleaned.startswith("class "):
+    if cleaned[:6].lower().startswith("class "):
         return None
     paren_idx = cleaned.find("(")
     if paren_idx < 1:
@@ -223,10 +244,9 @@ def _parse_class_signature(
     Returns ``(class_name, [base_classes])`` or ``None`` on parse failure.
     """
     cleaned = sig_str.strip()
-    for prefix in ("Class ", "class "):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix):]
-            break
+    lower = cleaned.lower()
+    if lower.startswith("class "):
+        cleaned = cleaned[len("class "):]
     else:
         return None
 
@@ -445,6 +465,11 @@ class DeterministicExtractor:
         ``kind=METHOD`` (or ``CLASSMETHOD``) and sets ``parent_class`` to the
         CLASS element in the same file, enabling downstream decomposition
         (REQ-MP-901).
+
+        When the file contains a single class, all self/cls-bearing functions
+        are linked to it.  When multiple classes exist, a proximity heuristic
+        is used: each function is linked to the nearest preceding CLASS element
+        in the list (which preserves ``api_signatures`` ordering).
         """
         for filepath, specs in file_elements.items():
             # Collect class names in this file
@@ -454,8 +479,18 @@ class DeterministicExtractor:
             if not class_names:
                 continue
 
+            # Build a positional map: for each index, find the nearest
+            # preceding CLASS element.  LLMs list methods right after their
+            # parent class in api_signatures, so list order is meaningful.
+            nearest_class: dict[int, str] = {}
+            last_class: Optional[str] = None
+            for i, s in enumerate(specs):
+                if s.kind == ElementKind.CLASS:
+                    last_class = s.name
+                nearest_class[i] = last_class  # type: ignore[assignment]
+
             updated: list[ForwardElementSpec] = []
-            for spec in specs:
+            for i, spec in enumerate(specs):
                 if (
                     spec.kind in (ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION)
                     and spec.parent_class is None
@@ -463,8 +498,15 @@ class DeterministicExtractor:
                     and spec.signature.params
                 ):
                     first_param = spec.signature.params[0].name
-                    if first_param == "self" and len(class_names) == 1:
-                        parent = next(iter(class_names))
+                    # Resolve parent: single class → trivial; multiple → proximity
+                    parent: Optional[str] = None
+                    if first_param in ("self", "cls"):
+                        if len(class_names) == 1:
+                            parent = next(iter(class_names))
+                        elif nearest_class.get(i):
+                            parent = nearest_class[i]
+
+                    if first_param == "self" and parent:
                         new_kind = (
                             ElementKind.ASYNC_METHOD
                             if spec.kind == ElementKind.ASYNC_FUNCTION
@@ -478,8 +520,7 @@ class DeterministicExtractor:
                             "REQ-3.1.1: Linked %s to class %s in %s",
                             spec.name, parent, filepath,
                         )
-                    elif first_param == "cls" and len(class_names) == 1:
-                        parent = next(iter(class_names))
+                    elif first_param == "cls" and parent:
                         spec = spec.model_copy(update={
                             "kind": ElementKind.METHOD,
                             "parent_class": parent,
@@ -570,18 +611,34 @@ class DeterministicExtractor:
             contracts.append(contract)
 
             # Build ForwardElementSpec for the target file
+            if not parsed_sig and feature.target_files:
+                logger.warning(
+                    "Signature parsed name %r but not params in feature %s: %r "
+                    "(contract created, element spec skipped)",
+                    func_name, feature.feature_id, sig_str,
+                )
             if parsed_sig and feature.target_files:
                 target_file = feature.target_files[0]
+
+                # Detect async-ness from the original signature before
+                # prefix stripping (which removes the "async" keyword).
+                is_async = _detect_async_prefix(sig_str)
 
                 # Derive parent_class from dotted name (last-dot split)
                 parent_class = None
                 element_name = func_name
-                element_kind = ElementKind.FUNCTION
+                element_kind = (
+                    ElementKind.ASYNC_FUNCTION if is_async
+                    else ElementKind.FUNCTION
+                )
                 if "." in func_name:
                     last_dot = func_name.rfind(".")
                     parent_class = func_name[:last_dot]
                     element_name = func_name[last_dot + 1:]
-                    element_kind = ElementKind.METHOD
+                    element_kind = (
+                        ElementKind.ASYNC_METHOD if is_async
+                        else ElementKind.METHOD
+                    )
                     # Warn on deeply nested classes (>2 nesting levels)
                     if parent_class.count(".") > 1:
                         logger.warning(
@@ -1469,7 +1526,7 @@ def extract_forward_contracts(
     # Extract from all sources
     det = DeterministicExtractor()
     prior_file_specs = (
-        prior_manifest.files if prior_manifest else None
+        prior_manifest.file_specs if prior_manifest else None
     )
     det_contracts, file_elements = det.extract(features, prior_file_specs)
 

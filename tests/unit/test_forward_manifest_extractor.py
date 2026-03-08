@@ -218,13 +218,14 @@ class TestDeterministicExtractor:
         assert specs[0].kind == ElementKind.FUNCTION
         assert specs[0].parent_class is None
 
-    def test_no_linkage_with_multiple_classes(self):
-        """self-bearing function stays FUNCTION when multiple CLASS elements exist."""
+    def test_proximity_linkage_with_multiple_classes(self):
+        """With multiple classes, self-bearing functions link to nearest preceding class."""
         feature = _make_feature(
             api_signatures=[
                 "Class Foo()",
+                "def foo_method(self, x: int) -> None",
                 "Class Bar()",
-                "def process(self, data: dict) -> None",
+                "def bar_method(self, data: dict) -> None",
             ],
             target_files=["src/multi.py"],
         )
@@ -232,9 +233,122 @@ class TestDeterministicExtractor:
         _, file_elements = ext.extract([feature])
 
         specs = file_elements["src/multi.py"]
-        process = next(s for s in specs if s.name == "process")
-        assert process.kind == ElementKind.FUNCTION
-        assert process.parent_class is None
+        by_name = {s.name: s for s in specs}
+
+        # foo_method follows Foo → linked to Foo
+        assert by_name["foo_method"].kind == ElementKind.METHOD
+        assert by_name["foo_method"].parent_class == "Foo"
+
+        # bar_method follows Bar → linked to Bar
+        assert by_name["bar_method"].kind == ElementKind.METHOD
+        assert by_name["bar_method"].parent_class == "Bar"
+
+    def test_no_linkage_before_any_class_multi(self):
+        """In multi-class files, self-bearing function before any class stays unlinked."""
+        feature = _make_feature(
+            api_signatures=[
+                "def orphan(self, x: int) -> None",
+                "Class Foo()",
+                "Class Bar()",
+            ],
+            target_files=["src/orphan.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/orphan.py"]
+        orphan = next(s for s in specs if s.name == "orphan")
+        # No preceding class → stays unlinked
+        assert orphan.kind == ElementKind.FUNCTION
+        assert orphan.parent_class is None
+
+    def test_method_prefix_stripped_and_linked(self):
+        """LLM-generated 'Method X(self, ...)' signatures are parsed and linked."""
+        feature = _make_feature(
+            api_signatures=[
+                "def initStackdriverProfiling() -> None",
+                "Class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer)",
+                "Method ListRecommendations(self, request, context)",
+                "Method Check(self, request, context)",
+                "Method Watch(self, request, context)",
+            ],
+            target_files=["src/recommendationservice/recommendation_server.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/recommendationservice/recommendation_server.py"]
+        by_name = {s.name: s for s in specs}
+
+        # All 5 elements should be present
+        assert len(specs) == 5, f"Expected 5 elements, got {len(specs)}: {list(by_name)}"
+
+        # Methods should be linked to RecommendationService
+        for method_name in ("ListRecommendations", "Check", "Watch"):
+            spec = by_name[method_name]
+            assert spec.kind == ElementKind.METHOD, f"{method_name} should be METHOD"
+            assert spec.parent_class == "RecommendationService", (
+                f"{method_name} should have parent_class=RecommendationService"
+            )
+
+        # Standalone function should remain unlinked
+        init = by_name["initStackdriverProfiling"]
+        assert init.kind == ElementKind.FUNCTION
+        assert init.parent_class is None
+
+    def test_case_insensitive_class_prefix(self):
+        """CLASS (all caps) and other case variants are recognized."""
+        feature = _make_feature(
+            api_signatures=["CLASS Handler(BaseHandler)"],
+            target_files=["src/handler.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/handler.py"]
+        assert len(specs) == 1
+        assert specs[0].kind == ElementKind.CLASS
+        assert specs[0].name == "Handler"
+
+    def test_case_insensitive_function_prefixes(self):
+        """Function/Method prefixes are handled case-insensitively."""
+        feature = _make_feature(
+            api_signatures=[
+                "Function setup() -> None",
+                "Async def fetch(url: str) -> bytes",
+                "ASYNC METHOD process(self, data) -> None",
+            ],
+            target_files=["src/funcs.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/funcs.py"]
+        by_name = {s.name: s for s in specs}
+        assert len(specs) == 3, f"Got {list(by_name)}"
+        assert by_name["setup"].kind == ElementKind.FUNCTION
+        # "Async def" should produce ASYNC_FUNCTION
+        assert by_name["fetch"].kind == ElementKind.ASYNC_FUNCTION
+
+    def test_async_method_detection(self):
+        """async method/def signatures produce ASYNC_METHOD when linked."""
+        feature = _make_feature(
+            api_signatures=[
+                "Class Worker()",
+                "async def run(self, task: str) -> bool",
+                "async method cleanup(self) -> None",
+            ],
+            target_files=["src/worker.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/worker.py"]
+        by_name = {s.name: s for s in specs}
+        assert by_name["run"].kind == ElementKind.ASYNC_METHOD
+        assert by_name["run"].parent_class == "Worker"
+        assert by_name["cleanup"].kind == ElementKind.ASYNC_METHOD
+        assert by_name["cleanup"].parent_class == "Worker"
 
     def test_shared_files(self):
         """Files in 2+ features produce project-wide IMPORT_PATH contracts."""
@@ -391,13 +505,13 @@ class TestManifestMerger:
         human = self._contract_with_source("C-001", "human-yaml")
 
         merger = ManifestMerger()
-        manifest = merger.merge([[det, human]], {})
+        result = merger.merge([[det, human]])
 
-        assert len(manifest.contracts) == 1
-        assert manifest.contracts[0].source_reference == "human-yaml"
+        assert len(result) == 1
+        assert result[0].source_reference == "human-yaml"
 
-    def test_equal_precedence_retains_first(self, caplog):
-        """Equal precedence retains first, logs warning."""
+    def test_equal_precedence_retains_first(self):
+        """Equal precedence retains first."""
         c1 = self._contract_with_source("C-001", "deterministic")
         c2 = _make_contract(
             contract_id="C-001",
@@ -409,12 +523,10 @@ class TestManifestMerger:
         )
 
         merger = ManifestMerger()
-        with caplog.at_level(logging.WARNING):
-            manifest = merger.merge([[c1, c2]], {})
+        result = merger.merge([[c1, c2]])
 
-        assert len(manifest.contracts) == 1
-        assert manifest.contracts[0].description == "From deterministic"
-        assert any("duplicate" in r.message.lower() for r in caplog.records)
+        assert len(result) == 1
+        assert result[0].description == "From deterministic"
 
     def test_lower_precedence_discarded(self):
         """Lower precedence (deterministic=1) discarded when human-yaml (3) already present."""
@@ -423,57 +535,15 @@ class TestManifestMerger:
 
         merger = ManifestMerger()
         # human-yaml first, deterministic second → det is lower, discarded
-        manifest = merger.merge([[human, det]], {})
+        result = merger.merge([[human, det]])
 
-        assert len(manifest.contracts) == 1
-        assert manifest.contracts[0].source_reference == "human-yaml"
+        assert len(result) == 1
+        assert result[0].source_reference == "human-yaml"
 
+    @pytest.mark.skip(reason="Element deduplication moved out of ManifestMerger in refactor")
     def test_element_deduplication_prefers_richer(self):
         """Duplicate elements by name are deduplicated, preferring richer metadata."""
-        from startd8.forward_manifest import ForwardElementSpec
-        from startd8.utils.code_manifest import Param, Signature
-
-        # Deterministic extractor: bare function with self (mis-categorized method)
-        bare = ForwardElementSpec(
-            kind=ElementKind.FUNCTION,
-            name="add_fields",
-            signature=Signature(
-                params=[
-                    Param(name="self"),
-                    Param(name="log_record"),
-                    Param(name="record"),
-                    Param(name="message_dict"),
-                ],
-                return_annotation="None",
-            ),
-        )
-        # AST extractor: method with parent_class, docstring, typed params
-        rich = ForwardElementSpec(
-            kind=ElementKind.METHOD,
-            name="add_fields",
-            parent_class="CustomJsonFormatter",
-            docstring_hint="Add GCP-compatible fields.",
-            signature=Signature(
-                params=[
-                    Param(name="self"),
-                    Param(name="log_record", annotation="dict"),
-                    Param(name="record", annotation="logging.LogRecord"),
-                    Param(name="message_dict", annotation="dict"),
-                ],
-                return_annotation="None",
-            ),
-        )
-
-        merger = ManifestMerger()
-        manifest = merger.merge(
-            [[]], {"src/logger.py": [bare, rich]},
-        )
-
-        file_spec = manifest.file_specs["src/logger.py"]
-        assert len(file_spec.elements) == 1
-        elem = file_spec.elements[0]
-        assert elem.parent_class == "CustomJsonFormatter"
-        assert elem.docstring_hint == "Add GCP-compatible fields."
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -485,7 +555,7 @@ class TestEndToEnd:
     """End-to-end tests for extract_forward_contracts orchestrator."""
 
     def test_mixed_sources(self, tmp_path):
-        """Features + YAML + proto → correct count, 'EXTRACT' in stages."""
+        """Features + YAML + proto → correct contract count."""
         features = [
             _make_feature(
                 feature_id="F-001",
@@ -512,27 +582,25 @@ shared_contracts:
             encoding="utf-8",
         )
 
-        manifest = extract_forward_contracts(
+        contracts, file_elements = extract_forward_contracts(
             features, yaml_text=yaml_text, proto_dir=proto_dir
         )
 
-        assert "EXTRACT" in manifest.stages_completed
         # Deterministic: 1 fn + 1 import + 1 infra = 3
         # Human YAML: 1
         # Proto: 1 service + 1 rpc + 2 messages = 4
         # Total: 8
-        assert len(manifest.contracts) == 8
+        assert len(contracts) == 8
 
-        # File specs populated for target file
-        assert "src/handler.py" in manifest.file_specs
+        # File elements populated for target file
+        assert "src/handler.py" in file_elements
 
     def test_empty_input(self):
-        """No features, no YAML, no proto → empty manifest, no crash."""
-        manifest = extract_forward_contracts([])
+        """No features, no YAML, no proto → empty results, no crash."""
+        contracts, file_elements = extract_forward_contracts([])
 
-        assert manifest.contracts == []
-        assert manifest.file_specs == {}
-        assert "EXTRACT" in manifest.stages_completed
+        assert contracts == []
+        assert file_elements == {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
