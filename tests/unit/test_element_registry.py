@@ -592,8 +592,8 @@ class TestSummary:
             assert counts.get(("extraction", "complete")) == 2
             assert counts.get(("extraction", "failed")) == 1
             assert counts.get(("generation", "complete")) == 1
-        elif hasattr(summary, "by_phase"):
-            by_phase = summary.by_phase
+        elif hasattr(summary, "by_phase_status"):
+            by_phase = summary.by_phase_status
             assert by_phase.get("extraction", {}).get("complete") == 2
             assert by_phase.get("extraction", {}).get("failed") == 1
             assert by_phase.get("generation", {}).get("complete") == 1

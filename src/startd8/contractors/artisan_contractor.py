@@ -1292,6 +1292,26 @@ class ArtisanContractorWorkflow:
                        "error": str(exc)},
             )
 
+        # ER-QW-003: Inject ElementRegistry so all phase handlers can
+        # access it via context["_element_registry"].
+        if "_element_registry" not in context:
+            try:
+                from startd8.element_registry import ElementRegistry
+
+                state_dir = Path(context["project_root"]) / ".startd8" / "state"
+                state_dir.mkdir(parents=True, exist_ok=True)
+                context["_element_registry"] = ElementRegistry(state_dir=state_dir)
+                self._logger.info(
+                    "element_registry.init",
+                    extra={"state_dir": str(state_dir)},
+                )
+            except Exception as exc:
+                context["_element_registry"] = None
+                self._logger.debug(
+                    "element_registry.init_failed: %s — element tracking disabled",
+                    exc,
+                )
+
         config = self.config
         cost_tracker = _CostTracker(budget=config.cost_budget)
         phase_results: list[PhaseResult] = []

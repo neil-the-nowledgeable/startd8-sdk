@@ -188,7 +188,7 @@ def _safe_filename(element_id: str) -> str:
 
 def _now_iso() -> str:
     """Return the current UTC time as an ISO-8601 string with a ``Z`` suffix."""
-    return datetime.datetime.utcnow().isoformat() + "Z"
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _sanitize_run_id(run_id: str) -> str:
@@ -440,7 +440,13 @@ class ElementRegistry:
                 timestamp=_now_iso(),
                 metadata=metadata or {},
             )
-            entry.phases.setdefault(phase, []).append(record)
+            records = entry.phases.setdefault(phase, [])
+            if records:
+                # Overwrite the latest record for this phase rather than
+                # accumulating duplicates (ER-QW-002).
+                records[-1] = record
+            else:
+                records.append(record)
             self._write_entry(entry)
             # entry is already the object in self._index; update is implicit,
             # but re-assign for explicitness.
