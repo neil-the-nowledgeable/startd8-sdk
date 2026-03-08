@@ -340,11 +340,20 @@ def _step_signature_reconcile(
             step_name="signature_reconcile", modified=False, code=code,
         )
 
-    # Find the target function/class
+    # Find the target function — prefer class-scoped match for methods,
+    # then fall back to top-level to avoid matching nested functions.
     target_node = None
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == element.name:
+    if element.parent_class:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
+                        target_node = child
+                        break
+                break
+    if target_node is None:
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
                 target_node = node
                 break
 

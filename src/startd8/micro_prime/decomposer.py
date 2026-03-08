@@ -457,7 +457,7 @@ class ClassDecomposeStrategy:
             if any(marker in dec for marker in _COMPLEX_CLASS_MARKERS):
                 return True
             # dataclass with complex field factories
-            if "dataclass" in dec and ("field(" in dec or "factory" in dec):
+            if (dec == "dataclass" or dec.startswith("dataclass(")) and ("field(" in dec or "factory" in dec):
                 return True
         # Check bases for ABCMeta
         for base in (element.bases or []):

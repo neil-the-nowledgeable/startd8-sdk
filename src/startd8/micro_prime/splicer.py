@@ -217,7 +217,7 @@ def _splice_class_body(
         return None
 
     class_node = None
-    for node in ast.walk(tree):
+    for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef) and node.name == element.name:
             class_node = node
             break

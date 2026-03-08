@@ -370,8 +370,8 @@ def _is_dataclass_boilerplate_match(
     if elem.kind != ElementKind.CLASS:
         return False
     # Must have dataclass decorator or BaseModel in bases
-    is_dataclass = "dataclass" in elem.decorators
-    is_pydantic = any("BaseModel" in b for b in elem.bases)
+    is_dataclass = any(d == "dataclass" or d.startswith("dataclass(") for d in elem.decorators)
+    is_pydantic = any(b == "BaseModel" or b.endswith(".BaseModel") for b in elem.bases)
     if not is_dataclass and not is_pydantic:
         return False
     # Must have an __init__ child with params in the file_spec
