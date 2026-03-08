@@ -224,7 +224,7 @@ class MicroPrimeEngine:
         metrics_collector: Optional metrics collector for observability.
     """
 
-    _CIRCUIT_BREAKER_THRESHOLD: int = 3
+    _CIRCUIT_BREAKER_THRESHOLD: int = 5
     _TIER_PRIORITY: dict[TierClassification, int] = {
         TierClassification.TRIVIAL: 0,
         TierClassification.SIMPLE: 1,

@@ -158,7 +158,11 @@ def class_element_with_methods() -> ForwardElementSpec:
 
 @pytest.fixture
 def class_file_spec(class_element_with_methods) -> ForwardFileSpec:
-    """File spec with a class + its methods as separate elements."""
+    """File spec with a class + its methods as separate elements.
+
+    Contains 5 elements to avoid the small-file bias (≤4 elements → -1)
+    which would push the class from MODERATE to SIMPLE.
+    """
     return ForwardFileSpec(
         file="src/emailservice/logger.py",
         imports=[
@@ -193,6 +197,22 @@ def class_file_spec(class_element_with_methods) -> ForwardFileSpec:
                     return_annotation="str",
                 ),
                 parent_class="CustomJsonFormatter",
+            ),
+            ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="getJSONLogger",
+                signature=Signature(
+                    params=[Param(name="name", annotation="str")],
+                    return_annotation="logging.Logger",
+                ),
+            ),
+            ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="setup_logging",
+                signature=Signature(
+                    params=[Param(name="level", annotation="int")],
+                    return_annotation="None",
+                ),
             ),
         ],
     )

@@ -9,9 +9,11 @@ import pytest
 from startd8.forward_manifest import ForwardElementSpec
 from startd8.micro_prime.splicer import (
     _ast_body_end,
+    _collect_leading_imports,
     _extract_body,
     _find_def_line,
     _find_stub_after_def,
+    _inject_imports,
     splice_body_into_skeleton,
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
@@ -300,3 +302,101 @@ class TestRelativeIndentationPreservation:
         result = splice_body_into_skeleton(body, element, skeleton)
         assert result is not None
         ast.parse(result)
+
+
+class TestCollectLeadingImports:
+    """Tests for _collect_leading_imports helper."""
+
+    def test_extracts_imports_before_code(self):
+        code = "from datetime import datetime\nimport os\nresult = 1 + 2"
+        assert _collect_leading_imports(code) == [
+            "from datetime import datetime",
+            "import os",
+        ]
+
+    def test_no_imports(self):
+        code = "result = 1 + 2\nreturn result"
+        assert _collect_leading_imports(code) == []
+
+    def test_empty_code(self):
+        assert _collect_leading_imports("") == []
+
+    def test_skips_blank_lines_between_imports(self):
+        code = "import os\n\ndef foo(): pass"
+        assert _collect_leading_imports(code) == ["import os"]
+
+
+class TestInjectImports:
+    """Tests for _inject_imports helper."""
+
+    def test_adds_new_imports_after_existing(self):
+        skeleton = "import logging\n\ndef foo():\n    pass"
+        result = _inject_imports(skeleton, ["from datetime import datetime"])
+        lines = result.splitlines()
+        logging_idx = next(i for i, l in enumerate(lines) if "import logging" in l)
+        dt_idx = next(i for i, l in enumerate(lines) if "from datetime" in l)
+        assert dt_idx == logging_idx + 1
+
+    def test_no_duplicates(self):
+        skeleton = "import logging\nfrom datetime import datetime\n\ndef foo():\n    pass"
+        result = _inject_imports(skeleton, ["from datetime import datetime"])
+        assert result.count("from datetime import datetime") == 1
+
+    def test_empty_imports_noop(self):
+        skeleton = "import os\n\ndef foo():\n    pass"
+        assert _inject_imports(skeleton, []) == skeleton
+
+
+class TestSpliceImportReinjection:
+    """Integration: splice_body_into_skeleton re-injects stripped imports."""
+
+    def test_imports_reinjected_after_splice(self):
+        skeleton = (
+            "import logging\n"
+            "\n"
+            "def add_fields(self, log_record):\n"
+            "    raise NotImplementedError\n"
+        )
+        body = (
+            "from datetime import datetime\n"
+            "log_record['timestamp'] = datetime.utcnow().isoformat()\n"
+            "return log_record\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="add_fields",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="log_record")],
+                return_annotation=None,
+            ),
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        assert "from datetime import datetime" in result
+        assert "raise NotImplementedError" not in result
+        assert "log_record['timestamp']" in result
+        ast.parse(result)
+
+    def test_existing_import_not_duplicated(self):
+        skeleton = (
+            "import logging\n"
+            "from datetime import datetime\n"
+            "\n"
+            "def add_fields(self, log_record):\n"
+            "    raise NotImplementedError\n"
+        )
+        body = (
+            "from datetime import datetime\n"
+            "log_record['timestamp'] = datetime.utcnow().isoformat()\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="add_fields",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="log_record")],
+                return_annotation=None,
+            ),
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        assert result.count("from datetime import datetime") == 1

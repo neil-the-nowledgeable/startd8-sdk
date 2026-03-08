@@ -42,6 +42,62 @@ def _dedent_lines(lines: list[str]) -> list[str]:
     ]
 
 
+def _collect_leading_imports(code: str) -> list[str]:
+    """Extract leading import lines from generated code.
+
+    Returns a list of import lines (``import …`` / ``from … import …``) that
+    appear before the first non-import, non-blank line.  These are the imports
+    that ``_extract_body`` will strip — capturing them here lets the caller
+    re-inject them into the skeleton's import section.
+    """
+    imports: list[str] = []
+    for line in code.strip().splitlines():
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        if stripped.startswith(("import ", "from ")):
+            imports.append(stripped)
+        else:
+            break
+    return imports
+
+
+def _inject_imports(skeleton: str, new_imports: list[str]) -> str:
+    """Add import lines to *skeleton* that are not already present.
+
+    Inserts new imports after the last existing ``import``/``from … import``
+    line in the file so they stay grouped with the existing import block.
+    If the skeleton has no imports, inserts after any leading comments /
+    docstrings / ``__future__`` imports.
+    """
+    if not new_imports:
+        return skeleton
+
+    lines = skeleton.splitlines()
+
+    # Build a set of normalised existing imports for dedup.
+    existing = set()
+    for line in lines:
+        s = line.strip()
+        if s.startswith(("import ", "from ")):
+            existing.add(s)
+
+    to_add = [imp for imp in new_imports if imp not in existing]
+    if not to_add:
+        return skeleton
+
+    # Find the last import line index to insert after it.
+    last_import_idx = -1
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith(("import ", "from ")):
+            last_import_idx = i
+
+    insert_at = last_import_idx + 1 if last_import_idx >= 0 else 0
+    new_lines = lines[:insert_at] + to_add + lines[insert_at:]
+    return "\n".join(new_lines)
+
+
 def splice_body_into_skeleton(
     body: str,
     element: ForwardElementSpec,
@@ -106,6 +162,9 @@ def _splice_function_body(
     stub_line = lines[stub_idx]
     stub_indent = stub_line[: len(stub_line) - len(stub_line.lstrip())]
 
+    # Collect imports that _extract_body will strip so we can re-inject them.
+    element_imports = _collect_leading_imports(body)
+
     # Extract just the body from the generated code
     extracted_body = _extract_body(body, element)
 
@@ -120,6 +179,10 @@ def _splice_function_body(
     # Replace the stub line with the body
     new_lines = lines[:stub_idx] + reindented + lines[stub_idx + 1:]
     result = "\n".join(new_lines)
+
+    # Re-inject any imports the element needs that the skeleton doesn't have.
+    if element_imports:
+        result = _inject_imports(result, element_imports)
 
     # Validate
     if not _validate_skeleton(result):
@@ -573,12 +636,12 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
     first_line = lines[first_code_idx].lstrip() if first_code_idx < len(lines) else ""
     has_def = first_line.startswith(("def ", "async def "))
 
-    # If there were leading imports, strip them — they belong at file level
-    if has_def and first_code_idx > 0:
+    # Strip leading imports — they belong at file level, not inside the body.
+    if first_code_idx > 0:
         stripped = "\n".join(lines[first_code_idx:]).strip()
 
     if not has_def:
-        # Body-only — return as-is
+        # Body-only — return with imports stripped
         return stripped
 
     # Has a def line — extract body after the colon
