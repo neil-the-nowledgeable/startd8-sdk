@@ -13,7 +13,11 @@ from startd8.forward_manifest import (
     ForwardManifest,
     InterfaceContract,
 )
-from startd8.micro_prime.engine import MicroPrimeEngine, _structural_verify
+from startd8.micro_prime.engine import (
+    MicroPrimeEngine,
+    _enrich_file_spec_from_skeleton,
+    _structural_verify,
+)
 from startd8.micro_prime.models import (
     EscalationReason,
     MicroPrimeConfig,
@@ -417,3 +421,130 @@ class Config:
         engine = MicroPrimeEngine()
         file_result = engine.process_file(file_spec, manifest, sample_skeleton)
         assert len(file_result.element_results) == 1
+
+
+class TestEnrichFileSpecFromSkeleton:
+    """Tests for _enrich_file_spec_from_skeleton (Opportunity 1 fix)."""
+
+    def test_adds_methods_from_skeleton(self):
+        """Class element without separate method elements gets enriched."""
+        class_element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="EmailService",
+            bases=["demo_pb2_grpc.EmailServiceServicer"],
+        )
+        file_spec = ForwardFileSpec(
+            file="src/email_service.py",
+            elements=[class_element],
+            imports=[],
+        )
+        skeleton = '''
+class EmailService(demo_pb2_grpc.EmailServiceServicer):
+    """Email service implementation."""
+
+    def Send(self, request, context) -> demo_pb2.SendResponse:
+        """Send an email."""
+        raise NotImplementedError
+
+    def Check(self, request, context) -> demo_pb2.CheckResponse:
+        """Check email status."""
+        raise NotImplementedError
+'''
+        enriched = _enrich_file_spec_from_skeleton(class_element, file_spec, skeleton)
+
+        # Should have 3 elements: class + 2 methods
+        assert len(enriched.elements) == 3
+        method_names = {e.name for e in enriched.elements if e.parent_class == "EmailService"}
+        assert method_names == {"Send", "Check"}
+
+        send = next(e for e in enriched.elements if e.name == "Send")
+        assert send.kind == ElementKind.METHOD
+        assert send.parent_class == "EmailService"
+        assert send.signature is not None
+        assert len(send.signature.params) == 3  # self, request, context
+        assert send.signature.return_annotation == "demo_pb2.SendResponse"
+        assert send.docstring_hint == "Send an email."
+
+    def test_does_not_duplicate_existing_methods(self):
+        """Methods already in file_spec are not added again."""
+        class_element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="Service",
+        )
+        existing_method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="handle",
+            signature=Signature(params=[Param(name="self")]),
+            parent_class="Service",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/service.py",
+            elements=[class_element, existing_method],
+            imports=[],
+        )
+        skeleton = '''
+class Service:
+    def handle(self):
+        raise NotImplementedError
+
+    def start(self):
+        raise NotImplementedError
+'''
+        enriched = _enrich_file_spec_from_skeleton(class_element, file_spec, skeleton)
+
+        # Should have 3: class + existing handle + new start
+        assert len(enriched.elements) == 3
+        names = [e.name for e in enriched.elements if e.parent_class == "Service"]
+        assert "handle" in names
+        assert "start" in names
+
+    def test_returns_unchanged_for_non_class(self):
+        """Non-class elements pass through unchanged."""
+        func_element = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="helper",
+            signature=Signature(params=[]),
+        )
+        file_spec = ForwardFileSpec(
+            file="src/utils.py",
+            elements=[func_element],
+            imports=[],
+        )
+        result = _enrich_file_spec_from_skeleton(func_element, file_spec, "def helper(): pass")
+        assert result is file_spec  # Same object — no copy
+
+    def test_returns_unchanged_for_empty_skeleton(self):
+        """Empty skeleton returns file_spec unchanged."""
+        class_element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="Service",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/service.py",
+            elements=[class_element],
+            imports=[],
+        )
+        result = _enrich_file_spec_from_skeleton(class_element, file_spec, "")
+        assert result is file_spec
+
+    def test_extracts_async_methods(self):
+        """Async methods are extracted with ASYNC_METHOD kind."""
+        class_element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="AsyncService",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/async_service.py",
+            elements=[class_element],
+            imports=[],
+        )
+        skeleton = '''
+class AsyncService:
+    async def fetch(self, url: str) -> bytes:
+        """Fetch data from URL."""
+        raise NotImplementedError
+'''
+        enriched = _enrich_file_spec_from_skeleton(class_element, file_spec, skeleton)
+        fetch = next(e for e in enriched.elements if e.name == "fetch")
+        assert fetch.kind == ElementKind.ASYNC_METHOD
+        assert fetch.parent_class == "AsyncService"

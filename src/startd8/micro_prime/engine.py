@@ -40,7 +40,7 @@ from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_
 from startd8.micro_prime.repair import build_repair_attribution, run_repair_pipeline
 from startd8.micro_prime.splicer import splice_body_into_skeleton
 from startd8.micro_prime.templates import TemplateRegistry
-from startd8.utils.code_manifest import ElementKind
+from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 logger = get_logger(__name__)
 
@@ -150,6 +150,149 @@ def _record_simple_decompose_succeeded(file_path: str) -> None:
 def _record_simple_decompose_rejected(file_path: str) -> None:
     if _simple_decompose_rejected is not None:
         _simple_decompose_rejected.add(1, {"file_path": file_path})
+
+
+def _signature_from_ast_args(
+    func_node: "ast.FunctionDef | ast.AsyncFunctionDef",
+) -> Signature:
+    """Build a Signature from an AST function node's arguments and return annotation.
+
+    Handles positional-only, regular, *args, keyword-only, and **kwargs params.
+    Skips individual parameters whose annotations fail to unparse rather than
+    aborting the entire signature.
+    """
+    params: list[Param] = []
+    args = func_node.args
+
+    all_args = args.posonlyargs + args.args
+    defaults_offset = len(all_args) - len(args.defaults)
+    for i, arg in enumerate(all_args):
+        try:
+            annotation = ast.unparse(arg.annotation) if arg.annotation else None
+        except (ValueError, TypeError):
+            annotation = None
+        default = None
+        default_idx = i - defaults_offset
+        if 0 <= default_idx < len(args.defaults):
+            try:
+                default = ast.unparse(args.defaults[default_idx])
+            except (ValueError, TypeError):
+                default = None
+        params.append(Param(
+            name=arg.arg,
+            annotation=annotation,
+            default=default,
+            kind=ParamKind.POSITIONAL_ONLY if arg in args.posonlyargs else ParamKind.POSITIONAL,
+        ))
+
+    if args.vararg:
+        ann = ast.unparse(args.vararg.annotation) if args.vararg.annotation else None
+        params.append(Param(name=args.vararg.arg, annotation=ann, kind=ParamKind.VAR_POSITIONAL))
+
+    for j, kwarg in enumerate(args.kwonlyargs):
+        ann = ast.unparse(kwarg.annotation) if kwarg.annotation else None
+        default = None
+        if j < len(args.kw_defaults) and args.kw_defaults[j] is not None:
+            default = ast.unparse(args.kw_defaults[j])
+        params.append(Param(name=kwarg.arg, annotation=ann, default=default, kind=ParamKind.KEYWORD_ONLY))
+
+    if args.kwarg:
+        ann = ast.unparse(args.kwarg.annotation) if args.kwarg.annotation else None
+        params.append(Param(name=args.kwarg.arg, annotation=ann, kind=ParamKind.VAR_KEYWORD))
+
+    ret_ann = ast.unparse(func_node.returns) if func_node.returns else None
+    return Signature(params=params, return_annotation=ret_ann)
+
+
+def _extract_docstring_hint(func_node: "ast.FunctionDef | ast.AsyncFunctionDef") -> Optional[str]:
+    """Extract the first line of a function's docstring, or None."""
+    if (
+        func_node.body
+        and isinstance(func_node.body[0], ast.Expr)
+        and isinstance(func_node.body[0].value, ast.Constant)
+        and isinstance(func_node.body[0].value.value, str)
+    ):
+        first_line = func_node.body[0].value.value.strip().split("\n")[0]
+        return first_line or None
+    return None
+
+
+def _enrich_file_spec_from_skeleton(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    skeleton: str,
+) -> ForwardFileSpec:
+    """Add missing method elements extracted from the skeleton AST.
+
+    When plan ingestion produces a CLASS element without separate method
+    entries (e.g. gRPC service classes), the ClassDecomposeStrategy rejects
+    it because ``_methods_are_separate()`` fails. This function parses the
+    skeleton to discover method stubs inside the class and adds them as
+    synthetic ForwardElementSpec entries so decomposition can proceed.
+
+    Only adds methods that are not already present in file_spec.elements.
+    Returns the original file_spec unchanged if no new methods are found.
+    """
+    if element.kind != ElementKind.CLASS or not skeleton:
+        return file_spec
+
+    try:
+        tree = ast.parse(skeleton)
+    except SyntaxError:
+        logger.debug("Skeleton parse failed for enrichment of %s", element.name)
+        return file_spec
+
+    # Find the class node in the skeleton
+    class_node = None
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == element.name:
+            class_node = node
+            break
+    if class_node is None:
+        return file_spec
+
+    # Collect existing child element names for this class
+    existing_names = {
+        e.name for e in file_spec.elements
+        if e.parent_class == element.name
+    }
+
+    new_specs: list[ForwardElementSpec] = []
+    for child in class_node.body:
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if child.name in existing_names:
+            continue
+
+        kind = (
+            ElementKind.ASYNC_METHOD if isinstance(child, ast.AsyncFunctionDef)
+            else ElementKind.METHOD
+        )
+        new_specs.append(ForwardElementSpec(
+            kind=kind,
+            name=child.name,
+            signature=_signature_from_ast_args(child),
+            parent_class=element.name,
+            docstring_hint=_extract_docstring_hint(child),
+            source_contract_id=f"skeleton-enrichment-{element.name}.{child.name}",
+        ))
+
+    if not new_specs:
+        return file_spec
+
+    logger.info(
+        "Enriched file_spec for class %s with %d method(s) from skeleton: %s",
+        element.name, len(new_specs),
+        ", ".join(s.name for s in new_specs),
+    )
+
+    # Create new ForwardFileSpec with enriched elements (model is frozen)
+    return ForwardFileSpec(
+        file=file_spec.file,
+        elements=list(file_spec.elements) + new_specs,
+        imports=file_spec.imports,
+        dependencies=file_spec.dependencies,
+    )
 
 
 _CODE_GEN_SYSTEM_PROMPT = (
@@ -536,6 +679,17 @@ class MicroPrimeEngine:
         self._current_manifest = manifest
         current_skeleton = skeleton
 
+        # Enrich file_spec with methods from skeleton for classes whose
+        # methods aren't separate manifest elements (e.g. gRPC servicers).
+        # Must happen before classification so enriched methods enter the
+        # processing loop as individual SIMPLE/TRIVIAL elements.
+        enriched_file_spec = file_spec
+        for element in file_spec.elements:
+            if element.kind == ElementKind.CLASS:
+                enriched_file_spec = _enrich_file_spec_from_skeleton(
+                    element, enriched_file_spec, skeleton,
+                )
+
         # Pre-classify to determine processing order (REQ-MP-704).
         # Classification results are cached to avoid redundant work in
         # process_element() — each element is classified exactly once.
@@ -544,10 +698,10 @@ class MicroPrimeEngine:
                   TierClassification, str, int, int]
         ] = []
 
-        for element in file_spec.elements:
-            contracts = self._get_element_contracts(element, file_spec, manifest)
+        for element in enriched_file_spec.elements:
+            contracts = self._get_element_contracts(element, enriched_file_spec, manifest)
             tier, reasoning, details = classify_element_with_details(
-                element, file_spec, contracts,
+                element, enriched_file_spec, contracts,
                 template_registry=self._templates,
                 config=self._config,
             )
@@ -569,7 +723,7 @@ class MicroPrimeEngine:
 
         for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust in classified:
             result = self._process_element_with_tier(
-                element, file_spec, current_skeleton, contracts,
+                element, enriched_file_spec, current_skeleton, contracts,
                 tier=pre_tier, reasoning=pre_reasoning,
                 api_file_import_bump=file_bump,
                 api_element_adjustment=elem_adjust,
@@ -801,6 +955,8 @@ class MicroPrimeEngine:
             )
 
         # Single entry point (R3-S2)
+        # file_spec is already enriched at the process_file() level with
+        # skeleton-derived method elements for classes.
         plan = self._decomposer.decompose(
             element, file_spec, manifest, reasoning,
         )

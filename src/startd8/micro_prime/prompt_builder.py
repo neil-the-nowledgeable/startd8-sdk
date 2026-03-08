@@ -107,14 +107,14 @@ def _build_function_prompt(
 
     sections.extend([
         "# Task: Implement ONLY the function body shown in the skeleton below.",
-        "# Implement the function body.",
         "# Replace the `raise NotImplementedError` line with a working implementation.",
-        f"# The body should be approximately {est_lines} lines.",
-        "# Output ONLY the body lines (no `def`, no class, no docstring).",
-        "# If you need imports not listed above, put them at the top of your output.",
-        f"# Indent the body with exactly {indent_spaces} spaces.",
-        "# STOP after the body ends. Do NOT write additional functions, classes, or tests.",
-        "# Output ONLY Python code. No markdown fences, no explanations, no comments before or after.",
+        f"# The body MUST be {est_lines} lines. Do NOT exceed this.",
+        "# Output ONLY the body lines — no `def` line, no class wrapper, no docstring.",
+        f"# Indent every line with exactly {indent_spaces} spaces.",
+        "# Do NOT add imports. Use only the imports listed below.",
+        "# Do NOT write helper functions, extra classes, main blocks, or tests.",
+        "# Do NOT add comments, explanations, or markdown fences.",
+        "# Output the body and NOTHING else.",
         "",
     ])
     if def_line:
@@ -180,10 +180,10 @@ def _build_constant_prompt(
 
     sections = [
         "# Task: Define this module-level variable.",
-        "# Output ONLY the assignment statement. 1-3 lines maximum.",
-        "# Do NOT write functions, classes, decorators, or explanations.",
+        "# Output ONLY the assignment statement. 1 line maximum.",
+        "# Do NOT write functions, classes, decorators, comments, or explanations.",
         "# Do NOT wrap output in markdown code fences.",
-        f"# Start your output directly with `{element.name}`.",
+        f"# Start your output directly with `{element.name}` and STOP after the assignment.",
         "",
     ]
 
@@ -256,17 +256,17 @@ def _estimate_body_lines(element: ForwardElementSpec) -> str:
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         return "1-2"
     if element.kind == ElementKind.PROPERTY:
-        return "1-3"
+        return "1-2"
     param_count = 0
     if element.signature:
         param_count = len([
             p for p in element.signature.params if p.name not in ("self", "cls")
         ])
     if param_count == 0:
-        return "3-8"
+        return "3-6"
     if param_count <= 2:
-        return "5-12"
-    return "8-15"
+        return "4-8"
+    return "6-12"
 
 
 def _render_imports(file_spec: ForwardFileSpec) -> list[str]:

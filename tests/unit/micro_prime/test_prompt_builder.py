@@ -33,7 +33,7 @@ class TestBuildBodyPrompt:
         prompt = build_body_prompt(
             simple_function_element, sample_file_spec, sample_contracts,
         )
-        assert "Implement the function body" in prompt
+        assert "Implement ONLY the function body" in prompt
         assert "raise NotImplementedError" in prompt
         assert "def get_name" in prompt
 
@@ -186,7 +186,7 @@ class TestEstimateBodyLines:
         assert _estimate_body_lines(constant_element) == "1-2"
 
     def test_property_estimate(self, property_element):
-        assert _estimate_body_lines(property_element) == "1-3"
+        assert _estimate_body_lines(property_element) == "1-2"
 
     def test_no_params_estimate(self):
         elem = ForwardElementSpec(
@@ -194,7 +194,7 @@ class TestEstimateBodyLines:
             name="foo",
             signature=Signature(params=[]),
         )
-        assert _estimate_body_lines(elem) == "3-8"
+        assert _estimate_body_lines(elem) == "3-6"
 
     def test_few_params_estimate(self):
         elem = ForwardElementSpec(
@@ -204,7 +204,7 @@ class TestEstimateBodyLines:
                 Param(name="a"), Param(name="b"),
             ]),
         )
-        assert _estimate_body_lines(elem) == "5-12"
+        assert _estimate_body_lines(elem) == "4-8"
 
     def test_many_params_estimate(self):
         elem = ForwardElementSpec(
@@ -214,7 +214,7 @@ class TestEstimateBodyLines:
                 Param(name="a"), Param(name="b"), Param(name="c"),
             ]),
         )
-        assert _estimate_body_lines(elem) == "8-15"
+        assert _estimate_body_lines(elem) == "6-12"
 
 
 class TestFindFewShotExamples:
