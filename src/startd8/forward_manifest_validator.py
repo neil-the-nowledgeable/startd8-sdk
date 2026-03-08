@@ -100,7 +100,10 @@ def _validate_file_spec(
     if spec.imports:
         actual_imports = [imp.module for imp in (file_manifest.imports or [])]
         for req_imp in spec.imports:
-            found = any(req_imp.module in acc_imp for acc_imp in actual_imports)
+            found = any(
+                acc_imp == req_imp.module or acc_imp.startswith(req_imp.module + ".")
+                for acc_imp in actual_imports
+            )
             if not found:
                  violations.append(
                     ContractViolation(
@@ -172,7 +175,7 @@ def _validate_function_name(
              expected_ret = expected_sig.split("->")[-1].strip()
              actual_ret = element.signature.return_annotation or "None"
              
-             if expected_ret not in actual_ret:
+             if expected_ret != actual_ret:
                   violations.append(
                       ContractViolation(
                           contract_id=contract.contract_id,
@@ -257,7 +260,10 @@ def _validate_import_path(
         for imp in (file_manifest.imports or []):
              global_imports.add(imp.module)
              
-    if not any(req_lib in acc_imp for acc_imp in global_imports):
+    if not any(
+        acc_imp == req_lib or acc_imp.startswith(req_lib + ".")
+        for acc_imp in global_imports
+    ):
          violations.append(
              ContractViolation(
                  contract_id=contract.contract_id,

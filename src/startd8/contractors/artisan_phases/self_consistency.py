@@ -618,17 +618,29 @@ def validate_function_call_completeness(
     # Collect function definitions (excluding exemptions)
     defined_functions: dict[str, int] = {}  # name -> lineno
 
-    for node in ast.walk(tree):
+    # Only collect top-level and class-method definitions — nested helper
+    # functions are inherently "called" by their enclosing scope.
+    for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             name = node.name
             if name in _EXEMPTED_FUNC_NAMES:
                 continue
             if any(name.startswith(p) for p in _EXEMPTED_FUNC_PREFIXES):
                 continue
-            # Skip decorated functions (likely registered as handlers/endpoints)
             if node.decorator_list:
                 continue
             defined_functions[name] = node.lineno
+        elif isinstance(node, ast.ClassDef):
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    name = child.name
+                    if name in _EXEMPTED_FUNC_NAMES:
+                        continue
+                    if any(name.startswith(p) for p in _EXEMPTED_FUNC_PREFIXES):
+                        continue
+                    if child.decorator_list:
+                        continue
+                    defined_functions[name] = child.lineno
 
     if not defined_functions:
         return issues
@@ -727,8 +739,16 @@ def validate_dockerfile_runtime_deps(
     for dep in expected_deps:
         dep_normalized = dep.lower().replace("-", "_")
         if dep_normalized not in installed_packages:
-            if dep.lower() in code_lower:
-                continue  # Likely installed via different mechanism
+            # Check if the dependency name appears as a word boundary in code
+            # (not as a substring of a longer word).
+            dep_lower = dep.lower()
+            if dep_lower in code_lower:
+                # Verify it's a standalone reference, not a substring
+                idx = code_lower.find(dep_lower)
+                before = code_lower[idx - 1] if idx > 0 else " "
+                after_ch = code_lower[idx + len(dep_lower)] if idx + len(dep_lower) < len(code_lower) else " "
+                if not before.isalnum() and before != "_" and not after_ch.isalnum() and after_ch != "_":
+                    continue  # Likely installed via different mechanism
             issues.append({
                 "validator": "dockerfile_runtime_deps",
                 "message": (
