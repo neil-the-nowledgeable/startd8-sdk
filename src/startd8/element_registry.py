@@ -661,6 +661,43 @@ class ElementRegistry:
         )
 
     # ------------------------------------------------------------------
+    # Element lineage (ER-018)
+    # ------------------------------------------------------------------
+
+    def element_lineage(self, element_id: str) -> Optional[ElementLineage]:
+        """Return the complete lineage and status history for an element.
+
+        Collects all phase records across all phases into a single
+        time-sorted history, plus a ``current_phases`` dict mapping each
+        phase to its latest status.
+
+        Returns ``None`` if the element does not exist.  Thread-safe.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            entry = self._index.get(element_id)
+            if entry is None:
+                return None
+
+            all_records: list[PhaseRecord] = []
+            current_phases: dict[str, str] = {}
+
+            for phase, records in entry.phases.items():
+                if not records:
+                    continue
+                all_records.extend(records)
+                current_phases[phase] = records[-1].status
+
+            # Sort by timestamp ascending
+            all_records.sort(key=lambda r: r.timestamp or "")
+
+            return ElementLineage(
+                element_id=element_id,
+                history=all_records,
+                current_phases=current_phases,
+            )
+
+    # ------------------------------------------------------------------
     # Dunder helpers
     # ------------------------------------------------------------------
 

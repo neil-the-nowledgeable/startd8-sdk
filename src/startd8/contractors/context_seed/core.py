@@ -8018,6 +8018,71 @@ PASS if score >= {pass_threshold} and no blocking issues.
         return valid
 
     # ------------------------------------------------------------------
+    # ER-010: Element-level review scoring
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _score_elements_from_review(
+        review_items: list[dict[str, Any]],
+        tasks: list[SeedTask],
+        element_registry: Any,
+    ) -> int:
+        """Attribute review scores to individual elements (ER-010).
+
+        For each reviewed task, look up its target files in the registry
+        and record the review score/verdict as a phase status on each
+        matching element.  Advisory — never blocks the REVIEW phase.
+
+        Returns the number of elements scored.
+        """
+        scored = 0
+        task_map = {t.task_id: t for t in tasks}
+
+        for item in review_items:
+            tid = item.get("task_id")
+            score = item.get("score")
+            verdict = item.get("verdict", "")
+            passed = item.get("passed")
+            if tid is None or score is None:
+                continue
+
+            task = task_map.get(tid)
+            if task is None:
+                continue
+
+            for fpath in (task.target_files or []):
+                try:
+                    entries = element_registry.elements_for_file(fpath)
+                    for entry in entries:
+                        element_registry.set_phase_status(
+                            entry.element_id,
+                            "review",
+                            f"{'passed' if passed else 'failed'}:{score}",
+                            metadata={
+                                "task_id": tid,
+                                "score": score,
+                                "verdict": verdict,
+                                "issues": [
+                                    iss for iss in (item.get("issues") or [])
+                                    if isinstance(iss, str)
+                                ][:5],
+                            },
+                        )
+                        scored += 1
+                except Exception as exc:
+                    logger.debug(
+                        "ER-010: Element scoring failed for %s/%s: %s",
+                        fpath, tid, exc,
+                    )
+
+        if scored > 0:
+            logger.info(
+                "ER-010: Scored %d elements from %d review items",
+                scored, len(review_items),
+            )
+        return scored
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -8630,6 +8695,13 @@ PASS if score >= {pass_threshold} and no blocking issues.
         }
 
         context["review_results"] = output
+
+        # ER-010: Score elements in the element registry from review results
+        _element_registry = context.get("_element_registry")
+        if _element_registry is not None:
+            self._score_elements_from_review(
+                review_items, tasks, _element_registry,
+            )
 
         # Context contract: validate REVIEW output model.
         # R2-T6: Respect gate mode — block raises, warn flags, skip ignores.
