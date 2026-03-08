@@ -392,17 +392,19 @@ class MicroPrimeCodeGenerator:
                     continue
 
                 # REQ-MP-703: Write filled skeleton to disk
+                # Strip the skeleton sentinel — it's a build marker, not output.
+                final_content = file_result.filled_skeleton.replace(
+                    _SKELETON_MARKER + "\n", "",
+                ).replace(_SKELETON_MARKER, "")
                 output_path = self._output_dir / file_path
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(
-                    file_result.filled_skeleton, encoding="utf-8",
-                )
+                output_path.write_text(final_content, encoding="utf-8")
                 generated_files.append(output_path)
                 written_file_paths.add(file_path)
                 logger.info(
                     "Micro Prime wrote %s (%d lines, %d elements filled)",
                     file_path,
-                    file_result.filled_skeleton.count("\n") + 1,
+                    final_content.count("\n") + 1,
                     sum(1 for er in file_result.element_results if er.success),
                 )
 

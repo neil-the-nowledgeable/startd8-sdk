@@ -387,8 +387,34 @@ class TestOutputFileWriting:
 
         assert "micro_prime_files_written" in result.metadata
 
-    def test_stub_skeleton_escalated_to_fallback(self, tmp_path, sample_manifest, sample_skeleton):
-        """Skeletons with stubs are escalated to fallback and removed from disk."""
+    def test_stub_skeleton_escalated_to_fallback(self, tmp_path, sample_manifest):
+        """Skeletons with unfillable stubs are escalated to fallback and removed from disk."""
+        # Add an extra function stub NOT in the manifest — engine can't fill it,
+        # so `raise NotImplementedError` remains and triggers assembly defect.
+        skeleton_with_unfillable = '''from __future__ import annotations
+from typing import Optional, List
+from pathlib import Path
+import json
+
+
+DEFAULT_TIMEOUT: int = ...  # STARTD8_AUTO_STUB
+
+
+class MyClass:
+    """My class."""
+
+    def get_name(self, key: str) -> str:
+        """Return the name for the given key."""
+        raise NotImplementedError
+
+    def get_value(self, key: str) -> int:
+        """Return the value for the given key."""
+        raise NotImplementedError
+
+    def orphan_method(self) -> None:
+        """Not in manifest — cannot be filled."""
+        raise NotImplementedError
+'''
         fallback = MagicMock()
         fallback.generate.return_value = MagicMock(
             success=True,
@@ -400,7 +426,7 @@ class TestOutputFileWriting:
         )
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": skeleton_with_unfillable},
             fallback=fallback,
             output_dir=tmp_path,
         )
@@ -409,22 +435,45 @@ class TestOutputFileWriting:
         )
 
         expected_path = tmp_path / "src/mypackage/utils.py"
-        assert not expected_path.exists(), "Skeleton with stubs should be removed when fallback available"
+        assert not expected_path.exists(), "Skeleton with unfillable stubs should be removed when fallback available"
         fallback.generate.assert_called_once()
 
-    def test_stub_skeleton_kept_without_fallback(self, tmp_path, sample_manifest, sample_skeleton):
-        """Without fallback, stubs are kept on disk but result reports failure."""
+    def test_stub_skeleton_kept_without_fallback(self, tmp_path, sample_manifest):
+        """Without fallback, unfillable stubs result in failure."""
+        skeleton_with_unfillable = '''from __future__ import annotations
+from typing import Optional, List
+from pathlib import Path
+import json
+
+
+DEFAULT_TIMEOUT: int = ...  # STARTD8_AUTO_STUB
+
+
+class MyClass:
+    """My class."""
+
+    def get_name(self, key: str) -> str:
+        """Return the name for the given key."""
+        raise NotImplementedError
+
+    def get_value(self, key: str) -> int:
+        """Return the value for the given key."""
+        raise NotImplementedError
+
+    def orphan_method(self) -> None:
+        """Not in manifest — cannot be filled."""
+        raise NotImplementedError
+'''
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
-            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            skeletons={"src/mypackage/utils.py": skeleton_with_unfillable},
             output_dir=tmp_path,
         )
         result = gen.generate(
             "Implement utils", {}, ["src/mypackage/utils.py"],
         )
 
-        expected_path = tmp_path / "src/mypackage/utils.py"
-        # File kept (Mottainai), but success is false
+        # Unfillable stubs remain — result reports failure
         assert not result.success
 
     def test_fallback_files_not_rewritten(self, tmp_path, sample_manifest):
