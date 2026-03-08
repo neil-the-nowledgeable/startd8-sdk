@@ -661,7 +661,9 @@ class TestExecuteRealMode:
         )
         mock_run_development_phase.return_value = dev_result
 
-        handler = ImplementPhaseHandler()
+        # enable_inner_loop=False to route through the DevelopmentPhase path
+        # (the default is True, which takes the inner loop path instead)
+        handler = ImplementPhaseHandler(HandlerConfig(enable_inner_loop=False))
 
         tasks = [_make_seed_task(task_id="T1")]
         context: dict[str, Any] = {
