@@ -1795,6 +1795,222 @@ class PrimeContractorWorkflow:
         logger.info("Staleness check: current — reusing cached '%s'", feature.name)
         return False
 
+    # ------------------------------------------------------------------
+    # REQ-MP-1105: Cross-task element cache assembly
+    # ------------------------------------------------------------------
+
+    def _try_element_cache_assembly(
+        self, feature: "FeatureSpec",
+    ) -> Optional[GenerationResult]:
+        """Attempt to assemble a feature entirely from cached element code.
+
+        Iterates the feature's ForwardElementSpecs via the forward manifest.
+        For each element with a ``source_contract_id``, checks whether the
+        element registry already holds generated code (stored in
+        ``entry.extra["code"]``).  If ALL elements are present and their
+        checksums are current, the feature is assembled deterministically
+        from cached code with zero LLM cost.
+
+        If SOME elements hit cache, the method stores pre-fill info in
+        ``feature.metadata["_prefill_elements"]`` for the generator to use
+        and returns ``None`` (fall through to normal generation).
+
+        If NONE hit cache, or if the registry / manifest is unavailable,
+        returns ``None`` immediately.
+
+        Any error is logged and the method returns ``None`` so the normal
+        generation path proceeds (non-fatal).
+
+        Args:
+            feature: The feature spec being developed.
+
+        Returns:
+            A ``GenerationResult`` with ``cost_usd=0.0`` and
+            ``strategy="element_reuse"`` if all elements were assembled from
+            cache, or ``None`` to fall through to normal generation.
+        """
+        if self._element_registry is None or self._forward_manifest is None:
+            return None
+
+        try:
+            fm = self._forward_manifest
+            target_files = feature.target_files or []
+            if not target_files:
+                return None
+
+            # Collect all element specs for this feature's target files
+            all_element_specs: list = []  # list of (file_path, element_spec) tuples
+            for path in target_files:
+                file_spec = fm.file_specs.get(path)
+                if file_spec is None:
+                    continue
+                for elem in file_spec.elements:
+                    if elem.source_contract_id:
+                        all_element_specs.append((path, elem))
+
+            if not all_element_specs:
+                return None
+
+            # Check each element against the registry
+            cached_elements: dict = {}  # element_id -> (file_path, code)
+            stale_elements: list = []
+            missing_elements: list = []
+
+            for file_path, elem_spec in all_element_specs:
+                eid = elem_spec.source_contract_id
+                entry = self._element_registry.get(eid)
+                if entry is None:
+                    missing_elements.append(eid)
+                    continue
+
+                cached_code = entry.extra.get("code")
+                if not cached_code:
+                    missing_elements.append(eid)
+                    continue
+
+                # Checksum validation: compare registry checksum against
+                # the manifest's source_contract_id (interface contract
+                # identity).  If the entry's context_checksum differs from
+                # the manifest's source_checksum, the contract has changed
+                # and the cached code is stale.
+                if (
+                    fm.source_checksum
+                    and entry.context_checksum
+                    and entry.context_checksum != fm.source_checksum
+                ):
+                    stale_elements.append(eid)
+                    continue
+
+                cached_elements[eid] = (file_path, cached_code)
+
+            elements_total = len(all_element_specs)
+            elements_from_cache = len(cached_elements)
+            elements_stale = len(stale_elements)
+            elements_missing = len(missing_elements)
+
+            logger.info(
+                "Element cache check for '%s': %d/%d cached, %d stale, %d missing",
+                feature.name,
+                elements_from_cache,
+                elements_total,
+                elements_stale,
+                elements_missing,
+            )
+
+            # ALL elements hit cache: assemble from cached code
+            if elements_from_cache == elements_total and elements_total > 0:
+                return self._assemble_from_element_cache(
+                    feature, cached_elements, elements_total,
+                )
+
+            # SOME elements hit cache: store pre-fill info for generator
+            if elements_from_cache > 0:
+                if feature.metadata is None:
+                    feature.metadata = {}
+                feature.metadata["_prefill_elements"] = {
+                    eid: code for eid, (_, code) in cached_elements.items()
+                }
+                logger.info(
+                    "Partial cache hit for '%s': %d elements pre-filled, "
+                    "%d to generate",
+                    feature.name,
+                    elements_from_cache,
+                    elements_total - elements_from_cache,
+                )
+
+            # Fall through to normal generation
+            return None
+
+        except Exception as exc:
+            logger.debug(
+                "Element cache assembly failed for '%s' (non-fatal): %s",
+                feature.name,
+                exc,
+            )
+            return None
+
+    def _assemble_from_element_cache(
+        self,
+        feature: "FeatureSpec",
+        cached_elements: dict,
+        elements_total: int,
+    ) -> Optional[GenerationResult]:
+        """Assemble a feature's files from cached element code.
+
+        Groups cached elements by target file, concatenates their code
+        blocks, writes each assembled file to the output directory, and
+        validates the result via ``_detect_assembly_defect``.
+
+        Args:
+            feature: The feature being assembled.
+            cached_elements: Mapping of element_id -> (file_path, code).
+            elements_total: Total number of elements for metadata.
+
+        Returns:
+            A successful ``GenerationResult`` or ``None`` if assembly
+            validation fails (falls through to normal generation).
+        """
+        try:
+            from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+        except ImportError:
+            _detect_assembly_defect = None  # type: ignore[assignment]
+
+        # Group code by file path
+        file_code: Dict[str, list] = {}
+        for eid, (file_path, code) in cached_elements.items():
+            file_code.setdefault(file_path, []).append(code)
+
+        # Write assembled files
+        output_dir = (
+            self.code_generator.output_dir
+            if hasattr(self.code_generator, "output_dir")
+            else self.project_root / "generated"
+        )
+        generated_files: List[Path] = []
+
+        for file_path, code_blocks in file_code.items():
+            assembled = "\n\n".join(code_blocks)
+
+            # Validate assembly if defect detection is available
+            if _detect_assembly_defect is not None:
+                defect = _detect_assembly_defect(assembled, file_path)
+                if defect:
+                    logger.warning(
+                        "Element cache assembly defect in '%s': %s — "
+                        "falling through to generation",
+                        file_path,
+                        defect,
+                    )
+                    return None
+
+            target = output_dir / file_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(assembled, encoding="utf-8")
+            generated_files.append(target)
+
+        logger.info(
+            "Element cache assembly complete for '%s': %d files, "
+            "%d elements, $0.00 cost",
+            feature.name,
+            len(generated_files),
+            elements_total,
+        )
+
+        return GenerationResult(
+            success=True,
+            generated_files=generated_files,
+            cost_usd=0.0,
+            input_tokens=0,
+            output_tokens=0,
+            iterations=0,
+            model="",
+            metadata={
+                "strategy": "element_reuse",
+                "elements_from_cache": elements_total,
+                "elements_generated": 0,
+            },
+        )
+
     def _write_generation_manifest(self, result_dict: Dict[str, Any]) -> None:
         """Write generation manifest to disk (pipeline mode only).
 
@@ -3045,6 +3261,33 @@ class PrimeContractorWorkflow:
                         exc,
                         exc_info=True,
                     )
+
+            # REQ-MP-1105: Cross-task element cache assembly — skip LLM if
+            # all elements for this feature are already in the registry.
+            cache_result = self._try_element_cache_assembly(feature)
+            if cache_result is not None:
+                result = cache_result
+                # Persist kaizen prompts even for cache hits
+                self._persist_kaizen_prompts(feature, gen_context, result=result)
+                feature.generated_files = [str(f) for f in result.generated_files]
+                feature.status = FeatureStatus.GENERATED
+                self._save_queue_state_with_mode()
+                self.total_cost_usd += result.cost_usd  # 0.0
+                if feature.metadata is None:
+                    feature.metadata = {}
+                feature.metadata["_generation_result_metadata"] = result.metadata
+                self.instrumentor.emit_metric(
+                    "prime_contractor.feature_cost",
+                    result.cost_usd,
+                    {"feature_name": feature.name, "model": result.model},
+                )
+                logger.info(
+                    "Element cache assembly for '%s': cost=$%.4f, strategy=%s",
+                    feature.name,
+                    result.cost_usd,
+                    result.metadata.get("strategy", "element_reuse"),
+                )
+                return True
 
             result: GenerationResult = generator.generate(
                 task=feature.description,
