@@ -1420,7 +1420,7 @@ class MicroPrimeEngine:
         )
 
         # Generate via Ollama with local retry
-        max_local_attempts = self._config.local_max_attempts
+        max_local_attempts = max(1, self._config.local_max_attempts)
         last_escalation_result = None
         input_tokens = 0
         output_tokens = 0
@@ -1432,7 +1432,7 @@ class MicroPrimeEngine:
                 code, attempt_in_tokens, attempt_out_tokens = self._generate_ollama(prompt)
                 input_tokens += attempt_in_tokens
                 output_tokens += attempt_out_tokens
-            except Exception as e:
+            except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
                 logger.warning(
                     "Ollama generation failed for %s (attempt %d/%d): %s",
                     element.name, local_attempt, max_local_attempts, e,

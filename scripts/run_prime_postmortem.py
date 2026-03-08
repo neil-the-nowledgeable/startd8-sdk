@@ -504,8 +504,8 @@ def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP) -> 
             entry["success_rate"] = m.get("success_rate")
             entry["total_features"] = m.get("total_features")
             entry["kaizen_enabled"] = m.get("kaizen_enabled", False)
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  [kaizen] Warning: failed to parse kaizen-metrics.json: {exc}")
 
     # Resolve kaizen_prompts_path (REQ-KZ-301): check known subdirectory
     # patterns under the run's kaizen-prompts directory.

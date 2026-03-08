@@ -173,7 +173,8 @@ class MicroPrimeConfig(BaseModel):
         # Testing / load
         "locust", "playwright",
     ]
-    local_max_attempts: int = 2
+    # Max Ollama generation attempts before escalating to cloud
+    local_max_attempts: int = Field(default=2, ge=1, le=10)
     cloud_escalation_max_attempts: int = 3
     cloud_escalation_retry_strategy: str = "same_prompt"
     cloud_escalation_retry_max_chars: int = 512

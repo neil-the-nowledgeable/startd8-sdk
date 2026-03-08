@@ -101,18 +101,13 @@ class WorkflowRegistry:
         # Thread-safe registration
         with cls._lock:
             if workflow_id in cls._workflows:
-                # TODO: Deduplicate when entry points and _register_builtin_workflows
-                # register the same class.  Currently discover() loads entry points
-                # first (pyproject.toml [project.entry-points."startd8.workflows"]),
-                # then _register_builtin_workflows() re-registers the same classes,
-                # producing 9 spurious "Overwriting" warnings on every CLI invocation.
-                # Fix: skip if type(existing) is type(incoming), or remove builtins
-                # that already have entry points.
+                # Deduplicate: entry points and _register_builtin_workflows
+                # load the same classes — skip if already registered.
                 existing = cls._workflows[workflow_id]
                 if type(existing) is type(workflow):
                     logger.debug(
-                        f"Skipping duplicate registration for {workflow_id} "
-                        f"(same class: {type(workflow).__name__})"
+                        "Skipping duplicate registration for %s (same class: %s)",
+                        workflow_id, type(workflow).__name__,
                     )
                     return
                 logger.warning(f"Overwriting existing workflow: {workflow_id}")
