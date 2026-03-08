@@ -37,14 +37,15 @@ import dataclasses
 import datetime
 import hashlib
 import json
-import logging
 import os
 import tempfile
 import threading
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

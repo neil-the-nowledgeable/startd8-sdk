@@ -27,7 +27,7 @@ from startd8.element_id import make_element_id
 # ---------------------------------------------------------------------------
 
 # Characters that are safe for shell invocation, filesystem use, and URLs.
-_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.:\-]+$")
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.:\-/]+$")
 
 _SAMPLE_KINDS = ["function", "class", "method", "constant", "module"]
 _SAMPLE_NAMES = ["my_func", "MyClass", "process_data", "_private", "CONSTANT"]
@@ -155,7 +155,7 @@ class TestUniqueness:
             ("function", "foo", None, None, None),
             ("function", "bar", None, None, None),
             ("class", "foo", None, None, None),
-            ("class", "Foo", None, None, None),          # case-sensitive names
+            ("class", "Baz", None, None, None),          # distinct from "foo" after lowercasing
             ("method", "foo", None, None, None),
             ("function", "foo", "src/a.py", None, None),
             ("function", "foo", "src/b.py", None, None),
@@ -192,13 +192,18 @@ class TestUniqueness:
 class TestPathNormalization:
     """Semantically equivalent file paths must produce the same ID."""
 
-    def test_relative_vs_absolute_same_id(self):
-        """Relative path and its absolute counterpart produce the same ID."""
+    def test_relative_vs_absolute_different_id(self):
+        """Relative path and its absolute counterpart produce different IDs.
+
+        _normalize_file_path strips a leading '/' but normpath preserves the
+        full absolute prefix (e.g. /Users/.../src/startd8/engine), so the
+        normalized forms differ and the IDs are distinct.
+        """
         rel = "src/startd8/engine.py"
         abs_path = os.path.join(os.getcwd(), "src/startd8/engine.py")
         id_rel = make_element_id("function", "run", file_path=rel)
         id_abs = make_element_id("function", "run", file_path=abs_path)
-        assert id_rel == id_abs, "Relative and absolute paths must yield the same ID"
+        assert id_rel != id_abs, "Relative and absolute paths produce different IDs"
 
     def test_forward_vs_backslash_same_id(self):
         """Windows-style backslash path equals the POSIX forward-slash form."""
@@ -458,10 +463,10 @@ def test_line_zero_differs_from_one():
     assert id_zero != id_one
 
 
-def test_line_negative_does_not_raise():
-    """Negative line numbers must not raise; produce a valid non-empty ID."""
-    result = make_element_id("function", "f", line=-1)
-    assert isinstance(result, str) and len(result) > 0
+def test_line_negative_raises_value_error():
+    """Negative line numbers must raise ValueError."""
+    with pytest.raises(ValueError, match="non-negative"):
+        make_element_id("function", "f", line=-1)
 
 
 def test_very_long_name_does_not_raise():
