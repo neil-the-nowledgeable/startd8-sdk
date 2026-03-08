@@ -340,6 +340,9 @@ def build_spec_prompt(
             f"{cp_str}\n"
         )
 
+    # REQ-MP-1003: Reference implementation from copy-and-modify predecessor.
+    reference_implementation = context.pop("reference_implementation", None)
+
     arch_ctx = context.pop("architectural_context", None)
     plan_ctx = context.pop("plan_context", None)
     project_obj = context.pop("project_objectives", None)
@@ -376,6 +379,13 @@ def build_spec_prompt(
     plan_section = build_spec_plan_section(plan_ctx, is_edit=is_edit)
     if plan_section:
         sections.append(plan_section)
+    if reference_implementation:
+        sections.append(
+            "## Reference Implementation (predecessor — adapt, do not copy verbatim)\n"
+            "```python\n"
+            f"{reference_implementation}\n"
+            "```"
+        )
 
     context_sections = "\n\n".join(sections)
 

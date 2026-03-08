@@ -101,9 +101,9 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Shared Complexity Router | REQ-MP-8xx | 9 | 9 | 0 | 0 |
 | Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
 | Recursive Decomposition Core | REQ-MP-910 | 6 | 0 | 0 | 6 |
-| Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 9 | 0 | 1 |
+| Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 10 | 0 | 0 |
 | Element Registry | REQ-MP-11xx | 10 | 0 | 0 | 10 |
-| **Total** | | **98** | **81** | **0** | **17** |
+| **Total** | | **98** | **82** | **0** | **16** |
 
 ---
 
@@ -1208,7 +1208,7 @@ Extends the deterministic assembly surface to eliminate LLM calls for two additi
 | REQ-MP-1000 | Copy Detection Module | P0 | implemented |
 | REQ-MP-1001 | Copy Source Schema Fields | P0 | implemented |
 | REQ-MP-1002 | Prime Contractor Copy Early-Exit | P0 | implemented |
-| REQ-MP-1003 | Copy-and-Modify Predecessor Injection | P1 | planned |
+| REQ-MP-1003 | Copy-and-Modify Predecessor Injection | P1 | implemented |
 | REQ-MP-1004 | Assembly Strategy Enum | P0 | implemented |
 | REQ-MP-1005 | All-TRIVIAL Class Decomposition | P0 | implemented |
 | REQ-MP-1006 | Template-First Short-Circuit in `_handle_simple` | P1 | implemented |
@@ -1252,7 +1252,7 @@ In `PrimeContractorWorkflow.develop_feature()`, add an early exit as the first c
 
 ### REQ-MP-1003: Copy-and-Modify Predecessor Injection
 
-**Priority:** P1 | **Status:** planned (only remaining Layer 10 requirement)
+**Priority:** P1 | **Status:** implemented
 
 When duplication signal + modification signal detected ("with changes", "adapted for", "modified to"), set `strategy="copy_and_modify"` and inject predecessor output as `{reference_implementation}` in the spec prompt. Prompt-budget guard: measure token count against configurable budget (default: 2000 tokens), apply tiered compression if exceeded (strip comments/docstrings → truncate with marker).
 

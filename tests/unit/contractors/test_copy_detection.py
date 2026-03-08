@@ -1,6 +1,6 @@
-"""Tests for copy_detection module (Phase 0: Identical-Copy File Duplication).
+"""Tests for copy_detection module.
 
-Requirements: REQ-MP-1000, REQ-MP-1001, REQ-MP-1002.
+Requirements: REQ-MP-1000, REQ-MP-1001, REQ-MP-1002, REQ-MP-1003.
 """
 
 import pytest
@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from startd8.contractors.copy_detection import (
+    CopyModifySource,
     CopySource,
+    compress_reference,
+    detect_copy_and_modify,
     detect_copy_task,
     validate_copy_path,
 )
@@ -194,3 +197,159 @@ class TestValidateCopyPath:
         result = validate_copy_path("a/b/c/d.py", str(tmp_path))
         expected = (tmp_path / "a" / "b" / "c" / "d.py").resolve()
         assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# detect_copy_and_modify tests (REQ-MP-1003)
+# ---------------------------------------------------------------------------
+
+class TestDetectCopyAndModify:
+
+    def test_detect_copy_and_modify(self):
+        """Both duplication + modification signals -> CopyModifySource."""
+        feat = _FakeFeature(
+            description="Create an identical copy of the parser with changes for v2.",
+            dependencies=["feat-1"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is not None
+        assert isinstance(result, CopyModifySource)
+        assert result.predecessor_id == "feat-1"
+
+    def test_detect_adapted_copy(self):
+        """'exact copy' + 'adapted for' -> CopyModifySource."""
+        feat = _FakeFeature(
+            description="An exact copy adapted for the new API.",
+            dependencies=["feat-1"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is not None
+        assert result.predecessor_id == "feat-1"
+
+    def test_detect_modified_to(self):
+        """'mirror of' + 'modified to' -> CopyModifySource."""
+        feat = _FakeFeature(
+            description="A mirror of the auth module modified to use JWT.",
+            dependencies=["feat-1"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is not None
+        assert result.predecessor_id == "feat-1"
+
+    def test_reject_pure_copy(self):
+        """Only duplication signals (no modification) -> None."""
+        feat = _FakeFeature(
+            description="This is an identical copy of the module.",
+            dependencies=["feat-1"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is None
+
+    def test_reject_no_duplication_signal(self):
+        """Only modification signals (no duplication) -> None."""
+        feat = _FakeFeature(
+            description="Implement the module with changes for v2.",
+            dependencies=["feat-1"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is None
+
+    def test_reject_no_dependencies(self):
+        """Both signals but no dependencies -> None."""
+        feat = _FakeFeature(
+            description="An exact copy with changes.",
+            dependencies=[],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is None
+
+    def test_reject_multiple_dependencies(self):
+        """Both signals but 2 dependencies -> None."""
+        feat = _FakeFeature(
+            description="An exact copy with changes.",
+            dependencies=["feat-1", "feat-3"],
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is None
+
+    def test_reject_explicit_copy_source_task_id(self):
+        """If copy_source_task_id is set, it's a pure file copy, not copy_and_modify."""
+        feat = _FakeFeature(
+            description="An exact copy with changes.",
+            dependencies=["feat-1"],
+            copy_source_task_id="feat-1",
+        )
+        result = detect_copy_and_modify(feat)
+        assert result is None
+
+    def test_infer_source_file_from_predecessor(self):
+        """Source file inferred from predecessor's single target."""
+        feat = _FakeFeature(
+            description="An identical copy adapted for new config.",
+            dependencies=["feat-1"],
+        )
+        predecessor = _FakePredecessor(target_files=["src/parser.py"])
+        result = detect_copy_and_modify(feat, predecessor=predecessor)
+        assert result is not None
+        assert result.source_file == "src/parser.py"
+
+    def test_no_infer_multiple_targets(self):
+        """Multiple predecessor targets -> empty source_file."""
+        feat = _FakeFeature(
+            description="An identical copy adapted for new config.",
+            dependencies=["feat-1"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/a.py", "src/b.py"]
+        )
+        result = detect_copy_and_modify(feat, predecessor=predecessor)
+        assert result is not None
+        assert result.source_file == ""
+
+
+# ---------------------------------------------------------------------------
+# compress_reference tests (REQ-MP-1003)
+# ---------------------------------------------------------------------------
+
+class TestCompressReference:
+
+    def test_short_code_unchanged(self):
+        """Code within budget is returned as-is."""
+        code = "x = 1\ny = 2\n"
+        result = compress_reference(code, token_budget=100)
+        assert result == code
+
+    def test_strip_comments(self):
+        """Comments are stripped when code exceeds budget."""
+        # Build code that exceeds ~20 token budget (80 chars) with comments
+        code = (
+            "# This is a long comment that takes up space\n"
+            "x = 1\n"
+            "# Another long comment here\n"
+            "y = 2\n"
+        )
+        result = compress_reference(code, token_budget=10)
+        assert "# This is a long comment" not in result
+
+    def test_strip_docstrings(self):
+        """Docstrings are stripped when code exceeds budget."""
+        code = (
+            'def foo():\n'
+            '    """This is a docstring that should be removed."""\n'
+            '    return 42\n'
+        )
+        result = compress_reference(code, token_budget=15)
+        assert "docstring that should be removed" not in result
+
+    def test_truncation_marker(self):
+        """Very large code gets truncated with a marker."""
+        code = "x = 1\n" * 500  # ~3000 chars
+        result = compress_reference(code, token_budget=10)  # 40 char budget
+        assert "[TRUNCATED" in result
+
+    def test_unparseable_code_survives(self):
+        """Unparseable code doesn't crash — falls through gracefully."""
+        code = "def foo(:\n" * 50  # Invalid syntax, repeated
+        result = compress_reference(code, token_budget=10)
+        # Should not raise — returns something truncated
+        assert isinstance(result, str)

@@ -1261,6 +1261,74 @@ class PrimeContractorWorkflow:
             },
         )
 
+    def _inject_copy_and_modify_context(self, feature: FeatureSpec) -> None:
+        """Detect copy-and-modify tasks and stash predecessor output in metadata (REQ-MP-1003).
+
+        If the feature has both duplication and modification signals in its
+        description, reads the predecessor's generated output and stores a
+        (possibly compressed) version in ``feature.metadata["_reference_implementation"]``.
+        The value is later threaded into ``gen_context`` before code generation.
+
+        Non-fatal: logs a warning and continues without reference on any error.
+        """
+        from .copy_detection import detect_copy_and_modify, compress_reference, validate_copy_path
+
+        predecessor = None
+        deps = feature.dependencies or []
+        if len(deps) == 1:
+            predecessor = self.queue.get_feature(deps[0])
+
+        cm = detect_copy_and_modify(feature, predecessor=predecessor)
+        if cm is None:
+            return
+
+        # Look up predecessor and read its output.
+        pred = self.queue.get_feature(cm.predecessor_id)
+        if pred is None or pred.status != FeatureStatus.COMPLETE:
+            logger.warning(
+                "copy_and_modify: predecessor '%s' not found or not complete — skipping injection",
+                cm.predecessor_id,
+            )
+            return
+
+        # Determine source file path.
+        source_file = cm.source_file
+        if not source_file:
+            if len(pred.generated_files) == 1:
+                source_file = pred.generated_files[0]
+            else:
+                logger.warning(
+                    "copy_and_modify: cannot infer source file for '%s' — skipping injection",
+                    feature.name,
+                )
+                return
+
+        try:
+            source_path = validate_copy_path(source_file, str(self.project_root))
+            if not source_path.is_file():
+                logger.warning(
+                    "copy_and_modify: source file '%s' not found on disk — skipping injection",
+                    source_path,
+                )
+                return
+            source_code = source_path.read_text(encoding="utf-8", errors="replace")
+        except (ValueError, OSError) as exc:
+            logger.warning(
+                "copy_and_modify: failed to read predecessor output for '%s': %s",
+                feature.name, exc,
+            )
+            return
+
+        compressed = compress_reference(source_code)
+        if feature.metadata is None:
+            feature.metadata = {}
+        feature.metadata["_reference_implementation"] = compressed
+        feature.metadata["_copy_and_modify_source"] = cm.predecessor_id
+        logger.info(
+            "copy_and_modify: stashed reference for '%s' from '%s' (%d → %d chars)",
+            feature.name, cm.predecessor_id, len(source_code), len(compressed),
+        )
+
     def _save_queue_state_with_mode(self) -> None:
         """Save queue state with execution_mode injected.
 
@@ -1520,16 +1588,29 @@ class PrimeContractorWorkflow:
             and "SOURCE_RECONCILE" not in self._forward_manifest.stages_completed
         ):
             try:
-                from startd8.forward_manifest_extractor import SourceReconciler
+                from startd8.forward_manifest_extractor import (
+                    SourceReconcileConfig,
+                    SourceReconciler,
+                )
 
                 all_targets = list({
                     f
                     for feat in self.queue.features.values()
                     for f in (feat.target_files or [])
                 })
+                # INV-12: When force_regenerate is set, exclude target files
+                # to prevent prior-run output from contaminating the manifest.
+                reconcile_config = SourceReconcileConfig()
+                if self.force_regenerate:
+                    reconcile_config.exclude_files = set(all_targets)
+                    logger.info(
+                        "Fallback SOURCE_RECONCILE: --force-regenerate excludes %d target files",
+                        len(all_targets),
+                    )
                 reconciler = SourceReconciler()
                 stats = reconciler.reconcile(
                     self._forward_manifest, self.project_root, all_targets,
+                    config=reconcile_config,
                 )
                 self._forward_manifest.stages_completed.append("SOURCE_RECONCILE")
                 logger.info(
@@ -2656,7 +2737,27 @@ class PrimeContractorWorkflow:
             self.queue.fail_feature(feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}")
             return False
         self.queue.start_feature(feature.id)
-        # Phase 0 (REQ-MP-1002): File copy early-exit for identical-copy tasks
+        # Phase 0 (REQ-MP-1002): File copy early-exit for identical-copy tasks.
+        # If copy_source_task_id is not already set, attempt detection from
+        # description signals + depends_on.  This bridges the gap where plan
+        # ingestion produces "Identical copy" language but doesn't set the
+        # explicit field.
+        if feature.copy_source_task_id is None:
+            from .copy_detection import detect_copy_task
+
+            predecessor = None
+            deps = feature.dependencies or []
+            if len(deps) == 1:
+                predecessor = self.queue.get_feature(deps[0])
+            copy_source = detect_copy_task(feature, predecessor=predecessor)
+            if copy_source is not None:
+                feature.copy_source_task_id = copy_source.predecessor_id
+                if copy_source.source_file:
+                    feature.copy_source_file = copy_source.source_file
+                logger.info(
+                    "Copy detection: '%s' identified as identical copy of '%s'",
+                    feature.name, copy_source.predecessor_id,
+                )
         if feature.copy_source_task_id is not None:
             try:
                 copy_result = self._handle_file_copy(feature)
@@ -2677,6 +2778,9 @@ class PrimeContractorWorkflow:
                 )
                 self.queue.fail_feature(feature.id, f"File copy failed: {exc}")
                 return False
+        # REQ-MP-1003: Detect copy-and-modify tasks — inject predecessor as reference.
+        self._inject_copy_and_modify_context(feature)
+
         if self.dry_run:
             logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
             simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
@@ -2820,6 +2924,15 @@ class PrimeContractorWorkflow:
                 feature.status = FeatureStatus.GENERATED
                 self._save_queue_state_with_mode()
                 return True
+
+            # REQ-MP-1003: Thread reference_implementation into gen_context
+            ref_impl = feature.metadata.get("_reference_implementation") if feature.metadata else None
+            if ref_impl:
+                gen_context["reference_implementation"] = ref_impl
+                logger.info(
+                    "Injected reference_implementation for '%s' (%d chars)",
+                    feature.name, len(ref_impl),
+                )
 
             # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal, hints added to gen_context
             if self._kaizen_config:
