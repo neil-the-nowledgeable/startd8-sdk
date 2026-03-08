@@ -17,7 +17,12 @@ from collections.abc import Iterator
 from typing import Any, Optional
 
 from startd8.element_id import make_element_id
-from startd8.element_registry import ElementEntry, ElementRegistry
+from startd8.element_registry import (
+    ElementEntry,
+    ElementRegistry,
+    compute_element_context_checksum,
+    is_stale,
+)
 from startd8.forward_manifest import (
     ForwardElementSpec,
     ForwardFileSpec,
@@ -299,9 +304,22 @@ def _enrich_file_spec_from_skeleton(
     )
 
 
-def _compute_context_checksum(skeleton: str) -> str:
-    """Compute a stable checksum of the skeleton context for cache staleness detection."""
-    return hashlib.sha256(skeleton.encode("utf-8")).hexdigest()[:16]
+def _compute_context_checksum(
+    element: ForwardElementSpec,
+    file_path: str,
+) -> str:
+    """Compute a structural context checksum for cache staleness detection.
+
+    Delegates to the shared ``compute_element_context_checksum`` so that the
+    same algorithm is used everywhere.
+    """
+    sig_str = str(element.signature) if element.signature else ""
+    return compute_element_context_checksum(
+        element_name=element.name,
+        element_kind=element.kind.value if hasattr(element.kind, "value") else str(element.kind),
+        signature=sig_str,
+        parent_class=element.parent_class or "",
+    )
 
 
 def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional[str]:
@@ -568,7 +586,7 @@ class MicroPrimeEngine:
 
         # Step 1a′: Element registry cache-through (REQ-MP-1102)
         element_id = _resolve_element_id(element, file_path)
-        ctx_checksum = _compute_context_checksum(skeleton)
+        ctx_checksum = _compute_context_checksum(element, file_path)
         if self._element_registry is not None and element_id:
             try:
                 t0 = time.monotonic()
@@ -580,8 +598,8 @@ class MicroPrimeEngine:
                         lookup_ms, element_id,
                     )
                 if cached is not None and cached.extra.get("code"):
-                    # Staleness check: verify context_checksum matches current skeleton
-                    if cached.context_checksum and cached.context_checksum != ctx_checksum:
+                    # Staleness check: verify context_checksum matches current context
+                    if is_stale(cached, ctx_checksum):
                         logger.info(
                             "Element registry STALE: %s (checksum %s != %s) — regenerating",
                             element_id, cached.context_checksum, ctx_checksum,

@@ -100,10 +100,17 @@ class TestResolveElementId:
 
 class TestComputeContextChecksum:
     def test_deterministic(self):
-        assert _compute_context_checksum("abc") == _compute_context_checksum("abc")
+        elem = _make_init_element()
+        assert _compute_context_checksum(elem, "src/foo.py") == _compute_context_checksum(elem, "src/foo.py")
 
-    def test_different_for_different_input(self):
-        assert _compute_context_checksum("abc") != _compute_context_checksum("def")
+    def test_different_for_different_element(self):
+        elem_a = _make_init_element(source_contract_id="A")
+        elem_b = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="other_func",
+            signature=Signature(params=[], return_annotation="None"),
+        )
+        assert _compute_context_checksum(elem_a, "src/foo.py") != _compute_context_checksum(elem_b, "src/foo.py")
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +127,7 @@ class TestEngineRegistryCacheThrough:
         element = _make_init_element(source_contract_id="C-100")
         file_spec = _make_file_spec()
         skeleton = _SKELETON
-        ctx_checksum = _compute_context_checksum(skeleton)
+        ctx_checksum = _compute_context_checksum(element, file_spec.file)
 
         # Pre-populate registry with cached code
         entry = ElementEntry(
@@ -172,7 +179,7 @@ class TestEngineRegistryCacheThrough:
         stored = registry.get("C-300")
         assert stored is not None
         assert stored.extra.get("code") is not None
-        assert stored.context_checksum == _compute_context_checksum(skeleton)
+        assert stored.context_checksum == _compute_context_checksum(element, file_spec.file)
         assert stored.kind == "method"
         assert stored.name == "__init__"
 
@@ -235,7 +242,7 @@ class TestEngineRegistryCacheThrough:
         # The registry should now have the updated entry with fresh checksum
         updated = registry.get("C-500")
         assert updated is not None
-        assert updated.context_checksum == _compute_context_checksum(skeleton)
+        assert updated.context_checksum == _compute_context_checksum(element, file_spec.file)
 
     def test_no_registry_still_works(self):
         """Engine without a registry should work exactly as before."""

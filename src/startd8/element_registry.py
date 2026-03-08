@@ -41,11 +41,20 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Optional OTel metrics — all instrumentation is no-op when not installed.
+try:
+    from opentelemetry import metrics as _otel_metrics
+
+    _OTEL_AVAILABLE = True
+except ImportError:
+    _otel_metrics = None  # type: ignore[assignment]
+    _OTEL_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +120,57 @@ class ReconciliationReport:
     missing: list  # element IDs in backup but absent from registry
     extra: list    # element IDs in registry but absent from backup
     tool: str      # identifier of the backup tool / source
+
+
+# ---------------------------------------------------------------------------
+# Context-checksum helpers (REQ-MP-1108)
+# ---------------------------------------------------------------------------
+
+
+def compute_element_context_checksum(
+    element_name: str,
+    element_kind: str,
+    signature: str = "",
+    parent_class: str = "",
+    contract_checksums: list[str] | None = None,
+) -> str:
+    """Hash the element's structural context for staleness detection.
+
+    Produces a 16-hex-char SHA-256 prefix that captures the element's identity
+    and structural surroundings.  When any input changes the checksum changes,
+    signalling that a cached ``ElementEntry`` is stale and must be regenerated.
+
+    Parameters
+    ----------
+    element_name:
+        The element's source-level name (e.g. ``"calculate_total"``).
+    element_kind:
+        The element kind string (e.g. ``"function"``, ``"method"``).
+    signature:
+        Serialised callable signature (params + return type).  Empty string
+        for non-callable elements.
+    parent_class:
+        Owning class name for methods/properties, or empty string.
+    contract_checksums:
+        Checksums of ``InterfaceContract`` objects that bind this element.
+        Order-independent (sorted internally).
+    """
+    parts = [element_name, element_kind, signature, parent_class]
+    if contract_checksums:
+        parts.extend(sorted(contract_checksums))
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def is_stale(entry: ElementEntry, current_checksum: str) -> bool:
+    """Return ``True`` if *entry*'s context checksum does not match *current_checksum*.
+
+    Legacy entries whose ``context_checksum`` is ``None`` are treated as
+    **not stale** so that pre-existing caches are not mass-invalidated on
+    upgrade.
+    """
+    if entry.context_checksum is None:
+        return False
+    return entry.context_checksum != current_checksum
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +306,63 @@ class ElementRegistry:
         self._index: dict[str, ElementEntry] = {}
         self._index_loaded: bool = False
 
+        # OTel metrics (lazy, optional)
+        self._metrics_initialized = False
+        self._hits_counter: Any = None
+        self._misses_counter: Any = None
+        self._puts_counter: Any = None
+        self._invalidations_counter: Any = None
+        self._size_gauge_value: int = 0
+
+    def _ensure_metrics(self) -> None:
+        """Lazy-init OTel metric instruments. No-op if already done or OTel absent."""
+        if self._metrics_initialized:
+            return
+        self._metrics_initialized = True
+
+        if not _OTEL_AVAILABLE:
+            return
+
+        try:
+            meter = _otel_metrics.get_meter("startd8.element_registry")
+        except Exception:
+            return
+
+        self._hits_counter = meter.create_counter(
+            name="micro_prime.element_registry.hits",
+            description="Registry lookups that returned a cached entry",
+        )
+        self._misses_counter = meter.create_counter(
+            name="micro_prime.element_registry.misses",
+            description="Registry lookups that returned None",
+        )
+        self._puts_counter = meter.create_counter(
+            name="micro_prime.element_registry.puts",
+            description="New entries written to registry",
+        )
+        self._invalidations_counter = meter.create_counter(
+            name="micro_prime.element_registry.invalidations",
+            description="Entries invalidated due to staleness",
+        )
+        # Observable gauge reports the current size via callback.
+        self._size_gauge = meter.create_observable_gauge(
+            name="micro_prime.element_registry.size",
+            description="Total entries in registry",
+            callbacks=[self._observe_size],
+        )
+
+    def _observe_size(self, options: Any) -> Any:
+        """Observable gauge callback — yields current registry size."""
+        try:
+            from opentelemetry.metrics import Observation
+            yield Observation(self._size_gauge_value)
+        except Exception:
+            pass
+
+    def _record_size(self) -> None:
+        """Update the gauge value to reflect current index size."""
+        self._size_gauge_value = len(self._index)
+
     # ------------------------------------------------------------------
     # Private helpers  (must be called while holding self._lock)
     # ------------------------------------------------------------------
@@ -316,7 +433,17 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
-            return self._index.get(element_id)
+            self._ensure_metrics()
+            entry = self._index.get(element_id)
+            if entry is not None:
+                logger.info("element_registry.get hit", extra={"element_id": element_id})
+                if self._hits_counter is not None:
+                    self._hits_counter.add(1)
+            else:
+                logger.info("element_registry.get miss", extra={"element_id": element_id})
+                if self._misses_counter is not None:
+                    self._misses_counter.add(1)
+            return entry
 
     def put(self, entry: ElementEntry) -> None:
         """
@@ -327,8 +454,13 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
+            self._ensure_metrics()
             self._write_entry(entry)
             self._index[entry.element_id] = entry
+            logger.info("element_registry.put", extra={"element_id": entry.element_id})
+            if self._puts_counter is not None:
+                self._puts_counter.add(1)
+            self._record_size()
 
     def has(self, element_id: str) -> bool:
         """
@@ -349,6 +481,7 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
+            self._ensure_metrics()
             if element_id not in self._index:
                 return False
             try:
@@ -360,6 +493,13 @@ class ElementRegistry:
                     exc,
                 )
             del self._index[element_id]
+            logger.info(
+                "element_registry.invalidation",
+                extra={"element_id": element_id},
+            )
+            if self._invalidations_counter is not None:
+                self._invalidations_counter.add(1)
+            self._record_size()
             return True
 
     def clear(self) -> None:
@@ -370,6 +510,7 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
+            self._ensure_metrics()
             for json_file in self._elements_dir.glob("*.json"):
                 try:
                     json_file.unlink()
@@ -380,6 +521,7 @@ class ElementRegistry:
                         exc,
                     )
             self._index.clear()
+            self._record_size()
 
     # ------------------------------------------------------------------
     # File-based lookup

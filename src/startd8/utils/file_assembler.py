@@ -409,9 +409,11 @@ class DeterministicFileAssembler:
                 lines.append(f"{body_indent}{doc_line}")
             lines.append(f'{body_indent}"""')
 
-        # Body — check element registry for pre-existing validated code (ER-005)
+        # Body — check element registry for pre-existing validated code (REQ-MP-1106)
+        element_id = getattr(elem, "source_contract_id", None)
         registry_code = self._lookup_registry_code(elem)
-        if registry_code is not None:
+        if registry_code is not None and element_id:
+            lines.append(f"{body_indent}# [ELEMENT-REGISTRY: {element_id}]")
             for code_line in registry_code.splitlines():
                 lines.append(f"{body_indent}{code_line}")
         else:
@@ -420,10 +422,13 @@ class DeterministicFileAssembler:
         return "\n".join(lines)
 
     def _lookup_registry_code(self, elem: ForwardElementSpec) -> Optional[str]:
-        """Look up pre-existing validated code from the element registry (ER-005).
+        """Look up pre-existing validated code from the element registry (REQ-MP-1106).
 
-        Returns the code body (without leading indent) if found and non-empty,
-        or ``None`` to fall back to the ``raise NotImplementedError`` stub.
+        Returns the code body (without leading indent) if found, non-empty,
+        and passing ``ast.parse()`` validation in a synthetic function context.
+        Returns ``None`` to fall back to the ``raise NotImplementedError`` stub.
+
+        Non-fatal: registry errors log a warning and fall back to stub.
         """
         if self._element_registry is None:
             return None
@@ -435,16 +440,40 @@ class DeterministicFileAssembler:
             if entry is not None:
                 code = entry.extra.get("code")
                 if code and isinstance(code, str):
+                    # Validate cached code parses in a function context
+                    if not self._validate_registry_code(code, element_id):
+                        logger.warning(
+                            "SCAFFOLD registry code for %s (%s) failed "
+                            "ast.parse validation; falling back to stub",
+                            elem.name, element_id,
+                        )
+                        return None
                     logger.debug(
                         "SCAFFOLD registry pre-fill for %s (%s)",
                         elem.name, element_id,
                     )
                     return code
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "SCAFFOLD registry lookup failed for %s: %s", element_id, exc,
             )
         return None
+
+    @staticmethod
+    def _validate_registry_code(code: str, element_id: str) -> bool:
+        """Validate that cached code is syntactically valid Python.
+
+        Wraps the code in a synthetic function body and runs ``ast.parse()``.
+        Returns ``True`` if valid, ``False`` otherwise.
+        """
+        # Indent the code as if it were inside a function body
+        indented = "\n".join(f"    {line}" for line in code.splitlines())
+        wrapper = f"def _validate_wrapper_():\n{indented}\n"
+        try:
+            ast.parse(wrapper)
+            return True
+        except SyntaxError:
+            return False
 
     def _render_constant(self, elem: ForwardElementSpec, indent: str) -> str:
         """Render a constant/variable/type_alias stub."""
