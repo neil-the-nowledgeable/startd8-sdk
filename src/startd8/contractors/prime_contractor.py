@@ -1787,8 +1787,11 @@ class PrimeContractorWorkflow:
         features_in_manifest = manifest.get("features", {})
         if feature.id not in features_in_manifest:
             logger.info(
-                "Staleness check: feature '%s' not in manifest — regenerating",
+                "Staleness check: feature '%s' (id='%s') not in manifest — "
+                "regenerating (manifest keys: %s)",
                 feature.name,
+                feature.id,
+                list(features_in_manifest.keys()),
             )
             return True
 
