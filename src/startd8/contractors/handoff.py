@@ -207,6 +207,9 @@ class HandoffData:
     # Quality gate result from DESIGN phase
     # {total_passed, total_failed, agreement_rate, evaluated_task_count}
     design_quality: dict[str, Any] = field(default_factory=dict)
+    # ER-013: Element registry summary snapshot for implementation half
+    # {"registry_checksum": str, "element_count": int, "elements_with_code": int}
+    element_state: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
@@ -420,6 +423,7 @@ def write_design_handoff(
     design_mode_evidence: dict[str, dict[str, Any]] | None = None,
     manifest_truncation_tier: dict[str, str] | None = None,
     design_quality: dict[str, Any] | None = None,
+    element_state: dict[str, Any] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -490,6 +494,7 @@ def write_design_handoff(
         design_mode_evidence=design_mode_evidence or {},
         manifest_truncation_tier=manifest_truncation_tier or {},
         design_quality=design_quality or {},
+        element_state=element_state or {},
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
         schema_version_str=ARTISAN_SCHEMA_VERSION,
@@ -600,6 +605,7 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         design_mode_evidence=raw.get("design_mode_evidence", {}),
         manifest_truncation_tier=raw.get("manifest_truncation_tier", {}),
         design_quality=raw.get("design_quality", {}),
+        element_state=raw.get("element_state", {}),
         created_at=raw.get("created_at", ""),
         schema_version=version,
         schema_version_str=raw.get("schema_version_str")

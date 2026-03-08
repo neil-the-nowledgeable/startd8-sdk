@@ -633,6 +633,30 @@ class PlanDeconstructor:
                 ):
                     metadata[key] = deepcopy(value)
 
+            # ER-004: Element inventory from registry (advisory)
+            element_registry = getattr(self, "_element_registry", None)
+            if element_registry is not None:
+                try:
+                    target_files = task.get("target_files") or []
+                    el_available = 0
+                    el_total = 0
+                    for tpath in target_files:
+                        for entry in element_registry.elements_for_file(tpath):
+                            el_total += 1
+                            if entry.extra.get("code"):
+                                el_available += 1
+                    if el_total > 0:
+                        metadata["elements_available"] = el_available
+                        metadata["elements_total"] = el_total
+                        if el_available == el_total:
+                            metadata["skip_candidate"] = True
+                            logger.info(
+                                "Task %s: all %d elements available in registry",
+                                task_id, el_total,
+                            )
+                except Exception:
+                    pass  # advisory — never block plan deconstruction
+
             work_item = WorkItem(
                 id=task_id,
                 title=title,

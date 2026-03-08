@@ -682,3 +682,40 @@ propagation_chains:
       phase: review
       field: project_metadata
     severity: advisory
+
+  - chain_id: element_registry_to_phases
+    description: >
+      Element registry instance (ER-017) is shared across all phases for
+      element-level identity, state, and quality tracking.
+    source:
+      phase: plan
+      field: element_registry
+    waypoints:
+      - phase: scaffold
+        field: element_registry
+      - phase: design
+        field: element_registry
+      - phase: implement
+        field: element_registry
+      - phase: integrate
+        field: element_registry
+      - phase: test
+        field: element_registry
+      - phase: review
+        field: element_registry
+    destination:
+      phase: finalize
+      field: element_registry
+    severity: advisory
+
+  - chain_id: element_state_handoff
+    description: >
+      Element registry summary snapshot flows from design half to
+      implementation half via the handoff file (ER-013).
+    source:
+      phase: design
+      field: element_state
+    destination:
+      phase: implement
+      field: element_state
+    severity: advisory

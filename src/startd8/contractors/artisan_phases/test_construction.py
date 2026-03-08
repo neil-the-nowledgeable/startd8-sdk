@@ -1774,6 +1774,7 @@ class TestConstructionPhase:
         max_retries: int = 2,
         parameter_sources: Optional[Dict[str, Any]] = None,
         semantic_conventions: Optional[Dict[str, Any]] = None,
+        element_registry: Optional[Any] = None,
     ):
         """
         Initialize the Test Construction Phase.
@@ -1799,6 +1800,8 @@ class TestConstructionPhase:
                 mappings forwarded to the LLM for context.
             semantic_conventions: Optional dict of semantic convention
                 mappings forwarded to the LLM for context.
+            element_registry: Optional element registry for recording
+                test coverage per element (ER-009).
         """
         self.raw_design = design_doc
         self.output_dir = output_dir or Path(
@@ -1811,6 +1814,7 @@ class TestConstructionPhase:
         self.max_retries = max_retries
         self.parameter_sources = parameter_sources
         self.semantic_conventions = semantic_conventions
+        self._element_registry = element_registry
         self.status = PhaseStatus.NOT_STARTED
         self._result: Optional[PhaseResult] = None
 
@@ -1902,6 +1906,42 @@ class TestConstructionPhase:
                 collection.collected_count,
             )
             result.status = PhaseStatus.SUCCESS
+
+    def _record_test_coverage(self, result: PhaseResult) -> None:
+        """Record test coverage in element registry (ER-009).
+
+        For each test module, mark the target elements as having test
+        coverage in the element registry.  Advisory — never blocks.
+        """
+        if self._element_registry is None:
+            return
+        try:
+            test_count = 0
+            for module in (result.test_modules or []):
+                for tc in module.test_cases:
+                    target_name = getattr(tc, "target_name", "")
+                    if not target_name:
+                        continue
+                    # Look up elements matching this target
+                    for entry in self._element_registry.all_entries():
+                        if entry.name == target_name:
+                            self._element_registry.set_phase_status(
+                                entry.element_id,
+                                "test",
+                                "covered",
+                                metadata={
+                                    "test_name": tc.test_name,
+                                    "status": result.status.value,
+                                },
+                            )
+                            test_count += 1
+            if test_count > 0:
+                logger.info(
+                    "ER-009: Recorded test coverage for %d elements",
+                    test_count,
+                )
+        except Exception as exc:
+            logger.debug("Element registry test coverage recording failed: %s", exc)
 
     # ------------------------------------------------------------------
     # LLM helpers
@@ -2072,6 +2112,9 @@ class TestConstructionPhase:
 
             # 7. Validate pytest collection
             self._validate_collection(result)
+
+            # 8. Record test coverage in element registry (ER-009)
+            self._record_test_coverage(result)
 
         except Exception as exc:
             logger.exception("Unexpected error during phase execution")

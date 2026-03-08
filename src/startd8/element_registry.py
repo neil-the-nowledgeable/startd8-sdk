@@ -402,6 +402,12 @@ class ElementRegistry:
                 and str(Path(entry.file_path)) == needle
             ]
 
+    def all_entries(self) -> list[ElementEntry]:
+        """Return a snapshot of all entries in the registry.  Thread-safe."""
+        with self._lock:
+            self._ensure_loaded()
+            return list(self._index.values())
+
     # ------------------------------------------------------------------
     # Phase / status tracking
     # ------------------------------------------------------------------

@@ -109,8 +109,13 @@ class DeterministicFileAssembler:
         SCAFFOLD.  Used for import classification (local vs external).
     """
 
-    def __init__(self, module_inventory: Optional[list[str]] = None) -> None:
+    def __init__(
+        self,
+        module_inventory: Optional[list[str]] = None,
+        element_registry: Optional[Any] = None,
+    ) -> None:
         self._module_inventory: set[str] = set(module_inventory or [])
+        self._element_registry = element_registry
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -404,10 +409,42 @@ class DeterministicFileAssembler:
                 lines.append(f"{body_indent}{doc_line}")
             lines.append(f'{body_indent}"""')
 
-        # Body
-        lines.append(f"{body_indent}raise NotImplementedError")
+        # Body — check element registry for pre-existing validated code (ER-005)
+        registry_code = self._lookup_registry_code(elem)
+        if registry_code is not None:
+            for code_line in registry_code.splitlines():
+                lines.append(f"{body_indent}{code_line}")
+        else:
+            lines.append(f"{body_indent}raise NotImplementedError")
 
         return "\n".join(lines)
+
+    def _lookup_registry_code(self, elem: ForwardElementSpec) -> Optional[str]:
+        """Look up pre-existing validated code from the element registry (ER-005).
+
+        Returns the code body (without leading indent) if found and non-empty,
+        or ``None`` to fall back to the ``raise NotImplementedError`` stub.
+        """
+        if self._element_registry is None:
+            return None
+        element_id = getattr(elem, "source_contract_id", None)
+        if not element_id:
+            return None
+        try:
+            entry = self._element_registry.get(element_id)
+            if entry is not None:
+                code = entry.extra.get("code")
+                if code and isinstance(code, str):
+                    logger.debug(
+                        "SCAFFOLD registry pre-fill for %s (%s)",
+                        elem.name, element_id,
+                    )
+                    return code
+        except Exception as exc:
+            logger.debug(
+                "SCAFFOLD registry lookup failed for %s: %s", element_id, exc,
+            )
+        return None
 
     def _render_constant(self, elem: ForwardElementSpec, indent: str) -> str:
         """Render a constant/variable/type_alias stub."""

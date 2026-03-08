@@ -600,3 +600,41 @@ class GateEmitter:
             "evidence": evidence_dicts or None,
             "checked_at": cls._now().isoformat(),
         }
+
+    # -- factory: element-level gate (ER-016) --------------------------------
+
+    @classmethod
+    def emit_element_gate(
+        cls,
+        gate_id: str,
+        element_id: str,
+        phase: str,
+        outcome: str,
+        evidence: Optional[List[Dict[str, Any]]] = None,
+        severity: str = "advisory",
+        workflow_id: str = "unknown",
+    ) -> None:
+        """Emit an element-level quality gate result (ER-016).
+
+        Args:
+            gate_id: Gate identifier (e.g. "gate-4-element").
+            element_id: The flcm-* element ID.
+            phase: Pipeline phase (implement, integrate, test, review).
+            outcome: PASS, FAIL, or ADVISORY.
+            evidence: List of evidence dicts (type + value pairs).
+            severity: advisory or blocking.
+            workflow_id: Current workflow run ID.
+        """
+        result: Dict[str, Any] = {
+            "schema_version": "v1",
+            "gate_id": f"artisan.element.{gate_id}",
+            "element_id": element_id,
+            "phase": phase,
+            "result": outcome.lower(),
+            "severity": severity,
+            "blocking": severity == "blocking",
+            "evidence": evidence,
+            "checked_at": cls._now().isoformat(),
+            "workflow_id": workflow_id,
+        }
+        cls.emit(result)

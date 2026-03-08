@@ -643,6 +643,60 @@ def _classify_complexity_tier(
     return _tier_map[shared_tier]
 
 
+def _record_design_element_contracts(
+    task: SeedTask,
+    design_doc: str,
+    element_registry: Any,
+) -> int:
+    """Record element contracts discovered during DESIGN into the registry (ER-006).
+
+    Parses the design document's ``### Files Touched`` section for element
+    references and updates each matching registry entry with a ``design``
+    phase record.
+
+    Args:
+        task: The seed task being designed.
+        design_doc: The raw design document text.
+        element_registry: An ``ElementRegistry`` instance (or ``None``).
+
+    Returns:
+        Number of element contracts recorded.
+    """
+    if element_registry is None:
+        return 0
+
+    count = 0
+    delta = _extract_structural_delta(design_doc)
+    for file_path, elements in delta.items():
+        for elem_info in elements:
+            elem_name = elem_info.get("element", "")
+            action = elem_info.get("action", "modify")
+            if not elem_name:
+                continue
+            # Look up elements for this file in the registry
+            try:
+                file_entries = element_registry.elements_for_file(file_path)
+                for entry in file_entries:
+                    if entry.name == elem_name or elem_name in entry.name:
+                        element_registry.set_phase_status(
+                            entry.element_id,
+                            "design",
+                            f"contracted:{action}",
+                            metadata={
+                                "task_id": task.task_id,
+                                "design_action": action,
+                                "detail": elem_info.get("detail", ""),
+                            },
+                        )
+                        count += 1
+            except Exception as exc:
+                logger.debug(
+                    "Design element contract recording failed for %s/%s: %s",
+                    file_path, elem_name, exc,
+                )
+    return count
+
+
 def _set_default_complexity_metadata(
     chunk: Any,
     *,

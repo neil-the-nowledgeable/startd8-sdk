@@ -224,10 +224,11 @@ class ReconciliationReport:
     design_specs_checked: int = 0
     files_quality_checked: int = 0
     summary: str = ""
+    element_manifest: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert report to a JSON-serializable dictionary."""
-        return {
+        result = {
             "timestamp": self.timestamp,
             "verdict": self.verdict.value,
             "total_findings": self.total_findings,
@@ -241,6 +242,9 @@ class ReconciliationReport:
             "summary": self.summary,
             "findings": [f.to_dict() for f in self.findings],
         }
+        if self.element_manifest:
+            result["element_manifest"] = self.element_manifest
+        return result
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize report to a formatted JSON string."""
@@ -895,9 +899,15 @@ class FinalAssemblyPhase:
     All findings are aggregated into a :class:`ReconciliationReport`.
     """
 
-    def __init__(self) -> None:
-        """Initialize phase."""
+    def __init__(self, element_registry: Optional[Any] = None) -> None:
+        """Initialize phase.
+
+        Args:
+            element_registry: Optional element registry for generating
+                the final element manifest (ER-011).
+        """
         self.logger = get_logger(__name__)
+        self._element_registry = element_registry
 
     def run(self, context: Dict[str, Any]) -> ReconciliationReport:
         """Execute the final assembly phase.
@@ -1011,6 +1021,42 @@ class FinalAssemblyPhase:
                 )
                 all_findings.extend(checker.check(source_code))
 
+        # ---- step 4b: element manifest (ER-011) ----
+        element_manifest: Dict[str, Any] = {}
+        if self._element_registry is not None:
+            try:
+                summary = self._element_registry.summary()
+                all_entries = self._element_registry.all_entries()
+                element_manifest = {
+                    "total_elements": summary.total,
+                    "by_kind": summary.by_kind,
+                    "by_phase_status": summary.by_phase_status,
+                    "files_covered": summary.files_covered,
+                    "elements_with_code": sum(
+                        1 for e in all_entries
+                        if e.extra.get("code")
+                    ),
+                    "elements_tested": sum(
+                        1 for e in all_entries
+                        if "test" in e.phases
+                    ),
+                    "elements_integrated": sum(
+                        1 for e in all_entries
+                        if "integrate" in e.phases
+                        and e.phases["integrate"]
+                        and e.phases["integrate"][-1].status == "merged"
+                    ),
+                }
+                self.logger.info(
+                    "ER-011: Element manifest generated: %d elements, %d with code",
+                    element_manifest["total_elements"],
+                    element_manifest["elements_with_code"],
+                )
+            except Exception as exc:
+                self.logger.debug(
+                    "Element manifest generation failed (non-fatal): %s", exc,
+                )
+
         # ---- step 5: aggregate & report ----
         error_count = sum(1 for f in all_findings if f.severity == Severity.ERROR)
         warning_count = sum(1 for f in all_findings if f.severity == Severity.WARNING)
@@ -1044,6 +1090,7 @@ class FinalAssemblyPhase:
             design_specs_checked=len(design_specs),
             files_quality_checked=len(quality_checked_files),
             summary=summary,
+            element_manifest=element_manifest,
         )
 
         self.logger.info("Reconciliation complete: %s", summary)

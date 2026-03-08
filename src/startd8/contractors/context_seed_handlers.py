@@ -62,6 +62,7 @@ from startd8.contractors.context_seed.design_support import (  # noqa: F401
     _classify_complexity_tier,
     _compute_manifest_file_checksums,
     _has_valid_extension,
+    _record_design_element_contracts,
 )
 from startd8.contractors.gate_contracts import GateEmitter  # noqa: F401
 from startd8.contractors.context_seed.shared import (  # noqa: F401

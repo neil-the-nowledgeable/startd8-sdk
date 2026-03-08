@@ -87,6 +87,7 @@ class IntegrationEngine:
         check_truncation: bool = True,
         strict_checkpoints: bool = False,
         repair_config: Optional[Any] = None,
+        element_registry: Optional[Any] = None,
     ) -> None:
         self.project_root = project_root
         self.merge_strategy = merge_strategy
@@ -102,6 +103,8 @@ class IntegrationEngine:
         self.element_retention_threshold: float = 0.80
         # Repair pipeline (REQ-RPL-200)
         self._repair_config = repair_config
+        # Element registry (ER-008)
+        self._element_registry = element_registry
 
     # ------------------------------------------------------------------
     # Phase 4: Manifest diff (IN-1 through IN-3)
@@ -518,6 +521,59 @@ class IntegrationEngine:
                 removed += 1
                 logger.debug("Cleaned snapshot: %s", self._rel_display(snapshot))
         return removed
+
+    # ------------------------------------------------------------------
+    # Element registry provenance (ER-008)
+    # ------------------------------------------------------------------
+
+    def _record_element_merge_outcomes(
+        self,
+        unit: IntegrationUnit,
+        integrated_files: List[Path],
+        skipped_files: List[Dict[str, Any]],
+    ) -> None:
+        """Record per-element merge outcomes in the element registry.
+
+        For each integrated file, look up known elements and mark them as
+        ``integrated``.  For skipped files, mark elements as ``blocked``.
+        """
+        registry = self._element_registry
+        if registry is None:
+            return
+
+        integrated_set = {str(f) for f in integrated_files}
+        skipped_set = {
+            entry.get("path", "") for entry in skipped_files
+        }
+
+        for tf in unit.target_files:
+            try:
+                entries = registry.elements_for_file(tf)
+            except Exception:
+                continue
+            for entry in entries:
+                try:
+                    if tf in integrated_set or any(
+                        tf in str(p) for p in integrated_files
+                    ):
+                        registry.set_phase_status(
+                            entry.element_id,
+                            "integrate",
+                            "merged",
+                            metadata={"unit_id": unit.id},
+                        )
+                    elif tf in skipped_set:
+                        registry.set_phase_status(
+                            entry.element_id,
+                            "integrate",
+                            "blocked",
+                            metadata={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Element provenance recording failed for %s: %s",
+                        entry.element_id, exc,
+                    )
 
     # ------------------------------------------------------------------
     # Dirty-file protection (extracted from PrimeContractor)
@@ -1675,6 +1731,12 @@ class IntegrationEngine:
             )
         else:
             final_status = IntegrationStatus.SUCCESS
+
+        # 8b. Element registry provenance (ER-008) — record merge outcomes
+        if self._element_registry is not None:
+            self._record_element_merge_outcomes(
+                unit, integrated_files, skipped_files,
+            )
 
         # 9. Notify completed
         listener.on_integration_completed(unit, integrated_files)

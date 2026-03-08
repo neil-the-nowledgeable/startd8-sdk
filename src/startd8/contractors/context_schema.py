@@ -217,6 +217,8 @@ class DesignPhaseOutput(BaseModel):
 
     design_results: Dict[str, Any]
     design_quality: Dict[str, Any] = {}
+    # ER-013: Element registry summary for handoff
+    element_state: Dict[str, Any] = {}
 
     @field_validator("design_results")
     @classmethod
@@ -343,6 +345,8 @@ class IntegratePhaseOutput(BaseModel):
     """Output model for the INTEGRATE phase."""
 
     integration_results: Dict[str, Any]  # task_id -> {success, integrated_files, errors, ...}
+    # ER-008: Per-element merge outcomes {task_id: {filepath: {element: status}}}
+    element_merge_outcomes: Dict[str, Any] = {}
 
     @field_validator("integration_results")
     @classmethod
@@ -379,6 +383,8 @@ class FinalizePhaseOutput(BaseModel):
     """Output of the FINALIZE phase."""
 
     workflow_summary: Dict[str, Any]
+    # ER-011: Element-level manifest for generation-manifest.json
+    element_manifest: Dict[str, Any] = {}
 
     @field_validator("workflow_summary")
     @classmethod
