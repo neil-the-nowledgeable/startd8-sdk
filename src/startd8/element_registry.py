@@ -436,11 +436,11 @@ class ElementRegistry:
             self._ensure_metrics()
             entry = self._index.get(element_id)
             if entry is not None:
-                logger.info("element_registry.get hit", extra={"element_id": element_id})
+                logger.debug("element_registry.get hit: %s", element_id)
                 if self._hits_counter is not None:
                     self._hits_counter.add(1)
             else:
-                logger.info("element_registry.get miss", extra={"element_id": element_id})
+                logger.debug("element_registry.get miss: %s", element_id)
                 if self._misses_counter is not None:
                     self._misses_counter.add(1)
             return entry
@@ -457,7 +457,7 @@ class ElementRegistry:
             self._ensure_metrics()
             self._write_entry(entry)
             self._index[entry.element_id] = entry
-            logger.info("element_registry.put", extra={"element_id": entry.element_id})
+            logger.debug("element_registry.put: %s", entry.element_id)
             if self._puts_counter is not None:
                 self._puts_counter.add(1)
             self._record_size()

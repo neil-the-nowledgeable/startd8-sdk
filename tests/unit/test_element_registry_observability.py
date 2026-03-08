@@ -114,30 +114,30 @@ class TestSizeGauge:
 class TestStructuredLogs:
     """Verify info-level logs with element_id context."""
 
-    def test_get_hit_logs_info(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
+    def test_get_hit_logs_debug(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
         reg = ElementRegistry(tmp_path)
         reg.put(_make_entry("el1"))
 
-        with caplog.at_level(logging.INFO, logger="startd8.element_registry"):
+        with caplog.at_level(logging.DEBUG, logger="startd8.element_registry"):
             reg.get("el1")
 
-        assert any("element_registry.get hit" in r.message for r in caplog.records)
+        assert any("element_registry.get hit: el1" in r.message for r in caplog.records)
 
-    def test_get_miss_logs_info(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
+    def test_get_miss_logs_debug(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
         reg = ElementRegistry(tmp_path)
 
-        with caplog.at_level(logging.INFO, logger="startd8.element_registry"):
+        with caplog.at_level(logging.DEBUG, logger="startd8.element_registry"):
             reg.get("missing")
 
-        assert any("element_registry.get miss" in r.message for r in caplog.records)
+        assert any("element_registry.get miss: missing" in r.message for r in caplog.records)
 
-    def test_put_logs_info(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
+    def test_put_logs_debug(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
         reg = ElementRegistry(tmp_path)
 
-        with caplog.at_level(logging.INFO, logger="startd8.element_registry"):
+        with caplog.at_level(logging.DEBUG, logger="startd8.element_registry"):
             reg.put(_make_entry("el2"))
 
-        assert any("element_registry.put" in r.message for r in caplog.records)
+        assert any("element_registry.put: el2" in r.message for r in caplog.records)
 
     def test_remove_logs_info(self, tmp_path: str, caplog: pytest.LogCaptureFixture) -> None:
         reg = ElementRegistry(tmp_path)
