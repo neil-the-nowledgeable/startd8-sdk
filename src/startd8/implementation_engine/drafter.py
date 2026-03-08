@@ -22,6 +22,9 @@ from .budget import (
     EXISTING_FILES_BUDGET_BYTES,
     SEARCH_REPLACE_LINE_THRESHOLD,
     SUPPLEMENTARY_BUDGET_CHARS,
+    TOTAL_DRAFT_BUDGET_TOKENS,
+    enforce_prompt_budget,
+    estimate_tokens,
     truncate_with_marker,
 )
 from .models import DraftResult
@@ -737,6 +740,16 @@ def create_draft(
                 supplementary_sections=supplementary,
             )
 
+            # Budget check (warning-only — drafter prompt is template-assembled)
+            _prompt_tokens = estimate_tokens(prompt)
+            if _prompt_tokens > TOTAL_DRAFT_BUDGET_TOKENS:
+                logger.warning(
+                    "Draft prompt exceeds budget: %d tokens > %d limit "
+                    "(mode=%s, supplementary=%d chars)",
+                    _prompt_tokens, TOTAL_DRAFT_BUDGET_TOKENS,
+                    draft_mode, len(supplementary),
+                )
+
             if span:
                 span.set_attribute("drafter.skeleton_files_count", len(skeleton_sources))
                 # Count pre-filled vs unfilled for observability
@@ -770,6 +783,16 @@ def create_draft(
                 existing_files_section=existing_files_section,
                 supplementary_sections=supplementary,
             )
+
+            # Budget check (warning-only — drafter prompt is template-assembled)
+            _prompt_tokens = estimate_tokens(prompt)
+            if _prompt_tokens > TOTAL_DRAFT_BUDGET_TOKENS:
+                logger.warning(
+                    "Draft prompt exceeds budget: %d tokens > %d limit "
+                    "(mode=%s, supplementary=%d chars)",
+                    _prompt_tokens, TOTAL_DRAFT_BUDGET_TOKENS,
+                    draft_mode, len(supplementary),
+                )
         else:
             existing_files_section = ""
             draft_template = get_template("draft")
@@ -780,6 +803,16 @@ def create_draft(
                 existing_files_section=existing_files_section,
                 supplementary_sections=supplementary,
             )
+
+            # Budget check (warning-only — drafter prompt is template-assembled)
+            _prompt_tokens = estimate_tokens(prompt)
+            if _prompt_tokens > TOTAL_DRAFT_BUDGET_TOKENS:
+                logger.warning(
+                    "Draft prompt exceeds budget: %d tokens > %d limit "
+                    "(mode=%s, supplementary=%d chars)",
+                    _prompt_tokens, TOTAL_DRAFT_BUDGET_TOKENS,
+                    draft_mode, len(supplementary),
+                )
 
         response_text, response_time_ms, token_usage = agent.generate(
             prompt, system_prompt=sys_prompt

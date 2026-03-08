@@ -570,7 +570,7 @@ class ValidatorRegistry:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Forward Element Spec Formatting (Lead Contractor parity with Micro Prime)
+# Forward Element Spec Formatting (Primary Contractor parity with Micro Prime)
 # ──────────────────────────────────────────────────────────────────────────
 
 
@@ -819,7 +819,7 @@ class StandaloneContextStrategy(ContextStrategy):
         if target_files:
             gen_context["target_file"] = target_files[0]
 
-        # Inject ForwardElementSpec data for Lead Contractor parity with Micro Prime
+        # Inject ForwardElementSpec data for Primary Contractor parity with Micro Prime
         if fm and hasattr(fm, "file_specs_for_task") and target_files:
             element_specs = _format_forward_element_specs(
                 fm, feature_data.get("id", ""), target_files
@@ -1001,7 +1001,7 @@ class PipelineContextStrategy(ContextStrategy):
         if target_files:
             gen_context["target_file"] = target_files[0]
 
-        # Inject ForwardElementSpec data for Lead Contractor parity with Micro Prime
+        # Inject ForwardElementSpec data for Primary Contractor parity with Micro Prime
         if fm and hasattr(fm, "file_specs_for_task") and target_files:
             element_specs = _format_forward_element_specs(
                 fm, feature_data.get("id", ""), target_files

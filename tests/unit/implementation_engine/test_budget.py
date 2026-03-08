@@ -22,7 +22,7 @@ from startd8.implementation_engine.budget import (
 
 class TestBudgetConstants:
     def test_plan_context_max(self):
-        assert PLAN_CONTEXT_MAX_CHARS == 16_384
+        assert PLAN_CONTEXT_MAX_CHARS == 6_000
 
     def test_arch_context_max(self):
         assert ARCH_CONTEXT_MAX_CHARS == 4_096

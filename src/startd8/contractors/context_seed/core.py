@@ -3117,9 +3117,72 @@ class Test{class_name}:
                     exc, exc_info=True,
                 )
 
+        # --- Env-block pre-filter (mirrors _tasks_to_chunks env check) ---
+        env_blocked_ids: set[str] = set()
+        skipped_reports: list[dict[str, Any]] = []
+        eligible_tasks: list[SeedTask] = []
+        for task in tasks:
+            env_fails = [
+                c for c in task.environment_checks
+                if c.get("status") == "fail"
+            ]
+            if env_fails:
+                env_blocked_ids.add(task.task_id)
+                logger.warning(
+                    "IMPLEMENT inner loop: skipping task %s (%s) — "
+                    "env_blocked (%d failing check(s))",
+                    task.task_id, task.title, len(env_fails),
+                )
+                skipped_reports.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "env_blocked",
+                    "complexity_tier": "tier_2",
+                    "environment_issues": [
+                        c for c in task.environment_checks
+                        if c.get("status") in ("fail", "warn")
+                    ],
+                })
+                _log_task_boundary_complete(
+                    task.task_id, status="env_blocked",
+                    phase="implement",
+                )
+            else:
+                # Also check for dep-blocked (dependency on an env-blocked task)
+                blocked_deps = [
+                    d for d in task.depends_on if d in env_blocked_ids
+                ]
+                if blocked_deps:
+                    logger.warning(
+                        "IMPLEMENT inner loop: skipping task %s (%s) — "
+                        "dep_blocked_env (blocked by: %s)",
+                        task.task_id, task.title,
+                        ", ".join(blocked_deps),
+                    )
+                    skipped_reports.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "status": "dep_blocked_env",
+                        "complexity_tier": "tier_2",
+                        "blocked_dependencies": blocked_deps,
+                    })
+                    _log_task_boundary_complete(
+                        task.task_id, status="dep_blocked_env",
+                        phase="implement",
+                    )
+                else:
+                    eligible_tasks.append(task)
+
+        if env_blocked_ids:
+            logger.info(
+                "IMPLEMENT inner loop: %d/%d tasks env-blocked, "
+                "%d eligible for generation",
+                len(env_blocked_ids), len(tasks), len(eligible_tasks),
+            )
+
         if not resumed:
             self._execute_inner_loop_tasks(
-                tasks, engine, config, context,
+                eligible_tasks, engine, config, context,
                 design_results, staging_dir, project_root,
                 drafter_spec, reviewer_spec,
                 edit_mode_map, task_tiers,
@@ -3385,6 +3448,9 @@ class Test{class_name}:
             )
 
         # --- Assemble output (same structure as DevelopmentPhase path) ---
+        # Merge env-blocked skipped reports into task_reports
+        task_reports.extend(skipped_reports)
+
         if not task_reports:
             # Build task reports for resumed path
             for task in tasks:

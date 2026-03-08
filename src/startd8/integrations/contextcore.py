@@ -1050,7 +1050,7 @@ def run_contextcore_project(
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
-    Run all pending tasks from a ContextCore project through the Lead Contractor workflow.
+    Run all pending tasks from a ContextCore project through the Primary Contractor workflow.
 
     This is a convenience function that:
     1. Loads pending tasks from ContextCore state files

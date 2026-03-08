@@ -157,7 +157,7 @@ class PrimaryContractorCodeGenerator:
         target_files: List[str],
     ) -> GenerationResult:
         """
-        Generate code using the Lead Contractor workflow.
+        Generate code using the Primary Contractor workflow.
 
         Args:
             task: Description of what to implement

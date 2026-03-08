@@ -219,7 +219,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
     def metadata(self) -> WorkflowMetadata:
         return WorkflowMetadata(
             workflow_id="lead-contractor",
-            name="Lead Contractor Workflow",
+            name="Primary Contractor Workflow",  # alias: "Lead Contractor Workflow"
             description="Cost-efficient multi-agent pattern: Claude specs/reviews, cheaper models draft",
             version="1.0.0",
             capabilities=[
@@ -355,7 +355,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         agents: Optional[List[BaseAgent]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
-        """Execute the Lead Contractor workflow synchronously."""
+        """Execute the Primary Contractor workflow synchronously."""
         started_at = datetime.now(timezone.utc)
         workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
 
@@ -422,7 +422,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         total_steps = 2 + max_iterations * 2 + 1  # spec + (draft+review)*N + integration
         current_step = 0
 
-        self._emit_progress(on_progress, current_step, total_steps, "Starting Lead Contractor workflow")
+        self._emit_progress(on_progress, current_step, total_steps, "Starting Primary Contractor workflow")
 
         try:
             # =================================================================
@@ -668,7 +668,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
             result.total_time_ms = sum(s.time_ms for s in step_results)
 
         except Exception as e:
-            logger.error(f"Lead Contractor workflow failed: {e}", exc_info=True)
+            logger.error(f"Primary Contractor workflow failed: {e}", exc_info=True)
             result.success = False
             result.error = str(e)
             result.final_phase = WorkflowPhase.FAILED
@@ -960,7 +960,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         agents: Optional[List[BaseAgent]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
-        """Execute the Lead Contractor workflow asynchronously (FR-150)."""
+        """Execute the Primary Contractor workflow asynchronously (FR-150)."""
         started_at = datetime.now(timezone.utc)
         workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
 
@@ -1021,7 +1021,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         total_steps = 2 + max_iterations * 2 + 1
         current_step = 0
 
-        self._emit_progress(on_progress, current_step, total_steps, "Starting Lead Contractor workflow")
+        self._emit_progress(on_progress, current_step, total_steps, "Starting Primary Contractor workflow")
 
         try:
             # Phase 1: Spec Creation (Lead)
@@ -1227,7 +1227,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
             result.total_time_ms = sum(s.time_ms for s in step_results)
 
         except Exception as e:
-            logger.error(f"Lead Contractor workflow failed: {e}", exc_info=True)
+            logger.error(f"Primary Contractor workflow failed: {e}", exc_info=True)
             result.success = False
             result.error = str(e)
             result.final_phase = WorkflowPhase.FAILED

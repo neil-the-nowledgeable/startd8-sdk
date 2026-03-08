@@ -621,6 +621,8 @@ class PrimeContractorWorkflow:
         # Micro Prime (REQ-MP-710) — off by default, enabled via enable_micro_prime()
         self._micro_prime_enabled = False
         self._original_code_generator = None
+        # Element registry (ER-012) — shared across features for cross-task reuse
+        self._element_registry: Optional[Any] = None
         # Tier escalation (REQ-RPL-500) — generator saved before escalation
         self._pre_escalation_generator = None
         self._escalation_threshold: int = 2  # attempts before escalation
@@ -828,11 +830,28 @@ class PrimeContractorWorkflow:
             if hasattr(self.code_generator, "output_dir")
             else Path("generated")
         )
+        # ER-012: Initialize element registry for cross-feature reuse
+        if getattr(self, "_element_registry", None) is None:
+            try:
+                from startd8.element_registry import ElementRegistry
+
+                proj_root = getattr(self, "project_root", None)
+                state_dir = (
+                    proj_root / ".startd8" / "state"
+                    if proj_root
+                    else output_dir / ".startd8" / "state"
+                )
+                self._element_registry = ElementRegistry(state_dir=state_dir)
+            except Exception as exc:
+                logger.debug("Element registry init failed (non-fatal): %s", exc)
+                self._element_registry = None
+
         self.code_generator = MicroPrimeCodeGenerator(
             config=mp_config,
             fallback=self._original_code_generator,
             output_dir=output_dir,
             cloud_agent_spec=cloud_agent_spec,
+            element_registry=getattr(self, "_element_registry", None),
         )
         self._micro_prime_enabled = True
         logger.info(
@@ -2805,6 +2824,33 @@ class PrimeContractorWorkflow:
             logger.error("No code generator configured for feature '%s'", feature.name)
             self.queue.fail_feature(feature.id, 'No code generator configured')
             return False
+
+        # ER-012: Log element registry availability for this feature
+        if self._element_registry and self.seed_forward_manifest:
+            try:
+                fm = self.seed_forward_manifest
+                manifest_obj = fm if hasattr(fm, "file_specs") else None
+                if manifest_obj and hasattr(manifest_obj, "file_specs"):
+                    elements_from_cache = 0
+                    elements_total = 0
+                    for path in feature.target_files or []:
+                        file_spec = manifest_obj.file_specs.get(path)
+                        if file_spec:
+                            for elem in getattr(file_spec, "elements", []):
+                                elements_total += 1
+                                eid = getattr(elem, "source_contract_id", None)
+                                if eid:
+                                    cached = self._element_registry.get(eid)
+                                    if cached and cached.extra.get("code"):
+                                        elements_from_cache += 1
+                    if elements_total > 0:
+                        logger.info(
+                            "Feature '%s': %d/%d elements available in registry",
+                            feature.name, elements_from_cache, elements_total,
+                        )
+            except Exception as exc:
+                logger.debug("Element registry pre-check failed: %s", exc)
+
         logger.info("Running code generation for '%s'...", feature.name)
         try:
             # Mottainai Gap 14: skip generation if files already exist on disk.

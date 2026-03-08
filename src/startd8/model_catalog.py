@@ -119,7 +119,7 @@ class Models:
     # Recommended Defaults by Use Case
     # ==========================================================================
 
-    # Lead Contractor pattern: balanced lead + cheap drafter
+    # Primary Contractor pattern: balanced lead + cheap drafter
     LEAD_CONTRACTOR_LEAD = CLAUDE_SONNET_LATEST
     LEAD_CONTRACTOR_DRAFTER = GEMINI_FLASH_LITE
 

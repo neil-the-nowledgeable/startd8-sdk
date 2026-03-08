@@ -381,6 +381,7 @@ class MicroPrimeEngine:
         config: Optional[MicroPrimeConfig] = None,
         template_registry: Optional[TemplateRegistry] = None,
         metrics_collector: Optional[MetricsCollector] = None,
+        element_registry: Optional[Any] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._templates = template_registry or TemplateRegistry(
@@ -393,6 +394,8 @@ class MicroPrimeEngine:
         self._circuit_open: bool = False
         # Element fingerprint success cache (R3-S4)
         self._success_cache: dict[str, Optional[str]] = {}
+        # Element registry for cross-task/cross-run caching (ER-007)
+        self._element_registry = element_registry
         # Decomposer for MODERATE elements (REQ-MP-900)
         self._decomposer = ModerateDecomposer(config=self._config, template_registry=self._templates)
         # Phase 3: Function-body decomposer for SIMPLE elements (lazy import, Leg 11 #55)
@@ -536,6 +539,33 @@ class MicroPrimeEngine:
             self._metrics.record(result)
             return result
 
+        # Step 1a′: Element registry cache-through (ER-007 / REQ-MP-1102)
+        element_id = getattr(element, "source_contract_id", None)
+        if self._element_registry and element_id:
+            try:
+                cached = self._element_registry.get(element_id)
+                if cached and cached.extra.get("code"):
+                    cached_code = cached.extra["code"]
+                    logger.info("Element registry HIT: %s", element_id)
+                    result = ElementResult(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=tier,
+                        classification_reason=reasoning,
+                        success=True,
+                        code=cached_code,
+                        verification_verdict="skipped",
+                        api_file_import_bump=api_file_import_bump,
+                        api_element_adjustment=api_element_adjustment,
+                        decomposition_metadata={"source": "element_registry"},
+                    )
+                    self._metrics.record(result)
+                    return result
+                else:
+                    logger.debug("Element registry MISS: %s", element_id)
+            except Exception as exc:
+                logger.debug("Element registry lookup failed for %s: %s", element_id, exc)
+
         # Step 1b: Circuit breaker (R3-S2) — escalate immediately if open
         if self._circuit_open and tier in (
             TierClassification.TRIVIAL,
@@ -643,6 +673,20 @@ class MicroPrimeEngine:
         if result.success:
             self._consecutive_failures = 0
             self._success_cache[fingerprint] = result.code
+            # ER-007: Register element in persistent registry
+            if self._element_registry and element_id and result.code:
+                try:
+                    cached = self._element_registry.get(element_id)
+                    if cached is not None:
+                        cached.extra["code"] = result.code
+                        cached.extra["generator"] = self._config.model or "ollama:unknown"
+                        cached.extra["tier"] = tier.value
+                        self._element_registry.put(cached)
+                    self._element_registry.set_phase_status(
+                        element_id, "implement", "generated",
+                    )
+                except Exception as exc:
+                    logger.debug("Element registry write failed for %s: %s", element_id, exc)
         elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
             self._consecutive_failures += 1
             if (

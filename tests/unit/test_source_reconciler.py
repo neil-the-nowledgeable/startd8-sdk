@@ -1,7 +1,7 @@
 """
 Unit tests for SOURCE_RECONCILE — AST-enriched ForwardManifest.
 
-Covers: conversion functions, SourceReconciler, ReconciliationStats,
+Covers: conversion functions, SourceReconciler,
 fingerprint caching, config disable, and integration with extract_forward_contracts.
 """
 
@@ -23,7 +23,6 @@ from startd8.forward_manifest import (
     forward_import_spec_from_entry,
 )
 from startd8.forward_manifest_extractor import (
-    ReconciliationStats,
     SourceReconcileConfig,
     SourceReconciler,
     extract_forward_contracts,
@@ -140,11 +139,11 @@ class TestForwardElementSpecFromElement:
         assert spec.parent_class == "MyClass"
         assert spec.name == "get_data"
 
-    def test_constant_raises(self):
-        """CONSTANT kind raises ValueError."""
+    def test_constant_handled(self):
+        """CONSTANT kind is handled (no longer raises)."""
         elem = _make_element(kind=ElementKind.CONSTANT, name="MAX", fqn="MAX", signature=None)
-        with pytest.raises(ValueError, match="constant"):
-            forward_element_spec_from_element(elem)
+        spec = forward_element_spec_from_element(elem)
+        assert spec.name == "MAX"
 
     def test_docstring_and_decorators_preserved(self):
         """AST docstring and decorators are forwarded."""

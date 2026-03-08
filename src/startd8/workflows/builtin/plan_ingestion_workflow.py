@@ -3977,19 +3977,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             try:
                 # REQ-PC-FM-001: Bridge to extractor API (features, proto_dir, etc.)
                 features = parsed_plan.features
-                tentative_contracts: Optional[List[Any]] = None
-                if review_output:
-                    # REFINE phase may produce tentative contracts (Phase 3)
-                    triage = review_output.get("triage") or {}
-                    if isinstance(triage, dict) and triage.get("contracts"):
-                        from startd8.forward_manifest import InterfaceContract
-
-                        raw = triage["contracts"]
-                        if isinstance(raw, list):
-                            tentative_contracts = [
-                                c if isinstance(c, InterfaceContract) else InterfaceContract.model_validate(c)
-                                for c in raw
-                            ]
                 proto_dir: Optional[Path] = None
                 for candidate in (output_dir / "proto", output_dir.parent / "proto"):
                     if candidate.is_dir() and any(candidate.glob("*.proto")):
@@ -4001,21 +3988,34 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if "shared_contracts:" in plan_text:
                         yaml_text = plan_text
 
-                # Layer 2: reference_root for behavioral AST contracts
-                reference_root: Optional[Path] = None
+                # Layer 2: reference files for behavioral AST contracts
+                reference_files: Optional[List[Path]] = None
                 if project_metadata and project_metadata.get("reference_root"):
                     ref_candidate = Path(str(project_metadata["reference_root"]))
                     if ref_candidate.is_dir():
-                        reference_root = ref_candidate
+                        reference_files = sorted(ref_candidate.rglob("*.py"))
 
-                forward_manifest = extract_forward_contracts(
+                contracts, file_elements = extract_forward_contracts(
                     features,
                     yaml_text=yaml_text,
                     proto_dir=proto_dir,
-                    tentative_contracts=tentative_contracts,
+                    reference_files=reference_files,
                     project_root=project_root,
-                    reference_root=reference_root,
-                    force_regenerate=force_regenerate,
+                )
+
+                # Construct ForwardManifest from extractor results
+                from startd8.forward_manifest import (
+                    ForwardFileSpec,
+                    ForwardManifest,
+                )
+
+                file_specs: Dict[str, ForwardFileSpec] = {}
+                for fpath, elems in file_elements.items():
+                    file_specs[fpath] = ForwardFileSpec(file=fpath, elements=elems)
+
+                forward_manifest = ForwardManifest(
+                    contracts=contracts,
+                    file_specs=file_specs,
                 )
 
                 forward_manifest_dict = forward_manifest.model_dump()

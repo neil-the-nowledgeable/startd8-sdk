@@ -20,7 +20,7 @@ from __future__ import annotations
 import ast
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -1150,6 +1150,21 @@ def _build_behavioral_contracts(
 # ═══════════════════════════════════════════════════════════════════════════
 # Source Reconciler
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class SourceReconcileConfig:
+    """Configuration for source reconciliation.
+
+    Attributes:
+        enabled: Master switch for reconciliation.
+        max_file_size_bytes: Skip files exceeding this byte size (default 1 MB).
+        exclude_files: Exact relative file paths to skip entirely.
+    """
+
+    enabled: bool = True
+    max_file_size_bytes: int = 1_000_000
+    exclude_files: set[str] = field(default_factory=set)
 
 
 @dataclass

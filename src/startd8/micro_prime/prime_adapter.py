@@ -263,13 +263,18 @@ class MicroPrimeCodeGenerator:
         skeletons: Optional[dict[str, str]] = None,
         output_dir: Optional[Path] = None,
         cloud_agent_spec: Optional[str] = None,
+        element_registry: Optional[Any] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
         self._manifest = manifest
         self._skeletons = skeletons or {}
         self._output_dir = output_dir or Path(".")
-        self._engine = MicroPrimeEngine(config=self._config)
+        self._element_registry = element_registry
+        self._engine = MicroPrimeEngine(
+            config=self._config,
+            element_registry=element_registry,
+        )
         self._ollama_available: Optional[bool] = None
         self._cloud_agent_spec = cloud_agent_spec
         self._cloud_agent: Optional[BaseAgent] = None

@@ -100,9 +100,17 @@ src/startd8/              # Main package
 │   ├── artisan_contractor.py     # ArtisanContractorWorkflow (8-phase orchestrator)
 │   ├── artisan_models.py         # Artisan phase data models
 │   ├── artisan_prompts.py        # Artisan phase prompt templates
-│   ├── context_seed_handlers.py  # Phase handlers (Design/Implement/Integrate/Review/Finalize/Test)
+│   ├── context_seed_handlers.py  # Compat wrapper — re-exports from context_seed/ subpackage
+│   ├── context_seed/             # Phase handler implementations (refactored from context_seed_handlers.py)
+│   │   ├── core.py               # Main handler classes (Design/Implement/Integrate/Review/Finalize/Test)
+│   │   ├── design_support.py     # Design-phase helpers, CCD span attrs, complexity classification
+│   │   ├── shared.py             # Shared utilities (PCA context fields, logging helpers)
+│   │   ├── tracing.py            # OTel tracing integration
+│   │   └── phases/               # Individual phase implementations (design, plan, scaffold)
 │   ├── context_schema.py         # Pydantic output models (DesignPhaseOutput, ImplementPhaseOutput, ValidationPhaseOutput)
-│   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec)
+│   ├── context_resolution.py     # Context resolution strategies
+│   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec, GateEmitter)
+│   ├── integration_engine.py     # INTEGRATE phase merge engine with pre/post-merge repair
 │   ├── handoff.py                # Design↔Implementation handoff (two-half split)
 │   ├── checkpoint.py             # Checkpoint/crash recovery
 │   ├── prime_contractor.py       # PrimeContractorWorkflow
@@ -141,7 +149,7 @@ src/startd8/              # Main package
 │   ├── registry.py       # Workflow registry
 │   ├── models.py         # Workflow data models
 │   └── builtin/          # Built-in workflows
-│       ├── lead_contractor_workflow.py
+│       ├── lead_contractor_workflow.py  # Primary Contractor (aliased as PrimaryContractorWorkflow)
 │       ├── plan_ingestion_workflow.py
 │       ├── domain_preflight_workflow.py
 │       ├── critical_review_workflow.py
@@ -153,6 +161,59 @@ src/startd8/              # Main package
 │       ├── task_tracking_emitter.py       # ContextCore SpanState v2 task emission
 │       ├── schema_versions.py             # Schema version constants
 │       └── preflight_rules/  # Domain-specific preflight rule system
+│
+├── complexity/           # Complexity classification and tier routing
+│   ├── classifier.py     # classify_tier() — TRIVIAL/SIMPLE/MODERATE/COMPLEX
+│   ├── models.py         # TaskComplexitySignals dataclass
+│   ├── router.py         # Routes tasks to appropriate generator by tier
+│   └── signals.py        # Signal extraction from task metadata
+│
+├── micro_prime/          # Local code generation engine (element-level)
+│   ├── engine.py         # MicroPrimeEngine — orchestrates element generation
+│   ├── decomposer.py     # Moderate decomposer (Class/Function strategies)
+│   ├── splicer.py        # Code splicing into existing files
+│   ├── models.py         # GenerationPlan, SubElement, etc.
+│   ├── templates.py      # Template registry for code generation
+│   ├── prime_adapter.py  # PrimeContractor ↔ MicroPrime bridge
+│   ├── repair.py         # Element-level repair
+│   ├── metrics.py        # OTel metrics for generation
+│   └── config_loader.py  # Configuration loading
+│
+├── repair/               # Post-generation repair pipeline
+│   ├── orchestrator.py   # run_file_repair(), run_element_repair()
+│   ├── diagnostics.py    # Checkpoint diagnostic parsing and classification
+│   ├── routing.py        # Failure routing to repair steps
+│   ├── staging.py        # Atomic staging for repair operations
+│   ├── models.py         # RepairOutcome, RepairRoute, RepairStepResult
+│   ├── config.py         # RepairConfig (repairable_categories, timeouts)
+│   └── steps/            # Individual repair steps (fence_strip, ast_validate, etc.)
+│
+├── implementation_engine/  # Code generation engine for contractors
+│   ├── spec_builder.py   # Spec prompt construction (with enforce_prompt_budget)
+│   ├── drafter.py        # Draft prompt construction (with budget check)
+│   ├── budget.py         # Budget constants, enforce_prompt_budget(), truncation utils
+│   └── prompts/          # YAML prompt templates
+│       ├── __init__.py   # get_template(), format_prompt() with fallback strings
+│       └── contractor_prompts.yaml  # Consolidated spec/draft/review templates
+│
+├── dashboard_creator/    # Grafana dashboard generation pipeline
+│   ├── workflow.py       # DashboardCreatorWorkflow
+│   ├── compiler.py       # Dashboard JSON compilation
+│   ├── generator.py      # Panel/dashboard generation
+│   └── models.py         # DashboardSpec, PanelSpec
+│
+├── seeds/                # Seed task builder and derivation
+│   ├── builder.py        # SeedBuilder
+│   ├── derivation.py     # Task derivation from plans
+│   └── models.py         # Seed data models
+│
+├── project/              # Project scaffolding
+│   ├── scaffolder.py     # Project structure generation
+│   └── manifest.py       # Project manifest
+│
+├── forward_manifest.py           # ForwardManifest, InterfaceContract models
+├── forward_manifest_validator.py # Contract violation detection
+├── forward_manifest_extractor.py # Extract contracts from source code
 │
 ├── diagnostics/          # Diagnostic/validation system with auto-fix
 ├── observability/        # OTel manifest and collector
@@ -182,9 +243,17 @@ scripts/                  # Runner and utility scripts (~25 files)
 ├── generate_observability_manifest.py  # OTel manifest generation
 └── ...                           # OTel, evaluation, decompose scripts
 
-tests/                    # Test suite (~133 files)
+tests/                    # Test suite (~307 files)
 ├── unit/                 # Unit tests
-├── unit/contractors/     # Contractor-specific unit tests
+│   ├── contractors/      # Contractor-specific unit tests (~2744 tests)
+│   ├── micro_prime/      # Micro Prime engine tests (~355 tests)
+│   ├── complexity/       # Complexity classifier tests
+│   ├── repair/           # Repair pipeline tests
+│   ├── seeds/            # Seed builder tests
+│   ├── dashboard_creator/  # Dashboard creator tests
+│   ├── implementation_engine/  # Implementation engine tests
+│   └── workflows/        # Workflow tests
+├── contract_validation/  # Pipeline contract validation tests
 ├── contractors/          # Contractor integration tests
 ├── integration/          # Integration tests
 ├── e2e/                  # End-to-end tests
@@ -226,7 +295,7 @@ The primary code generation pipeline, split into a design half and implementatio
 
 Key patterns:
 - **Handoff**: Design half (PLAN→SCAFFOLD→DESIGN) produces a handoff file consumed by implementation half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
-- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `IntegratePhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed_handlers.py`
+- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `IntegratePhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed/core.py` (re-exported via `context_seed_handlers.py` compat wrapper)
 - **HandlerConfig.from_config()**: Loads handler configuration from artisan YAML config
 - **Checkpoint/Recovery**: Per-phase crash recovery via `checkpoint.py`; generation results saved for resume
 - **Resume Caching**: IMPLEMENT, TEST, and REVIEW phases persist results to `.startd8/state/` with 3-layer validation (schema version → source checksum → per-task file hash)
@@ -262,6 +331,44 @@ Key patterns:
 - `task.percent_complete` attribute required for Grafana gauge panels
 - Zero-point `task.created` event with `percent_complete: 0` required for burndown charts
 - See `ContextCore/docs/plans/WEAVER_CROSS_REPO_ALIGNMENT_REQUIREMENTS.md` (REQ-8) for cross-repo dashboard alignment
+
+### Complexity Classification and Micro Prime
+
+The SDK routes code generation tasks by complexity tier:
+- `complexity/classifier.py` — `classify_tier()` assigns TRIVIAL/SIMPLE/MODERATE/COMPLEX
+- `complexity/router.py` — Routes tasks to the appropriate generator
+- `micro_prime/engine.py` — `MicroPrimeEngine` handles SIMPLE/MODERATE tasks locally (no LLM calls for trivial)
+- `micro_prime/decomposer.py` — Breaks MODERATE elements into SIMPLE sub-elements (Class/Function strategies)
+- `micro_prime/splicer.py` — Splices generated code into existing files
+- `micro_prime/prime_adapter.py` — Bridges PrimeContractor ↔ MicroPrime
+
+### Repair Pipeline
+
+Post-generation repair for syntax, lint, and import errors:
+- `repair/orchestrator.py` — `run_file_repair()`, `run_element_repair()` orchestrators
+- `repair/diagnostics.py` — Checkpoint diagnostic parsing and failure classification
+- `repair/routing.py` — Routes failures to appropriate repair steps
+- `repair/staging.py` — Atomic staging for safe repair operations
+- Integration: `IntegrationEngine._attempt_pre_merge_repair()` (pre-merge) and `_attempt_repair()` (post-merge)
+
+### Implementation Engine (Prompt Pipeline)
+
+The `implementation_engine/` module handles spec→draft→review prompt construction:
+- **Consolidated prompts**: All templates in `contractor_prompts.yaml` (single source of truth). Fallback strings in `prompts/__init__.py` ensure the engine works without the YAML file.
+- **Budget enforcement**: `enforce_prompt_budget()` uses P0-P3 priority-ordered section removal. `TOTAL_SPEC_BUDGET_TOKENS` (4096) and `TOTAL_DRAFT_BUDGET_TOKENS` (8192) hard caps.
+- **Primary Contractor**: The `LeadContractorWorkflow` is now also exported as `PrimaryContractorWorkflow` (alias). Comments/docstrings use "Primary Contractor" terminology; the `lead_contractor_*` filenames and class names are preserved for backward compatibility.
+
+### Forward Manifest
+
+Design-time contract forwarding for review-time validation:
+- `forward_manifest.py` — `ForwardManifest`, `InterfaceContract` models
+- `forward_manifest_extractor.py` — Extracts contracts from source code AST
+- `forward_manifest_validator.py` — Validates generated code against contracts, produces `ContractViolation` list
+- Consumed by `ReviewPhaseHandler` to enforce structural compliance
+
+### Context Seed Compat Wrapper Pattern
+
+`context_seed_handlers.py` is a **compatibility wrapper** that re-exports all symbols from the `context_seed/` subpackage. This preserves the legacy import path (`from startd8.contractors.context_seed_handlers import X`) while allowing the implementation to live in organized submodules. **When modifying context_seed/, always verify that new public symbols are re-exported in the wrapper and that test `mock.patch` targets reference `context_seed.core`, not `context_seed_handlers`.**
 
 ### Session Tracking
 
@@ -331,6 +438,8 @@ Agents are specified as `provider:model` strings:
 - Preserve existing exception handling patterns in `exceptions.py`
 - Use `from startd8.logging_config import get_logger` for logging in SDK modules (NOT `logging.getLogger()`) — ensures OTel log bridge attachment for Loki visibility
 - Use `ModelCatalogEntry.agent_spec` for model defaults — don't scatter hardcoded model strings
+- When modifying `context_seed/` subpackage, verify new symbols are re-exported in `context_seed_handlers.py` compat wrapper
+- When splitting modules, run `grep -rn 'from old_module import\|patch.*old_module' tests/` to find all symbols and patch targets that need forwarding
 
 ### Must Avoid
 - Don't hardcode API keys - they come from environment variables
@@ -341,6 +450,8 @@ Agents are specified as `provider:model` strings:
 - Don't hardcode model version strings — use `model_catalog.py` centralized defaults
 - Don't use ad-hoc status strings in `task_tracking_emitter` — use ContextCore's canonical `TaskStatus` enum values from `contracts/types.py` (`todo`, not `pending`)
 - Don't omit the top-level `status` field when creating ContextCore state files — SpanState v2 requires it (`UNSET`/`OK`/`ERROR`)
+- Don't patch `context_seed_handlers.X` in tests when the code under test imports from `context_seed.core` — patch where the symbol is **looked up**, not where it's re-exported
+- Don't split a module without updating the logger acquisition policy test allowlist (`test_logger_acquisition_policy.py`) for any new files using string logger names
 
 ### Environment Variables
 ```bash
@@ -386,6 +497,12 @@ Key docs in `docs/`:
 - `PATTERN-silent-telemetry-loss.md` - OTel log bridge init gap pattern
 - `ARTISAN_WORKFLOW_ISSUES_CATALOG.md` - Known artisan pipeline issues and fixes
 - `docs/design/` - Design documents for major features
+- `docs/design/micro-prime/` - Micro Prime engine requirements and plans
+- `docs/design/prime/` - Prime Contractor requirements, Kaizen convergent review
+- `docs/design-princples/` - Cross-cutting design principles:
+  - `MOTTAINAI_DESIGN_PRINCIPLE.md` - Don't discard artifacts (within a run)
+  - `KAIZEN_DESIGN_PRINCIPLE.md` - Don't discard lessons (across runs)
+  - `WARM_UP_DESIGN_PRINCIPLE.md` - Don't discard context (across toolchain transitions)
 - `docs/capability-index/` - Capability tracking across versions (benefits, capabilities, functional requirements, agent card, MCP tools)
 
 ## Embedded Pipeline (`.cap-dev-pipe/`)
