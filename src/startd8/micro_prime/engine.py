@@ -9,12 +9,15 @@ Routes elements through the local-first code generation pipeline:
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import time
 import textwrap
 from collections.abc import Iterator
 from typing import Any, Optional
 
+from startd8.element_id import make_element_id
+from startd8.element_registry import ElementEntry, ElementRegistry
 from startd8.forward_manifest import (
     ForwardElementSpec,
     ForwardFileSpec,
@@ -296,6 +299,30 @@ def _enrich_file_spec_from_skeleton(
     )
 
 
+def _compute_context_checksum(skeleton: str) -> str:
+    """Compute a stable checksum of the skeleton context for cache staleness detection."""
+    return hashlib.sha256(skeleton.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional[str]:
+    """Derive a stable element ID from the ForwardElementSpec.
+
+    Uses ``source_contract_id`` when present; otherwise falls back to
+    ``make_element_id()`` derived from (file_path, parent_class, name).
+    Returns ``None`` only when name is missing (should never happen).
+    """
+    if element.source_contract_id:
+        return element.source_contract_id
+    if not element.name:
+        return None
+    return make_element_id(
+        kind=element.kind.value if hasattr(element.kind, "value") else str(element.kind),
+        name=element.name,
+        file_path=file_path,
+        parent_class=element.parent_class,
+    )
+
+
 _CODE_GEN_SYSTEM_PROMPT = (
     "You are an expert Python developer. Generate ONLY the requested function body. "
     "Do NOT include markdown fences, explanations, or any text outside the code. "
@@ -381,7 +408,7 @@ class MicroPrimeEngine:
         config: Optional[MicroPrimeConfig] = None,
         template_registry: Optional[TemplateRegistry] = None,
         metrics_collector: Optional[MetricsCollector] = None,
-        element_registry: Optional[Any] = None,
+        element_registry: Optional[ElementRegistry] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._templates = template_registry or TemplateRegistry(
@@ -539,32 +566,50 @@ class MicroPrimeEngine:
             self._metrics.record(result)
             return result
 
-        # Step 1a′: Element registry cache-through (ER-007 / REQ-MP-1102)
-        element_id = getattr(element, "source_contract_id", None)
-        if self._element_registry and element_id:
+        # Step 1a′: Element registry cache-through (REQ-MP-1102)
+        element_id = _resolve_element_id(element, file_path)
+        ctx_checksum = _compute_context_checksum(skeleton)
+        if self._element_registry is not None and element_id:
             try:
+                t0 = time.monotonic()
                 cached = self._element_registry.get(element_id)
-                if cached and cached.extra.get("code"):
-                    cached_code = cached.extra["code"]
-                    logger.info("Element registry HIT: %s", element_id)
-                    result = ElementResult(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=tier,
-                        classification_reason=reasoning,
-                        success=True,
-                        code=cached_code,
-                        verification_verdict="skipped",
-                        api_file_import_bump=api_file_import_bump,
-                        api_element_adjustment=api_element_adjustment,
-                        decomposition_metadata={"source": "element_registry"},
+                lookup_ms = (time.monotonic() - t0) * 1000
+                if lookup_ms > 100:
+                    logger.warning(
+                        "Element registry lookup took %.1fms for %s — exceeds 100ms threshold",
+                        lookup_ms, element_id,
                     )
-                    self._metrics.record(result)
-                    return result
+                if cached is not None and cached.extra.get("code"):
+                    # Staleness check: verify context_checksum matches current skeleton
+                    if cached.context_checksum and cached.context_checksum != ctx_checksum:
+                        logger.info(
+                            "Element registry STALE: %s (checksum %s != %s) — regenerating",
+                            element_id, cached.context_checksum, ctx_checksum,
+                        )
+                    else:
+                        cached_code = cached.extra["code"]
+                        logger.info("Element registry HIT: %s", element_id)
+                        result = ElementResult(
+                            element_name=element.name,
+                            file_path=file_path,
+                            tier=tier,
+                            classification_reason=reasoning,
+                            success=True,
+                            code=cached_code,
+                            verification_verdict="skipped",
+                            api_file_import_bump=api_file_import_bump,
+                            api_element_adjustment=api_element_adjustment,
+                            decomposition_metadata={"source": "element_registry"},
+                        )
+                        self._metrics.record(result)
+                        return result
                 else:
                     logger.debug("Element registry MISS: %s", element_id)
-            except Exception as exc:
-                logger.debug("Element registry lookup failed for %s: %s", element_id, exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Element registry lookup failed for %s: %s — falling through to generation",
+                    element_id, exc,
+                )
 
         # Step 1b: Circuit breaker (R3-S2) — escalate immediately if open
         if self._circuit_open and tier in (
@@ -673,20 +718,40 @@ class MicroPrimeEngine:
         if result.success:
             self._consecutive_failures = 0
             self._success_cache[fingerprint] = result.code
-            # ER-007: Register element in persistent registry
-            if self._element_registry and element_id and result.code:
+            # REQ-MP-1102: Persist to element registry after successful generation
+            if self._element_registry is not None and element_id and result.code:
                 try:
-                    cached = self._element_registry.get(element_id)
-                    if cached is not None:
-                        cached.extra["code"] = result.code
-                        cached.extra["generator"] = self._config.model or "ollama:unknown"
-                        cached.extra["tier"] = tier.value
-                        self._element_registry.put(cached)
+                    existing = self._element_registry.get(element_id)
+                    if existing is not None:
+                        existing.extra["code"] = result.code
+                        existing.extra["generator"] = self._config.model or "ollama:unknown"
+                        existing.extra["tier"] = tier.value
+                        existing.context_checksum = ctx_checksum
+                        self._element_registry.put(existing)
+                    else:
+                        new_entry = ElementEntry(
+                            element_id=element_id,
+                            kind=element.kind.value if hasattr(element.kind, "value") else str(element.kind),
+                            name=element.name,
+                            file_path=file_path,
+                            parent_class=element.parent_class,
+                            source_contract_id=element.source_contract_id,
+                            context_checksum=ctx_checksum,
+                            extra={
+                                "code": result.code,
+                                "generator": self._config.model or "ollama:unknown",
+                                "tier": tier.value,
+                            },
+                        )
+                        self._element_registry.put(new_entry)
                     self._element_registry.set_phase_status(
                         element_id, "implement", "generated",
                     )
-                except Exception as exc:
-                    logger.debug("Element registry write failed for %s: %s", element_id, exc)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Element registry write failed for %s: %s — generation result not persisted",
+                        element_id, exc,
+                    )
         elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
             self._consecutive_failures += 1
             if (

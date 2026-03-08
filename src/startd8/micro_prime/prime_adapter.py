@@ -23,6 +23,8 @@ from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     GenerationResult,
 )
+from startd8.element_id import make_element_id
+from startd8.element_registry import ElementEntry, ElementRegistry
 from startd8.forward_manifest import (
     ForwardElementSpec,
     ForwardFileSpec,
@@ -263,7 +265,7 @@ class MicroPrimeCodeGenerator:
         skeletons: Optional[dict[str, str]] = None,
         output_dir: Optional[Path] = None,
         cloud_agent_spec: Optional[str] = None,
-        element_registry: Optional[Any] = None,
+        element_registry: Optional[ElementRegistry] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
@@ -271,6 +273,8 @@ class MicroPrimeCodeGenerator:
         self._skeletons = skeletons or {}
         self._output_dir = output_dir or Path(".")
         self._element_registry = element_registry
+        self._registry_hits = 0
+        self._registry_misses = 0
         self._engine = MicroPrimeEngine(
             config=self._config,
             element_registry=element_registry,
@@ -582,6 +586,9 @@ class MicroPrimeCodeGenerator:
                         file_path, defect,
                     )
                     stub_escalated.append(file_path)
+            else:
+                # REQ-MP-1103: Register validated elements in the registry
+                self._register_validated_elements(file_path, fr)
 
         # Compute effective file count based on element fill rate.
         # Files where <min_element_fill_rate of elements were filled are
@@ -608,6 +615,13 @@ class MicroPrimeCodeGenerator:
                     "File %s has low element fill rate: %d/%d (%.0f%%) — marking as incomplete",
                     file_path, filled, total, rate * 100,
                 )
+
+        # REQ-MP-1103: Count element registry hits/misses for metadata
+        reg_hits, reg_misses = self._count_registry_hits_misses(all_file_results)
+        logger.info(
+            "Element registry: %d hits, %d misses",
+            reg_hits, reg_misses,
+        )
 
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
@@ -651,6 +665,8 @@ class MicroPrimeCodeGenerator:
                     "element_escalation_count": element_escalation_count,
                     "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
                     "element_escalation_attempt_count": element_escalation_attempt_count,
+                    "prime.element_registry_hit": reg_hits,
+                    "prime.element_registry_miss": reg_misses,
                     "micro_prime_file_results": [
                         _serialize_file_result(fr) for fr in all_file_results
                     ],
@@ -679,6 +695,8 @@ class MicroPrimeCodeGenerator:
                 "element_escalation_count": element_escalation_count,
                 "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
                 "element_escalation_attempt_count": element_escalation_attempt_count,
+                "prime.element_registry_hit": reg_hits,
+                "prime.element_registry_miss": reg_misses,
                 "micro_prime_file_results": [
                     _serialize_file_result(fr) for fr in all_file_results
                 ],
@@ -800,6 +818,96 @@ class MicroPrimeCodeGenerator:
         if repaired_count:
             logger.info("Post-generation repair: %d file(s) repaired", repaired_count)
         return repaired_count
+
+    def _register_validated_elements(
+        self,
+        file_path: str,
+        file_result: FileResult,
+    ) -> None:
+        """Register successfully generated elements in the element registry.
+
+        Called after a file passes post-assembly validation
+        (``_detect_assembly_defect`` returns ``None``).  Each element that was
+        successfully generated is stored in the registry with its code,
+        tier, and generator metadata.
+
+        Non-fatal: any registry error is logged as a warning and does not
+        abort generation (REQ-MP-1103).
+        """
+        if self._element_registry is None:
+            return
+
+        for er in file_result.element_results:
+            if not er.success or not er.code:
+                continue
+
+            element_id = make_element_id(
+                kind=er.tier.value if er.tier else "unknown",
+                name=er.element_name,
+                file_path=file_path,
+                parent_class=er.parent_class,
+            )
+
+            try:
+                existing = self._element_registry.get(element_id)
+                if existing is not None:
+                    existing.extra["code"] = er.code
+                    existing.extra["generator"] = (
+                        er.model or self._config.model or "micro-prime"
+                    )
+                    existing.extra["tier"] = er.tier.value if er.tier else "unknown"
+                    self._element_registry.put(existing)
+                else:
+                    entry = ElementEntry(
+                        element_id=element_id,
+                        kind=er.tier.value if er.tier else "unknown",
+                        name=er.element_name,
+                        file_path=file_path,
+                        parent_class=er.parent_class,
+                        extra={
+                            "code": er.code,
+                            "generator": (
+                                er.model or self._config.model or "micro-prime"
+                            ),
+                            "tier": er.tier.value if er.tier else "unknown",
+                        },
+                    )
+                    self._element_registry.put(entry)
+                self._element_registry.set_phase_status(
+                    element_id, "post_assembly", "validated",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Element registry write failed for %s in %s: %s",
+                    er.element_name,
+                    file_path,
+                    exc,
+                )
+
+    def _count_registry_hits_misses(
+        self,
+        all_file_results: list[FileResult],
+    ) -> tuple[int, int]:
+        """Count element registry hits and misses across all file results.
+
+        A *hit* is an element whose ``decomposition_metadata`` has
+        ``source == "element_registry"`` (served from the cache).  A *miss*
+        is any successfully generated element that was NOT a registry hit.
+
+        Returns (hits, misses).
+        """
+        hits = 0
+        misses = 0
+        for fr in all_file_results:
+            for er in fr.element_results:
+                if not er.success:
+                    continue
+                dm = er.decomposition_metadata
+                if isinstance(dm, dict) and dm.get("source") == "element_registry":
+                    hits += 1
+                else:
+                    misses += 1
+        return hits, misses
 
     def _dry_run_classify(
         self,
