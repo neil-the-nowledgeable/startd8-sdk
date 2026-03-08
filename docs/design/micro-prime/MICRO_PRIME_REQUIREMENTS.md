@@ -102,8 +102,8 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
 | Recursive Decomposition Core | REQ-MP-910 | 6 | 0 | 0 | 6 |
 | Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 10 | 0 | 0 |
-| Element Registry | REQ-MP-11xx | 10 | 0 | 0 | 10 |
-| **Total** | | **98** | **82** | **0** | **16** |
+| Element Registry | REQ-MP-11xx | 10 | 10 | 0 | 0 |
+| **Total** | | **98** | **92** | **0** | **6** |
 
 ---
 
@@ -1313,16 +1313,16 @@ Persistent, index-addressable element store that closes the cross-task element r
 
 | ID | Name | Priority | Status |
 |----|------|----------|--------|
-| REQ-MP-1100 | Core Element Registry | P0 | planned |
-| REQ-MP-1101 | ForwardManifest Element Index | P0 | planned |
-| REQ-MP-1102 | Engine Registry Integration | P0 | planned |
-| REQ-MP-1103 | Adapter Registry Integration | P1 | planned |
-| REQ-MP-1104 | Skeleton-Derived Element Specs | P1 | planned |
-| REQ-MP-1105 | Cross-Task Element Lookup | P1 | planned |
-| REQ-MP-1106 | DFA Registry Pre-Fill | P2 | planned |
-| REQ-MP-1107 | Element Registry Observability | P2 | planned |
-| REQ-MP-1108 | Element Staleness & Invalidation | P2 | planned |
-| REQ-MP-1109 | Element Registry CLI Report | P3 | planned |
+| REQ-MP-1100 | Core Element Registry | P0 | implemented |
+| REQ-MP-1101 | ForwardManifest Element Index | P0 | implemented |
+| REQ-MP-1102 | Engine Registry Integration | P0 | implemented |
+| REQ-MP-1103 | Adapter Registry Integration | P1 | implemented |
+| REQ-MP-1104 | Skeleton-Derived Element Specs | P1 | implemented |
+| REQ-MP-1105 | Cross-Task Element Lookup | P1 | implemented |
+| REQ-MP-1106 | DFA Registry Pre-Fill | P2 | implemented |
+| REQ-MP-1107 | Element Registry Observability | P2 | implemented |
+| REQ-MP-1108 | Element Staleness & Invalidation | P2 | implemented |
+| REQ-MP-1109 | Element Registry CLI Report | P3 | implemented |
 
 ---
 
