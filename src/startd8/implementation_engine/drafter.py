@@ -1,12 +1,11 @@
 """
 Draft generator for the implementation engine.
 
-Extracted from ``LeadContractorWorkflow._create_draft`` and helpers.
 Produces code implementations from specs with mode-aware system prompts.
 """
 
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
 from ..costs.pricing import PricingService
@@ -28,6 +27,25 @@ from .budget import (
 from .models import DraftResult
 from .prompts import get_template
 
+# OTel tracing (graceful degradation when unavailable)
+try:
+    from opentelemetry import trace as _otel_trace
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
+    _otel_trace = None  # type: ignore[assignment]
+
+_drafter_tracer = (
+    _otel_trace.get_tracer("startd8.implementation_engine.drafter")
+    if _HAS_OTEL else None
+)
+
+# Draft mode identifiers — used for logging, tracing, and diagnostics
+DRAFT_MODE_CREATE = "create"
+DRAFT_MODE_EDIT = "edit"
+DRAFT_MODE_SEARCH_REPLACE = "search_replace"
+DRAFT_MODE_SKELETON_FILL = "skeleton_fill"
+
 
 __all__ = [
     "create_draft",
@@ -35,7 +53,13 @@ __all__ = [
     "build_existing_files_section",
     "build_output_format",
     "build_supplementary_sections",
+    "build_skeleton_section",
+    "build_pre_assembly_status",
     "detect_size_regression",
+    "DRAFT_MODE_CREATE",
+    "DRAFT_MODE_EDIT",
+    "DRAFT_MODE_SEARCH_REPLACE",
+    "DRAFT_MODE_SKELETON_FILL",
 ]
 
 logger = get_logger(__name__)
@@ -48,22 +72,19 @@ _pricing = PricingService()
 # ---------------------------------------------------------------------------
 
 def _get_output_template(name: str) -> str:
-    """Load output format template from lead_contractor YAML."""
+    """Load output format template from consolidated contractor YAML."""
     try:
-        from startd8.workflows.builtin.prompts import get_template as _get_prime_template
-        return _get_prime_template("lead_contractor", name)
+        return get_template(name)
     except (FileNotFoundError, KeyError, ImportError):
-        # Inline fallbacks
         _fallbacks = {
-            "single_file_output": "Provide your complete implementation.\n\n```\n[Your code here]\n```",
+            "single_file_output": "Provide your complete implementation in a single fenced code block.",
             "multi_file_output": "Produce a SEPARATE fenced code block for each file.\n\nREQUIRED files:\n{file_list}\n\n{file_checklist}",
             "single_file_edit_output": (
-                "You are EDITING an existing file ({existing_line_count} lines).\n"
-                "Your output must contain the COMPLETE modified file.\n\n"
-                "```\n[Your complete modified implementation here]\n```"
+                "Output the COMPLETE modified file ({existing_line_count} lines original).\n"
+                "Do NOT omit or abbreviate existing code."
             ),
             "multi_file_edit_output": (
-                "You are EDITING existing files. Each output must contain the COMPLETE modified file.\n"
+                "Output COMPLETE modified files.\n"
                 "{existing_line_summary}\n\nREQUIRED files:\n{file_list}\n\n{file_checklist}"
             ),
         }
@@ -74,24 +95,166 @@ def _get_output_template(name: str) -> str:
 # System prompt selection
 # ---------------------------------------------------------------------------
 
-def get_drafter_system_prompt(
+def _resolve_draft_mode(
     existing_files: Optional[Dict[str, str]] = None,
+    skeleton_fill: bool = False,
 ) -> str:
-    """Return mode-specific drafter system prompt.
+    """Determine draft mode from context.
 
-    Rules:
-    - existing_files and any file >= 50 lines -> search/replace
-    - existing_files present -> edit
-    - otherwise -> create
+    Returns one of the ``DRAFT_MODE_*`` constants.
     """
+    if skeleton_fill:
+        return DRAFT_MODE_SKELETON_FILL
     if existing_files and any(
         len((c or "").splitlines()) >= SEARCH_REPLACE_LINE_THRESHOLD
         for c in existing_files.values()
     ):
-        return get_template("draft_system_search_replace")
+        return DRAFT_MODE_SEARCH_REPLACE
     if existing_files:
-        return get_template("draft_system_edit")
-    return get_template("draft_system_create")
+        return DRAFT_MODE_EDIT
+    return DRAFT_MODE_CREATE
+
+
+_MODE_TO_TEMPLATE = {
+    DRAFT_MODE_CREATE: "draft_system_create",
+    DRAFT_MODE_EDIT: "draft_system_edit",
+    DRAFT_MODE_SEARCH_REPLACE: "draft_system_search_replace",
+    DRAFT_MODE_SKELETON_FILL: "draft_system_skeleton_fill",
+}
+
+
+def get_drafter_system_prompt(
+    existing_files: Optional[Dict[str, str]] = None,
+    skeleton_fill: bool = False,
+) -> Tuple[str, str]:
+    """Return mode-specific drafter system prompt and the resolved mode name.
+
+    Args:
+        existing_files: Existing file contents for edit-mode detection.
+        skeleton_fill: When True, selects skeleton-fill mode (FR-MPA-005).
+
+    Returns:
+        Tuple of (system_prompt_text, draft_mode_name).
+
+    Rules (priority order):
+    - skeleton_fill=True -> skeleton_fill
+    - existing_files and any file >= 50 lines -> search_replace
+    - existing_files present -> edit
+    - otherwise -> create
+    """
+    mode = _resolve_draft_mode(existing_files, skeleton_fill)
+    template_key = _MODE_TO_TEMPLATE[mode]
+    prompt = get_template(template_key)
+
+    logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)
+
+    return prompt, mode
+
+
+# ---------------------------------------------------------------------------
+# Skeleton fill section builders (FR-MPA-005)
+# ---------------------------------------------------------------------------
+
+def build_skeleton_section(
+    skeleton_sources: Dict[str, str],
+    target_files: Optional[List[str]] = None,
+) -> str:
+    """Build the skeleton source section for skeleton-fill prompts.
+
+    Includes the pre-assembled skeleton files as fenced code blocks so the
+    LLM can see the full file context with pre-filled elements.
+
+    Args:
+        skeleton_sources: Dict mapping file paths to skeleton source text.
+        target_files: If provided, only include skeletons for these files.
+
+    Returns:
+        Formatted skeleton section string.
+    """
+    if not skeleton_sources:
+        return ""
+
+    parts: List[str] = []
+    files_to_show = target_files if target_files else sorted(skeleton_sources.keys())
+    for fpath in files_to_show:
+        source = skeleton_sources.get(fpath)
+        if not source:
+            continue
+        line_count = len(source.splitlines())
+        nonce = uuid.uuid4().hex[:8]
+        parts.append(f"### `{fpath}` ({line_count} lines)")
+        parts.append(f"```skeleton-{nonce}\n{source}\n```")
+
+    if not parts:
+        return ""
+
+    return "\n\n".join(parts)
+
+
+def build_pre_assembly_status(
+    element_tiers: Optional[Dict[str, Dict[str, Any]]] = None,
+    target_files: Optional[List[str]] = None,
+) -> str:
+    """Build pre-assembly status section listing pre-filled vs unfilled elements.
+
+    Args:
+        element_tiers: Per-file element tier map from seed artifacts.
+        target_files: If provided, only include elements for these files.
+
+    Returns:
+        Formatted pre-assembly status string (empty if no tier data).
+    """
+    if not element_tiers:
+        return ""
+
+    pre_filled: List[str] = []
+    unfilled: List[str] = []
+
+    files_to_check = target_files if target_files else sorted(element_tiers.keys())
+    for fpath in files_to_check:
+        file_tiers = element_tiers.get(fpath)
+        if not file_tiers or not isinstance(file_tiers, dict):
+            continue
+        for elem_name, info in sorted(file_tiers.items()):
+            if not isinstance(info, dict):
+                continue
+            fill_source = info.get("fill_source", "")
+            is_pre_filled = info.get("pre_filled", False)
+            if is_pre_filled or (fill_source and fill_source != "none"):
+                label = f"{elem_name} ({fill_source})" if fill_source else elem_name
+                pre_filled.append(f"- {label}")
+            else:
+                tier = info.get("tier", "UNKNOWN")
+                unfilled.append(f"- {elem_name} (tier: {tier})")
+
+    if not pre_filled and not unfilled:
+        return ""
+
+    lines: List[str] = ["## Pre-Assembly Status", ""]
+
+    if pre_filled:
+        lines.append("### Pre-filled (do not modify):")
+        lines.extend(pre_filled)
+        lines.append("")
+
+    if unfilled:
+        lines.append("### To implement (fill method bodies only):")
+        lines.extend(unfilled)
+        lines.append("")
+        lines.append(
+            "Implement ONLY the method bodies listed above. "
+            "The skeleton file already exists with correct imports, "
+            "class structure, and some method bodies pre-filled. "
+            "Do not modify pre-filled elements."
+        )
+    elif pre_filled:
+        lines.append(
+            "All elements in this file are pre-filled. "
+            "No additional implementation is needed — "
+            "verify correctness and return the file as-is."
+        )
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +600,32 @@ def build_supplementary_sections(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _detect_skeleton_fill(
+    context: Optional[Dict[str, Any]],
+    target_files: Optional[List[str]],
+) -> bool:
+    """Detect whether skeleton-fill mode applies for this draft.
+
+    Skeleton-fill mode is activated when the pipeline context contains
+    pre-assembly data (skeleton_sources + element_tiers) from plan ingestion.
+    """
+    if not context:
+        return False
+
+    artifacts = context.get("artifacts") or {}
+    skeleton_sources = artifacts.get("skeleton_sources") or context.get("skeleton_sources")
+    element_tiers = artifacts.get("element_tiers") or context.get("element_tiers")
+
+    if not skeleton_sources or not element_tiers:
+        return False
+
+    # Skeleton fill applies only when target files have skeletons
+    if target_files:
+        return any(f in skeleton_sources for f in target_files)
+
+    return bool(skeleton_sources)
+
+
 def create_draft(
     agent: Any,
     spec: Any,
@@ -452,6 +641,12 @@ def create_draft(
     """Create an implementation draft from a spec.
 
     Equivalent to ``LeadContractorWorkflow._create_draft()``.
+
+    Supports 4 modes via ``get_drafter_system_prompt()``:
+    - **create**: Greenfield generation (no existing files)
+    - **edit**: Whole-file edit (existing files < 50 lines)
+    - **search_replace**: Large-file edit (existing files >= 50 lines)
+    - **skeleton_fill**: Pre-assembled skeleton with stubs (FR-MPA-005)
 
     Args:
         agent: Drafter agent (must have ``.generate()``).
@@ -470,104 +665,203 @@ def create_draft(
     """
     draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
-    output_format = build_output_format(target_files, existing_files=existing_files)
-    existing_files_section = build_existing_files_section(existing_files, edit_mode)
+    # Determine skeleton fill eligibility (FR-MPA-005)
+    skeleton_fill = _detect_skeleton_fill(context, target_files)
 
-    # Select template — duck-typed spec may be a SpecResult, ImplementationSpec, or str
-    if hasattr(spec, "raw_spec"):
-        raw_spec = spec.raw_spec
-    else:
-        logger.debug("Drafter: spec lacks raw_spec attribute, using str(spec)")
-        raw_spec = str(spec)
-    spec_id = getattr(spec, "spec_id", "")
-
-    # Build supplementary sections from pipeline context
-    supplementary = ""
-    if context:
-        task_id = context.get("task_id", "")
-        supplementary = build_supplementary_sections(
-            context, task_id=task_id,
-        )
-
-    if existing_files:
-        draft_template = get_template("draft_edit")
-    else:
-        draft_template = get_template("draft")
-
-    prompt = draft_template.format(
-        spec=raw_spec,
-        feedback=feedback if feedback else "This is the initial implementation attempt.",
-        output_format=output_format,
-        existing_files_section=existing_files_section,
-        supplementary_sections=supplementary,
+    # Resolve system prompt mode and log it
+    sys_prompt, draft_mode = get_drafter_system_prompt(
+        existing_files=existing_files,
+        skeleton_fill=skeleton_fill,
     )
 
-    sys_prompt = get_drafter_system_prompt(existing_files)
-    response_text, response_time_ms, token_usage = agent.generate(
-        prompt, system_prompt=sys_prompt
+    # Start OTel span for the draft operation
+    span_cm = (
+        _drafter_tracer.start_as_current_span("drafter.create_draft")
+        if _drafter_tracer else None
     )
+    span = None
+    if span_cm is not None:
+        span = span_cm.__enter__()
+        span.set_attribute("drafter.mode", draft_mode)
+        span.set_attribute("drafter.draft_id", draft_id)
+        span.set_attribute("drafter.iteration", iteration)
+        span.set_attribute("drafter.skeleton_fill", skeleton_fill)
+        span.set_attribute("drafter.agent", getattr(agent, "name", "unknown"))
+        span.set_attribute("drafter.model", getattr(agent, "model", "unknown"))
+        if target_files:
+            span.set_attribute("drafter.target_file_count", len(target_files))
 
-    # Extract code
-    implementation_code = extract_code_from_response(response_text)
+    try:
+        output_format = build_output_format(target_files, existing_files=existing_files)
 
-    # API truncation detection
-    api_truncated = token_usage.was_truncated if token_usage else False
-    truncation_source = "api" if api_truncated else None
+        # Select template — duck-typed spec may be a SpecResult, ImplementationSpec, or str
+        if hasattr(spec, "raw_spec"):
+            raw_spec = spec.raw_spec
+        else:
+            logger.debug("Drafter: spec lacks raw_spec attribute, using str(spec)")
+            raw_spec = str(spec)
+        spec_id = getattr(spec, "spec_id", "")
 
-    # Heuristic truncation detection
-    heuristic_truncated = False
-    if check_truncation and not api_truncated and implementation_code:
-        confidence_threshold = (
-            CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
-        )
-        expected = get_expected_sections_for_code(implementation_code)
-        truncation_result = detect_truncation(
-            implementation_code,
-            expected_sections=expected,
-            strict_mode=strict_truncation,
-        )
-        if (
-            truncation_result.is_truncated
-            and truncation_result.confidence >= confidence_threshold
-        ):
-            heuristic_truncated = True
-            truncation_source = "heuristic"
-            indicators = truncation_result.indicators[:3] if truncation_result.indicators else []
-            logger.warning(
-                "Draft appears truncated (heuristic, confidence=%.0f%%): %s",
-                truncation_result.confidence * 100,
-                indicators,
+        # Build supplementary sections from pipeline context
+        supplementary = ""
+        if context:
+            task_id = context.get("task_id", "")
+            supplementary = build_supplementary_sections(
+                context, task_id=task_id,
             )
 
-    was_truncated = api_truncated or heuristic_truncated
+        # Build prompt based on mode
+        if skeleton_fill:
+            # FR-MPA-005: Skeleton fill mode — provide skeleton source + pre-assembly status
+            artifacts = (context or {}).get("artifacts") or {}
+            skeleton_sources = (
+                artifacts.get("skeleton_sources")
+                or (context or {}).get("skeleton_sources")
+                or {}
+            )
+            element_tiers = (
+                artifacts.get("element_tiers")
+                or (context or {}).get("element_tiers")
+                or {}
+            )
+            skeleton_section = build_skeleton_section(skeleton_sources, target_files)
+            pre_assembly_status = build_pre_assembly_status(element_tiers, target_files)
 
-    # Size regression gate
-    size_regression_detected = detect_size_regression(
-        existing_files, implementation_code
-    )
-    was_truncated = was_truncated or size_regression_detected
-    if size_regression_detected and not truncation_source:
-        truncation_source = "size_regression"
+            draft_template = get_template("draft_skeleton_fill")
+            prompt = draft_template.format(
+                skeleton_section=skeleton_section,
+                pre_assembly_status=pre_assembly_status,
+                spec=raw_spec,
+                feedback=feedback if feedback else "This is the initial implementation attempt.",
+                output_format=output_format,
+                supplementary_sections=supplementary,
+            )
 
-    draft = DraftResult(
-        draft_id=draft_id,
-        iteration=iteration,
-        implementation=implementation_code,
-        spec_id=spec_id,
-        agent_name=getattr(agent, "name", "unknown"),
-        model=getattr(agent, "model", "unknown"),
-        input_tokens=token_usage.input if token_usage else 0,
-        output_tokens=token_usage.output if token_usage else 0,
-        time_ms=response_time_ms,
-        was_truncated=was_truncated,
-        truncation_source=truncation_source,
-        raw_response=response_text,
-    )
+            if span:
+                span.set_attribute("drafter.skeleton_files_count", len(skeleton_sources))
+                # Count pre-filled vs unfilled for observability
+                n_pre_filled = 0
+                n_unfilled = 0
+                for ft in element_tiers.values():
+                    if isinstance(ft, dict):
+                        for info in ft.values():
+                            if isinstance(info, dict):
+                                if info.get("pre_filled") or (
+                                    info.get("fill_source", "none") != "none"
+                                ):
+                                    n_pre_filled += 1
+                                else:
+                                    n_unfilled += 1
+                span.set_attribute("drafter.pre_filled_elements", n_pre_filled)
+                span.set_attribute("drafter.unfilled_elements", n_unfilled)
 
-    draft.cost = _pricing.calculate_total_cost(
-        getattr(agent, "model", "unknown"),
-        draft.input_tokens,
-        draft.output_tokens,
-    )
+            logger.info(
+                "Drafter: skeleton_fill mode — %d skeleton file(s), "
+                "prompt template=draft_skeleton_fill",
+                len(skeleton_sources),
+            )
+        elif existing_files:
+            existing_files_section = build_existing_files_section(existing_files, edit_mode)
+            draft_template = get_template("draft_edit")
+            prompt = draft_template.format(
+                spec=raw_spec,
+                feedback=feedback if feedback else "This is the initial implementation attempt.",
+                output_format=output_format,
+                existing_files_section=existing_files_section,
+                supplementary_sections=supplementary,
+            )
+        else:
+            existing_files_section = ""
+            draft_template = get_template("draft")
+            prompt = draft_template.format(
+                spec=raw_spec,
+                feedback=feedback if feedback else "This is the initial implementation attempt.",
+                output_format=output_format,
+                existing_files_section=existing_files_section,
+                supplementary_sections=supplementary,
+            )
 
-    return draft
+        response_text, response_time_ms, token_usage = agent.generate(
+            prompt, system_prompt=sys_prompt
+        )
+
+        # Extract code
+        implementation_code = extract_code_from_response(response_text)
+
+        # API truncation detection
+        api_truncated = token_usage.was_truncated if token_usage else False
+        truncation_source = "api" if api_truncated else None
+
+        # Heuristic truncation detection
+        heuristic_truncated = False
+        if check_truncation and not api_truncated and implementation_code:
+            confidence_threshold = (
+                CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
+            )
+            expected = get_expected_sections_for_code(implementation_code)
+            truncation_result = detect_truncation(
+                implementation_code,
+                expected_sections=expected,
+                strict_mode=strict_truncation,
+            )
+            if (
+                truncation_result.is_truncated
+                and truncation_result.confidence >= confidence_threshold
+            ):
+                heuristic_truncated = True
+                truncation_source = "heuristic"
+                indicators = truncation_result.indicators[:3] if truncation_result.indicators else []
+                logger.warning(
+                    "Draft appears truncated (heuristic, confidence=%.0f%%): %s",
+                    truncation_result.confidence * 100,
+                    indicators,
+                )
+
+        was_truncated = api_truncated or heuristic_truncated
+
+        # Size regression gate
+        size_regression_detected = detect_size_regression(
+            existing_files, implementation_code
+        )
+        was_truncated = was_truncated or size_regression_detected
+        if size_regression_detected and not truncation_source:
+            truncation_source = "size_regression"
+
+        draft = DraftResult(
+            draft_id=draft_id,
+            iteration=iteration,
+            implementation=implementation_code,
+            spec_id=spec_id,
+            agent_name=getattr(agent, "name", "unknown"),
+            model=getattr(agent, "model", "unknown"),
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+            was_truncated=was_truncated,
+            truncation_source=truncation_source,
+            raw_response=response_text,
+        )
+
+        draft.cost = _pricing.calculate_total_cost(
+            getattr(agent, "model", "unknown"),
+            draft.input_tokens,
+            draft.output_tokens,
+        )
+
+        if span:
+            span.set_attribute("drafter.input_tokens", draft.input_tokens)
+            span.set_attribute("drafter.output_tokens", draft.output_tokens)
+            span.set_attribute("drafter.was_truncated", was_truncated)
+            span.set_attribute("drafter.cost", draft.cost or 0.0)
+            if truncation_source:
+                span.set_attribute("drafter.truncation_source", truncation_source)
+
+        return draft
+
+    except Exception:
+        if span:
+            span.set_attribute("drafter.status", "error")
+        raise
+    finally:
+        if span_cm is not None:
+            span_cm.__exit__(None, None, None)

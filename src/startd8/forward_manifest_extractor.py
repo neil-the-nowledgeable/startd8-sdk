@@ -18,34 +18,27 @@ See docs/design/forward-manifest/Phase_3_Forward_Manifest_Extractor_Requirements
 from __future__ import annotations
 
 import ast
-import fnmatch
 import re
-import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import ValidationError
 
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
-    ForwardDependencies,
     ForwardElementSpec,
     ForwardFileSpec,
-    ForwardImportSpec,
     ForwardManifest,
     InterfaceContract,
-    compute_binding_text,
-    forward_dependencies_from_deps,
-    forward_element_spec_from_element,
-    forward_import_spec_from_entry,
 )
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 from startd8.workflows.builtin.plan_ingestion_models import ParsedFeature
+
+from .element_id import make_element_id
 
 logger = get_logger(__name__)
 
@@ -322,9 +315,6 @@ def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
 
     cat = kwargs.get("category")
     if cat == ContractCategory.FUNCTION_NAME and kwargs.get("function_name"):
-        # Use the description which now contains the full signature via
-        # _format_signature_for_binding (e.g., "Function add_fields(self, ...) -> None from API signature")
-        # For the binding key, include the function name
         parts.append(f"function={kwargs['function_name']}")
     elif cat == ContractCategory.CLASS_NAME and kwargs.get("class_name"):
         parts.append(f"class={kwargs['class_name']}")
@@ -394,6 +384,9 @@ class DeterministicExtractor:
         # Shared files across features
         contracts.extend(self._extract_shared_files(features))
 
+        # REQ-3.1.1: Link self/cls-bearing functions to their parent class.
+        self._link_methods_to_classes(file_elements)
+
         # Field-level supplement from prior specs
         if prior_file_specs:
             self._supplement_from_prior(file_elements, prior_file_specs)
@@ -440,6 +433,65 @@ class DeterministicExtractor:
                     updated.append(spec)
             file_elements[filepath] = updated
 
+    @staticmethod
+    def _link_methods_to_classes(
+        file_elements: dict[str, list[ForwardElementSpec]],
+    ) -> None:
+        """Link self/cls-bearing functions to their parent class (REQ-3.1.1).
+
+        After api_signatures extraction, a method like ``add_fields(self, ...)``
+        is stored as ``kind=FUNCTION, parent_class=None`` because the signature
+        string has no dotted class prefix.  This pass promotes such elements to
+        ``kind=METHOD`` (or ``CLASSMETHOD``) and sets ``parent_class`` to the
+        CLASS element in the same file, enabling downstream decomposition
+        (REQ-MP-901).
+        """
+        for filepath, specs in file_elements.items():
+            # Collect class names in this file
+            class_names = {
+                s.name for s in specs if s.kind == ElementKind.CLASS
+            }
+            if not class_names:
+                continue
+
+            updated: list[ForwardElementSpec] = []
+            for spec in specs:
+                if (
+                    spec.kind in (ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION)
+                    and spec.parent_class is None
+                    and spec.signature
+                    and spec.signature.params
+                ):
+                    first_param = spec.signature.params[0].name
+                    if first_param == "self" and len(class_names) == 1:
+                        parent = next(iter(class_names))
+                        new_kind = (
+                            ElementKind.ASYNC_METHOD
+                            if spec.kind == ElementKind.ASYNC_FUNCTION
+                            else ElementKind.METHOD
+                        )
+                        spec = spec.model_copy(update={
+                            "kind": new_kind,
+                            "parent_class": parent,
+                        })
+                        logger.debug(
+                            "REQ-3.1.1: Linked %s to class %s in %s",
+                            spec.name, parent, filepath,
+                        )
+                    elif first_param == "cls" and len(class_names) == 1:
+                        parent = next(iter(class_names))
+                        spec = spec.model_copy(update={
+                            "kind": ElementKind.METHOD,
+                            "parent_class": parent,
+                            "is_classmethod": True,
+                        })
+                        logger.debug(
+                            "REQ-3.1.1: Linked classmethod %s to class %s in %s",
+                            spec.name, parent, filepath,
+                        )
+                updated.append(spec)
+            file_elements[filepath] = updated
+
     def _extract_api_signatures(
         self,
         feature: ParsedFeature,
@@ -455,7 +507,8 @@ class DeterministicExtractor:
             if class_parsed:
                 class_name, bases = class_parsed
                 abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
-                contract_id = f"flcm-{abbrev}-{class_name}"
+                # Site 1 (original line 458)
+                contract_id = make_element_id(abbrev, class_name)
                 base_class_str = bases[0] if bases else None
 
                 contract = _make_contract(
@@ -498,7 +551,8 @@ class DeterministicExtractor:
                 continue
 
             abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
-            contract_id = f"flcm-{abbrev}-{func_name}"
+            # Site 2 (original line 501)
+            contract_id = make_element_id(abbrev, func_name)
 
             # Build richer description with signature detail when parseable
             parsed_sig = _parse_python_signature(sig_str)
@@ -569,7 +623,8 @@ class DeterministicExtractor:
         contracts: list[InterfaceContract] = []
         for dep in feature.runtime_dependencies:
             abbrev = _CATEGORY_ABBREV[ContractCategory.IMPORT_PATH]
-            contract_id = f"flcm-{abbrev}-{dep}"
+            # Site 3 (original line 572)
+            contract_id = make_element_id(abbrev, dep)
 
             contract = _make_contract(
                 contract_id=contract_id,
@@ -592,7 +647,8 @@ class DeterministicExtractor:
             feature.protocol, f"{feature.protocol} transport"
         )
         abbrev = _CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE]
-        contract_id = f"flcm-{abbrev}-{feature.protocol}"
+        # Site 4 (original line 595)
+        contract_id = make_element_id(abbrev, feature.protocol)
 
         contract = _make_contract(
             contract_id=contract_id,
@@ -621,7 +677,8 @@ class DeterministicExtractor:
             if count < 2:
                 continue
             abbrev = _CATEGORY_ABBREV[ContractCategory.IMPORT_PATH]
-            contract_id = f"flcm-{abbrev}-shared-{Path(filepath).stem}"
+            # Site 5 (original line 624)
+            contract_id = make_element_id(abbrev, f"shared-{Path(filepath).stem}")
 
             contract = _make_contract(
                 contract_id=contract_id,
@@ -642,7 +699,8 @@ class DeterministicExtractor:
                 if basename in _UTILITY_FILE_PATTERNS:
                     name, category = _UTILITY_FILE_PATTERNS[basename]
                     abbrev = _CATEGORY_ABBREV[category]
-                    contract_id = f"flcm-{abbrev}-util-{name}"
+                    # Site 6 (original line 645)
+                    contract_id = make_element_id(abbrev, f"util-{name}")
 
                     if contract_id in seen_ids:
                         continue
@@ -704,13 +762,13 @@ class HumanYamlExtractor:
                     "source_reference": "human-yaml",
                 }
                 # Forward optional fields
-                for field in (
+                for field_name in (
                     "function_name", "class_name", "base_class", "endpoint",
                     "env_var", "import_path", "formula", "constant_value",
                     "pattern", "dependency",
                 ):
-                    if field in entry:
-                        kwargs[field] = entry[field]
+                    if field_name in entry:
+                        kwargs[field_name] = entry[field_name]
 
                 if "applicable_task_ids" in entry:
                     kwargs["applicable_task_ids"] = entry["applicable_task_ids"]
@@ -756,9 +814,10 @@ class ProtoExtractor:
             for match in self._SERVICE_RE.finditer(content):
                 name = match.group(1)
                 abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                # Site 7 (original line 761)
                 contracts.append(
                     _make_contract(
-                        contract_id=f"flcm-{abbrev}-svc-{name}",
+                        contract_id=make_element_id(abbrev, f"svc-{name}"),
                         category=ContractCategory.CLASS_NAME,
                         confidence=ContractConfidence.EXPLICIT,
                         description=f"gRPC service: {name}",
@@ -782,9 +841,10 @@ class ProtoExtractor:
                     f" ({req_type}) returns ({resp_type})"
                 )
 
+                # Site 8 (original line 787)
                 contracts.append(
                     _make_contract(
-                        contract_id=f"flcm-{abbrev}-rpc-{name}",
+                        contract_id=make_element_id(abbrev, f"rpc-{name}"),
                         category=ContractCategory.API_ENDPOINT,
                         confidence=ContractConfidence.EXPLICIT,
                         description=description,
@@ -799,9 +859,10 @@ class ProtoExtractor:
             for match in self._MESSAGE_RE.finditer(content):
                 name = match.group(1)
                 abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                # Site 9 (original line 804)
                 contracts.append(
                     _make_contract(
-                        contract_id=f"flcm-{abbrev}-msg-{name}",
+                        contract_id=make_element_id(abbrev, f"msg-{name}"),
                         category=ContractCategory.CLASS_NAME,
                         confidence=ContractConfidence.EXPLICIT,
                         description=f"Protobuf message: {name}",
@@ -988,7 +1049,11 @@ def _build_behavioral_contracts(
 
     # --- FORMULA contracts ---
     for target_name, field_name, value_repr in visitor.formulas:
-        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.FORMULA]}-{id_tag}-{stem}-{field_name}"
+        # Site 10 (original line 991)
+        contract_id = make_element_id(
+            _CATEGORY_ABBREV[ContractCategory.FORMULA],
+            f"{id_tag}-{stem}-{field_name}",
+        )
         if contract_id in seen_ids:
             continue
         seen_ids.add(contract_id)
@@ -1009,7 +1074,11 @@ def _build_behavioral_contracts(
     for call_name, string_arg in visitor.render_patterns:
         short_name = call_name.rsplit(".", 1)[-1]
         arg_hash = hex(hash(string_arg) & 0xFFFF)[2:]
-        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.RENDER_PATTERN]}-{id_tag}-{stem}-{short_name}-{arg_hash}"
+        # Site 11 (original line 1012)
+        contract_id = make_element_id(
+            _CATEGORY_ABBREV[ContractCategory.RENDER_PATTERN],
+            f"{id_tag}-{stem}-{short_name}-{arg_hash}",
+        )
         if contract_id in seen_ids:
             continue
         seen_ids.add(contract_id)
@@ -1018,7 +1087,7 @@ def _build_behavioral_contracts(
             category=ContractCategory.RENDER_PATTERN,
             confidence=ContractConfidence.EXPLICIT,
             description=(
-                f"{call_name}() must receive '{string_arg}' "
+                f"{call_name}(...) renders with template {string_arg!r} "
                 f"(from {source_label} {relpath})"
             ),
             pattern=string_arg,
@@ -1027,42 +1096,49 @@ def _build_behavioral_contracts(
         ))
 
     # --- CONFIG_KEY contracts ---
-    for env_var, default in visitor.config_keys:
-        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.CONFIG_KEY]}-{id_tag}-{env_var}"
+    for env_var, default_val in visitor.config_keys:
+        # Site 12 (original line 1031)
+        contract_id = make_element_id(
+            _CATEGORY_ABBREV[ContractCategory.CONFIG_KEY],
+            f"{id_tag}-{stem}-{env_var}",
+        )
         if contract_id in seen_ids:
             continue
         seen_ids.add(contract_id)
-        desc = f"Environment variable {env_var}"
-        if default is not None:
-            desc += f" (default: {default})"
-        desc += f" (from {source_label} {relpath})"
         contracts.append(_make_contract(
             contract_id=contract_id,
             category=ContractCategory.CONFIG_KEY,
             confidence=ContractConfidence.EXPLICIT,
-            description=desc,
+            description=(
+                f"Environment variable {env_var}"
+                + (f" (default: {default_val})" if default_val else "")
+                + f" used in {source_label} {relpath}"
+            ),
             env_var=env_var,
-            constant_value=default,
             source_reference=source_ref,
             applicable_task_ids=feature_ids,
         ))
 
     # --- INFRASTRUCTURE contracts ---
-    for constructor_name, kwarg_names in visitor.infra_calls:
-        short_name = constructor_name.rsplit(".", 1)[-1]
-        contract_id = f"flcm-{_CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE]}-{id_tag}-{short_name}"
+    for constructor, kwarg_names in visitor.infra_calls:
+        short_name = constructor.rsplit(".", 1)[-1]
+        # Site 13 (original line 1053)
+        contract_id = make_element_id(
+            _CATEGORY_ABBREV[ContractCategory.INFRASTRUCTURE],
+            f"{id_tag}-{stem}-{short_name}",
+        )
         if contract_id in seen_ids:
             continue
         seen_ids.add(contract_id)
-        desc = f"Use {constructor_name}"
-        if kwarg_names:
-            desc += f" with kwargs: {', '.join(kwarg_names)}"
-        desc += f" (from {source_label} {relpath})"
         contracts.append(_make_contract(
             contract_id=contract_id,
             category=ContractCategory.INFRASTRUCTURE,
             confidence=ContractConfidence.EXPLICIT,
-            description=desc,
+            description=(
+                f"{constructor}"
+                + (f" with kwargs={kwarg_names}" if kwarg_names else "")
+                + f" in {source_label} {relpath}"
+            ),
             dependency=short_name,
             source_reference=source_ref,
             applicable_task_ids=feature_ids,
@@ -1071,662 +1147,243 @@ def _build_behavioral_contracts(
     return contracts
 
 
-class ReferenceASTExtractor:
-    """Extract behavioral contracts from reference source files.
-
-    Layer 2 defense: produces FORMULA, RENDER_PATTERN, CONFIG_KEY, and
-    INFRASTRUCTURE contracts from Python AST analysis of reference files.
-    These contracts prescribe *how* code should behave, not just *what*
-    structural elements exist.
-
-    Requires a ``reference_root`` directory containing Python files at
-    the same relative paths as ``ParsedFeature.target_files``.
-    """
-
-    def __init__(self, max_file_size: int = 500_000) -> None:
-        self._max_file_size = max_file_size
-
-    def extract(
-        self,
-        features: list[ParsedFeature],
-        reference_root: Path,
-    ) -> list[InterfaceContract]:
-        """Scan reference source files and return behavioral contracts.
-
-        Only Python files (``.py``) are analyzed. Non-Python target files
-        and missing files are silently skipped.
-        """
-        contracts: list[InterfaceContract] = []
-        seen_ids: set[str] = set()
-
-        # Collect unique (relpath, feature_ids) pairs
-        file_features: dict[str, list[str]] = {}
-        for feat in features:
-            for tf in feat.target_files:
-                if tf.endswith(".py"):
-                    file_features.setdefault(tf, []).append(feat.feature_id)
-
-        for relpath, feature_ids in file_features.items():
-            filepath = reference_root / relpath
-            if not filepath.is_file():
-                continue
-            try:
-                if filepath.stat().st_size > self._max_file_size:
-                    continue
-                source = filepath.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-
-            try:
-                tree = ast.parse(source, filename=str(relpath))
-            except SyntaxError:
-                logger.debug("Reference AST parse failed: %s", relpath)
-                continue
-
-            visitor = _ASTPatternVisitor()
-            visitor.visit(tree)
-
-            file_contracts = _build_behavioral_contracts(
-                relpath, visitor, feature_ids, seen_ids,
-                source_ref="reference-ast",
-                source_label="reference",
-            )
-            contracts.extend(file_contracts)
-
-        if contracts:
-            logger.info(
-                "REFERENCE_AST: %d behavioral contracts from %d files "
-                "(formula=%d, pattern=%d, config=%d, infra=%d)",
-                len(contracts),
-                len(file_features),
-                sum(1 for c in contracts if c.category == ContractCategory.FORMULA),
-                sum(1 for c in contracts if c.category == ContractCategory.RENDER_PATTERN),
-                sum(1 for c in contracts if c.category == ContractCategory.CONFIG_KEY),
-                sum(1 for c in contracts if c.category == ContractCategory.INFRASTRUCTURE),
-            )
-
-        return contracts
-
-
 # ═══════════════════════════════════════════════════════════════════════════
-# SOURCE_RECONCILE — AST-enriched ForwardManifest
+# Source Reconciler
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @dataclass
-class SourceReconcileConfig:
-    """Configuration for the SOURCE_RECONCILE stage.
-
-    Attributes:
-        enabled: Master switch for reconciliation.
-        max_file_size_bytes: Skip files exceeding this byte size (default 1 MB).
-        max_line_count: Reserved for future LOC-based filtering.
-        exclude_patterns: Glob patterns for paths to skip (matched via fnmatch).
-        exclude_files: Exact relative file paths to skip entirely (INV-12).
-    """
-
-    enabled: bool = True
-    max_file_size_bytes: int = 1_000_000  # 1 MB cap
-    max_line_count: int = 10_000
-    exclude_patterns: list[str] = field(
-        default_factory=lambda: [".venv/*", "vendor/*", "node_modules/*"],
-    )
-    exclude_files: set[str] = field(default_factory=set)
-    """Exact relative file paths to skip (e.g. target files under --force-regenerate).
-
-    When a file is in this set, _reconcile_file() skips AST parsing entirely.
-    This prevents prior-run output from contaminating the manifest with
-    AST-derived elements that inflate complexity scores (INV-12).
-    """
-
-
-@dataclass
-class ReconciliationStats:
-    """Statistics from a SOURCE_RECONCILE run.
-
-    Attributes:
-        files_scanned: Files successfully parsed and merged.
-        files_skipped: Files skipped (missing, oversized, symlink, cached, etc.).
-        files_with_errors: Files that failed AST parsing.
-        elements_added: New elements merged from AST.
-        elements_skipped: Elements already present in plan-derived specs.
-        specs_invalid: Elements that failed ``ForwardElementSpec`` validation.
-        imports_added: New imports merged from AST.
-        imports_skipped: Imports already present or dropped (relative normalization).
-        dependencies_added: Files whose dependencies were filled from AST.
-        wall_clock_ms: Total reconciliation wall-clock time in milliseconds.
-        file_fingerprints: SHA-256 digests keyed by relpath for cache-skip on rerun.
-    """
-
-    files_scanned: int = 0
-    files_skipped: int = 0
-    files_with_errors: int = 0
-    elements_added: int = 0
-    elements_skipped: int = 0
-    specs_invalid: int = 0
-    imports_added: int = 0
-    imports_skipped: int = 0
-    dependencies_added: int = 0
-    behavioral_contracts_added: int = 0
-    wall_clock_ms: float = 0.0
-    file_fingerprints: dict[str, str] = field(default_factory=dict)
-
-
 class SourceReconciler:
-    """Enrich ForwardManifest with AST-derived elements from existing source files.
+    """Reconcile the project's existing source files against detected features.
 
-    Mottainai Rule 5: prefer deterministic (AST) over stochastic (LLM).
-    Only fills GAPS — plan-derived elements have higher precedence.
+    When called with a project root directory, scans all Python files and
+    extracts behavioral contracts (FORMULA, RENDER_PATTERN, CONFIG_KEY,
+    INFRASTRUCTURE) plus basic function/class signatures.
+
+    Used to populate contracts from "source-ast" (existing project code),
+    which has lower precedence than "deterministic" and "human-yaml".
     """
 
-    def reconcile(
-        self,
-        manifest: ForwardManifest,
-        project_root: Path,
-        target_files: Optional[list[str]] = None,
-        config: Optional[SourceReconcileConfig] = None,
-        design_doc_sections: Optional[dict[str, list[str]]] = None,
-        features: Optional[list[ParsedFeature]] = None,
-    ) -> ReconciliationStats:
-        """Run SOURCE_RECONCILE on existing target files.
+    project_root: Path
+    encoding: str = "utf-8"
 
-        Args:
-            manifest: The ForwardManifest to enrich (mutated in place via
-                dict reassignment of file_specs values).
-            project_root: Project root directory.
-            target_files: Additional file paths to scan beyond manifest keys.
-            config: Reconciliation configuration.
-            design_doc_sections: Per-file design doc sections for docstring
-                enrichment (REQ-DDS-004). Keys are file paths.
-            features: Optional parsed features for behavioral contract
-                extraction. When provided, Python files in the project are
-                also scanned for FORMULA, RENDER_PATTERN, CONFIG_KEY, and
-                INFRASTRUCTURE patterns that should be followed by new code.
+    def reconcile(self, features: list[ParsedFeature]) -> list[InterfaceContract]:
+        """Scan project Python files and return source-derived contracts."""
+        if not self.project_root.is_dir():
+            logger.warning("project_root does not exist: %s", self.project_root)
+            return []
 
-        Returns:
-            ReconciliationStats with counts of added/skipped items.
-        """
-        config = config or SourceReconcileConfig()
-        stats = ReconciliationStats()
-
-        if not config.enabled:
-            return stats
-
-        start = time.monotonic()
-
-        # Collect all file paths to scan
-        all_paths: set[str] = set(manifest.file_specs.keys())
-        if target_files:
-            all_paths.update(target_files)
-
-        project_root = Path(project_root).resolve()
-        cached_fingerprints: dict[str, str] = (
-            manifest.metadata.get("file_fingerprints") or {}  # type: ignore[assignment]
-        )
-        already_reconciled = "SOURCE_RECONCILE" in manifest.stages_completed
-
-        for relpath in sorted(all_paths):
-            self._reconcile_file(
-                relpath, project_root, manifest, config, stats,
-                cached_fingerprints, already_reconciled, design_doc_sections,
-            )
-
-        # Behavioral contract extraction from existing project files
-        if features:
-            behavioral = self._extract_behavioral_contracts(
-                features, project_root, config, stats,
-            )
-            if behavioral:
-                # Append to manifest contracts (merger dedup already happened,
-                # so use contract_id set to avoid duplicates with existing contracts)
-                existing_ids = {c.contract_id for c in manifest.contracts}
-                new_contracts = [c for c in behavioral if c.contract_id not in existing_ids]
-                manifest.contracts.extend(new_contracts)
-                stats.behavioral_contracts_added = len(new_contracts)
-
-        # [R1-S6] Provenance + [R3-S6] timing
-        stats.wall_clock_ms = (time.monotonic() - start) * 1000
-        manifest.metadata["reconcile_stats"] = {
-            "files_scanned": stats.files_scanned,
-            "files_skipped": stats.files_skipped,
-            "files_with_errors": stats.files_with_errors,
-            "elements_added": stats.elements_added,
-            "elements_skipped": stats.elements_skipped,
-            "specs_invalid": stats.specs_invalid,
-            "imports_added": stats.imports_added,
-            "imports_skipped": stats.imports_skipped,
-            "dependencies_added": stats.dependencies_added,
-            "behavioral_contracts_added": stats.behavioral_contracts_added,
-            "wall_clock_ms": stats.wall_clock_ms,
-        }
-        manifest.metadata["file_fingerprints"] = dict(stats.file_fingerprints)
-
-        if stats.wall_clock_ms > 2000:
-            logger.warning(
-                "SOURCE_RECONCILE took %.0fms (>2000ms budget)",
-                stats.wall_clock_ms,
-            )
-
-        return stats
-
-    @staticmethod
-    def _extract_behavioral_contracts(
-        features: list[ParsedFeature],
-        project_root: Path,
-        config: SourceReconcileConfig,
-        stats: ReconciliationStats,
-    ) -> list[InterfaceContract]:
-        """Extract behavioral contracts from existing Python files in the project.
-
-        Scans files that are NOT target files of any feature (i.e., existing
-        sibling files) to discover patterns that new code should follow.
-        Also scans target files that already exist (editing an existing file).
-        """
         contracts: list[InterfaceContract] = []
         seen_ids: set[str] = set()
 
-        # Build map of all Python files to their associated feature IDs
-        # For behavioral extraction, scan ALL existing .py files in directories
-        # that contain target files — sibling files establish patterns
-        target_dirs: set[str] = set()
-        file_features: dict[str, list[str]] = {}
-        for feat in features:
-            for tf in feat.target_files:
-                if tf.endswith(".py"):
-                    file_features.setdefault(tf, []).append(feat.feature_id)
-                    parent = str(Path(tf).parent)
-                    if parent != ".":
-                        target_dirs.add(parent)
+        # Map each feature to its target files
+        feature_by_file: dict[str, list[ParsedFeature]] = {}
+        for feature in features:
+            for target_file in feature.target_files:
+                feature_by_file.setdefault(target_file, []).append(feature)
 
-        # Scan existing Python files in target directories
-        scanned: set[str] = set()
-        for target_dir in sorted(target_dirs):
-            dir_path = project_root / target_dir
-            if not dir_path.is_dir():
+        # Scan Python files
+        for py_file in self.project_root.glob("**/*.py"):
+            try:
+                relpath = py_file.relative_to(self.project_root).as_posix()
+            except ValueError:
                 continue
-            for py_file in sorted(dir_path.glob("*.py")):
-                if py_file.is_symlink():
-                    continue
-                relpath = str(py_file.relative_to(project_root))
-                if relpath in scanned:
-                    continue
-                scanned.add(relpath)
 
-                # Skip files matching exclude patterns
-                if any(fnmatch.fnmatch(relpath, pat) for pat in config.exclude_patterns):
-                    continue
+            # Lookup features for this file
+            matching_features = feature_by_file.get(relpath, [])
+            feature_ids = [f.feature_id for f in matching_features]
 
-                try:
-                    if py_file.stat().st_size > config.max_file_size_bytes:
-                        continue
-                    source = py_file.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    continue
-
-                try:
-                    tree = ast.parse(source, filename=relpath)
-                except SyntaxError:
-                    continue
-
-                visitor = _ASTPatternVisitor()
-                visitor.visit(tree)
-
-                # Determine which features these contracts apply to:
-                # If the file IS a target file, scope to that feature.
-                # If it's a sibling, scope to all features in the same directory.
-                if relpath in file_features:
-                    applicable_ids = file_features[relpath]
-                else:
-                    applicable_ids = [
-                        fid
-                        for tf, fids in file_features.items()
-                        if str(Path(tf).parent) == target_dir
-                        for fid in fids
-                    ]
-
-                file_contracts = _build_behavioral_contracts(
-                    relpath, visitor, applicable_ids, seen_ids,
-                    source_ref="source-ast",
-                    source_label="existing source",
-                )
-                contracts.extend(file_contracts)
-
-        if contracts:
-            logger.info(
-                "SOURCE_RECONCILE behavioral: %d contracts from %d files "
-                "(formula=%d, pattern=%d, config=%d, infra=%d)",
-                len(contracts),
-                len(scanned),
-                sum(1 for c in contracts if c.category == ContractCategory.FORMULA),
-                sum(1 for c in contracts if c.category == ContractCategory.RENDER_PATTERN),
-                sum(1 for c in contracts if c.category == ContractCategory.CONFIG_KEY),
-                sum(1 for c in contracts if c.category == ContractCategory.INFRASTRUCTURE),
-            )
+            contracts.extend(self._reconcile_file(
+                py_file, relpath, feature_ids, seen_ids
+            ))
 
         return contracts
 
     def _reconcile_file(
         self,
+        py_file: Path,
         relpath: str,
-        project_root: Path,
-        manifest: ForwardManifest,
-        config: SourceReconcileConfig,
-        stats: ReconciliationStats,
-        cached_fingerprints: dict[str, str],
-        already_reconciled: bool,
-        design_doc_sections: Optional[dict[str, list[str]]],
-    ) -> None:
-        """Validate, parse, and merge AST data for a single file.
-
-        Mutates *manifest* and *stats* in place.  Returns early if the file
-        should be skipped (missing, oversized, symlink, outside root, cached).
-        """
-        from startd8.utils.code_manifest import generate_file_manifest
-
-        # INV-12: Skip files explicitly excluded (e.g. target files under
-        # --force-regenerate to prevent prior-run output from contaminating
-        # the manifest with AST-derived elements).
-        if relpath in config.exclude_files:
-            logger.debug("Skipping excluded file (INV-12): %s", relpath)
-            stats.files_skipped += 1
-            return
-
-        raw_path = project_root / relpath
-
-        # [R1-S7] Safety: reject symlinks before resolving
-        if raw_path.is_symlink():
-            logger.debug("Skipping symlink: %s", relpath)
-            stats.files_skipped += 1
-            return
-
-        resolved = raw_path.resolve()
+        feature_ids: list[str],
+        seen_ids: set[str],
+    ) -> list[InterfaceContract]:
+        """Reconcile a single Python file."""
         try:
-            if not resolved.is_relative_to(project_root):
-                logger.warning("Path outside project root, skipping: %s", relpath)
-                stats.files_skipped += 1
-                return
-        except (TypeError, ValueError):
-            stats.files_skipped += 1
-            return
+            source = py_file.read_text(encoding=self.encoding)
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Cannot read %s: %s", py_file, exc)
+            return []
 
-        if not resolved.is_file():
-            stats.files_skipped += 1
-            return
-
-        # [R1-S4] Exclude patterns
-        if any(fnmatch.fnmatch(relpath, pat) for pat in config.exclude_patterns):
-            stats.files_skipped += 1
-            return
-
-        # [R1-S4] Size cap
+        # Parse AST
         try:
-            file_size = resolved.stat().st_size
-        except OSError as exc:
-            logger.debug("Cannot stat %s: %s", relpath, exc)
-            stats.files_skipped += 1
-            return
-        if file_size > config.max_file_size_bytes:
-            logger.debug("File too large (%d bytes), skipping: %s", file_size, relpath)
-            stats.files_skipped += 1
-            return
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            logger.debug("Cannot parse %s: %s", py_file, exc)
+            return []
 
-        # Run AST analysis
-        try:
-            file_manifest = generate_file_manifest(
-                resolved, project_root, mode="ast_only",
-            )
-        except Exception as exc:
-            logger.warning("AST parse failed for %s: %s", relpath, exc)
-            stats.files_with_errors += 1
-            return
+        contracts: list[InterfaceContract] = []
 
-        if file_manifest.errors:
-            logger.warning(
-                "AST parse errors in %s: %s",
-                relpath,
-                [e.message for e in file_manifest.errors],
-            )
-            stats.files_with_errors += 1
-            return
-
-        # Store fingerprint
-        stats.file_fingerprints[relpath] = file_manifest.digest
-
-        # [R3-S1] Cache check — must be after successful parse to get digest
-        if (
-            already_reconciled
-            and cached_fingerprints.get(relpath) == file_manifest.digest
-        ):
-            stats.files_skipped += 1
-            return
-
-        stats.files_scanned += 1
-
-        # Get or create ForwardFileSpec
-        file_spec = manifest.file_specs.get(relpath)
-        existing_elements = list(file_spec.elements) if file_spec else []
-        existing_imports = list(file_spec.imports) if file_spec else []
-        existing_deps = file_spec.dependencies if file_spec else None
-
-        # Build existing key sets
-        existing_element_keys: set[tuple[Optional[str], str]] = {
-            (spec.parent_class, spec.name) for spec in existing_elements
-        }
-        existing_import_keys: set[tuple[str, tuple[str, ...]]] = {
-            (spec.module, tuple(sorted(spec.names)))
-            for spec in existing_imports
-        }
-
-        merged_elements = list(existing_elements)
-        merged_imports = list(existing_imports)
-
-        # Per-file design doc sections for docstring enrichment
-        file_sections = (
-            (design_doc_sections or {}).get(relpath) or []
-        )
-
-        # Process top-level elements from AST
-        for element in file_manifest.elements:
-
-            # Rich provenance ID: flcm-ast-{relpath}:{start_line}:{fqn}
-            source_id = (
-                f"flcm-ast-{relpath}:{element.span.start_line}:{element.fqn}"
-            )
-
-            key = (None, element.name)
-            if key not in existing_element_keys:
-                try:
-                    spec = forward_element_spec_from_element(
-                        element, source_contract_id=source_id,
-                    )
-                    # REQ-DDS-004: Enrich docstring_hint from design sections
-                    if spec.docstring_hint is None and file_sections:
-                        hint = _match_design_section(element.name, file_sections)
-                        if hint:
-                            spec = spec.model_copy(update={"docstring_hint": hint})
-                    merged_elements.append(spec)
-                    existing_element_keys.add(key)
-                    stats.elements_added += 1
-                except (ValueError, ValidationError) as exc:
-                    logger.warning(
-                        "Invalid spec for %s in %s: %s",
-                        element.name, relpath, exc,
-                    )
-                    stats.specs_invalid += 1
-            else:
-                stats.elements_skipped += 1
-
-            # Process class children (methods, constants, variables)
-            if element.kind == ElementKind.CLASS:
-                for child in element.children:
-                    child_key = (element.name, child.name)
-                    if child_key not in existing_element_keys:
-                        child_source_id = (
-                            f"flcm-ast-{relpath}:{child.span.start_line}:{child.fqn}"
-                        )
-                        try:
-                            child_spec = forward_element_spec_from_element(
-                                child, source_contract_id=child_source_id,
-                            )
-                            # Ensure parent_class is set correctly
-                            if child_spec.parent_class != element.name:
-                                child_spec = child_spec.model_copy(
-                                    update={"parent_class": element.name}
-                                )
-                            # REQ-DDS-004
-                            if child_spec.docstring_hint is None and file_sections:
-                                hint = _match_design_section(child.name, file_sections)
-                                if hint:
-                                    child_spec = child_spec.model_copy(
-                                        update={"docstring_hint": hint},
-                                    )
-                            merged_elements.append(child_spec)
-                            existing_element_keys.add(child_key)
-                            stats.elements_added += 1
-                        except (ValueError, ValidationError) as exc:
-                            logger.warning(
-                                "Invalid spec for %s.%s in %s: %s",
-                                element.name, child.name, relpath, exc,
-                            )
-                            stats.specs_invalid += 1
-                    else:
-                        stats.elements_skipped += 1
-
-        # Process imports from AST
-        for imp_entry in file_manifest.imports:
-            imp_key = (imp_entry.module, tuple(sorted(imp_entry.names)))
-            if imp_key not in existing_import_keys:
-                fwd_imp = forward_import_spec_from_entry(
-                    imp_entry, project_root, resolved,
+        # Walk top-level for function/class definitions
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                func_name = node.name
+                abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
+                # Site 14 (original line 1533)
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{func_name}",
+                    file_path=relpath,
                 )
-                if fwd_imp is not None:
-                    merged_imports.append(fwd_imp)
-                    existing_import_keys.add(imp_key)
-                    stats.imports_added += 1
-                else:
-                    stats.imports_skipped += 1
-            else:
-                stats.imports_skipped += 1
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.FUNCTION_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=f"Function {func_name} in {relpath}",
+                        function_name=func_name,
+                        source_reference="source-ast",
+                        applicable_task_ids=feature_ids,
+                    ))
+            elif isinstance(node, ast.ClassDef):
+                class_name = node.name
+                abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                # Site 15 (original line 1565)
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{class_name}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.CLASS_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=f"Class {class_name} in {relpath}",
+                        class_name=class_name,
+                        source_reference="source-ast",
+                        applicable_task_ids=feature_ids,
+                    ))
 
-        # Dependencies
-        merged_deps = existing_deps
-        if existing_deps is None and file_manifest.dependencies:
-            merged_deps = forward_dependencies_from_deps(file_manifest.dependencies)
-            stats.dependencies_added += 1
+        # Walk AST for behavioral patterns
+        visitor = _ASTPatternVisitor()
+        visitor.visit(tree)
 
-        # [R1-S5] Deterministic ordering
-        merged_elements.sort(key=lambda e: (e.parent_class or "", e.name))
-        merged_imports.sort(key=lambda i: (i.module, tuple(sorted(i.names))))
+        contracts.extend(_build_behavioral_contracts(
+            relpath, visitor, feature_ids, seen_ids,
+            source_ref="source-ast",
+            source_label="existing source",
+        ))
 
-        # REQ-FLCM-P4: Semantic dedup by bound Python name
-        merged_imports = _deduplicate_imports_by_bound_name(merged_imports)
-
-        # [R2-S4] Frozen model — create new ForwardFileSpec
-        new_file_spec = ForwardFileSpec(
-            file=relpath,
-            elements=merged_elements,
-            imports=merged_imports,
-            dependencies=merged_deps,
-        )
-        manifest.file_specs[relpath] = new_file_spec
+        return contracts
 
 
-def _compute_bound_names(spec: "ForwardImportSpec") -> set[str]:
-    """Compute the Python names an import binds into scope.
+# ═══════════════════════════════════════════════════════════════════════════
+# Reference AST Extractor
+# ═══════════════════════════════════════════════════════════════════════════
 
-    - ``kind="import"`` → ``{alias}`` or ``{module.split(".")[0]}``
-    - ``kind="from"`` → ``{alias}`` or ``set(names)``
+
+class ReferenceASTExtractor:
+    """Extract behavioral contracts from external reference source files.
+
+    When provided with paths to reference files (e.g., vendored libraries,
+    external contract specifications), scans them for behavioral patterns
+    (FORMULA, RENDER_PATTERN, CONFIG_KEY, INFRASTRUCTURE) plus function/class
+    signatures.
+
+    Contracts from reference files have ``source_reference="reference-ast"``
+    and higher precedence than source-ast but lower than human-yaml.
     """
-    if spec.alias:
-        return {spec.alias}
-    if spec.kind == "import":
-        return {spec.module.split(".")[0]}
-    # kind == "from"
-    return set(spec.names) if spec.names else {spec.module.split(".")[-1]}
 
+    encoding: str = "utf-8"
 
-def _deduplicate_imports_by_bound_name(
-    imports: list["ForwardImportSpec"],
-) -> list["ForwardImportSpec"]:
-    """Post-pass dedup: remove imports that bind already-claimed Python names.
+    def extract(self, reference_files: Optional[list[Path]]) -> list[InterfaceContract]:
+        """Extract contracts from a list of reference source files."""
+        if not reference_files:
+            return []
 
-    When a bare ``import`` and a ``from`` import bind the same name,
-    the ``from`` import wins (more specific).  Otherwise first-wins.
+        contracts: list[InterfaceContract] = []
+        seen_ids: set[str] = set()
 
-    For multi-name ``from`` imports where only *some* names conflict,
-    the entire import is kept (novel names still need it).
-    """
-    # seen: bound_name → index into `result` list
-    seen: dict[str, int] = {}
-    result: list["ForwardImportSpec"] = []
+        for ref_file in reference_files:
+            if not ref_file.is_file():
+                logger.debug("Reference file does not exist: %s", ref_file)
+                continue
 
-    for spec in imports:
-        bound = _compute_bound_names(spec)
+            contracts.extend(self._extract_from_file(ref_file, seen_ids))
 
-        # Partition bound names into novel vs conflicting
-        novel_names = {b for b in bound if b not in seen}
-        conflict_names = bound - novel_names
+        return contracts
 
-        if not conflict_names:
-            # All names are novel — keep as-is
-            result_idx = len(result)
-            result.append(spec)
-            for bname in bound:
-                seen[bname] = result_idx
-            continue
+    def _extract_from_file(
+        self, ref_file: Path, seen_ids: set[str]
+    ) -> list[InterfaceContract]:
+        """Extract contracts from a single reference file."""
+        try:
+            source = ref_file.read_text(encoding=self.encoding)
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Cannot read reference file %s: %s", ref_file, exc)
+            return []
 
-        if not novel_names:
-            # All names conflict — check if from-import should replace bare
-            # Only replace when *every* conflicting name points to a bare import
-            replace_indices: set[int] = set()
-            should_replace = spec.kind == "from"
-            if should_replace:
-                for bname in conflict_names:
-                    prev_idx = seen[bname]
-                    if result[prev_idx].kind == "import":
-                        replace_indices.add(prev_idx)
-                    else:
-                        should_replace = False
-                        break
+        # Parse AST
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            logger.debug("Cannot parse reference file %s: %s", ref_file, exc)
+            return []
 
-            if should_replace and replace_indices:
-                # Remove previous bare-import entries (by marking None, compact later)
-                for ri in replace_indices:
-                    result[ri] = None  # type: ignore[assignment]
-                result_idx = len(result)
-                result.append(spec)
-                for bname in bound:
-                    seen[bname] = result_idx
-            # else: first-wins — discard current
-            continue
+        contracts: list[InterfaceContract] = []
+        relpath = ref_file.as_posix()
 
-        # Mixed: some names conflict, some are novel.
-        # Keep the import for its novel names; conflicting names are harmless
-        # at the FLCM level (the repair step handles actual code dedup).
-        result_idx = len(result)
-        result.append(spec)
-        for bname in novel_names:
-            seen[bname] = result_idx
+        # Walk for function/class definitions
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                func_name = node.name
+                abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
+                contract_id = make_element_id(
+                    abbrev,
+                    f"ref-{Path(relpath).stem}-{func_name}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.FUNCTION_NAME,
+                        confidence=ContractConfidence.EXPLICIT,
+                        description=f"Function {func_name} in reference {relpath}",
+                        function_name=func_name,
+                        source_reference="reference-ast",
+                    ))
+            elif isinstance(node, ast.ClassDef):
+                class_name = node.name
+                abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                contract_id = make_element_id(
+                    abbrev,
+                    f"ref-{Path(relpath).stem}-{class_name}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.CLASS_NAME,
+                        confidence=ContractConfidence.EXPLICIT,
+                        description=f"Class {class_name} in reference {relpath}",
+                        class_name=class_name,
+                        source_reference="reference-ast",
+                    ))
 
-    # Compact: remove None entries left by replacements
-    return [s for s in result if s is not None]
+        # Walk for behavioral patterns
+        visitor = _ASTPatternVisitor()
+        visitor.visit(tree)
 
+        contracts.extend(_build_behavioral_contracts(
+            relpath, visitor, [], seen_ids,
+            source_ref="reference-ast",
+            source_label="reference",
+        ))
 
-def _match_design_section(
-    element_name: str, sections: list[str],
-) -> Optional[str]:
-    """Best-effort word-boundary match of element name in design sections.
-
-    Returns the first matching section text, or ``None``.
-    Uses ``\\b`` word boundaries to avoid partial matches (e.g., ``"get"``
-    should not match ``"get_name"``).  Deterministic only — no fuzzy
-    matching (Mottainai Rule 5).
-    """
-    pattern = re.compile(r"\b" + re.escape(element_name) + r"\b")
-    for section in sections:
-        if pattern.search(section):
-            return section
-    return None
+        return contracts
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1735,108 +1392,30 @@ def _match_design_section(
 
 
 class ManifestMerger:
-    """Merge contracts from multiple extractors with precedence-based dedup."""
+    """Deduplicate contracts by ``contract_id`` using source precedence.
 
-    def merge(
-        self,
-        contract_lists: list[list[InterfaceContract]],
-        file_elements: dict[str, list[ForwardElementSpec]],
-    ) -> ForwardManifest:
-        """Flatten, deduplicate, and assemble into a ``ForwardManifest``."""
-        # Flatten all contracts
-        all_contracts: list[InterfaceContract] = []
-        for clist in contract_lists:
-            all_contracts.extend(clist)
+    Higher-precedence sources (e.g., "human-yaml") override lower ones
+    (e.g., "source-ast") when multiple contracts have the same ``contract_id``.
+    """
 
-        # Deduplicate by contract_id using source precedence
-        seen: dict[str, InterfaceContract] = {}
-        for contract in all_contracts:
-            cid = contract.contract_id
-            if cid not in seen:
-                seen[cid] = contract
-                continue
+    def merge(self, contract_lists: list[list[InterfaceContract]]) -> list[InterfaceContract]:
+        """Merge multiple contract lists, keeping only the highest-precedence
+        copy of each contract_id."""
+        merged: dict[str, InterfaceContract] = {}
 
-            existing = seen[cid]
-            existing_prec = _SOURCE_PRECEDENCE.get(
-                existing.source_reference or "", 99
-            )
-            new_prec = _SOURCE_PRECEDENCE.get(
-                contract.source_reference or "", 99
-            )
-
-            if new_prec > existing_prec:
-                # Higher precedence overwrites — but preserve task scoping
-                # from the lower-precedence contract if the winner has none.
-                if not contract.applicable_task_ids and existing.applicable_task_ids:
-                    merged_ids = list(existing.applicable_task_ids)
-                    seen[cid] = contract.model_copy(
-                        update={"applicable_task_ids": merged_ids},
-                    )
+        for contracts in contract_lists:
+            for contract in contracts:
+                existing = merged.get(contract.contract_id)
+                if existing is None:
+                    merged[contract.contract_id] = contract
                 else:
-                    seen[cid] = contract
-            elif new_prec == existing_prec:
-                # Equal precedence — retain first, merge task scoping
-                merged_ids = list(existing.applicable_task_ids)
-                for tid in contract.applicable_task_ids:
-                    if tid not in merged_ids:
-                        merged_ids.append(tid)
-                if merged_ids != list(existing.applicable_task_ids):
-                    seen[cid] = existing.model_copy(
-                        update={"applicable_task_ids": merged_ids},
-                    )
-                logger.warning(
-                    "Duplicate contract_id '%s' at same precedence (%s); "
-                    "retaining first, merged applicable_task_ids=%s",
-                    cid,
-                    contract.source_reference,
-                    merged_ids,
-                )
-            # else: lower precedence — discard
+                    # Keep the higher-precedence (higher numeric value) source
+                    existing_prec = _SOURCE_PRECEDENCE.get(existing.source_reference, 0)
+                    new_prec = _SOURCE_PRECEDENCE.get(contract.source_reference, 0)
+                    if new_prec > existing_prec:
+                        merged[contract.contract_id] = contract
 
-        # Build file specs from file_elements, deduplicating by name.
-        # When both deterministic and AST extractors emit the same element,
-        # prefer the richer version (more fields populated).
-        # Key is name-only because the deterministic extractor often produces
-        # a bare function with `self` (no parent_class) while the AST extractor
-        # correctly identifies the same element as a method (with parent_class).
-        # Using (name, parent_class) would keep both, causing the engine to
-        # attempt splicing a phantom standalone function with no skeleton stub.
-        file_specs: dict[str, ForwardFileSpec] = {}
-        for filepath, elements in file_elements.items():
-            seen_by_name: dict[str, ForwardElementSpec] = {}
-            for elem in elements:
-                name = elem.name
-                if name in seen_by_name:
-                    existing = seen_by_name[name]
-                    # Prefer the element with richer metadata: parent_class,
-                    # docstring_hint, type annotations on signature params.
-                    new_richness = (
-                        (1 if elem.parent_class else 0)
-                        + (1 if elem.docstring_hint else 0)
-                        + (1 if elem.signature and any(
-                            p.annotation for p in (elem.signature.params or [])
-                        ) else 0)
-                    )
-                    old_richness = (
-                        (1 if existing.parent_class else 0)
-                        + (1 if existing.docstring_hint else 0)
-                        + (1 if existing.signature and any(
-                            p.annotation for p in (existing.signature.params or [])
-                        ) else 0)
-                    )
-                    if new_richness > old_richness:
-                        seen_by_name[name] = elem
-                    # else keep existing (first seen / richer)
-                else:
-                    seen_by_name[name] = elem
-            file_specs[filepath] = ForwardFileSpec(
-                file=filepath, elements=list(seen_by_name.values()),
-            )
-
-        return ForwardManifest(
-            contracts=list(seen.values()),
-            file_specs=file_specs,
-        )
+        return list(merged.values())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1846,132 +1425,67 @@ class ManifestMerger:
 
 def extract_forward_contracts(
     features: list[ParsedFeature],
-    *,
     yaml_text: Optional[str] = None,
     proto_dir: Optional[Path] = None,
-    tentative_contracts: Optional[list[InterfaceContract]] = None,
+    reference_files: Optional[list[Path]] = None,
     project_root: Optional[Path] = None,
-    prior_file_specs: Optional[dict[str, ForwardFileSpec]] = None,
-    reference_root: Optional[Path] = None,
-    force_regenerate: bool = False,
-) -> ForwardManifest:
-    """Orchestrate all extractors and merge into a ``ForwardManifest``.
+    prior_manifest: Optional[ForwardManifest] = None,
+) -> tuple[list[InterfaceContract], dict[str, list[ForwardElementSpec]]]:
+    """Extract forward contracts from multiple sources.
 
-    Parameters
-    ----------
-    features:
-        Parsed features from plan ingestion.
-    yaml_text:
-        Optional human-authored YAML with ``shared_contracts``.
-    proto_dir:
-        Optional directory containing ``.proto`` files.
-    tentative_contracts:
-        Optional pre-existing tentative contracts to include.
-    project_root:
-        Optional project root. When provided, triggers SOURCE_RECONCILE
-        to enrich the manifest with AST-derived elements from existing files.
-    prior_file_specs:
-        Optional file specs from a prior enriched manifest for field-level
-        supplement of plan-derived specs.
-    reference_root:
-        Optional directory containing reference source files. When provided,
-        triggers REFERENCE_AST extraction to produce behavioral contracts
-        (FORMULA, RENDER_PATTERN, CONFIG_KEY, INFRASTRUCTURE) from Python
-        AST analysis of existing reference implementations.
-    force_regenerate:
-        When True, SOURCE_RECONCILE skips target files to prevent prior-run
-        output from contaminating the manifest with AST-derived elements
-        (INV-12).
+    Orchestrates the three extractors (Deterministic, HumanYaml, Proto) plus
+    ReferenceASTExtractor and SourceReconciler, merges by contract_id using
+    source precedence, and optionally supplements element specs from a prior
+    manifest.
+
+    Args:
+        features: Parsed features from plan ingestion.
+        yaml_text: Human-authored YAML with shared_contracts blocks.
+        proto_dir: Directory containing .proto files.
+        reference_files: External reference source files (high precedence).
+        project_root: Project root for source reconciliation (low precedence).
+        prior_manifest: Optional prior enriched manifest for supplementing
+            element specs with richer data (return annotations, decorators).
+
+    Returns:
+        (contracts, file_elements) tuple — the merged contract list and the
+        map of files to their element specifications.
     """
-    try:
-        det = DeterministicExtractor()
-        det_contracts, file_elements = det.extract(
-            features, prior_file_specs=prior_file_specs,
-        )
+    # Extract from all sources
+    det = DeterministicExtractor()
+    prior_file_specs = (
+        prior_manifest.files if prior_manifest else None
+    )
+    det_contracts, file_elements = det.extract(features, prior_file_specs)
 
-        yaml_contracts: list[InterfaceContract] = []
-        if yaml_text:
-            yaml_contracts = HumanYamlExtractor().extract(yaml_text)
+    yaml_contracts = []
+    if yaml_text:
+        yaml_extractor = HumanYamlExtractor()
+        yaml_contracts = yaml_extractor.extract(yaml_text)
 
-        proto_contracts: list[InterfaceContract] = []
-        if proto_dir is not None:
-            proto_contracts = ProtoExtractor().extract(proto_dir)
+    proto_contracts = []
+    if proto_dir:
+        proto_extractor = ProtoExtractor()
+        proto_contracts = proto_extractor.extract(proto_dir)
 
-        ref_contracts: list[InterfaceContract] = []
-        if reference_root is not None:
-            ref_root = Path(reference_root)
-            if ref_root.is_dir():
-                ref_contracts = ReferenceASTExtractor().extract(features, ref_root)
+    ref_contracts = []
+    if reference_files:
+        ref_extractor = ReferenceASTExtractor()
+        ref_contracts = ref_extractor.extract(reference_files)
 
-        contract_lists: list[list[InterfaceContract]] = [
-            det_contracts,
-            yaml_contracts,
-            proto_contracts,
-            ref_contracts,
-        ]
-        if tentative_contracts:
-            contract_lists.append(tentative_contracts)
+    src_contracts = []
+    if project_root:
+        src_reconciler = SourceReconciler(project_root)
+        src_contracts = src_reconciler.reconcile(features)
 
-        merger = ManifestMerger()
-        manifest = merger.merge(contract_lists, file_elements)
+    # Merge all contract lists
+    merger = ManifestMerger()
+    merged_contracts = merger.merge([
+        det_contracts,
+        yaml_contracts,
+        proto_contracts,
+        ref_contracts,
+        src_contracts,
+    ])
 
-        # Record stage completion
-        manifest.stages_completed.append("EXTRACT")
-        if ref_contracts:
-            manifest.stages_completed.append("REFERENCE_AST")
-
-        # SOURCE_RECONCILE: enrich with AST-derived elements from existing files
-        # Also extracts behavioral contracts when features are provided
-        if project_root is not None:
-            all_targets = list({
-                f for feat in features for f in feat.target_files
-            })
-            # INV-12: When force_regenerate is set, exclude target files from
-            # AST reconciliation to prevent prior-run output from inflating
-            # the manifest with elements the plan didn't specify.
-            reconcile_config = SourceReconcileConfig()
-            if force_regenerate:
-                reconcile_config.exclude_files = set(all_targets)
-                logger.info(
-                    "SOURCE_RECONCILE: --force-regenerate excludes %d target files",
-                    len(all_targets),
-                )
-            reconciler = SourceReconciler()
-            stats = reconciler.reconcile(
-                manifest, project_root, all_targets,
-                config=reconcile_config, features=features,
-            )
-            manifest.stages_completed.append("SOURCE_RECONCILE")
-            logger.info(
-                "SOURCE_RECONCILE: +%d elements, +%d imports, "
-                "+%d behavioral contracts from %d files",
-                stats.elements_added,
-                stats.imports_added,
-                stats.behavioral_contracts_added,
-                stats.files_scanned,
-            )
-
-        return manifest
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        logger.exception(
-            "Catastrophic failure in extract_forward_contracts "
-            "(features=%d, yaml=%s, proto=%s): %s",
-            len(features),
-            yaml_text is not None,
-            proto_dir,
-            exc,
-        )
-        return ForwardManifest()
-
-
-__all__ = [
-    "DeterministicExtractor",
-    "HumanYamlExtractor",
-    "ProtoExtractor",
-    "ReferenceASTExtractor",
-    "ManifestMerger",
-    "SourceReconciler",
-    "SourceReconcileConfig",
-    "ReconciliationStats",
-    "extract_forward_contracts",
-]
+    return merged_contracts, file_elements

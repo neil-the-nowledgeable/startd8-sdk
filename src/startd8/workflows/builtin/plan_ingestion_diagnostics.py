@@ -228,8 +228,10 @@ def compute_refine_quality(review_output: Optional[Dict[str, Any]]) -> Dict[str,
             "acceptance_rate": 0.0,
         }
     triage = review_output.get("triage") or {}
-    accepted = len(triage.get("accepted", []))
-    rejected = len(triage.get("rejected", []))
+    _acc = triage.get("accepted", [])
+    accepted = _acc if isinstance(_acc, int) else len(_acc)
+    _rej = triage.get("rejected", [])
+    rejected = _rej if isinstance(_rej, int) else len(_rej)
     total = accepted + rejected
     return {
         "rounds_completed": review_output.get("rounds_completed", 0),

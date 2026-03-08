@@ -1,7 +1,7 @@
 """
-LeadContractorWorkflow - Cost-efficient multi-agent implementation pattern.
+PrimaryContractorWorkflow - Cost-efficient multi-agent implementation pattern.
 
-Claude acts as "lead contractor" (architect, spec writer, reviewer, integrator)
+Claude acts as "primary contractor" (architect, spec writer, reviewer, integrator)
 while cheaper models handle the actual drafting work.
 
 Pattern:
@@ -12,7 +12,7 @@ Pattern:
 5. Claude integrates/finalizes
 
 Cost Structure (January 2026):
-Lead Contractors (Claude 4.5 family - recommended):
+Primary Contractors (Claude 4.5 family - recommended):
 - Claude Sonnet 4.5: $3.00/$15.00 per 1M tokens (default, best for coding/agents)
 - Claude Opus 4.5: $5.00/$25.00 per 1M tokens (most intelligent)
 - Claude Haiku 4.5: $1.00/$5.00 per 1M tokens (fastest)
@@ -81,34 +81,33 @@ logger = get_logger(__name__)
 # Prompt Templates — loaded from YAML (REQ-PPE-001 / REQ-PPE-004)
 # ============================================================================
 
-from .prompts import get_template as _get_prime_template
+from ...implementation_engine.prompts import get_template as _get_contractor_template
 
-SPEC_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "spec")
-DRAFT_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "draft")
-SINGLE_FILE_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "single_file_output")
-MULTI_FILE_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "multi_file_output")
-REVIEW_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "review")
-INTEGRATION_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "integration")
-# PCA-602: Edit-mode output templates
-SINGLE_FILE_EDIT_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "single_file_edit_output")
-MULTI_FILE_EDIT_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "multi_file_edit_output")
-# PCA-605: Edit-mode draft template (existing files BEFORE spec)
-DRAFT_EDIT_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "draft_edit")
+# Backward-compatible prompt constants — now loaded from consolidated
+# contractor_prompts.yaml via the implementation_engine prompt loader.
+SPEC_PROMPT_TEMPLATE = _get_contractor_template("spec")
+DRAFT_PROMPT_TEMPLATE = _get_contractor_template("draft")
+SINGLE_FILE_OUTPUT_FORMAT = _get_contractor_template("single_file_output")
+MULTI_FILE_OUTPUT_FORMAT = _get_contractor_template("multi_file_output")
+REVIEW_PROMPT_TEMPLATE = _get_contractor_template("review")
+INTEGRATION_PROMPT_TEMPLATE = _get_contractor_template("integration")
+SINGLE_FILE_EDIT_OUTPUT_FORMAT = _get_contractor_template("single_file_edit_output")
+MULTI_FILE_EDIT_OUTPUT_FORMAT = _get_contractor_template("multi_file_edit_output")
+DRAFT_EDIT_PROMPT_TEMPLATE = _get_contractor_template("draft_edit")
 
-# PC-Y2: Format helper with fallback when YAML unavailable (Phase 4)
 def _format_lead_prompt(template_name: str, fallback: str, **kwargs: Any) -> str:
-    """Format prompt from YAML template; use fallback when YAML missing (PC-Y2, AC-5).
+    """Format prompt from consolidated YAML; use fallback when unavailable.
 
     Args:
-        template_name: Key in lead_contractor.yaml prompts section.
-        fallback: String to use when template unavailable (e.g. downstream installs).
+        template_name: Key in contractor_prompts.yaml prompts section.
+        fallback: String to use when template unavailable.
         **kwargs: Placeholders for template.format().
 
     Returns:
         Formatted string (from YAML or fallback).
     """
     try:
-        template = _get_prime_template("lead_contractor", template_name)
+        template = _get_contractor_template(template_name)
         return template.format(**kwargs)
     except (FileNotFoundError, KeyError):
         try:
@@ -148,9 +147,9 @@ _PLAN_CONTEXT_CREATE_FRAMING_FALLBACK = _ie_spec_builder._PLAN_CONTEXT_CREATE_FR
 _ARCH_CONTEXT_EDIT_FRAMING_FALLBACK = _ie_spec_builder._ARCH_CONTEXT_EDIT_FRAMING_FALLBACK
 
 
-class LeadContractorWorkflow(WorkflowBase):
+class PrimaryContractorWorkflow(WorkflowBase):
     """
-    Lead Contractor workflow for cost-efficient multi-agent implementation.
+    Primary Contractor workflow for cost-efficient multi-agent implementation.
 
     Uses Claude as the architect/reviewer while cheaper models draft code.
 
@@ -158,7 +157,7 @@ class LeadContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": Models.LEAD_CONTRACTOR_LEAD - Lead contractor,
+            "lead_agent": Models.LEAD_CONTRACTOR_LEAD - Primary contractor,
             "drafter_agent": Models.LEAD_CONTRACTOR_DRAFTER - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
@@ -1358,7 +1357,8 @@ class LeadContractorWorkflow(WorkflowBase):
             existing_files_section=existing_files_section,
         )
 
-        sys_prompt = _ie_drafter.get_drafter_system_prompt(existing_files)
+        sys_prompt, draft_mode = _ie_drafter.get_drafter_system_prompt(existing_files)
+        logger.info("Async drafter system prompt mode: %s", draft_mode)
         response_text, response_time_ms, token_usage = await drafter_agent.agenerate(
             prompt, system_prompt=sys_prompt
         )
@@ -1705,3 +1705,7 @@ class LeadContractorWorkflow(WorkflowBase):
 - Security testing needs manual review
 """
         return md
+
+
+# Backward-compat alias (Phase 4 rename: Lead → Primary)
+LeadContractorWorkflow = PrimaryContractorWorkflow

@@ -1,8 +1,8 @@
 """
 YAML prompt loader for the implementation engine.
 
-Uses ``lru_cache`` + ``yaml.safe_load`` pattern matching the existing
-``workflows/builtin/prompts/__init__.py`` loader.
+Loads from the consolidated ``contractor_prompts.yaml``.
+Falls back to inline strings if the YAML file is unavailable.
 """
 
 from functools import lru_cache
@@ -21,87 +21,96 @@ _PROMPTS_DIR = Path(__file__).parent
 # Inline fallback strings so the engine works without the YAML file installed.
 _FALLBACK_TEMPLATES: Dict[str, str] = {
     "spec": (
-        "You are a senior software architect acting as the Lead Contractor.\n\n"
-        "## Task Description\n{task_description}\n{requirements_section}\n"
+        "You are a senior software architect creating an implementation specification.\n\n"
+        "## Task\n{task_description}\n{requirements_section}\n"
         "{context_sections}\n{critical_parameters_section}\n"
-        "{forward_contracts_section}\n## Domain Constraints\n{domain_constraints}\n\n"
-        "Create a detailed 8-section implementation specification.\n"
-        "Sections: Task Summary, Requirements, Technical Approach, Code Structure, "
-        "Acceptance Criteria, Edge Cases, Constraints, Examples."
+        "{forward_contracts_section}\n## Constraints\n{domain_constraints}\n\n"
+        "Provide an 8-section specification: Task Summary, Requirements, "
+        "Technical Approach, Code Structure, Acceptance Criteria, Edge Cases, "
+        "Constraints, Examples."
     ),
     "spec_from_design": (
-        "You are a senior software architect expanding an approved design document "
-        "into a full implementation specification.\n\n"
-        "## Design Document (AUTHORITATIVE — include verbatim)\n{design_document}\n\n"
-        "## Task Description\n{task_description}\n{requirements_section}\n"
+        "You are expanding an approved design document into a full specification.\n\n"
+        "## Design Document (AUTHORITATIVE)\n{design_document}\n\n"
+        "## Task\n{task_description}\n{requirements_section}\n"
         "{context_sections}\n{critical_parameters_section}\n"
-        "{forward_contracts_section}\n## Domain Constraints\n{domain_constraints}\n\n"
-        "The design document's sections (What to Build, Files, API Surface, Constraints) "
-        "are AUTHORITATIVE. Include them VERBATIM in your spec.\n"
-        "ADD these new sections: Technical Approach, Code Structure, "
-        "Acceptance Criteria, Edge Cases, Examples.\n"
-        "Do NOT paraphrase or re-derive the design document's content."
+        "{forward_contracts_section}\n## Constraints\n{domain_constraints}\n\n"
+        "Forward design content verbatim. ADD: Technical Approach, Code Structure, "
+        "Acceptance Criteria, Edge Cases, Examples."
     ),
     "draft": (
-        "You are implementing code based on a detailed specification.\n\n"
-        "## Implementation Specification\n{spec}\n\n"
-        "## Previous Feedback (if any)\n{feedback}\n\n"
+        "Implement the following specification.\n\n"
+        "## Specification\n{spec}\n\n"
+        "## Feedback\n{feedback}\n\n"
         "{existing_files_section}\n\n"
         "{supplementary_sections}\n\n"
         "## Output Format\n{output_format}"
     ),
     "draft_edit": (
-        "You are modifying an existing codebase based on a specification.\n\n"
+        "Modify the existing code per the specification below.\n\n"
         "{existing_files_section}\n\n"
-        "## Implementation Specification (changes to apply)\n{spec}\n\n"
-        "## Previous Feedback (if any)\n{feedback}\n\n"
+        "## Specification (changes to apply)\n{spec}\n\n"
+        "## Feedback\n{feedback}\n\n"
         "{supplementary_sections}\n\n"
         "## Output Format\n{output_format}"
     ),
     "draft_system_create": (
-        "You are an expert Python engineer generating production-quality source code "
-        "from a specification. Implement the spec exactly. Emit complete implementations "
-        "— no stubs or TODO placeholders."
+        "You are an expert Python engineer. Implement the spec exactly. "
+        "Complete implementations only — no stubs, TODOs, or pass bodies. "
+        "Use parameter names from upstream documents verbatim. "
+        "Ruff: no single-letter vars l/O/I; define helpers before use."
     ),
     "draft_system_edit": (
         "You are an expert Python engineer editing existing source code. "
-        "PRESERVE all existing code not being changed. ADD or MODIFY only what the "
-        "spec specifies. Your output MUST include the complete modified file — "
-        "not just the changed sections."
+        "PRESERVE all unchanged code. Output the COMPLETE modified file. "
+        "Use parameter names from upstream documents verbatim. "
+        "Ruff: no single-letter vars l/O/I; define helpers before use."
     ),
     "draft_system_search_replace": (
-        "You are an expert Python engineer editing large existing source files. "
-        "Make minimal, targeted changes. Preserve all unchanged code. "
-        "Your output MUST be the complete modified file — include every line, "
-        "changing only what the spec requires."
+        "You are an expert Python engineer making targeted edits to large files. "
+        "Minimal changes only. Output the COMPLETE modified file — every line. "
+        "Use parameter names from upstream documents verbatim. "
+        "Ruff: no single-letter vars l/O/I; define helpers before use."
+    ),
+    "draft_system_skeleton_fill": (
+        "You are an expert Python engineer filling method bodies in pre-assembled skeleton files. "
+        "Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements. "
+        "Use parameter names from upstream documents verbatim. Do not rename them. "
+        "Preserve all imports, class structure, and pre-filled method bodies exactly as provided. "
+        "Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed."
+    ),
+    "draft_skeleton_fill": (
+        "Fill the unfilled method bodies in the pre-assembled skeleton file below.\n\n"
+        "## Existing Skeleton\n"
+        "The following file already exists with correct imports, class structure, "
+        "and some method bodies pre-filled. Implement ONLY the method bodies "
+        "marked with `raise NotImplementedError`.\n\n"
+        "{skeleton_section}\n\n"
+        "{pre_assembly_status}\n\n"
+        "## Specification (scope: unfilled elements only)\n{spec}\n\n"
+        "## Feedback\n{feedback}\n\n"
+        "{supplementary_sections}\n\n"
+        "## Output Format\n{output_format}"
     ),
     "review": (
-        "You are reviewing an implementation as the Lead Contractor.\n\n"
-        "## Original Task\n{task_description}\n\n"
-        "## Your Specification\n{spec}\n\n"
+        "Review this implementation against the specification.\n\n"
+        "## Task\n{task_description}\n\n"
+        "## Specification\n{spec}\n\n"
         "{enrichment_sections}\n\n"
         "{prior_issues_section}\n\n"
-        "## Implementation to Review\n{implementation}\n\n"
-        "## Review Instructions\nEvaluate the implementation against your specification.\n"
+        "## Implementation\n{implementation}\n\n"
         "{convergence_instructions}\n\n"
-        "## Required Output Format\n\n"
+        "## Output Format\n"
         "### Score: [0-100]\n### Verdict: [PASS/FAIL]\n"
-        "### Strengths\n- [What was done well]\n"
-        "### Issues\n- [Problems found, with severity: BLOCKING, MAJOR, MINOR]\n"
-        "### Suggestions\n- [Specific improvements]\n"
-        "### Blocking Issues (if any)\n- [Issues that MUST be fixed]\n"
-        "### Full Review\n[Detailed analysis]\n\n"
+        "### Strengths\n### Issues\n### Suggestions\n"
+        "### Blocking Issues\n\n"
         "Pass threshold: {pass_threshold}"
     ),
     "review_system": (
-        "You are a senior software engineer reviewing code implementations for "
-        "correctness, completeness, and quality.\n\n"
-        "Severity classification:\n"
-        "- BLOCKING: Must be fixed (missing functionality, logic errors, broken imports)\n"
-        "- MAJOR: Should be fixed (poor error handling, missing type hints)\n"
-        "- MINOR: Nice to fix (cosmetic, naming suggestions)\n\n"
-        "Convergence: When prior issues are listed, explicitly state RESOLVED or "
-        "STILL OUTSTANDING for each. Do not re-raise addressed issues."
+        "You are a senior engineer reviewing code for correctness and completeness. "
+        "Severity: BLOCKING (must fix), MAJOR (should fix), MINOR (nice to fix). "
+        "Verify parameter names match upstream documents exactly. "
+        "Convergence: state RESOLVED or STILL OUTSTANDING for prior issues."
     ),
 }
 
@@ -117,8 +126,8 @@ def _load_file(name: str) -> Dict[str, Any]:
 def get_template(prompt_name: str) -> str:
     """Get a prompt template by name.
 
-    Loads from the YAML file first; falls back to inline strings if
-    the YAML file is unavailable.
+    Loads from the consolidated YAML file first; falls back to inline
+    strings if the YAML file is unavailable.
 
     Args:
         prompt_name: Template key (e.g. ``spec``, ``draft``, ``review``).
@@ -127,7 +136,7 @@ def get_template(prompt_name: str) -> str:
         Template string with ``{placeholder}`` markers.
     """
     try:
-        data = _load_file("implementation_engine")
+        data = _load_file("contractor_prompts")
         prompts = data.get("prompts", {})
         entry = prompts.get(prompt_name, {})
         template = entry.get("template") if isinstance(entry, dict) else None

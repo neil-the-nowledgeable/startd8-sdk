@@ -10,8 +10,10 @@ Available workflows:
 - IterativeDevWorkflowWrapper: Dev-review-fix iterations
 - DesignPolishWorkflow: 3-stage design document refinement
 - CriticalReviewWorkflow: Multi-agent document review
-- LeadContractorWorkflow: Cost-efficient lead contractor pattern
-- LeadContractorContextCoreWorkflow: Lead contractor with ContextCore task tracking
+- PrimaryContractorWorkflow: Cost-efficient primary contractor pattern
+- PrimaryContractorContextCoreWorkflow: Primary contractor with ContextCore task tracking
+- LeadContractorWorkflow: Backward-compat alias for PrimaryContractorWorkflow
+- LeadContractorContextCoreWorkflow: Backward-compat alias for PrimaryContractorContextCoreWorkflow
 - PolicyAnalysisWorkflow: Multi-agent critical policy analysis
 - PlainLanguageWorkflow: Simplifies complex content into plain language
 - PlanIngestionWorkflow: Parses, assesses, and transforms generic plans into SDK-native formats
@@ -30,6 +32,8 @@ __all__ = [
     "CriticalReviewWorkflow",
     "DocReviewLogWorkflow",
     "ArchitecturalReviewLogWorkflow",
+    "PrimaryContractorWorkflow",
+    "PrimaryContractorContextCoreWorkflow",
     "LeadContractorWorkflow",
     "LeadContractorContextCoreWorkflow",
     "PolicyAnalysisWorkflow",
@@ -63,6 +67,12 @@ def __getattr__(name: str):
     elif name == "ArchitecturalReviewLogWorkflow":
         from .architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
         return ArchitecturalReviewLogWorkflow
+    elif name == "PrimaryContractorWorkflow":
+        from .lead_contractor_workflow import PrimaryContractorWorkflow
+        return PrimaryContractorWorkflow
+    elif name == "PrimaryContractorContextCoreWorkflow":
+        from .lead_contractor_contextcore_workflow import PrimaryContractorContextCoreWorkflow
+        return PrimaryContractorContextCoreWorkflow
     elif name == "LeadContractorWorkflow":
         from .lead_contractor_workflow import LeadContractorWorkflow
         return LeadContractorWorkflow

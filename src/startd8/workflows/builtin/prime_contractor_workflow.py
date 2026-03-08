@@ -149,7 +149,7 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
             5. Apply task filter, run workflow, convert result
         """
         from ...contractors.prime_contractor import PrimeContractorWorkflow
-        from ...contractors.generators.lead_contractor import LeadContractorCodeGenerator
+        from ...contractors.generators.lead_contractor import PrimaryContractorCodeGenerator
         from ...contractors.queue import FeatureStatus
 
         started_at = datetime.now(timezone.utc)
@@ -170,7 +170,7 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
             code_generator = None
             if lead_agent or drafter_agent:
                 output_dir = project_root / "generated"
-                code_generator = LeadContractorCodeGenerator(
+                code_generator = PrimaryContractorCodeGenerator(
                     output_dir=output_dir,
                     lead_agent=lead_agent,
                     drafter_agent=drafter_agent,

@@ -351,9 +351,12 @@ class MicroPrimeCodeGenerator:
 
             # REQ-DDS-002: Thread design_doc_sections to engine
             _dds = context.get("design_doc_sections") or []
+            # Mottainai Rule 2: Forward task description to element prompts
+            _task_desc = task or None
             file_result = self._engine.process_file_with_context(
                 file_spec, skeleton, mp_context,
                 design_doc_sections=_dds if _dds else None,
+                task_description=_task_desc,
             )
             all_file_results.append(file_result)
             file_results_by_path[file_path] = file_result

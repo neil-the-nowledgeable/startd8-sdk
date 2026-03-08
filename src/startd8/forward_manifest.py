@@ -16,7 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import (
@@ -131,6 +131,7 @@ class ForwardElementSpec(BaseModel):
         is_abstract: Whether the callable is abstract (``@abstractmethod``).
         type_annotation: Type annotation string for constants/variables.
         value_repr: Representative value for constants (e.g., ``"3.14"``).
+        decomposition_source: Provenance tag from the decomposition phase.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -205,12 +206,21 @@ class ForwardElementSpec(BaseModel):
         return self
 
     def to_element(self) -> Element:
-        """Bridge to code_manifest.Element with sentinel span."""
+        """Bridge to code_manifest.Element with a sentinel zero-span.
+
+        The returned ``Element`` uses ``Span(0, 0, 0, 0)`` because forward
+        specs describe *expected* code that does not yet have a source
+        location.  Callers that need a real span must update it after
+        code generation.
+
+        Returns:
+            An ``Element`` populated from this spec's fields.
+        """
         return Element(
             kind=self.kind,
             name=self.name,
             fqn=f"{self.parent_class}.{self.name}" if self.parent_class else self.name,
-            span=Span(start_line=0, start_col=0, end_line=0, end_col=0),  # Sentinel: forward specs have no source location
+            span=Span(start_line=0, start_col=0, end_line=0, end_col=0),
             signature=self.signature,
             bases=list(self.bases),
             visibility=self.visibility,
@@ -299,8 +309,10 @@ class ForwardManifest(BaseModel):
         generated_at: ISO-8601 timestamp of manifest creation.
         source_checksum: Checksum of the source design document.
         contracts: Interface contracts extracted from the design.
-        file_specs: Per-file element and import specifications.
+        file_specs: Per-file element and import specifications, keyed by
+            relative file path.
         stages_completed: Pipeline stages that have enriched this manifest.
+        metadata: Arbitrary key-value metadata attached by pipeline stages.
     """
 
     schema_version: str = "1.0.0"
@@ -313,8 +325,131 @@ class ForwardManifest(BaseModel):
     stages_completed: list[str] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
 
+    # --- Lazy element indexes (excluded from serialization via PrivateAttr) ---
+    #
+    # _element_index: source_contract_id → ForwardElementSpec
+    #     Only elements where source_contract_id is set are indexed here.
+    # _name_index: element.name → list[ForwardElementSpec]
+    #     All elements are indexed here regardless of source_contract_id.
+    # _index_built: sentinel that prevents redundant rebuild passes.
+    _element_index: dict[str, ForwardElementSpec] = PrivateAttr(default_factory=dict)
+    _name_index: dict[str, list[ForwardElementSpec]] = PrivateAttr(default_factory=dict)
+    _index_built: bool = PrivateAttr(default=False)
+
+    def _build_element_index(self) -> None:
+        """Build in-memory element indexes (lazy, called once).
+
+        Populates two private indexes over all ``file_specs``:
+
+        * ``_element_index`` — maps ``source_contract_id`` →
+          ``ForwardElementSpec`` for elements where ``source_contract_id``
+          is set.  If two elements share the same ``source_contract_id`` the
+          later one wins and a warning is emitted.
+        * ``_name_index`` — maps ``element.name`` →
+          ``list[ForwardElementSpec]`` for *all* elements regardless of
+          ``source_contract_id``.
+
+        Idempotent: returns immediately if ``_index_built`` is ``True``.
+        Neither index is serialized to JSON (both are ``PrivateAttr``).
+        """
+        if self._index_built:
+            return
+
+        element_index: dict[str, ForwardElementSpec] = {}
+        name_index: dict[str, list[ForwardElementSpec]] = {}
+
+        for file_spec in self.file_specs.values():
+            for element in file_spec.elements:
+                # --- ID index: only elements with a source_contract_id ---
+                if element.source_contract_id:
+                    if element.source_contract_id in element_index:
+                        logger.warning(
+                            "Duplicate source_contract_id in ForwardManifest element index; "
+                            "later entry will overwrite earlier one.",
+                            extra={
+                                "source_contract_id": element.source_contract_id,
+                                "element_name": element.name,
+                            },
+                        )
+                    element_index[element.source_contract_id] = element
+
+                # --- Name index: all elements ---
+                name_index.setdefault(element.name, []).append(element)
+
+        self._element_index = element_index
+        self._name_index = name_index
+        self._index_built = True
+
+        logger.debug(
+            "ForwardManifest element index built",
+            extra={
+                "indexed_by_id": len(element_index),
+                "indexed_by_name": len(name_index),
+            },
+        )
+
+    def get_element_by_id(self, element_id: str) -> Optional[ForwardElementSpec]:
+        """Return the element spec whose ``source_contract_id`` matches *element_id*.
+
+        Builds the element index on first call (O(n) once, O(1) thereafter).
+
+        Args:
+            element_id: The ``source_contract_id`` of the desired element.
+
+        Returns:
+            The matching ``ForwardElementSpec``, or ``None`` if not found.
+        """
+        self._build_element_index()
+        return self._element_index.get(element_id)
+
+    def get_elements_by_name(self, name: str) -> list[ForwardElementSpec]:
+        """Return all element specs whose ``name`` field equals *name*.
+
+        Multiple elements may share a name (e.g., a method named ``validate``
+        defined in different classes across different files).
+
+        Builds the element index on first call (O(n) once, O(1) thereafter).
+
+        Args:
+            name: The ``name`` field value to look up.
+
+        Returns:
+            A new list of matching ``ForwardElementSpec`` objects (may be
+            empty).  Mutating the returned list does not affect the index.
+        """
+        self._build_element_index()
+        return list(self._name_index.get(name, []))
+
+    def all_elements(self) -> list[tuple[str, ForwardElementSpec]]:
+        """Return all ``(source_contract_id, spec)`` pairs in the ID index.
+
+        Only elements that have a non-``None`` ``source_contract_id`` are
+        included, matching the population semantics of
+        ``_build_element_index``.  Elements without a ``source_contract_id``
+        can still be reached via ``get_elements_by_name`` or by iterating
+        ``file_specs`` directly.
+
+        Builds the element index on first call (O(n) once, O(1) thereafter).
+
+        Returns:
+            A new list of ``(element_id, ForwardElementSpec)`` tuples.
+            Mutating the returned list does not affect the index.
+        """
+        self._build_element_index()
+        return list(self._element_index.items())
+
     def contracts_for_task(self, task_id: str) -> list[InterfaceContract]:
-        """Return project-wide contracts plus those specific to *task_id*."""
+        """Return project-wide contracts plus those specific to *task_id*.
+
+        A contract is "project-wide" when its ``applicable_task_ids`` list
+        is empty, meaning it applies to every task.
+
+        Args:
+            task_id: The task identifier to filter by.
+
+        Returns:
+            All contracts that apply to *task_id*.
+        """
         return [
             c
             for c in self.contracts
@@ -322,13 +457,28 @@ class ForwardManifest(BaseModel):
         ]
 
     def binding_constraints_for_task(self, task_id: str) -> list[str]:
-        """Return binding_text strings for all contracts applicable to *task_id*."""
+        """Return ``binding_text`` strings for all contracts applicable to *task_id*.
+
+        Args:
+            task_id: The task identifier to filter by.
+
+        Returns:
+            Ordered list of binding-text directives ready for prompt injection.
+        """
         return [c.binding_text for c in self.contracts_for_task(task_id)]
 
     def file_specs_for_task(
         self, task_id: str, target_files: list[str]
     ) -> dict[str, ForwardFileSpec]:
-        """Return file specs whose path appears in *target_files*."""
+        """Return file specs whose path appears in *target_files*.
+
+        Args:
+            task_id: Unused by this method; reserved for future scoping logic.
+            target_files: Relative file paths to include.
+
+        Returns:
+            Filtered subset of ``self.file_specs``.
+        """
         return {
             path: spec
             for path, spec in self.file_specs.items()
@@ -336,7 +486,11 @@ class ForwardManifest(BaseModel):
         }
 
     def contract_count_by_category(self) -> Counter:
-        """Return a Counter of contracts grouped by category."""
+        """Return a ``Counter`` of contracts grouped by ``ContractCategory``.
+
+        Returns:
+            Mapping of ``ContractCategory`` → count.
+        """
         return Counter(c.category for c in self.contracts)
 
 
@@ -353,12 +507,13 @@ class ContractViolation:
     satisfy a binding constraint from the manifest.
 
     Attributes:
-        contract_id: ID of the violated InterfaceContract.
-        violation_type: Category of the violation (e.g., missing element).
+        contract_id: ID of the violated ``InterfaceContract``.
+        violation_type: Category of the violation (e.g., ``"missing_element"``).
         expected: What the contract required.
         actual: What was found in generated code (``None`` if absent).
         file_path: File where the violation was detected.
-        severity: Severity level (default ``"error"``).
+        severity: Severity level — one of ``"error"``, ``"warning"``,
+            ``"info"`` (default ``"error"``).
     """
 
     contract_id: str
@@ -391,11 +546,22 @@ class ContractViolation:
 
 
 def _format_endpoint_schema_parts(
-    req_schema: object, resp_schema: object,
+    req_schema: object,
+    resp_schema: object,
 ) -> list[str]:
-    """Format request/response schema fields into binding text parts.
+    """Format request/response schema dicts into binding-text field parts.
 
-    Defensively accesses field dicts per [O11Y Leg 8 #3] existence→type→access.
+    Defensively accesses nested ``fields`` lists per existence → type → access
+    order to avoid ``AttributeError`` or ``TypeError`` on malformed schemas.
+
+    Args:
+        req_schema: Value of ``InterfaceContract.request_schema`` (any type).
+        resp_schema: Value of ``InterfaceContract.response_schema`` (any type).
+
+    Returns:
+        List of formatted strings such as
+        ``["request_fields=[name, age]", "response_fields=[id, status]"]``.
+        Empty if the schemas are ``None`` or malformed.
     """
     parts: list[str] = []
     for label, schema in (("request_fields", req_schema), ("response_fields", resp_schema)):
@@ -413,10 +579,19 @@ def _format_endpoint_schema_parts(
 
 
 def compute_binding_text(contract: InterfaceContract) -> str:
-    """Compute a compact binding-text string from an InterfaceContract.
+    """Compute a compact binding-text directive from an ``InterfaceContract``.
 
-    Returns a ``[BINDING]`` or ``[ADVISORY]`` prefixed string with
+    Produces a ``[BINDING]`` or ``[ADVISORY]`` prefixed string with
     category-specific fields joined by `` | ``.
+
+    ``[BINDING]`` is used for ``EXPLICIT`` and ``INFERRED`` confidence levels;
+    ``[ADVISORY]`` is used for ``TENTATIVE``.
+
+    Args:
+        contract: The contract to render.
+
+    Returns:
+        A single-line binding-text string ready for prompt injection.
     """
     prefix = (
         "[BINDING]"
@@ -435,9 +610,9 @@ def compute_binding_text(contract: InterfaceContract) -> str:
             parts.append(f"base={contract.base_class}")
     elif cat == ContractCategory.API_ENDPOINT and contract.endpoint:
         parts.append(f"endpoint={contract.endpoint}")
-        parts.extend(_format_endpoint_schema_parts(
-            contract.request_schema, contract.response_schema,
-        ))
+        parts.extend(
+            _format_endpoint_schema_parts(contract.request_schema, contract.response_schema)
+        )
     elif cat == ContractCategory.CONFIG_KEY and contract.env_var:
         parts.append(f"env_var={contract.env_var}")
     elif cat == ContractCategory.IMPORT_PATH and contract.import_path:
@@ -466,19 +641,23 @@ def forward_element_spec_from_element(
 ) -> ForwardElementSpec:
     """Convert an AST ``Element`` to a ``ForwardElementSpec``.
 
-    Supports all element kinds including CONSTANT/VARIABLE (which carry
+    Supports all element kinds including ``CONSTANT``/``VARIABLE`` (which carry
     ``type_annotation`` and ``value_repr`` instead of a signature).
-    Derives ``parent_class`` from ``element.fqn`` if dotted.
+    Derives ``parent_class`` from ``element.fqn`` when the FQN is dotted and
+    the element kind is a nested kind (method, property, constant, variable).
 
     Args:
         element: AST-derived element from ``code_manifest``.
-        source_contract_id: Provenance ID. When ``None`` a rich ID is NOT
-            set — callers should provide ``"flcm-ast-{relpath}:{line}:{fqn}"``.
+        source_contract_id: Provenance ID linking this spec to an
+            ``InterfaceContract``.  Callers should provide a stable ID such as
+            ``"flcm-ast-{relpath}:{line}:{fqn}"``.  When ``None`` the element
+            will not appear in ``ForwardManifest.all_elements()`` or be
+            reachable via ``get_element_by_id()``.
 
     Returns:
         A validated ``ForwardElementSpec``.
     """
-    # Derive parent_class only for method/property/constant/variable kinds.
+    # Derive parent_class only for nested kinds where the FQN is dotted.
     parent_class: Optional[str] = None
     nested_kinds = {
         ElementKind.METHOD,
@@ -490,6 +669,7 @@ def forward_element_spec_from_element(
     if element.kind in nested_kinds and "." in element.fqn:
         parts = element.fqn.rsplit(".", 1)
         if parts[0]:
+            # Strip outer nesting beyond one level (Outer.Inner → Inner).
             parent_class = parts[0].rsplit(".", 1)[-1]
 
     return ForwardElementSpec(
@@ -517,17 +697,23 @@ def forward_import_spec_from_entry(
 ) -> Optional[ForwardImportSpec]:
     """Convert an AST ``ImportEntry`` to a ``ForwardImportSpec``.
 
-    Relative imports (``is_relative=True``) are normalized to absolute module
-    paths using ``project_root`` and ``file_path``. If normalization fails or
-    the required paths are not provided, the import is dropped (returns ``None``).
+    Relative imports (``is_relative=True``) are resolved to absolute module
+    paths using ``project_root`` and ``file_path``.  The ``src/`` directory is
+    stripped from the package path because it is a layout convention and not
+    part of the Python package namespace.
+
+    If resolution fails or the required paths are not provided, the import is
+    dropped and ``None`` is returned.
 
     Args:
         entry: AST-derived import from ``code_manifest``.
-        project_root: Project root for relative import resolution.
-        file_path: Source file path for relative import resolution.
+        project_root: Absolute path to the project root directory.
+            Required for relative import resolution.
+        file_path: Absolute path to the source file containing the import.
+            Required for relative import resolution.
 
     Returns:
-        A ``ForwardImportSpec`` or ``None`` if the import should be dropped.
+        A ``ForwardImportSpec``, or ``None`` if the import should be dropped.
     """
     module = entry.module
 
@@ -537,11 +723,8 @@ def forward_import_spec_from_entry(
         try:
             project_root = Path(project_root)
             file_path = Path(file_path)
-            # Compute package from file location.
-            # Strip "src" directory since it's a common layout convention
-            # (e.g., src/mypackage/utils.py → mypackage.utils) and is not
-            # part of the Python package path.
             rel = file_path.parent.relative_to(project_root)
+            # Strip "src" — it's a layout convention, not a package component.
             package_parts = [p for p in rel.parts if p != "src"]
             if module:
                 package_parts.append(module)
@@ -562,13 +745,14 @@ def forward_import_spec_from_entry(
 def forward_dependencies_from_deps(deps: Dependencies) -> ForwardDependencies:
     """Convert AST ``Dependencies`` to ``ForwardDependencies``.
 
-    Maps external and stdlib; drops internal and conditional.
+    Maps ``external`` and ``stdlib`` package lists; drops ``internal`` and
+    ``conditional`` entries which are not relevant to the forward manifest.
 
     Args:
         deps: AST-derived dependency summary from ``code_manifest``.
 
     Returns:
-        A ``ForwardDependencies`` with external and stdlib only.
+        A ``ForwardDependencies`` with only external and stdlib packages.
     """
     return ForwardDependencies(
         external=list(deps.external) if deps.external else [],

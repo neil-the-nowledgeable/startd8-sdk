@@ -1,7 +1,7 @@
 """
-LeadContractorContextCoreWorkflow - Lead Contractor with ContextCore Task Tracking.
+PrimaryContractorContextCoreWorkflow - Primary Contractor with ContextCore Task Tracking.
 
-Extends the Lead Contractor pattern with integrated task tracking via ContextCore.
+Extends the Primary Contractor pattern with integrated task tracking via ContextCore.
 Tasks are modeled as OpenTelemetry spans, enabling unified project observability.
 
 Features:
@@ -51,16 +51,16 @@ from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
 from ...logging_config import get_logger
 
-# Import existing Lead Contractor components
+# Import existing Primary Contractor components
 from .lead_contractor_workflow import (
-    LeadContractorWorkflow,
+    PrimaryContractorWorkflow,
     SPEC_PROMPT_TEMPLATE,
     DRAFT_PROMPT_TEMPLATE,
     REVIEW_PROMPT_TEMPLATE,
     INTEGRATION_PROMPT_TEMPLATE,
 )
 from .lead_contractor_models import (
-    LeadContractorResult,
+    PrimaryContractorResult,
     WorkflowPhase,
 )
 
@@ -106,7 +106,7 @@ class ContextCoreTaskTracker:
             self._tracker = TaskTracker(project=self.project_id)
             self._emitter = InsightEmitter(
                 project_id=self.project_id,
-                agent_id="startd8-lead-contractor"
+                agent_id="startd8-primary-contractor"
             )
             self._enabled = True
             logger.info(f"ContextCore tracking enabled for task {self.task_id}")
@@ -233,11 +233,11 @@ class ContextCoreTaskTracker:
             return False
 
 
-class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
+class PrimaryContractorContextCoreWorkflow(PrimaryContractorWorkflow):
     """
-    Lead Contractor workflow with integrated ContextCore task tracking.
+    Primary Contractor workflow with integrated ContextCore task tracking.
 
-    Extends LeadContractorWorkflow to automatically track workflow execution
+    Extends PrimaryContractorWorkflow to automatically track workflow execution
     as ContextCore task spans, enabling project observability integration.
 
     Additional Config:
@@ -304,7 +304,7 @@ class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
 
         return WorkflowMetadata(
             workflow_id="lead-contractor-contextcore",
-            name="Lead Contractor with ContextCore Tracking",
+            name="Primary Contractor with ContextCore Tracking",
             description="Cost-efficient multi-agent pattern with integrated task-as-spans tracking",
             version="1.0.0",
             capabilities=base.capabilities + ["contextcore-tracking", "task-as-spans", "observability"],
@@ -342,7 +342,7 @@ class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
             )
 
             # Start the task
-            task_title = f"Lead Contractor: {config.get('task_description', 'Unknown')[:50]}"
+            task_title = f"Primary Contractor: {config.get('task_description', 'Unknown')[:50]}"
             tracker.start_task(task_title, task_type="task")
             tracker.update_status("in_progress")
 
@@ -441,7 +441,7 @@ class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
                 local_storage=local_storage,
             )
 
-            task_title = f"Lead Contractor: {config.get('task_description', 'Unknown')[:50]}"
+            task_title = f"Primary Contractor: {config.get('task_description', 'Unknown')[:50]}"
             tracker.start_task(task_title, task_type="task")
             tracker.update_status("in_progress")
 
@@ -533,3 +533,7 @@ class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
+
+
+# Backward-compat alias (Phase 4 rename: Lead → Primary)
+LeadContractorContextCoreWorkflow = PrimaryContractorContextCoreWorkflow

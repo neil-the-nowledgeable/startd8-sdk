@@ -1,0 +1,390 @@
+# Consolidated contractor prompt templates.
+#
+# Single source of truth for spec, draft, and review prompts.
+# Replaces the former lead_contractor.yaml and implementation_engine.yaml.
+#
+# Design principles (modeled after micro_prime/prompt_builder.py):
+#   - System prompts: 2-4 lines max (role + core constraint)
+#   - User prompts: placeholders for context; no repeated instruction blocks
+#   - Coding standards & provenance rules: injected once via system prompt,
+#     NOT duplicated across user-prompt sections
+#   - Domain-specific rules (Docker, gRPC): injected via context, not hardcoded
+
+prompts:
+
+  # ---------- SPEC PHASE (Primary Contractor) ----------
+
+  spec:
+    description: "Spec prompt — 8-section implementation specification"
+    template: |
+      You are a senior software architect creating an implementation specification.
+
+      ## Task
+      {task_description}
+      {requirements_section}
+      {context_sections}
+      {critical_parameters_section}
+      {forward_contracts_section}
+
+      ## Constraints
+      {domain_constraints}
+
+      ## Output Format
+      Provide an 8-section specification: Task Summary, Requirements,
+      Technical Approach, Code Structure, Acceptance Criteria, Edge Cases,
+      Constraints, Examples.
+    placeholders:
+      - task_description
+      - requirements_section
+      - context_sections
+      - critical_parameters_section
+      - forward_contracts_section
+      - domain_constraints
+
+  spec_from_design:
+    description: "Spec from approved design doc — forwards verbatim, adds missing sections"
+    template: |
+      You are expanding an approved design document into a full implementation specification.
+
+      ## Design Document (AUTHORITATIVE — include verbatim)
+      {design_document}
+
+      ## Task
+      {task_description}
+      {requirements_section}
+      {context_sections}
+      {critical_parameters_section}
+      {forward_contracts_section}
+
+      ## Constraints
+      {domain_constraints}
+
+      ## Instructions
+      1. Forward ALL design document content verbatim into the appropriate sections
+      2. ADD: Technical Approach, Code Structure, Acceptance Criteria, Edge Cases, Examples
+      3. Do NOT paraphrase design document content
+
+      ## Output Format
+      Provide an 8-section specification: Task Summary, Requirements,
+      Technical Approach, Code Structure, Acceptance Criteria, Edge Cases,
+      Constraints, Examples.
+    placeholders:
+      - design_document
+      - task_description
+      - requirements_section
+      - context_sections
+      - critical_parameters_section
+      - forward_contracts_section
+      - domain_constraints
+
+  # ---------- DRAFT PHASE (Secondary Contractor) ----------
+
+  draft:
+    description: "Draft implementation from spec (greenfield)"
+    template: |
+      Implement the following specification.
+
+      ## Specification
+      {spec}
+
+      ## Feedback
+      {feedback}
+
+      {existing_files_section}
+
+      {supplementary_sections}
+
+      ## Output Format
+      {output_format}
+    placeholders:
+      - spec
+      - feedback
+      - output_format
+      - existing_files_section
+      - supplementary_sections
+
+  draft_edit:
+    description: "Draft implementation from spec (edit mode — existing files first)"
+    template: |
+      Modify the existing code per the specification below.
+
+      {existing_files_section}
+
+      ## Specification (changes to apply)
+      {spec}
+
+      ## Feedback
+      {feedback}
+
+      {supplementary_sections}
+
+      ## Output Format
+      {output_format}
+    placeholders:
+      - spec
+      - feedback
+      - output_format
+      - existing_files_section
+      - supplementary_sections
+
+  # ---------- DRAFT SYSTEM PROMPTS (mode-aware, sparse) ----------
+
+  draft_system_create:
+    description: "System prompt — greenfield CREATE mode"
+    template: |
+      You are an expert Python engineer. Implement the spec exactly.
+      Complete implementations only — no stubs, TODOs, or pass bodies.
+      Use parameter names from upstream documents verbatim. Do not rename them.
+      Do not generate project boilerplate — only task-specific code.
+      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+    placeholders: []
+
+  draft_system_edit:
+    description: "System prompt — whole-file EDIT mode"
+    template: |
+      You are an expert Python engineer editing existing source code.
+      PRESERVE all unchanged code. Output the COMPLETE modified file.
+      Use parameter names from upstream documents verbatim. Do not rename them.
+      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+    placeholders: []
+
+  draft_system_search_replace:
+    description: "System prompt — large-file EDIT mode (>= 50 lines)"
+    template: |
+      You are an expert Python engineer making targeted edits to large files.
+      Minimal changes only. Output the COMPLETE modified file — every line.
+      Use parameter names from upstream documents verbatim. Do not rename them.
+      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+    placeholders: []
+
+  draft_system_skeleton_fill:
+    description: "System prompt — skeleton fill mode (FR-MPA-005, pre-assembled file)"
+    template: |
+      You are an expert Python engineer filling method bodies in pre-assembled skeleton files.
+      Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements.
+      Use parameter names from upstream documents verbatim. Do not rename them.
+      Preserve all imports, class structure, and pre-filled method bodies exactly as provided.
+      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+    placeholders: []
+
+  # ---------- DRAFT USER PROMPT — SKELETON FILL (FR-MPA-005) ----------
+
+  draft_skeleton_fill:
+    description: "Draft implementation from spec (skeleton fill — pre-assembled file with stubs)"
+    template: |
+      Fill the unfilled method bodies in the pre-assembled skeleton file below.
+
+      ## Existing Skeleton
+      The following file already exists with correct imports, class structure,
+      and some method bodies pre-filled. Implement ONLY the method bodies
+      marked with `raise NotImplementedError`.
+
+      {skeleton_section}
+
+      {pre_assembly_status}
+
+      ## Specification (scope: unfilled elements only)
+      {spec}
+
+      ## Feedback
+      {feedback}
+
+      {supplementary_sections}
+
+      ## Output Format
+      {output_format}
+    placeholders:
+      - skeleton_section
+      - pre_assembly_status
+      - spec
+      - feedback
+      - output_format
+      - supplementary_sections
+
+  # ---------- REVIEW PHASE (Primary Contractor) ----------
+
+  review:
+    description: "Review prompt with convergent review support"
+    template: |
+      Review this implementation against the specification.
+
+      ## Task
+      {task_description}
+
+      ## Specification
+      {spec}
+
+      {enrichment_sections}
+
+      {prior_issues_section}
+
+      ## Implementation
+      {implementation}
+
+      {convergence_instructions}
+
+      ## Output Format
+      ### Score: [0-100]
+      ### Verdict: [PASS/FAIL] (PASS if >= {pass_threshold}, no blockers)
+      ### Strengths
+      ### Issues (prefix: BLOCKING / MAJOR / MINOR)
+      ### Suggestions
+      ### Blocking Issues
+    placeholders:
+      - task_description
+      - spec
+      - implementation
+      - pass_threshold
+      - enrichment_sections
+      - prior_issues_section
+      - convergence_instructions
+
+  review_system:
+    description: "System prompt for review agent"
+    template: |
+      You are a senior engineer reviewing code for correctness and completeness.
+      Severity: BLOCKING (must fix), MAJOR (should fix), MINOR (nice to fix).
+      Verify parameter names match upstream documents exactly — flag renames as BLOCKING.
+      For edit-mode: verify existing code preserved. Flag removal as BLOCKING unless spec required it.
+      Convergence: state RESOLVED or STILL OUTSTANDING for each prior issue.
+    placeholders: []
+
+  # ---------- INTEGRATION PHASE ----------
+
+  integration:
+    description: "Final integration polish"
+    template: |
+      Finalize this implementation for production.
+
+      ## Task
+      {task_description}
+
+      ## Implementation
+      {implementation}
+
+      ## Review History
+      {review_history}
+
+      ## Instructions
+      {integration_instructions}
+      {multi_file_directive}
+
+      Make final polish, then output the production-ready code in a fenced block.
+    placeholders:
+      - task_description
+      - implementation
+      - review_history
+      - integration_instructions
+      - multi_file_directive
+
+  # ---------- FRAMING TEMPLATES ----------
+
+  plan_context_edit_framing:
+    description: "Plan context framing for edit tasks"
+    template: |
+      The following plan describes CHANGES to existing code. Do NOT treat as greenfield.
+    placeholders: []
+
+  plan_context_create_framing:
+    description: "Plan context framing for create tasks"
+    template: |
+      The following plan provides context. The design document (if present) is authoritative.
+    placeholders: []
+
+  arch_context_edit_framing:
+    description: "Architectural context framing for edit tasks"
+    template: |
+      Apply these architectural constraints to the existing file(s). Do not redesign.
+    placeholders: []
+
+  spec_edit_preamble_base:
+    description: "Edit-mode spec preamble"
+    template: |
+      ## EDIT MODE
+      **Task type: {task_verb}** existing code.
+      Describe ONLY additions and modifications. List unchanged functions/classes.
+      Specify exact insertion points.
+    placeholders:
+      - task_verb
+
+  spec_edit_quantitative_constraint:
+    description: "Line-count constraint for edit spec"
+    template: |
+      **Existing file(s): {total_lines} lines.** Draft must be >= {min_lines} lines ({edit_min_pct}%).
+    placeholders:
+      - total_lines
+      - min_lines
+      - edit_min_pct
+
+  spec_completeness_warning:
+    description: "Warning for missing spec parameters"
+    template: |
+      ## Spec Completeness Warning
+      These parameters from requirements are NOT in the spec — include them:
+      {missing_lines}
+    placeholders:
+      - missing_lines
+
+  # ---------- OUTPUT FORMAT TEMPLATES ----------
+
+  single_file_output:
+    description: "Output format for single-file tasks"
+    template: |
+      Provide your complete implementation in a single fenced code block.
+    placeholders: []
+
+  multi_file_output:
+    description: "Output format for multi-file tasks"
+    template: |
+      Produce a SEPARATE fenced code block for each file. First line comment = file path.
+
+      REQUIRED files:
+      {file_list}
+
+      Format per file:
+      ```
+      # <full path>
+      <implementation>
+      ```
+
+      Checklist — verify each file has a block:
+      {file_checklist}
+
+      Rules: __init__.py gets its own block. Every file gets its own block. No skipping.
+    placeholders:
+      - file_list
+      - file_checklist
+
+  single_file_edit_output:
+    description: "Output format for single-file edit tasks"
+    template: |
+      Output the COMPLETE modified file ({existing_line_count} lines original).
+      Do NOT omit or abbreviate existing code.
+    placeholders:
+      - existing_line_count
+      - min_output_lines
+      - min_pct
+
+  multi_file_edit_output:
+    description: "Output format for multi-file edit tasks"
+    template: |
+      Output COMPLETE modified files — every line of original plus changes.
+      {existing_line_summary}
+
+      REQUIRED files:
+      {file_list}
+
+      Format per file:
+      ```
+      # <full path>
+      <complete modified file>
+      ```
+
+      Checklist:
+      {file_checklist}
+
+      Rules: every file gets its own block. Preserve all existing code.
+    placeholders:
+      - file_list
+      - file_checklist
+      - existing_line_summary

@@ -2167,7 +2167,8 @@ class PrimeContractorWorkflow:
 
         # --- Draft phase ---
         existing_files = gen_context.get("existing_files")
-        draft_system = get_drafter_system_prompt(existing_files=existing_files)
+        draft_system, draft_mode = get_drafter_system_prompt(existing_files=existing_files)
+        logger.info("Prompt build: drafter mode=%s for '%s'", draft_mode, feature.name)
         prompts["draft_system_prompt.md"] = draft_system
 
         is_edit = bool(existing_files)
@@ -2633,7 +2634,8 @@ class PrimeContractorWorkflow:
 
         # --- Draft phase ---
         existing_files = gen_context.get("existing_files")
-        draft_system = get_drafter_system_prompt(existing_files=existing_files)
+        draft_system, draft_mode = get_drafter_system_prompt(existing_files=existing_files)
+        logger.info("Walkthrough: drafter mode=%s for '%s'", draft_mode, feature.name)
         (wt_dir / "draft_system_prompt.md").write_text(
             draft_system, encoding="utf-8",
         )

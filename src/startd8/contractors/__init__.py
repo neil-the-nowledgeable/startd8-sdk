@@ -68,9 +68,10 @@ from .cli_helpers import add_workflow_args, apply_workflow_args
 
 # Optional: Code generators (require workflow dependencies)
 try:
-    from .generators import LeadContractorCodeGenerator
+    from .generators import PrimaryContractorCodeGenerator, LeadContractorCodeGenerator
     _GENERATORS_AVAILABLE = True
 except ImportError:
+    PrimaryContractorCodeGenerator = None  # type: ignore
     LeadContractorCodeGenerator = None  # type: ignore
     _GENERATORS_AVAILABLE = False
 
@@ -114,5 +115,6 @@ __all__ = [
     "add_workflow_args",
     "apply_workflow_args",
     # Generators (optional)
-    "LeadContractorCodeGenerator",
+    "PrimaryContractorCodeGenerator",
+    "LeadContractorCodeGenerator",  # Backward-compat alias
 ]

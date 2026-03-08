@@ -1,5 +1,5 @@
 """
-Data models for the LeadContractor workflow.
+Data models for the PrimaryContractor workflow.
 
 Defines configuration, intermediate results, and output structures
 for the cost-efficient multi-agent implementation pattern.
@@ -18,13 +18,15 @@ from startd8.model_catalog import Models
 __all__ = [
     "DrafterChoice",
     "WorkflowPhase",
-    "LeadContractorConfig",
+    "PrimaryContractorConfig",
+    "LeadContractorConfig",  # Backward-compat alias
     "ImplementationSpec",
     "DraftResult",
     "ReviewResult",
     "IntegrationResult",
     "PhaseMetrics",
-    "LeadContractorResult",
+    "PrimaryContractorResult",
+    "LeadContractorResult",  # Backward-compat alias
     "TestCase",
     "TestPlanJSON",
     "TestPlanMarkdown",
@@ -49,7 +51,7 @@ class DrafterChoice(str, Enum):
 
 
 class WorkflowPhase(str, Enum):
-    """Phases of the lead contractor workflow."""
+    """Phases of the primary contractor workflow."""
     SPEC_CREATION = "spec_creation"
     DRAFTING = "drafting"
     REVIEW = "review"
@@ -60,14 +62,14 @@ class WorkflowPhase(str, Enum):
 
 
 @dataclass
-class LeadContractorConfig:
+class PrimaryContractorConfig:
     """
-    Configuration for the LeadContractor workflow.
+    Configuration for the PrimaryContractor workflow.
 
     Attributes:
         task_description: What needs to be implemented
         context: Additional context (existing code, requirements, constraints)
-        lead_agent: Lead agent spec (default: Models.LEAD_CONTRACTOR_LEAD)
+        lead_agent: Primary agent spec (default: Models.LEAD_CONTRACTOR_LEAD)
         drafter_agent: Drafter agent spec (default: Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations: Maximum draft/review cycles (default: 3)
         pass_threshold: Minimum review score to pass (0-100, default: 80)
@@ -217,9 +219,9 @@ class PhaseMetrics:
 
 
 @dataclass
-class LeadContractorResult:
+class PrimaryContractorResult:
     """
-    Complete result of the LeadContractor workflow.
+    Complete result of the PrimaryContractor workflow.
     """
     workflow_id: str
     success: bool
@@ -349,3 +351,8 @@ class TestPlanMarkdown(BaseModel):
     test_cases_md: str = ""
     execution_plan: str = ""
     coverage_analysis: str = ""
+
+
+# Backward-compat aliases (Phase 4 rename: Lead → Primary)
+LeadContractorConfig = PrimaryContractorConfig
+LeadContractorResult = PrimaryContractorResult

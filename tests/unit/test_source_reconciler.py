@@ -426,6 +426,19 @@ class TestSourceReconciler:
         assert stats.elements_added == 0
         assert stats.imports_added == 0
 
+    def test_exclude_files_skips_reconciliation(self, project_with_source):
+        """INV-12: exclude_files prevents AST parsing of target files."""
+        root, relpath = project_with_source
+        manifest = ForwardManifest()
+        config = SourceReconcileConfig(exclude_files={relpath})
+        reconciler = SourceReconciler()
+        stats = reconciler.reconcile(manifest, root, [relpath], config=config)
+        # File should be skipped entirely — no elements added
+        assert stats.files_skipped >= 1
+        assert stats.files_scanned == 0
+        assert stats.elements_added == 0
+        assert relpath not in manifest.file_specs
+
     def test_deterministic_ordering(self, project_with_source):
         """Elements are sorted by (parent_class, name)."""
         root, relpath = project_with_source
@@ -469,6 +482,30 @@ class TestExtractWithProjectRoot:
         manifest = extract_forward_contracts([feature])
         assert "SOURCE_RECONCILE" not in manifest.stages_completed
         assert "EXTRACT" in manifest.stages_completed
+
+    def test_force_regenerate_skips_target_files(self, project_with_source):
+        """INV-12: force_regenerate=True excludes target files from SOURCE_RECONCILE."""
+        root, relpath = project_with_source
+        feature = _make_feature(
+            target_files=[relpath],
+            api_signatures=["def create_app() -> ShoppingAssistant"],
+        )
+        manifest = extract_forward_contracts(
+            [feature], project_root=root, force_regenerate=True,
+        )
+        assert "SOURCE_RECONCILE" in manifest.stages_completed
+        # Target file should NOT have AST-derived elements
+        file_spec = manifest.file_specs.get(relpath)
+        if file_spec is not None:
+            ast_elements = [
+                e for e in file_spec.elements
+                if e.source_contract_id
+                and e.source_contract_id.startswith("flcm-ast-")
+            ]
+            assert len(ast_elements) == 0, (
+                f"Expected no AST-derived elements under force_regenerate, "
+                f"got {len(ast_elements)}"
+            )
 
     def test_deterministic_extractor_with_prior_specs(self, project_with_source):
         """Prior file specs supplement plan-derived specs."""

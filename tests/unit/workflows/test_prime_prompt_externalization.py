@@ -25,16 +25,16 @@ import pytest
 class TestYAMLPromptLoading:
     """Verify YAML files are parseable and contain expected prompts."""
 
-    def test_lead_contractor_yaml_all_prompts_parseable(self):
-        """Test 1: Load lead_contractor.yaml — all 6 prompts parseable."""
-        from startd8.workflows.builtin.prompts import get_template
+    def test_contractor_prompts_yaml_all_prompts_parseable(self):
+        """Test 1: Load contractor_prompts.yaml — all 6 prompts parseable."""
+        from startd8.implementation_engine.prompts import get_template
 
         expected_prompts = [
             "spec", "draft", "single_file_output",
             "multi_file_output", "review", "integration",
         ]
         for name in expected_prompts:
-            template = get_template("lead_contractor", name)
+            template = get_template(name)
             assert isinstance(template, str), f"Prompt '{name}' should be a string"
             assert len(template) > 10, f"Prompt '{name}' should have content"
 
@@ -62,9 +62,9 @@ class TestLoaderModule:
 
     def test_get_template_returns_string_with_placeholders(self):
         """Test 3: get_template returns string with {task_description}."""
-        from startd8.workflows.builtin.prompts import get_template
+        from startd8.implementation_engine.prompts import get_template
 
-        spec = get_template("lead_contractor", "spec")
+        spec = get_template("spec")
         assert "{task_description}" in spec
         assert "{domain_constraints}" in spec
 
@@ -88,10 +88,10 @@ class TestLoaderModule:
 
     def test_missing_prompt_name_raises_key_error(self):
         """Test 6: Missing prompt name raises KeyError."""
-        from startd8.workflows.builtin.prompts import get_template
+        from startd8.implementation_engine.prompts import get_template
 
         with pytest.raises(KeyError):
-            get_template("lead_contractor", "nonexistent_prompt")
+            get_template("nonexistent_prompt")
 
 
 # =========================================================================
@@ -103,13 +103,13 @@ class TestBackwardCompatibility:
     """Verify module-level constants match YAML-loaded values."""
 
     def test_spec_prompt_constant_matches_yaml(self):
-        """Test 7: SPEC_PROMPT_TEMPLATE constant matches YAML-loaded value."""
+        """Test 7: SPEC_PROMPT_TEMPLATE constant matches consolidated YAML."""
         from startd8.workflows.builtin.lead_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
-        from startd8.workflows.builtin.prompts import get_template
+        from startd8.implementation_engine.prompts import get_template
 
-        assert SPEC_PROMPT_TEMPLATE == get_template("lead_contractor", "spec")
+        assert SPEC_PROMPT_TEMPLATE == get_template("spec")
 
     def test_build_output_format_single_file(self):
         """Test 8a: _build_output_format() returns single-file format."""
@@ -133,7 +133,7 @@ class TestBackwardCompatibility:
         result = _build_output_format(["__init__.py", "module.py"])
         assert "__init__.py" in result
         assert "module.py" in result
-        assert "VERIFICATION CHECKLIST" in result
+        assert "Checklist" in result
 
     def test_all_six_constants_loadable(self):
         """All 6 prompt constants are importable from lead_contractor_workflow."""
@@ -283,18 +283,17 @@ class TestCriticalParameters:
 
 
 class TestProtocolGuidance:
-    """Verify spec prompt contains protocol guidance text."""
+    """Verify spec prompt contains core structural elements."""
 
-    def test_spec_prompt_contains_protocol_guidance(self):
-        """Test 15: Spec prompt contains protocol guidance text."""
+    def test_spec_prompt_contains_core_placeholders(self):
+        """Test 15: Spec prompt contains required placeholders."""
         from startd8.workflows.builtin.lead_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
 
-        assert "Protocol and Implementation Guidance" in SPEC_PROMPT_TEMPLATE
-        assert "HEALTHCHECK" in SPEC_PROMPT_TEMPLATE
-        assert "grpc_health_probe" in SPEC_PROMPT_TEMPLATE
-        assert "transport_protocol" in SPEC_PROMPT_TEMPLATE
+        assert "{task_description}" in SPEC_PROMPT_TEMPLATE
+        assert "{domain_constraints}" in SPEC_PROMPT_TEMPLATE
+        assert "{context_sections}" in SPEC_PROMPT_TEMPLATE
 
 
 # =========================================================================

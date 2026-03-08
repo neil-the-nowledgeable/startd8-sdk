@@ -8,8 +8,11 @@ compute_binding_text, JSON round-trip, and ContractViolation.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
+from startd8.element_id import make_element_id
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
@@ -422,6 +425,148 @@ class TestForwardManifestQueries:
     def test_default_schema_version(self) -> None:
         m = ForwardManifest()
         assert m.schema_version == "1.0.0"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ForwardManifest element index
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestForwardManifestElementIndex:
+    """Tests for ForwardManifest element index: get_element_by_id, all_elements, etc.
+
+    Verifies:
+    - correct element returned by ID
+    - index not rebuilt on second call (lazy-build / caching)
+    - unknown ID returns None
+    - all_elements() completeness (count and types)
+    - edge cases: empty manifest, single-match and multi-match name lookups
+    """
+
+    def _build_manifest_with_elements(self) -> ForwardManifest:
+        """Build a manifest with 2 file specs × 2 elements each = 4 elements total.
+
+        Elements in file_a share names with elements in file_b to exercise
+        get_elements_by_name() returning multiple results.
+        """
+        sig = Signature(params=[])
+
+        elem_a1 = ForwardElementSpec(
+            name="alpha",
+            kind=ElementKind.FUNCTION,
+            signature=sig,
+            source_contract_id="contract::alpha_a",
+        )
+        elem_a2 = ForwardElementSpec(
+            name="beta",
+            kind=ElementKind.FUNCTION,
+            signature=sig,
+            source_contract_id="contract::beta_a",
+        )
+        elem_b1 = ForwardElementSpec(
+            name="alpha",  # same name as elem_a1 — for multi-match test
+            kind=ElementKind.FUNCTION,
+            signature=sig,
+            source_contract_id="contract::alpha_b",
+        )
+        elem_b2 = ForwardElementSpec(
+            name="gamma",
+            kind=ElementKind.FUNCTION,
+            signature=sig,
+            source_contract_id="contract::gamma_b",
+        )
+
+        file_a = ForwardFileSpec(
+            file="src/module_a.py",
+            elements=[elem_a1, elem_a2],
+        )
+        file_b = ForwardFileSpec(
+            file="src/module_b.py",
+            elements=[elem_b1, elem_b2],
+        )
+
+        return ForwardManifest(
+            file_specs={"src/module_a.py": file_a, "src/module_b.py": file_b}
+        )
+
+    def test_get_element_by_id_returns_correct_element(self) -> None:
+        """get_element_by_id() must return the exact ForwardElementSpec for a valid ID."""
+        manifest = self._build_manifest_with_elements()
+        # Access first element from first file spec
+        file_specs_list = list(manifest.file_specs.values())
+        expected_element = file_specs_list[0].elements[0]
+        element_id = make_element_id(
+            kind=expected_element.kind,
+            name=expected_element.name,
+            file_path=file_specs_list[0].file,
+        )
+        result = manifest.get_element_by_id(element_id)
+        assert result == expected_element
+
+    def test_index_not_rebuilt_on_second_call(self) -> None:
+        """The internal index must be built exactly once regardless of query count."""
+        manifest = self._build_manifest_with_elements()
+        file_specs_list = list(manifest.file_specs.values())
+        expected_element = file_specs_list[0].elements[0]
+        element_id = make_element_id(
+            kind=expected_element.kind,
+            name=expected_element.name,
+            file_path=file_specs_list[0].file,
+        )
+        with patch.object(
+            manifest, "_build_element_index", wraps=manifest._build_element_index
+        ) as mock_build:
+            manifest.get_element_by_id(element_id)
+            manifest.get_element_by_id(element_id)
+            # Index must be built at most once; second call must reuse cached result.
+            assert mock_build.call_count == 1
+
+    def test_unknown_id_returns_none(self) -> None:
+        """get_element_by_id() must return None for an ID that does not exist."""
+        manifest = self._build_manifest_with_elements()
+        result = manifest.get_element_by_id("nonexistent::totally_unknown_id")
+        assert result is None
+
+    def test_all_elements_completeness(self) -> None:
+        """all_elements() must return every element across all file specs.
+
+        Verifies count (2 files × 2 elements = 4) and that each entry is a
+        (str, ForwardElementSpec) pair with a non-empty ID string.
+        """
+        manifest = self._build_manifest_with_elements()
+        all_elems = manifest.all_elements()
+        # 2 files × 2 elements = 4 total
+        assert len(all_elems) == 4
+        for eid, spec in all_elems:
+            assert isinstance(eid, str)
+            assert len(eid) > 0
+            assert isinstance(spec, ForwardElementSpec)
+
+    def test_all_elements_empty_manifest(self) -> None:
+        """all_elements() must return an empty list when there are no file specs."""
+        manifest = ForwardManifest(file_specs={})
+        assert manifest.all_elements() == []
+
+    def test_get_elements_by_name_single_match(self) -> None:
+        """get_elements_by_name() returns exactly one result for a unique element name."""
+        manifest = self._build_manifest_with_elements()
+        results = manifest.get_elements_by_name("beta")
+        assert len(results) == 1
+        assert results[0].name == "beta"
+
+    def test_get_elements_by_name_multiple_matches(self) -> None:
+        """get_elements_by_name() returns all elements sharing a name across files."""
+        manifest = self._build_manifest_with_elements()
+        # "alpha" appears in both file_a and file_b
+        results = manifest.get_elements_by_name("alpha")
+        assert len(results) == 2
+        assert all(r.name == "alpha" for r in results)
+
+    def test_get_elements_by_name_no_match(self) -> None:
+        """get_elements_by_name() returns an empty list for an unknown element name."""
+        manifest = self._build_manifest_with_elements()
+        results = manifest.get_elements_by_name("does_not_exist")
+        assert results == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════

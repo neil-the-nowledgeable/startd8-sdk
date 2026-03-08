@@ -12,10 +12,10 @@ Usage Examples:
 
     # Run a single task with adapter pattern
     from startd8.integrations import ContextCoreWorkflowAdapter, ContextCoreConfig
-    from startd8.workflows.builtin import LeadContractorWorkflow
+    from startd8.workflows.builtin import PrimaryContractorWorkflow
 
     adapter = ContextCoreWorkflowAdapter(
-        workflow=LeadContractorWorkflow(),
+        workflow=PrimaryContractorWorkflow(),
         config=ContextCoreConfig(project_id="my-project"),
     )
     result = adapter.run_as_task(

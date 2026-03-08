@@ -1,7 +1,7 @@
 """
-Lead Contractor Code Generator.
+Primary Contractor Code Generator.
 
-Implements the CodeGenerator protocol using the Lead Contractor workflow
+Implements the CodeGenerator protocol using the Primary Contractor workflow
 (Claude specs/reviews, cheaper models draft).
 """
 
@@ -66,15 +66,15 @@ def _detect_downstream_files(
     return downstream
 
 
-class LeadContractorCodeGenerator:
+class PrimaryContractorCodeGenerator:
     """
-    Code generator using the Lead Contractor workflow.
+    Code generator using the Primary Contractor workflow.
 
-    The Lead Contractor pattern uses Claude as the architect/reviewer
+    The Primary Contractor pattern uses Claude as the architect/reviewer
     while cheaper models (Gemini Flash, GPT-4o-mini) do the drafting.
 
     Example:
-        generator = LeadContractorCodeGenerator(
+        generator = PrimaryContractorCodeGenerator(
             lead_agent=VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
             drafter_agent=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         )
@@ -98,10 +98,10 @@ class LeadContractorCodeGenerator:
         strict_truncation: bool = False,
     ):
         """
-        Initialize the Lead Contractor code generator.
+        Initialize the Primary Contractor code generator.
 
         Args:
-            lead_agent: Agent spec for lead contractor (architect/reviewer)
+            lead_agent: Agent spec for primary contractor (architect/reviewer)
             drafter_agent: Agent spec for drafter (implementation)
             max_iterations: Maximum draft/review iterations
             pass_threshold: Minimum score to pass review (0-100)
@@ -170,10 +170,10 @@ class LeadContractorCodeGenerator:
         try:
             # Import the workflow
             from startd8.workflows.builtin.lead_contractor_workflow import (
-                LeadContractorWorkflow,
+                PrimaryContractorWorkflow,
             )
 
-            workflow = LeadContractorWorkflow()
+            workflow = PrimaryContractorWorkflow()
 
             # Build config — include target_files in context so spec mentions them
             enriched_context = dict(context)
@@ -204,7 +204,7 @@ class LeadContractorCodeGenerator:
             if not result.success:
                 return GenerationResult(
                     success=False,
-                    error=result.error or "Lead Contractor workflow failed",
+                    error=result.error or "Primary Contractor workflow failed",
                     input_tokens=result.metrics.input_tokens if result.metrics else 0,
                     output_tokens=result.metrics.output_tokens if result.metrics else 0,
                     cost_usd=result.metrics.total_cost if result.metrics else 0.0,
@@ -377,6 +377,8 @@ class LeadContractorCodeGenerator:
                     "cost_efficiency_ratio", 0.0
                 ),
                 "artifact_dir": str(self.output_dir / ".artifacts"),
+                "lead_agent_spec": self.lead_agent,
+                "drafter_agent_spec": self.drafter_agent,
             }
             # Forward raw LLM responses for Kaizen capture (REQ-KZ-201)
             if lc_summary.get("spec_raw"):
@@ -438,7 +440,7 @@ class LeadContractorCodeGenerator:
         except ImportError as e:
             return GenerationResult(
                 success=False,
-                error=f"LeadContractorWorkflow not available: {e}",
+                error=f"PrimaryContractorWorkflow not available: {e}",
             )
         except Exception as e:
             logger.error("Code generation failed: %s", e, exc_info=True)
@@ -446,3 +448,7 @@ class LeadContractorCodeGenerator:
                 success=False,
                 error=str(e),
             )
+
+
+# Backward-compat alias (Phase 4 rename: Lead → Primary)
+LeadContractorCodeGenerator = PrimaryContractorCodeGenerator

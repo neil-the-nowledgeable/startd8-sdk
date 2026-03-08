@@ -438,6 +438,7 @@ class MicroPrimeEngine:
         skeleton: str,
         contracts: Optional[list[InterfaceContract]] = None,
         design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
     ) -> ElementResult:
         """Process a single element through the pipeline.
 
@@ -452,6 +453,7 @@ class MicroPrimeEngine:
             skeleton: Current skeleton file content.
             contracts: Binding constraints for this element.
             design_doc_sections: Optional design doc sections for prompt context.
+            task_description: Optional feature-level task description from seed.
 
         Returns:
             ElementResult with success/failure and optional code.
@@ -470,6 +472,7 @@ class MicroPrimeEngine:
             api_file_import_bump=details.file_import_bump,
             api_element_adjustment=details.element_api_adjustment,
             design_doc_sections=design_doc_sections,
+            task_description=task_description,
         )
 
     def _process_element_with_tier(
@@ -484,6 +487,7 @@ class MicroPrimeEngine:
         api_element_adjustment: int = 0,
         ollama_available: bool = True,
         design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
     ) -> ElementResult:
         """Process a single element with a pre-computed tier classification.
 
@@ -499,6 +503,7 @@ class MicroPrimeEngine:
             tier: Pre-computed tier classification.
             reasoning: Classification reasoning string.
             design_doc_sections: Optional design doc sections for prompt context.
+            task_description: Optional feature-level task description from seed.
 
         Returns:
             ElementResult with success/failure and optional code.
@@ -601,12 +606,14 @@ class MicroPrimeEngine:
             result = self._handle_simple(
                 element, file_spec, skeleton, contracts, file_path, reasoning,
                 design_doc_sections=design_doc_sections,
+                task_description=task_description,
             )
         elif tier == TierClassification.MODERATE:
             result = self._handle_moderate(
                 element, file_spec, self._current_manifest, skeleton, contracts,
                 file_path, reasoning,
                 design_doc_sections=design_doc_sections,
+                task_description=task_description,
             )
         else:
             # COMPLEX only — immediate escalation
@@ -658,6 +665,7 @@ class MicroPrimeEngine:
         skeleton: str,
         design_doc_sections: Optional[list[str]] = None,
         ollama_available: bool = True,
+        task_description: Optional[str] = None,
     ) -> FileResult:
         """Process all elements in a file.
 
@@ -671,6 +679,7 @@ class MicroPrimeEngine:
             manifest: Full manifest for contract lookup.
             skeleton: Skeleton file content.
             design_doc_sections: Optional design doc sections for prompt context.
+            task_description: Optional feature-level task description from seed.
 
         Returns:
             FileResult with all element results and updated skeleton.
@@ -730,6 +739,7 @@ class MicroPrimeEngine:
                 api_element_adjustment=elem_adjust,
                 ollama_available=ollama_available,
                 design_doc_sections=design_doc_sections,
+                task_description=task_description,
             )
             file_result.element_results.append(result)
 
@@ -785,6 +795,7 @@ class MicroPrimeEngine:
         skeleton: str,
         context: MicroPrimeContext,
         design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
     ) -> FileResult:
         """Process a file using normalized MicroPrimeContext (REQ-MP-509)."""
         return self.process_file(
@@ -793,6 +804,7 @@ class MicroPrimeEngine:
             skeleton,
             design_doc_sections=design_doc_sections,
             ollama_available=context.ollama_available,
+            task_description=task_description,
         )
 
     def process_seed(
@@ -888,6 +900,7 @@ class MicroPrimeEngine:
         file_path: str,
         reasoning: str = "",
         design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
     ) -> ElementResult:
         """Handle MODERATE tier: attempt decomposition, then escalate.
 
@@ -1075,6 +1088,7 @@ class MicroPrimeEngine:
                 sub_spec, file_spec, skeleton, contracts,
                 file_path, f"sub-element of {element.name}",
                 design_doc_sections=design_doc_sections,
+                task_description=task_description,
             )
             total_input += sub_result.input_tokens
             total_output += sub_result.output_tokens
@@ -1315,6 +1329,7 @@ class MicroPrimeEngine:
         file_path: str,
         reasoning: str = "",
         design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
         start_time = time.monotonic()
@@ -1417,6 +1432,7 @@ class MicroPrimeEngine:
             few_shot_examples=few_shot or None,
             token_budget=self._config.input_token_budget,
             design_doc_sections=design_doc_sections,
+            task_description=task_description,
         )
 
         # Generate via Ollama with local retry

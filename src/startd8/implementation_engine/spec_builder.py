@@ -1,8 +1,8 @@
 """
 Spec builder for the implementation engine.
 
-Extracted from ``LeadContractorWorkflow._build_spec_prompt`` and ``_create_spec``.
-Produces an 8-section implementation specification from a task description and context.
+Produces an 8-section implementation specification from a task description
+and context.
 """
 
 import json
@@ -15,7 +15,10 @@ from .budget import (
     ARCH_CONTEXT_MAX_CHARS,
     PLAN_CONTEXT_MAX_CHARS,
     SPEC_CONTEXT_BUDGET_CHARS,
+    TOTAL_SPEC_BUDGET_TOKENS,
     TRUNCATION_MARKER,
+    enforce_prompt_budget,
+    estimate_tokens,
     truncate_arch_context,
     truncate_with_marker,
 )
@@ -96,10 +99,9 @@ def build_spec_context_section(
 
 
 def _format_lead_prompt(template_name: str, fallback: str, **kwargs: Any) -> str:
-    """Format prompt from YAML template; use fallback when YAML missing."""
+    """Format prompt from consolidated YAML; use fallback when YAML missing."""
     try:
-        from startd8.workflows.builtin.prompts import get_template as _get_prime_template
-        template = _get_prime_template("lead_contractor", template_name)
+        template = get_template(template_name)
         return template.format(**kwargs)
     except (FileNotFoundError, KeyError, ImportError):
         try:
@@ -249,6 +251,58 @@ def build_spec_prompt(
     # --- Design document forwarding (Mottainai Rule 2) ---
     design_document = context.pop("design_document", None) or ""
 
+    # --- FR-MPA-005: Pre-assembly scope narrowing ---
+    # When element tiers are available, narrow the spec to unfilled elements only.
+    # This reduces W-3 waste (30-50% input token reduction).
+    element_tiers = context.pop("element_tiers", None)
+    if not element_tiers:
+        artifacts = context.get("artifacts")
+        if isinstance(artifacts, dict):
+            element_tiers = artifacts.pop("element_tiers", None)
+
+    pre_assembly_preamble = ""
+    if element_tiers and isinstance(element_tiers, dict):
+        pre_filled_names: list = []
+        unfilled_names: list = []
+        for file_path, file_tiers in element_tiers.items():
+            if not isinstance(file_tiers, dict):
+                continue
+            for elem_name, info in file_tiers.items():
+                if not isinstance(info, dict):
+                    continue
+                is_filled = info.get("pre_filled", False) or (
+                    info.get("fill_source", "none") != "none"
+                )
+                if is_filled:
+                    fill_src = info.get("fill_source", "pre-filled")
+                    pre_filled_names.append(f"  - `{elem_name}` ({fill_src})")
+                else:
+                    tier = info.get("tier", "UNKNOWN")
+                    unfilled_names.append(f"  - `{elem_name}` (tier: {tier})")
+
+        if pre_filled_names:
+            preamble_parts = [
+                "## Pre-Assembly Scope (Mottainai)\n",
+                "The following elements are already implemented deterministically "
+                "and do NOT need specification:\n",
+                "\n".join(pre_filled_names),
+                "",
+            ]
+            if unfilled_names:
+                preamble_parts.extend([
+                    "Scope your specification to ONLY these unfilled elements:\n",
+                    "\n".join(unfilled_names),
+                    "",
+                ])
+            pre_assembly_preamble = "\n".join(preamble_parts) + "\n"
+            logger.info(
+                "Spec builder: pre-assembly narrowing — %d pre-filled, %d unfilled elements",
+                len(pre_filled_names), len(unfilled_names),
+            )
+
+    if pre_assembly_preamble:
+        task_description = pre_assembly_preamble + task_description
+
     # --- Edit-aware spec framing ---
     existing_files = context.pop("existing_files", None)
     edit_mode = context.pop("edit_mode", None)
@@ -353,51 +407,50 @@ def build_spec_prompt(
     manifest_obj = context.pop("manifest", None)
     raw_manifest = context.pop("forward_manifest", None)
 
-    # --- Build sections ---
+    # --- Build prioritized sections (P0=never drop, P3=drop first) ---
     target_files = context.get("target_files")
-    sections: List[str] = []
 
+    # P0: Core context (always kept)
     ctx_section = build_spec_context_section(context, output_format, target_files)
-    sections.append(ctx_section)
+    prioritized: List[tuple] = [(0, "context", ctx_section)]
 
+    # P1: Requirements and protocol guidance
     if requirements_context:
-        sections.append(f"## Requirements Context\n{requirements_context}")
+        prioritized.append((1, "requirements_ctx", f"## Requirements Context\n{requirements_context}"))
     if protocol_guidance:
-        sections.append(f"## Protocol Guidance\n{protocol_guidance}")
-    if scope_boundary:
-        sections.append(f"## Scope Boundary\n{scope_boundary}")
+        prioritized.append((1, "protocol", f"## Protocol Guidance\n{protocol_guidance}"))
 
+    # P2: Architecture and plan context
     obj_section = build_spec_objectives_section(project_obj)
     if obj_section:
-        sections.append(obj_section)
+        prioritized.append((2, "objectives", obj_section))
     conv_section = build_spec_conventions_section(sem_conv)
     if conv_section:
-        sections.append(conv_section)
+        prioritized.append((2, "conventions", conv_section))
     arch_section = build_spec_arch_section(arch_ctx, is_edit=is_edit)
     if arch_section:
-        sections.append(arch_section)
+        prioritized.append((2, "arch", arch_section))
     plan_section = build_spec_plan_section(plan_ctx, is_edit=is_edit)
     if plan_section:
-        sections.append(plan_section)
+        prioritized.append((2, "plan", plan_section))
+
+    # P3: Reference implementation, scope boundary (drop first)
+    if scope_boundary:
+        prioritized.append((3, "scope", f"## Scope Boundary\n{scope_boundary}"))
     if reference_implementation:
-        sections.append(
+        prioritized.append((3, "reference", (
             "## Reference Implementation (predecessor — adapt, do not copy verbatim)\n"
             "```python\n"
             f"{reference_implementation}\n"
             "```"
-        )
+        )))
 
-    context_sections = "\n\n".join(sections)
-
-    if len(context_sections) > SPEC_CONTEXT_BUDGET_CHARS:
-        logger.info(
-            "Spec prompt: context sections %d chars exceeds budget %d",
-            len(context_sections), SPEC_CONTEXT_BUDGET_CHARS,
-        )
+    context_sections = enforce_prompt_budget(
+        prioritized, TOTAL_SPEC_BUDGET_TOKENS, logger=logger,
+    )
 
     template = get_template(selected_key)
 
-    # Common placeholders; spec_from_design adds {design_document}
     format_kwargs = {
         "task_description": task_description,
         "requirements_section": requirements_section,
@@ -408,7 +461,17 @@ def build_spec_prompt(
     }
     if selected_key == "spec_from_design":
         format_kwargs["design_document"] = design_document
-    return template.format(**format_kwargs)
+
+    prompt = template.format(**format_kwargs)
+
+    tokens = estimate_tokens(prompt)
+    if tokens > TOTAL_SPEC_BUDGET_TOKENS:
+        logger.info(
+            "Spec prompt: %d tokens exceeds budget %d (template chrome + P0)",
+            tokens, TOTAL_SPEC_BUDGET_TOKENS,
+        )
+
+    return prompt
 
 
 def build_spec(

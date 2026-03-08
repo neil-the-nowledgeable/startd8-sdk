@@ -31,6 +31,7 @@ def build_body_prompt(
     few_shot_examples: Optional[list[str]] = None,
     token_budget: int = 1024,
     design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
 ) -> str:
     """Build a prompt for a local model to generate a single element body.
 
@@ -43,6 +44,10 @@ def build_body_prompt(
         token_budget: Maximum input tokens (REQ-MP-205). Used for truncation.
         design_doc_sections: Optional design doc sections for implementation
             context (REQ-DDS-001). Rendered as ``# Implementation context:``.
+        task_description: Optional feature-level task description forwarded
+            from the seed (Mottainai Rule 2). Rendered as ``# Task context:``
+            to convey intent (e.g. protocol, API style) that the skeleton
+            and imports alone cannot express.
 
     Returns:
         The constructed prompt string.
@@ -54,6 +59,7 @@ def build_body_prompt(
     prompt = _build_function_prompt(
         element, file_spec, contracts, skeleton, few_shot_examples,
         design_doc_sections=design_doc_sections,
+        task_description=task_description,
     )
     return _truncate_to_budget(prompt, token_budget)
 
@@ -65,6 +71,7 @@ def _build_function_prompt(
     skeleton: Optional[str],
     few_shot_examples: Optional[list[str]],
     design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     stub = _build_element_stub(element)
@@ -125,6 +132,11 @@ def _build_function_prompt(
     if import_lines:
         sections.append("# Available imports (ONLY use these — do NOT invent other APIs):")
         sections.extend(import_lines)
+        sections.append("")
+
+    # Task context from seed (Mottainai Rule 2: forward, don't regenerate)
+    if task_description:
+        sections.append(f"# Task context: {task_description}")
         sections.append("")
 
     # Implementation context from design doc sections (REQ-DDS-001)

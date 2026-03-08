@@ -1,7 +1,8 @@
 """Complexity signal extraction utilities.
 
-Provides manifest-based cross-file edge detection and feature-level
-signal extraction for Prime Contractor routing.
+Provides manifest-based cross-file edge detection and signal extraction
+for Artisan (chunk-level), Prime Contractor (feature-level), and Micro
+Prime (element-level) routing.
 """
 
 from __future__ import annotations
@@ -257,3 +258,249 @@ def _compute_manifest_coverage(
         if not manifest.get(tf):
             return "none"
     return "full"
+
+
+# ── Chunk-level extraction (Artisan, REQ-MP-800) ────────────────────────
+
+
+def extract_signals_from_chunk(
+    chunk: Any,
+    manifest_registry: Any,
+) -> TaskComplexitySignals:
+    """Extract complexity signals from an Artisan chunk + manifest registry.
+
+    Port of ``context_seed/design_support._extract_complexity_signals()``.
+    Never raises — all lookups wrapped in try/except with safe defaults.
+
+    Args:
+        chunk: A ``DevelopmentChunk``-like object with ``metadata`` dict
+            and ``file_targets`` list.
+        manifest_registry: A ``ManifestRegistry`` instance, or ``None``
+            when manifest data is unavailable.
+
+    Returns:
+        Populated ``TaskComplexitySignals`` instance.
+    """
+    meta = getattr(chunk, "metadata", {}) or {}
+    _chunk_id = getattr(chunk, "chunk_id", "?")
+
+    # --- Signals from chunk metadata (populated by earlier enrichment) ---
+    blast_radius = 0
+    caller_count = 0
+    has_cross_file_edges = False
+    manifest_coverage = "none"
+
+    try:
+        cg_callers = meta.get("_call_graph_callers", [])
+        if cg_callers:
+            blast_radius = max(
+                (entry.get("blast_radius", 0) for entry in cg_callers),
+                default=0,
+            )
+            caller_count = sum(
+                len(entry.get("direct_callers", []))
+                for entry in cg_callers
+            )
+    except (TypeError, AttributeError) as exc:
+        logger.debug(
+            "CMR: call graph caller extraction failed for %s: %s",
+            _chunk_id, exc,
+        )
+
+    # Edit mode from classification (normalized at extraction boundary)
+    edit_mode = "unknown"
+    try:
+        edit_mode_dict = meta.get("_edit_mode")
+        if edit_mode_dict and isinstance(edit_mode_dict, dict):
+            edit_mode = str(edit_mode_dict.get("mode", "unknown")).strip().lower()
+        elif isinstance(edit_mode_dict, str):
+            edit_mode = edit_mode_dict.strip().lower()
+    except (TypeError, AttributeError) as exc:
+        logger.debug(
+            "CMR: edit mode extraction failed for %s: %s", _chunk_id, exc,
+        )
+
+    # Estimated LOC from seed task
+    estimated_loc = 0
+    try:
+        estimated_loc = int(meta.get("estimated_loc", 0) or 0)
+    except (ValueError, TypeError):
+        logger.debug("estimated_loc coercion failed", exc_info=True)
+
+    # Target file count
+    target_files = getattr(chunk, "file_targets", []) or []
+    target_file_count = max(len(target_files), 1)
+
+    # --- Signals from manifest registry (Phase 5/6 data) ---
+    has_dynamic_dispatch = False
+    is_closure = False
+    mro_depth = 0
+    unresolved_call_count = 0
+    manifests_found = 0
+
+    if manifest_registry is not None:
+        flatten_fn = None
+        try:
+            from startd8.utils.manifest_registry import _flatten_elements
+            flatten_fn = _flatten_elements
+        except ImportError:
+            logger.debug(
+                "CMR: manifest_registry import failed for %s", _chunk_id,
+            )
+
+        if flatten_fn is not None:
+            try:
+                for tf in target_files:
+                    manifest = manifest_registry.get(tf)
+                    if manifest is None:
+                        continue
+                    manifests_found += 1
+                    try:
+                        elements = flatten_fn(manifest.elements)
+                    except (TypeError, AttributeError) as exc:
+                        logger.debug(
+                            "CMR: element flattening failed for %s in %s: %s",
+                            tf, _chunk_id, exc,
+                        )
+                        continue
+
+                    for elem in elements:
+                        # Dynamic dispatch + unresolved call detection
+                        try:
+                            cg = getattr(elem, "call_graph", None)
+                            if cg is not None:
+                                for call in getattr(cg, "calls", []):
+                                    if getattr(call, "is_dynamic", False):
+                                        has_dynamic_dispatch = True
+                                        break
+                                unresolved_call_count += sum(
+                                    1 for c in getattr(cg, "calls", [])
+                                    if getattr(c, "target_fqn", None) is None
+                                )
+                        except (TypeError, AttributeError) as exc:
+                            logger.debug(
+                                "CMR: call graph inspection failed for "
+                                "element in %s: %s",
+                                _chunk_id, exc,
+                            )
+
+                        # Closure detection
+                        if getattr(elem, "is_closure", False):
+                            is_closure = True
+
+                        # MRO depth (Phase 5)
+                        try:
+                            inspect_info = getattr(elem, "inspect_info", None)
+                            if inspect_info is not None:
+                                depth = getattr(
+                                    inspect_info, "mro_depth", 0,
+                                ) or 0
+                                mro_depth = max(mro_depth, depth)
+                        except (TypeError, AttributeError) as exc:
+                            logger.debug(
+                                "CMR: MRO depth extraction failed for "
+                                "element in %s: %s",
+                                _chunk_id, exc,
+                            )
+
+                # Cross-file call edges
+                if len(target_files) > 1:
+                    has_cross_file_edges = detect_cross_file_edges(
+                        target_files, manifest_registry, flatten_fn,
+                    )
+            except Exception:
+                logger.debug(
+                    "CMR: manifest signal extraction failed for %s",
+                    _chunk_id, exc_info=True,
+                )
+
+    # Simplified confidence signal: binary manifest coverage.
+    manifest_coverage = (
+        "full"
+        if manifest_registry is not None
+        and target_files
+        and manifests_found == len(target_files)
+        else "none"
+    )
+
+    return TaskComplexitySignals(
+        blast_radius=blast_radius,
+        caller_count=caller_count,
+        has_dynamic_dispatch=has_dynamic_dispatch,
+        is_closure=is_closure,
+        estimated_loc=estimated_loc,
+        target_file_count=target_file_count,
+        edit_mode=edit_mode,
+        mro_depth=mro_depth,
+        unresolved_call_count=unresolved_call_count,
+        has_cross_file_edges=has_cross_file_edges,
+        manifest_coverage=manifest_coverage,
+    )
+
+
+# ── Element-level extraction (Micro Prime, REQ-MP-806) ──────────────────
+
+
+def extract_signals_from_element(
+    element: Any,
+    file_spec: Any,
+    contracts: Any,
+) -> TaskComplexitySignals:
+    """Extract complexity signals from a Micro Prime element spec.
+
+    Bridges element-level signals to task-level signal space. Signals
+    that have no element-level equivalent use safe defaults (MODERATE).
+
+    Args:
+        element: A ``ForwardElementSpec``-like object.
+        file_spec: A ``ForwardFileSpec``-like object.
+        contracts: List of ``InterfaceContract`` objects (may be empty).
+
+    Returns:
+        Populated ``TaskComplexitySignals`` instance.
+    """
+    estimated_loc = 0
+    has_dynamic_dispatch = False
+    mro_depth = 0
+    target_file_count = 1
+
+    try:
+        # Estimate LOC from docstring length heuristic
+        docstring = getattr(element, "docstring_hint", "") or ""
+        estimated_loc = max(len(docstring) // 2, 1)
+
+        # Check for dynamic dispatch markers (complex decorators)
+        decorators = getattr(element, "decorators", None) or []
+        _DISPATCH_MARKERS = {"dispatch", "singledispatch", "abstractmethod"}
+        for dec in decorators:
+            if any(marker in dec for marker in _DISPATCH_MARKERS):
+                has_dynamic_dispatch = True
+                break
+
+        # MRO depth from bases
+        bases = getattr(element, "bases", None) or []
+        if len(bases) > 1:
+            mro_depth = len(bases)  # Multi-inheritance → elevated MRO
+
+        # Estimate target file count from file_spec
+        target_file_count = 1
+
+    except (TypeError, AttributeError) as exc:
+        logger.debug(
+            "Element signal extraction failed for %s: %s",
+            getattr(element, "name", "?"), exc,
+        )
+
+    return TaskComplexitySignals(
+        blast_radius=0,
+        caller_count=0,
+        has_dynamic_dispatch=has_dynamic_dispatch,
+        is_closure=False,
+        estimated_loc=estimated_loc,
+        target_file_count=target_file_count,
+        edit_mode="create",
+        mro_depth=mro_depth,
+        unresolved_call_count=0,
+        has_cross_file_edges=False,
+        manifest_coverage="full",
+    )

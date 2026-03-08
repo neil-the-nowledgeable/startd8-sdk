@@ -2,9 +2,12 @@
 Budget constants and truncation utilities for the implementation engine.
 
 Co-locates all budget/size constants and provides deterministic truncation.
+
+Total prompt budget follows the micro_prime pattern: a hard token cap with
+priority-ordered section removal when the prompt exceeds budget.
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 
 __all__ = [
@@ -18,8 +21,13 @@ __all__ = [
     "DRAFT_SIZE_REGRESSION_MIN_LINES",
     "SUPPLEMENTARY_BUDGET_CHARS",
     "ENRICHMENT_BUDGET_CHARS",
+    "TOTAL_SPEC_BUDGET_TOKENS",
+    "TOTAL_DRAFT_BUDGET_TOKENS",
+    "CHARS_PER_TOKEN",
     "truncate_with_marker",
     "truncate_arch_context",
+    "estimate_tokens",
+    "enforce_prompt_budget",
 ]
 
 
@@ -47,6 +55,12 @@ DRAFT_SIZE_REGRESSION_MIN_LINES: int = 50
 # T1 drafter agents get a smaller budget; T2 reviewer agents get more.
 SUPPLEMENTARY_BUDGET_CHARS: int = 4_000   # ~1000 tokens — draft prompt (T1)
 ENRICHMENT_BUDGET_CHARS: int = 8_000      # ~2000 tokens — review prompt (T2)
+
+# Total prompt budget (modeled after micro_prime's 1024-token input budget).
+# These are hard caps; sections are dropped by priority when exceeded.
+TOTAL_SPEC_BUDGET_TOKENS: int = 4_096     # Spec prompt (architect agent)
+TOTAL_DRAFT_BUDGET_TOKENS: int = 8_192    # Draft prompt (includes existing files)
+CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
 
 
 def truncate_with_marker(text: str, max_chars: int,
@@ -109,3 +123,71 @@ def truncate_arch_context(arch_ctx: Any, max_chars: int) -> str:
             return truncate_with_marker(result, max_chars, TRUNCATION_MARKER)
         return result
     return truncate_with_marker(str(arch_ctx), max_chars, TRUNCATION_MARKER)
+
+
+def estimate_tokens(text: str) -> int:
+    """Estimate token count using chars/4 heuristic (matches micro_prime)."""
+    return len(text) // CHARS_PER_TOKEN
+
+
+def enforce_prompt_budget(
+    sections: List[tuple],
+    budget_tokens: int,
+    logger: Optional[Any] = None,
+) -> str:
+    """Assemble prompt sections within a token budget.
+
+    Follows the micro_prime pattern: priority-ordered section removal.
+    Each section is a ``(priority, label, text)`` tuple where lower
+    priority numbers are kept first.
+
+    Priority levels:
+        P0 — Never dropped (task description, spec, target)
+        P1 — Dropped last (critical parameters, forward contracts)
+        P2 — Dropped second (arch context, plan context, supplementary)
+        P3 — Dropped first (examples, verbose instructions, call graphs)
+
+    Args:
+        sections: List of ``(priority, label, text)`` tuples.
+        budget_tokens: Maximum token budget.
+        logger: Optional logger for truncation warnings.
+
+    Returns:
+        Assembled prompt string within budget.
+    """
+    # Sort by priority (stable — preserves order within same priority)
+    ordered = sorted(sections, key=lambda s: s[0])
+
+    # Try all sections first
+    full = "\n\n".join(text for _, _, text in ordered if text)
+    if estimate_tokens(full) <= budget_tokens:
+        return full
+
+    # Progressive removal: drop highest priority number first
+    max_priority = max(p for p, _, _ in ordered)
+    result_sections = list(ordered)
+
+    for drop_priority in range(max_priority, 0, -1):
+        result_sections = [s for s in result_sections if s[0] < drop_priority]
+        candidate = "\n\n".join(text for _, _, text in result_sections if text)
+        if logger:
+            dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
+            logger.info(
+                "Prompt budget: dropping P%d sections (%s), %d→%d tokens",
+                drop_priority, ", ".join(dropped),
+                estimate_tokens(full), estimate_tokens(candidate),
+            )
+        if estimate_tokens(candidate) <= budget_tokens:
+            return candidate
+
+    # Emergency: P0 only, hard-truncate
+    p0_text = "\n\n".join(text for p, _, text in ordered if p == 0 and text)
+    budget_chars = budget_tokens * CHARS_PER_TOKEN
+    if len(p0_text) > budget_chars:
+        if logger:
+            logger.warning(
+                "Prompt budget: P0 sections exceed budget (%d > %d tokens), truncating",
+                estimate_tokens(p0_text), budget_tokens,
+            )
+        return truncate_with_marker(p0_text, budget_chars)
+    return p0_text

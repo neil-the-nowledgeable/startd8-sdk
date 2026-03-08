@@ -407,3 +407,57 @@ class TestDesignDocSections:
             design_doc_sections=[],
         )
         assert "# Implementation context:" not in prompt_empty
+
+
+class TestTaskDescription:
+    """Tests for task_description forwarding (Mottainai Rule 2)."""
+
+    def test_task_description_rendered_in_prompt(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """Task context line rendered when task_description provided."""
+        desc = "Creates insecure gRPC channel to localhost:8080, calls SendOrderConfirmation"
+        prompt = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            task_description=desc,
+        )
+        assert "# Task context:" in prompt
+        assert "gRPC" in prompt
+        assert "SendOrderConfirmation" in prompt
+
+    def test_task_description_absent_when_none(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """No task context line when task_description is None or empty."""
+        prompt = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            task_description=None,
+        )
+        assert "# Task context:" not in prompt
+
+        prompt_empty = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            task_description="",
+        )
+        assert "# Task context:" not in prompt_empty
+
+    def test_task_description_before_design_sections(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """Task context appears before implementation context."""
+        prompt = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            design_doc_sections=["RpcError handling"],
+            task_description="gRPC test client",
+        )
+        task_pos = prompt.index("# Task context:")
+        impl_pos = prompt.index("# Implementation context:")
+        assert task_pos < impl_pos

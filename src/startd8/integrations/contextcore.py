@@ -16,13 +16,13 @@ Components:
 
 Example (Single Task):
     from startd8.integrations.contextcore import ContextCoreWorkflowAdapter, ContextCoreConfig
-    from startd8.workflows.builtin import LeadContractorWorkflow
+    from startd8.workflows.builtin import PrimaryContractorWorkflow
 
     config = ContextCoreConfig(
         project_id="my-project",
         sprint_id="sprint-3",
     )
-    adapter = ContextCoreWorkflowAdapter(LeadContractorWorkflow(), config)
+    adapter = ContextCoreWorkflowAdapter(PrimaryContractorWorkflow(), config)
 
     result = adapter.run_as_task(
         task_id="SDK-102",
@@ -369,7 +369,7 @@ class ContextCoreWorkflowAdapter:
 
     Example:
         adapter = ContextCoreWorkflowAdapter(
-            workflow=LeadContractorWorkflow(),
+            workflow=PrimaryContractorWorkflow(),
             config=ContextCoreConfig(project_id="my-project"),
         )
 
@@ -586,7 +586,7 @@ class ContextCoreTaskRunner:
             ),
         ]
 
-        results = runner.run_all(tasks, workflow=LeadContractorWorkflow())
+        results = runner.run_all(tasks, workflow=PrimaryContractorWorkflow())
     """
 
     def __init__(
@@ -641,9 +641,9 @@ class ContextCoreTaskRunner:
             Dictionary mapping task_id to TaskExecutionResult
         """
         if not workflow and not workflow_class:
-            # Default to LeadContractorWorkflow
-            from ..workflows.builtin import LeadContractorWorkflow
-            workflow = LeadContractorWorkflow()
+            # Default to PrimaryContractorWorkflow
+            from ..workflows.builtin import PrimaryContractorWorkflow
+            workflow = PrimaryContractorWorkflow()
 
         # Build task map for dependency resolution
         task_map = {t.task_id: t for t in tasks}
@@ -1061,7 +1061,7 @@ def run_contextcore_project(
     Args:
         project_id: ContextCore project ID
         sprint_id: Optional sprint ID for filtering/organization
-        workflow: Workflow to use (defaults to LeadContractorWorkflow)
+        workflow: Workflow to use (defaults to PrimaryContractorWorkflow)
         status_filter: Task statuses to include (default: ["todo", "backlog"])
         stop_on_failure: Stop if a task fails
         dry_run: If True, only list tasks without executing
@@ -1122,8 +1122,8 @@ def run_contextcore_project(
 
     # Set up default workflow
     if workflow is None:
-        from ..workflows.builtin import LeadContractorWorkflow
-        workflow = LeadContractorWorkflow()
+        from ..workflows.builtin import PrimaryContractorWorkflow
+        workflow = PrimaryContractorWorkflow()
 
     # Create runner
     runner = ContextCoreTaskRunner(

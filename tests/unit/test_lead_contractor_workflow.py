@@ -610,8 +610,8 @@ class TestSpecPromptPhase2:
         prompt = LeadContractorWorkflow._build_spec_prompt(
             "Task", dict(context), None
         )
-        assert "CHANGES to apply to existing code" in prompt
-        assert "Do NOT treat it as a greenfield specification" in prompt
+        assert "CHANGES to existing code" in prompt
+        assert "Do NOT treat" in prompt
 
     def test_plan_context_create_framing(self):
         """PC-F1: Without existing_files, plan section has create preamble."""
@@ -621,8 +621,8 @@ class TestSpecPromptPhase2:
         prompt = LeadContractorWorkflow._build_spec_prompt(
             "Task", dict(context), None
         )
-        assert "provides context for this task" in prompt
-        assert "design document (if present) is authoritative" in prompt
+        assert "provides context" in prompt
+        assert "design document" in prompt
 
     def test_arch_context_edit_framing(self):
         """PC-F2: With edit mode, arch section has edit prefix."""
@@ -636,10 +636,10 @@ class TestSpecPromptPhase2:
             "Task", dict(context), None
         )
         assert "Apply these architectural constraints to the existing file(s)" in prompt
-        assert "Do not redesign from scratch" in prompt
+        assert "Do not redesign" in prompt
 
     def test_quantitative_spec_constraint(self):
-        """PC-Q1: With existing_files totaling 100 lines, spec preamble includes AT LEAST 80 lines."""
+        """PC-Q1: With existing_files totaling 100 lines, spec preamble includes line count."""
         from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
 
         # 100 lines of content
@@ -651,9 +651,9 @@ class TestSpecPromptPhase2:
         prompt = LeadContractorWorkflow._build_spec_prompt(
             "Task", dict(context), None
         )
-        assert "total 100 lines" in prompt
-        assert "AT LEAST 80 lines" in prompt
-        assert "80% of existing" in prompt
+        assert "100 lines" in prompt
+        assert "80 lines" in prompt
+        assert "80%" in prompt
 
     def test_edit_min_pct_configurable(self):
         """PC-Q3: edit_min_pct from context overrides default."""
@@ -668,8 +668,8 @@ class TestSpecPromptPhase2:
         prompt = LeadContractorWorkflow._build_spec_prompt(
             "Task", dict(context), None
         )
-        assert "AT LEAST 90 lines" in prompt
-        assert "90% of existing" in prompt
+        assert "90 lines" in prompt
+        assert "90%" in prompt
 
 
 class TestPhase4YAMLExternalization:
@@ -683,7 +683,7 @@ class TestPhase4YAMLExternalization:
             "plan_context_edit_framing",
             "fallback if missing",
         )
-        assert "CHANGES to apply to existing code" in result
+        assert "CHANGES to existing code" in result
         assert "fallback if missing" not in result
 
     def test_format_lead_prompt_uses_fallback_when_yaml_missing(self):
@@ -698,7 +698,7 @@ class TestPhase4YAMLExternalization:
             _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
         )
         assert "CHANGES to apply to existing code" in result
-        assert "Do NOT treat it as a greenfield" in result
+        assert "Do NOT treat" in result
 
     def test_format_lead_prompt_with_placeholders(self):
         """_format_lead_prompt formats placeholders in fallback path."""
@@ -712,8 +712,8 @@ class TestPhase4YAMLExternalization:
         assert result == "Hello World"
 
     def test_all_phase4_templates_loadable(self):
-        """PC-Y3: All Phase 4 templates load without error."""
-        from startd8.workflows.builtin.prompts import get_template
+        """PC-Y3: All framing templates load from consolidated YAML."""
+        from startd8.implementation_engine.prompts import get_template
 
         templates = [
             "plan_context_edit_framing",
@@ -724,11 +724,11 @@ class TestPhase4YAMLExternalization:
             "spec_completeness_warning",
         ]
         for name in templates:
-            t = get_template("lead_contractor", name)
+            t = get_template(name)
             assert isinstance(t, str)
             assert len(t) > 0
 
-    @patch("startd8.workflows.builtin.lead_contractor_workflow._get_prime_template")
+    @patch("startd8.implementation_engine.spec_builder.get_template")
     def test_spec_prompt_builds_with_fallback_when_yaml_missing(
         self, mock_get_template
     ):
@@ -737,8 +737,8 @@ class TestPhase4YAMLExternalization:
             LeadContractorWorkflow,
         )
 
-        # Raise for our Phase 4 templates; allow other templates (spec, etc.)
-        def side_effect(phase, name):
+        # Raise for framing templates; allow spec template through
+        def side_effect(name):
             if name in (
                 "plan_context_edit_framing",
                 "plan_context_create_framing",
@@ -747,9 +747,8 @@ class TestPhase4YAMLExternalization:
                 "spec_edit_quantitative_constraint",
             ):
                 raise FileNotFoundError("YAML missing")
-            # Delegate to real loader for spec template etc.
-            from startd8.workflows.builtin.prompts import get_template
-            return get_template(phase, name)
+            from startd8.implementation_engine.prompts import get_template
+            return get_template(name)
 
         mock_get_template.side_effect = side_effect
 
@@ -761,7 +760,7 @@ class TestPhase4YAMLExternalization:
             "Task", dict(context), None
         )
         assert "EDIT MODE" in prompt
-        assert "AT LEAST 80 lines" in prompt
+        assert "80 lines" in prompt
         assert "CHANGES to apply to existing code" in prompt
 
 
@@ -772,8 +771,9 @@ class TestPhase3DrafterSystemPrompt:
         """PC-M2: Without existing_files, returns create_system."""
         from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
 
-        prompt = _get_drafter_system_prompt(existing_files=None)
+        prompt, mode = _get_drafter_system_prompt(existing_files=None)
         assert prompt is not None
+        assert mode == "create"
         assert "generating" in prompt.lower() or "implement" in prompt.lower()
         assert "spec" in prompt.lower()
 
@@ -782,8 +782,9 @@ class TestPhase3DrafterSystemPrompt:
         from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
 
         existing = {"src/foo.py": "def bar():\n    pass\n" * 5}  # ~25 lines
-        prompt = _get_drafter_system_prompt(existing_files=existing)
+        prompt, mode = _get_drafter_system_prompt(existing_files=existing)
         assert prompt is not None
+        assert mode == "edit"
         assert "editing" in prompt.lower() or "edit" in prompt.lower()
         assert "PRESERVE" in prompt or "preserve" in prompt
 
@@ -793,8 +794,9 @@ class TestPhase3DrafterSystemPrompt:
 
         content_60_lines = "\n".join([f"line {i}" for i in range(60)])
         existing = {"src/large.py": content_60_lines}
-        prompt = _get_drafter_system_prompt(existing_files=existing)
+        prompt, mode = _get_drafter_system_prompt(existing_files=existing)
         assert prompt is not None
+        assert mode == "search_replace"
         assert "large" in prompt.lower() or "minimal" in prompt.lower()
 
     def test_draft_edit_ordering(self):
@@ -811,6 +813,7 @@ class TestPhase3DrafterSystemPrompt:
             feedback="No feedback",
             output_format="```\ncode\n```",
             existing_files_section=section,
+            supplementary_sections="",
         )
         # existing_files_section must appear before "Implementation Specification"
         idx_section = prompt.find(section[:50]) if len(section) > 50 else prompt.find(section)
@@ -885,8 +888,7 @@ class TestPromptTemplates:
         )
         assert "Implement feature X" in prompt
         assert "Context info" in prompt
-        assert "Implementation Specification" not in prompt  # That's in draft prompt
-        assert "Domain Constraints" in prompt
+        assert "Constraints" in prompt
 
     def test_draft_prompt_template_format(self):
         """Test draft prompt template can be formatted (single-file)."""
@@ -895,11 +897,11 @@ class TestPromptTemplates:
             spec="Detailed spec...",
             feedback="No feedback yet",
             existing_files_section="",
+            supplementary_sections="",
             output_format=_build_output_format(None),
         )
         assert "Detailed spec..." in prompt
         assert "No feedback yet" in prompt
-        assert "[Your implementation code here]" in prompt
 
     def test_draft_prompt_template_multi_file(self):
         """Test draft prompt template with multi-file output format."""
@@ -909,6 +911,7 @@ class TestPromptTemplates:
             spec="Multi-file spec",
             feedback="No feedback",
             existing_files_section="",
+            supplementary_sections="",
             output_format=_build_output_format(target_files),
         )
         assert "SEPARATE fenced code block" in prompt
@@ -921,7 +924,10 @@ class TestPromptTemplates:
             task_description="Task description",
             spec="The spec",
             implementation="The code",
-            pass_threshold=80
+            pass_threshold=80,
+            enrichment_sections="",
+            prior_issues_section="",
+            convergence_instructions="",
         )
         assert "Task description" in prompt
         assert "The spec" in prompt

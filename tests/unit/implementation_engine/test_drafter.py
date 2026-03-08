@@ -24,53 +24,76 @@ from startd8.implementation_engine.drafter import (
 
 class TestGetDrafterSystemPrompt:
     def test_create_mode_no_files(self):
-        prompt = get_drafter_system_prompt()
+        prompt, mode = get_drafter_system_prompt()
+        assert mode == "create"
         assert "engineer" in prompt.lower()
 
-    def test_create_mode_has_provenance_rules(self):
-        prompt = get_drafter_system_prompt()
-        assert "provenance" in prompt.lower() or "mottainai" in prompt.lower()
+    def test_create_mode_has_upstream_param_rules(self):
+        prompt, mode = get_drafter_system_prompt()
+        assert mode == "create"
+        # System prompt mandates verbatim parameter names from upstream docs
+        assert "upstream" in prompt.lower() or "verbatim" in prompt.lower()
 
     def test_create_mode_has_coding_standards(self):
-        prompt = get_drafter_system_prompt()
+        prompt, mode = get_drafter_system_prompt()
         assert "E741" in prompt or "ruff" in prompt.lower()
 
     def test_edit_mode_small_files(self):
         files = {"app.py": "line\n" * 10}
-        prompt = get_drafter_system_prompt(files)
+        prompt, mode = get_drafter_system_prompt(files)
+        assert mode == "edit"
         # Small files → edit mode (not search/replace)
         assert "edit" in prompt.lower() or "existing" in prompt.lower()
 
     def test_edit_mode_has_edit_first_discipline(self):
         files = {"app.py": "line\n" * 10}
-        prompt = get_drafter_system_prompt(files)
+        prompt, mode = get_drafter_system_prompt(files)
+        assert mode == "edit"
         assert "preserve" in prompt.lower() or "edit" in prompt.lower()
 
     def test_search_replace_mode_large_file(self):
         # File with >= 50 lines triggers search/replace mode
         content = "\n".join(f"line {i}" for i in range(SEARCH_REPLACE_LINE_THRESHOLD))
         files = {"big.py": content}
-        prompt = get_drafter_system_prompt(files)
-        # S/R prompt is distinct from the edit prompt — must contain "existing source code files"
-        assert "existing source code files" in prompt.lower() or "edit-first" in prompt.lower()
+        prompt, mode = get_drafter_system_prompt(files)
+        assert mode == "search_replace"
+        # S/R prompt is distinct from the edit prompt
+        assert "large" in prompt.lower() or "minimal" in prompt.lower() or "targeted" in prompt.lower()
 
     def test_search_replace_any_file_triggers(self):
         big = "\n".join(f"line {i}" for i in range(60))
         files = {"small.py": "x = 1\n", "big.py": big}
-        prompt = get_drafter_system_prompt(files)
+        prompt, mode = get_drafter_system_prompt(files)
+        prompt2, mode2 = get_drafter_system_prompt({"big.py": big})
         # At least one file >= 50 lines → search/replace mode
-        assert prompt == get_drafter_system_prompt({"big.py": big})
+        assert prompt == prompt2
+        assert mode == mode2 == "search_replace"
 
     def test_empty_dict_creates_mode(self):
-        prompt = get_drafter_system_prompt({})
-        create_prompt = get_drafter_system_prompt()
+        prompt, mode = get_drafter_system_prompt({})
+        create_prompt, create_mode = get_drafter_system_prompt()
         assert prompt == create_prompt
+        assert mode == create_mode == "create"
 
     def test_none_content_handled(self):
         # None content treated as empty → 0 lines
         files = {"app.py": None}
-        prompt = get_drafter_system_prompt(files)
+        prompt, mode = get_drafter_system_prompt(files)
         assert isinstance(prompt, str)
+        assert mode in ("create", "edit")
+
+    def test_skeleton_fill_mode(self):
+        """FR-MPA-005: skeleton_fill=True selects skeleton fill system prompt."""
+        prompt, mode = get_drafter_system_prompt(skeleton_fill=True)
+        assert mode == "skeleton_fill"
+        assert "skeleton" in prompt.lower()
+        assert "NotImplementedError" in prompt or "pre-filled" in prompt.lower()
+
+    def test_skeleton_fill_overrides_existing_files(self):
+        """skeleton_fill takes priority over existing_files detection."""
+        files = {"app.py": "line\n" * 10}
+        prompt, mode = get_drafter_system_prompt(files, skeleton_fill=True)
+        assert mode == "skeleton_fill"
 
 
 # ---------------------------------------------------------------------------
