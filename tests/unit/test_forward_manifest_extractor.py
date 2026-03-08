@@ -337,6 +337,53 @@ class TestManifestMerger:
         assert len(manifest.contracts) == 1
         assert manifest.contracts[0].source_reference == "human-yaml"
 
+    def test_element_deduplication_prefers_richer(self):
+        """Duplicate elements by name are deduplicated, preferring richer metadata."""
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import Param, Signature
+
+        # Deterministic extractor: bare function with self (mis-categorized method)
+        bare = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="add_fields",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="log_record"),
+                    Param(name="record"),
+                    Param(name="message_dict"),
+                ],
+                return_annotation="None",
+            ),
+        )
+        # AST extractor: method with parent_class, docstring, typed params
+        rich = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="add_fields",
+            parent_class="CustomJsonFormatter",
+            docstring_hint="Add GCP-compatible fields.",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="log_record", annotation="dict"),
+                    Param(name="record", annotation="logging.LogRecord"),
+                    Param(name="message_dict", annotation="dict"),
+                ],
+                return_annotation="None",
+            ),
+        )
+
+        merger = ManifestMerger()
+        manifest = merger.merge(
+            [[]], {"src/logger.py": [bare, rich]},
+        )
+
+        file_spec = manifest.file_specs["src/logger.py"]
+        assert len(file_spec.elements) == 1
+        elem = file_spec.elements[0]
+        assert elem.parent_class == "CustomJsonFormatter"
+        assert elem.docstring_hint == "Add GCP-compatible fields."
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Group 6: End-to-End

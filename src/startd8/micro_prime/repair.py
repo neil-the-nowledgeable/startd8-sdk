@@ -225,8 +225,34 @@ def _step_bare_statement_wrap(
             step_name="bare_statement_wrap", modified=False, code=code,
         )
 
-    # Indent body under the def
+    # Dedent body first.  Ollama often returns body-only output where the
+    # first line is unindented and subsequent lines carry a spurious 4-space
+    # indent (relative to a def that Ollama omitted).  Normalise all body
+    # lines to zero indent before re-indenting under the def.
     body_lines = code.splitlines()
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in body_lines
+        if line.strip()
+    ]
+    if indents:
+        min_indent = min(indents)
+        if min_indent > 0:
+            body_lines = [
+                line[min_indent:] if line.strip() else ""
+                for line in body_lines
+            ]
+        elif len(indents) >= 2 and indents[0] == 0:
+            # First line at column 0, rest indented — Ollama body-only pattern.
+            # Strip the common indent of lines 2+ so all lines align.
+            rest_indents = [i for i in indents[1:] if i > 0]
+            if rest_indents:
+                strip = min(rest_indents)
+                body_lines = [body_lines[0]] + [
+                    line[strip:] if line.strip() else ""
+                    for line in body_lines[1:]
+                ]
+    # Indent body under the def
     indented = "\n".join(f"    {line}" if line.strip() else "" for line in body_lines)
     wrapped = f"{sig_line}\n{indented}"
 

@@ -136,6 +136,49 @@ class TestBareStatementWrap:
         assert result.modified is True
         assert "async def fetch_data" in result.code
 
+    def test_dedents_before_wrapping(self, simple_function_element):
+        """Ollama often returns first line unindented, rest with 4-space indent.
+
+        bare_statement_wrap must normalise indentation before wrapping to avoid
+        the body ending up with 8-space indent on lines 2+.
+        """
+        # Simulate Ollama output: first line bare, subsequent indented
+        raw_output = "result = lookup(key)\n    return result"
+        result = _step_bare_statement_wrap(raw_output, simple_function_element)
+        assert result.modified is True
+        # The wrapped code must be valid Python
+        assert _try_parse(result.code, is_method=True)
+        # Both body lines should have exactly 4-space indent
+        lines = result.code.splitlines()
+        body_lines = [l for l in lines[1:] if l.strip()]
+        for line in body_lines:
+            indent = len(line) - len(line.lstrip())
+            assert indent == 4, f"Expected 4-space indent, got {indent}: {line!r}"
+
+    def test_dedents_multiline_ollama_output(self):
+        """Regression test for the exact Ollama output pattern from run-008."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="getJSONLogger",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="logging.Logger",
+            ),
+        )
+        raw_output = (
+            "logger = logging.getLogger(name)\n"
+            "    handler = logging.StreamHandler(sys.stdout)\n"
+            "    formatter = jsonlogger.JsonFormatter()\n"
+            "    handler.setFormatter(formatter)\n"
+            "    logger.addHandler(handler)\n"
+            "    return logger"
+        )
+        result = _step_bare_statement_wrap(raw_output, elem)
+        assert result.modified is True
+        assert _try_parse(result.code, is_method=False), (
+            f"Wrapped code is not valid Python:\n{result.code}"
+        )
+
 
 class TestIndentNormalize:
     """Tests for Step 4: Indentation normalize (REQ-MP-402)."""

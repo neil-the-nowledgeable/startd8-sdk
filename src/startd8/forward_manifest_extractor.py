@@ -1162,6 +1162,7 @@ class SourceReconcileConfig:
         max_file_size_bytes: Skip files exceeding this byte size (default 1 MB).
         max_line_count: Reserved for future LOC-based filtering.
         exclude_patterns: Glob patterns for paths to skip (matched via fnmatch).
+        exclude_files: Exact relative file paths to skip entirely (INV-12).
     """
 
     enabled: bool = True
@@ -1170,6 +1171,13 @@ class SourceReconcileConfig:
     exclude_patterns: list[str] = field(
         default_factory=lambda: [".venv/*", "vendor/*", "node_modules/*"],
     )
+    exclude_files: set[str] = field(default_factory=set)
+    """Exact relative file paths to skip (e.g. target files under --force-regenerate).
+
+    When a file is in this set, _reconcile_file() skips AST parsing entirely.
+    This prevents prior-run output from contaminating the manifest with
+    AST-derived elements that inflate complexity scores (INV-12).
+    """
 
 
 @dataclass
@@ -1414,6 +1422,14 @@ class SourceReconciler:
         should be skipped (missing, oversized, symlink, outside root, cached).
         """
         from startd8.utils.code_manifest import generate_file_manifest
+
+        # INV-12: Skip files explicitly excluded (e.g. target files under
+        # --force-regenerate to prevent prior-run output from contaminating
+        # the manifest with AST-derived elements).
+        if relpath in config.exclude_files:
+            logger.debug("Skipping excluded file (INV-12): %s", relpath)
+            stats.files_skipped += 1
+            return
 
         raw_path = project_root / relpath
 
@@ -1777,10 +1793,43 @@ class ManifestMerger:
                 )
             # else: lower precedence — discard
 
-        # Build file specs from file_elements
+        # Build file specs from file_elements, deduplicating by name.
+        # When both deterministic and AST extractors emit the same element,
+        # prefer the richer version (more fields populated).
+        # Handles the case where the deterministic extractor produces a bare
+        # function with `self` (no parent_class) and AST produces the correct
+        # method (with parent_class) — these are the same element.
         file_specs: dict[str, ForwardFileSpec] = {}
         for filepath, elements in file_elements.items():
-            file_specs[filepath] = ForwardFileSpec(file=filepath, elements=elements)
+            seen_by_name: dict[str, ForwardElementSpec] = {}
+            for elem in elements:
+                name = elem.name
+                if name in seen_by_name:
+                    existing = seen_by_name[name]
+                    # Prefer the element with richer metadata: parent_class,
+                    # docstring_hint, type annotations on signature params.
+                    new_richness = (
+                        (1 if elem.parent_class else 0)
+                        + (1 if elem.docstring_hint else 0)
+                        + (1 if elem.signature and any(
+                            p.annotation for p in (elem.signature.params or [])
+                        ) else 0)
+                    )
+                    old_richness = (
+                        (1 if existing.parent_class else 0)
+                        + (1 if existing.docstring_hint else 0)
+                        + (1 if existing.signature and any(
+                            p.annotation for p in (existing.signature.params or [])
+                        ) else 0)
+                    )
+                    if new_richness > old_richness:
+                        seen_by_name[name] = elem
+                    # else keep existing (first seen / richer)
+                else:
+                    seen_by_name[name] = elem
+            file_specs[filepath] = ForwardFileSpec(
+                file=filepath, elements=list(seen_by_name.values()),
+            )
 
         return ForwardManifest(
             contracts=list(seen.values()),
@@ -1802,6 +1851,7 @@ def extract_forward_contracts(
     project_root: Optional[Path] = None,
     prior_file_specs: Optional[dict[str, ForwardFileSpec]] = None,
     reference_root: Optional[Path] = None,
+    force_regenerate: bool = False,
 ) -> ForwardManifest:
     """Orchestrate all extractors and merge into a ``ForwardManifest``.
 
@@ -1826,6 +1876,10 @@ def extract_forward_contracts(
         triggers REFERENCE_AST extraction to produce behavioral contracts
         (FORMULA, RENDER_PATTERN, CONFIG_KEY, INFRASTRUCTURE) from Python
         AST analysis of existing reference implementations.
+    force_regenerate:
+        When True, SOURCE_RECONCILE skips target files to prevent prior-run
+        output from contaminating the manifest with AST-derived elements
+        (INV-12).
     """
     try:
         det = DeterministicExtractor()
@@ -1870,9 +1924,20 @@ def extract_forward_contracts(
             all_targets = list({
                 f for feat in features for f in feat.target_files
             })
+            # INV-12: When force_regenerate is set, exclude target files from
+            # AST reconciliation to prevent prior-run output from inflating
+            # the manifest with elements the plan didn't specify.
+            reconcile_config = SourceReconcileConfig()
+            if force_regenerate:
+                reconcile_config.exclude_files = set(all_targets)
+                logger.info(
+                    "SOURCE_RECONCILE: --force-regenerate excludes %d target files",
+                    len(all_targets),
+                )
             reconciler = SourceReconciler()
             stats = reconciler.reconcile(
-                manifest, project_root, all_targets, features=features,
+                manifest, project_root, all_targets,
+                config=reconcile_config, features=features,
             )
             manifest.stages_completed.append("SOURCE_RECONCILE")
             logger.info(

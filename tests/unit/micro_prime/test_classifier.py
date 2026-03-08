@@ -180,10 +180,21 @@ class TestScoringFactors:
                     Param(name="c", annotation="int"),
                 ],
             ),
-            docstring_hint="A" * 150,  # Very long docstring
+            docstring_hint="A " * 120,  # 240-char intent (no Args section)
         )
-        tier, reason = classify_element(elem, sample_file_spec, empty_contracts)
-        assert "long docstring" in reason
+        # Use a file spec with enough elements so small-file bias doesn't mask it
+        large_file = ForwardFileSpec(
+            file="src/big_module.py",
+            elements=[
+                ForwardElementSpec(
+                    kind=ElementKind.FUNCTION, name=f"fn_{i}",
+                    signature=Signature(params=[], return_annotation="None"),
+                )
+                for i in range(10)
+            ],
+        )
+        tier, reason = classify_element(elem, large_file, empty_contracts)
+        assert "long docstring intent" in reason
 
 
 class TestAPIDependencyAnalysis:

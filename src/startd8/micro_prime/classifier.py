@@ -268,10 +268,20 @@ def classify_element_with_details(
         complexity_score += 2
         reasons.append("class definition")
 
-    # Docstring hint length
-    if element.docstring_hint and len(element.docstring_hint) > 100:
-        complexity_score += 1
-        reasons.append("long docstring hint (complex intent)")
+    # Docstring hint intent length — strip Args/Returns/Raises boilerplate
+    # before measuring, since long parameter docs don't imply complex logic.
+    if element.docstring_hint:
+        intent_len = _docstring_intent_length(element.docstring_hint)
+        if intent_len > 200:
+            complexity_score += 1
+            reasons.append(f"long docstring intent ({intent_len} chars)")
+
+    # Small-file bias: elements in files with few total elements are
+    # likely simpler than the same signature in a large module.
+    total_elements = len(file_spec.elements) if file_spec.elements else 0
+    if total_elements <= 4:
+        complexity_score -= 1
+        reasons.append(f"small file ({total_elements} elements)")
 
     # ── Classify ──
     reasoning = "; ".join(reasons) if reasons else "default"
@@ -282,6 +292,26 @@ def classify_element_with_details(
         return TierClassification.MODERATE, reasoning, details
     else:
         return TierClassification.COMPLEX, reasoning, details
+
+
+import re as _re
+
+_DOCSTRING_SECTION_RE = _re.compile(
+    r"^\s*(Args|Arguments|Parameters|Returns?|Raises?|Yields?|Examples?|Notes?|See Also|Attributes)\s*:",
+    _re.MULTILINE,
+)
+
+
+def _docstring_intent_length(docstring: str) -> int:
+    """Return the character length of the intent portion of a docstring.
+
+    Strips conventional sections (Args, Returns, Raises, etc.) so that
+    verbose parameter documentation doesn't inflate the complexity signal.
+    """
+    match = _DOCSTRING_SECTION_RE.search(docstring)
+    if match:
+        return len(docstring[: match.start()].rstrip())
+    return len(docstring.rstrip())
 
 
 def _get_real_params(element: ForwardElementSpec) -> list:
