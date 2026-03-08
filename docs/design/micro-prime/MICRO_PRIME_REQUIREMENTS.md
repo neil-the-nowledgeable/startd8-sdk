@@ -101,9 +101,9 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Shared Complexity Router | REQ-MP-8xx | 9 | 9 | 0 | 0 |
 | Moderate Decomposer | REQ-MP-9xx | 10 | 10 | 0 | 0 |
 | Recursive Decomposition Core | REQ-MP-910 | 6 | 0 | 0 | 6 |
-| Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 0 | 0 | 10 |
+| Simple → Trivial Decomposer | REQ-MP-10xx | 10 | 9 | 0 | 1 |
 | Element Registry | REQ-MP-11xx | 10 | 0 | 0 | 10 |
-| **Total** | | **98** | **72** | **0** | **26** |
+| **Total** | | **98** | **81** | **0** | **17** |
 
 ---
 
@@ -1193,7 +1193,7 @@ Pre-escalation decomposition of MODERATE elements into SIMPLE sub-elements that 
 
 ## 13. Layer 9.5 — Recursive Decomposition Core (REQ-MP-910)
 
-> Detailed requirements: [`REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md`](./REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md)
+> Detailed requirements: [`REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md`](../decomposer/REQ-MP-910_RECURSIVE_DECOMPOSITION_CORE.md)
 
 ## 14. Layer 10 — Simple → Trivial Decomposer (REQ-MP-10xx)
 
@@ -1205,20 +1205,20 @@ Extends the deterministic assembly surface to eliminate LLM calls for two additi
 
 | ID | Name | Priority | Status |
 |----|------|----------|--------|
-| REQ-MP-1000 | Copy Detection Module | P0 | planned |
-| REQ-MP-1001 | Copy Source Schema Fields | P0 | planned |
-| REQ-MP-1002 | Prime Contractor Copy Early-Exit | P0 | planned |
+| REQ-MP-1000 | Copy Detection Module | P0 | implemented |
+| REQ-MP-1001 | Copy Source Schema Fields | P0 | implemented |
+| REQ-MP-1002 | Prime Contractor Copy Early-Exit | P0 | implemented |
 | REQ-MP-1003 | Copy-and-Modify Predecessor Injection | P1 | planned |
-| REQ-MP-1004 | Assembly Strategy Enum | P0 | planned |
-| REQ-MP-1005 | All-TRIVIAL Class Decomposition | P0 | planned |
-| REQ-MP-1006 | Template-First Short-Circuit in `_handle_simple` | P1 | planned |
-| REQ-MP-1007 | Post-Assembly File-Level Validation Gate | P1 | planned |
-| REQ-MP-1008 | Simple Decomposer Observability | P1 | planned |
-| REQ-MP-1009 | Simple Decomposer Report | P2 | planned |
+| REQ-MP-1004 | Assembly Strategy Enum | P0 | implemented |
+| REQ-MP-1005 | All-TRIVIAL Class Decomposition | P0 | implemented |
+| REQ-MP-1006 | Template-First Short-Circuit in `_handle_simple` | P1 | implemented |
+| REQ-MP-1007 | Post-Assembly File-Level Validation Gate | P1 | implemented |
+| REQ-MP-1008 | Simple Decomposer Observability | P1 | implemented |
+| REQ-MP-1009 | Simple Decomposer Report | P2 | implemented |
 
 ### REQ-MP-1000: Copy Detection Module
 
-**Priority:** P0 | **Status:** planned
+**Priority:** P0 | **Status:** implemented
 
 New module `src/startd8/contractors/copy_detection.py` that detects tasks whose description indicates byte-identical duplication of a predecessor's output.
 
@@ -1233,13 +1233,13 @@ New module `src/startd8/contractors/copy_detection.py` that detects tasks whose 
 
 ### REQ-MP-1001: Copy Source Schema Fields
 
-**Priority:** P0 | **Status:** planned
+**Priority:** P0 | **Status:** implemented
 
 Add `copy_source_task_id: Optional[str] = None` and `copy_source_file: Optional[str] = None` to `FeatureSpec` in `contractors/queue.py`. Populate during plan ingestion when copy detection signals are present. Existing tests must pass without modification (new fields are optional with `None` defaults).
 
 ### REQ-MP-1002: Prime Contractor Copy Early-Exit
 
-**Priority:** P0 | **Status:** planned
+**Priority:** P0 | **Status:** implemented
 
 In `PrimeContractorWorkflow.develop_feature()`, add an early exit as the first conditional before code generation:
 
@@ -1252,19 +1252,19 @@ In `PrimeContractorWorkflow.develop_feature()`, add an early exit as the first c
 
 ### REQ-MP-1003: Copy-and-Modify Predecessor Injection
 
-**Priority:** P1 | **Status:** planned
+**Priority:** P1 | **Status:** planned (only remaining Layer 10 requirement)
 
 When duplication signal + modification signal detected ("with changes", "adapted for", "modified to"), set `strategy="copy_and_modify"` and inject predecessor output as `{reference_implementation}` in the spec prompt. Prompt-budget guard: measure token count against configurable budget (default: 2000 tokens), apply tiered compression if exceeded (strip comments/docstrings → truncate with marker).
 
 ### REQ-MP-1004: Assembly Strategy Enum
 
-**Priority:** P0 | **Status:** planned
+**Priority:** P0 | **Status:** implemented
 
 Add `AssemblyStrategy(str, Enum)` to `complexity/models.py` with values: `FILE_COPY`, `COPY_AND_MODIFY`, `TEMPLATE`, `SIMPLE_DECOMPOSE`, `LLM_SIMPLE`, `LLM_MODERATE`, `ESCALATE`. Each strategy maps to exactly one handler with no overlap. Record as OTel span attribute `assembly.strategy`.
 
 ### REQ-MP-1005: All-TRIVIAL Class Decomposition
 
-**Priority:** P0 | **Status:** planned
+**Priority:** P0 | **Status:** implemented
 
 Extend `ClassDecomposeStrategy` in the Moderate Decomposer: after `plan()` produces sub-elements, check if every sub-element passes `template_registry.is_trivial()`. If all are TRIVIAL, set `sub_element.deterministic = True` for each, render via templates, and assemble without LLM. `ClassDecomposeStrategy.__init__` accepts optional `template_registry: Optional[TemplateRegistry] = None` parameter.
 
@@ -1272,13 +1272,13 @@ All-or-nothing: assemble in memory; if any sub-element fails, fall back to `_han
 
 ### REQ-MP-1006: Template-First Short-Circuit in `_handle_simple`
 
-**Priority:** P1 | **Status:** planned
+**Priority:** P1 | **Status:** implemented
 
 Before invoking Ollama in `_handle_simple`, try `template_registry.is_trivial()`. If it matches, render and return immediately (zero LLM). This catches cases where template expansion makes previously-SIMPLE elements directly TRIVIAL.
 
 ### REQ-MP-1007: Post-Assembly File-Level Validation Gate
 
-**Priority:** P1 | **Status:** planned
+**Priority:** P1 | **Status:** implemented
 
 After splice, run file-level validation using static analysis only (`ast.parse` + string search):
 
@@ -1290,13 +1290,13 @@ On FAIL: rollback splice, record `RejectionReason.RENDER_CONTRACT_VIOLATION`, es
 
 ### REQ-MP-1008: Simple Decomposer Observability
 
-**Priority:** P1 | **Status:** planned
+**Priority:** P1 | **Status:** implemented
 
 OTel counters on meter `startd8.micro_prime`: `micro_prime.simple_decompose_attempted`, `micro_prime.simple_decompose_succeeded`, `micro_prime.simple_decompose_rejected`. Prime contractor counters: `prime.file_copy_tasks`, `prime.file_copy_cost_saved_usd`. `RejectionReason` enum for bounded rejection taxonomy.
 
 ### REQ-MP-1009: Simple Decomposer Report
 
-**Priority:** P2 | **Status:** planned
+**Priority:** P2 | **Status:** implemented
 
 JSON report at `.startd8/reports/simple-decomposer.json` as typed `@dataclass` (`SimpleDecomposerReport`) with `_meta` (schema_version, sdk_version, python_version), attempted/succeeded/rejected counts, rejection_reasons map, template_coverage map, cost_savings estimate. Advisory file I/O: `try/except OSError` with warning log — never fail generation due to report write error.
 
