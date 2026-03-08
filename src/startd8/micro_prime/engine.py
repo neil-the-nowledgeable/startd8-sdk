@@ -12,6 +12,7 @@ import ast
 import json
 import time
 import textwrap
+from collections.abc import Iterator
 from typing import Any, Optional
 
 from startd8.forward_manifest import (
@@ -1907,6 +1908,13 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, st
                         break
                 if target_node is not None:
                     break
+        # Fallback: code may be a bare def without class wrapper (common from
+        # body-generation prompts). Check top-level before expensive wrapping.
+        if target_node is None:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
+                    target_node = node
+                    break
     else:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
@@ -1941,18 +1949,18 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, st
         if target_node is None:
             return False, "target function not found"
 
-    # Check for NotImplementedError stub
-    for node in ast.walk(target_node):
+    # Check for NotImplementedError stub — only direct body, not nested defs
+    for node in _walk_body_only(target_node):
         if isinstance(node, ast.Raise) and _is_not_implemented(node):
             return False, "contains NotImplementedError"
 
-    # Check return statements for non-None annotations
+    # Check return statements for non-None annotations — direct body only
     if element.signature and element.signature.return_annotation:
         ret_ann = element.signature.return_annotation
         if ret_ann not in ("None", "none"):
             has_return = any(
                 isinstance(n, ast.Return) and n.value is not None
-                for n in ast.walk(target_node)
+                for n in _walk_body_only(target_node)
             )
             if not has_return:
                 return False, f"missing return for -> {ret_ann}"
@@ -1968,6 +1976,25 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, st
         return False, "function body empty"
 
     return True, "structural checks passed"
+
+
+def _walk_body_only(
+    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> Iterator[ast.AST]:
+    """Walk all AST nodes inside *func_node* except nested function bodies.
+
+    This prevents false positives when a generated function contains inner
+    helper functions — e.g. a ``raise NotImplementedError`` in a nested stub
+    should not flag the outer function as incomplete.
+    """
+    for child in ast.iter_child_nodes(func_node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Yield the def node itself (for decorators/name checks) but
+            # do NOT descend into its body.
+            yield child
+            continue
+        yield child
+        yield from ast.walk(child)
 
 
 def _is_not_implemented(node: ast.Raise) -> bool:

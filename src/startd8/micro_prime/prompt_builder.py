@@ -310,6 +310,18 @@ def _render_constraints(contracts: list[InterfaceContract]) -> list[str]:
     return lines
 
 
+def _is_usable_example(ce: dict) -> bool:
+    """Return True if a completed element dict is safe to inject as few-shot."""
+    if not ce.get("syntax_valid") or not ce.get("code"):
+        return False
+    # Re-validate: the syntax_valid flag may have been set before post-processing.
+    try:
+        ast.parse(ce["code"])
+    except SyntaxError:
+        return False
+    return True
+
+
 def find_few_shot_examples(
     element: ForwardElementSpec,
     file_path: str,
@@ -341,8 +353,7 @@ def find_few_shot_examples(
             if len(examples) >= max_examples:
                 break
             if (
-                ce.get("syntax_valid")
-                and ce.get("code")
+                _is_usable_example(ce)
                 and ce.get("element", {}).get("parent_class") == element.parent_class
                 and ce.get("element", {}).get("name") != element.name
             ):
@@ -354,8 +365,7 @@ def find_few_shot_examples(
             if len(examples) >= max_examples:
                 break
             if (
-                ce.get("syntax_valid")
-                and ce.get("code")
+                _is_usable_example(ce)
                 and ce.get("file_path") == file_path
                 and ce.get("element", {}).get("name") != element.name
                 and ce["code"].strip() not in examples
@@ -368,8 +378,7 @@ def find_few_shot_examples(
             if len(examples) >= max_examples:
                 break
             if (
-                ce.get("syntax_valid")
-                and ce.get("code")
+                _is_usable_example(ce)
                 and ce.get("element", {}).get("kind") == element.kind
                 and ce.get("element", {}).get("name") != element.name
                 and ce["code"].strip() not in examples

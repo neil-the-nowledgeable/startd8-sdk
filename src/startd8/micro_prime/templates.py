@@ -251,7 +251,7 @@ def _template_constant(elem: ForwardElementSpec) -> Optional[str]:
             if ann == type_str:
                 return f"{elem.name} = {default}"
         # Fallback for Optional, List, Dict etc.
-        if ann.startswith("Optional"):
+        if ann.startswith("Optional[") or ann == "Optional":
             return f"{elem.name} = None"
     return None
 
