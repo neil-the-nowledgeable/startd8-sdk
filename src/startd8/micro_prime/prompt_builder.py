@@ -110,10 +110,10 @@ def _build_function_prompt(
         "# Implement the function body.",
         "# Replace the `raise NotImplementedError` line with a working implementation.",
         f"# The body should be approximately {est_lines} lines.",
-        "# Output ONLY the body lines (no `def`, no class, no docstring, no import statements).",
+        "# Output ONLY the body lines (no `def`, no class, no docstring).",
+        "# If you need imports not listed above, put them at the top of your output.",
         f"# Indent the body with exactly {indent_spaces} spaces.",
         "# STOP after the body ends. Do NOT write additional functions, classes, or tests.",
-        "# Do NOT include `import` or `from ... import` lines — imports are handled separately.",
         "# Output ONLY Python code. No markdown fences, no explanations, no comments before or after.",
         "",
     ])

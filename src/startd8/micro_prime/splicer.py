@@ -43,12 +43,16 @@ def _dedent_lines(lines: list[str]) -> list[str]:
 
 
 def _collect_leading_imports(code: str) -> list[str]:
-    """Extract leading import lines from generated code.
+    """Extract leading **single-line** import statements from generated code.
 
     Returns a list of import lines (``import …`` / ``from … import …``) that
     appear before the first non-import, non-blank line.  These are the imports
     that ``_extract_body`` will strip — capturing them here lets the caller
     re-inject them into the skeleton's import section.
+
+    Multi-line imports (``from x import (\\n  a,\\n  b\\n)``) are skipped to
+    avoid injecting fragments.  Ollama almost exclusively emits single-line
+    imports so this is safe.
     """
     imports: list[str] = []
     for line in code.strip().splitlines():
@@ -56,6 +60,9 @@ def _collect_leading_imports(code: str) -> list[str]:
         if not stripped:
             continue
         if stripped.startswith(("import ", "from ")):
+            # Skip multi-line imports (open paren without close on same line)
+            if "(" in stripped and ")" not in stripped:
+                break
             imports.append(stripped)
         else:
             break
@@ -82,7 +89,10 @@ def _inject_imports(skeleton: str, new_imports: list[str]) -> str:
         if s.startswith(("import ", "from ")):
             existing.add(s)
 
-    to_add = [imp for imp in new_imports if imp not in existing]
+    to_add = [
+        imp for imp in new_imports
+        if imp not in existing and "from __future__" not in imp
+    ]
     if not to_add:
         return skeleton
 

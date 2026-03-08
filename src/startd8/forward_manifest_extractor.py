@@ -1796,9 +1796,11 @@ class ManifestMerger:
         # Build file specs from file_elements, deduplicating by name.
         # When both deterministic and AST extractors emit the same element,
         # prefer the richer version (more fields populated).
-        # Handles the case where the deterministic extractor produces a bare
-        # function with `self` (no parent_class) and AST produces the correct
-        # method (with parent_class) — these are the same element.
+        # Key is name-only because the deterministic extractor often produces
+        # a bare function with `self` (no parent_class) while the AST extractor
+        # correctly identifies the same element as a method (with parent_class).
+        # Using (name, parent_class) would keep both, causing the engine to
+        # attempt splicing a phantom standalone function with no skeleton stub.
         file_specs: dict[str, ForwardFileSpec] = {}
         for filepath, elements in file_elements.items():
             seen_by_name: dict[str, ForwardElementSpec] = {}
