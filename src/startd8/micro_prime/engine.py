@@ -14,6 +14,7 @@ import json
 import time
 import textwrap
 from collections.abc import Iterator
+from dataclasses import dataclass, field as dc_field
 from typing import Any, Optional
 
 from startd8.element_id import make_element_id
@@ -176,6 +177,7 @@ def _record_decomp_time(strategy: str, duration_ms: float) -> None:
 
 
 def _record_assembly_time(strategy: str, file_path: str, duration_ms: float) -> None:
+    """Emit assembly_time_ms OTel histogram (REQ-MP-906)."""
     if _assembly_time_ms is not None:
         _assembly_time_ms.record(duration_ms, {"strategy": strategy, "file": file_path})
 
@@ -199,6 +201,9 @@ def _record_simple_decompose_rejected(file_path: str) -> None:
 # value are bucketed as "N+" to prevent unbounded label cardinality.
 _RECURSION_DEPTH_LABEL_CAP = 3
 
+# Max chars for sub-element docstring hint context injection.
+_MAX_DOC_HINT_CHARS = 512
+
 
 def _cap_depth_label(depth: int) -> str:
     """Cap depth for metric labels to avoid high-cardinality (REQ-MP-914)."""
@@ -208,6 +213,7 @@ def _cap_depth_label(depth: int) -> str:
 
 
 def _record_recursion_attempted(strategy: str, depth: int) -> None:
+    """Emit recursion_attempted counter with capped depth label."""
     if _recursion_attempted is not None:
         _recursion_attempted.add(1, {
             "strategy": strategy, "depth": _cap_depth_label(depth),
@@ -215,6 +221,7 @@ def _record_recursion_attempted(strategy: str, depth: int) -> None:
 
 
 def _record_recursion_succeeded(strategy: str, depth: int) -> None:
+    """Emit recursion_succeeded counter with capped depth label."""
     if _recursion_succeeded is not None:
         _recursion_succeeded.add(1, {
             "strategy": strategy, "depth": _cap_depth_label(depth),
@@ -224,6 +231,7 @@ def _record_recursion_succeeded(strategy: str, depth: int) -> None:
 def _record_recursion_rejected(
     strategy: str, depth: int, rejection_reason: str,
 ) -> None:
+    """Emit recursion_rejected counter with capped depth and bounded reason label."""
     if _recursion_rejected is not None:
         _recursion_rejected.add(1, {
             "strategy": strategy,
@@ -233,8 +241,6 @@ def _record_recursion_rejected(
 
 
 # ── Graph execution result types (REQ-MP-912) ──────────────────────
-
-from dataclasses import dataclass, field as dc_field
 
 
 @dataclass
@@ -920,10 +926,7 @@ class MicroPrimeEngine:
                     "Circuit breaker tripped (per-file): %d consecutive local failures",
                     self._consecutive_failures,
                 )
-            if (
-                self._run_consecutive_failures >= self._RUN_BREAKER_THRESHOLD
-                and not self._file_circuit_open
-            ):
+            if self._run_consecutive_failures == self._RUN_BREAKER_THRESHOLD:
                 logger.warning(
                     "Circuit breaker tripped (per-run): %d consecutive failures across files",
                     self._run_consecutive_failures,
@@ -1707,6 +1710,7 @@ class MicroPrimeEngine:
         # Step 2: Recursive children — requires policy check
         if node.children and policy.enabled:
             # Policy checks
+            fp: Optional[str] = None
             sub_spec = getattr(sub, "element_spec", None)
             if sub_spec is not None:
                 fp = make_fingerprint(
@@ -1766,7 +1770,7 @@ class MicroPrimeEngine:
                 assembly_kind="sequential_body",
                 confidence=0.0,
             )
-            child_path = decomposition_path + [fp] if sub_spec else decomposition_path
+            child_path = decomposition_path + [fp] if fp is not None else decomposition_path
             child_result = self._execute_plan_graph(
                 graph=child_graph,
                 file_spec=file_spec,
@@ -1801,6 +1805,10 @@ class MicroPrimeEngine:
         # Step 3: Leaf node — fall back to _handle_simple
         sub_spec = getattr(sub, "element_spec", None)
         if sub_spec is None:
+            logger.debug(
+                "Leaf node %s has no element_spec — cannot generate",
+                sub_name,
+            )
             return _NodeExecutionResult(
                 success=False, code="",
                 input_tokens=0, output_tokens=0, llm_calls=0,
@@ -1814,8 +1822,8 @@ class MicroPrimeEngine:
                 if sub_spec.docstring_hint
                 else prompt_context
             )
-            if len(doc_hint) > 512:
-                doc_hint = doc_hint[:509] + "..."
+            if len(doc_hint) > _MAX_DOC_HINT_CHARS:
+                doc_hint = doc_hint[:_MAX_DOC_HINT_CHARS - 3] + "..."
             sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
 
         sub_result = self._handle_simple(

@@ -499,6 +499,14 @@ def find_few_shot_examples(
         List of code strings to use as few-shot examples.
     """
     examples: list[str] = []
+    seen: set[str] = set()
+
+    def _add(code: str) -> bool:
+        if code in seen:
+            return False
+        seen.add(code)
+        examples.append(code)
+        return True
 
     # Tier 1: Same class
     if element.parent_class:
@@ -512,7 +520,7 @@ def find_few_shot_examples(
         for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            examples.append(ce["code"].strip())
+            _add(ce["code"].strip())
 
     # Tier 2: Same file
     if len(examples) < max_examples:
@@ -526,9 +534,7 @@ def find_few_shot_examples(
         for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            code = ce["code"].strip()
-            if code not in examples:
-                examples.append(code)
+            _add(ce["code"].strip())
 
     # Tier 3: Same kind (across files)
     if len(examples) < max_examples:
@@ -542,9 +548,7 @@ def find_few_shot_examples(
         for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            code = ce["code"].strip()
-            if code not in examples:
-                examples.append(code)
+            _add(ce["code"].strip())
 
     return examples
 

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -3602,9 +3603,7 @@ class PrimeContractorWorkflow:
         # D4 + F1: Persist element registry run metrics for Kaizen analysis
         if getattr(self, "_element_registry", None) is not None:
             try:
-                import os as _os
-                import time as _time
-                run_id = _os.environ.get("KAIZEN_RUN_ID") or f"run-{int(_time.time())}"
+                run_id = os.environ.get("KAIZEN_RUN_ID") or f"run-{int(time.time())}"
                 self._element_registry.write_run_metrics(run_id)
                 # F1: Enrich result dict with element-level status counts
                 local_count = len(self._element_registry.elements_by_status("implement", "generated"))
@@ -3614,7 +3613,7 @@ class PrimeContractorWorkflow:
                     "escalated": escalated_count,
                     "total": len(self._element_registry.all_entries()),
                 }
-            except Exception:
+            except (OSError, ValueError, KeyError, TypeError):
                 logger.warning("Element registry run metrics failed", exc_info=True)
                 result_dict_registry = None
         else:

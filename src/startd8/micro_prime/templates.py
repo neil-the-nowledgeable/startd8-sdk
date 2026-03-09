@@ -272,14 +272,14 @@ def _is_property_setter(
         return False
     if not elem.decorators:
         return False
-    return any(d.endswith(".setter") for d in elem.decorators)
+    return any(d == f"{elem.name}.setter" for d in elem.decorators)
 
 
 def _template_property_setter(
     elem: ForwardElementSpec,
     _file: ForwardFileSpec,
     _contracts: list[InterfaceContract],
-) -> str:
+) -> Optional[str]:
     """Generate a simple property setter: self._name = value."""
     attr_name = elem.name.lstrip("_")
     # Derive the value param name (first non-self param, or "value")
@@ -288,6 +288,8 @@ def _template_property_setter(
         non_self = [p for p in elem.signature.params if p.name not in ("self", "cls")]
         if non_self:
             value_param = non_self[0].name
+    if not _is_safe_identifier(value_param):
+        return None
     return f"self._{attr_name} = {value_param}"
 
 
@@ -297,7 +299,12 @@ def _template_context_enter(elem: ForwardElementSpec) -> Optional[str]:
 
 
 def _template_context_exit(elem: ForwardElementSpec) -> Optional[str]:
-    """Generate __exit__: return None (don't suppress exceptions)."""
+    """Generate __exit__: return None (don't suppress exceptions).
+
+    Returning None/False means exceptions propagate normally.
+    The (exc_type, exc_val, exc_tb) params are on the def line
+    (handled by the splicer), not in the body.
+    """
     return "return None"
 
 

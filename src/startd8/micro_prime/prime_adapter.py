@@ -281,6 +281,7 @@ class MicroPrimeCodeGenerator:
         )
         self._ollama_available: Optional[bool] = None
         self._cloud_agent_spec = cloud_agent_spec
+        self._tier_agent_spec: Optional[str] = None
         self._cloud_agent: Optional[BaseAgent] = None
 
     def generate(
@@ -923,10 +924,11 @@ class MicroPrimeCodeGenerator:
 
         backfilled = 0
         for file_path in generated_files:
-            if not file_path.endswith(".py"):
+            file_path = Path(file_path)
+            if file_path.suffix != ".py":
                 continue
             try:
-                source = Path(file_path).read_text(encoding="utf-8")
+                source = file_path.read_text(encoding="utf-8")
                 tree = ast.parse(source)
             except (OSError, SyntaxError):
                 continue
@@ -1360,9 +1362,8 @@ class MicroPrimeCodeGenerator:
         → ``DRAFT_MODEL_CLAUDE_HAIKU.agent_spec``.
         """
         # D3: Tier-specific agent spec from complexity routing
-        tier_spec = getattr(self, "_tier_agent_spec", None)
-        if tier_spec is not None:
-            return tier_spec
+        if self._tier_agent_spec is not None:
+            return self._tier_agent_spec
         if self._cloud_agent_spec is not None:
             return self._cloud_agent_spec
         drafter = getattr(self._fallback, "drafter_agent", None)

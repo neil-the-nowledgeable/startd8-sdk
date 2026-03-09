@@ -2865,6 +2865,10 @@ def element_registry_lineage(
         console.print(f"[red]Error: element not found: {element_id}[/red]")
         raise typer.Exit(1)
 
+    if not lineage.history:
+        console.print(f"[dim]No history records found for {element_id}.[/dim]")
+        return
+
     table = Table(title=f"Lineage: {element_id}")
     table.add_column("Timestamp", style="dim")
     table.add_column("Phase")
