@@ -94,6 +94,36 @@ class TestSignatureParsing:
         sig = _parse_python_signature("not a function at all !!!")
         assert sig is None
 
+    def test_dotted_method_name(self):
+        """Dotted 'def ClassName.method(self, x)' parses correctly."""
+        sig = _parse_python_signature(
+            "def CustomJsonFormatter.add_fields(self, log_record, record, message_dict)"
+        )
+        assert sig is not None
+        assert len(sig.params) == 4
+        assert sig.params[0].name == "self"
+        assert sig.params[1].name == "log_record"
+
+    def test_dotted_method_with_return(self):
+        """Dotted method with return annotation."""
+        sig = _parse_python_signature(
+            "def RecommendationService.ListRecommendations(self, request, context) -> list"
+        )
+        assert sig is not None
+        assert sig.return_annotation == "list"
+        assert len(sig.params) == 3
+
+    def test_dotted_method_with_annotations(self):
+        """Dotted method preserves param annotations."""
+        sig = _parse_python_signature(
+            "def MyClass.process(self, data: bytes, count: int) -> None"
+        )
+        assert sig is not None
+        assert sig.params[1].name == "data"
+        assert sig.params[1].annotation == "bytes"
+        assert sig.params[2].annotation == "int"
+        assert sig.return_annotation == "None"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Group 2: DeterministicExtractor
@@ -185,6 +215,36 @@ class TestDeterministicExtractor:
         cls = by_name["CustomJsonFormatter"]
         assert cls.kind == ElementKind.CLASS
         assert cls.parent_class is None
+
+    def test_dotted_method_creates_element_spec(self):
+        """Dotted 'def ClassName.method(self, ...)' creates METHOD element with parent_class."""
+        feature = _make_feature(
+            api_signatures=[
+                "class CustomJsonFormatter(jsonlogger.JsonFormatter)",
+                "def CustomJsonFormatter.add_fields(self, log_record, record, message_dict)",
+                "def getJSONLogger(name: str) -> logging.Logger",
+            ],
+            target_files=["src/recommendationservice/logger.py"],
+        )
+        ext = DeterministicExtractor()
+        _, file_elements = ext.extract([feature])
+
+        specs = file_elements["src/recommendationservice/logger.py"]
+        by_name = {s.name: s for s in specs}
+
+        # Dotted name should parse and create element with parent_class
+        assert "add_fields" in by_name, (
+            f"add_fields missing from elements: {[s.name for s in specs]}"
+        )
+        add_fields = by_name["add_fields"]
+        assert add_fields.kind == ElementKind.METHOD
+        assert add_fields.parent_class == "CustomJsonFormatter"
+        assert add_fields.signature is not None
+        assert len(add_fields.signature.params) == 4
+
+        # Other elements unaffected
+        assert by_name["getJSONLogger"].kind == ElementKind.FUNCTION
+        assert by_name["CustomJsonFormatter"].kind == ElementKind.CLASS
 
     def test_classmethod_linked_to_class_by_cls(self):
         """REQ-3.1.1: cls-bearing function promoted with is_classmethod=True."""

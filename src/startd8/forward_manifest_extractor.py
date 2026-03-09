@@ -142,8 +142,20 @@ def _parse_python_signature(sig_str: str) -> Optional[Signature]:
     if cleaned.rstrip().endswith(": pass"):
         cleaned = cleaned.rstrip()[: -len(": pass")].rstrip()
 
+    # Strip class prefix from dotted method names (e.g.
+    # "ClassName.method(self, ...)" → "method(self, ...)") because
+    # "def ClassName.method(...): pass" is invalid Python syntax.
+    # The parent_class is resolved downstream from the dotted func_name.
+    parse_name = cleaned
+    paren_idx = cleaned.find("(")
+    if paren_idx != -1:
+        name_part = cleaned[:paren_idx]
+        if "." in name_part:
+            last_dot = name_part.rfind(".")
+            parse_name = name_part[last_dot + 1:] + cleaned[paren_idx:]
+
     # Wrap as a valid function so ast.parse can handle it
-    source = f"def {cleaned}: pass"
+    source = f"def {parse_name}: pass"
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -616,10 +628,18 @@ class DeterministicExtractor:
 
             # Build ForwardElementSpec for the target file
             if not parsed_sig and feature.target_files:
-                logger.warning(
+                level = (
+                    logging.WARNING
+                    if "." not in func_name
+                    else logging.ERROR
+                )
+                logger.log(
+                    level,
                     "Signature parsed name %r but not params in feature %s: %r "
-                    "(contract created, element spec skipped)",
+                    "(contract created, element spec skipped%s)",
                     func_name, feature.feature_id, sig_str,
+                    "; dotted method name — class decomposition will fail"
+                    if "." in func_name else "",
                 )
             if parsed_sig and feature.target_files:
                 target_file = feature.target_files[0]

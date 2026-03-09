@@ -838,6 +838,25 @@ class MicroPrimeEngine:
                     element, enriched_file_spec, skeleton,
                 )
 
+        # Defense-in-depth: warn if any CLASS element still has no child
+        # methods after enrichment.  This means class_decompose will reject
+        # it, forcing cloud fallback.  Root cause is usually a dotted
+        # api_signature that _parse_python_signature couldn't handle.
+        for element in enriched_file_spec.elements:
+            if element.kind == ElementKind.CLASS:
+                child_count = sum(
+                    1 for e in enriched_file_spec.elements
+                    if e.parent_class == element.name
+                )
+                if child_count == 0:
+                    logger.warning(
+                        "Class %s in %s has no child method elements after "
+                        "enrichment — class_decompose will fail. Check if "
+                        "api_signatures used dotted method names that failed "
+                        "to parse.",
+                        element.name, file_spec.file,
+                    )
+
         # Pre-classify to determine processing order (REQ-MP-704).
         # Classification results are cached to avoid redundant work in
         # process_element() — each element is classified exactly once.
