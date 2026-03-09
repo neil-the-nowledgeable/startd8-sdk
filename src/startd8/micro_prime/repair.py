@@ -254,6 +254,22 @@ def _step_bare_statement_wrap(
         body_lines = body_lines[1:]
     if not body_lines:
         body_lines = ["pass"]
+
+    # Re-check after import hoisting: if the remaining body already starts
+    # with def/class/decorator, don't wrap — just reassemble with hoisted
+    # imports.  This happens when over_generation_trim extracts a complete
+    # function with imports prepended (run-016 getJSONLogger pattern).
+    first_body_stripped = body_lines[0].lstrip() if body_lines else ""
+    if first_body_stripped.startswith(("def ", "async def ", "class ", "@")):
+        reassembled = "\n".join(body_lines)
+        if hoisted_imports:
+            reassembled = "\n".join(hoisted_imports) + "\n\n" + reassembled
+        return RepairStepResult(
+            step_name="bare_statement_wrap",
+            modified=bool(hoisted_imports),
+            code=reassembled,
+            metrics={"hoisted_imports": len(hoisted_imports), "already_wrapped": True},
+        )
     indents = [
         len(line) - len(line.lstrip())
         for line in body_lines

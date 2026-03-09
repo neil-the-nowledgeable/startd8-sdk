@@ -222,6 +222,28 @@ class TestBareStatementWrap:
         assert result.modified is True
         assert result.metrics.get("hoisted_imports", 0) == 0
 
+    def test_no_double_wrap_when_def_after_imports(self, simple_function_element):
+        """Run-016: over_generation_trim outputs imports + complete def.
+
+        bare_statement_wrap should NOT re-wrap the function in another def.
+        """
+        code = (
+            "import logging\n"
+            "from logging import StreamHandler\n"
+            "\n"
+            "def get_name(self, key: str) -> str:\n"
+            "    logger = logging.getLogger(key)\n"
+            "    return key\n"
+        )
+        result = _step_bare_statement_wrap(code, simple_function_element)
+        # Should not contain nested def
+        assert "    def get_name" not in result.code
+        # The def should exist exactly once
+        assert result.code.count("def get_name") == 1
+        # Imports should be preserved
+        assert "import logging" in result.code
+        assert result.metrics.get("already_wrapped") is True
+
 
 class TestIndentNormalize:
     """Tests for Step 4: Indentation normalize (REQ-MP-402)."""
