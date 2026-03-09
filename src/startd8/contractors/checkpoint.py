@@ -13,12 +13,14 @@ features are developed without integration validation.
 This module is now part of startd8-sdk and works without ContextCore.
 """
 
+import ast
+import importlib
 import os
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..logging_config import get_logger
 
@@ -178,7 +180,11 @@ class IntegrationCheckpoint:
         # 3. Lint check (basic)
         results.append(self.check_lint(integrated_files))
 
-        # 4. Test check (if enabled)
+        # 4. Semantic checks (L2 — stub detection, duplicate detection)
+        results.append(self.check_stubs(integrated_files))
+        results.append(self.check_duplicates(integrated_files))
+
+        # 5. Test check (if enabled)
         if self.run_tests:
             results.append(self.check_tests(feature_name))
 
@@ -457,6 +463,224 @@ class IntegrationCheckpoint:
             name="Pre-Merge Validation",
             message=f"{len(generated_files)} generated file(s) passed pre-merge validation",
             details={"files_checked": len(generated_files)},
+        )
+
+    # -------------------------------------------------------------------
+    # L2: Semantic validation checks (stubs, duplicates, import symbols)
+    # -------------------------------------------------------------------
+
+    def check_stubs(
+        self,
+        files: List[Path],
+        *,
+        max_stub_ratio: float = 0.3,
+    ) -> CheckpointResult:
+        """Detect files where stub bodies exceed *max_stub_ratio* of functions.
+
+        A function body is considered a stub if it contains only ``pass``,
+        ``...``, or ``raise NotImplementedError``.  Files exceeding the
+        threshold are reported as warnings (not errors) because partial
+        implementations may be intentional during incremental generation.
+        """
+        warnings: List[str] = []
+        checked = 0
+
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            checked += 1
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(file_path))
+            except (SyntaxError, OSError):
+                continue
+
+            total_funcs = 0
+            stub_funcs = 0
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                total_funcs += 1
+                if self._is_stub_body(node.body):
+                    stub_funcs += 1
+
+            if total_funcs > 0:
+                ratio = stub_funcs / total_funcs
+                if ratio > max_stub_ratio:
+                    warnings.append(
+                        f"{file_path.name}: {stub_funcs}/{total_funcs} functions "
+                        f"are stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
+                    )
+
+        if warnings:
+            return CheckpointResult(
+                status=CheckpointStatus.WARNING,
+                name="Stub Detection",
+                message=f"{len(warnings)} file(s) have excessive stubs",
+                warnings=warnings,
+                details={"files_checked": checked},
+            )
+
+        return CheckpointResult(
+            status=CheckpointStatus.PASSED,
+            name="Stub Detection",
+            message=f"{checked} file(s) checked, no excessive stubs",
+            details={"files_checked": checked},
+        )
+
+    @staticmethod
+    def _is_stub_body(body: List[Any]) -> bool:
+        """Return True if a function body is a stub (pass, ..., or raise NotImplementedError)."""
+        if not body:
+            return True
+        # Filter out docstrings (first Expr(Constant(str)))
+        stmts = body
+        if (
+            len(stmts) >= 1
+            and isinstance(stmts[0], ast.Expr)
+            and isinstance(stmts[0].value, ast.Constant)
+            and isinstance(stmts[0].value.value, str)
+        ):
+            stmts = stmts[1:]
+        if not stmts:
+            return True
+        if len(stmts) != 1:
+            return False
+        stmt = stmts[0]
+        # pass
+        if isinstance(stmt, ast.Pass):
+            return True
+        # ... (Ellipsis)
+        if (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is ...
+        ):
+            return True
+        # raise NotImplementedError(...)
+        if isinstance(stmt, ast.Raise) and stmt.exc is not None:
+            exc = stmt.exc
+            if isinstance(exc, ast.Call):
+                exc = exc.func
+            if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
+                return True
+        return False
+
+    def check_duplicates(self, files: List[Path]) -> CheckpointResult:
+        """Detect duplicate class or function definitions at the same scope level.
+
+        Two definitions are duplicates if they share the same name at the
+        top level of a file.
+        """
+        warnings: List[str] = []
+        checked = 0
+
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            checked += 1
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(file_path))
+            except (SyntaxError, OSError):
+                continue
+
+            # Collect top-level definition names
+            seen: Dict[str, str] = {}  # name → kind
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, ast.ClassDef):
+                    kind = "class"
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    kind = "function"
+                else:
+                    continue
+                if node.name in seen:
+                    warnings.append(
+                        f"{file_path.name}: duplicate {kind} '{node.name}' "
+                        f"(first defined as {seen[node.name]})"
+                    )
+                else:
+                    seen[node.name] = kind
+
+        if warnings:
+            return CheckpointResult(
+                status=CheckpointStatus.WARNING,
+                name="Duplicate Detection",
+                message=f"{len(warnings)} duplicate definition(s) found",
+                warnings=warnings,
+                details={"files_checked": checked},
+            )
+
+        return CheckpointResult(
+            status=CheckpointStatus.PASSED,
+            name="Duplicate Detection",
+            message=f"{checked} file(s) checked, no duplicates",
+            details={"files_checked": checked},
+        )
+
+    def check_import_symbols(
+        self,
+        files: List[Path],
+        *,
+        known_local_modules: Optional[Set[str]] = None,
+    ) -> CheckpointResult:
+        """Validate that ``from X import Y`` statements resolve to real symbols.
+
+        Skips local/proto-generated modules (listed in *known_local_modules*).
+        Reports as warnings (not errors) because some modules are only
+        available at runtime inside a container.
+        """
+        warnings: List[str] = []
+        checked = 0
+        skip_modules = known_local_modules or set()
+
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            checked += 1
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(file_path))
+            except (SyntaxError, OSError):
+                continue
+
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or not node.module:
+                    continue
+                top_level = node.module.split(".")[0]
+                if top_level in skip_modules:
+                    continue
+                try:
+                    mod = importlib.import_module(node.module)
+                except (ImportError, ModuleNotFoundError):
+                    # Module itself not importable — skip (covered by check_imports)
+                    continue
+                except Exception:
+                    continue
+
+                for alias in node.names or []:
+                    if alias.name == "*":
+                        continue
+                    if not hasattr(mod, alias.name):
+                        warnings.append(
+                            f"{file_path.name}: 'from {node.module} import {alias.name}' "
+                            f"— '{alias.name}' not found in module"
+                        )
+
+        if warnings:
+            return CheckpointResult(
+                status=CheckpointStatus.WARNING,
+                name="Import Symbol Check",
+                message=f"{len(warnings)} unresolved import symbol(s)",
+                warnings=warnings,
+                details={"files_checked": checked},
+            )
+
+        return CheckpointResult(
+            status=CheckpointStatus.PASSED,
+            name="Import Symbol Check",
+            message=f"{checked} file(s) checked, all import symbols valid",
+            details={"files_checked": checked},
         )
 
     def check_tests(self, feature_name: str) -> CheckpointResult:
