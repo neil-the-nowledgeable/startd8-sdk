@@ -40,6 +40,7 @@ def _make_element_spec(
     name: str,
     contract_id: str,
     kind: ElementKind = ElementKind.FUNCTION,
+    parent_class: Optional[str] = None,
 ) -> ForwardElementSpec:
     """Build a ForwardElementSpec with the given name and contract ID."""
     sig = _make_signature() if kind != ElementKind.CLASS else None
@@ -48,6 +49,7 @@ def _make_element_spec(
         name=name,
         source_contract_id=contract_id,
         signature=sig,
+        parent_class=parent_class,
     )
 
 
@@ -78,7 +80,7 @@ def _make_registry_entry(
     )
 
 
-def _make_workflow(tmp_path: Path) -> PrimeContractorWorkflow:
+def _make_workflow(tmp_path: Path, skeleton_sources: Optional[Dict[str, str]] = None) -> PrimeContractorWorkflow:
     """Build a PrimeContractorWorkflow with mocked internals."""
     wf = PrimeContractorWorkflow.__new__(PrimeContractorWorkflow)
     wf.project_root = tmp_path
@@ -88,6 +90,7 @@ def _make_workflow(tmp_path: Path) -> PrimeContractorWorkflow:
     wf.code_generator.output_dir = tmp_path / "generated"
     wf.seed_forward_manifest = None
     wf.force_regenerate = False
+    wf._skeleton_sources = skeleton_sources or {}
     return wf
 
 
@@ -466,6 +469,171 @@ class TestCachedEntryWithoutCode:
                     elements=[
                         _make_element_spec("func_a", "c.a"),
                     ],
+                ),
+            },
+        )
+        wf._forward_manifest = manifest
+
+        feature = _make_feature()
+        result = wf._try_element_cache_assembly(feature)
+
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: Skeleton-based assembly (L6 fix — preserves class wrappers)
+# ---------------------------------------------------------------------------
+
+
+_SKELETON_WITH_CLASS = textwrap.dedent("""\
+    import logging
+
+
+    class JsonFormatter:
+        def add_fields(self, log_record, record, message_dict):
+            raise NotImplementedError
+
+        def format(self, record):
+            raise NotImplementedError
+
+
+    def get_logger(name: str) -> logging.Logger:
+        raise NotImplementedError
+""")
+
+
+class TestSkeletonBasedAssembly:
+    """When a skeleton is available, splices cached code into it."""
+
+    def test_class_methods_preserved_in_skeleton(self, tmp_path: Path) -> None:
+        """Core L6 fix: class wrappers are NOT lost during cache assembly."""
+        wf = _make_workflow(
+            tmp_path,
+            skeleton_sources={"src/widget.py": _SKELETON_WITH_CLASS},
+        )
+
+        registry = ElementRegistry(state_dir=tmp_path / "reg")
+        registry.put(_make_registry_entry(
+            "c.add_fields",
+            "log_record.update({'severity': record.levelname})",
+        ))
+        registry.put(_make_registry_entry(
+            "c.format",
+            "return super().format(record)",
+        ))
+        registry.put(_make_registry_entry(
+            "c.get_logger",
+            "logger = logging.getLogger(name)\nreturn logger",
+        ))
+        wf._element_registry = registry
+
+        elem_add = _make_element_spec("add_fields", "c.add_fields", kind=ElementKind.METHOD, parent_class="JsonFormatter")
+        elem_fmt = _make_element_spec("format", "c.format", kind=ElementKind.METHOD, parent_class="JsonFormatter")
+        elem_get = _make_element_spec("get_logger", "c.get_logger")
+
+        manifest = ForwardManifest(
+            file_specs={
+                "src/widget.py": ForwardFileSpec(
+                    file="src/widget.py",
+                    elements=[elem_add, elem_fmt, elem_get],
+                ),
+            },
+        )
+        wf._forward_manifest = manifest
+
+        feature = _make_feature()
+        result = wf._try_element_cache_assembly(feature)
+
+        assert result is not None
+        content = result.generated_files[0].read_text(encoding="utf-8")
+
+        # Class definition must be present (the L6 bug lost it)
+        assert "class JsonFormatter:" in content
+        # Methods must be indented inside the class
+        assert "    def add_fields(" in content
+        assert "    def format(" in content
+        # Module-level function must be present
+        assert "def get_logger(" in content
+        # Import preserved from skeleton
+        assert "import logging" in content
+        # Stubs should be replaced
+        assert "raise NotImplementedError" not in content
+
+    def test_skeleton_assembly_metadata_flag(self, tmp_path: Path) -> None:
+        """Metadata indicates skeleton-based assembly was used."""
+        wf = _make_workflow(
+            tmp_path,
+            skeleton_sources={"src/widget.py": "def func_a():\n    raise NotImplementedError\n"},
+        )
+
+        registry = ElementRegistry(state_dir=tmp_path / "reg")
+        registry.put(_make_registry_entry("c.a", "return 42"))
+        wf._element_registry = registry
+
+        manifest = ForwardManifest(
+            file_specs={
+                "src/widget.py": ForwardFileSpec(
+                    file="src/widget.py",
+                    elements=[_make_element_spec("func_a", "c.a")],
+                ),
+            },
+        )
+        wf._forward_manifest = manifest
+
+        feature = _make_feature()
+        result = wf._try_element_cache_assembly(feature)
+
+        assert result is not None
+        assert result.metadata.get("skeleton_assembly") is True
+
+    def test_no_skeleton_falls_back_to_concatenation(self, tmp_path: Path) -> None:
+        """Without skeleton, falls back to concatenation (backward-compat)."""
+        wf = _make_workflow(tmp_path)  # no skeleton_sources
+
+        registry = ElementRegistry(state_dir=tmp_path / "reg")
+        registry.put(_make_registry_entry("c.a", "def func_a(): pass"))
+        registry.put(_make_registry_entry("c.b", "def func_b(): pass"))
+        wf._element_registry = registry
+
+        manifest = ForwardManifest(
+            file_specs={
+                "src/widget.py": ForwardFileSpec(
+                    file="src/widget.py",
+                    elements=[
+                        _make_element_spec("func_a", "c.a"),
+                        _make_element_spec("func_b", "c.b"),
+                    ],
+                ),
+            },
+        )
+        wf._forward_manifest = manifest
+
+        feature = _make_feature()
+        result = wf._try_element_cache_assembly(feature)
+
+        assert result is not None
+        content = result.generated_files[0].read_text(encoding="utf-8")
+        assert "def func_a(): pass" in content
+        assert "def func_b(): pass" in content
+        assert result.metadata.get("skeleton_assembly") is False
+
+    def test_all_splices_fail_falls_through(self, tmp_path: Path) -> None:
+        """If all element splices fail, returns None (falls to generation)."""
+        # Skeleton has no matching stub for the cached element
+        wf = _make_workflow(
+            tmp_path,
+            skeleton_sources={"src/widget.py": "# empty skeleton\npass\n"},
+        )
+
+        registry = ElementRegistry(state_dir=tmp_path / "reg")
+        registry.put(_make_registry_entry("c.a", "return 42"))
+        wf._element_registry = registry
+
+        manifest = ForwardManifest(
+            file_specs={
+                "src/widget.py": ForwardFileSpec(
+                    file="src/widget.py",
+                    elements=[_make_element_spec("func_a", "c.a")],
                 ),
             },
         )

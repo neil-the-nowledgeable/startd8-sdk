@@ -1916,6 +1916,7 @@ class PrimeContractorWorkflow:
             if elements_from_cache == elements_total and elements_total > 0:
                 return self._assemble_from_element_cache(
                     feature, cached_elements, elements_total,
+                    all_element_specs,
                 )
 
             # SOME elements hit cache: store pre-fill info for generator
@@ -1949,17 +1950,24 @@ class PrimeContractorWorkflow:
         feature: "FeatureSpec",
         cached_elements: dict,
         elements_total: int,
+        all_element_specs: list,
     ) -> Optional[GenerationResult]:
         """Assemble a feature's files from cached element code.
 
-        Groups cached elements by target file, concatenates their code
-        blocks, writes each assembled file to the output directory, and
-        validates the result via ``_detect_assembly_defect``.
+        Uses the forward manifest's skeleton as the assembly scaffold and
+        splices cached element code into it via ``splice_body_into_skeleton``.
+        This preserves class wrappers, imports, and module structure that
+        would be lost by naive concatenation.
+
+        Falls back to ``"\\n\\n".join()`` only when no skeleton is available,
+        with ``_detect_assembly_defect`` as a safety net.
 
         Args:
             feature: The feature being assembled.
             cached_elements: Mapping of element_id -> (file_path, code).
             elements_total: Total number of elements for metadata.
+            all_element_specs: List of (file_path, ForwardElementSpec) tuples
+                for all elements in this feature.
 
         Returns:
             A successful ``GenerationResult`` or ``None`` if assembly
@@ -1970,10 +1978,26 @@ class PrimeContractorWorkflow:
         except ImportError:
             _detect_assembly_defect = None  # type: ignore[assignment]
 
-        # Group code by file path
-        file_code: Dict[str, list] = {}
+        try:
+            from startd8.micro_prime.splicer import splice_body_into_skeleton
+        except ImportError:
+            splice_body_into_skeleton = None  # type: ignore[assignment]
+
+        # Build element_id -> ForwardElementSpec lookup for splicing
+        element_spec_by_id: Dict[str, Any] = {}
+        for _fp, elem_spec in all_element_specs:
+            if elem_spec.source_contract_id:
+                element_spec_by_id[elem_spec.source_contract_id] = elem_spec
+
+        # Group cached elements by file path, preserving element specs
+        # Each entry: (element_id, code, element_spec_or_None)
+        file_elements: Dict[str, list] = {}
         for eid, (file_path, code) in cached_elements.items():
-            file_code.setdefault(file_path, []).append(code)
+            elem_spec = element_spec_by_id.get(eid)
+            file_elements.setdefault(file_path, []).append((eid, code, elem_spec))
+
+        # Resolve skeletons from seed data
+        skeletons = getattr(self, "_skeleton_sources", {}) or {}
 
         # Write assembled files
         output_dir = (
@@ -1982,11 +2006,64 @@ class PrimeContractorWorkflow:
             else self.project_root / "generated"
         )
         generated_files: List[Path] = []
+        used_skeleton = False
 
-        for file_path, code_blocks in file_code.items():
-            assembled = "\n\n".join(code_blocks)
+        for file_path, elements in file_elements.items():
+            skeleton = skeletons.get(file_path, "")
 
-            # Validate assembly if defect detection is available
+            # Option A: Skeleton-based assembly via splicer
+            if skeleton and splice_body_into_skeleton is not None:
+                assembled = skeleton
+                splice_failures = 0
+                for eid, code, elem_spec in elements:
+                    if elem_spec is None:
+                        logger.debug(
+                            "No element spec for %s in %s — skipping splice",
+                            eid, file_path,
+                        )
+                        splice_failures += 1
+                        continue
+                    spliced = splice_body_into_skeleton(code, elem_spec, assembled)
+                    if spliced is not None:
+                        assembled = spliced
+                    else:
+                        logger.debug(
+                            "Splice failed for %s in %s — element skipped",
+                            elem_spec.name, file_path,
+                        )
+                        splice_failures += 1
+
+                if splice_failures == len(elements):
+                    logger.warning(
+                        "All %d element splices failed for '%s' — "
+                        "falling through to generation",
+                        len(elements), file_path,
+                    )
+                    return None
+
+                used_skeleton = True
+                logger.info(
+                    "Skeleton-based cache assembly for '%s': "
+                    "%d/%d elements spliced",
+                    file_path,
+                    len(elements) - splice_failures,
+                    len(elements),
+                )
+            else:
+                # Fallback: concatenate code blocks (no skeleton available)
+                assembled = "\n\n".join(code for _, code, _ in elements)
+                if skeleton:
+                    logger.debug(
+                        "Splicer unavailable for '%s' — using concatenation",
+                        file_path,
+                    )
+                else:
+                    logger.debug(
+                        "No skeleton for '%s' — using concatenation fallback",
+                        file_path,
+                    )
+
+            # Option C safety net: defect detection on assembled output
             if _detect_assembly_defect is not None:
                 defect = _detect_assembly_defect(assembled, file_path)
                 if defect:
@@ -2023,6 +2100,7 @@ class PrimeContractorWorkflow:
                 "strategy": "element_reuse",
                 "elements_from_cache": elements_total,
                 "elements_generated": 0,
+                "skeleton_assembly": used_skeleton,
             },
         )
 
