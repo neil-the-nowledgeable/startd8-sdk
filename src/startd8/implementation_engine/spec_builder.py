@@ -454,6 +454,20 @@ def build_spec_prompt(
     if available_imports_section:
         prioritized.append((1, "available_imports", available_imports_section))
 
+    # P1: Framework import templates (L5 — reduces framework lint errors)
+    from .framework_imports import detect_frameworks, get_import_preamble
+
+    runtime_deps = context.get("runtime_dependencies", [])
+    frameworks = detect_frameworks(
+        task_description=task_description,
+        target_files=target_files,
+        dependencies=runtime_deps,
+    )
+    if frameworks:
+        preamble = get_import_preamble(frameworks, dependencies=runtime_deps)
+        if preamble:
+            prioritized.append((1, "framework_imports", preamble))
+
     # P1: Requirements and protocol guidance
     if requirements_context:
         prioritized.append((1, "requirements_ctx", f"## Requirements Context\n{requirements_context}"))
