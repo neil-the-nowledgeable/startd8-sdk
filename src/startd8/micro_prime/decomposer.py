@@ -27,6 +27,10 @@ from startd8.forward_manifest import (
 )
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element_with_details
+from startd8.micro_prime.decomposition.core import (
+    DecompositionContext,
+    RecursionPolicy,
+)
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
@@ -858,6 +862,32 @@ class ModerateDecomposer:
             FunctionChainStrategy(config=self._config),
         ]
 
+    def build_context(
+        self,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        file_path: str,
+        skeleton: str,
+        classification_reason: str = "",
+        classification_signals: Optional[set[str]] = None,
+        recursion_policy: Optional[RecursionPolicy] = None,
+    ) -> DecompositionContext:
+        """Build a DecompositionContext from individual parameters.
+
+        Convenience factory for callers migrating to the context-based API.
+        """
+        return DecompositionContext(
+            config=self._config,
+            manifest=manifest,
+            file_spec=file_spec,
+            file_path=file_path,
+            skeleton=skeleton,
+            recursion_policy=recursion_policy or RecursionPolicy(),
+            template_registry=self._template_registry,
+            classification_signals=classification_signals,
+            classification_reason=classification_reason,
+        )
+
     def can_decompose(
         self,
         element: ForwardElementSpec,
@@ -888,12 +918,20 @@ class ModerateDecomposer:
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        *,
+        context: Optional[DecompositionContext] = None,
     ) -> Optional[DecompositionPlan]:
         """Produce a decomposition plan, or None if no strategy applies.
 
         This is the single entry point for the generation path — it checks
         strategy applicability, builds the plan, and applies confidence/size
         filters in one pass.
+
+        Args:
+            context: Optional DecompositionContext. When provided, the context
+                fields (config, manifest, etc.) are used; the positional args
+                are still required for backward compatibility but the context
+                takes precedence for new features (recursion, etc.).
         """
         if not self._config.decomposition_enabled:
             return None
