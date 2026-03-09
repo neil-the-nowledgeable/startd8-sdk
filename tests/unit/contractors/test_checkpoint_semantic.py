@@ -184,38 +184,78 @@ class TestCheckDuplicates:
 
 
 # ---------------------------------------------------------------------------
-# check_import_symbols
+# check_known_bad_imports (L2+ — replaces check_import_symbols)
 # ---------------------------------------------------------------------------
 
-class TestCheckImportSymbols:
-    def test_valid_import_symbol(self, tmp_path, checkpoint):
-        f = _write_py(tmp_path, "a.py", "from os.path import join\n")
-        result = checkpoint.check_import_symbols([f])
-        assert result.status == CheckpointStatus.PASSED
-
-    def test_invalid_import_symbol(self, tmp_path, checkpoint):
-        f = _write_py(tmp_path, "a.py", "from os.path import nonexistent_xyz\n")
-        result = checkpoint.check_import_symbols([f])
+class TestCheckKnownBadImports:
+    def test_known_bad_jsonlogger(self, tmp_path, checkpoint):
+        f = _write_py(tmp_path, "a.py", "import jsonlogger\n")
+        result = checkpoint.check_known_bad_imports([f])
         assert result.status == CheckpointStatus.WARNING
-        assert "nonexistent_xyz" in result.warnings[0]
+        assert "jsonlogger" in result.warnings[0]
+        assert "pythonjsonlogger" in result.warnings[0]
 
-    def test_skips_local_modules(self, tmp_path, checkpoint):
-        f = _write_py(tmp_path, "a.py", "from demo_pb2 import SomeMessage\n")
-        result = checkpoint.check_import_symbols(
-            [f], known_local_modules={"demo_pb2"}
+    def test_known_bad_vectordb(self, tmp_path, checkpoint):
+        f = _write_py(tmp_path, "a.py", "from google.cloud.vectordb import Client\n")
+        result = checkpoint.check_known_bad_imports([f])
+        assert result.status == CheckpointStatus.WARNING
+        assert "no PyPI replacement" in result.warnings[0]
+
+    def test_valid_import_not_flagged(self, tmp_path, checkpoint):
+        f = _write_py(tmp_path, "a.py", "import os\nimport json\n")
+        result = checkpoint.check_known_bad_imports([f])
+        assert result.status == CheckpointStatus.PASSED
+
+    def test_denylist_extensible(self, tmp_path, checkpoint):
+        f = _write_py(tmp_path, "a.py", "import fake_hallucinated_pkg\n")
+        result = checkpoint.check_known_bad_imports(
+            [f],
+            extra_denylist={"fake_hallucinated_pkg": "real_pkg"},
         )
-        assert result.status == CheckpointStatus.PASSED
+        assert result.status == CheckpointStatus.WARNING
+        assert "real_pkg" in result.warnings[0]
 
-    def test_unimportable_module_skipped(self, tmp_path, checkpoint):
-        """Modules that can't be imported at all are skipped (covered by check_imports)."""
-        f = _write_py(tmp_path, "a.py", "from nonexistent_module_xyz import Foo\n")
-        result = checkpoint.check_import_symbols([f])
-        # Module itself not importable — should be PASSED (not our job to flag)
-        assert result.status == CheckpointStatus.PASSED
+    def test_from_import_variant(self, tmp_path, checkpoint):
+        f = _write_py(tmp_path, "a.py", "from jsonlogger import JsonFormatter\n")
+        result = checkpoint.check_known_bad_imports([f])
+        assert result.status == CheckpointStatus.WARNING
 
-    def test_star_import_skipped(self, tmp_path, checkpoint):
-        f = _write_py(tmp_path, "a.py", "from os.path import *\n")
-        result = checkpoint.check_import_symbols([f])
+
+class TestStubDetectionWithSentinel:
+    """L2+: STUB_SENTINEL-aware stub detection."""
+
+    def test_pipeline_stub_is_not_warning(self, tmp_path, checkpoint):
+        """File with STUB_SENTINEL should not trigger LLM stub warning."""
+        from startd8.utils.code_extraction import STUB_SENTINEL
+
+        content = (
+            f"# {STUB_SENTINEL}\n"
+            '"""module — stub."""\n'
+            "\n"
+            "def placeholder():\n"
+            "    pass\n"
+        )
+        f = _write_py(tmp_path, "a.py", content)
+        result = checkpoint.check_stubs([f])
+        assert result.status == CheckpointStatus.PASSED
+        assert result.details.get("pipeline_stubs") == 1
+
+    def test_llm_stub_detected(self, tmp_path, checkpoint):
+        """File without STUB_SENTINEL but with pass body → LLM stub warning."""
+        f = _write_py(tmp_path, "a.py", "def foo():\n    pass\n")
+        result = checkpoint.check_stubs([f])
+        assert result.status == CheckpointStatus.WARNING
+        assert "LLM stubs" in result.warnings[0]
+
+    def test_mixed_pipeline_and_llm_stubs(self, tmp_path, checkpoint):
+        """Pipeline stubs don't count toward LLM stub ratio."""
+        from startd8.utils.code_extraction import STUB_SENTINEL
+
+        # File 1: pipeline stub (expected)
+        f1 = _write_py(tmp_path, "stub.py", f"# {STUB_SENTINEL}\ndef a(): pass\n")
+        # File 2: real code
+        f2 = _write_py(tmp_path, "real.py", "def b():\n    return 42\n")
+        result = checkpoint.check_stubs([f1, f2])
         assert result.status == CheckpointStatus.PASSED
 
 
@@ -233,6 +273,7 @@ class TestSemanticChecksInRunAll:
         names = [r.name for r in results]
         assert "Stub Detection" in names
         assert "Duplicate Detection" in names
+        assert "Known Bad Import Check" in names
 
     def test_semantic_warnings_dont_block(self, tmp_path, checkpoint):
         """Semantic check warnings should not prevent overall pass."""

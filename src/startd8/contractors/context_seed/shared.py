@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from startd8.contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN
+from startd8.implementation_engine.package_aliases import (
+    _PYPI_TO_IMPORT,
+    pypi_to_import,
+)
 from startd8.logging_config import get_logger
 
 logger = get_logger("startd8.contractors.context_seed_handlers")
@@ -530,32 +534,7 @@ def _track_onboarding_consumption(
 # ---------------------------------------------------------------------------
 # L3: Per-service dependency scoping
 # ---------------------------------------------------------------------------
-
-# Map PyPI distribution names to their importable top-level module names.
-# Used by scope_dependencies_to_file() to match AST imports against deps.
-_PYPI_TO_IMPORT: dict[str, str] = {
-    "grpcio": "grpc",
-    "grpcio-health-checking": "grpc_health",
-    "grpcio-tools": "grpc_tools",
-    "pillow": "PIL",
-    "python-json-logger": "pythonjsonlogger",
-    "google-api-core": "google",
-    "google-cloud-secret-manager": "google",
-    "opentelemetry-distro": "opentelemetry",
-    "opentelemetry-api": "opentelemetry",
-    "opentelemetry-sdk": "opentelemetry",
-    "opentelemetry-exporter-otlp-proto-grpc": "opentelemetry",
-    "opentelemetry-instrumentation-grpc": "opentelemetry",
-    "python-dateutil": "dateutil",
-    "pyyaml": "yaml",
-    "beautifulsoup4": "bs4",
-    "scikit-learn": "sklearn",
-}
-
-# Reverse map: importable module → set of PyPI names that provide it.
-_IMPORT_TO_PYPI: dict[str, set[str]] = {}
-for _pypi, _mod in _PYPI_TO_IMPORT.items():
-    _IMPORT_TO_PYPI.setdefault(_mod, set()).add(_pypi)
+# _PYPI_TO_IMPORT is imported from package_aliases.py (single source of truth).
 
 
 def _strip_version_pin(dep: str) -> str:
@@ -618,8 +597,10 @@ def scope_dependencies_to_file(
             scoped.append(dep)
             continue
         # Alias match: PyPI name maps to a different import name
-        import_name = _PYPI_TO_IMPORT.get(pkg_name.lower())
-        if import_name and import_name in imported:
+        import_name = pypi_to_import(pkg_name.lower())
+        # pypi_to_import returns the input unchanged when no mapping exists,
+        # so only match when it actually resolved to something different.
+        if import_name != pkg_name.lower() and import_name.split(".")[0] in imported:
             scoped.append(dep)
             continue
 

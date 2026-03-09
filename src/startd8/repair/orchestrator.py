@@ -369,6 +369,25 @@ def _inject_traceability_comment(code: str, step_names: List[str]) -> str:
     return f"{comment}\n{code}"
 
 
+def strip_repair_markers(code: str) -> str:
+    """Remove STARTD8 repair traceability comments from final output.
+
+    Called before writing files to the project directory.  The markers
+    remain in ``.artifacts/`` pipeline copies for debugging.
+    """
+    if _TRACEABILITY_PREFIX.rstrip() not in code:
+        return code
+    lines = code.splitlines(keepends=True)
+    cleaned = [
+        line for line in lines
+        if not line.strip().startswith(_TRACEABILITY_PREFIX.rstrip())
+    ]
+    # Strip leading blank line if marker removal left one
+    while cleaned and cleaned[0].strip() == "":
+        cleaned.pop(0)
+    return "".join(cleaned)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Repair attempt artifact persistence (REQ-RPL-404)
 # ═══════════════════════════════════════════════════════════════════════════

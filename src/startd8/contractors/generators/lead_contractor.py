@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...logging_config import get_logger
+from ...repair.orchestrator import strip_repair_markers
 from ..protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     GenerationResult,
@@ -357,6 +358,8 @@ class PrimaryContractorCodeGenerator:
                 output_path = self.output_dir / target_file
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 content = per_file_code.get(target_file, final_implementation)
+                # L7: Strip repair traceability markers before project write
+                content = strip_repair_markers(content)
                 output_path.write_text(content, encoding="utf-8")
                 generated_files.append(output_path)
                 logger.info("Generated: %s", output_path)
@@ -366,7 +369,9 @@ class PrimaryContractorCodeGenerator:
                 feature_name = context.get("feature_name", "code")
                 output_path = self.output_dir / f"{feature_name}.py"
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(final_implementation, encoding="utf-8")
+                output_path.write_text(
+                    strip_repair_markers(final_implementation), encoding="utf-8",
+                )
                 generated_files.append(output_path)
 
             # Build metadata with stub info for observability

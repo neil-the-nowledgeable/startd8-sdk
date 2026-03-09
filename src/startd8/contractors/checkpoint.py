@@ -14,7 +14,6 @@ This module is now part of startd8-sdk and works without ContextCore.
 """
 
 import ast
-import importlib
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -23,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from ..logging_config import get_logger
+from ..utils.code_extraction import STUB_SENTINEL
 
 logger = get_logger(__name__)
 
@@ -180,9 +180,10 @@ class IntegrationCheckpoint:
         # 3. Lint check (basic)
         results.append(self.check_lint(integrated_files))
 
-        # 4. Semantic checks (L2 — stub detection, duplicate detection)
+        # 4. Semantic checks (L2 — stub detection, duplicate detection, known-bad imports)
         results.append(self.check_stubs(integrated_files))
         results.append(self.check_duplicates(integrated_files))
+        results.append(self.check_known_bad_imports(integrated_files))
 
         # 5. Test check (if enabled)
         if self.run_tests:
@@ -475,14 +476,18 @@ class IntegrationCheckpoint:
         *,
         max_stub_ratio: float = 0.3,
     ) -> CheckpointResult:
-        """Detect files where stub bodies exceed *max_stub_ratio* of functions.
+        """Detect LLM-generated stubs (functions the LLM failed to implement).
 
-        A function body is considered a stub if it contains only ``pass``,
-        ``...``, or ``raise NotImplementedError``.  Files exceeding the
-        threshold are reported as warnings (not errors) because partial
-        implementations may be intentional during incremental generation.
+        Pipeline stubs (carrying ``STUB_SENTINEL``) are expected for
+        downstream tasks and reported as info, not errors.
+
+        LLM stubs (function body is ``pass``/``...``/``raise
+        NotImplementedError`` without the sentinel) indicate the LLM
+        didn't implement the function.  Files exceeding
+        *max_stub_ratio* of LLM stubs are reported as warnings.
         """
         warnings: List[str] = []
+        info: List[str] = []
         checked = 0
 
         for file_path in files:
@@ -495,37 +500,51 @@ class IntegrationCheckpoint:
             except (SyntaxError, OSError):
                 continue
 
+            is_pipeline_stub = STUB_SENTINEL in source
+
             total_funcs = 0
-            stub_funcs = 0
+            llm_stub_funcs = 0
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 total_funcs += 1
                 if self._is_stub_body(node.body):
-                    stub_funcs += 1
+                    if is_pipeline_stub:
+                        # Pipeline stub — expected, just info
+                        pass
+                    else:
+                        llm_stub_funcs += 1
 
-            if total_funcs > 0:
-                ratio = stub_funcs / total_funcs
+            if is_pipeline_stub:
+                info.append(
+                    f"{file_path.name}: pipeline stub (STUB_SENTINEL present)"
+                )
+            elif total_funcs > 0:
+                ratio = llm_stub_funcs / total_funcs
                 if ratio > max_stub_ratio:
                     warnings.append(
-                        f"{file_path.name}: {stub_funcs}/{total_funcs} functions "
-                        f"are stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
+                        f"{file_path.name}: {llm_stub_funcs}/{total_funcs} functions "
+                        f"are LLM stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
                     )
+
+        details: Dict[str, Any] = {"files_checked": checked}
+        if info:
+            details["pipeline_stubs"] = len(info)
 
         if warnings:
             return CheckpointResult(
                 status=CheckpointStatus.WARNING,
                 name="Stub Detection",
-                message=f"{len(warnings)} file(s) have excessive stubs",
+                message=f"{len(warnings)} file(s) have excessive LLM stubs",
                 warnings=warnings,
-                details={"files_checked": checked},
+                details=details,
             )
 
         return CheckpointResult(
             status=CheckpointStatus.PASSED,
             name="Stub Detection",
             message=f"{checked} file(s) checked, no excessive stubs",
-            details={"files_checked": checked},
+            details=details,
         )
 
     @staticmethod
@@ -618,21 +637,34 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
-    def check_import_symbols(
+    # Known hallucinated imports observed in production runs.
+    # Maps bad_import → correct_import (or None if no replacement exists).
+    # Updated as new hallucinations are observed across Kaizen runs.
+    _KNOWN_BAD_IMPORTS: Dict[str, Optional[str]] = {
+        "jsonlogger": "pythonjsonlogger.jsonlogger",
+        "google.cloud.vectordb": None,  # doesn't exist on PyPI
+    }
+
+    def check_known_bad_imports(
         self,
         files: List[Path],
         *,
-        known_local_modules: Optional[Set[str]] = None,
+        extra_denylist: Optional[Dict[str, Optional[str]]] = None,
     ) -> CheckpointResult:
-        """Validate that ``from X import Y`` statements resolve to real symbols.
+        """Flag imports known to be hallucinated by LLMs.
 
-        Skips local/proto-generated modules (listed in *known_local_modules*).
-        Reports as warnings (not errors) because some modules are only
-        available at runtime inside a container.
+        When a corrected import is known, include it in the warning message
+        so the repair pipeline or human reviewer can fix it.
+
+        The *extra_denylist* parameter allows callers to merge project-specific
+        bad imports with the built-in denylist.
         """
+        denylist = dict(self._KNOWN_BAD_IMPORTS)
+        if extra_denylist:
+            denylist.update(extra_denylist)
+
         warnings: List[str] = []
         checked = 0
-        skip_modules = known_local_modules or set()
 
         for file_path in files:
             if file_path.suffix != ".py":
@@ -645,41 +677,46 @@ class IntegrationCheckpoint:
                 continue
 
             for node in ast.walk(tree):
-                if not isinstance(node, ast.ImportFrom) or not node.module:
-                    continue
-                top_level = node.module.split(".")[0]
-                if top_level in skip_modules:
-                    continue
-                try:
-                    mod = importlib.import_module(node.module)
-                except (ImportError, ModuleNotFoundError):
-                    # Module itself not importable — skip (covered by check_imports)
-                    continue
-                except Exception:
-                    continue
+                module_name: Optional[str] = None
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name in denylist:
+                            module_name = alias.name
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module in denylist:
+                        module_name = node.module
+                    # Also check top-level prefix
+                    for bad in denylist:
+                        if node.module == bad or node.module.startswith(bad + "."):
+                            module_name = bad
+                            break
 
-                for alias in node.names or []:
-                    if alias.name == "*":
-                        continue
-                    if not hasattr(mod, alias.name):
+                if module_name is not None:
+                    replacement = denylist.get(module_name)
+                    if replacement:
                         warnings.append(
-                            f"{file_path.name}: 'from {node.module} import {alias.name}' "
-                            f"— '{alias.name}' not found in module"
+                            f"{file_path.name}: import '{module_name}' is a known "
+                            f"hallucination — use '{replacement}' instead"
+                        )
+                    else:
+                        warnings.append(
+                            f"{file_path.name}: import '{module_name}' is a known "
+                            f"hallucination (no PyPI replacement exists)"
                         )
 
         if warnings:
             return CheckpointResult(
                 status=CheckpointStatus.WARNING,
-                name="Import Symbol Check",
-                message=f"{len(warnings)} unresolved import symbol(s)",
+                name="Known Bad Import Check",
+                message=f"{len(warnings)} hallucinated import(s) detected",
                 warnings=warnings,
                 details={"files_checked": checked},
             )
 
         return CheckpointResult(
             status=CheckpointStatus.PASSED,
-            name="Import Symbol Check",
-            message=f"{checked} file(s) checked, all import symbols valid",
+            name="Known Bad Import Check",
+            message=f"{checked} file(s) checked, no known-bad imports",
             details={"files_checked": checked},
         )
 

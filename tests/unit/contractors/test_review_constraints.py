@@ -2,7 +2,10 @@
 
 import pytest
 
-from startd8.implementation_engine.spec_builder import extract_spec_constraints
+from startd8.implementation_engine.spec_builder import (
+    build_constraint_block,
+    extract_spec_constraints,
+)
 from startd8.contractors.context_seed.core import ReviewPhaseHandler
 
 
@@ -210,3 +213,70 @@ class TestConstraintScoreCapping:
         )
         result = handler._parse_review_response(review)
         assert result["score"] == 70  # already below 85, not changed
+
+
+# ---------------------------------------------------------------------------
+# L4+: Structured constraint emission from spec builder
+# ---------------------------------------------------------------------------
+
+class TestBuildConstraintBlock:
+    def test_constraints_from_critical_params(self):
+        context = {"critical_parameters": ["Use port 8080"]}
+        text, constraints = build_constraint_block(context)
+        assert len(constraints) == 1
+        assert constraints[0]["type"] == "MUST"
+        assert constraints[0]["source"] == "critical_parameters"
+        assert "8080" in text
+
+    def test_constraints_from_domain_do_not(self):
+        context = {"domain_constraints": ["Do not add header comments"]}
+        text, constraints = build_constraint_block(context)
+        assert len(constraints) == 1
+        assert constraints[0]["type"] == "MUST_NOT"
+        assert constraints[0]["source"] == "domain_constraints"
+
+    def test_constraints_from_prompt_never(self):
+        context = {"prompt_constraints": ["Never use global state"]}
+        text, constraints = build_constraint_block(context)
+        assert len(constraints) == 1
+        assert constraints[0]["type"] == "MUST_NOT"
+
+    def test_empty_constraints_no_block(self):
+        context = {}
+        text, constraints = build_constraint_block(context)
+        assert text == ""
+        assert constraints == []
+
+    def test_multiple_sources_combined(self):
+        context = {
+            "critical_parameters": ["Use stdlib only"],
+            "domain_constraints": ["Do not add pip-compile headers"],
+            "prompt_constraints": ["Implement health check"],
+        }
+        text, constraints = build_constraint_block(context)
+        assert len(constraints) == 3
+        assert "## Constraints" in text
+        assert "1." in text
+        assert "2." in text
+        assert "3." in text
+
+    def test_numbered_formatting(self):
+        context = {"critical_parameters": ["A", "B"]}
+        text, constraints = build_constraint_block(context)
+        assert "1. **[MUST]** A" in text
+        assert "2. **[MUST]** B" in text
+
+    def test_constraints_round_trip_to_review(self):
+        """Constraints from spec builder can be consumed by review handler."""
+        context = {"prompt_constraints": ["Use stdlib only", "No pip-compile headers"]}
+        _, constraints = build_constraint_block(context)
+        texts = [c["text"] for c in constraints]
+        # These can be passed directly to ReviewPhaseHandler
+        handler = ReviewPhaseHandler()
+
+        class FakeTask:
+            prompt_constraints = texts
+
+        result = handler._build_constraint_checklist_section(FakeTask())
+        assert "Constraint Checklist" in result
+        assert "Use stdlib only" in result

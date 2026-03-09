@@ -634,6 +634,18 @@ class MicroPrimeCodeGenerator:
             )
             generated_files.extend(fallback_result.generated_files)
             total_input += fallback_result.input_tokens
+
+            # L6: Backfill registry from cloud output for future run reuse
+            if fallback_result.success and self._element_registry is not None:
+                backfill_count = self._backfill_registry_from_cloud(
+                    fallback_result.generated_files,
+                    feature_id=context.get("feature_id", "unknown"),
+                )
+                if backfill_count > 0:
+                    logger.info(
+                        "Backfilled %d elements from cloud fallback into registry",
+                        backfill_count,
+                    )
             # The generation is successful if the fallback succeeded AND
             # either there were no locally-handled files, or the ones that
             # were handled locally met the effective fill rate.
@@ -883,6 +895,96 @@ class MicroPrimeCodeGenerator:
                     file_path,
                     exc,
                 )
+
+    def _backfill_registry_from_cloud(
+        self,
+        generated_files: list[str],
+        feature_id: str,
+    ) -> int:
+        """Decompose cloud-generated files into registry entries.
+
+        After cloud fallback produces files that pass validation,
+        AST-decompose each Python file into individual function/class
+        elements and ``registry.put()`` each one.  This populates the
+        registry for future runs on the same project.
+
+        Returns the number of elements backfilled.
+        """
+        if self._element_registry is None:
+            return 0
+
+        backfilled = 0
+        for file_path in generated_files:
+            if not file_path.endswith(".py"):
+                continue
+            try:
+                source = Path(file_path).read_text(encoding="utf-8")
+                tree = ast.parse(source)
+            except (OSError, SyntaxError):
+                continue
+
+            rel_path = file_path
+            try:
+                rel_path = os.path.relpath(file_path, self._output_dir)
+            except ValueError:
+                pass
+
+            # Build parent map for method detection
+            parent_map: dict[int, str | None] = {}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    for child in ast.walk(node):
+                        if child is not node and isinstance(
+                            child, (ast.FunctionDef, ast.AsyncFunctionDef)
+                        ):
+                            parent_map[id(child)] = node.name
+
+            for node in ast.walk(tree):
+                if not isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    continue
+
+                start = node.lineno - 1
+                end = node.end_lineno or start + 1
+                code_lines = source.splitlines()[start:end]
+                code = "\n".join(code_lines)
+
+                parent_class = parent_map.get(id(node))
+                kind = "class" if isinstance(node, ast.ClassDef) else "function"
+
+                element_id = make_element_id(
+                    kind=kind,
+                    name=node.name,
+                    file_path=rel_path,
+                    parent_class=parent_class,
+                )
+
+                try:
+                    entry = ElementEntry(
+                        element_id=element_id,
+                        kind=kind,
+                        name=node.name,
+                        file_path=rel_path,
+                        parent_class=parent_class,
+                        extra={
+                            "code": code,
+                            "generator": "cloud-backfill",
+                            "feature_id": feature_id,
+                        },
+                    )
+                    self._element_registry.put(entry)
+                    self._element_registry.set_phase_status(
+                        element_id, "cloud_backfill", "validated",
+                    )
+                    backfilled += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Registry backfill failed for %s in %s: %s",
+                        node.name, rel_path, exc,
+                    )
+
+        return backfilled
 
     def _count_registry_hits_misses(
         self,

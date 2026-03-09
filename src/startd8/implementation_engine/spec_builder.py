@@ -5,7 +5,9 @@ Produces an 8-section implementation specification from a task description
 and context.
 """
 
+import ast
 import json
+import os
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +37,7 @@ __all__ = [
     "build_spec_arch_section",
     "build_spec_objectives_section",
     "build_spec_conventions_section",
+    "build_constraint_block",
     "extract_spec_constraints",
     "format_context_value",
 ]
@@ -239,6 +242,60 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
         )
 
 
+def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
+    """Extract imports from existing sibling files in the same directory.
+
+    When generating a new file, knowing what its neighbors import
+    provides project-specific framework context that no hardcoded
+    template can match (e.g. the exact proto module names, the
+    project's logging pattern, the OTel setup convention).
+
+    Returns empty string if no Python siblings with imports are found.
+    """
+    existing_files = context.get("existing_files_content", {})
+    if not existing_files:
+        return ""
+
+    # Determine the target directory from target_files
+    target_files = context.get("target_files", [])
+    if not target_files:
+        return ""
+
+    # Use the directory of the first target file
+    target_dir = os.path.dirname(target_files[0]) if target_files else ""
+
+    sibling_imports: set[str] = set()
+    for path, content in existing_files.items():
+        if not isinstance(content, str) or not path.endswith(".py"):
+            continue
+        if os.path.dirname(path) != target_dir:
+            continue
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                try:
+                    sibling_imports.add(ast.unparse(node))
+                except (AttributeError, ValueError):
+                    pass
+
+    if not sibling_imports:
+        return ""
+
+    lines = [
+        "## Imports Used by Sibling Files in This Directory\n",
+        "The following imports are used by other files in this",
+        "service. Use the same packages and import patterns",
+        "where applicable:\n",
+        "```python",
+    ]
+    lines.extend(sorted(sibling_imports))
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def extract_spec_constraints(spec_text: str) -> List[Dict[str, str]]:
     """Extract MUST and MUST NOT assertions from a spec document.
 
@@ -292,6 +349,51 @@ def extract_spec_constraints(spec_text: str) -> List[Dict[str, str]]:
             constraints.append({"type": ctype, "text": text, "source": "spec"})
 
     return constraints
+
+
+def build_constraint_block(context: Dict[str, Any]) -> tuple[str, List[Dict[str, str]]]:
+    """Build a structured constraint block for the spec AND a machine-readable
+    list for the review phase.
+
+    Returns ``(spec_section_text, constraint_list)`` where
+    ``constraint_list`` is stored in the task context for review.
+
+    Sources checked (in order):
+    - ``critical_parameters``: always MUST constraints
+    - ``domain_constraints``: MUST_NOT if starts with "Do not"/"Never"
+    - ``prompt_constraints``: MUST_NOT if starts with "Do not"/"Never"
+    """
+    constraints: List[Dict[str, str]] = []
+
+    for param in context.get("critical_parameters", []):
+        if isinstance(param, str) and param.strip():
+            constraints.append({
+                "type": "MUST",
+                "text": param.strip(),
+                "source": "critical_parameters",
+            })
+
+    for dc in context.get("domain_constraints", []):
+        if isinstance(dc, str) and dc.strip():
+            text = dc.strip()
+            ctype = "MUST_NOT" if text.lower().startswith(("do not", "never")) else "MUST"
+            constraints.append({"type": ctype, "text": text, "source": "domain_constraints"})
+
+    for pc in context.get("prompt_constraints", []):
+        if isinstance(pc, str) and pc.strip():
+            text = pc.strip()
+            ctype = "MUST_NOT" if text.lower().startswith(("do not", "never")) else "MUST"
+            constraints.append({"type": ctype, "text": text, "source": "prompt_constraints"})
+
+    if not constraints:
+        return "", []
+
+    lines = ["## Constraints\n"]
+    for i, c in enumerate(constraints, 1):
+        lines.append(f"{i}. **[{c['type']}]** {c['text']}")
+    spec_text = "\n".join(lines)
+
+    return spec_text, constraints
 
 
 def _select_template_key(context: Dict[str, Any], override: Optional[str] = None) -> str:
@@ -510,19 +612,26 @@ def build_spec_prompt(
     if available_imports_section:
         prioritized.append((1, "available_imports", available_imports_section))
 
-    # P1: Framework import templates (L5 — reduces framework lint errors)
-    from .framework_imports import detect_frameworks, get_import_preamble
+    # P1: Sibling-file imports (L5+ — project-specific, preferred)
+    sibling_section = _build_sibling_imports_section(context)
+    if sibling_section:
+        prioritized.append((1, "sibling_imports", sibling_section))
 
-    runtime_deps = context.get("runtime_dependencies", [])
-    frameworks = detect_frameworks(
-        task_description=task_description,
-        target_files=target_files,
-        dependencies=runtime_deps,
-    )
-    if frameworks:
-        preamble = get_import_preamble(frameworks, dependencies=runtime_deps)
-        if preamble:
-            prioritized.append((1, "framework_imports", preamble))
+    # P1: Framework import templates (L5 — fallback for greenfield projects)
+    # Only used when no sibling imports are available.
+    if not sibling_section:
+        from .framework_imports import detect_frameworks, get_import_preamble
+
+        runtime_deps = context.get("runtime_dependencies", [])
+        frameworks = detect_frameworks(
+            task_description=task_description,
+            target_files=target_files,
+            dependencies=runtime_deps,
+        )
+        if frameworks:
+            preamble = get_import_preamble(frameworks, dependencies=runtime_deps)
+            if preamble:
+                prioritized.append((1, "framework_imports", preamble))
 
     # P1: Requirements and protocol guidance
     if requirements_context:

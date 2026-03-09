@@ -6,8 +6,11 @@ and explanatory notes. Used by LeadContractorWorkflow and available for
 downstream integration pipelines.
 """
 
+import ast
+import builtins
 import os
 import re
+import sys
 from typing import Dict, List, Optional, Tuple
 
 from startd8.logging_config import get_logger
@@ -18,6 +21,223 @@ from startd8.logging_config import get_logger
 STUB_SENTINEL = "STARTD8_AUTO_STUB"
 
 logger = get_logger("startd8.utils.code_extraction")
+
+# Names that are always available — never inject imports for these.
+_BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins))
+
+# Standard library top-level module names (Python 3.9+).
+_STDLIB_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names)
+
+
+def _find_import_insertion_line(lines: list[str]) -> int:
+    """Find the 0-based line index where new imports should be inserted.
+
+    Skips past hashbang, encoding declarations, module docstrings,
+    leading comments/blanks, and ``from __future__`` imports.
+    """
+    i = 0
+    n = len(lines)
+
+    # Skip hashbang
+    if i < n and lines[i].startswith("#!"):
+        i += 1
+
+    # Skip leading comments, blank lines, encoding declarations
+    while i < n:
+        stripped = lines[i].strip()
+        if stripped == "" or stripped.startswith("#"):
+            i += 1
+        else:
+            break
+
+    # Skip module docstring (triple-quoted)
+    if i < n:
+        stripped = lines[i].strip()
+        for quote in ('"""', "'''"):
+            if stripped.startswith(quote):
+                if stripped.count(quote) >= 2 and stripped.endswith(quote) and len(stripped) > len(quote):
+                    i += 1
+                else:
+                    i += 1
+                    while i < n and quote not in lines[i]:
+                        i += 1
+                    if i < n:
+                        i += 1
+                break
+
+    # Skip blank lines after docstring
+    while i < n and lines[i].strip() == "":
+        i += 1
+
+    # Skip from __future__ imports
+    while i < n and lines[i].strip().startswith("from __future__"):
+        i += 1
+
+    # Skip past existing import block to insert after last import
+    last_import = i
+    j = i
+    while j < n:
+        stripped = lines[j].strip()
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            last_import = j + 1
+            j += 1
+        elif stripped == "" or stripped.startswith("#"):
+            # Blank lines or comments between imports
+            j += 1
+        else:
+            break
+
+    return last_import
+
+
+def _collect_imported_names(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """Collect imported names and imported modules from an AST.
+
+    Returns ``(imported_names, imported_modules)`` where:
+    - *imported_names*: all names brought into scope (``os``, ``join``, aliases)
+    - *imported_modules*: top-level module names (``os`` from ``import os.path``)
+    """
+    names: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.add(node.module.split(".")[0])
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    return names, modules
+
+
+def _collect_referenced_names(tree: ast.Module) -> set[str]:
+    """Collect all referenced top-level names from an AST.
+
+    Returns names used in ``ast.Name`` nodes (variable/function references)
+    and the root of ``ast.Attribute`` chains (e.g. ``os`` from ``os.path.join``).
+    """
+    refs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            refs.add(node.id)
+    return refs
+
+
+def audit_and_inject_imports(
+    code: str,
+    available_packages: list[str] | None = None,
+    *,
+    package_alias_map: dict[str, str] | None = None,
+) -> tuple[str, list[str]]:
+    """Deterministic import audit for extracted code.
+
+    AST-parses *code*, identifies all unresolved names, matches them
+    against *available_packages* (using *package_alias_map* for
+    PyPI-name → import-name translation), and injects missing import
+    statements after the last existing import.
+
+    Returns ``(patched_code, injected_imports)`` so callers can log
+    what was added.
+
+    This runs BEFORE the repair pipeline, handling the common case
+    deterministically.  The repair pipeline remains as a safety net
+    for edge cases this pass misses (e.g. dynamic attribute access,
+    conditional imports).
+    """
+    if not code or not code.strip():
+        return code, []
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+
+    imported_names, imported_modules = _collect_imported_names(tree)
+    referenced = _collect_referenced_names(tree)
+
+    # Names that don't need imports
+    defined_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defined_names.add(node.name)
+            for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+                defined_names.add(arg.arg)
+        elif isinstance(node, ast.ClassDef):
+            defined_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined_names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined_names.add(node.target.id)
+        elif isinstance(node, ast.Global):
+            defined_names.update(node.names)
+
+    unresolved = referenced - imported_names - _BUILTIN_NAMES - defined_names
+
+    if not unresolved:
+        return code, []
+
+    # Build lookup: importable_name → package/module
+    # Priority: available_packages with alias map, then stdlib
+    importable: dict[str, str] = {}
+
+    # Stdlib modules
+    for mod in _STDLIB_MODULES:
+        importable[mod] = mod
+
+    # Available packages (with alias mapping)
+    if available_packages:
+        alias_map = package_alias_map or {}
+        for pkg in available_packages:
+            # Strip version pins
+            clean = pkg
+            for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
+                clean = clean.split(sep)[0]
+            clean = clean.strip().lower()
+
+            # The import name might differ from the package name
+            import_name = alias_map.get(clean, clean)
+            # Normalize: PyPI uses dashes, Python uses underscores
+            import_name_underscore = import_name.replace("-", "_")
+            importable[import_name_underscore] = import_name_underscore
+            # Also register the clean package name with underscore normalization
+            importable[clean.replace("-", "_")] = clean.replace("-", "_")
+
+    # Match unresolved names to importable modules
+    to_inject: list[str] = []
+    for name in sorted(unresolved):
+        if name in importable:
+            stmt = f"import {importable[name]}"
+            if stmt not in to_inject:
+                to_inject.append(stmt)
+
+    if not to_inject:
+        return code, []
+
+    # Insert after last existing import
+    lines = code.splitlines()
+    insert_at = _find_import_insertion_line(lines)
+
+    new_lines = lines[:insert_at] + to_inject + lines[insert_at:]
+
+    # Ensure blank line separation after injected imports
+    if insert_at < len(lines) and lines[insert_at].strip():
+        new_lines = lines[:insert_at] + to_inject + [""] + lines[insert_at:]
+
+    patched = "\n".join(new_lines)
+    # Preserve trailing newline if original had one
+    if code.endswith("\n"):
+        patched += "\n"
+
+    logger.info(
+        "Import audit: injected %d import(s): %s",
+        len(to_inject),
+        to_inject,
+    )
+    return patched, to_inject
 
 
 def extract_code_from_response(response: str, language: Optional[str] = None) -> str:
