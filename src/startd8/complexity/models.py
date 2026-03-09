@@ -68,6 +68,10 @@ class TaskComplexitySignals:
     unresolved_call_count: int = 0
     has_cross_file_edges: bool = False
     manifest_coverage: str = "none"
+    # File extension of the primary target file (e.g. ".py", ".html", ".yaml").
+    # Used for non-Python trivial routing: non-Python files below LOC
+    # thresholds route to TRIVIAL/SIMPLE instead of cloud fallback.
+    file_extension: str = ".py"
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging."""
@@ -116,6 +120,11 @@ class ComplexityRoutingConfig:
     mro_depth_complex_threshold: int = 3
     unresolved_calls_complex_threshold: int = 2
     templates_enabled: bool = True
+    # Non-Python file routing thresholds (LOC-based).
+    # Files with non-.py extensions below these thresholds route to
+    # TRIVIAL/SIMPLE instead of cloud fallback.
+    non_python_trivial_loc_max: int = 100
+    non_python_simple_loc_max: int = 300
 
     @classmethod
     def from_handler_config(cls, config: Any) -> ComplexityRoutingConfig:

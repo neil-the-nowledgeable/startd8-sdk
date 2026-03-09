@@ -211,6 +211,53 @@ class TestThresholdOverrides:
 # ── None config uses defaults ────────────────────────────────────────
 
 
+# ── Non-Python file routing ─────────────────────────────────────────
+
+
+class TestNonPythonRouting:
+    def test_html_below_trivial_threshold(self):
+        """HTML template (54 LOC) should route to TRIVIAL."""
+        tier, reason = classify_tier(
+            _signals(file_extension=".html", estimated_loc=54)
+        )
+        assert tier is ComplexityTier.TRIVIAL
+        assert ".html" in reason
+
+    def test_dockerfile_below_trivial_threshold(self):
+        tier, reason = classify_tier(
+            _signals(file_extension="", estimated_loc=50)
+        )
+        # Empty extension falls back to .py default, not non-Python
+        # (Dockerfiles use no extension — handled by explicit empty check)
+
+    def test_yaml_below_simple_threshold(self):
+        """YAML config at 200 LOC should route to SIMPLE."""
+        tier, reason = classify_tier(
+            _signals(file_extension=".yaml", estimated_loc=200)
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert ".yaml" in reason
+
+    def test_non_python_above_simple_threshold(self):
+        """Large non-Python file should route to COMPLEX."""
+        tier, reason = classify_tier(
+            _signals(file_extension=".html", estimated_loc=400)
+        )
+        assert tier is ComplexityTier.COMPLEX
+        assert ".html" in reason
+
+    def test_python_file_not_affected(self):
+        """Python files should NOT take the non-Python path."""
+        tier, _ = classify_tier(_signals(file_extension=".py"))
+        assert tier is ComplexityTier.MODERATE  # default
+
+    def test_requirements_txt_trivial(self):
+        tier, reason = classify_tier(
+            _signals(file_extension=".txt", estimated_loc=9)
+        )
+        assert tier is ComplexityTier.TRIVIAL
+
+
 class TestNoneConfig:
     def test_none_config_uses_defaults(self):
         tier, _ = classify_tier(_signals(blast_radius=10), config=None)

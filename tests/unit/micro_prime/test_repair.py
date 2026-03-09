@@ -180,6 +180,49 @@ class TestBareStatementWrap:
         )
 
 
+    def test_hoists_leading_imports(self):
+        """Run-014: initStackdriverProfiling generated 'import os' + bare statements.
+
+        Leading imports should be hoisted above the def line, not wrapped
+        inside the function body.
+        """
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="initStackdriverProfiling",
+            signature=Signature(
+                params=[],
+                return_annotation="None",
+            ),
+        )
+        raw_output = (
+            'import os\n'
+            '\n'
+            'if "GOOGLE_CLOUD_PROJECT" in os.environ:\n'
+            '    from google.cloud import profiler\n'
+            '    profiler.start(project_id=os.getenv("GOOGLE_CLOUD_PROJECT"))'
+        )
+        result = _step_bare_statement_wrap(raw_output, elem)
+        assert result.modified is True
+        assert result.metrics.get("hoisted_imports") == 1
+        # import os should appear BEFORE def line
+        lines = result.code.splitlines()
+        import_idx = next(i for i, l in enumerate(lines) if l.strip() == "import os")
+        def_idx = next(i for i, l in enumerate(lines) if l.strip().startswith("def initStackdriverProfiling"))
+        assert import_idx < def_idx, (
+            f"import os (line {import_idx}) should precede def (line {def_idx})"
+        )
+        assert _try_parse(result.code, is_method=False), (
+            f"Wrapped code is not valid Python:\n{result.code}"
+        )
+
+    def test_no_hoist_when_no_leading_imports(self, simple_function_element):
+        """Code without leading imports should wrap normally."""
+        code = "x = 1\nreturn x"
+        result = _step_bare_statement_wrap(code, simple_function_element)
+        assert result.modified is True
+        assert result.metrics.get("hoisted_imports", 0) == 0
+
+
 class TestIndentNormalize:
     """Tests for Step 4: Indentation normalize (REQ-MP-402)."""
 

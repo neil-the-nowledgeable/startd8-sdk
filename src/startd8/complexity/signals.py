@@ -100,6 +100,16 @@ def extract_signals_from_feature(
 
     target_file_count = max(len(target_files), 1)
 
+    # file_extension: use the first target file's extension for routing
+    file_extension = ".py"
+    if target_files:
+        try:
+            ext = Path(target_files[0]).suffix
+            if ext:
+                file_extension = ext.lower()
+        except (TypeError, ValueError):
+            pass
+
     # edit_mode: "create" if no target files exist on disk, "edit" if any do
     edit_mode = "create"
     try:
@@ -156,6 +166,7 @@ def extract_signals_from_feature(
         unresolved_call_count=unresolved_call_count,
         has_cross_file_edges=has_cross_file_edges,
         manifest_coverage=manifest_coverage,
+        file_extension=file_extension,
     )
 
 

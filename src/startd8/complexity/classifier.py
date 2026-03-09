@@ -52,6 +52,30 @@ def classify_tier(
     """
     cfg = config or ComplexityRoutingConfig()
 
+    # --- Non-Python early routing ---
+    # Non-Python files (HTML, Dockerfile, YAML, requirements.txt, etc.) don't
+    # benefit from Python-centric complexity analysis.  Route by LOC only.
+    # Run-013 showed an HTML template costing $0.59 via cloud fallback — it
+    # should have been TRIVIAL ($0.00).
+    if signals.file_extension and signals.file_extension != ".py":
+        if signals.estimated_loc <= cfg.non_python_trivial_loc_max:
+            return _emit(
+                ComplexityTier.TRIVIAL,
+                f"non-Python file ({signals.file_extension}) "
+                f"below trivial LOC threshold ({signals.estimated_loc} <= {cfg.non_python_trivial_loc_max})",
+            )
+        if signals.estimated_loc <= cfg.non_python_simple_loc_max:
+            return _emit(
+                ComplexityTier.SIMPLE,
+                f"non-Python file ({signals.file_extension}) "
+                f"below simple LOC threshold ({signals.estimated_loc} <= {cfg.non_python_simple_loc_max})",
+            )
+        return _emit(
+            ComplexityTier.COMPLEX,
+            f"non-Python file ({signals.file_extension}) "
+            f"above simple LOC threshold ({signals.estimated_loc} > {cfg.non_python_simple_loc_max})",
+        )
+
     # --- COMPLEX: any trigger fires ---
     if signals.blast_radius > cfg.blast_radius_complex_threshold:
         return _emit(

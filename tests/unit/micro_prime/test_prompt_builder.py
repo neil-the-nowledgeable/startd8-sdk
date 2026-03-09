@@ -15,6 +15,8 @@ from startd8.forward_manifest import (
 from startd8.micro_prime.prompt_builder import (
     _build_element_stub,
     _estimate_body_lines,
+    _lookup_parent_bases,
+    _partition_design_sections,
     _render_constraints,
     _render_imports,
     _render_sibling_stubs,
@@ -33,7 +35,7 @@ class TestBuildBodyPrompt:
         prompt = build_body_prompt(
             simple_function_element, sample_file_spec, sample_contracts,
         )
-        assert "Implement ONLY the function body" in prompt
+        assert "Implement the body of method `get_name`" in prompt
         assert "raise NotImplementedError" in prompt
         assert "def get_name" in prompt
 
@@ -373,7 +375,7 @@ class TestDesignDocSections:
     def test_prompt_builder_with_design_sections(
         self, simple_function_element, sample_file_spec, sample_contracts,
     ):
-        """# Implementation context: section rendered when sections provided."""
+        """Design doc sections rendered; non-matching go to general context."""
         sections = [
             "Stage 1: ChatGoogleGenerativeAI gemini-1.5-flash with HumanMessage",
             "Error handling returning HTTP error responses per stage",
@@ -384,7 +386,8 @@ class TestDesignDocSections:
             sample_contracts,
             design_doc_sections=sections,
         )
-        assert "# Implementation context:" in prompt
+        # Neither section mentions element name → both go to general context
+        assert "# Implementation context (other parts" in prompt
         assert "ChatGoogleGenerativeAI" in prompt
         assert "Error handling" in prompt
 
@@ -398,7 +401,7 @@ class TestDesignDocSections:
             sample_contracts,
             design_doc_sections=None,
         )
-        assert "# Implementation context:" not in prompt
+        assert "# Implementation context" not in prompt
 
         prompt_empty = build_body_prompt(
             simple_function_element,
@@ -406,7 +409,7 @@ class TestDesignDocSections:
             sample_contracts,
             design_doc_sections=[],
         )
-        assert "# Implementation context:" not in prompt_empty
+        assert "# Implementation context" not in prompt_empty
 
 
 class TestTaskDescription:
@@ -459,5 +462,166 @@ class TestTaskDescription:
             task_description="gRPC test client",
         )
         task_pos = prompt.index("# Task context:")
-        impl_pos = prompt.index("# Implementation context:")
+        impl_pos = prompt.index("# Implementation context (other parts")
         assert task_pos < impl_pos
+
+
+class TestBaseClassContext:
+    """Tests for parent class base-class enrichment in prompts."""
+
+    def test_prompt_includes_base_classes(self):
+        """Base classes from file spec appear in class context header."""
+        method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="Check",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="request"),
+                    Param(name="context"),
+                ],
+            ),
+            parent_class="RecommendationService",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/recommendation_server.py",
+            elements=[
+                ForwardElementSpec(
+                    kind=ElementKind.CLASS,
+                    name="RecommendationService",
+                    bases=["demo_pb2_grpc.RecommendationServiceServicer"],
+                ),
+                method,
+            ],
+        )
+        prompt = build_body_prompt(method, file_spec, [])
+        assert "RecommendationService(demo_pb2_grpc.RecommendationServiceServicer)" in prompt
+
+    def test_prompt_without_base_classes(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """When parent class has no bases, show plain class name."""
+        prompt = build_body_prompt(
+            simple_function_element, sample_file_spec, sample_contracts,
+        )
+        assert "method of class `MyClass`" in prompt
+        assert "(" not in prompt.split("method of class")[1].split(".")[0]
+
+
+class TestElementScopedDesignSections:
+    """Tests for element-scoped design doc section partitioning."""
+
+    def test_relevant_sections_appear_under_element_header(self):
+        """Sections mentioning element name go to 'What X must do' section."""
+        method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="ListRecommendations",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request"), Param(name="context")],
+            ),
+            parent_class="RecommendationService",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/server.py",
+            elements=[method],
+        )
+        sections = [
+            "ListRecommendations: max_responses=5, fetch all products, filter, random.sample",
+            "Check: health check returning SERVING status",
+            "Global product_catalog_stub created in __main__",
+        ]
+        prompt = build_body_prompt(method, file_spec, [], design_doc_sections=sections)
+        assert "# What `ListRecommendations` must do:" in prompt
+        assert "max_responses=5" in prompt
+        # Other sections go to general context
+        assert "# Implementation context (other parts" in prompt
+        assert "health check" in prompt
+
+    def test_all_general_when_no_match(
+        self, simple_function_element, sample_file_spec,
+    ):
+        """When no section mentions element name, all go to general."""
+        sections = ["gRPC server setup", "OTel instrumentation"]
+        prompt = build_body_prompt(
+            simple_function_element, sample_file_spec, [],
+            design_doc_sections=sections,
+        )
+        assert "# What `get_name` must do:" not in prompt
+        assert "# Implementation context (other parts" in prompt
+
+    def test_all_relevant_no_general_section(self):
+        """When all sections match, no general section rendered."""
+        method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="Check",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request"), Param(name="context")],
+            ),
+            parent_class="HealthService",
+        )
+        file_spec = ForwardFileSpec(file="src/health.py", elements=[method])
+        sections = [
+            "Check: return SERVING status",
+            "Check should validate service name",
+        ]
+        prompt = build_body_prompt(method, file_spec, [], design_doc_sections=sections)
+        assert "# What `Check` must do:" in prompt
+        assert "# Implementation context (other parts" not in prompt
+
+
+class TestSiblingDocstringHints:
+    """Tests for docstring_hint inclusion in sibling method stubs."""
+
+    def test_sibling_stubs_include_docstring_hint(self):
+        """Sibling stubs render docstring_hint as inline comment."""
+        method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="Check",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request"), Param(name="context")],
+            ),
+            parent_class="MyService",
+        )
+        sibling = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="ListItems",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request"), Param(name="context")],
+            ),
+            parent_class="MyService",
+            docstring_hint="Return top 5 recommended items.",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/service.py",
+            elements=[method, sibling],
+        )
+        stubs = _render_sibling_stubs(method, file_spec)
+        assert len(stubs) == 1
+        assert "ListItems" in stubs[0]
+        assert "# Return top 5 recommended items." in stubs[0]
+
+    def test_sibling_stubs_no_hint_when_absent(self):
+        """No inline comment when sibling has no docstring_hint."""
+        method = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="Check",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request")],
+            ),
+            parent_class="MyService",
+        )
+        sibling = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="Watch",
+            signature=Signature(
+                params=[Param(name="self"), Param(name="request")],
+            ),
+            parent_class="MyService",
+        )
+        file_spec = ForwardFileSpec(
+            file="src/service.py",
+            elements=[method, sibling],
+        )
+        stubs = _render_sibling_stubs(method, file_spec)
+        assert len(stubs) == 1
+        assert stubs[0].endswith("...")

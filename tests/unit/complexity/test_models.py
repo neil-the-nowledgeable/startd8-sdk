@@ -71,7 +71,7 @@ class TestTaskComplexitySignals:
     def test_to_dict_contains_all_fields(self):
         signals = TaskComplexitySignals()
         d = signals.to_dict()
-        assert len(d) == 11
+        assert len(d) == 12
 
 
 # ── ComplexityRoutingConfig ──────────────────────────────────────────

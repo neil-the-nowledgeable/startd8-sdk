@@ -225,11 +225,35 @@ def _step_bare_statement_wrap(
             step_name="bare_statement_wrap", modified=False, code=code,
         )
 
+    # Hoist leading import statements above the def line instead of
+    # wrapping them inside the function body.  Run-014 showed Ollama
+    # generating ``import os\n\nif "X" in os.environ: ...`` for
+    # initStackdriverProfiling — the import must be at module level,
+    # not inside the function.
+    raw_lines = code.splitlines()
+    hoisted_imports: list[str] = []
+    first_body_idx = 0
+    for i, line in enumerate(raw_lines):
+        lstripped = line.lstrip()
+        if not lstripped:
+            continue
+        if lstripped.startswith(("import ", "from ")):
+            hoisted_imports.append(lstripped)
+            first_body_idx = i + 1
+        else:
+            break
+
     # Dedent body first.  Ollama often returns body-only output where the
     # first line is unindented and subsequent lines carry a spurious 4-space
     # indent (relative to a def that Ollama omitted).  Normalise all body
     # lines to zero indent before re-indenting under the def.
-    body_lines = code.splitlines()
+    body_lines = raw_lines[first_body_idx:]
+    # Strip leading blank lines so the indent[0] index corresponds to
+    # the first actual code line (not a blank separator after imports).
+    while body_lines and not body_lines[0].strip():
+        body_lines = body_lines[1:]
+    if not body_lines:
+        body_lines = ["pass"]
     indents = [
         len(line) - len(line.lstrip())
         for line in body_lines
@@ -245,8 +269,14 @@ def _step_bare_statement_wrap(
         elif len(indents) >= 2 and indents[0] == 0:
             # First line at column 0, rest indented — Ollama body-only pattern.
             # Strip the common indent of lines 2+ so all lines align.
+            # BUT: skip this when the first non-blank line ends with `:`
+            # (e.g. `if`, `for`, `while`, `with`) — the subsequent indent
+            # represents genuine block nesting, not Ollama body-only spurious
+            # indent.
+            first_content = body_lines[0].strip() if body_lines else ""
+            is_block_start = first_content.endswith(":")
             rest_indents = [i for i in indents[1:] if i > 0]
-            if rest_indents:
+            if rest_indents and not is_block_start:
                 strip = min(rest_indents)
                 body_lines = [body_lines[0]] + [
                     line[strip:] if line.strip() else ""
@@ -256,11 +286,18 @@ def _step_bare_statement_wrap(
     indented = "\n".join(f"    {line}" if line.strip() else "" for line in body_lines)
     wrapped = f"{sig_line}\n{indented}"
 
+    # Prepend hoisted imports above the def line
+    if hoisted_imports:
+        wrapped = "\n".join(hoisted_imports) + "\n\n" + wrapped
+
     return RepairStepResult(
         step_name="bare_statement_wrap",
         modified=True,
         code=wrapped,
-        metrics={"wrapped_body_lines": len(body_lines)},
+        metrics={
+            "wrapped_body_lines": len(body_lines),
+            "hoisted_imports": len(hoisted_imports),
+        },
     )
 
 

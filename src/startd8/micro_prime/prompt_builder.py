@@ -98,11 +98,27 @@ def _build_function_prompt(
 
     sections: list[str] = []
 
-    # Method context header (REQ-MP-201)
+    # Method context header (REQ-MP-201) — include base classes for semantic
+    # context (e.g. gRPC servicer, ABC subclass) so the LLM understands the
+    # protocol/contract this method must satisfy.
     if element.parent_class:
-        sections.append(
-            f"# This is a method of class `{element.parent_class}`."
-        )
+        bases_str = _lookup_parent_bases(element.parent_class, file_spec)
+        if bases_str:
+            sections.append(
+                f"# This is a method of class `{element.parent_class}({bases_str})`."
+            )
+        else:
+            sections.append(
+                f"# This is a method of class `{element.parent_class}`."
+            )
+        # Include __init__ signature/body hint so the LLM knows what instance
+        # attributes are available (e.g. self._catalog_stub instead of globals).
+        # Run-014 showed all 3 gRPC methods used global `product_catalog_stub`
+        # instead of `self._catalog_stub` because __init__ context was missing.
+        init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "")
+        if init_hint:
+            sections.append(f"# Constructor context (use `self.*` for instance state):")
+            sections.append(init_hint)
 
     # Core instructions (REQ-MP-202)
     def_line = None
@@ -112,16 +128,30 @@ def _build_function_prompt(
         def_line = line.strip()
         break
 
+    # Build method-specific framing so the LLM understands it's generating
+    # a function body (not standalone statements).  Run-014 showed 3/3 method
+    # elements needed bare_statement_wrap repair because Ollama returned bare
+    # statements instead of indented function body lines.
+    if element.parent_class:
+        body_framing = (
+            f"# Task: Implement the body of method `{element.name}` "
+            f"inside class `{element.parent_class}`."
+        )
+    else:
+        body_framing = (
+            f"# Task: Implement the body of function `{element.name}`."
+        )
+
     sections.extend([
-        "# Task: Implement ONLY the function body shown in the skeleton below.",
+        body_framing,
         "# Replace the `raise NotImplementedError` line with a working implementation.",
         f"# The body MUST be {est_lines} lines. Do NOT exceed this.",
-        "# Output ONLY the body lines — no `def` line, no class wrapper, no docstring.",
+        "# Output ONLY the indented body lines that go INSIDE the function.",
+        "# Do NOT output a `def` line, `class` wrapper, docstring, or imports.",
         f"# Indent every line with exactly {indent_spaces} spaces.",
-        "# Do NOT add imports. Use only the imports listed below.",
-        "# Do NOT write helper functions, extra classes, main blocks, or tests.",
+        "# Do NOT write standalone statements, helper functions, extra classes, main blocks, or tests.",
         "# Do NOT add comments, explanations, or markdown fences.",
-        "# Output the body and NOTHING else.",
+        "# Output ONLY the function body and NOTHING else.",
         "",
     ])
     if def_line:
@@ -140,11 +170,23 @@ def _build_function_prompt(
         sections.append("")
 
     # Implementation context from design doc sections (REQ-DDS-001)
+    # Split into element-relevant (mentioning this element's name) vs general.
+    # Element-relevant sections appear first as primary guidance so the LLM
+    # knows what THIS specific method should do vs. general feature context.
     if design_doc_sections:
-        sections.append("# Implementation context:")
-        for ds in design_doc_sections:
-            sections.append(f"# - {ds}")
-        sections.append("")
+        relevant, general = _partition_design_sections(
+            design_doc_sections, element.name,
+        )
+        if relevant:
+            sections.append(f"# What `{element.name}` must do:")
+            for ds in relevant:
+                sections.append(f"# - {ds}")
+            sections.append("")
+        if general:
+            sections.append("# Implementation context (other parts of this feature):")
+            for ds in general:
+                sections.append(f"# - {ds}")
+            sections.append("")
 
     # Sibling context (REQ-MP-201)
     if sibling_stubs:
@@ -297,7 +339,12 @@ def _render_imports(file_spec: ForwardFileSpec) -> list[str]:
 def _render_sibling_stubs(
     element: ForwardElementSpec, file_spec: ForwardFileSpec,
 ) -> list[str]:
-    """Render stubs for sibling methods in the same class."""
+    """Render stubs for sibling methods in the same class.
+
+    Includes ``docstring_hint`` when available so the LLM can differentiate
+    sibling methods by purpose (e.g. ``Check`` = health check vs.
+    ``ListRecommendations`` = business logic).
+    """
     stubs: list[str] = []
     if not element.parent_class:
         return stubs
@@ -309,8 +356,81 @@ def _render_sibling_stubs(
                     for p in sib.signature.params
                 )
                 ret = f" -> {sib.signature.return_annotation}" if sib.signature.return_annotation else ""
-                stubs.append(f"def {sib.name}({params}){ret}: ...")
+                hint = f"  # {sib.docstring_hint}" if sib.docstring_hint else ""
+                stubs.append(f"def {sib.name}({params}){ret}: ...{hint}")
     return stubs
+
+
+def _lookup_init_context(
+    parent_class: str,
+    file_spec: ForwardFileSpec,
+    skeleton: str,
+) -> Optional[str]:
+    """Extract __init__ method context for a class to expose instance attributes.
+
+    Prefers skeleton AST (has actual assignments like ``self._stub = stub``).
+    Falls back to manifest __init__ signature (``def __init__(self, stub)``).
+    Returns a comment-prefixed string or None.
+    """
+    # Try skeleton first — it has the actual __init__ body
+    if skeleton:
+        try:
+            tree = ast.parse(skeleton)
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef) and node.name == parent_class:
+                    for child in node.body:
+                        if isinstance(child, ast.FunctionDef) and child.name == "__init__":
+                            lines = skeleton.splitlines()
+                            start = child.lineno - 1
+                            end = getattr(child, "end_lineno", None) or start + 1
+                            init_lines = lines[start:end]
+                            return "\n".join(f"# {line}" for line in init_lines if line.strip())
+        except SyntaxError:
+            pass
+
+    # Fall back to manifest element spec for __init__
+    for el in file_spec.elements:
+        if el.parent_class == parent_class and el.name == "__init__" and el.signature:
+            params = ", ".join(
+                f"{p.name}: {p.annotation}" if p.annotation else p.name
+                for p in el.signature.params
+            )
+            return f"# def __init__({params}): ..."
+
+    return None
+
+
+def _lookup_parent_bases(
+    parent_class: str, file_spec: ForwardFileSpec,
+) -> Optional[str]:
+    """Find the base classes for *parent_class* from the file spec elements.
+
+    Returns a comma-separated string like ``"demo_pb2_grpc.RecommendationServiceServicer"``
+    or ``None`` if the class has no bases or isn't in the file spec.
+    """
+    for el in file_spec.elements:
+        if el.kind == ElementKind.CLASS and el.name == parent_class and el.bases:
+            return ", ".join(el.bases)
+    return None
+
+
+def _partition_design_sections(
+    sections: list[str], element_name: str,
+) -> tuple[list[str], list[str]]:
+    """Split design-doc sections into element-relevant and general.
+
+    A section is element-relevant if it mentions *element_name* (case-insensitive).
+    This lets the prompt emphasize "what THIS method must do" vs. general context.
+    """
+    name_lower = element_name.lower()
+    relevant: list[str] = []
+    general: list[str] = []
+    for s in sections:
+        if name_lower in s.lower():
+            relevant.append(s)
+        else:
+            general.append(s)
+    return relevant, general
 
 
 def _render_constraints(contracts: list[InterfaceContract]) -> list[str]:
@@ -651,6 +771,7 @@ def _truncate_to_budget(prompt: str, token_budget: int) -> str:
         ("# Example (completed):", 1),
         ("# Another example:", 1),
         ("# Other methods in this class", 2),
+        ("# Implementation context (other parts", 3),
         ("# Implementation context:", 3),
     ]
 

@@ -328,6 +328,13 @@ def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional
     Uses ``source_contract_id`` when present; otherwise falls back to
     ``make_element_id()`` derived from (file_path, parent_class, name).
     Returns ``None`` only when name is missing (should never happen).
+
+    **ID stability**: ``source_contract_id`` is set by the forward manifest
+    extractor using category abbreviations (``"fn"``, ``"cls"``) rather than
+    element kinds.  This keeps IDs stable across element kind reclassifications
+    (e.g. FUNCTION→METHOD after class linking).  The fallback path uses
+    ``element.kind.value`` and is therefore kind-sensitive — always prefer
+    ``source_contract_id`` for cross-run cache stability.
     """
     if element.source_contract_id:
         return element.source_contract_id
@@ -622,7 +629,11 @@ class MicroPrimeEngine:
                         self._metrics.record(result)
                         return result
                 else:
-                    logger.debug("Element registry MISS: %s", element_id)
+                    logger.info(
+                        "Element registry MISS: %s (element=%s, kind=%s)",
+                        element_id, element.name,
+                        element.kind.value if hasattr(element.kind, "value") else element.kind,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Element registry lookup failed for %s: %s — falling through to generation",
