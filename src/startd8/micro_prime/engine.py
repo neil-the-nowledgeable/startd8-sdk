@@ -105,6 +105,19 @@ try:
         "micro_prime.simple_decompose_rejected",
         description="SIMPLE function body decompositions that fell back to LLM",
     )
+    # Recursion metrics (REQ-MP-914)
+    _recursion_attempted = _meter.create_counter(
+        "micro_prime.recursion_attempted",
+        description="Recursive decomposition attempts",
+    )
+    _recursion_succeeded = _meter.create_counter(
+        "micro_prime.recursion_succeeded",
+        description="Recursive decomposition successes",
+    )
+    _recursion_rejected = _meter.create_counter(
+        "micro_prime.recursion_rejected",
+        description="Recursive decomposition rejections",
+    )
 except ImportError:
     _decomp_attempted = None
     _decomp_succeeded = None
@@ -115,6 +128,9 @@ except ImportError:
     _simple_decompose_attempted = None
     _simple_decompose_succeeded = None
     _simple_decompose_rejected = None
+    _recursion_attempted = None
+    _recursion_succeeded = None
+    _recursion_rejected = None
 
 
 def _record_decomp_attempted(strategy: str, file_path: str) -> None:
@@ -170,6 +186,43 @@ def _record_simple_decompose_rejected(file_path: str) -> None:
         _simple_decompose_rejected.add(1, {"file_path": file_path})
 
 
+# Depth label cardinality cap (REQ-MP-914, R2-F3): depths beyond this
+# value are bucketed as "N+" to prevent unbounded label cardinality.
+_RECURSION_DEPTH_LABEL_CAP = 3
+
+
+def _cap_depth_label(depth: int) -> str:
+    """Cap depth for metric labels to avoid high-cardinality (REQ-MP-914)."""
+    if depth > _RECURSION_DEPTH_LABEL_CAP:
+        return f"{_RECURSION_DEPTH_LABEL_CAP}+"
+    return str(depth)
+
+
+def _record_recursion_attempted(strategy: str, depth: int) -> None:
+    if _recursion_attempted is not None:
+        _recursion_attempted.add(1, {
+            "strategy": strategy, "depth": _cap_depth_label(depth),
+        })
+
+
+def _record_recursion_succeeded(strategy: str, depth: int) -> None:
+    if _recursion_succeeded is not None:
+        _recursion_succeeded.add(1, {
+            "strategy": strategy, "depth": _cap_depth_label(depth),
+        })
+
+
+def _record_recursion_rejected(
+    strategy: str, depth: int, rejection_reason: str,
+) -> None:
+    if _recursion_rejected is not None:
+        _recursion_rejected.add(1, {
+            "strategy": strategy,
+            "depth": _cap_depth_label(depth),
+            "rejection_reason": rejection_reason,
+        })
+
+
 # ── Graph execution result types (REQ-MP-912) ──────────────────────
 
 from dataclasses import dataclass, field as dc_field
@@ -185,6 +238,9 @@ class _GraphExecutionResult:
     output_tokens: int = 0
     llm_calls: int = 0
     rejection_reason: Optional[str] = None
+    # Recursion metadata for postmortem (REQ-MP-913, R1-S3)
+    recursion_depth: int = 0
+    decomposition_path: list[str] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -1504,6 +1560,10 @@ class MicroPrimeEngine:
         total_output = 0
         llm_calls = 0
 
+        # Emit recursion_attempted only when recursion is enabled (REQ-MP-914)
+        if policy.enabled and depth > 0:
+            _record_recursion_attempted(graph.strategy, depth)
+
         for node in graph.root_nodes:
             node_result = self._execute_graph_node(
                 node=node,
@@ -1531,6 +1591,9 @@ class MicroPrimeEngine:
                     depth,
                     len(staged_results),
                 )
+                if policy.enabled and depth > 0:
+                    reason = node_result.rejection_reason or "sub_element_failed"
+                    _record_recursion_rejected(graph.strategy, depth, reason)
                 return _GraphExecutionResult(
                     success=False,
                     sub_results={},
@@ -1538,6 +1601,8 @@ class MicroPrimeEngine:
                     output_tokens=total_output + node_result.output_tokens,
                     llm_calls=llm_calls + node_result.llm_calls,
                     rejection_reason=node_result.rejection_reason,
+                    recursion_depth=depth,
+                    decomposition_path=list(decomposition_path),
                 )
 
             sub_name = getattr(node.sub_element, "name", f"node_{id(node)}")
@@ -1547,12 +1612,16 @@ class MicroPrimeEngine:
             llm_calls += node_result.llm_calls
 
         # All nodes succeeded — commit staged results
+        if policy.enabled and depth > 0:
+            _record_recursion_succeeded(graph.strategy, depth)
         return _GraphExecutionResult(
             success=True,
             sub_results=staged_results,
             input_tokens=total_input,
             output_tokens=total_output,
             llm_calls=llm_calls,
+            recursion_depth=depth,
+            decomposition_path=list(decomposition_path),
         )
 
     def _execute_graph_node(
