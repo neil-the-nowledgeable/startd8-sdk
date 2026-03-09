@@ -203,6 +203,12 @@ class MicroPrimeConfig(BaseModel):
     # Simple decomposer gate (Phase 1, Step 6)
     enable_simple_decomposer: bool = True
     simple_decomposer_confidence_threshold: float = 0.7
+    # Recursive decomposition settings (REQ-MP-915)
+    recursion_enabled: bool = False
+    recursion_max_depth: int = 2
+    recursion_max_sub_elements_total: int = 8
+    recursion_max_llm_calls: int = 3
+    recursion_monotonicity: str = "strict_tier_decrease"
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

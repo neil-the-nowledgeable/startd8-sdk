@@ -15,12 +15,14 @@ from startd8.micro_prime.decomposer import (
     SubElement,
 )
 from startd8.micro_prime.decomposition.core import (
+    RECURSION_REJECTION_REASONS,
     DecompositionContext,
     DecompositionNode,
     DecompositionPlanGraph,
     RecursionPolicy,
     compute_graph_confidence,
     make_fingerprint,
+    policy_from_config,
 )
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 from startd8.utils.code_manifest import ElementKind, Param, Signature
@@ -561,3 +563,285 @@ class TestBackwardCompatibility:
         )
         # Result may be None (class may not qualify) — we're testing the call doesn't crash
         assert result is None or isinstance(result, DecompositionPlan)
+
+
+# ── Phase 1: Config wiring tests ─────────────────────────────────────
+
+
+class TestRecursionConfigDefaults:
+    """REQ-MP-915: config defaults preserve current behavior (no recursion)."""
+
+    def test_recursion_config_defaults(self):
+        config = MicroPrimeConfig()
+        assert config.recursion_enabled is False
+        assert config.recursion_max_depth == 2
+        assert config.recursion_max_sub_elements_total == 8
+        assert config.recursion_max_llm_calls == 3
+        assert config.recursion_monotonicity == "strict_tier_decrease"
+
+    def test_policy_from_config_defaults(self):
+        config = MicroPrimeConfig()
+        policy = policy_from_config(config)
+        assert policy.enabled is False
+        assert policy.max_depth == 2
+        assert policy.max_sub_elements_total == 8
+        assert policy.max_llm_calls == 3
+        assert policy.monotonicity == "strict_tier_decrease"
+
+    def test_policy_from_config_enabled(self):
+        config = MicroPrimeConfig(
+            recursion_enabled=True,
+            recursion_max_depth=3,
+            recursion_max_sub_elements_total=10,
+            recursion_max_llm_calls=5,
+            recursion_monotonicity="allow_same_tier",
+        )
+        policy = policy_from_config(config)
+        assert policy.enabled is True
+        assert policy.max_depth == 3
+        assert policy.max_sub_elements_total == 10
+        assert policy.max_llm_calls == 5
+        assert policy.monotonicity == "allow_same_tier"
+
+    def test_policy_from_config_invalid_raises(self):
+        """R2-S10: zero limits with enabled=True raise at construction."""
+        config = MicroPrimeConfig(recursion_enabled=True, recursion_max_depth=0)
+        with pytest.raises(ValueError, match="max_depth must be >= 1"):
+            policy_from_config(config)
+
+    def test_build_context_uses_config_policy(self):
+        """build_context() plumbs config into RecursionPolicy."""
+        config = MicroPrimeConfig(recursion_enabled=False)
+        decomposer = ModerateDecomposer(config=config)
+        ctx = decomposer.build_context(
+            file_spec=ForwardFileSpec(file="a.py", imports=[], elements=[]),
+            manifest=ForwardManifest(
+                schema_version="1.0.0", file_specs={}, contracts=[],
+            ),
+            file_path="a.py",
+            skeleton="",
+        )
+        assert ctx.recursion_policy.enabled is False
+
+
+# ── Phase 1: Policy depth limit tests ────────────────────────────────
+
+
+class TestRecursionPolicyDepthLimit:
+    """REQ-MP-911: depth enforcement."""
+
+    def test_depth_within_limit(self):
+        policy = RecursionPolicy(enabled=True, max_depth=2)
+        assert policy.check_depth(0) is None
+        assert policy.check_depth(1) is None
+
+    def test_depth_at_limit_rejects(self):
+        policy = RecursionPolicy(enabled=True, max_depth=2)
+        assert policy.check_depth(2) == "depth_exceeded"
+
+    def test_depth_beyond_limit_rejects(self):
+        policy = RecursionPolicy(enabled=True, max_depth=1)
+        assert policy.check_depth(5) == "depth_exceeded"
+
+    def test_depth_check_disabled_blocks(self):
+        policy = RecursionPolicy(enabled=False)
+        assert policy.check_depth(0) == "recursion_blocked"
+
+
+# ── Phase 1: Policy budget limit tests ───────────────────────────────
+
+
+class TestRecursionPolicyBudgetLimit:
+    """REQ-MP-911: sub-element and LLM call budget enforcement."""
+
+    def test_budget_within_limits(self):
+        policy = RecursionPolicy(
+            enabled=True, max_sub_elements_total=8, max_llm_calls=3,
+        )
+        assert policy.check_budget(sub_element_count=5, llm_call_count=2) is None
+
+    def test_sub_element_budget_exceeded(self):
+        policy = RecursionPolicy(
+            enabled=True, max_sub_elements_total=4, max_llm_calls=10,
+        )
+        assert policy.check_budget(sub_element_count=5, llm_call_count=0) == "budget_exceeded"
+
+    def test_llm_call_budget_exceeded(self):
+        policy = RecursionPolicy(
+            enabled=True, max_sub_elements_total=100, max_llm_calls=2,
+        )
+        assert policy.check_budget(sub_element_count=1, llm_call_count=3) == "budget_exceeded"
+
+    def test_both_at_exact_limit(self):
+        """At exactly the limit — still OK (> not >=)."""
+        policy = RecursionPolicy(
+            enabled=True, max_sub_elements_total=5, max_llm_calls=3,
+        )
+        assert policy.check_budget(sub_element_count=5, llm_call_count=3) is None
+
+    def test_budget_check_disabled_blocks(self):
+        policy = RecursionPolicy(enabled=False)
+        assert policy.check_budget(0, 0) == "recursion_blocked"
+
+
+# ── Phase 1: Monotonicity tests ──────────────────────────────────────
+
+
+class TestRecursionMonotonicityStrict:
+    """REQ-MP-911: strict_tier_decrease monotonicity."""
+
+    def test_strict_decrease_allowed(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="strict_tier_decrease",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.MODERATE, TierClassification.SIMPLE,
+        ) is None
+
+    def test_strict_same_tier_rejected(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="strict_tier_decrease",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.SIMPLE, TierClassification.SIMPLE,
+        ) == "monotonicity_violation"
+
+    def test_strict_increase_rejected(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="strict_tier_decrease",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.SIMPLE, TierClassification.MODERATE,
+        ) == "monotonicity_violation"
+
+    def test_strict_same_tier_rejected_even_with_strategy_flag(self):
+        """strict_tier_decrease ignores strategy safe_for_same_tier flag."""
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="strict_tier_decrease",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.MODERATE,
+            TierClassification.MODERATE,
+            strategy_safe_for_same_tier=True,
+        ) == "monotonicity_violation"
+
+
+class TestRecursionMonotonicityAllowSameTier:
+    """REQ-MP-911, R2-F4: allow_same_tier requires dual-guard."""
+
+    def test_same_tier_with_strategy_flag_allowed(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="allow_same_tier",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.SIMPLE,
+            TierClassification.SIMPLE,
+            strategy_safe_for_same_tier=True,
+        ) is None
+
+    def test_same_tier_without_strategy_flag_rejected(self):
+        """R2-F4: policy allows but strategy didn't opt in → reject."""
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="allow_same_tier",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.SIMPLE,
+            TierClassification.SIMPLE,
+            strategy_safe_for_same_tier=False,
+        ) == "monotonicity_violation"
+
+    def test_decrease_always_allowed(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="allow_same_tier",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.COMPLEX, TierClassification.TRIVIAL,
+        ) is None
+
+    def test_increase_always_rejected(self):
+        policy = RecursionPolicy(
+            enabled=True, monotonicity="allow_same_tier",
+        )
+        assert policy.check_monotonicity(
+            TierClassification.TRIVIAL, TierClassification.MODERATE,
+        ) == "monotonicity_violation"
+
+    def test_monotonicity_disabled_blocks(self):
+        policy = RecursionPolicy(enabled=False)
+        assert policy.check_monotonicity(
+            TierClassification.MODERATE, TierClassification.SIMPLE,
+        ) == "recursion_blocked"
+
+
+# ── Phase 1: Cycle detection tests ───────────────────────────────────
+
+
+class TestCycleDetection:
+    """REQ-MP-911: fingerprint-based cycle detection."""
+
+    def test_no_cycle(self):
+        policy = RecursionPolicy(enabled=True)
+        fp = make_fingerprint("A", "init", "a.py", TierClassification.SIMPLE)
+        assert policy.check_cycle(fp, []) is None
+
+    def test_cycle_detected(self):
+        policy = RecursionPolicy(enabled=True)
+        fp = make_fingerprint("A", "init", "a.py", TierClassification.SIMPLE)
+        path = [fp, "other:fp:x.py:trivial"]
+        assert policy.check_cycle(fp, path) == "cycle_detected"
+
+    def test_different_fingerprint_no_cycle(self):
+        policy = RecursionPolicy(enabled=True)
+        fp1 = make_fingerprint("A", "init", "a.py", TierClassification.SIMPLE)
+        fp2 = make_fingerprint("B", "init", "a.py", TierClassification.SIMPLE)
+        assert policy.check_cycle(fp2, [fp1]) is None
+
+    def test_cycle_check_disabled_blocks(self):
+        policy = RecursionPolicy(enabled=False)
+        assert policy.check_cycle("any", []) == "recursion_blocked"
+
+
+# ── Phase 1: Rejection reasons bounded set tests ─────────────────────
+
+
+class TestRejectionReasonsBounded:
+    """REQ-MP-913: all policy rejections use bounded reason set."""
+
+    def test_all_policy_rejections_in_bounded_set(self):
+        """Every rejection reason from policy methods is in RECURSION_REJECTION_REASONS."""
+        policy_enabled = RecursionPolicy(enabled=True)
+        policy_disabled = RecursionPolicy(enabled=False)
+
+        # Collect all possible rejection reasons from policy methods
+        reasons = set()
+
+        # Disabled policy
+        reasons.add(policy_disabled.check_depth(0))
+        reasons.add(policy_disabled.check_budget(0, 0))
+        reasons.add(policy_disabled.check_monotonicity(
+            TierClassification.MODERATE, TierClassification.SIMPLE,
+        ))
+        reasons.add(policy_disabled.check_cycle("fp", []))
+
+        # Enabled policy — trigger each rejection
+        reasons.add(policy_enabled.check_depth(99))  # depth_exceeded
+        reasons.add(policy_enabled.check_budget(999, 0))  # budget_exceeded
+        reasons.add(policy_enabled.check_monotonicity(
+            TierClassification.SIMPLE, TierClassification.MODERATE,
+        ))  # monotonicity_violation
+        reasons.add(policy_enabled.check_cycle("fp", ["fp"]))  # cycle_detected
+
+        # Remove None (success case)
+        reasons.discard(None)
+
+        # All reasons must be in the bounded set
+        assert reasons == RECURSION_REJECTION_REASONS
+
+    def test_bounded_set_has_expected_members(self):
+        assert RECURSION_REJECTION_REASONS == frozenset({
+            "recursion_blocked",
+            "depth_exceeded",
+            "budget_exceeded",
+            "monotonicity_violation",
+            "cycle_detected",
+        })

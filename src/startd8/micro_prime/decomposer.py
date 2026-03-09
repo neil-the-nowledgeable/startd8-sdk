@@ -30,6 +30,7 @@ from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.decomposition.core import (
     DecompositionContext,
     RecursionPolicy,
+    policy_from_config,
 )
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
@@ -882,7 +883,7 @@ class ModerateDecomposer:
             file_spec=file_spec,
             file_path=file_path,
             skeleton=skeleton,
-            recursion_policy=recursion_policy or RecursionPolicy(),
+            recursion_policy=recursion_policy or policy_from_config(self._config),
             template_registry=self._template_registry,
             classification_signals=classification_signals,
             classification_reason=classification_reason,

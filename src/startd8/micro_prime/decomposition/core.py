@@ -59,6 +59,85 @@ class RecursionPolicy:
                     f"got {self.max_llm_calls}"
                 )
 
+    # ── Policy enforcement methods (REQ-MP-911) ──────────────────────
+
+    def check_depth(self, current_depth: int) -> Optional[str]:
+        """Check depth constraint. Returns rejection reason or None."""
+        if not self.enabled:
+            return "recursion_blocked"
+        if current_depth >= self.max_depth:
+            return "depth_exceeded"
+        return None
+
+    def check_budget(
+        self,
+        sub_element_count: int,
+        llm_call_count: int,
+    ) -> Optional[str]:
+        """Check sub-element and LLM call budgets. Returns rejection reason or None.
+
+        LLM budget accounting (R2-S5): only decomposition LLM calls count
+        toward max_llm_calls. Repair and escalation calls are excluded —
+        they are gated by their own budgets.
+        """
+        if not self.enabled:
+            return "recursion_blocked"
+        if sub_element_count > self.max_sub_elements_total:
+            return "budget_exceeded"
+        if llm_call_count > self.max_llm_calls:
+            return "budget_exceeded"
+        return None
+
+    def check_monotonicity(
+        self,
+        parent_tier: TierClassification,
+        child_tier: TierClassification,
+        strategy_safe_for_same_tier: bool = False,
+    ) -> Optional[str]:
+        """Check tier monotonicity constraint. Returns rejection reason or None.
+
+        REQ-MP-911, R2-F4: ``allow_same_tier`` requires BOTH the policy
+        setting AND the strategy's explicit ``safe_for_same_tier`` flag.
+        """
+        if not self.enabled:
+            return "recursion_blocked"
+
+        tier_order = {
+            TierClassification.COMPLEX: 3,
+            TierClassification.MODERATE: 2,
+            TierClassification.SIMPLE: 1,
+            TierClassification.TRIVIAL: 0,
+        }
+        parent_rank = tier_order[parent_tier]
+        child_rank = tier_order[child_tier]
+
+        if child_rank < parent_rank:
+            # Strictly decreasing — always OK
+            return None
+
+        if child_rank == parent_rank:
+            if (
+                self.monotonicity == "allow_same_tier"
+                and strategy_safe_for_same_tier
+            ):
+                return None
+            return "monotonicity_violation"
+
+        # child_rank > parent_rank — tier increased, never allowed
+        return "monotonicity_violation"
+
+    def check_cycle(
+        self,
+        fingerprint: str,
+        decomposition_path: list[str],
+    ) -> Optional[str]:
+        """Check for cycles via fingerprint history. Returns rejection reason or None."""
+        if not self.enabled:
+            return "recursion_blocked"
+        if fingerprint in decomposition_path:
+            return "cycle_detected"
+        return None
+
 
 # ── Decomposition Context (REQ-MP-910) ──────────────────────────────
 
@@ -137,6 +216,36 @@ class DecompositionPlanGraph:
     strategy: str
     assembly_kind: str  # "class_compose", "function_chain", "sequential_body"
     confidence: float  # 0.0–1.0, aggregated across children
+
+
+# ── Bounded rejection reasons for recursion (REQ-MP-913) ─────────────
+
+RECURSION_REJECTION_REASONS = frozenset({
+    "recursion_blocked",
+    "depth_exceeded",
+    "budget_exceeded",
+    "monotonicity_violation",
+    "cycle_detected",
+})
+
+
+# ── Factory ──────────────────────────────────────────────────────────
+
+
+def policy_from_config(config: MicroPrimeConfig) -> RecursionPolicy:
+    """Build a RecursionPolicy from MicroPrimeConfig fields (REQ-MP-915).
+
+    Maps the flat config fields (recursion_enabled, recursion_max_depth, etc.)
+    into a structured RecursionPolicy. Raises ValueError if the config
+    produces an invalid policy (e.g., enabled=True with zero limits).
+    """
+    return RecursionPolicy(
+        enabled=config.recursion_enabled,
+        max_depth=config.recursion_max_depth,
+        max_sub_elements_total=config.recursion_max_sub_elements_total,
+        max_llm_calls=config.recursion_max_llm_calls,
+        monotonicity=config.recursion_monotonicity,  # type: ignore[arg-type]
+    )
 
 
 # ── Utility Functions ────────────────────────────────────────────────
