@@ -31,6 +31,14 @@ _BASELINE_TIMEOUT_SECONDS = 60
 _SYNTAX_CHECK_TIMEOUT_SECONDS = 30
 _IMPORT_CHECK_TIMEOUT_SECONDS = 30
 _LINT_CHECK_TIMEOUT_SECONDS = 60
+
+# Ruff rule codes that are style-only, not correctness issues.
+# These are downgraded from errors to warnings so they don't fail features.
+# E741: ambiguous variable name (l, O, I) — common in framework conventions
+#       (e.g. Locust's `l` parameter, Django's `I` in migrations)
+# E742: ambiguous class name
+# E743: ambiguous function name
+_STYLE_ONLY_CODES: frozenset[str] = frozenset({"E741", "E742", "E743"})
 _TEST_SUITE_TIMEOUT_SECONDS = 120
 
 
@@ -299,7 +307,12 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
-    def check_lint(self, files: List[Path], ignore_codes: Optional[List[str]] = None) -> CheckpointResult:
+    def check_lint(
+        self,
+        files: List[Path],
+        ignore_codes: Optional[List[str]] = None,
+        style_ignore_codes: Optional[Set[str]] = None,
+    ) -> CheckpointResult:
         """Run basic lint checks on the files.
 
         Args:
@@ -307,10 +320,15 @@ class IntegrationCheckpoint:
             ignore_codes: Optional list of ruff rule codes to ignore
                 (e.g. ``["F401"]`` to skip unused-import checks on
                 partial files destined for AST merge).
+            style_ignore_codes: Optional set of additional rule codes to
+                treat as style warnings (not errors).  Merged with the
+                built-in ``_STYLE_ONLY_CODES`` set.  Useful for framework
+                conventions (e.g. Locust ``l`` parameter triggers E741).
         """
         errors = []
         warnings = []
         checked = 0
+        downgraded = _STYLE_ONLY_CODES | (style_ignore_codes or set())
 
         for file_path in files:
             if file_path.suffix != ".py":
@@ -338,15 +356,21 @@ class IntegrationCheckpoint:
                 continue
 
             if result.returncode != 0:
-                # Parse ruff output for errors vs warnings
-                # Include all error codes (E=pycodestyle, F=pyflakes) for
-                # actionable feedback in error-informed retries.
+                # Parse ruff output — classify each diagnostic as error or
+                # warning.  Style-only codes (E741, etc.) are downgraded to
+                # warnings so they don't fail the feature.
                 for line in result.stdout.strip().split("\n"):
-                    if line.strip():
-                        if ": F" in line or ": E" in line:
-                            errors.append(line)
-                        else:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if ": F" in line or ": E" in line:
+                        # Check if the code is style-only
+                        if any(f": {code}" in line for code in downgraded):
                             warnings.append(line)
+                        else:
+                            errors.append(line)
+                    else:
+                        warnings.append(line)
 
         if errors:
             return CheckpointResult(
