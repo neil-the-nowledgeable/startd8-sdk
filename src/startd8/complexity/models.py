@@ -120,6 +120,11 @@ class ComplexityRoutingConfig:
     mro_depth_complex_threshold: int = 3
     unresolved_calls_complex_threshold: int = 2
     templates_enabled: bool = True
+    # Relaxed SIMPLE boundary (Kaizen run-017 recalibration):
+    # Create-mode elements with small blast radius can qualify as SIMPLE
+    # even when manifest_coverage is not "full".
+    simple_relaxed_enabled: bool = True
+    simple_relaxed_blast_radius_max: int = 2
     # Non-Python file routing thresholds (LOC-based).
     # Files with non-.py extensions below these thresholds route to
     # TRIVIAL/SIMPLE instead of cloud fallback.

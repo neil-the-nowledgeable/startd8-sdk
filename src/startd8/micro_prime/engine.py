@@ -1,9 +1,10 @@
 """Micro Prime Engine — Main Orchestrator (REQ-MP-502, 512).
 
 Routes elements through the local-first code generation pipeline:
-  TRIVIAL → template registry → splice → done
-  SIMPLE  → prompt builder → Ollama → repair → verify → splice or escalate
-  MODERATE/COMPLEX → passthrough for cloud handling
+  TRIVIAL  → template registry → splice → done
+  SIMPLE   → prompt builder → Ollama → repair → verify → splice or escalate
+  MODERATE → Ollama-whole (if eligible) → decompose → escalate
+  COMPLEX  → passthrough for cloud handling
 """
 
 from __future__ import annotations
@@ -124,6 +125,15 @@ try:
         "micro_prime.recursion_rejected",
         description="Recursive decomposition rejections",
     )
+    # Ollama-whole for MODERATE elements (Kaizen run-017 recalibration)
+    _moderate_ollama_whole_attempted = _meter.create_counter(
+        "micro_prime.moderate_ollama_whole_attempted",
+        description="MODERATE elements where Ollama-whole was tried before decomposition",
+    )
+    _moderate_ollama_whole_succeeded = _meter.create_counter(
+        "micro_prime.moderate_ollama_whole_succeeded",
+        description="MODERATE elements resolved by Ollama-whole (no decomposition needed)",
+    )
 except ImportError:
     _decomp_attempted = None
     _decomp_succeeded = None
@@ -137,6 +147,8 @@ except ImportError:
     _recursion_attempted = None
     _recursion_succeeded = None
     _recursion_rejected = None
+    _moderate_ollama_whole_attempted = None
+    _moderate_ollama_whole_succeeded = None
 
 
 def _record_decomp_attempted(strategy: str, file_path: str) -> None:
@@ -195,6 +207,16 @@ def _record_simple_decompose_succeeded(file_path: str) -> None:
 def _record_simple_decompose_rejected(file_path: str) -> None:
     if _simple_decompose_rejected is not None:
         _simple_decompose_rejected.add(1, {"file_path": file_path})
+
+
+def _record_moderate_ollama_whole_attempted(file_path: str) -> None:
+    if _moderate_ollama_whole_attempted is not None:
+        _moderate_ollama_whole_attempted.add(1, {"file_path": file_path})
+
+
+def _record_moderate_ollama_whole_succeeded(file_path: str) -> None:
+    if _moderate_ollama_whole_succeeded is not None:
+        _moderate_ollama_whole_succeeded.add(1, {"file_path": file_path})
 
 
 # Depth label cardinality cap (REQ-MP-914, R2-F3): depths beyond this
@@ -458,9 +480,12 @@ def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional
 
 
 _CODE_GEN_SYSTEM_PROMPT = (
-    "You are an expert Python developer. Generate ONLY the requested function body. "
+    "You are a Python code generator for the startd8 pipeline. "
+    "Output the COMPLETE function definition including the `def` line, then STOP. "
     "Do NOT include markdown fences, explanations, or any text outside the code. "
-    "Do NOT repeat the function signature unless asked for a complete definition."
+    "Do NOT output additional functions, classes, or tests after the target function. "
+    "Use ONLY the imports shown in the prompt — do not invent APIs or import new modules. "
+    "Use 4-space indentation consistently."
 )
 
 
@@ -1189,6 +1214,29 @@ class MicroPrimeEngine:
             "sub_count": len(plan.sub_elements),
         }
 
+    # ─── Ollama-whole eligibility ────────────────────────────────────
+
+    def _is_ollama_whole_eligible(
+        self,
+        classification_signals: Optional[set[str]],
+    ) -> bool:
+        """Check if a MODERATE element should attempt Ollama-whole generation.
+
+        Elements with signals in ``moderate_ollama_whole_skip_signals`` (e.g.
+        ``external_api``, ``orchestrator``) are skipped — these have external
+        dependencies that make single-shot local generation unreliable.
+        """
+        if classification_signals is None:
+            return True  # No signal data — try optimistically
+        skip = self._config.moderate_ollama_whole_skip_signals
+        overlap = classification_signals & skip
+        if overlap:
+            logger.debug(
+                "Ollama-whole skipped: signals %s overlap skip list", overlap,
+            )
+            return False
+        return True
+
     # ─── Private handlers ─────────────────────────────────────────────
 
     def _handle_moderate(
@@ -1228,6 +1276,44 @@ class MicroPrimeEngine:
                     reason=EscalationReason.CIRCUIT_BREAKER,
                     detail="Circuit breaker open",
                 ),
+            )
+
+        # Ollama-whole attempt (Kaizen run-017 recalibration): try single-shot
+        # local generation before decomposition.  Many MODERATE elements are
+        # generatable as a whole by Ollama — decomposition adds complexity and
+        # failure modes (29% moderate vs 10% simple failure rate in run-017).
+        if (
+            self._config.moderate_ollama_whole_enabled
+            and element.decomposition_source is None
+            and self._is_ollama_whole_eligible(classification_signals)
+        ):
+            _record_moderate_ollama_whole_attempted(file_path)
+            logger.info(
+                "Attempting Ollama-whole for MODERATE element %s before decomposition",
+                element.name,
+            )
+            ollama_result = self._handle_simple(
+                element, file_spec, skeleton, contracts, file_path,
+                f"moderate_ollama_whole: {reasoning}",
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+            )
+            if ollama_result.success:
+                _record_moderate_ollama_whole_succeeded(file_path)
+                # Re-stamp tier as MODERATE (handle_simple stamps SIMPLE)
+                ollama_result.tier = TierClassification.MODERATE
+                ollama_result.decomposition_metadata = {
+                    "strategy": "ollama_whole",
+                    "llm_calls": 1,
+                }
+                logger.info(
+                    "Ollama-whole succeeded for MODERATE element %s — skipping decomposition",
+                    element.name,
+                )
+                return ollama_result
+            logger.info(
+                "Ollama-whole failed for %s — falling through to decomposition",
+                element.name,
             )
 
         # Null-guard for standalone process_element() path (R1-S5)
@@ -2287,6 +2373,21 @@ class MicroPrimeEngine:
             output_tokens=output_tokens,
         )
 
+    # Stop sequences for complete-function output mode (REQ-MP-206).
+    # Safe because the model now outputs one complete `def` — a second
+    # `\n\ndef ` means it's generating a second function.
+    _OLLAMA_STOP_SEQUENCES: list[str] = [
+        "\n\ndef ",          # Second function boundary
+        "\n\nasync def ",    # Second async function boundary
+        "\n\nclass ",        # Class boundary after function
+        "\nif __name__",     # Common Python trailer
+        "\n# Task:",         # Model echoing prompt template
+        "\n# Implement",     # Model echoing prompt template
+        "\n# Define",        # Model echoing constant prompt template
+        "\n# Now implement",  # Model echoing "Now implement this:" marker
+        "\n\n\n",            # Triple newline — generation exhausted
+    ]
+
     def _generate_ollama(self, prompt: str) -> tuple[str, int, int]:
         """Generate code using the Ollama provider.
 
@@ -2306,6 +2407,7 @@ class MicroPrimeEngine:
             prompt,
             system_prompt=_CODE_GEN_SYSTEM_PROMPT,
             temperature=self._config.temperature,
+            stop=self._OLLAMA_STOP_SEQUENCES,
         )
 
         code = extract_code_from_response(result_text)

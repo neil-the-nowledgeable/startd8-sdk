@@ -122,6 +122,23 @@ def classify_tier(
     ):
         return _emit(ComplexityTier.SIMPLE, "all SIMPLE conditions met")
 
+    # --- Relaxed SIMPLE (Kaizen run-017): create-mode elements with small
+    # blast radius that only fail SIMPLE on manifest_coverage or blast_radius.
+    if (
+        cfg.simple_relaxed_enabled
+        and signals.edit_mode == "create"
+        and signals.blast_radius <= cfg.simple_relaxed_blast_radius_max
+        and signals.caller_count == 0
+        and not signals.has_dynamic_dispatch
+        and signals.estimated_loc < cfg.loc_simple_max
+        and signals.target_file_count == 1
+    ):
+        return _emit(
+            ComplexityTier.SIMPLE,
+            f"relaxed SIMPLE: create-mode, blast_radius={signals.blast_radius} "
+            f"<= {cfg.simple_relaxed_blast_radius_max}",
+        )
+
     # --- Default: MODERATE ---
     return _emit(ComplexityTier.MODERATE, "default (no COMPLEX triggers, SIMPLE conditions not fully met)")
 

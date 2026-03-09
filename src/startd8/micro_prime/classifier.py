@@ -38,6 +38,8 @@ class ClassificationDetails:
     file_import_bump: int = 0
     element_api_adjustment: int = 0
     classification_signals: frozenset[str] = frozenset()
+    complexity_score: int = 0  # Raw scoring-path score (Kaizen run-017)
+    external_dependency_count: int = 0  # Distinct non-stdlib external packages (Kaizen run-017)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Classification constants (from experiment script)
@@ -255,6 +257,7 @@ def classify_element_with_details(
             file_import_bump=file_import_bump,
             element_api_adjustment=elem_adjust,
             classification_signals=frozenset(signals),
+            external_dependency_count=file_import_bump,
         )
         return api_tier[0], api_tier[1], details
 
@@ -297,6 +300,8 @@ def classify_element_with_details(
         file_import_bump=file_import_bump,
         element_api_adjustment=elem_adjust,
         classification_signals=frozenset(signals),
+        complexity_score=complexity_score,
+        external_dependency_count=file_import_bump,
     )
 
     if complexity_score <= -1:

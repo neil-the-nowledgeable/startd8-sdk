@@ -36,6 +36,7 @@ class EscalationReason(str, Enum):
     CIRCUIT_BREAKER = "circuit_breaker"
     DECOMPOSITION_FAILED = "decomposition_failed"
     NOT_DECOMPOSABLE = "not_decomposable"
+    OLLAMA_WHOLE_FAILED = "ollama_whole_failed"
 
 
 # Re-export from shared repair package for backward compatibility.
@@ -209,6 +210,11 @@ class MicroPrimeConfig(BaseModel):
     recursion_max_sub_elements_total: int = 8
     recursion_max_llm_calls: int = 3
     recursion_monotonicity: str = "strict_tier_decrease"
+    # Orchestrator decomposition relaxation (Kaizen run-017)
+    orchestrator_decomp_max_external_deps: int = 3
+    # Ollama-whole for MODERATE elements (before decomposition)
+    moderate_ollama_whole_enabled: bool = True
+    moderate_ollama_whole_skip_signals: set[str] = {"external_api", "orchestrator", "app_server_instance"}
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

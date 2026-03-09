@@ -113,17 +113,37 @@ class TestSimpleEligibility:
         assert tier is ComplexityTier.SIMPLE
         assert "SIMPLE" in reason
 
-    def test_not_simple_if_manifest_partial(self):
+    def test_not_simple_if_manifest_partial_strict(self):
+        """Strict gate rejects partial manifest coverage."""
         tier, _ = classify_tier(
-            _signals(**{**self.SIMPLE_SIGNALS, "manifest_coverage": "partial"})
+            _signals(**{**self.SIMPLE_SIGNALS, "manifest_coverage": "partial"}),
+            _config(simple_relaxed_enabled=False),
         )
         assert tier is ComplexityTier.MODERATE
 
-    def test_not_simple_if_blast_radius_nonzero(self):
+    def test_simple_if_manifest_partial_relaxed(self):
+        """Relaxed gate (default) accepts partial manifest + create mode."""
+        tier, reason = classify_tier(
+            _signals(**{**self.SIMPLE_SIGNALS, "manifest_coverage": "partial"})
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert "relaxed" in reason
+
+    def test_not_simple_if_blast_radius_nonzero_strict(self):
+        """Strict gate rejects blast_radius > 0."""
         tier, _ = classify_tier(
-            _signals(**{**self.SIMPLE_SIGNALS, "blast_radius": 1})
+            _signals(**{**self.SIMPLE_SIGNALS, "blast_radius": 1}),
+            _config(simple_relaxed_enabled=False),
         )
         assert tier is ComplexityTier.MODERATE
+
+    def test_simple_if_blast_radius_small_relaxed(self):
+        """Relaxed gate (default) accepts small blast_radius + create mode."""
+        tier, reason = classify_tier(
+            _signals(**{**self.SIMPLE_SIGNALS, "blast_radius": 1})
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert "relaxed" in reason
 
     def test_not_simple_if_edit_mode(self):
         tier, _ = classify_tier(
@@ -262,3 +282,93 @@ class TestNoneConfig:
     def test_none_config_uses_defaults(self):
         tier, _ = classify_tier(_signals(blast_radius=10), config=None)
         assert tier is ComplexityTier.COMPLEX
+
+
+# ── Relaxed SIMPLE boundary (Kaizen run-017) ──────────────────────────
+
+
+class TestRelaxedSimple:
+    """Create-mode elements with small blast radius qualify as SIMPLE."""
+
+    def test_blast_radius_1_create_mode(self):
+        """Create-mode element with blast_radius=1 qualifies under relaxed gate."""
+        tier, reason = classify_tier(
+            _signals(
+                blast_radius=1,
+                edit_mode="create",
+                caller_count=0,
+                estimated_loc=100,
+                target_file_count=1,
+            ),
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert "relaxed" in reason
+
+    def test_blast_radius_2_create_mode(self):
+        """blast_radius=2 is at the default relaxed threshold."""
+        tier, reason = classify_tier(
+            _signals(
+                blast_radius=2,
+                edit_mode="create",
+                caller_count=0,
+                estimated_loc=100,
+                target_file_count=1,
+            ),
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert "relaxed" in reason
+
+    def test_blast_radius_3_still_moderate(self):
+        """blast_radius=3 exceeds the relaxed threshold → MODERATE."""
+        tier, _ = classify_tier(
+            _signals(
+                blast_radius=3,
+                edit_mode="create",
+                caller_count=0,
+                estimated_loc=100,
+                target_file_count=1,
+            ),
+        )
+        assert tier is ComplexityTier.MODERATE
+
+    def test_edit_mode_not_relaxed(self):
+        """Edit-mode elements are NOT eligible for relaxed SIMPLE."""
+        tier, _ = classify_tier(
+            _signals(
+                blast_radius=1,
+                edit_mode="edit",
+                caller_count=0,
+                estimated_loc=100,
+                target_file_count=1,
+            ),
+        )
+        assert tier is ComplexityTier.MODERATE
+
+    def test_relaxed_disabled(self):
+        """With simple_relaxed_enabled=False, blast_radius=1 stays MODERATE."""
+        tier, _ = classify_tier(
+            _signals(
+                blast_radius=1,
+                edit_mode="create",
+                caller_count=0,
+                estimated_loc=100,
+                target_file_count=1,
+            ),
+            _config(simple_relaxed_enabled=False),
+        )
+        assert tier is ComplexityTier.MODERATE
+
+    def test_partial_manifest_create_mode(self):
+        """Partial manifest coverage + create mode + blast_radius=0 → relaxed SIMPLE."""
+        tier, reason = classify_tier(
+            _signals(
+                manifest_coverage="partial",
+                blast_radius=0,
+                edit_mode="create",
+                caller_count=0,
+                estimated_loc=80,
+                target_file_count=1,
+            ),
+        )
+        assert tier is ComplexityTier.SIMPLE
+        assert "relaxed" in reason
