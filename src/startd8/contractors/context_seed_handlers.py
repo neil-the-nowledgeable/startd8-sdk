@@ -67,6 +67,7 @@ from startd8.contractors.context_seed.design_support import (  # noqa: F401
 from startd8.contractors.gate_contracts import GateEmitter  # noqa: F401
 from startd8.contractors.context_seed.shared import (  # noqa: F401
     _PCA_CONTEXT_FIELDS,
+    scope_dependencies_to_file,
 )
 from startd8.utils.file_operations import atomic_write_json  # noqa: F401
 

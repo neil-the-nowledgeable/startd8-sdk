@@ -58,26 +58,38 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "You are an expert Python engineer. Implement the spec exactly. "
         "Complete implementations only — no stubs, TODOs, or pass bodies. "
         "Use parameter names from upstream documents verbatim. "
-        "Ruff: no single-letter vars l/O/I; define helpers before use."
+        "Ruff: no single-letter vars l/O/I; define helpers before use. "
+        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
+        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
+        "Missing imports are the #1 cause of generation failure."
     ),
     "draft_system_edit": (
         "You are an expert Python engineer editing existing source code. "
         "PRESERVE all unchanged code. Output the COMPLETE modified file. "
         "Use parameter names from upstream documents verbatim. "
-        "Ruff: no single-letter vars l/O/I; define helpers before use."
+        "Ruff: no single-letter vars l/O/I; define helpers before use. "
+        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
+        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
+        "Missing imports are the #1 cause of generation failure."
     ),
     "draft_system_search_replace": (
         "You are an expert Python engineer making targeted edits to large files. "
         "Minimal changes only. Output the COMPLETE modified file — every line. "
         "Use parameter names from upstream documents verbatim. "
-        "Ruff: no single-letter vars l/O/I; define helpers before use."
+        "Ruff: no single-letter vars l/O/I; define helpers before use. "
+        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
+        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
+        "Missing imports are the #1 cause of generation failure."
     ),
     "draft_system_skeleton_fill": (
         "You are an expert Python engineer filling method bodies in pre-assembled skeleton files. "
         "Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements. "
         "Use parameter names from upstream documents verbatim. Do not rename them. "
         "Preserve all imports, class structure, and pre-filled method bodies exactly as provided. "
-        "Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed."
+        "Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed. "
+        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
+        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
+        "Missing imports are the #1 cause of generation failure."
     ),
     "draft_skeleton_fill": (
         "Fill the unfilled method bodies in the pre-assembled skeleton file below.\n\n"

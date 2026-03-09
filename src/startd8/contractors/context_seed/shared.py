@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -526,6 +527,105 @@ def _track_onboarding_consumption(
         audit[field_name].append(phase_name)
 
 
+# ---------------------------------------------------------------------------
+# L3: Per-service dependency scoping
+# ---------------------------------------------------------------------------
+
+# Map PyPI distribution names to their importable top-level module names.
+# Used by scope_dependencies_to_file() to match AST imports against deps.
+_PYPI_TO_IMPORT: dict[str, str] = {
+    "grpcio": "grpc",
+    "grpcio-health-checking": "grpc_health",
+    "grpcio-tools": "grpc_tools",
+    "pillow": "PIL",
+    "python-json-logger": "pythonjsonlogger",
+    "google-api-core": "google",
+    "google-cloud-secret-manager": "google",
+    "opentelemetry-distro": "opentelemetry",
+    "opentelemetry-api": "opentelemetry",
+    "opentelemetry-sdk": "opentelemetry",
+    "opentelemetry-exporter-otlp-proto-grpc": "opentelemetry",
+    "opentelemetry-instrumentation-grpc": "opentelemetry",
+    "python-dateutil": "dateutil",
+    "pyyaml": "yaml",
+    "beautifulsoup4": "bs4",
+    "scikit-learn": "sklearn",
+}
+
+# Reverse map: importable module → set of PyPI names that provide it.
+_IMPORT_TO_PYPI: dict[str, set[str]] = {}
+for _pypi, _mod in _PYPI_TO_IMPORT.items():
+    _IMPORT_TO_PYPI.setdefault(_mod, set()).add(_pypi)
+
+
+def _strip_version_pin(dep: str) -> str:
+    """Strip version pins from a dependency string: ``grpcio==1.76.0`` → ``grpcio``."""
+    for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
+        dep = dep.split(sep)[0]
+    return dep.strip()
+
+
+def _extract_imported_modules(source: str) -> set[str]:
+    """Extract top-level imported module names from Python source via AST.
+
+    Returns a set of top-level package names (e.g. ``grpc`` from
+    ``import grpc.reflection`` or ``from grpc_health.v1 import ...``).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.add(node.module.split(".")[0])
+    return modules
+
+
+def scope_dependencies_to_file(
+    file_path: str,
+    file_content: str,
+    all_dependencies: list[str],
+) -> list[str]:
+    """Return only the dependencies that *file_path* actually imports.
+
+    Parses *file_content* with ``ast`` to extract top-level import names,
+    then intersects with *all_dependencies* (stripping version pins).
+    Falls back to *all_dependencies* if parsing fails (e.g. non-Python files).
+    """
+    if not file_content or not all_dependencies:
+        return list(all_dependencies) if all_dependencies else []
+
+    # Non-Python files get the full list
+    if not file_path.endswith(".py"):
+        return list(all_dependencies)
+
+    imported = _extract_imported_modules(file_content)
+    if not imported:
+        # AST parsing returned nothing — fallback to full list
+        return list(all_dependencies)
+
+    scoped: list[str] = []
+    for dep in all_dependencies:
+        pkg_name = _strip_version_pin(dep)
+        # Direct match: PyPI name == import name (common case: flask, locust)
+        if pkg_name.lower().replace("-", "_") in imported:
+            scoped.append(dep)
+            continue
+        # Alias match: PyPI name maps to a different import name
+        import_name = _PYPI_TO_IMPORT.get(pkg_name.lower())
+        if import_name and import_name in imported:
+            scoped.append(dep)
+            continue
+
+    return scoped
+
+
 __all__ = [
     "SeedTask",
     "_ensure_context_loaded",
@@ -534,4 +634,8 @@ __all__ = [
     "_parse_tasks",
     "_topological_sort",
     "_track_onboarding_consumption",
+    "scope_dependencies_to_file",
+    "_PYPI_TO_IMPORT",
+    "_strip_version_pin",
+    "_extract_imported_modules",
 ]

@@ -137,6 +137,7 @@ prompts:
       Use parameter names from upstream documents verbatim. Do not rename them.
       Do not generate project boilerplate — only task-specific code.
       Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
     placeholders: []
 
   draft_system_edit:
@@ -146,6 +147,7 @@ prompts:
       PRESERVE all unchanged code. Output the COMPLETE modified file.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
     placeholders: []
 
   draft_system_search_replace:
@@ -155,6 +157,7 @@ prompts:
       Minimal changes only. Output the COMPLETE modified file — every line.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
     placeholders: []
 
   draft_system_skeleton_fill:
@@ -165,6 +168,7 @@ prompts:
       Use parameter names from upstream documents verbatim. Do not rename them.
       Preserve all imports, class structure, and pre-filled method bodies exactly as provided.
       Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
     placeholders: []
 
   # ---------- DRAFT USER PROMPT — SKELETON FILL (FR-MPA-005) ----------
@@ -315,6 +319,21 @@ prompts:
       - total_lines
       - min_lines
       - edit_min_pct
+
+  available_imports:
+    description: "Available imports section for spec — reduces post-generation import repair"
+    template: |
+      ## Available Imports
+
+      The following packages are installed and available for import:
+
+      {available_packages}
+
+      Use ONLY these packages plus Python stdlib. Every non-stdlib symbol you
+      reference MUST have a corresponding import statement at the top of the file.
+      Do NOT import packages not listed above.
+    placeholders:
+      - available_packages
 
   spec_completeness_warning:
     description: "Warning for missing spec parameters"

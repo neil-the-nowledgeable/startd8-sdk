@@ -203,6 +203,41 @@ def build_spec_conventions_section(sem_conv: Any) -> str:
     return f"## Semantic Conventions\n{format_context_value(sem_conv)}"
 
 
+def _build_available_imports_section(context: Dict[str, Any]) -> str:
+    """Build the available imports section from task dependencies.
+
+    Strips version pins (e.g. ``grpcio==1.76.0`` → ``grpcio``) and formats
+    as a bullet list.  Returns empty string when no dependencies are present.
+    """
+    deps = context.get("runtime_dependencies", [])
+    if not deps:
+        return ""
+    package_lines = []
+    for dep in sorted(deps):
+        # Strip version pins: "grpcio==1.76.0" → "grpcio"
+        pkg = dep
+        for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
+            pkg = pkg.split(sep)[0]
+        pkg = pkg.strip()
+        if pkg:
+            package_lines.append(f"- {pkg}")
+    if not package_lines:
+        return ""
+    packages_str = "\n".join(package_lines)
+    try:
+        template = get_template("available_imports")
+        return template.format(available_packages=packages_str)
+    except (FileNotFoundError, KeyError, ImportError):
+        return (
+            "## Available Imports\n\n"
+            "The following packages are installed and available for import:\n\n"
+            f"{packages_str}\n\n"
+            "Use ONLY these packages plus Python stdlib. Every non-stdlib symbol you\n"
+            "reference MUST have a corresponding import statement at the top of the file.\n"
+            "Do NOT import packages not listed above.\n"
+        )
+
+
 def _select_template_key(context: Dict[str, Any], override: Optional[str] = None) -> str:
     """Auto-select spec template: ``spec_from_design`` when design doc present.
 
@@ -413,6 +448,11 @@ def build_spec_prompt(
     # P0: Core context (always kept)
     ctx_section = build_spec_context_section(context, output_format, target_files)
     prioritized: List[tuple] = [(0, "context", ctx_section)]
+
+    # P1: Available imports (L1 — reduces import repair rate)
+    available_imports_section = _build_available_imports_section(context)
+    if available_imports_section:
+        prioritized.append((1, "available_imports", available_imports_section))
 
     # P1: Requirements and protocol guidance
     if requirements_context:
