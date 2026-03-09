@@ -514,7 +514,8 @@ class MicroPrimeEngine:
         metrics_collector: Optional metrics collector for observability.
     """
 
-    _CIRCUIT_BREAKER_THRESHOLD: int = 3
+    _CIRCUIT_BREAKER_THRESHOLD: int = 3   # per-file
+    _RUN_BREAKER_THRESHOLD: int = 5       # per-run (E1: cross-file systemic failure)
     _TIER_PRIORITY: dict[TierClassification, int] = {
         TierClassification.TRIVIAL: 0,
         TierClassification.SIMPLE: 1,
@@ -535,9 +536,10 @@ class MicroPrimeEngine:
         )
         self._metrics = metrics_collector or MetricsCollector()
         self._completed: list[dict[str, Any]] = []
-        # Circuit breaker state (R3-S2)
-        self._consecutive_failures: int = 0
-        self._circuit_open: bool = False
+        # Circuit breaker state (R3-S2 + E1)
+        self._consecutive_failures: int = 0       # per-file, reset between files
+        self._run_consecutive_failures: int = 0   # per-run (E1), persists across files
+        self._file_circuit_open: bool = False      # per-file breaker state
         # Element fingerprint success cache (R3-S4)
         self._success_cache: dict[str, Optional[str]] = {}
         # Element registry for cross-task/cross-run caching (ER-007)
@@ -567,18 +569,29 @@ class MicroPrimeEngine:
     def metrics_collector(self) -> MetricsCollector:
         return self._metrics
 
-    def reset_circuit_breaker(self) -> None:
-        """Reset the circuit breaker to closed state.
+    @property
+    def _circuit_open(self) -> bool:
+        """True if either per-file or per-run breaker is tripped (E1)."""
+        return (
+            self._file_circuit_open
+            or self._run_consecutive_failures >= self._RUN_BREAKER_THRESHOLD
+        )
 
-        Callers should invoke this between files or runs to allow
-        local generation to resume after transient failures.
+    def reset_circuit_breaker(self) -> None:
+        """Reset the per-file circuit breaker to closed state.
+
+        Callers should invoke this between files to allow local
+        generation to resume after transient failures.  The per-run
+        breaker (E1) persists across files — use ``clear_cache()``
+        or a new engine instance to reset it.
         """
         self._consecutive_failures = 0
-        self._circuit_open = False
+        self._file_circuit_open = False
 
     def clear_cache(self) -> None:
-        """Clear the element fingerprint success cache."""
+        """Clear the element fingerprint success cache and reset per-run breaker."""
         self._success_cache.clear()  # dict[fingerprint, code]
+        self._run_consecutive_failures = 0
 
     def process_element(
         self,
@@ -846,6 +859,7 @@ class MicroPrimeEngine:
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
             self._consecutive_failures = 0
+            self._run_consecutive_failures = 0  # E1: success proves Ollama is working
             self._success_cache[fingerprint] = result.code
             # REQ-MP-1102: Persist to element registry after successful generation
             if self._element_registry is not None and element_id and result.code:
@@ -883,14 +897,23 @@ class MicroPrimeEngine:
                     )
         elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
             self._consecutive_failures += 1
+            self._run_consecutive_failures += 1
             if (
                 self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
-                and not self._circuit_open
+                and not self._file_circuit_open
             ):
-                self._circuit_open = True
+                self._file_circuit_open = True
                 logger.warning(
-                    "Circuit breaker tripped: %d consecutive local failures",
+                    "Circuit breaker tripped (per-file): %d consecutive local failures",
                     self._consecutive_failures,
+                )
+            if (
+                self._run_consecutive_failures >= self._RUN_BREAKER_THRESHOLD
+                and not self._file_circuit_open
+            ):
+                logger.warning(
+                    "Circuit breaker tripped (per-run): %d consecutive failures across files",
+                    self._run_consecutive_failures,
                 )
 
         self._metrics.record(result)
@@ -1354,13 +1377,14 @@ class MicroPrimeEngine:
 
             if not sub_result.success or not sub_result.code:
                 self._consecutive_failures += 1
+                self._run_consecutive_failures += 1
                 if (
                     self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
-                    and not self._circuit_open
+                    and not self._file_circuit_open
                 ):
-                    self._circuit_open = True
+                    self._file_circuit_open = True
                     logger.warning(
-                        "Circuit breaker tripped: %d consecutive sub-element failures",
+                        "Circuit breaker tripped (per-file): %d consecutive sub-element failures",
                         self._consecutive_failures,
                     )
                 logger.warning(

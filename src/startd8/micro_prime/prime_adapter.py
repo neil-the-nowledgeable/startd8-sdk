@@ -302,6 +302,9 @@ class MicroPrimeCodeGenerator:
         Returns:
             GenerationResult with success status and generated file paths.
         """
+        # D3: Capture tier-specific agent spec from complexity routing
+        self._tier_agent_spec = context.get("_tier_agent_spec")
+
         manifest = context.get("manifest") or self._manifest
         skeletons = context.get("skeletons") or self._skeletons
 
@@ -1352,9 +1355,14 @@ class MicroPrimeCodeGenerator:
     def _resolve_cloud_agent_spec(self) -> str:
         """Resolve the cloud agent spec string for element-level escalation.
 
-        Priority: explicit ``cloud_agent_spec`` → fallback's ``drafter_agent``
+        Priority: tier-specific spec from complexity routing →
+        explicit ``cloud_agent_spec`` → fallback's ``drafter_agent``
         → ``DRAFT_MODEL_CLAUDE_HAIKU.agent_spec``.
         """
+        # D3: Tier-specific agent spec from complexity routing
+        tier_spec = getattr(self, "_tier_agent_spec", None)
+        if tier_spec is not None:
+            return tier_spec
         if self._cloud_agent_spec is not None:
             return self._cloud_agent_spec
         drafter = getattr(self._fallback, "drafter_agent", None)

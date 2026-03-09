@@ -3256,6 +3256,10 @@ class PrimeContractorWorkflow:
                     )
                     tier, reason = classify_tier(signals, self._complexity_config)
                     generator = self._complexity_router.select(tier) or generator
+                    # D3: Route tier-specific agent spec for cloud escalation
+                    tier_agent_spec = self._complexity_router.select_agent_spec(tier)
+                    if tier_agent_spec:
+                        gen_context["_tier_agent_spec"] = tier_agent_spec
                     # Stash classification in feature metadata for forensics
                     if feature.metadata is None:
                         feature.metadata = {}
@@ -3595,8 +3599,31 @@ class PrimeContractorWorkflow:
             except Exception:
                 logger.debug("Tier distribution logging failed", exc_info=True)
 
+        # D4 + F1: Persist element registry run metrics for Kaizen analysis
+        if getattr(self, "_element_registry", None) is not None:
+            try:
+                import os as _os
+                import time as _time
+                run_id = _os.environ.get("KAIZEN_RUN_ID") or f"run-{int(_time.time())}"
+                self._element_registry.write_run_metrics(run_id)
+                # F1: Enrich result dict with element-level status counts
+                local_count = len(self._element_registry.elements_by_status("implement", "generated"))
+                escalated_count = len(self._element_registry.elements_by_status("implement", "escalated"))
+                result_dict_registry = {
+                    "local": local_count,
+                    "escalated": escalated_count,
+                    "total": len(self._element_registry.all_entries()),
+                }
+            except Exception:
+                logger.warning("Element registry run metrics failed", exc_info=True)
+                result_dict_registry = None
+        else:
+            result_dict_registry = None
+
         # Phase 4: Write generation manifest (pipeline mode only)
         result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
+        if result_dict_registry is not None:
+            result_dict["element_registry"] = result_dict_registry
         self._write_generation_manifest(result_dict)
 
         # Launch async post-mortem evaluation
