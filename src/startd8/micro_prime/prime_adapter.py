@@ -626,6 +626,11 @@ class MicroPrimeCodeGenerator:
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
         if escalated_files and self._fallback is not None:
+            logger.warning(
+                "Escalating %d file(s) to cloud fallback: %s",
+                len(escalated_files),
+                ", ".join(escalated_files),
+            )
             fallback_context = self._with_escalation_context(
                 context, all_file_results,
             )
@@ -1253,7 +1258,9 @@ class MicroPrimeCodeGenerator:
         """
         from startd8.utils.file_assembler import DeterministicFileAssembler
 
-        assembler = DeterministicFileAssembler()
+        assembler = DeterministicFileAssembler(
+            element_registry=self._element_registry,
+        )
         skeletons: dict[str, str] = {}
 
         for file_path in target_files:

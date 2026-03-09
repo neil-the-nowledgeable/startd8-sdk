@@ -179,7 +179,7 @@ class MicroPrimeConfig(BaseModel):
     cloud_escalation_retry_strategy: str = "same_prompt"
     cloud_escalation_retry_max_chars: int = 512
     # Semantic verification (REQ-MP-512)
-    semantic_verification_enabled: bool = False
+    semantic_verification_enabled: bool = True
     semantic_verification_agent_spec: Optional[str] = None
     semantic_verification_max_tokens: int = 256
     semantic_verification_temperature: float = 0.0
@@ -201,8 +201,8 @@ class MicroPrimeConfig(BaseModel):
     class_decompose_enabled: bool = True
     function_chain_enabled: bool = True
     # Simple decomposer gate (Phase 1, Step 6)
-    enable_simple_decomposer: bool = False
-    simple_decomposer_confidence_threshold: float = 0.6
+    enable_simple_decomposer: bool = True
+    simple_decomposer_confidence_threshold: float = 0.7
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

@@ -184,31 +184,31 @@ class TestCheckDuplicates:
 
 
 # ---------------------------------------------------------------------------
-# check_known_bad_imports (L2+ — replaces check_import_symbols)
+# check_import_dependency_alignment (B4 — replaces check_known_bad_imports)
 # ---------------------------------------------------------------------------
 
-class TestCheckKnownBadImports:
+class TestCheckImportDependencyAlignment:
     def test_known_bad_jsonlogger(self, tmp_path, checkpoint):
         f = _write_py(tmp_path, "a.py", "import jsonlogger\n")
-        result = checkpoint.check_known_bad_imports([f])
+        result = checkpoint.check_import_dependency_alignment([f])
         assert result.status == CheckpointStatus.WARNING
         assert "jsonlogger" in result.warnings[0]
         assert "pythonjsonlogger" in result.warnings[0]
 
     def test_known_bad_vectordb(self, tmp_path, checkpoint):
         f = _write_py(tmp_path, "a.py", "from google.cloud.vectordb import Client\n")
-        result = checkpoint.check_known_bad_imports([f])
+        result = checkpoint.check_import_dependency_alignment([f])
         assert result.status == CheckpointStatus.WARNING
         assert "no PyPI replacement" in result.warnings[0]
 
     def test_valid_import_not_flagged(self, tmp_path, checkpoint):
         f = _write_py(tmp_path, "a.py", "import os\nimport json\n")
-        result = checkpoint.check_known_bad_imports([f])
+        result = checkpoint.check_import_dependency_alignment([f])
         assert result.status == CheckpointStatus.PASSED
 
     def test_denylist_extensible(self, tmp_path, checkpoint):
         f = _write_py(tmp_path, "a.py", "import fake_hallucinated_pkg\n")
-        result = checkpoint.check_known_bad_imports(
+        result = checkpoint.check_import_dependency_alignment(
             [f],
             extra_denylist={"fake_hallucinated_pkg": "real_pkg"},
         )
@@ -217,8 +217,32 @@ class TestCheckKnownBadImports:
 
     def test_from_import_variant(self, tmp_path, checkpoint):
         f = _write_py(tmp_path, "a.py", "from jsonlogger import JsonFormatter\n")
-        result = checkpoint.check_known_bad_imports([f])
+        result = checkpoint.check_import_dependency_alignment([f])
         assert result.status == CheckpointStatus.WARNING
+
+    def test_undeclared_dependency_flagged(self, tmp_path, checkpoint):
+        """Import of a known PyPI package not in runtime_dependencies."""
+        f = _write_py(tmp_path, "a.py", "import requests\n")
+        result = checkpoint.check_import_dependency_alignment(
+            [f], runtime_dependencies=["flask>=2.0"],
+        )
+        assert result.status == CheckpointStatus.WARNING
+        assert "requests" in result.warnings[0]
+        assert "not in runtime_dependencies" in result.warnings[0]
+
+    def test_declared_dependency_passes(self, tmp_path, checkpoint):
+        """Import that maps to a declared dependency should pass."""
+        f = _write_py(tmp_path, "a.py", "import requests\n")
+        result = checkpoint.check_import_dependency_alignment(
+            [f], runtime_dependencies=["requests>=2.28"],
+        )
+        assert result.status == CheckpointStatus.PASSED
+
+    def test_no_deps_skips_alignment(self, tmp_path, checkpoint):
+        """Without runtime_dependencies, layer 2 is inactive."""
+        f = _write_py(tmp_path, "a.py", "import requests\n")
+        result = checkpoint.check_import_dependency_alignment([f])
+        assert result.status == CheckpointStatus.PASSED
 
 
 class TestStubDetectionWithSentinel:
@@ -273,7 +297,7 @@ class TestSemanticChecksInRunAll:
         names = [r.name for r in results]
         assert "Stub Detection" in names
         assert "Duplicate Detection" in names
-        assert "Known Bad Import Check" in names
+        assert "Import Dependency Alignment" in names
 
     def test_semantic_warnings_dont_block(self, tmp_path, checkpoint):
         """Semantic check warnings should not prevent overall pass."""

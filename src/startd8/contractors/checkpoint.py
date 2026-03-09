@@ -21,6 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from ..implementation_engine.package_aliases import import_to_pypi
 from ..logging_config import get_logger
 from ..utils.code_extraction import STUB_SENTINEL
 
@@ -180,10 +181,10 @@ class IntegrationCheckpoint:
         # 3. Lint check (basic)
         results.append(self.check_lint(integrated_files))
 
-        # 4. Semantic checks (L2 — stub detection, duplicate detection, known-bad imports)
+        # 4. Semantic checks (L2 — stub detection, duplicate detection, import alignment)
         results.append(self.check_stubs(integrated_files))
         results.append(self.check_duplicates(integrated_files))
-        results.append(self.check_known_bad_imports(integrated_files))
+        results.append(self.check_import_dependency_alignment(integrated_files))
 
         # 5. Test check (if enabled)
         if self.run_tests:
@@ -639,29 +640,64 @@ class IntegrationCheckpoint:
 
     # Known hallucinated imports observed in production runs.
     # Maps bad_import → correct_import (or None if no replacement exists).
-    # Updated as new hallucinations are observed across Kaizen runs.
     _KNOWN_BAD_IMPORTS: Dict[str, Optional[str]] = {
         "jsonlogger": "pythonjsonlogger.jsonlogger",
         "google.cloud.vectordb": None,  # doesn't exist on PyPI
     }
 
-    def check_known_bad_imports(
+    # Standard library top-level modules — imports of these are always valid.
+    _STDLIB_PREFIXES: frozenset = frozenset({
+        "abc", "argparse", "ast", "asyncio", "base64", "bisect",
+        "calendar", "collections", "concurrent", "configparser",
+        "contextlib", "copy", "csv", "ctypes", "dataclasses",
+        "datetime", "decimal", "difflib", "email", "enum",
+        "errno", "fcntl", "fileinput", "fnmatch", "fractions",
+        "ftplib", "functools", "getpass", "glob", "gzip",
+        "hashlib", "heapq", "hmac", "html", "http",
+        "importlib", "inspect", "io", "ipaddress", "itertools",
+        "json", "keyword", "linecache", "locale", "logging",
+        "lzma", "math", "mimetypes", "multiprocessing", "numbers",
+        "operator", "os", "pathlib", "pickle", "pkgutil",
+        "platform", "pprint", "queue", "random", "re",
+        "shlex", "shutil", "signal", "site", "socket",
+        "sqlite3", "ssl", "stat", "statistics", "string",
+        "struct", "subprocess", "sys", "sysconfig", "tempfile",
+        "textwrap", "threading", "time", "timeit", "token",
+        "tokenize", "traceback", "types", "typing", "typing_extensions",
+        "unittest", "urllib", "uuid", "venv", "warnings",
+        "weakref", "xml", "xmlrpc", "zipfile", "zipimport", "zlib",
+        # builtins that appear in import statements
+        "builtins", "_thread", "__future__",
+    })
+
+    def check_import_dependency_alignment(
         self,
         files: List[Path],
         *,
+        runtime_dependencies: Optional[List[str]] = None,
         extra_denylist: Optional[Dict[str, Optional[str]]] = None,
     ) -> CheckpointResult:
-        """Flag imports known to be hallucinated by LLMs.
+        """Validate imports against declared runtime_dependencies.
 
-        When a corrected import is known, include it in the warning message
-        so the repair pipeline or human reviewer can fix it.
+        Two-layer check:
+        1. Known-bad denylist (hallucinated imports that never exist).
+        2. Dependency alignment — third-party imports must map to a
+           declared runtime dependency via ``package_aliases.import_to_pypi``.
 
-        The *extra_denylist* parameter allows callers to merge project-specific
-        bad imports with the built-in denylist.
+        Layer 2 is only active when *runtime_dependencies* is provided.
         """
         denylist = dict(self._KNOWN_BAD_IMPORTS)
         if extra_denylist:
             denylist.update(extra_denylist)
+
+        # Normalise declared deps to a set of top-level import names
+        declared_imports: Optional[Set[str]] = None
+        if runtime_dependencies:
+            declared_imports = set()
+            for dep in runtime_dependencies:
+                # Strip version specifiers
+                pkg = dep.split(">=")[0].split("==")[0].split("<")[0].split("[")[0].strip()
+                declared_imports.add(pkg.replace("-", "_").lower())
 
         warnings: List[str] = []
         checked = 0
@@ -677,48 +713,83 @@ class IntegrationCheckpoint:
                 continue
 
             for node in ast.walk(tree):
-                module_name: Optional[str] = None
+                # Extract the top-level module name from the import
+                top_module: Optional[str] = None
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        if alias.name in denylist:
-                            module_name = alias.name
+                        top_module = alias.name.split(".")[0]
+                        self._check_import(
+                            top_module, alias.name, file_path, denylist,
+                            declared_imports, warnings,
+                        )
                 elif isinstance(node, ast.ImportFrom) and node.module:
-                    if node.module in denylist:
-                        module_name = node.module
-                    # Also check top-level prefix
-                    for bad in denylist:
-                        if node.module == bad or node.module.startswith(bad + "."):
-                            module_name = bad
-                            break
+                    top_module = node.module.split(".")[0]
+                    self._check_import(
+                        top_module, node.module, file_path, denylist,
+                        declared_imports, warnings,
+                    )
 
-                if module_name is not None:
-                    replacement = denylist.get(module_name)
-                    if replacement:
-                        warnings.append(
-                            f"{file_path.name}: import '{module_name}' is a known "
-                            f"hallucination — use '{replacement}' instead"
-                        )
-                    else:
-                        warnings.append(
-                            f"{file_path.name}: import '{module_name}' is a known "
-                            f"hallucination (no PyPI replacement exists)"
-                        )
-
+        name = "Import Dependency Alignment"
         if warnings:
             return CheckpointResult(
                 status=CheckpointStatus.WARNING,
-                name="Known Bad Import Check",
-                message=f"{len(warnings)} hallucinated import(s) detected",
+                name=name,
+                message=f"{len(warnings)} import alignment issue(s)",
                 warnings=warnings,
                 details={"files_checked": checked},
             )
 
         return CheckpointResult(
             status=CheckpointStatus.PASSED,
-            name="Known Bad Import Check",
-            message=f"{checked} file(s) checked, no known-bad imports",
+            name=name,
+            message=f"{checked} file(s) checked, imports aligned",
             details={"files_checked": checked},
         )
+
+    def _check_import(
+        self,
+        top_module: str,
+        full_module: str,
+        file_path: Path,
+        denylist: Dict[str, Optional[str]],
+        declared_imports: Optional[Set[str]],
+        warnings: List[str],
+    ) -> None:
+        """Check a single import against denylist and declared deps."""
+        # Layer 1: known-bad denylist
+        for bad in denylist:
+            if full_module == bad or full_module.startswith(bad + "."):
+                replacement = denylist[bad]
+                if replacement:
+                    warnings.append(
+                        f"{file_path.name}: import '{full_module}' is a known "
+                        f"hallucination — use '{replacement}' instead"
+                    )
+                else:
+                    warnings.append(
+                        f"{file_path.name}: import '{full_module}' is a known "
+                        f"hallucination (no PyPI replacement exists)"
+                    )
+                return
+
+        # Layer 2: dependency alignment (only when deps are declared)
+        if declared_imports is None:
+            return
+        # Skip stdlib
+        if top_module in self._STDLIB_PREFIXES:
+            return
+        # Skip relative / local project imports (heuristic: starts with project_root relative name)
+        # We can't reliably detect these, so only flag if import_to_pypi finds a known package
+        pypi_name = import_to_pypi(top_module)
+        if pypi_name is None:
+            # Unknown import — could be local, skip
+            return
+        normalised = pypi_name.replace("-", "_").lower()
+        if normalised not in declared_imports:
+            warnings.append(
+                f"{file_path.name}: import '{top_module}' maps to PyPI package "
+                f"'{pypi_name}' which is not in runtime_dependencies"
+            )
 
     def check_tests(self, feature_name: str) -> CheckpointResult:
         """
