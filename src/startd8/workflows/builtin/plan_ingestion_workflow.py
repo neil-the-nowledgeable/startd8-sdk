@@ -288,7 +288,7 @@ and extract structured information.
 {plan_text}
 </plan>
 
-Return a JSON object (no markdown fences) with exactly these keys:
+Return a JSON object wrapped in ```json code fences with exactly these keys:
 {{
   "title": "string — plan title",
   "goals": ["string — each high-level goal"],
@@ -303,7 +303,7 @@ Return a JSON object (no markdown fences) with exactly these keys:
       "labels": ["label"],
       "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
       "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
-      "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "Method serve(request, context)"],
+      "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
       "negative_scope": ["things explicitly excluded from this feature"]
@@ -327,7 +327,7 @@ Rules for target_files:
 
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
-api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "Method name(params)". Include ALL signatures mentioned for the feature.
+api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
@@ -359,7 +359,7 @@ Then compute a composite score (weighted average, 0–100).
 
 Routing rule: composite ≤ {threshold} → "prime", else → "artisan".
 
-Return JSON (no markdown fences):
+Return JSON wrapped in ```json code fences:
 {{
   "feature_count": 0,
   "cross_file_deps": 0,
@@ -4341,6 +4341,15 @@ class PlanIngestionWorkflow(WorkflowBase):
                     getattr(self, "_complexity_threshold", 40),
                     _dims,
                 )
+                # REQ-KPI-301: threshold alert on borderline routing
+                _margin = _assess_q.get("route_margin", 999)
+                if _margin < 10:
+                    logger.warning(
+                        "ASSESS: route_margin=%d (composite=%d, threshold=%d) — "
+                        "borderline routing; minor plan changes may flip the route",
+                        _margin, complexity.composite,
+                        getattr(self, "_complexity_threshold", 40),
+                    )
             seed_dict["_ingestion_quality"] = {
                 "seed_quality_score": _sq_score,
                 "features_extracted": _parse_q.get("features_extracted", 0),

@@ -8,7 +8,7 @@ prompts:
       {plan_text}
       </plan>
 
-      Return a JSON object (no markdown fences) with exactly these keys:
+      Return a JSON object wrapped in ```json code fences with exactly these keys:
       {{
         "title": "string — plan title",
         "goals": ["string — each high-level goal"],
@@ -23,7 +23,7 @@ prompts:
             "labels": ["label"],
             "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
             "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
-            "api_signatures": ["optional: key function/method signatures e.g. def serve(port: int) -> None"],
+            "api_signatures": ["optional: key signatures e.g. Class MyService(Base)", "def MyService.serve(request, context) -> Response"],
             "protocol": "optional: transport protocol — grpc | http | cli | library | none",
             "runtime_dependencies": ["optional: runtime packages e.g. grpcio, flask, redis"],
             "negative_scope": ["optional: things this feature explicitly does NOT do e.g. no OpenTelemetry, no database"]
@@ -51,7 +51,7 @@ prompts:
 
       design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
       artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
-      api_signatures: optional list of key function/method signatures this feature defines. Helps the DESIGN phase produce accurate API Contracts sections. Omit or empty if not applicable.
+      api_signatures: optional list of class, function, and method signatures this feature defines. Use dotted notation for methods (e.g. "def ClassName.method_name(params)"). For gRPC services, model RPC handlers as methods of their Servicer class. Helps the DESIGN phase produce accurate API Contracts sections. Omit or empty if not applicable.
       protocol: optional transport protocol for this service/feature (grpc, http, cli, library, none). Helps DESIGN choose correct health check and deployment patterns. Omit or empty if not applicable.
       runtime_dependencies: optional list of runtime packages this feature requires (e.g. grpcio, flask). Helps DESIGN and IMPLEMENT phases produce correct import statements. Omit or empty if not applicable.
       negative_scope: optional list of things this feature explicitly does NOT do. Prevents the DESIGN phase from adding unwanted capabilities. Omit or empty if not applicable.
@@ -85,7 +85,7 @@ prompts:
 
       Routing rule: composite ≤ {threshold} → "prime", else → "artisan".
 
-      Return JSON (no markdown fences):
+      Return JSON wrapped in ```json code fences:
       {{
         "feature_count": 0,
         "cross_file_deps": 0,

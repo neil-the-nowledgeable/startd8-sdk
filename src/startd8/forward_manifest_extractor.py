@@ -548,8 +548,10 @@ class DeterministicExtractor:
             if class_parsed:
                 class_name, bases = class_parsed
                 abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
-                # Site 1 (original line 458)
-                contract_id = make_element_id(abbrev, class_name)
+                # Site 1 (original line 458) — file_path differentiates
+                # identically-named classes across different files.
+                target_file = feature.target_files[0] if feature.target_files else None
+                contract_id = make_element_id(abbrev, class_name, file_path=target_file)
                 base_class_str = bases[0] if bases else None
 
                 contract = _make_contract(
@@ -592,8 +594,10 @@ class DeterministicExtractor:
                 continue
 
             abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
-            # Site 2 (original line 501)
-            contract_id = make_element_id(abbrev, func_name)
+            # Site 2 (original line 501) — file_path differentiates
+            # identically-named functions across different files.
+            target_file = feature.target_files[0] if feature.target_files else None
+            contract_id = make_element_id(abbrev, func_name, file_path=target_file)
 
             # Build richer description with signature detail when parseable
             parsed_sig = _parse_python_signature(sig_str)
