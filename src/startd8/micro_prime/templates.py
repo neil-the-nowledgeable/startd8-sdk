@@ -262,6 +262,45 @@ def _template_property_getter(elem: ForwardElementSpec) -> Optional[str]:
     return f"return self._{attr_name}"
 
 
+def _is_property_setter(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> bool:
+    """Match a @name.setter property method."""
+    if elem.kind != ElementKind.METHOD:
+        return False
+    if not elem.decorators:
+        return False
+    return any(d.endswith(".setter") for d in elem.decorators)
+
+
+def _template_property_setter(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> str:
+    """Generate a simple property setter: self._name = value."""
+    attr_name = elem.name.lstrip("_")
+    # Derive the value param name (first non-self param, or "value")
+    value_param = "value"
+    if elem.signature:
+        non_self = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+        if non_self:
+            value_param = non_self[0].name
+    return f"self._{attr_name} = {value_param}"
+
+
+def _template_context_enter(elem: ForwardElementSpec) -> Optional[str]:
+    """Generate __enter__: return self."""
+    return "return self"
+
+
+def _template_context_exit(elem: ForwardElementSpec) -> Optional[str]:
+    """Generate __exit__: return None (don't suppress exceptions)."""
+    return "return None"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase 2 template generators (REQ-MP-310–313)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -495,6 +534,8 @@ _DUNDER_TEMPLATES: dict[str, Callable[[ForwardElementSpec], Optional[str]]] = {
     "__str__": _template_str,
     "__eq__": _template_eq,
     "__hash__": _template_hash,
+    "__enter__": _template_context_enter,
+    "__exit__": _template_context_exit,
 }
 
 
@@ -528,6 +569,11 @@ TEMPLATES: list[CodeTemplate] = [
         name="property_getter",
         match_fn=lambda e, _f, _c: e.kind == ElementKind.PROPERTY,
         render_fn=lambda e, f, c: _template_property_getter(e) or "",
+    ),
+    CodeTemplate(
+        name="property_setter",
+        match_fn=_is_property_setter,
+        render_fn=_template_property_setter,
     ),
     CodeTemplate(
         name="dunder_method",

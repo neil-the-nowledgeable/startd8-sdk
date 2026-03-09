@@ -2850,6 +2850,47 @@ def element_registry_show(
     console.print(table)
 
 
+@element_registry_app.command("lineage")
+def element_registry_lineage(
+    element_id: str = typer.Argument(..., help="Element ID to look up"),
+    state_dir: Optional[Path] = typer.Option(
+        None, "--state-dir", "-s", help="Registry state directory"
+    ),
+):
+    """Show the full lineage (time-sorted history) for an element."""
+    registry = _get_element_registry(state_dir)
+    lineage = registry.element_lineage(element_id)
+
+    if lineage is None:
+        console.print(f"[red]Error: element not found: {element_id}[/red]")
+        raise typer.Exit(1)
+
+    table = Table(title=f"Lineage: {element_id}")
+    table.add_column("Timestamp", style="dim")
+    table.add_column("Phase")
+    table.add_column("Status")
+    table.add_column("Detail")
+
+    for record in lineage.history:
+        detail = record.metadata.get("detail", "") if record.metadata else ""
+        table.add_row(
+            record.timestamp or "N/A",
+            record.phase,
+            record.status,
+            str(detail),
+        )
+
+    console.print(table)
+
+    if lineage.current_phases:
+        summary = Table(title="Current Phase Status", show_header=False)
+        summary.add_column("Phase", style="bold")
+        summary.add_column("Status")
+        for phase, status in lineage.current_phases.items():
+            summary.add_row(phase, status)
+        console.print(summary)
+
+
 @element_registry_app.command("stats")
 def element_registry_stats(
     state_dir: Optional[Path] = typer.Option(

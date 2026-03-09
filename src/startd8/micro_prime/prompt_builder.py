@@ -467,6 +467,11 @@ def _is_usable_example(ce: dict) -> bool:
     return True
 
 
+def _repair_sort_key(ce: dict) -> int:
+    """Sort key preferring examples with fewer repair steps (E2: quality weighting)."""
+    return ce.get("repair_steps_count", 0)
+
+
 def find_few_shot_examples(
     element: ForwardElementSpec,
     file_path: str,
@@ -479,6 +484,9 @@ def find_few_shot_examples(
         1. Same class (matching parent_class)
         2. Same file (matching file_path)
         3. Same kind (matching ElementKind, across files)
+
+    Within each tier, candidates are sorted by repair_steps_count ascending
+    so that cleaner examples are preferred (E2: quality weighting).
 
     Args:
         element: Target element.
@@ -494,41 +502,49 @@ def find_few_shot_examples(
 
     # Tier 1: Same class
     if element.parent_class:
-        for ce in completed_elements:
+        candidates = sorted(
+            (ce for ce in completed_elements
+             if _is_usable_example(ce)
+             and ce.get("element", {}).get("parent_class") == element.parent_class
+             and ce.get("element", {}).get("name") != element.name),
+            key=_repair_sort_key,
+        )
+        for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            if (
-                _is_usable_example(ce)
-                and ce.get("element", {}).get("parent_class") == element.parent_class
-                and ce.get("element", {}).get("name") != element.name
-            ):
-                examples.append(ce["code"].strip())
+            examples.append(ce["code"].strip())
 
     # Tier 2: Same file
     if len(examples) < max_examples:
-        for ce in completed_elements:
+        candidates = sorted(
+            (ce for ce in completed_elements
+             if _is_usable_example(ce)
+             and ce.get("file_path") == file_path
+             and ce.get("element", {}).get("name") != element.name),
+            key=_repair_sort_key,
+        )
+        for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            if (
-                _is_usable_example(ce)
-                and ce.get("file_path") == file_path
-                and ce.get("element", {}).get("name") != element.name
-                and ce["code"].strip() not in examples
-            ):
-                examples.append(ce["code"].strip())
+            code = ce["code"].strip()
+            if code not in examples:
+                examples.append(code)
 
     # Tier 3: Same kind (across files)
     if len(examples) < max_examples:
-        for ce in completed_elements:
+        candidates = sorted(
+            (ce for ce in completed_elements
+             if _is_usable_example(ce)
+             and ce.get("element", {}).get("kind") == element.kind
+             and ce.get("element", {}).get("name") != element.name),
+            key=_repair_sort_key,
+        )
+        for ce in candidates:
             if len(examples) >= max_examples:
                 break
-            if (
-                _is_usable_example(ce)
-                and ce.get("element", {}).get("kind") == element.kind
-                and ce.get("element", {}).get("name") != element.name
-                and ce["code"].strip() not in examples
-            ):
-                examples.append(ce["code"].strip())
+            code = ce["code"].strip()
+            if code not in examples:
+                examples.append(code)
 
     return examples
 

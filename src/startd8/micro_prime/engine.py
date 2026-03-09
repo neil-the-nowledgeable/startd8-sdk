@@ -92,6 +92,11 @@ try:
         description="End-to-end time for decompose + generate + assemble",
         unit="ms",
     )
+    _assembly_time_ms = _meter.create_histogram(
+        "micro_prime.assembly_time_ms",
+        description="Time spent in decomposer assembly step",
+        unit="ms",
+    )
     # Phase 3: Simple decompose OTel counters
     _simple_decompose_attempted = _meter.create_counter(
         "micro_prime.simple_decompose_attempted",
@@ -169,6 +174,10 @@ def _record_decomp_time(strategy: str, duration_ms: float) -> None:
     if _decomp_time_ms is not None:
         _decomp_time_ms.record(duration_ms, {"strategy": strategy})
 
+
+def _record_assembly_time(strategy: str, file_path: str, duration_ms: float) -> None:
+    if _assembly_time_ms is not None:
+        _assembly_time_ms.record(duration_ms, {"strategy": strategy, "file": file_path})
 
 
 def _record_simple_decompose_attempted(file_path: str) -> None:
@@ -621,6 +630,10 @@ class MicroPrimeEngine:
             ElementResult with success/failure and optional code.
         """
         element_contracts = contracts or []
+
+        # Enrich file_spec with skeleton-derived methods (D6: standalone path parity)
+        if element.kind == ElementKind.CLASS and skeleton:
+            file_spec = _enrich_file_spec_from_skeleton(element, file_spec, skeleton)
 
         tier, reasoning, details = classify_element_with_details(
             element, file_spec, element_contracts,
@@ -1426,10 +1439,10 @@ class MicroPrimeEngine:
             sub_results[sub.name] = sub_result.code
 
         # All sub-elements succeeded — assemble
-        # TODO(Phase 2, REQ-MP-906): Emit assembly_time_ms as OTel histogram
         assemble_start = time.monotonic()
         assembled = self._decomposer.assemble(plan, sub_results, skeleton)
         assembly_time_ms = (time.monotonic() - assemble_start) * 1000
+        _record_assembly_time(plan.strategy, file_path, assembly_time_ms)
         gen_time = (time.monotonic() - start_time) * 1000
 
         if assembled is None:
@@ -1503,6 +1516,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": assembled,
             "syntax_valid": True,
+            "repair_steps_count": 0,
         })
 
         # Record success for cache (R1-S7)
@@ -1875,6 +1889,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": body,
             "syntax_valid": True,
+            "repair_steps_count": 0,
         })
 
         return ElementResult(
@@ -1926,6 +1941,7 @@ class MicroPrimeEngine:
                 "file_path": file_path,
                 "code": template_match.code,
                 "syntax_valid": True,
+                "repair_steps_count": 0,
             })
             result = ElementResult(
                 element_name=element.name,
@@ -1965,6 +1981,7 @@ class MicroPrimeEngine:
                     "file_path": file_path,
                     "code": decomposed_code,
                     "syntax_valid": True,
+                    "repair_steps_count": 0,
                 })
                 result = ElementResult(
                     element_name=element.name,
@@ -2240,6 +2257,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": code,
             "syntax_valid": True,
+            "repair_steps_count": len(repair_steps) if repair_steps else 0,
         })
 
         return ElementResult(
