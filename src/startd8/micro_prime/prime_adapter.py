@@ -283,6 +283,9 @@ class MicroPrimeCodeGenerator:
         self._cloud_agent_spec = cloud_agent_spec
         self._tier_agent_spec: Optional[str] = None
         self._cloud_agent: Optional[BaseAgent] = None
+        # Expose fallback agent specs for Kaizen metadata capture
+        self.lead_agent = getattr(fallback, "lead_agent", None)
+        self.drafter_agent = getattr(fallback, "drafter_agent", None)
 
     def generate(
         self,
@@ -691,6 +694,11 @@ class MicroPrimeCodeGenerator:
                     "micro_prime_file_results": [
                         _serialize_file_result(fr) for fr in all_file_results
                     ],
+                    # Forward raw LLM responses from fallback for Kaizen capture
+                    **{k: v for k, v in (fallback_result.metadata or {}).items()
+                       if k in ("spec_raw_response", "draft_raw_response",
+                                "review_raw_response", "lead_agent_spec",
+                                "drafter_agent_spec")},
                 },
             )
 
@@ -721,6 +729,8 @@ class MicroPrimeCodeGenerator:
                 "micro_prime_file_results": [
                     _serialize_file_result(fr) for fr in all_file_results
                 ],
+                "lead_agent_spec": getattr(self, "lead_agent", None),
+                "drafter_agent_spec": getattr(self, "drafter_agent", None),
             },
         )
 

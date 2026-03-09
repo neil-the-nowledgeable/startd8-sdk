@@ -32,7 +32,7 @@ class TestTierClassification:
 
 class TestEscalationReason:
     def test_all_reasons(self):
-        assert len(EscalationReason) == 11
+        assert len(EscalationReason) == 12
         assert EscalationReason.AST_FAILURE.value == "ast_failure"
 
 

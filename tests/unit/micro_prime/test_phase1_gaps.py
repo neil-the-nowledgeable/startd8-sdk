@@ -296,7 +296,11 @@ class TestRejectionReasonMetadata:
         )
         skeleton = "def some_func() -> None:\n    raise NotImplementedError\n"
 
-        engine = MicroPrimeEngine()
+        config = MicroPrimeConfig(
+            enable_simple_decomposer=False,
+            moderate_ollama_whole_enabled=False,
+        )
+        engine = MicroPrimeEngine(config=config)
         result = engine._handle_moderate(
             elem, file_spec, manifest, skeleton, [],
             "src/pkg/mod.py", reasoning="test",

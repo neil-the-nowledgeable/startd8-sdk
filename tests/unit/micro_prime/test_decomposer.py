@@ -724,6 +724,86 @@ class TestFunctionChainStrategy:
             "orchestrator pattern detected",
         ) is False
 
+    def test_orchestrator_allowed_with_low_external_deps(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Orchestrators with few external deps can now be decomposed (Kaizen run-017)."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+            external_dependency_count=2,
+        ) is True
+
+    def test_orchestrator_rejected_with_high_external_deps(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Orchestrators with many external deps are still rejected."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+            external_dependency_count=5,
+        ) is False
+
+    def test_orchestrator_rejected_when_count_missing(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Orchestrators without dependency count are conservatively rejected."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+        ) is False
+
+    def test_orchestrator_threshold_configurable(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """The external dep threshold is configurable."""
+        config = MicroPrimeConfig(orchestrator_decomp_max_external_deps=1)
+        strategy = FunctionChainStrategy(config=config)
+        # 2 deps > threshold of 1
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+            external_dependency_count=2,
+        ) is False
+        # 1 dep <= threshold of 1
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+            external_dependency_count=1,
+        ) is True
+
+    def test_orchestrator_at_exact_threshold(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """Orchestrators at exactly the threshold are allowed."""
+        strategy = FunctionChainStrategy()  # default threshold = 3
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"orchestrator"},
+            external_dependency_count=3,
+        ) is True
+
+    def test_external_api_still_rejected_regardless_of_dep_count(
+        self, func_element, func_file_spec, func_manifest,
+    ):
+        """external_api signal is always rejected (no relaxation)."""
+        strategy = FunctionChainStrategy()
+        assert strategy.can_handle(
+            func_element, func_file_spec, func_manifest,
+            "scoring",
+            classification_signals={"external_api"},
+            external_dependency_count=0,
+        ) is False
+
     def test_cannot_handle_with_classification_signals(
         self, func_element, func_file_spec, func_manifest,
     ):
@@ -957,9 +1037,13 @@ class TestHandleModerateInEngine:
     ):
         """MODERATE class with separate methods decomposes successfully."""
         from startd8.micro_prime.engine import MicroPrimeEngine
-        from startd8.micro_prime.models import TierClassification
+        from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 
-        engine = MicroPrimeEngine()
+        config = MicroPrimeConfig(
+            enable_simple_decomposer=False,
+            moderate_ollama_whole_enabled=False,
+        )
+        engine = MicroPrimeEngine(config=config)
         file_result = engine.process_file(
             class_file_spec, class_manifest, class_skeleton,
         )
@@ -986,7 +1070,11 @@ class TestHandleModerateInEngine:
             TierClassification,
         )
 
-        config = MicroPrimeConfig(decomposition_enabled=False)
+        config = MicroPrimeConfig(
+            decomposition_enabled=False,
+            enable_simple_decomposer=False,
+            moderate_ollama_whole_enabled=False,
+        )
         engine = MicroPrimeEngine(config=config)
         file_result = engine.process_file(
             class_file_spec, class_manifest, class_skeleton,
@@ -1034,9 +1122,13 @@ class TestHandleModerateInEngine:
         from unittest.mock import patch
 
         from startd8.micro_prime.engine import MicroPrimeEngine
-        from startd8.micro_prime.models import TierClassification
+        from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 
-        engine = MicroPrimeEngine()
+        config = MicroPrimeConfig(
+            enable_simple_decomposer=False,
+            moderate_ollama_whole_enabled=False,
+        )
+        engine = MicroPrimeEngine(config=config)
         initial_completed = len(engine._completed)
 
         # Force _extract_class_shell to return None → decomposition fails
