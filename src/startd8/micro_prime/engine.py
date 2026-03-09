@@ -33,6 +33,15 @@ from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.metrics import MetricsCollector
 from startd8.micro_prime.decomposer import ModerateDecomposer
+from startd8.micro_prime.decomposition.core import (
+    DecompositionContext,
+    DecompositionNode,
+    DecompositionPlanGraph,
+    RECURSION_REJECTION_REASONS,
+    RecursionPolicy,
+    make_fingerprint,
+    policy_from_config,
+)
 from startd8.micro_prime.context import MicroPrimeContext
 from startd8.complexity.models import RejectionReason
 from startd8.micro_prime.models import (
@@ -159,6 +168,35 @@ def _record_simple_decompose_succeeded(file_path: str) -> None:
 def _record_simple_decompose_rejected(file_path: str) -> None:
     if _simple_decompose_rejected is not None:
         _simple_decompose_rejected.add(1, {"file_path": file_path})
+
+
+# ── Graph execution result types (REQ-MP-912) ──────────────────────
+
+from dataclasses import dataclass, field as dc_field
+
+
+@dataclass
+class _GraphExecutionResult:
+    """Result from executing a full DecompositionPlanGraph."""
+
+    success: bool
+    sub_results: dict[str, str] = dc_field(default_factory=dict)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_calls: int = 0
+    rejection_reason: Optional[str] = None
+
+
+@dataclass
+class _NodeExecutionResult:
+    """Result from executing a single DecompositionNode."""
+
+    success: bool
+    code: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_calls: int = 0
+    rejection_reason: Optional[str] = None
 
 
 def _signature_from_ast_args(
@@ -528,6 +566,7 @@ class MicroPrimeEngine:
             api_element_adjustment=details.element_api_adjustment,
             design_doc_sections=design_doc_sections,
             task_description=task_description,
+            classification_signals=details.classification_signals,
         )
 
     def _process_element_with_tier(
@@ -543,6 +582,7 @@ class MicroPrimeEngine:
         ollama_available: bool = True,
         design_doc_sections: Optional[list[str]] = None,
         task_description: Optional[str] = None,
+        classification_signals: Optional[frozenset[str]] = None,
     ) -> ElementResult:
         """Process a single element with a pre-computed tier classification.
 
@@ -559,6 +599,9 @@ class MicroPrimeEngine:
             reasoning: Classification reasoning string.
             design_doc_sections: Optional design doc sections for prompt context.
             task_description: Optional feature-level task description from seed.
+            classification_signals: Structured signal names from classification
+                (e.g. ``{"orchestrator", "external_api"}``).  Forwarded to
+                the decomposer for strategy selection (REQ-MP-902).
 
         Returns:
             ElementResult with success/failure and optional code.
@@ -718,6 +761,7 @@ class MicroPrimeEngine:
                 file_path, reasoning,
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
+                classification_signals=set(classification_signals) if classification_signals else None,
             )
         else:
             # COMPLEX only — immediate escalation
@@ -804,6 +848,7 @@ class MicroPrimeEngine:
         design_doc_sections: Optional[list[str]] = None,
         ollama_available: bool = True,
         task_description: Optional[str] = None,
+        domain_constraints: Optional[list[str]] = None,
     ) -> FileResult:
         """Process all elements in a file.
 
@@ -825,6 +870,7 @@ class MicroPrimeEngine:
         file_result = FileResult(file_path=file_spec.file)
         self.reset_circuit_breaker()
         self._current_manifest = manifest
+        self._current_domain_constraints = domain_constraints
         current_skeleton = skeleton
 
         # Enrich file_spec with methods from skeleton for classes whose
@@ -862,7 +908,7 @@ class MicroPrimeEngine:
         # process_element() — each element is classified exactly once.
         classified: list[
             tuple[int, str, ForwardElementSpec, list[InterfaceContract],
-                  TierClassification, str, int, int]
+                  TierClassification, str, int, int, frozenset[str]]
         ] = []
 
         for element in enriched_file_spec.elements:
@@ -883,12 +929,13 @@ class MicroPrimeEngine:
                     reasoning,
                     details.file_import_bump,
                     details.element_api_adjustment,
+                    details.classification_signals,
                 )
             )
 
         classified.sort(key=lambda x: (x[0], x[1]))
 
-        for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust in classified:
+        for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust, cls_signals in classified:
             result = self._process_element_with_tier(
                 element, enriched_file_spec, current_skeleton, contracts,
                 tier=pre_tier, reasoning=pre_reasoning,
@@ -897,6 +944,7 @@ class MicroPrimeEngine:
                 ollama_available=ollama_available,
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
+                classification_signals=cls_signals,
             )
             file_result.element_results.append(result)
 
@@ -962,6 +1010,7 @@ class MicroPrimeEngine:
             design_doc_sections=design_doc_sections,
             ollama_available=context.ollama_available,
             task_description=task_description,
+            domain_constraints=context.binding_constraints or None,
         )
 
     def process_seed(
@@ -1058,13 +1107,9 @@ class MicroPrimeEngine:
         reasoning: str = "",
         design_doc_sections: Optional[list[str]] = None,
         task_description: Optional[str] = None,
+        classification_signals: Optional[set[str]] = None,
     ) -> ElementResult:
-        """Handle MODERATE tier: attempt decomposition, then escalate.
-
-        Note: Phase 3 (FunctionChainStrategy) will need to add
-        classification_signals plumbing from the classifier through
-        _process_element_with_tier into this method.
-        """
+        """Handle MODERATE tier: attempt decomposition, then escalate."""
         start_time = time.monotonic()
 
         # Leaf-only constraint (Phase 1, Step 7): decomposed sub-elements
@@ -1130,6 +1175,7 @@ class MicroPrimeEngine:
         # skeleton-derived method elements for classes.
         plan = self._decomposer.decompose(
             element, file_spec, manifest, reasoning,
+            classification_signals=classification_signals,
         )
         if plan is None:
             _record_decomp_rejected(file_path, "no_strategy")
@@ -1414,6 +1460,280 @@ class MicroPrimeEngine:
             output_tokens=total_output,
         )
 
+    # ── Plan Graph Executor (REQ-MP-912) ─────────────────────────────
+
+    def _execute_plan_graph(
+        self,
+        graph: DecompositionPlanGraph,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
+        *,
+        depth: int = 0,
+        decomposition_path: Optional[list[str]] = None,
+        policy: Optional[RecursionPolicy] = None,
+    ) -> "_GraphExecutionResult":
+        """Execute a plan graph with staged results and policy enforcement.
+
+        Staging contract (R2-S2):
+            Staged artifacts: sub_results dict (code strings per sub-element name)
+            Rollback: On any sub-element failure, returns success=False with
+            empty sub_results — no results are committed to caller
+            Commit boundary: Only when ALL sub-elements succeed are results returned
+            Partial sub-element successes are NOT persisted on parent failure
+
+        Scope of atomicity (R2-F8): The write guarantee applies within a single
+        _execute_plan_graph call. Nested recursive calls each have their own
+        staged scope — a failure at depth N+1 only discards depth N+1's staged
+        results and causes the depth N caller to fail the sub-element.
+
+        Returns:
+            _GraphExecutionResult with success flag, sub_results, and token counts.
+        """
+        if policy is None:
+            policy = policy_from_config(self._config)
+        if decomposition_path is None:
+            decomposition_path = []
+
+        staged_results: dict[str, str] = {}
+        total_input = 0
+        total_output = 0
+        llm_calls = 0
+
+        for node in graph.root_nodes:
+            node_result = self._execute_graph_node(
+                node=node,
+                element=graph.original_element,
+                file_spec=file_spec,
+                manifest=manifest,
+                skeleton=skeleton,
+                contracts=contracts,
+                file_path=file_path,
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+                depth=depth,
+                decomposition_path=decomposition_path,
+                policy=policy,
+                llm_calls_so_far=llm_calls,
+                sub_elements_so_far=len(staged_results),
+            )
+
+            if not node_result.success:
+                # Rollback: discard all staged results
+                logger.debug(
+                    "Graph execution failed at node %s depth=%d — "
+                    "discarding %d staged results",
+                    getattr(node.sub_element, "name", "?"),
+                    depth,
+                    len(staged_results),
+                )
+                return _GraphExecutionResult(
+                    success=False,
+                    sub_results={},
+                    input_tokens=total_input + node_result.input_tokens,
+                    output_tokens=total_output + node_result.output_tokens,
+                    llm_calls=llm_calls + node_result.llm_calls,
+                    rejection_reason=node_result.rejection_reason,
+                )
+
+            sub_name = getattr(node.sub_element, "name", f"node_{id(node)}")
+            staged_results[sub_name] = node_result.code
+            total_input += node_result.input_tokens
+            total_output += node_result.output_tokens
+            llm_calls += node_result.llm_calls
+
+        # All nodes succeeded — commit staged results
+        return _GraphExecutionResult(
+            success=True,
+            sub_results=staged_results,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            llm_calls=llm_calls,
+        )
+
+    def _execute_graph_node(
+        self,
+        node: DecompositionNode,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        design_doc_sections: Optional[list[str]],
+        task_description: Optional[str],
+        depth: int,
+        decomposition_path: list[str],
+        policy: RecursionPolicy,
+        llm_calls_so_far: int,
+        sub_elements_so_far: int,
+    ) -> "_NodeExecutionResult":
+        """Execute a single graph node, potentially recursing into children.
+
+        Execution flow (REQ-MP-912):
+            1. Deterministic sub-elements: extract from skeleton (no LLM, no budget)
+            2. If node has children and recursion policy allows: recurse
+            3. Otherwise: fall back to _handle_simple
+        """
+        sub = node.sub_element
+        sub_name = getattr(sub, "name", "?")
+        is_deterministic = getattr(sub, "deterministic", False)
+
+        # Step 1: Deterministic — no LLM, no budget impact
+        if is_deterministic:
+            code = self._extract_class_shell(element, skeleton)
+            if code is not None:
+                return _NodeExecutionResult(
+                    success=True, code=code,
+                    input_tokens=0, output_tokens=0, llm_calls=0,
+                )
+            return _NodeExecutionResult(
+                success=False, code="",
+                input_tokens=0, output_tokens=0, llm_calls=0,
+                rejection_reason="shell_extraction_failed",
+            )
+
+        # Step 2: Recursive children — requires policy check
+        if node.children and policy.enabled:
+            # Policy checks
+            sub_spec = getattr(sub, "element_spec", None)
+            if sub_spec is not None:
+                fp = make_fingerprint(
+                    getattr(sub_spec, "parent_class", None),
+                    getattr(sub_spec, "name", sub_name),
+                    file_path,
+                    TierClassification.SIMPLE,  # children are at lower tier
+                )
+
+                # Cycle detection
+                cycle_reason = policy.check_cycle(fp, decomposition_path)
+                if cycle_reason:
+                    logger.debug(
+                        "Recursion cycle detected for %s at depth %d",
+                        sub_name, depth,
+                    )
+                    return _NodeExecutionResult(
+                        success=False, code="",
+                        input_tokens=0, output_tokens=0, llm_calls=0,
+                        rejection_reason=cycle_reason,
+                    )
+
+                # Depth check
+                depth_reason = policy.check_depth(depth + 1)
+                if depth_reason:
+                    logger.debug(
+                        "Recursion depth exceeded for %s: depth=%d > max=%d",
+                        sub_name, depth + 1, policy.max_depth,
+                    )
+                    return _NodeExecutionResult(
+                        success=False, code="",
+                        input_tokens=0, output_tokens=0, llm_calls=0,
+                        rejection_reason=depth_reason,
+                    )
+
+                # Budget check
+                budget_reason = policy.check_budget(
+                    sub_elements_so_far + len(node.children),
+                    llm_calls_so_far,
+                )
+                if budget_reason:
+                    logger.debug(
+                        "Recursion budget exceeded for %s at depth %d",
+                        sub_name, depth,
+                    )
+                    return _NodeExecutionResult(
+                        success=False, code="",
+                        input_tokens=0, output_tokens=0, llm_calls=0,
+                        rejection_reason=budget_reason,
+                    )
+
+            # Build child graph and recurse
+            child_graph = DecompositionPlanGraph(
+                original_element=getattr(sub, "element_spec", element),
+                root_nodes=node.children,
+                strategy=f"recursive_{depth + 1}",
+                assembly_kind="sequential_body",
+                confidence=0.0,
+            )
+            child_path = decomposition_path + [fp] if sub_spec else decomposition_path
+            child_result = self._execute_plan_graph(
+                graph=child_graph,
+                file_spec=file_spec,
+                manifest=manifest,
+                skeleton=skeleton,
+                contracts=contracts,
+                file_path=file_path,
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+                depth=depth + 1,
+                decomposition_path=child_path,
+                policy=policy,
+            )
+
+            if child_result.success:
+                # Combine child results into this node's code
+                code = "\n".join(child_result.sub_results.values())
+                return _NodeExecutionResult(
+                    success=True, code=code,
+                    input_tokens=child_result.input_tokens,
+                    output_tokens=child_result.output_tokens,
+                    llm_calls=child_result.llm_calls,
+                )
+            return _NodeExecutionResult(
+                success=False, code="",
+                input_tokens=child_result.input_tokens,
+                output_tokens=child_result.output_tokens,
+                llm_calls=child_result.llm_calls,
+                rejection_reason=child_result.rejection_reason,
+            )
+
+        # Step 3: Leaf node — fall back to _handle_simple
+        sub_spec = getattr(sub, "element_spec", None)
+        if sub_spec is None:
+            return _NodeExecutionResult(
+                success=False, code="",
+                input_tokens=0, output_tokens=0, llm_calls=0,
+                rejection_reason="missing_element_spec",
+            )
+
+        prompt_context = getattr(sub, "prompt_context", "")
+        if prompt_context:
+            doc_hint = (
+                f"{sub_spec.docstring_hint}\nContext: {prompt_context}"
+                if sub_spec.docstring_hint
+                else prompt_context
+            )
+            if len(doc_hint) > 512:
+                doc_hint = doc_hint[:509] + "..."
+            sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
+
+        sub_result = self._handle_simple(
+            sub_spec, file_spec, skeleton, contracts,
+            file_path, f"sub-element of {element.name}",
+            design_doc_sections=design_doc_sections,
+            task_description=task_description,
+        )
+
+        if sub_result.success and sub_result.code:
+            return _NodeExecutionResult(
+                success=True,
+                code=sub_result.code,
+                input_tokens=sub_result.input_tokens,
+                output_tokens=sub_result.output_tokens,
+                llm_calls=1,  # One LLM call for _handle_simple
+            )
+        return _NodeExecutionResult(
+            success=False, code="",
+            input_tokens=sub_result.input_tokens,
+            output_tokens=sub_result.output_tokens,
+            llm_calls=1,
+            rejection_reason="sub_element_failed",
+        )
+
     def _extract_class_shell(
         self,
         element: ForwardElementSpec,
@@ -1590,6 +1910,7 @@ class MicroPrimeEngine:
             token_budget=self._config.input_token_budget,
             design_doc_sections=design_doc_sections,
             task_description=task_description,
+            domain_constraints=getattr(self, "_current_domain_constraints", None),
         )
 
         # Generate via Ollama with local retry
@@ -2014,7 +2335,7 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, st
         if target.signature:
             from startd8.utils.file_assembler import DeterministicFileAssembler
 
-            assembler = DeterministicFileAssembler()
+            assembler = DeterministicFileAssembler(element_registry=None)
             sig = assembler._render_signature(target.signature)
         ret = ""
         if target.signature and target.signature.return_annotation:
