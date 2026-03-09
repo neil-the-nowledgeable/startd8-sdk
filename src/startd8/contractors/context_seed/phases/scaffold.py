@@ -188,6 +188,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
                 assembler = DeterministicFileAssembler(
                     module_inventory=module_inventory,
+                    element_registry=None,
                 )
 
                 # FR-MPA-004: Consume pre-rendered skeleton_sources from EMIT

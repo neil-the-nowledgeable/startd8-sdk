@@ -37,6 +37,7 @@ class ClassificationDetails:
 
     file_import_bump: int = 0
     element_api_adjustment: int = 0
+    classification_signals: frozenset[str] = frozenset()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Classification constants (from experiment script)
@@ -121,6 +122,7 @@ def classify_element_with_details(
 ) -> tuple[TierClassification, str, ClassificationDetails]:
     """Classify an element and return API gate details (REQ-MP-511)."""
     cfg = config or MicroPrimeConfig()
+    signals: set[str] = set()
     details = ClassificationDetails()
 
     # ── TRIVIAL gate: template match (REQ-MP-500a) ──
@@ -136,6 +138,8 @@ def classify_element_with_details(
     # ── Constants: simple unless they're app/server instances ──
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         if element.name.lower() in _APP_INSTANCE_NAMES:
+            signals.add("app_server_instance")
+            details = ClassificationDetails(classification_signals=frozenset(signals))
             return TierClassification.MODERATE, f"app/server instance ({element.name})", details
         return TierClassification.SIMPLE, "constant/variable declaration", details
 
@@ -158,8 +162,10 @@ def classify_element_with_details(
         orch_reason = "orchestrator docstring hint"
 
     if is_orchestrator:
+        signals.add("orchestrator")
         real_params = _get_real_params(element)
         if len(real_params) <= 1:
+            details = ClassificationDetails(classification_signals=frozenset(signals))
             return (
                 TierClassification.MODERATE,
                 f"{orch_reason}; {len(real_params)} params (side-effect heavy)",
@@ -225,21 +231,14 @@ def classify_element_with_details(
     # Pass 1: File-level import bump (REQ-MP-501)
     external_pkgs = _get_external_api_packages(cfg)
     file_import_bump = _import_complexity_bump(file_spec, external_pkgs)
-    details = ClassificationDetails(
-        file_import_bump=file_import_bump,
-        element_api_adjustment=0,
-    )
     if file_import_bump > 0:
+        signals.add("external_imports")
         complexity_score += file_import_bump
         reasons.append(f"external APIs: {file_import_bump} packages")
 
     # Pass 2: Per-element refinement (REQ-MP-511)
     elem_adjust, elem_reasons = _per_element_api_adjustment(
         element, file_spec, contracts, external_pkgs,
-    )
-    details = ClassificationDetails(
-        file_import_bump=file_import_bump,
-        element_api_adjustment=elem_adjust,
     )
     if elem_adjust:
         complexity_score += elem_adjust
@@ -251,10 +250,17 @@ def classify_element_with_details(
         file_import_bump, elem_adjust, elem_reasons,
     )
     if api_tier is not None:
+        signals.add("external_api")
+        details = ClassificationDetails(
+            file_import_bump=file_import_bump,
+            element_api_adjustment=elem_adjust,
+            classification_signals=frozenset(signals),
+        )
         return api_tier[0], api_tier[1], details
 
     # Complex decorators
     if set(element.decorators or []) & _COMPLEX_DECORATORS:
+        signals.add("complex_decorators")
         complexity_score += 2
         reasons.append(f"complex decorators: {element.decorators}")
 
@@ -265,6 +271,7 @@ def classify_element_with_details(
 
     # Class definition
     if element.kind == ElementKind.CLASS:
+        signals.add("class_definition")
         complexity_score += 2
         reasons.append("class definition")
 
@@ -285,6 +292,12 @@ def classify_element_with_details(
 
     # ── Classify ──
     reasoning = "; ".join(reasons) if reasons else "default"
+
+    details = ClassificationDetails(
+        file_import_bump=file_import_bump,
+        element_api_adjustment=elem_adjust,
+        classification_signals=frozenset(signals),
+    )
 
     if complexity_score <= -1:
         return TierClassification.SIMPLE, reasoning, details

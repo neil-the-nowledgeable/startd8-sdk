@@ -243,6 +243,26 @@ def _step_bare_statement_wrap(
         else:
             break
 
+    # Drop hoisted imports that reference symbols defined in the same file.
+    # Run-017: Ollama generated ``from custom_json_formatter import
+    # CustomJsonFormatter`` inside getJSONLogger, but CustomJsonFormatter is
+    # a class defined in the same file.  Hoisting that import creates F811.
+    if hoisted_imports and file_spec is not None:
+        local_names = {el.name for el in file_spec.elements}
+        filtered: list[str] = []
+        for imp in hoisted_imports:
+            # ``from mod import Name`` — check Name against local definitions
+            if imp.startswith("from ") and " import " in imp:
+                imported_part = imp.split(" import ", 1)[1]
+                imported_names = [n.strip().split(" as ")[0].strip() for n in imported_part.split(",")]
+                if all(n in local_names for n in imported_names):
+                    logger.debug(
+                        "Dropping hoisted import %r — all names defined locally", imp,
+                    )
+                    continue
+            filtered.append(imp)
+        hoisted_imports = filtered
+
     # Dedent body first.  Ollama often returns body-only output where the
     # first line is unindented and subsequent lines carry a spurious 4-space
     # indent (relative to a def that Ollama omitted).  Normalise all body
@@ -693,7 +713,7 @@ def _build_def_line(element: ForwardElementSpec) -> Optional[str]:
     if element.signature:
         from startd8.utils.file_assembler import DeterministicFileAssembler
 
-        assembler = DeterministicFileAssembler()
+        assembler = DeterministicFileAssembler(element_registry=None)
         sig = assembler._render_signature(element.signature)
 
     ret = ""

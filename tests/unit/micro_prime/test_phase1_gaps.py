@@ -185,17 +185,17 @@ class TestSimpleDecomposerReport:
 class TestConfigGating:
     """Gap 3: enable_simple_decomposer and confidence threshold."""
 
-    def test_default_disabled(self):
+    def test_default_enabled(self):
         config = MicroPrimeConfig()
-        assert config.enable_simple_decomposer is False
+        assert config.enable_simple_decomposer is True
 
     def test_default_threshold(self):
         config = MicroPrimeConfig()
-        assert config.simple_decomposer_confidence_threshold == 0.6
+        assert config.simple_decomposer_confidence_threshold == 0.7
 
-    def test_enable_simple_decomposer(self):
-        config = MicroPrimeConfig(enable_simple_decomposer=True)
-        assert config.enable_simple_decomposer is True
+    def test_disable_simple_decomposer(self):
+        config = MicroPrimeConfig(enable_simple_decomposer=False)
+        assert config.enable_simple_decomposer is False
 
     def test_custom_threshold(self):
         config = MicroPrimeConfig(simple_decomposer_confidence_threshold=0.8)

@@ -4037,7 +4037,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if hasattr(forward_manifest, "file_specs") and forward_manifest.file_specs:
                     from startd8.utils.file_assembler import DeterministicFileAssembler
 
-                    assembler = DeterministicFileAssembler(module_inventory=None)
+                    assembler = DeterministicFileAssembler(module_inventory=None, element_registry=None)
                     render_result = assembler.render_specs(forward_manifest)
                     if render_result.metadata:
                         stub_manifest = [entry._asdict() for entry in render_result.metadata]

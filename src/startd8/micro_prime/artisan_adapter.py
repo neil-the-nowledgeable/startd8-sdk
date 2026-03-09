@@ -54,6 +54,7 @@ class MicroPrimePrePass:
         manifest: Optional[ForwardManifest] = None,
         skeletons: Optional[dict[str, str]] = None,
         project_root: Optional[Path] = None,
+        domain_constraints: Optional[list[str]] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._manifest = manifest
@@ -61,6 +62,7 @@ class MicroPrimePrePass:
         self._project_root = project_root or Path(".")
         self._engine = MicroPrimeEngine(config=self._config)
         self._ollama_available: Optional[bool] = None
+        self._domain_constraints = domain_constraints or []
 
     def run(
         self,
@@ -110,7 +112,7 @@ class MicroPrimePrePass:
             ),
             {
                 "forward_manifest": manifest,
-                "binding_constraints": [],
+                "binding_constraints": self._domain_constraints,
                 "ollama_model": self._config.model,
             },
             ollama_ok,

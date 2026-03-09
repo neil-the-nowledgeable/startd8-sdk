@@ -32,6 +32,7 @@ def build_body_prompt(
     token_budget: int = 1024,
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
 ) -> str:
     """Build a prompt for a local model to generate a single element body.
 
@@ -48,6 +49,9 @@ def build_body_prompt(
             from the seed (Mottainai Rule 2). Rendered as ``# Task context:``
             to convey intent (e.g. protocol, API style) that the skeleton
             and imports alone cannot express.
+        domain_constraints: Optional domain-level constraints from plan
+            ingestion (e.g. "must use async I/O", "no direct external API
+            calls"). Rendered as ``# Domain constraints:``.
 
     Returns:
         The constructed prompt string.
@@ -60,6 +64,7 @@ def build_body_prompt(
         element, file_spec, contracts, skeleton, few_shot_examples,
         design_doc_sections=design_doc_sections,
         task_description=task_description,
+        domain_constraints=domain_constraints,
     )
     return _truncate_to_budget(prompt, token_budget)
 
@@ -72,6 +77,7 @@ def _build_function_prompt(
     few_shot_examples: Optional[list[str]],
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     stub = _build_element_stub(element)
@@ -167,6 +173,13 @@ def _build_function_prompt(
     # Task context from seed (Mottainai Rule 2: forward, don't regenerate)
     if task_description:
         sections.append(f"# Task context: {task_description}")
+        sections.append("")
+
+    # Domain constraints from plan ingestion (D2: wire binding_constraints)
+    if domain_constraints:
+        sections.append("# Domain constraints (MUST follow these):")
+        for dc in domain_constraints:
+            sections.append(f"# - {dc}")
         sections.append("")
 
     # Implementation context from design doc sections (REQ-DDS-001)
