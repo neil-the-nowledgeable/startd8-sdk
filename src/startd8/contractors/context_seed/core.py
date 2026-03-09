@@ -6791,6 +6791,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
     # PAQ-102/502: deterministic REVIEW section budgets and global cap.
     _REVIEW_SECTION_BUDGETS: dict[str, int] = {
+        "constraint_checklist": 2000,
         "project_context": 2000,
         "design_compliance": 8000,
         "parameter_sources": 1200,
@@ -6898,6 +6899,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
         # dropped first.  FM violations and design compliance are the most
         # actionable and must survive budget trimming.
         named_sections: list[tuple[str, str]] = []
+
+        # L4: Constraint checklist (highest priority — above project context)
+        constraint_checklist = self._build_constraint_checklist_section(task)
+        if constraint_checklist:
+            named_sections.append(("constraint_checklist", constraint_checklist))
+
         for text in self._build_project_context_section(project_context):
             named_sections.append(("project_context", text))
         for text in self._build_design_compliance_section(design_document):
@@ -7032,6 +7039,77 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "truncation_count": len(truncated_sections),
         }
         return rendered, diagnostics
+
+    # -- helper: constraint checklist (L4) -----------------------------------
+
+    def _build_constraint_checklist_section(self, task: SeedTask) -> str:
+        """Build a structured constraint checklist for the reviewer.
+
+        Each constraint is presented as a numbered assertion the reviewer
+        must explicitly verify (PASS/FAIL) in their response.  Returns
+        empty string when no constraints are available.
+
+        Source: ``task.prompt_constraints`` (from enrichment + plan ingestion).
+        """
+        constraints = getattr(task, "prompt_constraints", None) or []
+        if not constraints:
+            return ""
+
+        lines = [
+            "## Constraint Checklist (MANDATORY)",
+            "",
+            "You MUST evaluate each constraint below and report",
+            "PASS or FAIL for each. A FAIL on any constraint caps",
+            "the maximum score at 85.",
+            "",
+        ]
+        for idx, constraint_text in enumerate(constraints, 1):
+            lines.append(f"{idx}. [MUST] {constraint_text}")
+        lines.append("")
+        lines.append(
+            "After the Issues section, add a ## Constraint Verdicts section "
+            "listing each numbered constraint as PASS or FAIL."
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_constraint_verdicts(
+        review_text: str, constraint_count: int,
+    ) -> list[dict[str, str]]:
+        """Extract PASS/FAIL verdicts for each numbered constraint.
+
+        Looks for lines like ``1. PASS`` or ``1. FAIL: ...`` in a
+        "Constraint Verdicts" section of the review response.
+
+        Returns:
+            List of dicts ``[{"index": "1", "verdict": "PASS"|"FAIL", "reason": "..."}]``
+        """
+        import re
+
+        verdicts: list[dict[str, str]] = []
+
+        # Try to find the Constraint Verdicts section
+        section_match = re.search(
+            r"##\s*Constraint\s+Verdicts?\s*\n(.*?)(?=\n##\s|\Z)",
+            review_text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        search_text = section_match.group(1) if section_match else review_text
+
+        _VERDICT_RE = re.compile(
+            r"(\d+)\.\s*\**\s*(PASS|FAIL)\s*\**\s*(?::?\s*(.+))?\s*$",
+            re.IGNORECASE,
+        )
+        for line in search_text.splitlines():
+            match = _VERDICT_RE.match(line.strip())
+            if match:
+                verdicts.append({
+                    "index": match.group(1),
+                    "verdict": match.group(2).upper(),
+                    "reason": (match.group(3) or "").strip(),
+                })
+
+        return verdicts
 
     # -- helper: base prompt ------------------------------------------------
 
@@ -7661,7 +7739,20 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     items.append(re.sub(r"^\d+\.\s+", "", cleaned).strip())
             return items
 
-        return {
+        # L4: Extract constraint verdicts and cap score on failure
+        constraint_verdicts = self._extract_constraint_verdicts(response, 0)
+        constraint_failed = any(
+            v["verdict"] == "FAIL" for v in constraint_verdicts
+        )
+        _CONSTRAINT_FAIL_SCORE_CAP = 85
+        if constraint_failed and score is not None and score > _CONSTRAINT_FAIL_SCORE_CAP:
+            logger.info(
+                "REVIEW: constraint violation detected — capping score from %d to %d",
+                score, _CONSTRAINT_FAIL_SCORE_CAP,
+            )
+            score = _CONSTRAINT_FAIL_SCORE_CAP
+
+        result = {
             "score": score,
             "verdict": verdict,
             "passed": verdict == "PASS" and score is not None and score >= self.config.pass_threshold,
@@ -7670,6 +7761,11 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "issues": extract_section("Issues"),
             "suggestions": extract_section("Suggestions"),
         }
+        if constraint_verdicts:
+            result["constraint_verdicts"] = constraint_verdicts
+        if constraint_failed:
+            result["quality_failed"] = True
+        return result
 
     _REVIEW_PHASE_SYSTEM_PROMPT_FALLBACK = (
         "You are an expert code quality reviewer. Evaluate the implementation "

@@ -35,6 +35,7 @@ __all__ = [
     "build_spec_arch_section",
     "build_spec_objectives_section",
     "build_spec_conventions_section",
+    "extract_spec_constraints",
     "format_context_value",
 ]
 
@@ -236,6 +237,61 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
             "reference MUST have a corresponding import statement at the top of the file.\n"
             "Do NOT import packages not listed above.\n"
         )
+
+
+def extract_spec_constraints(spec_text: str) -> List[Dict[str, str]]:
+    """Extract MUST and MUST NOT assertions from a spec document.
+
+    Scans for patterns like:
+    - ``MUST ...`` / ``must ...``
+    - ``MUST NOT ...`` / ``Do NOT ...`` / ``MUST not ...``
+    - ``Required: ...``
+    - ``Constraint: ...``
+
+    Returns:
+        List of dicts: ``[{"type": "MUST"|"MUST_NOT", "text": "...", "source": "spec"}]``
+    """
+    import re
+
+    constraints: List[Dict[str, str]] = []
+    seen_texts: set = set()
+
+    # Pattern 1: MUST NOT / must not / MUST not / Do NOT
+    for match in re.finditer(
+        r"(?:MUST\s+NOT|must\s+not|Do\s+NOT|do\s+not|SHOULD\s+NOT)\s+(.+?)(?:\.|$)",
+        spec_text,
+        re.MULTILINE,
+    ):
+        text = match.group(1).strip()
+        if text and text not in seen_texts:
+            seen_texts.add(text)
+            constraints.append({"type": "MUST_NOT", "text": text, "source": "spec"})
+
+    # Pattern 2: MUST / Required
+    for match in re.finditer(
+        r"(?:MUST|must|Required:?|REQUIRED:?)\s+(.+?)(?:\.|$)",
+        spec_text,
+        re.MULTILINE,
+    ):
+        text = match.group(1).strip()
+        # Skip if already captured as MUST_NOT
+        if text and text not in seen_texts and not text.upper().startswith("NOT"):
+            seen_texts.add(text)
+            constraints.append({"type": "MUST", "text": text, "source": "spec"})
+
+    # Pattern 3: Constraint: ... (explicit constraint labels)
+    for match in re.finditer(
+        r"Constraint:?\s+(.+?)(?:\.|$)",
+        spec_text,
+        re.MULTILINE | re.IGNORECASE,
+    ):
+        text = match.group(1).strip()
+        if text and text not in seen_texts:
+            seen_texts.add(text)
+            ctype = "MUST_NOT" if "not" in text.lower()[:10] else "MUST"
+            constraints.append({"type": ctype, "text": text, "source": "spec"})
+
+    return constraints
 
 
 def _select_template_key(context: Dict[str, Any], override: Optional[str] = None) -> str:
