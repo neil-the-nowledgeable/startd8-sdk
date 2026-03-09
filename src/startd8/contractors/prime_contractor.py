@@ -1607,36 +1607,47 @@ class PrimeContractorWorkflow:
             and "SOURCE_RECONCILE" not in self._forward_manifest.stages_completed
         ):
             try:
-                from startd8.forward_manifest_extractor import (
-                    SourceReconcileConfig,
-                    SourceReconciler,
-                )
+                from startd8.forward_manifest_extractor import SourceReconciler
+                from startd8.workflows.builtin.plan_ingestion_models import ParsedFeature
 
                 all_targets = list({
                     f
                     for feat in self.queue.features.values()
                     for f in (feat.target_files or [])
                 })
+                # Bridge FeatureSpec → ParsedFeature for the reconciler API
+                parsed_features = [
+                    ParsedFeature(
+                        feature_id=feat.id,
+                        name=feat.name,
+                        description=feat.description,
+                        target_files=feat.target_files or [],
+                    )
+                    for feat in self.queue.features.values()
+                ]
                 # INV-12: When force_regenerate is set, exclude target files
                 # to prevent prior-run output from contaminating the manifest.
-                reconcile_config = SourceReconcileConfig()
                 if self.force_regenerate:
-                    reconcile_config.exclude_files = set(all_targets)
+                    for pf in parsed_features:
+                        pf.target_files = []
                     logger.info(
                         "Fallback SOURCE_RECONCILE: --force-regenerate excludes %d target files",
                         len(all_targets),
                     )
-                reconciler = SourceReconciler()
-                stats = reconciler.reconcile(
-                    self._forward_manifest, self.project_root, all_targets,
-                    config=reconcile_config,
-                )
+                reconciler = SourceReconciler(project_root=self.project_root)
+                new_contracts = reconciler.reconcile(parsed_features)
+                # Merge new contracts into existing manifest
+                existing_ids = {c.contract_id for c in self._forward_manifest.contracts}
+                added = 0
+                for contract in new_contracts:
+                    if contract.contract_id not in existing_ids:
+                        self._forward_manifest.contracts.append(contract)
+                        existing_ids.add(contract.contract_id)
+                        added += 1
                 self._forward_manifest.stages_completed.append("SOURCE_RECONCILE")
                 logger.info(
-                    "Fallback SOURCE_RECONCILE: +%d elements, +%d imports from %d files",
-                    stats.elements_added,
-                    stats.imports_added,
-                    stats.files_scanned,
+                    "Fallback SOURCE_RECONCILE: +%d contracts from project AST",
+                    added,
                 )
             except Exception as exc:
                 logger.warning("Fallback SOURCE_RECONCILE failed: %s", exc, exc_info=True)
