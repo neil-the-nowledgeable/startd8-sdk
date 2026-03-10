@@ -838,7 +838,7 @@ class TestTryTier2:
         )
         result = _try_tier_2(
             task, route, {feat.feature_id: feat}, None,
-            max_lines=80, timeout_s=10,
+            max_lines=80,
             micro_prime_engine=engine,
         )
         assert result is not None
@@ -928,7 +928,7 @@ class TestTier2InExecutor:
             micro_prime_engine=engine,
         )
         assert counters["tier_2_count"] == 1
-        assert counters["tier_2_skipped_signals"] == 1
+        assert counters["tier_2_skipped_circuit_breaker"] == 1
         assert counters["code_examples_added"] == 0
 
     def test_tier_2_disabled_counted_only(self):

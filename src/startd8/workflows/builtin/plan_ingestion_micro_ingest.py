@@ -281,6 +281,21 @@ def _build_forward_element_spec(parsed: dict) -> Optional[Any]:
         return None
 
 
+def _parse_signatures_to_elements(api_sigs: List[str]) -> List[Any]:
+    """Parse a list of API signature strings into ForwardElementSpec objects.
+
+    Skips unparseable signatures silently (logged at DEBUG by callee).
+    """
+    elements = []
+    for s in api_sigs:
+        parsed = _parse_api_signature(s)
+        if parsed:
+            spec = _build_forward_element_spec(parsed)
+            if spec:
+                elements.append(spec)
+    return elements
+
+
 def _build_synthetic_file_spec(
     target_file: str,
     elements: List[Any],
@@ -431,13 +446,7 @@ def classify_enrichment_routes(
             api_sigs = ctx["api_signatures"]
 
         if api_sigs:
-            parsed_elements = []
-            for s in api_sigs:
-                parsed = _parse_api_signature(s)
-                if parsed:
-                    spec = _build_forward_element_spec(parsed)
-                    if spec:
-                        parsed_elements.append(spec)
+            parsed_elements = _parse_signatures_to_elements(api_sigs)
 
             if parsed_elements:
                 element_names = [e.name for e in parsed_elements]
@@ -619,8 +628,7 @@ def _render_code_example_tier_0(
 
     # Validate produced source
     try:
-        import ast as _ast
-        _ast.parse(source)
+        ast.parse(source)
     except SyntaxError:
         logger.debug("micro_ingest.tier_0: DFA output failed AST validation")
         return None
@@ -729,14 +737,7 @@ def _get_or_build_file_spec(
     if not api_sigs:
         return None
 
-    parsed_elements = []
-    for s in api_sigs:
-        parsed = _parse_api_signature(s)
-        if parsed:
-            spec = _build_forward_element_spec(parsed)
-            if spec:
-                parsed_elements.append(spec)
-
+    parsed_elements = _parse_signatures_to_elements(api_sigs)
     if not parsed_elements:
         return None
 
@@ -794,7 +795,10 @@ def _pick_generation_target(elements: List[Any], route: "EnrichmentRoute") -> Op
     route_names = set(route.elements) if route.elements else set()
 
     # Prefer elements named in the route
-    candidates = [e for e in elements if getattr(e, "name", "") in route_names] if route_names else list(elements)
+    if route_names:
+        candidates = [e for e in elements if getattr(e, "name", "") in route_names]
+    else:
+        candidates = list(elements)
     if not candidates:
         candidates = list(elements)
 
@@ -815,7 +819,8 @@ def _extract_classification_signals(task: Dict[str, Any], feature_index: Dict[st
     generate stubs for.
     """
     signals: set = set()
-    ctx = task.get("config", {}).get("context", {})
+    cfg = task.get("config", {})
+    ctx = cfg.get("context", {})
     feature_id = ctx.get("feature_id", "")
     feat = feature_index.get(feature_id)
 
@@ -824,7 +829,7 @@ def _extract_classification_signals(task: Dict[str, Any], feature_index: Dict[st
     if feat:
         deps = set(getattr(feat, "runtime_dependencies", []) or [])
 
-    desc = (task.get("config", {}).get("task_description", "") or "").lower()
+    desc = (cfg.get("task_description", "") or "").lower()
 
     # External API indicators
     if deps & {"httpx", "requests", "aiohttp", "grpcio-tools"} or "external api" in desc:
@@ -845,7 +850,6 @@ def _try_tier_2(
     feature_index: Dict[str, Any],
     forward_manifest: Optional[Any],
     max_lines: int,
-    timeout_s: int = 10,
     micro_prime_engine: Optional[Any] = None,
 ) -> Optional[str]:
     """Generate a code example via Ollama SIMPLE pipeline.
@@ -866,14 +870,14 @@ def _try_tier_2(
     if not file_spec or not getattr(file_spec, "elements", None):
         return None
 
-    # Render DFA skeleton for context
+    # Render DFA skeleton for context (optional — generation proceeds without it)
     skeleton = ""
     try:
         from startd8.utils.file_assembler import DeterministicFileAssembler
         assembler = DeterministicFileAssembler()
         skeleton = assembler.render_file(file_spec)
     except Exception:
-        pass  # skeleton is optional context
+        logger.debug("micro_ingest.tier_2: skeleton rendering failed for %s", route.task_id, exc_info=True)
 
     target_element = _pick_generation_target(file_spec.elements, route)
     if not target_element:
@@ -889,8 +893,12 @@ def _try_tier_2(
             reasoning="micro_ingest_tier_2",
             task_description=task.get("config", {}).get("task_description", ""),
         )
-    except Exception:
-        logger.debug("micro_ingest.tier_2: _handle_simple() failed for %s", route.task_id, exc_info=True)
+    except (RuntimeError, ValueError, TypeError, OSError) as exc:
+        logger.debug(
+            "micro_ingest.tier_2: _handle_simple() failed for %s element=%s: %s",
+            route.task_id, getattr(target_element, "name", "?"), exc,
+            exc_info=True,
+        )
         return None
 
     if not result.success or not result.code:
@@ -927,8 +935,9 @@ def enrich_tasks_micro_ingest(
 ) -> Dict[str, Any]:
     """Run Micro-Ingest enrichment on tasks (in-place).
 
-    Phase 2: Tier 0 + Tier 1 only (deterministic, zero LLM).
-    Phase 3: Tier 2 (Ollama) when tier_2_enabled=True.
+    Tier 0: DFA skeleton rendering (deterministic, zero LLM).
+    Tier 1: Template-matched stubs (deterministic, zero LLM).
+    Tier 2: Ollama generation via MicroPrimeEngine (opt-in, local LLM).
 
     Returns a dict of diagnostic counters for MicroIngestDiagnostic.
     """
@@ -944,7 +953,7 @@ def enrich_tasks_micro_ingest(
         "tier_1_count": 0,
         "tier_2_count": 0,
         "tier_2_skipped_timeout": 0,
-        "tier_2_skipped_signals": 0,
+        "tier_2_skipped_circuit_breaker": 0,
         "skip_count": 0,
         "code_examples_added": 0,
     }
@@ -952,17 +961,14 @@ def enrich_tasks_micro_ingest(
     # R1-S6: Check circuit breaker before entering Tier 2 loop
     _t2_circuit_open = False
     if tier_2_enabled and micro_prime_engine is not None:
-        try:
-            if getattr(micro_prime_engine, "_circuit_open", False):
-                _t2_circuit_open = True
-                logger.warning("micro_ingest.tier_2: circuit breaker open — will skip all Tier 2")
-        except Exception:
-            pass
+        if getattr(micro_prime_engine, "_circuit_open", False):
+            _t2_circuit_open = True
+            logger.warning("micro_ingest.tier_2: circuit breaker open — will skip all Tier 2")
     elif tier_2_enabled and micro_prime_engine is None:
         # No engine → can't run Tier 2
         _t2_circuit_open = True
 
-    for route in routes:
+    for route_idx, route in enumerate(routes):
         if route.tier == -1:
             if not route.needs_code_example:
                 counters["already_enriched"] += 1
@@ -1001,9 +1007,9 @@ def enrich_tasks_micro_ingest(
         elif route.tier == 2 and tier_2_enabled:
             counters["tier_2_count"] += 1
             if _t2_circuit_open:
-                counters["tier_2_skipped_signals"] += 1
+                counters["tier_2_skipped_circuit_breaker"] += 1
             elif _t2_budget_exhausted(t0, ollama_timeout_s):
-                tier_2_remaining = sum(1 for r in routes[routes.index(route):] if r.tier == 2)
+                tier_2_remaining = sum(1 for r in routes[route_idx:] if r.tier == 2)
                 counters["tier_2_skipped_timeout"] += tier_2_remaining
                 logger.warning(
                     "micro_ingest.tier_2: time budget exhausted (%.1fs > %ds) — skipping %d",
@@ -1014,7 +1020,7 @@ def enrich_tasks_micro_ingest(
             else:
                 code_block = _try_tier_2(
                     task, route, feature_index, forward_manifest,
-                    max_lines, ollama_per_element_s,
+                    max_lines,
                     micro_prime_engine=micro_prime_engine,
                 )
 
