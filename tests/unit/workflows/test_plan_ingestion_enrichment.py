@@ -601,6 +601,70 @@ class TestEnrichmentDiagnostic:
         assert diag.enrichment.negative_scope_added == 3
         assert diag.enrichment.tasks_enriched == 4
 
+    def test_before_after_snapshots_present(self):
+        """Orchestrator populates before/after DensitySnapshot."""
+        features = [
+            FakeFeature(
+                "F-1",
+                negative_scope=["no auth"],
+                api_signatures=["def serve(): ..."],
+            ),
+        ]
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Implement.")]
+
+        diag = enrich_tasks_deterministic(tasks, features)
+
+        assert diag.before is not None
+        assert diag.after is not None
+        assert diag.before.total_tasks == 1
+        assert diag.after.total_tasks == 1
+        # Before: no negative_scope, no code examples
+        assert diag.before.with_negative_scope == 0
+        assert diag.before.with_code_examples == 0
+        # After: enrichment added both
+        assert diag.after.with_negative_scope == 1
+        assert diag.after.with_code_examples == 1
+
+    def test_before_after_delta_shows_enrichment(self):
+        """Delta between before/after reflects actual enrichment work."""
+        features = [
+            FakeFeature("F-1", api_signatures=["def f(): ..."]),
+            FakeFeature("F-2"),  # no signatures
+        ]
+        tasks = [
+            _make_task("PI-001", feature_id="F-1", description="Implement server."),
+            _make_task("PI-002", feature_id="F-2", description="Implement client."),
+        ]
+        tasks[0]["title"] = "Email Service"
+        tasks[1]["title"] = "Email Client"
+
+        diag = enrich_tasks_deterministic(
+            tasks, features,
+            refine_suggestions=[{"area": "config", "rationale": "Check env vars"}],
+        )
+
+        b, a = diag.before, diag.after
+        # code_examples: only PI-001 got api_sigs (F-1 has signatures)
+        assert a.with_code_examples - b.with_code_examples == 1
+        # review_guidance: both tasks should get guidance
+        assert a.with_review_guidance - b.with_review_guidance == 2
+        assert b.with_review_guidance == 0
+
+    def test_counter_includes_refine_only_tasks(self):
+        """Tasks enriched only by refine suggestions are counted as enriched."""
+        features = [FakeFeature("F-1")]  # no sigs, no neg_scope
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Simple task.")]
+
+        diag = enrich_tasks_deterministic(
+            tasks, features,
+            refine_suggestions=[{"area": "testing", "rationale": "Add unit tests"}],
+        )
+
+        # Task got review guidance only — should still count as enriched
+        assert diag.tasks_enriched == 1
+        assert diag.tasks_skipped == 0
+        assert "## Review Guidance" in tasks[0]["config"]["task_description"]
+
 
 # ── REQ-TDE-401/402: Density Score Integration ───────────────────────
 

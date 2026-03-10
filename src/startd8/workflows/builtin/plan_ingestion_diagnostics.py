@@ -69,6 +69,18 @@ class IngestionDiagnostic:
 
 
 @dataclass
+class DensitySnapshot:
+    """Per-signal density counts at a point in time (before or after enrichment)."""
+
+    total_tasks: int = 0
+    with_negative_scope: int = 0
+    with_target_files: int = 0
+    with_requirement_refs: int = 0
+    with_code_examples: int = 0
+    with_review_guidance: int = 0
+
+
+@dataclass
 class EnrichmentDiagnostic:
     """Diagnostic metrics for deterministic task enrichment (REQ-TDE-400)."""
 
@@ -81,6 +93,8 @@ class EnrichmentDiagnostic:
     tasks_enriched: int = 0
     tasks_skipped: int = 0
     time_ms: int = 0
+    before: Optional[DensitySnapshot] = None
+    after: Optional[DensitySnapshot] = None
 
 
 @dataclass
@@ -348,7 +362,9 @@ def compute_refine_quality(review_output: Optional[Dict[str, Any]]) -> Dict[str,
     }
 
 
-_REQ_PATTERN = re.compile(r"\bREQ[-_]?\w+", re.IGNORECASE)
+# Match multi-segment requirement IDs like REQ-PI-003, REQ_KPI_500, REQ-TDE-100
+# Must stay in sync with plan_ingestion_enrichment._REQ_PATTERN
+_REQ_PATTERN = re.compile(r"\bREQ(?:[-_]\w+)+", re.IGNORECASE)
 
 
 def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:

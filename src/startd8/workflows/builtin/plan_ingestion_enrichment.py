@@ -37,7 +37,7 @@ _MIN_FEATURE_NAME_CHARS = 8
 
 
 def _task_density_key(task: Dict[str, Any]) -> tuple:
-    """Snapshot the 4 density-relevant signals of a task for change detection."""
+    """Snapshot the 5 density-relevant signals of a task for change detection."""
     cfg = task.get("config", {})
     ctx = cfg.get("context", {})
     desc = cfg.get("task_description", "") or ""
@@ -46,7 +46,30 @@ def _task_density_key(task: Dict[str, Any]) -> tuple:
         bool(ctx.get("target_files")),
         bool(_REQ_PATTERN.search(desc)),
         "```" in desc,
+        "## Review Guidance" in desc,
     )
+
+
+def _compute_density_snapshot(tasks: List[Dict[str, Any]]) -> Any:
+    """Compute a DensitySnapshot summarising signal counts across all tasks."""
+    from .plan_ingestion_diagnostics import DensitySnapshot
+
+    snap = DensitySnapshot(total_tasks=len(tasks))
+    for t in tasks:
+        cfg = t.get("config", {})
+        ctx = cfg.get("context", {})
+        desc = cfg.get("task_description", "") or ""
+        if ctx.get("negative_scope"):
+            snap.with_negative_scope += 1
+        if ctx.get("target_files"):
+            snap.with_target_files += 1
+        if _REQ_PATTERN.search(desc):
+            snap.with_requirement_refs += 1
+        if "```" in desc:
+            snap.with_code_examples += 1
+        if "## Review Guidance" in desc:
+            snap.with_review_guidance += 1
+    return snap
 
 
 def _ensure_task_context(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -416,7 +439,8 @@ def enrich_tasks_deterministic(
     diag = EnrichmentDiagnostic()
     feature_index = _build_feature_index(features)
 
-    # Snapshot density signals before enrichment (O(1) lookup via dict)
+    # Snapshot density signals before enrichment
+    diag.before = _compute_density_snapshot(tasks)
     keys_before: Dict[str, tuple] = {
         t.get("task_id", ""): _task_density_key(t) for t in tasks
     }
@@ -460,6 +484,9 @@ def enrich_tasks_deterministic(
         except Exception:
             logger.warning("ENRICH-A: refine_suggestions step failed", exc_info=True)
 
+    # Snapshot density signals after enrichment
+    diag.after = _compute_density_snapshot(tasks)
+
     # Count enriched vs skipped tasks (O(n) with dict lookup)
     for t in tasks:
         tid = t.get("task_id", "")
@@ -471,6 +498,7 @@ def enrich_tasks_deterministic(
 
     diag.time_ms = int((time.monotonic() - t0) * 1000)
 
+    # Per-step counts
     logger.info(
         "ENRICH-A: %d/%d tasks enriched (neg_scope=%d, req_refs=%d, "
         "target_files=%d, api_sigs=%d, refine_sug=%d) in %dms",
@@ -483,5 +511,27 @@ def enrich_tasks_deterministic(
         diag.refine_suggestions_mapped,
         diag.time_ms,
     )
+
+    # Before/after delta summary
+    b, a = diag.before, diag.after
+    if b and a:
+        n = a.total_tasks
+        logger.info(
+            "ENRICH-A delta: neg_scope %d/%d→%d/%d (+%d), "
+            "req_refs %d/%d→%d/%d (+%d), "
+            "code %d/%d→%d/%d (+%d), "
+            "target %d/%d→%d/%d (+%d), "
+            "guidance %d/%d→%d/%d (+%d)",
+            b.with_negative_scope, n, a.with_negative_scope, n,
+            a.with_negative_scope - b.with_negative_scope,
+            b.with_requirement_refs, n, a.with_requirement_refs, n,
+            a.with_requirement_refs - b.with_requirement_refs,
+            b.with_code_examples, n, a.with_code_examples, n,
+            a.with_code_examples - b.with_code_examples,
+            b.with_target_files, n, a.with_target_files, n,
+            a.with_target_files - b.with_target_files,
+            b.with_review_guidance, n, a.with_review_guidance, n,
+            a.with_review_guidance - b.with_review_guidance,
+        )
 
     return diag

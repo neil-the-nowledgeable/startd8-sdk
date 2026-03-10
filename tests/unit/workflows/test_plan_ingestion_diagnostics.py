@@ -228,6 +228,19 @@ class TestComputeTaskDensity:
         result = compute_task_density(tasks)
         assert result[0].has_negative_scope is False
 
+    def test_multi_segment_req_id_detected(self):
+        """Multi-segment IDs like REQ-PMS-008 are detected as requirement refs."""
+        tasks = [
+            {
+                "task_id": "T-001",
+                "config": {
+                    "task_description": "Implements REQ-PMS-008 logging standard",
+                },
+            },
+        ]
+        result = compute_task_density(tasks)
+        assert result[0].has_requirements_refs is True
+
 
 # ── compute_density_warnings ────────────────────────────────────────
 
@@ -498,6 +511,40 @@ class TestLoadKaizenConfig:
         result = load_kaizen_config(p)
         assert result.complexity_threshold_override == 30
         assert result.parse_prompt_suffix == ""
+
+    def test_refine_fields_defaults(self):
+        cfg = PlanIngestionKaizenConfig()
+        assert cfg.refine_scope_override == ""
+        assert cfg.refine_review_profile == {}
+        assert cfg.refine_rounds_override is None
+
+    def test_refine_fields_from_json(self, tmp_path: Path):
+        cfg = {
+            "plan_ingestion_kaizen": {
+                "refine_scope_override": "Focus on code examples.",
+                "refine_review_profile": {
+                    "persona": "test persona",
+                    "focus": "test focus",
+                    "areas": ["completeness"],
+                },
+                "refine_rounds_override": 2,
+            }
+        }
+        p = tmp_path / "kaizen.json"
+        p.write_text(json.dumps(cfg))
+        result = load_kaizen_config(p)
+        assert result.refine_scope_override == "Focus on code examples."
+        assert result.refine_review_profile["persona"] == "test persona"
+        assert result.refine_rounds_override == 2
+
+    def test_refine_fields_partial(self, tmp_path: Path):
+        cfg = {"plan_ingestion_kaizen": {"refine_rounds_override": 3}}
+        p = tmp_path / "kaizen.json"
+        p.write_text(json.dumps(cfg))
+        result = load_kaizen_config(p)
+        assert result.refine_rounds_override == 3
+        assert result.refine_scope_override == ""
+        assert result.refine_review_profile == {}
 
 
 # ── Cross-run trend script (Phase 2) ────────────────────────────────
