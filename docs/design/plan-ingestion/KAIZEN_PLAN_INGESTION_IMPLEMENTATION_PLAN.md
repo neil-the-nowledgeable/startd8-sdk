@@ -1,8 +1,8 @@
 # Kaizen for Plan Ingestion — Implementation Plan
 
-> **Version:** 0.1.0
-> **Status:** DRAFT
-> **Date:** 2026-03-07
+> **Version:** 0.2.0
+> **Status:** IMPLEMENTED (Layers 1–6 SDK-side complete; cap-dev-pipe integration pending for REQ-KPI-102, 502)
+> **Date:** 2026-03-09
 > **Requirements:** [KAIZEN_PLAN_INGESTION_REQUIREMENTS.md](./KAIZEN_PLAN_INGESTION_REQUIREMENTS.md)
 
 ---

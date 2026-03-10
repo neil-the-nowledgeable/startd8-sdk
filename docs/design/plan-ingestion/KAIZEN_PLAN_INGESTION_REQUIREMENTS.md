@@ -108,30 +108,47 @@ Under Kaizen, every plan ingestion run becomes a learning opportunity. Each phas
 | Req ID | Description | Impl Home | Status | Closes |
 |--------|-------------|-----------|--------|--------|
 | **Layer 1 — Run Diagnostics & Persistence** | | | | |
-| REQ-KPI-100 | Per-run diagnostic report | startd8-sdk | PLANNED | KPI-1 |
-| REQ-KPI-101 | Per-phase timing and token breakdown | startd8-sdk | PARTIAL | KPI-1 |
+| REQ-KPI-100 | Per-run diagnostic report | startd8-sdk | ✅ DONE | KPI-1 |
+| REQ-KPI-101 | Per-phase timing and token breakdown | startd8-sdk | ✅ DONE | KPI-1 |
 | REQ-KPI-102 | Diagnostic archive in run directory | cap-dev-pipe | PLANNED | KPI-1 |
 | **Layer 2 — Prompt-Response Pairing** | | | | |
-| REQ-KPI-200 | Prompt persistence for PARSE/ASSESS/TRANSFORM | startd8-sdk | PLANNED | KPI-2 |
-| REQ-KPI-201 | Response persistence alongside prompts | startd8-sdk | PLANNED | KPI-2 |
-| REQ-KPI-202 | Code extraction fallback tracking | startd8-sdk | PLANNED | KPI-2 |
+| REQ-KPI-200 | Prompt persistence for PARSE/ASSESS/TRANSFORM | startd8-sdk | ✅ DONE | KPI-2 |
+| REQ-KPI-201 | Response persistence alongside prompts | startd8-sdk | ✅ DONE | KPI-2 |
+| REQ-KPI-202 | Code extraction fallback tracking | startd8-sdk | ✅ DONE | KPI-2 |
 | **Layer 3 — Output Quality Metrics** | | | | |
-| REQ-KPI-300 | PARSE quality: feature extraction completeness | startd8-sdk | PLANNED | KPI-3 |
-| REQ-KPI-301 | ASSESS quality: routing confidence | startd8-sdk | PLANNED | KPI-3 |
-| REQ-KPI-302 | TRANSFORM quality: seed completeness score | startd8-sdk | PLANNED | KPI-3 |
-| REQ-KPI-303 | TRANSFORM quality: task description density | startd8-sdk | PLANNED | KPI-3 |
-| REQ-KPI-304 | REFINE quality: review acceptance rate | startd8-sdk | PLANNED | KPI-3 |
+| REQ-KPI-300 | PARSE quality: feature extraction completeness | startd8-sdk | ✅ DONE | KPI-3 |
+| REQ-KPI-301 | ASSESS quality: routing confidence | startd8-sdk | ✅ DONE | KPI-3 |
+| REQ-KPI-302 | TRANSFORM quality: seed completeness score | startd8-sdk | ✅ DONE | KPI-3 |
+| REQ-KPI-303 | TRANSFORM quality: task description density | startd8-sdk | ✅ DONE | KPI-3 |
+| REQ-KPI-304 | REFINE quality: review acceptance rate | startd8-sdk | ✅ DONE | KPI-3 |
 | **Layer 4 — Cross-Run Aggregation** | | | | |
-| REQ-KPI-400 | Cross-run trend script | cap-dev-pipe | PLANNED | KPI-4 |
-| REQ-KPI-401 | Phase-level metric comparison | cap-dev-pipe | PLANNED | KPI-4 |
-| REQ-KPI-402 | Cost trajectory tracking | cap-dev-pipe | PLANNED | KPI-4 |
+| REQ-KPI-400 | Cross-run trend script | startd8-sdk | ✅ DONE | KPI-4 |
+| REQ-KPI-401 | Phase-level metric comparison | startd8-sdk | ✅ DONE | KPI-4 |
+| REQ-KPI-402 | Cost trajectory tracking | startd8-sdk | ✅ DONE | KPI-4 |
 | **Layer 5 — Feedback Loop** | | | | |
-| REQ-KPI-500 | Prompt template adjustment from prior analysis | startd8-sdk | PLANNED | KPI-5 |
-| REQ-KPI-501 | Complexity threshold tuning | startd8-sdk | PLANNED | KPI-5 |
+| REQ-KPI-500 | Prompt template adjustment from prior analysis | startd8-sdk | ✅ DONE | KPI-5 |
+| REQ-KPI-501 | Complexity threshold tuning | startd8-sdk | ✅ DONE | KPI-5 |
 | REQ-KPI-502 | Kaizen config injection | cap-dev-pipe | PLANNED | KPI-5 |
 | **Layer 6 — Pipeline Integration** | | | | |
-| REQ-KPI-600 | Seed quality signal for downstream consumption | startd8-sdk | PLANNED | KPI-6 |
-| REQ-KPI-601 | Quality gate: block contractor on low-quality seeds | cap-dev-pipe | PLANNED | KPI-6 |
+| REQ-KPI-600 | Seed quality signal for downstream consumption | startd8-sdk | ✅ DONE | KPI-6 |
+| REQ-KPI-601 | Quality gate: block contractor on low-quality seeds | cap-dev-pipe | ✅ DONE | KPI-6 |
+
+### Implementation Notes
+
+**REQ-KPI-302 Recalibration (2026-03-09):** The original 4-component quality formula (30% desc + 30% targets + 20% schema + 20% coverage) only measured *presence* of descriptions and target files, giving a perfect 1.0 to seeds with single-line descriptions. Commit `b601aed` recalibrates to a 6-component formula when `task_density` is provided:
+
+| Component | Weight | What It Measures |
+|-----------|--------|-----------------|
+| Description presence | 0.20 | Tasks with non-empty `task_description` |
+| Target file presence | 0.20 | Tasks with non-empty `target_files` |
+| Schema validity | 0.15 | JSON schema validation passes |
+| Field coverage | 0.15 | Optional enrichment fields populated |
+| Description depth | 0.15 | Average of `min(chars/500, 1.0)` per task |
+| Description richness | 0.15 | Fraction of tasks with code examples OR requirements refs |
+
+The original 4-component formula is preserved when `task_density=None` (backward compatible).
+
+**Density warnings** (REQ-KPI-303 extension): `compute_density_warnings()` generates actionable warnings when task descriptions are shallow (< 500 chars), lack code examples, or miss requirements references. These are surfaced in both the `_ingestion_quality` seed block and the `check_seed_quality.py` gate script.
 
 ---
 
