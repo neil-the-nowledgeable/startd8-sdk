@@ -322,6 +322,27 @@ class TestRefineSuggestionMapping:
 
         assert count == 0
 
+    def test_unmapped_suggestions_shared(self):
+        """Suggestions that match no task → appended to all tasks as shared guidance."""
+        tasks = [
+            _make_task("PI-001", description="Implement logger."),
+            _make_task("PI-002", description="Implement client."),
+        ]
+        tasks[0]["title"] = "Logger"
+        tasks[1]["title"] = "Client"
+        # This suggestion's area "security" has no keyword matches
+        suggestions = [
+            {"area": "security", "rationale": "Enable TLS for all connections"},
+        ]
+
+        count = _enrich_refine_suggestions(tasks, suggestions)
+
+        assert count == 2
+        for t in tasks:
+            desc = t["config"]["task_description"]
+            assert "Enable TLS" in desc
+            assert "## Review Guidance (from REFINE)" in desc
+
 
 # ── REQ-TDE-105/106: Orchestrator ─────────────────────────────────────
 
@@ -471,3 +492,113 @@ class TestEnrichmentDiagnostic:
         assert diag.enrichment is not None
         assert diag.enrichment.negative_scope_added == 3
         assert diag.enrichment.tasks_enriched == 4
+
+
+# ── REQ-TDE-401/402: Density Score Integration ───────────────────────
+
+
+class TestDensityScoreIntegration:
+    """Verify enrichment improves density metrics (REQ-TDE-401, 402)."""
+
+    def _build_seed_dict(self, tasks):
+        return {"tasks": tasks, "plan": {}, "complexity": {}}
+
+    def test_density_score_improvement(self):
+        """Seed quality score increases after enrichment."""
+        from startd8.workflows.builtin.plan_ingestion_diagnostics import (
+            compute_seed_quality,
+            compute_task_density,
+        )
+
+        features = [
+            FakeFeature(
+                "F-1",
+                name="Email Service",
+                negative_scope=["no auth"],
+                target_files=["emailservice/server.py"],
+                api_signatures=['def send_email(to: str) -> bool: ...'],
+            ),
+        ]
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Implement email service.")]
+        tasks[0]["title"] = "Email Service"
+        seed_dict = self._build_seed_dict(tasks)
+
+        # Score BEFORE enrichment
+        density_before = compute_task_density(seed_dict["tasks"])
+        score_before, _ = compute_seed_quality(seed_dict, task_density=density_before)
+
+        # Enrich
+        enrich_tasks_deterministic(
+            tasks,
+            features,
+            plan_text="The Email Service implements REQ-PI-003.",
+        )
+
+        # Score AFTER enrichment
+        density_after = compute_task_density(seed_dict["tasks"])
+        score_after, _ = compute_seed_quality(seed_dict, task_density=density_after)
+
+        assert score_after > score_before
+
+    def test_density_warnings_reduced(self):
+        """Density warnings decrease after enrichment."""
+        from startd8.workflows.builtin.plan_ingestion_diagnostics import (
+            compute_density_warnings,
+            compute_task_density,
+        )
+
+        features = [
+            FakeFeature(
+                "F-1",
+                name="Email Service",
+                api_signatures=['def send_email(to: str) -> bool: ...'],
+            ),
+            FakeFeature(
+                "F-2",
+                name="Recommendation Service",
+                api_signatures=['def get_recs(user: str) -> list: ...'],
+            ),
+        ]
+        tasks = [
+            _make_task("PI-001", feature_id="F-1", description="Implement email."),
+            _make_task("PI-002", feature_id="F-2", description="Implement recs."),
+        ]
+        tasks[0]["title"] = "Email Service"
+        tasks[1]["title"] = "Recommendation Service"
+
+        # Warnings BEFORE
+        density_before = compute_task_density(tasks)
+        warnings_before = compute_density_warnings(density_before)
+
+        # Enrich
+        plan_text = "Email Service implements REQ-PI-001. Recommendation Service implements REQ-PI-002."
+        enrich_tasks_deterministic(tasks, features, plan_text=plan_text)
+
+        # Warnings AFTER
+        density_after = compute_task_density(tasks)
+        warnings_after = compute_density_warnings(density_after)
+
+        assert len(warnings_after) < len(warnings_before)
+
+    def test_pre_post_density_snapshot(self):
+        """Verify density signals flip from False to True after enrichment."""
+        from startd8.workflows.builtin.plan_ingestion_diagnostics import compute_task_density
+
+        features = [
+            FakeFeature(
+                "F-1",
+                negative_scope=["no caching"],
+                api_signatures=['def serve() -> None: ...'],
+            ),
+        ]
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Implement server.")]
+
+        density_before = compute_task_density(tasks)
+        assert not density_before[0].has_code_examples
+        assert not density_before[0].has_negative_scope
+
+        enrich_tasks_deterministic(tasks, features)
+
+        density_after = compute_task_density(tasks)
+        assert density_after[0].has_code_examples  # API signatures added code block
+        assert density_after[0].has_negative_scope  # negative scope forwarded

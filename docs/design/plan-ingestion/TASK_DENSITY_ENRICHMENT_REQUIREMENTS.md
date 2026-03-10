@@ -426,7 +426,7 @@ Follows existing `persist_prompt_response()` pattern.
 | REQ-TDE-303 | Per-step disable | IMPLEMENTED |
 | **Observability** | | |
 | REQ-TDE-400 | Enrichment diagnostic block | IMPLEMENTED |
-| REQ-TDE-401 | Pre/post density comparison | PLANNED |
+| REQ-TDE-401 | Pre/post density comparison | IMPLEMENTED (via test_pre_post_density_snapshot) |
 | REQ-TDE-402 | Seed quality score impact | IMPLEMENTED (automatic — enrichment runs before scoring) |
 | REQ-TDE-403 | Kaizen prompt capture | PLANNED (Option B only) |
 
