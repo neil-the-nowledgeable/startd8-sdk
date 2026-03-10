@@ -498,9 +498,12 @@ class MicroPrimeCodeGenerator:
             and (fr := file_results_by_path.get(fp))
             and fr.escalated_count > 0 and fr.success_count > 0
         ]
-        cloud_escalation_available = self._cloud_agent_spec is not None
+        cloud_escalation_available = (
+            self._cloud_agent_spec is not None
+            and self._config.escalation_enabled
+        )
         element_escalation_allowed = bool(ollama_ok)
-        if partial_escalation_candidates and self._fallback is not None and not cloud_escalation_available:
+        if partial_escalation_candidates and self._fallback is not None and not cloud_escalation_available and self._config.escalation_enabled:
             for fp in partial_escalation_candidates:
                 if fp not in escalated_files:
                     escalated_files.append(fp)
@@ -632,7 +635,14 @@ class MicroPrimeCodeGenerator:
 
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
-        if escalated_files and self._fallback is not None:
+        if escalated_files and not self._config.escalation_enabled:
+            logger.info(
+                "Cloud escalation disabled (escalation_enabled=False) — "
+                "keeping %d file(s) as partial local output: %s",
+                len(escalated_files),
+                ", ".join(escalated_files),
+            )
+        elif escalated_files and self._fallback is not None and self._config.escalation_enabled:
             logger.warning(
                 "Escalating %d file(s) to cloud fallback: %s",
                 len(escalated_files),

@@ -4371,6 +4371,23 @@ class PlanIngestionWorkflow(WorkflowBase):
                 enrich_req_proximity_chars=_kc.enrich_req_proximity_chars,
             )
 
+        # --- REQ-MI-1xx: Micro-Ingest task enrichment classification ---
+        _mi_report = None
+        if tasks and parsed_plan is not None and _kc.micro_ingest_enabled:
+            try:
+                from .plan_ingestion_micro_ingest import classify_enrichment_routes
+
+                _mi_report = classify_enrichment_routes(
+                    tasks,
+                    parsed_plan.features,
+                    forward_manifest=forward_manifest,
+                )
+            except Exception:
+                logger.warning(
+                    "micro_ingest: classification failed — skipping",
+                    exc_info=True,
+                )
+
         # --- Build common artifacts and onboarding_var ---
         def _build_seed_artifacts() -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
             """Build artifacts dict, onboarding_var, and source_checksum from resolved onboarding."""

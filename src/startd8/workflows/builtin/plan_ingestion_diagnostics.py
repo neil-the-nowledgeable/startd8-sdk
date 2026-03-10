@@ -98,6 +98,21 @@ class EnrichmentDiagnostic:
 
 
 @dataclass
+class MicroIngestDiagnostic:
+    """Diagnostic metrics for Micro-Ingest enrichment (REQ-MI-500)."""
+
+    enabled: bool = False
+    total_tasks: int = 0
+    already_enriched: int = 0
+    tier_0_count: int = 0
+    tier_1_count: int = 0
+    tier_2_count: int = 0
+    skip_count: int = 0
+    code_examples_added: int = 0
+    time_ms: int = 0
+
+
+@dataclass
 class PlanIngestionKaizenConfig:
     """Kaizen overrides for plan ingestion runs (REQ-KPI-500)."""
 
@@ -118,6 +133,15 @@ class PlanIngestionKaizenConfig:
     enrich_api_signatures: bool = True       # REQ-TDE-103
     enrich_refine_suggestions: bool = True   # REQ-TDE-104
     enrich_req_proximity_chars: int = 500    # REQ-TDE-101 proximity window
+
+    # Micro-Ingest (REQ-MI-4xx) — config-driven, no CLI flag
+    micro_ingest_enabled: bool = True          # Master switch
+    micro_ingest_tier_0_enabled: bool = True   # DFA stub rendering
+    micro_ingest_tier_1_enabled: bool = True   # Template rendering
+    micro_ingest_tier_2_enabled: bool = False  # Ollama generation (opt-in)
+    micro_ingest_max_lines: int = 80           # Max code example lines per task
+    micro_ingest_ollama_timeout_s: int = 30    # Total Ollama time budget
+    micro_ingest_ollama_per_element_s: int = 10  # Per-element timeout
 
 
 def load_kaizen_config(path: Path) -> PlanIngestionKaizenConfig:
