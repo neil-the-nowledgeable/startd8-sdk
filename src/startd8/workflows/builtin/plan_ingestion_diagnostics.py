@@ -47,6 +47,7 @@ class TaskDensity:
     description_lines: int = 0
     has_code_examples: bool = False
     has_requirements_refs: bool = False
+    has_negative_scope: bool = False
 
 
 @dataclass
@@ -155,11 +156,44 @@ def compute_assess_quality(
     }
 
 
+# ── Density thresholds (REQ-KPI-303 extension) ─────────────────────
+
+_MIN_DESCRIPTION_CHARS = 500  # Tasks below this produce poor code generation
+
+
+def compute_density_warnings(
+    density: List[TaskDensity],
+) -> List[str]:
+    """Generate warnings for shallow task descriptions (REQ-KPI-303 extension)."""
+    warnings: List[str] = []
+    if not density:
+        return warnings
+    shallow_count = sum(1 for d in density if d.description_chars < _MIN_DESCRIPTION_CHARS)
+    if shallow_count > 0:
+        warnings.append(
+            f"{shallow_count}/{len(density)} task(s) have descriptions < {_MIN_DESCRIPTION_CHARS} chars"
+        )
+    no_code = sum(1 for d in density if not d.has_code_examples)
+    if no_code == len(density):
+        warnings.append("no tasks have code examples in descriptions")
+    no_refs = sum(1 for d in density if not d.has_requirements_refs)
+    if no_refs > len(density) * 0.5:
+        warnings.append(
+            f"{no_refs}/{len(density)} task(s) missing requirements references"
+        )
+    return warnings
+
+
 def compute_seed_quality(
     seed_dict: Dict[str, Any],
     schema_valid: bool = True,
+    task_density: Optional[List[TaskDensity]] = None,
 ) -> Tuple[float, List[str]]:
     """Compute weighted seed quality score and warnings (REQ-KPI-302).
+
+    When *task_density* is provided, the formula includes description depth
+    and richness components that penalise shallow single-line descriptions.
+    Without it the original 4-component formula is used (backward compat).
 
     Returns:
         (score, warnings) where score is 0.0–1.0.
@@ -167,24 +201,24 @@ def compute_seed_quality(
     tasks = seed_dict.get("tasks", [])
     total = len(tasks) or 1
 
-    # Task description coverage (weight 0.3)
+    # Task description coverage
     tasks_with_desc = sum(
         1 for t in tasks
         if t.get("config", {}).get("task_description")
     )
     desc_ratio = tasks_with_desc / total
 
-    # Target file coverage (weight 0.3)
+    # Target file coverage
     tasks_with_targets = sum(
         1 for t in tasks
         if t.get("config", {}).get("context", {}).get("target_files")
     )
     target_ratio = tasks_with_targets / total
 
-    # Schema validity (weight 0.2)
+    # Schema validity
     schema_score = 1.0 if schema_valid else 0.0
 
-    # Field coverage (weight 0.2) — 6 optional enrichment fields
+    # Field coverage — 6 optional enrichment fields
     _OPTIONAL_FIELDS = [
         "architectural_context", "design_calibration", "service_metadata",
         "onboarding", "context_files", "project_metadata",
@@ -207,13 +241,49 @@ def compute_seed_quality(
             f"{tasks_missing_targets}/{len(tasks)} task(s) missing target_files"
         )
 
-    score = round(
-        0.3 * desc_ratio
-        + 0.3 * target_ratio
-        + 0.2 * schema_score
-        + 0.2 * coverage_score,
-        4,
-    )
+    if task_density is not None:
+        # Recalibrated 6-component formula with depth + richness
+        # Description depth: average of min(chars/500, 1.0)
+        if task_density:
+            depth_score = sum(
+                min(d.description_chars / _MIN_DESCRIPTION_CHARS, 1.0)
+                for d in task_density
+            ) / len(task_density)
+        else:
+            depth_score = 0.0
+
+        # Description richness: fraction with code examples OR requirements refs
+        if task_density:
+            rich_count = sum(
+                1 for d in task_density
+                if d.has_code_examples or d.has_requirements_refs
+            )
+            richness_score = rich_count / len(task_density)
+        else:
+            richness_score = 0.0
+
+        score = round(
+            0.20 * desc_ratio
+            + 0.20 * target_ratio
+            + 0.15 * schema_score
+            + 0.15 * coverage_score
+            + 0.15 * depth_score
+            + 0.15 * richness_score,
+            4,
+        )
+
+        # Merge density warnings
+        warnings.extend(compute_density_warnings(task_density))
+    else:
+        # Original 4-component formula (backward compat)
+        score = round(
+            0.3 * desc_ratio
+            + 0.3 * target_ratio
+            + 0.2 * schema_score
+            + 0.2 * coverage_score,
+            4,
+        )
+
     return score, warnings
 
 
@@ -249,13 +319,17 @@ def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:
     """Compute per-task description density (REQ-KPI-303)."""
     results = []
     for t in tasks:
-        desc = t.get("config", {}).get("task_description", "") or ""
+        cfg = t.get("config", {})
+        desc = cfg.get("task_description", "") or ""
+        ctx = cfg.get("context", {})
+        neg_scope = ctx.get("negative_scope") or cfg.get("negative_scope")
         results.append(TaskDensity(
             task_id=t.get("task_id", ""),
             description_chars=len(desc),
             description_lines=desc.count("\n") + 1 if desc else 0,
             has_code_examples="```" in desc,
             has_requirements_refs=bool(_REQ_PATTERN.search(desc)),
+            has_negative_scope=bool(neg_scope),
         ))
     return results
 

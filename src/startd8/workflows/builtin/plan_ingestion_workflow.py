@@ -47,6 +47,7 @@ from .plan_ingestion_diagnostics import (
     PlanIngestionKaizenConfig,
     build_diagnostic,
     compute_assess_quality,
+    compute_density_warnings,
     compute_parse_quality,
     compute_refine_quality,
     compute_seed_quality,
@@ -4319,7 +4320,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             seed_dict = seed.to_dict()
 
             # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)
-            _sq_score, _sq_warnings = compute_seed_quality(seed_dict)
+            _task_density = compute_task_density(seed_dict.get("tasks", []))
+            _sq_score, _sq_warnings = compute_seed_quality(
+                seed_dict, task_density=_task_density,
+            )
             _parse_q = {}
             if parsed_plan is not None:
                 _parse_q = compute_parse_quality(
@@ -4350,12 +4354,14 @@ class PlanIngestionWorkflow(WorkflowBase):
                         _margin, complexity.composite,
                         getattr(self, "_complexity_threshold", 40),
                     )
+            _density_warnings = compute_density_warnings(_task_density)
             seed_dict["_ingestion_quality"] = {
                 "seed_quality_score": _sq_score,
                 "features_extracted": _parse_q.get("features_extracted", 0),
                 "multi_file_features": _parse_q.get("multi_file_features", 0),
                 "route_margin": _assess_q.get("route_margin", 0),
                 "field_coverage_warnings": _sq_warnings,
+                "density_warnings": _density_warnings,
                 "diagnostic_report_path": "plan-ingestion-diagnostic.json",
             }
 
@@ -5208,7 +5214,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                     _seed_dict = json.loads(
                         emit_result.context_seed_path.read_text(encoding="utf-8")
                     )
-                    _seed_score, _seed_warnings = compute_seed_quality(_seed_dict)
+                    _density = compute_task_density(_seed_dict.get("tasks", []))
+                    _seed_score, _seed_warnings = compute_seed_quality(
+                        _seed_dict, task_density=_density,
+                    )
                 except (OSError, json.JSONDecodeError) as _seed_err:
                     logger.debug("Kaizen: seed quality read failed: %s", _seed_err)
 

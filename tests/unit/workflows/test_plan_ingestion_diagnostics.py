@@ -14,8 +14,10 @@ from startd8.workflows.builtin.plan_ingestion_diagnostics import (
     PhaseDiagnostic,
     PlanIngestionKaizenConfig,
     TaskDensity,
+    _MIN_DESCRIPTION_CHARS,
     build_diagnostic,
     compute_assess_quality,
+    compute_density_warnings,
     compute_parse_quality,
     compute_refine_quality,
     compute_seed_quality,
@@ -205,6 +207,147 @@ class TestComputeTaskDensity:
         assert result[0].description_lines == 3  # 2 newlines → 3 lines
         assert result[1].has_code_examples is False
         assert result[1].has_requirements_refs is False
+
+    def test_negative_scope_in_context(self):
+        tasks = [
+            {
+                "task_id": "T-001",
+                "config": {
+                    "task_description": "Build widget",
+                    "context": {"negative_scope": ["Do not modify auth"]},
+                },
+            },
+        ]
+        result = compute_task_density(tasks)
+        assert result[0].has_negative_scope is True
+
+    def test_negative_scope_absent(self):
+        tasks = [
+            {"task_id": "T-001", "config": {"task_description": "Build widget"}},
+        ]
+        result = compute_task_density(tasks)
+        assert result[0].has_negative_scope is False
+
+
+# ── compute_density_warnings ────────────────────────────────────────
+
+
+class TestComputeDensityWarnings:
+    def test_empty_density(self):
+        assert compute_density_warnings([]) == []
+
+    def test_shallow_descriptions(self):
+        density = [
+            TaskDensity(task_id="T-1", description_chars=100),
+            TaskDensity(task_id="T-2", description_chars=600),
+        ]
+        warnings = compute_density_warnings(density)
+        assert any(f"< {_MIN_DESCRIPTION_CHARS} chars" in w for w in warnings)
+
+    def test_no_code_examples(self):
+        density = [
+            TaskDensity(task_id="T-1", description_chars=600, has_code_examples=False),
+        ]
+        warnings = compute_density_warnings(density)
+        assert "no tasks have code examples" in " ".join(warnings)
+
+    def test_some_code_examples_no_warning(self):
+        density = [
+            TaskDensity(task_id="T-1", description_chars=600, has_code_examples=True),
+            TaskDensity(task_id="T-2", description_chars=600, has_code_examples=False),
+        ]
+        warnings = compute_density_warnings(density)
+        assert not any("code examples" in w for w in warnings)
+
+    def test_missing_requirements_refs(self):
+        density = [
+            TaskDensity(task_id="T-1", description_chars=600, has_requirements_refs=False),
+            TaskDensity(task_id="T-2", description_chars=600, has_requirements_refs=False),
+            TaskDensity(task_id="T-3", description_chars=600, has_requirements_refs=True),
+        ]
+        warnings = compute_density_warnings(density)
+        assert any("missing requirements references" in w for w in warnings)
+
+    def test_all_rich_no_warnings(self):
+        density = [
+            TaskDensity(
+                task_id="T-1", description_chars=600,
+                has_code_examples=True, has_requirements_refs=True,
+            ),
+        ]
+        warnings = compute_density_warnings(density)
+        assert warnings == []
+
+
+# ── compute_seed_quality with task_density ──────────────────────────
+
+
+class TestComputeSeedQualityWithDensity:
+    def test_backward_compat_without_density(self):
+        """Without task_density, original 4-component formula is used."""
+        tasks = [{"config": {"task_description": "t", "context": {"target_files": ["f"]}}}]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        score, _ = compute_seed_quality(seed)
+        assert score == 1.0  # Same as original perfect score
+
+    def test_shallow_descriptions_lower_score(self):
+        """Shallow descriptions should produce lower score with density."""
+        tasks = [{"config": {"task_description": "short", "context": {"target_files": ["f"]}}}]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        density = [TaskDensity(task_id="T-1", description_chars=50)]
+        score_with, _ = compute_seed_quality(seed, task_density=density)
+        score_without, _ = compute_seed_quality(seed)
+        assert score_with < score_without
+
+    def test_rich_descriptions_high_score(self):
+        """Rich descriptions with code+refs should score high."""
+        tasks = [{"config": {"task_description": "x" * 600, "context": {"target_files": ["f"]}}}]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        density = [TaskDensity(
+            task_id="T-1", description_chars=600,
+            has_code_examples=True, has_requirements_refs=True,
+        )]
+        score, _ = compute_seed_quality(seed, task_density=density)
+        assert score >= 0.95
+
+    def test_density_warnings_merged(self):
+        """Density warnings should be merged into quality warnings."""
+        tasks = [{"config": {"task_description": "short", "context": {"target_files": ["f"]}}}]
+        seed = _make_seed(
+            tasks=tasks,
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        density = [TaskDensity(task_id="T-1", description_chars=50)]
+        _, warnings = compute_seed_quality(seed, task_density=density)
+        assert any(f"< {_MIN_DESCRIPTION_CHARS}" in w for w in warnings)
+
+    def test_empty_density_list(self):
+        """Empty density list should still use 6-component formula."""
+        seed = _make_seed(
+            architectural_context="a", design_calibration="d",
+            service_metadata="s", onboarding="o",
+            context_files=["c"], project_metadata="p",
+        )
+        score, _ = compute_seed_quality(seed, task_density=[])
+        # desc=0, target=0, schema=1, coverage=1, depth=0, richness=0
+        assert score == pytest.approx(0.30, abs=0.01)
 
 
 # ── build_diagnostic ─────────────────────────────────────────────────

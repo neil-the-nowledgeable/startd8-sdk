@@ -37,7 +37,8 @@ def check_seed_quality(
     data = json.loads(seed_path.read_text(encoding="utf-8"))
     quality: Dict[str, Any] = data.get("_ingestion_quality", {})
     score = float(quality.get("seed_quality_score", 1.0))
-    warnings = quality.get("field_coverage_warnings", [])
+    warnings = list(quality.get("field_coverage_warnings", []))
+    warnings.extend(quality.get("density_warnings", []))
     return score >= threshold, score, warnings
 
 
