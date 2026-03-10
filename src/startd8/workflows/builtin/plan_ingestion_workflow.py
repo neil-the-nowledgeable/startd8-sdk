@@ -116,6 +116,18 @@ _EXT_TO_LANGUAGE: Dict[str, str] = {
     "rb": "ruby", "cs": "csharp",
 }
 
+# QP-1: Declarative set of PARSE fields that are threaded into task context.
+# Adding a new field here automatically wires it through seed assembly —
+# no manual ``if feat.X: ctx["X"] = ...`` block required.
+_CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
+    "negative_scope",
+    "api_signatures",
+    "protocol",
+    "runtime_dependencies",
+    "design_doc_sections",
+    "artifact_types_addressed",
+})
+
 # JSON Schema for ArtisanContextSeed (Item 6 — validation before write)
 _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -3155,28 +3167,23 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "target_files": ordered_files,
                 "estimated_loc": feat.estimated_loc,
             }
-            # Thread negative scope so downstream phases (DESIGN, IMPLEMENT)
-            # know what the task should NOT do — even if REFINE is skipped or
-            # fails.  Kaizen run-019 showed zero tasks had negative_scope
-            # because it was only extracted during PARSE but never wired here.
-            if feat.negative_scope:
-                ctx["negative_scope"] = list(feat.negative_scope)
-            # IMP-4 per-task fields: thread through so DESIGN/IMPLEMENT
-            # have concrete type information without re-deriving.
-            if feat.api_signatures:
-                ctx["api_signatures"] = list(feat.api_signatures)
-            if feat.protocol:
-                ctx["protocol"] = feat.protocol
-            if feat.runtime_dependencies:
-                ctx["runtime_dependencies"] = list(feat.runtime_dependencies)
-            if feat.design_doc_sections:
-                ctx["design_doc_sections"] = list(feat.design_doc_sections)
-            if feat.artifact_types_addressed:
-                ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
-            elif ordered_files:
-                # Mottainai Phase 2.2: infer artifact types from target file
-                # patterns so downstream injections keyed on artifact_types
-                # have something to match against.
+            # QP-1: Declarative context threading — every field in
+            # _CONTEXT_THREADABLE_FIELDS is forwarded from PARSE into the
+            # task context automatically.  Adding a new PARSE field to the
+            # frozenset is all that's needed; no manual ``if`` block required.
+            for _field_name in _CONTEXT_THREADABLE_FIELDS:
+                _val = getattr(feat, _field_name, None)
+                if _val:
+                    ctx[_field_name] = (
+                        list(_val) if isinstance(_val, (list, tuple, set, frozenset))
+                        else _val
+                    )
+
+            # Mottainai Phase 2.2: infer artifact types from target file
+            # patterns when the PARSE phase didn't produce them, so
+            # downstream injections keyed on artifact_types have something
+            # to match against.
+            if "artifact_types_addressed" not in ctx and ordered_files:
                 inferred = _infer_artifact_types_from_files(ordered_files)
                 if inferred:
                     ctx["artifact_types_addressed"] = inferred

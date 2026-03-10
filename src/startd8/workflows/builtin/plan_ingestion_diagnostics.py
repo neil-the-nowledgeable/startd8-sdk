@@ -210,6 +210,10 @@ def compute_assess_quality(
 
 _MIN_DESCRIPTION_CHARS = 500  # Tasks below this produce poor code generation
 
+# Minimum viable structured context fields that downstream phases depend on.
+# Tasks missing these fields receive inflated quality scores without this check.
+_STRUCTURED_CONTEXT_FIELDS = ("api_signatures", "negative_scope", "target_files")
+
 
 def compute_density_warnings(
     density: List[TaskDensity],
@@ -292,7 +296,8 @@ def compute_seed_quality(
         )
 
     if task_density is not None:
-        # Recalibrated 6-component formula with depth + richness
+        # Recalibrated 7-component formula with depth, richness, and
+        # structured context completeness (QP-3).
         # Description depth: average of min(chars/500, 1.0)
         if task_density:
             depth_score = sum(
@@ -312,15 +317,42 @@ def compute_seed_quality(
         else:
             richness_score = 0.0
 
+        # Component 7: Structured context completeness (QP-3)
+        # Fraction of tasks where all minimum viable context fields are present.
+        if tasks:
+            ctx_complete = sum(
+                1 for t in tasks
+                if all(
+                    t.get("config", {}).get("context", {}).get(f)
+                    for f in _STRUCTURED_CONTEXT_FIELDS
+                )
+            ) / len(tasks)
+        else:
+            ctx_complete = 0.0
+
+        # Weights rebalanced to fit 0.10 for structured context (was 6×, now 7×).
         score = round(
-            0.20 * desc_ratio
-            + 0.20 * target_ratio
-            + 0.15 * schema_score
-            + 0.15 * coverage_score
-            + 0.15 * depth_score
-            + 0.15 * richness_score,
+            0.18 * desc_ratio
+            + 0.18 * target_ratio
+            + 0.14 * schema_score
+            + 0.14 * coverage_score
+            + 0.13 * depth_score
+            + 0.13 * richness_score
+            + 0.10 * ctx_complete,
             4,
         )
+
+        # Structured context warnings
+        if tasks:
+            for fld in _STRUCTURED_CONTEXT_FIELDS:
+                missing = sum(
+                    1 for t in tasks
+                    if not t.get("config", {}).get("context", {}).get(fld)
+                )
+                if missing > 0:
+                    warnings.append(
+                        f"{missing}/{len(tasks)} task(s) missing structured context field '{fld}'"
+                    )
 
         # Merge density warnings
         warnings.extend(compute_density_warnings(task_density))
@@ -366,6 +398,21 @@ def compute_refine_quality(review_output: Optional[Dict[str, Any]]) -> Dict[str,
 # Must stay in sync with plan_ingestion_enrichment._REQ_PATTERN
 _REQ_PATTERN = re.compile(r"\bREQ(?:[-_]\w+)+", re.IGNORECASE)
 
+# Minimum inline code spans to qualify as "has code examples" when no
+# fenced blocks are present.  Descriptions with >= this many backtick-wrapped
+# spans contain substantive code patterns (Dockerfile instructions, function
+# signatures in bullet lists, template variables, etc.).
+_MIN_INLINE_CODE_SPANS = 5
+
+_INLINE_CODE_RE = re.compile(r"`[^`]+`")
+
+
+def _has_code_examples(desc: str) -> bool:
+    """Detect code examples via fenced blocks OR dense inline code spans."""
+    if "```" in desc:
+        return True
+    return len(_INLINE_CODE_RE.findall(desc)) >= _MIN_INLINE_CODE_SPANS
+
 
 def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:
     """Compute per-task description density (REQ-KPI-303)."""
@@ -379,7 +426,7 @@ def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:
             task_id=t.get("task_id", ""),
             description_chars=len(desc),
             description_lines=desc.count("\n") + 1 if desc else 0,
-            has_code_examples="```" in desc,
+            has_code_examples=_has_code_examples(desc),
             has_requirements_refs=bool(_REQ_PATTERN.search(desc)),
             has_negative_scope=bool(neg_scope),
         ))

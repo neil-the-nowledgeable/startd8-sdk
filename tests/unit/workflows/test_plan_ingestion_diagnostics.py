@@ -323,8 +323,12 @@ class TestComputeSeedQualityWithDensity:
         assert score_with < score_without
 
     def test_rich_descriptions_high_score(self):
-        """Rich descriptions with code+refs should score high."""
-        tasks = [{"config": {"task_description": "x" * 600, "context": {"target_files": ["f"]}}}]
+        """Rich descriptions with code+refs and structured context should score high."""
+        tasks = [{"config": {"task_description": "x" * 600, "context": {
+            "target_files": ["f"],
+            "api_signatures": ["def foo()"],
+            "negative_scope": ["Do not modify auth"],
+        }}}]
         seed = _make_seed(
             tasks=tasks,
             architectural_context="a", design_calibration="d",
@@ -352,15 +356,16 @@ class TestComputeSeedQualityWithDensity:
         assert any(f"< {_MIN_DESCRIPTION_CHARS}" in w for w in warnings)
 
     def test_empty_density_list(self):
-        """Empty density list should still use 6-component formula."""
+        """Empty density list should still use 7-component formula."""
         seed = _make_seed(
             architectural_context="a", design_calibration="d",
             service_metadata="s", onboarding="o",
             context_files=["c"], project_metadata="p",
         )
         score, _ = compute_seed_quality(seed, task_density=[])
-        # desc=0, target=0, schema=1, coverage=1, depth=0, richness=0
-        assert score == pytest.approx(0.30, abs=0.01)
+        # desc=0, target=0, schema=1, coverage=1, depth=0, richness=0, ctx=0
+        # 0.14 + 0.14 = 0.28
+        assert score == pytest.approx(0.28, abs=0.01)
 
 
 # ── build_diagnostic ─────────────────────────────────────────────────

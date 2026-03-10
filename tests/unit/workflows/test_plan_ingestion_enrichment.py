@@ -239,7 +239,7 @@ class TestRequirementRefInjection:
         assert count == 0
 
     def test_requirement_refs_no_clobber(self):
-        """Description already has REQ-* → not doubled."""
+        """Description already has REQ-* → text not doubled, structured field still populated."""
         plan_text = "Email Service implements REQ-PI-003."
         tasks = [_make_task(
             "PI-001",
@@ -249,7 +249,12 @@ class TestRequirementRefInjection:
 
         count = _enrich_requirement_refs(tasks, plan_text)
 
-        assert count == 0
+        # Structured field populated even when description text is not modified
+        assert count == 1
+        ctx = tasks[0]["config"]["context"]
+        assert "REQ-PI-003" in ctx.get("requirements_refs", [])
+        # Description text NOT modified (no-clobber on text)
+        assert "## Requirements References" not in tasks[0]["config"]["task_description"]
 
     def test_short_title_skipped(self):
         """P2: title shorter than _MIN_FEATURE_NAME_CHARS → skipped to avoid false positives."""
@@ -293,7 +298,7 @@ class TestApiSignatureStubs:
         assert "send_email" in desc
 
     def test_api_signatures_skip_existing_code(self):
-        """Description already has code blocks → no code block added."""
+        """Description already has code blocks → text not doubled, structured field still populated."""
         features = [FakeFeature("F-1", api_signatures=["def foo(): ..."])]
         tasks = [_make_task(
             "PI-001",
@@ -303,7 +308,12 @@ class TestApiSignatureStubs:
 
         count = _enrich_api_signatures(tasks, {"F-1": features[0]})
 
-        assert count == 0
+        # Structured field populated even when description text is not modified
+        assert count == 1
+        ctx = tasks[0]["config"]["context"]
+        assert "def foo(): ..." in ctx.get("api_signatures", [])
+        # Description text NOT modified (no-clobber — no second code block added)
+        assert tasks[0]["config"]["task_description"].count("```python") == 1
 
     def test_api_signatures_max_limit(self):
         """More than 5 signatures → capped at 5."""

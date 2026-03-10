@@ -243,20 +243,9 @@ def _enrich_requirement_refs(
     plan_text: str,
     proximity_chars: int = 500,
 ) -> int:
-    """Append ## Requirements References section to task descriptions."""
+    """Append ## Requirements References section and populate structured field."""
     count = 0
     for task in tasks:
-        cfg = task.get("config", {})
-        desc = cfg.get("task_description", "") or ""
-
-        # No-clobber: skip if description already has requirement refs
-        if _REQ_PATTERN.search(desc):
-            logger.debug(
-                "ENRICH-A: skipping requirement_refs for %s (already present)",
-                task.get("task_id", "?"),
-            )
-            continue
-
         title = task.get("title", "")
         # Skip proximity search for very short titles — generic names like
         # "API" or "Service" would match ubiquitously and inject spurious refs.
@@ -266,10 +255,27 @@ def _enrich_requirement_refs(
         if not refs:
             continue
 
-        ref_section = "\n\n## Requirements References\n" + "\n".join(
-            f"- {r}" for r in refs
-        )
-        cfg["task_description"] = desc + ref_section
+        # Always populate the structured context field (merge-with-dedup)
+        ctx = _ensure_task_context(task)
+        existing = set(ctx.get("requirements_refs") or [])
+        merged = list(existing | set(refs))
+        if merged:
+            ctx["requirements_refs"] = merged
+
+        # No-clobber on description text: skip section if refs already inline
+        cfg = task.get("config", {})
+        desc = cfg.get("task_description", "") or ""
+        if _REQ_PATTERN.search(desc):
+            logger.debug(
+                "ENRICH-A: skipping requirement_refs text for %s (already present)",
+                task.get("task_id", "?"),
+            )
+        else:
+            ref_section = "\n\n## Requirements References\n" + "\n".join(
+                f"- {r}" for r in refs
+            )
+            cfg["task_description"] = desc + ref_section
+
         count += 1
 
     return count
@@ -282,28 +288,35 @@ def _enrich_api_signatures(
     tasks: List[Dict[str, Any]],
     feature_index: Dict[str, Any],
 ) -> int:
-    """Append ## API Signatures code block from ParsedFeature.api_signatures."""
+    """Append ## API Signatures code block and populate structured field."""
     count = 0
     for task in tasks:
-        cfg = task.get("config", {})
-        desc = cfg.get("task_description", "") or ""
-
-        # No-clobber: skip if description already has code blocks
-        if "```" in desc:
-            logger.debug(
-                "ENRICH-A: skipping api_signatures for %s (code blocks exist)",
-                task.get("task_id", "?"),
-            )
-            continue
-
         fid = _get_task_feature_id(task)
         feat = feature_index.get(fid)
         if not feat or not feat.api_signatures:
             continue
 
         sigs = feat.api_signatures[:_MAX_SIGNATURES_PER_TASK]
-        sig_block = "\n\n## API Signatures\n```python\n" + "\n\n".join(sigs) + "\n```"
-        cfg["task_description"] = desc + sig_block
+
+        # Always populate the structured context field (merge-with-dedup)
+        ctx = _ensure_task_context(task)
+        existing = set(ctx.get("api_signatures") or [])
+        merged = list(existing | set(sigs))
+        if merged:
+            ctx["api_signatures"] = merged
+
+        # No-clobber on description text: skip fenced block if already present
+        cfg = task.get("config", {})
+        desc = cfg.get("task_description", "") or ""
+        if "```" in desc:
+            logger.debug(
+                "ENRICH-A: skipping api_signatures text for %s (code blocks exist)",
+                task.get("task_id", "?"),
+            )
+        else:
+            sig_block = "\n\n## API Signatures\n```python\n" + "\n\n".join(sigs) + "\n```"
+            cfg["task_description"] = desc + sig_block
+
         count += 1
 
     return count
