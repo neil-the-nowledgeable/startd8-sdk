@@ -23,6 +23,8 @@ from startd8.workflows.builtin.plan_ingestion_models import (
 )
 from startd8.workflows.builtin.plan_ingestion_workflow import (
     PlanIngestionWorkflow,
+    _enrich_features_from_plan,
+    _extract_implementation_contracts,
     _extract_json_from_response,
     _parse_context_files,
 )
@@ -2526,3 +2528,150 @@ class TestSkipArcReview:
         wf = PlanIngestionWorkflow()
         input_names = [inp.name for inp in wf.metadata.inputs]
         assert "skip_arc_review" in input_names
+
+
+# ---------------------------------------------------------------------------
+# Deterministic Implementation Contract Extraction (G-1 fix)
+# ---------------------------------------------------------------------------
+
+PLAN_WITH_CONTRACTS = textwrap.dedent("""\
+    # Online Boutique Python Services
+
+    ## Features
+
+    ### F-001: Shared JSON Logger Utility
+
+    **Description:**
+    A structured JSON logging utility.
+
+    **Implementation contract:**
+    - Class `CustomJsonFormatter(jsonlogger.JsonFormatter)` with `add_fields()` override:
+      - Sets `timestamp` from `record.created`
+      - Sets `severity` from `log_record['severity'].upper()`
+    - Function `getJSONLogger(name: str) -> logging.Logger`:
+      - Creates logger via `logging.getLogger(name)`
+      - Sets level to `logging.INFO`
+
+    **Dependencies:** `python-json-logger`
+
+    **Estimated LOC:** 42
+
+    ---
+
+    ### F-002: Email Service
+
+    **Satisfies:** REQ-PMS-001
+
+    **Output files:**
+    - `src/emailservice/email_server.py`
+
+    **Description:**
+    A gRPC server implementing the EmailService proto contract.
+
+    **Implementation contract:**
+
+    `email_server.py` (201 lines):
+    - Class `BaseEmailService(demo_pb2_grpc.EmailServiceServicer)`:
+      - `__init__` initializes Jinja2 environment
+    - Class `DummyEmailService(BaseEmailService)`:
+      - `SendOrderConfirmation(request, context)` — logs and returns empty
+
+    **Dependencies:** `grpcio`, `jinja2`
+
+    ---
+
+    ### F-003: Recommendation Service
+
+    **Description:**
+    gRPC recommendation service.
+
+    No implementation contract for this feature.
+
+    ---
+""")
+
+
+class TestExtractImplementationContracts:
+    """Tests for _extract_implementation_contracts()."""
+
+    def test_extracts_two_contracts(self):
+        contracts = _extract_implementation_contracts(PLAN_WITH_CONTRACTS)
+        assert "F-001" in contracts
+        assert "F-002" in contracts
+        assert "F-003" not in contracts
+
+    def test_f001_contains_class_and_function(self):
+        contracts = _extract_implementation_contracts(PLAN_WITH_CONTRACTS)
+        c = contracts["F-001"]
+        assert "CustomJsonFormatter" in c
+        assert "getJSONLogger" in c
+        assert "logging.INFO" in c
+
+    def test_f002_contains_class_hierarchy(self):
+        contracts = _extract_implementation_contracts(PLAN_WITH_CONTRACTS)
+        c = contracts["F-002"]
+        assert "BaseEmailService" in c
+        assert "DummyEmailService" in c
+        assert "SendOrderConfirmation" in c
+
+    def test_contract_excludes_trailing_fields(self):
+        """Contract text should not include Dependencies or Estimated LOC."""
+        contracts = _extract_implementation_contracts(PLAN_WITH_CONTRACTS)
+        assert "python-json-logger" not in contracts["F-001"]
+        assert "42" not in contracts["F-001"]
+
+    def test_empty_plan_returns_empty_dict(self):
+        assert _extract_implementation_contracts("") == {}
+
+    def test_plan_without_features_returns_empty(self):
+        assert _extract_implementation_contracts("# Just a title\n\nSome text.") == {}
+
+
+class TestEnrichFeaturesFromPlan:
+    """Tests for _enrich_features_from_plan()."""
+
+    def _make_feature(self, fid, desc="Short description"):
+        return ParsedFeature(
+            feature_id=fid,
+            name=f"Feature {fid}",
+            description=desc,
+            target_files=[],
+            dependencies=[],
+            estimated_loc=0,
+            labels=[],
+            design_doc_sections=[],
+            artifact_types_addressed=[],
+            api_signatures=[],
+            protocol="",
+            runtime_dependencies=[],
+            negative_scope=[],
+        )
+
+    def test_enriches_matching_features(self):
+        features = [self._make_feature("F-001"), self._make_feature("F-002")]
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 2
+        assert "Implementation contract:" in features[0].description
+        assert "CustomJsonFormatter" in features[0].description
+        assert "BaseEmailService" in features[1].description
+
+    def test_preserves_original_description(self):
+        features = [self._make_feature("F-001", "A JSON logger.")]
+        _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert features[0].description.startswith("A JSON logger.")
+
+    def test_skips_features_without_contracts(self):
+        features = [self._make_feature("F-003")]
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 0
+        assert features[0].description == "Short description"
+
+    def test_skips_unknown_feature_ids(self):
+        features = [self._make_feature("F-999")]
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 0
+
+    def test_description_length_increases(self):
+        features = [self._make_feature("F-002", "Short.")]
+        _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert len(features[0].description) > 200

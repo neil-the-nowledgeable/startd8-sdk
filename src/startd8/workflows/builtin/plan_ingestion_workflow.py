@@ -411,7 +411,15 @@ Dependency graph: {dependency_graph}
 
 Generate valid YAML. Use task IDs like PI-001, PI-002, etc.
 Include dependency edges from the dependency graph.
-Each task should have a thorough task_description.
+
+Each task_description MUST be a multi-line block (5+ lines minimum) containing:
+1. **Implementation steps** — numbered steps describing what to build
+2. **Key function signatures** — the primary functions/methods with parameters and return types
+3. **Code example** — a fenced code block showing the core API call, constructor, or pattern
+4. **Error handling** — what errors to handle and how
+5. **Negative scope** — "This task should NOT: ..." listing explicit exclusions
+
+Do NOT produce single-line descriptions. A one-sentence summary is insufficient for code generation.
 """
 
 _TRANSFORM_ARTISAN_PROMPT = """\
@@ -806,6 +814,78 @@ def _heuristic_assess_complexity(
         reasoning="Heuristic fallback complexity used after assess failure",
         route=route,
     )
+
+
+def _extract_implementation_contracts(raw_text: str) -> Dict[str, str]:
+    """Deterministic extraction of Implementation Contract sections from plan markdown.
+
+    Scans the plan for ``### F-NNN:`` headings and, within each feature section,
+    extracts the block between ``**Implementation contract:**`` and the next bold
+    field (``**...**``), horizontal rule (``---``), or next feature heading.
+
+    Returns a mapping of ``feature_id → contract_text`` (e.g. ``{"F-001": "..."}``.
+    Features without an Implementation Contract section are omitted from the dict.
+    """
+    # Split plan into per-feature chunks keyed by feature ID.
+    _FEATURE_HEADING = re.compile(r"^###\s+(F-\d{3}):", re.MULTILINE)
+    splits = _FEATURE_HEADING.split(raw_text)
+    # splits alternates: [preamble, "F-001", body1, "F-002", body2, ...]
+    contracts: Dict[str, str] = {}
+    for i in range(1, len(splits) - 1, 2):
+        fid = splits[i]
+        body = splits[i + 1]
+
+        # Find the Implementation Contract block within this feature section.
+        contract_start = body.find("**Implementation contract:**")
+        if contract_start == -1:
+            continue
+
+        contract_body = body[contract_start + len("**Implementation contract:**"):]
+
+        # End at the next bold field, horizontal rule, or end of section.
+        end_match = re.search(
+            r"^(?:\*\*(?:Dependencies|Estimated LOC|Note|Depends on|Satisfies|Output files|Description).*?\*\*|---)",
+            contract_body,
+            re.MULTILINE,
+        )
+        if end_match:
+            contract_body = contract_body[: end_match.start()]
+
+        contract_text = contract_body.strip()
+        if contract_text:
+            contracts[fid] = contract_text
+
+    return contracts
+
+
+def _enrich_features_from_plan(
+    features: List[ParsedFeature],
+    raw_text: str,
+) -> int:
+    """Enrich ParsedFeature descriptions with Implementation Contract text from the plan.
+
+    Mutates features in place.  Returns the count of features enriched.
+    """
+    contracts = _extract_implementation_contracts(raw_text)
+    if not contracts:
+        return 0
+
+    enriched = 0
+    for feat in features:
+        contract = contracts.get(feat.feature_id)
+        if not contract:
+            continue
+        # Only enrich if the contract adds meaningful length beyond the
+        # existing summary description.
+        if len(contract) > len(feat.description or ""):
+            feat.description = (
+                f"{feat.description}\n\n"
+                f"Implementation contract:\n{contract}"
+                if feat.description
+                else f"Implementation contract:\n{contract}"
+            )
+            enriched += 1
+    return enriched
 
 
 def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute) -> str:
@@ -4804,10 +4884,30 @@ class PlanIngestionWorkflow(WorkflowBase):
             step_costs["parse"] = parse_step.cost
             if parse_step.error:
                 return _fail(parse_step.error)
+            # ── Deterministic enrichment: inject Implementation Contract
+            # text from the plan markdown into feature descriptions so
+            # downstream phases (TRANSFORM, EMIT) have full detail
+            # without relying on LLM summarization.  $0.00 per run.
+            _enriched_count = _enrich_features_from_plan(
+                parsed_plan.features, parsed_plan.raw_text,
+            )
+            if _enriched_count:
+                logger.info(
+                    "Enriched %d/%d feature descriptions with implementation "
+                    "contracts from plan markdown",
+                    _enriched_count, len(parsed_plan.features),
+                )
+                if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
+                    _parse_span.add_event("enrichment.implementation_contracts", {
+                        "enriched_count": _enriched_count,
+                        "total_features": len(parsed_plan.features),
+                    })
+
             state.parsed_plan = parsed_plan
             logger.debug(
-                "Parsed plan: '%s' with %d features (heuristic=%s)",
-                parsed_plan.title, len(parsed_plan.features), _used_heuristic_parse,
+                "Parsed plan: '%s' with %d features (heuristic=%s, enriched=%d)",
+                parsed_plan.title, len(parsed_plan.features),
+                _used_heuristic_parse, _enriched_count,
             )
 
             # When heuristic parse collapses all features into a single
