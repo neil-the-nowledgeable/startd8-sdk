@@ -4388,9 +4388,29 @@ class PlanIngestionWorkflow(WorkflowBase):
                     exc_info=True,
                 )
 
-        # --- REQ-MI-2xx: Micro-Ingest deterministic stub assembly ---
+        # --- REQ-MI-2xx/3xx: Micro-Ingest stub assembly + Ollama generation ---
         _mi_counters: Optional[Dict[str, Any]] = None
         if _mi_report is not None and _mi_report.routes:
+            # Instantiate MicroPrimeEngine only when Tier 2 is enabled (REQ-MI-305)
+            _mi_engine = None
+            if _kc.micro_ingest_tier_2_enabled:
+                try:
+                    from startd8.micro_prime.engine import MicroPrimeEngine
+                    from startd8.micro_prime.models import MicroPrimeConfig
+
+                    _mi_engine = MicroPrimeEngine(MicroPrimeConfig(
+                        local_max_attempts=1,
+                        repair_enabled=True,
+                        semantic_verification_enabled=False,
+                        max_tokens=512,
+                        temperature=0.1,
+                        escalation_enabled=False,
+                    ))
+                except Exception as exc:
+                    logger.warning(
+                        "micro_ingest: Ollama engine init failed: %s — tier_2 disabled", exc,
+                    )
+
             try:
                 from .plan_ingestion_micro_ingest import enrich_tasks_micro_ingest
 
@@ -4405,6 +4425,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     max_lines=_kc.micro_ingest_max_lines,
                     ollama_timeout_s=_kc.micro_ingest_ollama_timeout_s,
                     ollama_per_element_s=_kc.micro_ingest_ollama_per_element_s,
+                    micro_prime_engine=_mi_engine,
                 )
             except Exception:
                 logger.warning(

@@ -692,8 +692,8 @@ class TestEnrichTasksMicroIngest:
         )
         assert counters["code_examples_added"] == 0
 
-    def test_tier_2_counted_not_implemented(self):
-        """Tier 2 routes are counted but produce no code (Phase 3)."""
+    def test_tier_2_no_engine_skips(self):
+        """Tier 2 enabled but no engine → counted, no code generated."""
         task = _make_task()
         feat = FakeFeature()
         route = EnrichmentRoute(
@@ -702,6 +702,7 @@ class TestEnrichTasksMicroIngest:
         )
         counters = enrich_tasks_micro_ingest(
             [task], [route], [feat], tier_2_enabled=True,
+            micro_prime_engine=None,
         )
         assert counters["tier_2_count"] == 1
         assert counters["code_examples_added"] == 0
@@ -731,3 +732,218 @@ class TestEnrichTasksMicroIngest:
         if "```python" in desc:
             # Original description preserved
             assert desc.startswith("Implement the server")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 3 Tests: Ollama Code Example Generation
+# ═══════════════════════════════════════════════════════════════════════
+
+
+from startd8.workflows.builtin.plan_ingestion_micro_ingest import (
+    _extract_classification_signals,
+    _pick_generation_target,
+    _try_tier_2,
+)
+
+
+class FakeElementResult:
+    """Minimal ElementResult stub."""
+
+    def __init__(self, success=True, code="def serve(port: int) -> None:\n    pass"):
+        self.success = success
+        self.code = code
+
+
+class FakeMicroPrimeEngine:
+    """Minimal MicroPrimeEngine stub for testing."""
+
+    _circuit_open = False
+
+    def __init__(self, circuit_open=False, result=None):
+        self._circuit_open = circuit_open
+        self._result = result or FakeElementResult()
+
+    def _handle_simple(self, **kwargs):
+        return self._result
+
+
+class TestPickGenerationTarget:
+    def test_prefers_function_over_class(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Signature
+
+        cls_elem = ForwardElementSpec(kind=ElementKind.CLASS, name="Foo")
+        fn_elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION, name="bar",
+            signature=Signature(params=[]),
+        )
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test", elements=["Foo", "bar"],
+        )
+        result = _pick_generation_target([cls_elem, fn_elem], route)
+        assert result.name == "bar"
+
+    def test_returns_first_if_no_functions(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind
+
+        elem = ForwardElementSpec(kind=ElementKind.CLASS, name="Foo")
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test",
+        )
+        result = _pick_generation_target([elem], route)
+        assert result.name == "Foo"
+
+    def test_returns_none_empty(self):
+        route = EnrichmentRoute(task_id="T-001", needs_code_example=True, tier=2, tier_reason="test")
+        assert _pick_generation_target([], route) is None
+
+
+class TestExtractClassificationSignals:
+    def test_external_api_from_deps(self):
+        feat = FakeFeature(runtime_dependencies=["httpx", "pydantic"])
+        task = _make_task()
+        signals = _extract_classification_signals(task, {feat.feature_id: feat})
+        assert "external_api" in signals
+
+    def test_orchestrator_from_description(self):
+        task = _make_task(description="Main orchestration loop for the service")
+        feat = FakeFeature()
+        signals = _extract_classification_signals(task, {feat.feature_id: feat})
+        assert "orchestrator" in signals
+
+    def test_no_signals(self):
+        task = _make_task(description="Simple data transform")
+        feat = FakeFeature(runtime_dependencies=["pydantic"])
+        signals = _extract_classification_signals(task, {feat.feature_id: feat})
+        assert len(signals) == 0
+
+
+class TestTryTier2:
+    def test_success_returns_code_block(self):
+        engine = FakeMicroPrimeEngine(
+            result=FakeElementResult(success=True, code="def serve(port: int) -> None:\n    pass"),
+        )
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature(
+            api_signatures=["def serve(port: int) -> None"],
+            target_files=["src/server.py"],
+        )
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test", has_forward_spec=False,
+            elements=["serve"],
+        )
+        result = _try_tier_2(
+            task, route, {feat.feature_id: feat}, None,
+            max_lines=80, timeout_s=10,
+            micro_prime_engine=engine,
+        )
+        assert result is not None
+        assert "```python" in result
+        assert "generated by Ollama" in result
+
+    def test_failure_returns_none(self):
+        engine = FakeMicroPrimeEngine(
+            result=FakeElementResult(success=False, code=None),
+        )
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature(
+            api_signatures=["def serve(port: int) -> None"],
+            target_files=["src/server.py"],
+        )
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test", has_forward_spec=False,
+        )
+        result = _try_tier_2(
+            task, route, {feat.feature_id: feat}, None,
+            max_lines=80, micro_prime_engine=engine,
+        )
+        assert result is None
+
+    def test_skip_signals_respected(self):
+        """external_api signal → skip generation."""
+        engine = FakeMicroPrimeEngine()
+        task = _make_task(description="Call external API with httpx")
+        feat = FakeFeature(runtime_dependencies=["httpx"])
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test", has_forward_spec=False,
+        )
+        result = _try_tier_2(
+            task, route, {feat.feature_id: feat}, None,
+            max_lines=80, micro_prime_engine=engine,
+        )
+        assert result is None
+
+    def test_no_engine_returns_none(self):
+        task = _make_task()
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2, tier_reason="test",
+        )
+        assert _try_tier_2(task, route, {feat.feature_id: feat}, None, 80) is None
+
+
+class TestTier2InExecutor:
+    def test_tier_2_with_engine_success(self):
+        """Tier 2 with mock engine → code block appended."""
+        engine = FakeMicroPrimeEngine(
+            result=FakeElementResult(success=True, code="def serve(port: int):\n    pass"),
+        )
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature(
+            api_signatures=["def serve(port: int) -> None"],
+            target_files=["src/server.py"],
+        )
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="SIMPLE-viable", has_forward_spec=False,
+            elements=["serve"],
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat],
+            tier_2_enabled=True,
+            micro_prime_engine=engine,
+        )
+        assert counters["tier_2_count"] == 1
+        assert counters["code_examples_added"] == 1
+        assert "```python" in task["config"]["task_description"]
+
+    def test_circuit_breaker_skips_all(self):
+        """Circuit breaker open → all Tier 2 skipped."""
+        engine = FakeMicroPrimeEngine(circuit_open=True)
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature(api_signatures=["def serve(port: int)"])
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="test", elements=["serve"],
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat],
+            tier_2_enabled=True,
+            micro_prime_engine=engine,
+        )
+        assert counters["tier_2_count"] == 1
+        assert counters["tier_2_skipped_signals"] == 1
+        assert counters["code_examples_added"] == 0
+
+    def test_tier_2_disabled_counted_only(self):
+        """tier_2_enabled=False → counted but no engine call."""
+        engine = FakeMicroPrimeEngine()
+        task = _make_task()
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="SIMPLE-viable",
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat],
+            tier_2_enabled=False,
+            micro_prime_engine=engine,
+        )
+        assert counters["tier_2_count"] == 1
+        assert counters["code_examples_added"] == 0
