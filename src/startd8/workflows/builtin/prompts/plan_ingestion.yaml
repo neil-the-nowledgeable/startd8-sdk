@@ -1,0 +1,183 @@
+# Externalized prompt templates for the Plan Ingestion workflow.
+#
+# Loaded by ``startd8.workflows.builtin.prompts.get_template()`` /
+# ``format_prompt()``.  Placeholders use ``str.format()`` syntax.
+# Literal braces in the template must be doubled ({{ / }}).
+
+prompts:
+  parse:
+    description: >
+      Extracts structured JSON from a plan document: features, goals,
+      dependencies, file references, API signatures.
+    template: |
+      You are an expert software architect. Analyze the following implementation plan and extract structured information.
+
+      <plan>
+      {plan_text}
+      </plan>
+
+      Return a JSON object wrapped in ```json code fences with exactly these keys:
+      {{
+        "title": "string — plan title",
+        "goals": ["string — each high-level goal"],
+        "features": [
+          {{
+            "feature_id": "F-001",
+            "name": "short name",
+            "description": "what this feature does",
+            "target_files": ["path/to/file.py"],
+            "dependencies": ["F-002"],
+            "estimated_loc": 100,
+            "labels": ["label"],
+            "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
+            "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
+            "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
+            "protocol": "grpc or http or cli or library or none",
+            "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
+            "negative_scope": ["things explicitly excluded from this feature"]
+          }}
+        ],
+        "mentioned_files": ["every file path mentioned in the plan"],
+        "dependency_graph": {{"F-001": ["F-002"]}}
+      }}
+
+      ## target_files guidance
+
+      Each feature becomes ONE implementation task sent to a code-generation LLM.
+      Multi-file tasks reliably fail — the LLM drops files or produces partial output.
+
+      Rules for target_files:
+      1. ALWAYS assign exactly ONE file per feature. If a change spans multiple
+         files, create separate features with dependencies between them.
+      2. Do NOT create features targeting test `__init__.py` files
+         (e.g. `tests/__init__.py`, `tests/unit/__init__.py`). Python 3 + pytest
+         do not require them — they are wasted implementation slots.
+
+      design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
+      artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
+      api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
+      protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
+      runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
+      negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
+
+      Be thorough. Extract every feature, file reference, and dependency.
+
+  assess:
+    description: >
+      Scores plan complexity across 7 dimensions and routes to PRIME or ARTISAN.
+    template: |
+      You are a complexity assessor for software plans.
+
+      <plan_summary>
+      Title: {title}
+      Goals: {goals}
+      Feature count: {feature_count}
+      Features: {feature_summary}
+      Files mentioned: {file_count}
+      </plan_summary>
+
+      Score the plan on these 7 dimensions (each 0–100):
+      1. feature_count — number and granularity of features
+      2. cross_file_deps — how many features touch multiple files
+      3. api_surface — breadth of public API changes
+      4. test_complexity — difficulty of testing
+      5. integration_depth — how deeply it integrates with existing code
+      6. domain_novelty — how novel the domain concepts are
+      7. ambiguity — how ambiguous or under-specified the plan is
+
+      Then compute a composite score (weighted average, 0–100).
+
+      Routing rule: composite ≤ {threshold} → "prime", else → "artisan".
+
+      Return JSON wrapped in ```json code fences:
+      {{
+        "feature_count": 0,
+        "cross_file_deps": 0,
+        "api_surface": 0,
+        "test_complexity": 0,
+        "integration_depth": 0,
+        "domain_novelty": 0,
+        "ambiguity": 0,
+        "composite": 0,
+        "reasoning": "one paragraph explaining the score and routing decision",
+        "route": "prime or artisan"
+      }}
+
+  transform_prime:
+    description: >
+      Converts parsed plan to YAML task manifest for PrimeContractor workflow.
+    template: |
+      You are a task YAML generator for the PrimeContractor workflow.
+
+      Convert the following parsed plan into a task YAML file matching this schema:
+
+      ```yaml
+      project:
+        id: <project-id>
+        name: <project-name>
+        sprint_id: <sprint-id>
+
+      tasks:
+        - task_id: <ID>
+          title: "short title"
+          task_type: task
+          story_points: <1-8>
+          priority: <high|medium|low>
+          labels: [label1, label2]
+          depends_on: [<other-task-id>]
+          config:
+            task_description: |
+              Detailed implementation instructions...
+            context:
+              existing_code: ""
+      ```
+
+      <plan>
+      Title: {title}
+      Goals: {goals}
+      Features:
+      {features}
+      Dependency graph: {dependency_graph}
+      </plan>
+
+      Generate valid YAML. Use task IDs like PI-001, PI-002, etc.
+      Include dependency edges from the dependency graph.
+
+      Each task_description MUST be a multi-line block (5+ lines minimum) containing:
+      1. **Implementation steps** — numbered steps describing what to build
+      2. **Key function signatures** — the primary functions/methods with parameters and return types
+      3. **Code example** — a fenced code block showing the core API call, constructor, or pattern
+      4. **Error handling** — what errors to handle and how
+      5. **Negative scope** — "This task should NOT: ..." listing explicit exclusions
+
+      Do NOT produce single-line descriptions. A one-sentence summary is insufficient for code generation.
+
+  transform_artisan:
+    description: >
+      Converts parsed plan to structured markdown plan document for ArtisanContractor workflow.
+    template: |
+      You are a plan document generator for the ArtisanContractor workflow.
+
+      Convert the following parsed plan into a structured markdown plan document.
+
+      The document must have these sections:
+      1. **Overview** — title, goals, scope
+      2. **Data Models** — key data structures
+      3. **Architecture** — component diagram, file layout
+      4. **Phase Breakdown** — implementation phases with deliverables
+      5. **Cost Model** — estimated token usage per phase
+      6. **Risk Register** — risks and mitigations
+      7. **Verification** — test strategy, acceptance criteria
+      8. **Dependencies** — external deps, inter-feature deps
+
+      <plan>
+      Title: {title}
+      Goals: {goals}
+      Features:
+      {features}
+      Mentioned files: {mentioned_files}
+      Dependency graph: {dependency_graph}
+      </plan>
+
+      Generate a complete, well-structured markdown document.
+      Use ## for top-level sections, ### for subsections.
