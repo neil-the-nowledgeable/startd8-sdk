@@ -405,13 +405,13 @@ Follows existing `persist_prompt_response()` pattern.
 | Req ID | Description | Status |
 |--------|-------------|--------|
 | **Option A — Deterministic Enrichment** | | |
-| REQ-TDE-100 | Negative scope forwarding | PLANNED |
-| REQ-TDE-101 | Requirement reference injection | PLANNED |
-| REQ-TDE-102 | Target files inference | PLANNED |
-| REQ-TDE-103 | API signature code stubs | PLANNED |
-| REQ-TDE-104 | REFINE suggestion mapping | PLANNED |
-| REQ-TDE-105 | Enrichment ordering | PLANNED |
-| REQ-TDE-106 | No-clobber rule | PLANNED |
+| REQ-TDE-100 | Negative scope forwarding | IMPLEMENTED |
+| REQ-TDE-101 | Requirement reference injection | IMPLEMENTED |
+| REQ-TDE-102 | Target files inference | IMPLEMENTED (Tier 1+2; Tier 3 deferred) |
+| REQ-TDE-103 | API signature code stubs | IMPLEMENTED |
+| REQ-TDE-104 | REFINE suggestion mapping | IMPLEMENTED |
+| REQ-TDE-105 | Enrichment ordering | IMPLEMENTED |
+| REQ-TDE-106 | No-clobber rule | IMPLEMENTED |
 | **Option B — LLM-Assisted Enrichment** | | |
 | REQ-TDE-200 | Enrichment prompt generation | PLANNED |
 | REQ-TDE-201 | Batch processing | PLANNED |
@@ -420,15 +420,15 @@ Follows existing `persist_prompt_response()` pattern.
 | REQ-TDE-204 | Agent configuration | PLANNED |
 | REQ-TDE-205 | Cost guard | PLANNED |
 | **Configuration** | | |
-| REQ-TDE-300 | Kaizen config extension | PLANNED |
-| REQ-TDE-301 | CLI flag | PLANNED |
-| REQ-TDE-302 | Kaizen config JSON format | PLANNED |
-| REQ-TDE-303 | Per-step disable | PLANNED |
+| REQ-TDE-300 | Kaizen config extension | IMPLEMENTED |
+| REQ-TDE-301 | CLI flag | PLANNED (Option B only) |
+| REQ-TDE-302 | Kaizen config JSON format | IMPLEMENTED |
+| REQ-TDE-303 | Per-step disable | IMPLEMENTED |
 | **Observability** | | |
-| REQ-TDE-400 | Enrichment diagnostic block | PLANNED |
+| REQ-TDE-400 | Enrichment diagnostic block | IMPLEMENTED |
 | REQ-TDE-401 | Pre/post density comparison | PLANNED |
-| REQ-TDE-402 | Seed quality score impact | PLANNED |
-| REQ-TDE-403 | Kaizen prompt capture | PLANNED |
+| REQ-TDE-402 | Seed quality score impact | IMPLEMENTED (automatic — enrichment runs before scoring) |
+| REQ-TDE-403 | Kaizen prompt capture | PLANNED (Option B only) |
 
 ---
 

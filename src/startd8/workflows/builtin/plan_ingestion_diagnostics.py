@@ -65,6 +65,22 @@ class IngestionDiagnostic:
     seed_quality_score: float = 0.0
     quality_warnings: List[str] = field(default_factory=list)
     task_density: List[TaskDensity] = field(default_factory=list)
+    enrichment: Optional[EnrichmentDiagnostic] = None
+
+
+@dataclass
+class EnrichmentDiagnostic:
+    """Diagnostic metrics for deterministic task enrichment (REQ-TDE-400)."""
+
+    enabled: bool = True
+    negative_scope_added: int = 0
+    requirement_refs_added: int = 0
+    target_files_inferred: int = 0
+    api_signatures_added: int = 0
+    refine_suggestions_mapped: int = 0
+    tasks_enriched: int = 0
+    tasks_skipped: int = 0
+    time_ms: int = 0
 
 
 @dataclass
@@ -76,6 +92,19 @@ class PlanIngestionKaizenConfig:
     transform_prompt_suffix: str = ""
     complexity_threshold_override: Optional[int] = None
 
+    # REFINE phase overrides (REQ-KPI-500 extension)
+    refine_scope_override: str = ""
+    refine_review_profile: Optional[Dict[str, Any]] = field(default_factory=dict)
+    refine_rounds_override: Optional[int] = None
+
+    # Option A: Deterministic enrichment (REQ-TDE-3xx) — always runs
+    enrich_negative_scope: bool = True       # REQ-TDE-100
+    enrich_requirement_refs: bool = True     # REQ-TDE-101
+    enrich_target_files: bool = True         # REQ-TDE-102
+    enrich_api_signatures: bool = True       # REQ-TDE-103
+    enrich_refine_suggestions: bool = True   # REQ-TDE-104
+    enrich_req_proximity_chars: int = 500    # REQ-TDE-101 proximity window
+
 
 def load_kaizen_config(path: Path) -> PlanIngestionKaizenConfig:
     """Load kaizen config from a JSON file.
@@ -85,7 +114,14 @@ def load_kaizen_config(path: Path) -> PlanIngestionKaizenConfig:
         {
             "plan_ingestion_kaizen": {
                 "parse_prompt_suffix": "...",
-                "complexity_threshold_override": 50
+                "complexity_threshold_override": 50,
+                "refine_scope_override": "Focus on ...",
+                "refine_review_profile": {
+                    "persona": "...",
+                    "focus": "...",
+                    "areas": ["completeness", "clarity"]
+                },
+                "refine_rounds_override": 2
             }
         }
 
@@ -348,6 +384,7 @@ def build_diagnostic(
     seed_quality_score: float = 0.0,
     quality_warnings: Optional[List[str]] = None,
     task_density: Optional[List[TaskDensity]] = None,
+    enrichment: Optional[EnrichmentDiagnostic] = None,
 ) -> IngestionDiagnostic:
     """Assemble a complete diagnostic report."""
     totals: Dict[str, Any] = {
@@ -359,7 +396,7 @@ def build_diagnostic(
         "output_tokens": sum(p.output_tokens for p in phase_diagnostics.values()),
         "llm_calls": sum(
             1 for p in phase_diagnostics.values()
-            if p.phase in ("parse", "assess", "transform") and p.success
+            if p.phase in ("parse", "assess", "transform", "refine") and p.success
         ),
     }
     return IngestionDiagnostic(
@@ -373,6 +410,7 @@ def build_diagnostic(
         seed_quality_score=seed_quality_score,
         quality_warnings=quality_warnings or [],
         task_density=task_density or [],
+        enrichment=enrichment,
     )
 
 

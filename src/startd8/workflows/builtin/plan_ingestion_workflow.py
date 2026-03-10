@@ -43,6 +43,7 @@ from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 from .plan_ingestion_diagnostics import (
+    EnrichmentDiagnostic,
     PhaseDiagnostic,
     PlanIngestionKaizenConfig,
     build_diagnostic,
@@ -56,6 +57,7 @@ from .plan_ingestion_diagnostics import (
     persist_diagnostic,
     persist_prompt_response,
 )
+from .plan_ingestion_enrichment import enrich_tasks_deterministic
 from .plan_ingestion_models import (
     ArtisanContextSeed,
     ComplexityScore,
@@ -281,7 +283,26 @@ def _ensure_onboarding_in_context_files(
 # LLM prompt templates
 # ---------------------------------------------------------------------------
 
-_PARSE_PROMPT = """\
+# ---------------------------------------------------------------------------
+# Prompt templates — loaded from YAML with inline fallbacks
+# ---------------------------------------------------------------------------
+# Primary source: prompts/plan_ingestion.yaml (externalized, editable).
+# Fallback: inline strings below ensure the engine works even if the YAML
+# file is missing (e.g. during packaging or minimal installs).
+
+def _fmt_prompt(prompt_name: str, **kwargs: Any) -> str:
+    """Format a plan-ingestion prompt from YAML, falling back to inline strings."""
+    try:
+        from .prompts import format_prompt
+        return format_prompt("plan_ingestion", prompt_name, **kwargs)
+    except (FileNotFoundError, KeyError):
+        _logger.debug("YAML template plan_ingestion.%s unavailable, using inline fallback", prompt_name)
+        return _FALLBACK_PROMPTS[prompt_name].format(**kwargs)
+
+
+_FALLBACK_PROMPTS: Dict[str, str] = {}
+
+_FALLBACK_PROMPTS["parse"] = """\
 You are an expert software architect. Analyze the following implementation plan \
 and extract structured information.
 
@@ -336,7 +357,7 @@ negative_scope: list of things explicitly excluded or out-of-scope for this feat
 Be thorough. Extract every feature, file reference, and dependency.
 """
 
-_ASSESS_PROMPT = """\
+_FALLBACK_PROMPTS["assess"] = """\
 You are a complexity assessor for software plans.
 
 <plan_summary>
@@ -375,7 +396,7 @@ Return JSON wrapped in ```json code fences:
 }}
 """
 
-_TRANSFORM_PRIME_PROMPT = """\
+_FALLBACK_PROMPTS["transform_prime"] = """\
 You are a task YAML generator for the PrimeContractor workflow.
 
 Convert the following parsed plan into a task YAML file matching this schema:
@@ -422,7 +443,7 @@ Each task_description MUST be a multi-line block (5+ lines minimum) containing:
 Do NOT produce single-line descriptions. A one-sentence summary is insufficient for code generation.
 """
 
-_TRANSFORM_ARTISAN_PROMPT = """\
+_FALLBACK_PROMPTS["transform_artisan"] = """\
 You are a plan document generator for the ArtisanContractor workflow.
 
 Convert the following parsed plan into a structured markdown plan document.
@@ -1693,6 +1714,7 @@ class EmitResult(NamedTuple):
     context_seed_path: Optional[Path]
     tracking_result: Optional[Dict[str, Any]]
     tasks: List[Dict[str, Any]]
+    enrichment_diagnostic: Optional[EnrichmentDiagnostic] = None
 
 
 # ---------------------------------------------------------------------------
@@ -2040,7 +2062,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         self, plan_text: str, agent: BaseAgent
     ) -> Tuple[Optional[ParsedPlan], StepResult]:
         t0 = time.time()
-        prompt = _PARSE_PROMPT.format(plan_text=plan_text)
+        prompt = _fmt_prompt("parse", plan_text=plan_text)
         if getattr(self, "_kaizen_config", None) and self._kaizen_config.parse_prompt_suffix:
             prompt += self._kaizen_config.parse_prompt_suffix
 
@@ -2179,7 +2201,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 f"factor this into cross_file_deps scoring."
             )
 
-        prompt = _ASSESS_PROMPT.format(
+        prompt = _fmt_prompt(
+            "assess",
             title=parsed_plan.title,
             goals=", ".join(parsed_plan.goals),
             feature_count=len(parsed_plan.features),
@@ -2239,7 +2262,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                 error=f"Failed to parse assessment JSON: {exc}",
             )
 
-        # Determine route from composite score (don't trust LLM's route suggestion)
+        # Determine route from composite score.
+        # NOTE: Complexity routing is EXPERIMENTAL. The Artisan workflow is not
+        # production-ready, so all plans currently route to PRIME regardless of
+        # score. The threshold/margin logic is retained for future use and for
+        # Kaizen telemetry (route_margin tracking).
         composite = _safe_int(data.get("composite"), 50)
         if force_route:
             route = ContractorRoute(force_route)
@@ -2306,7 +2333,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         )
 
         if route == ContractorRoute.PRIME:
-            prompt = _TRANSFORM_PRIME_PROMPT.format(
+            prompt = _fmt_prompt(
+                "transform_prime",
                 title=parsed_plan.title,
                 goals=", ".join(parsed_plan.goals),
                 features=features_text,
@@ -2314,7 +2342,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             out_filename = "plan-ingestion-tasks.yaml"
         else:
-            prompt = _TRANSFORM_ARTISAN_PROMPT.format(
+            prompt = _fmt_prompt(
+                "transform_artisan",
                 title=parsed_plan.title,
                 goals=", ".join(parsed_plan.goals),
                 features=features_text,
@@ -3126,6 +3155,20 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "target_files": ordered_files,
                 "estimated_loc": feat.estimated_loc,
             }
+            # Thread negative scope so downstream phases (DESIGN, IMPLEMENT)
+            # know what the task should NOT do — even if REFINE is skipped or
+            # fails.  Kaizen run-019 showed zero tasks had negative_scope
+            # because it was only extracted during PARSE but never wired here.
+            if feat.negative_scope:
+                ctx["negative_scope"] = list(feat.negative_scope)
+            # IMP-4 per-task fields: thread through so DESIGN/IMPLEMENT
+            # have concrete type information without re-deriving.
+            if feat.api_signatures:
+                ctx["api_signatures"] = list(feat.api_signatures)
+            if feat.protocol:
+                ctx["protocol"] = feat.protocol
+            if feat.runtime_dependencies:
+                ctx["runtime_dependencies"] = list(feat.runtime_dependencies)
             if feat.design_doc_sections:
                 ctx["design_doc_sections"] = list(feat.design_doc_sections)
             if feat.artifact_types_addressed:
@@ -4223,6 +4266,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ),
             )
 
+        # --- REQ-TDE-1xx enrichment diagnostic placeholder (populated after refine_suggestions)
+        _enrichment_diag: Optional[EnrichmentDiagnostic] = None
+
         # --- REQ-PC-FM-005: Rewrite forward manifest applicable_task_ids using actual task IDs
         # (must run AFTER _derive_tasks_from_features so skipped features and split
         #  sub-tasks are reflected — see task ID mapping divergence fix)
@@ -4298,6 +4344,25 @@ class PlanIngestionWorkflow(WorkflowBase):
             self._extract_refine_suggestions_for_seed(review_output)
             if review_output else []
         )
+
+        # --- REQ-TDE-1xx: Deterministic task density enrichment (Option A)
+        # Runs after task derivation + refine_suggestions extraction, before
+        # seed construction, so enrichment populates density signals that
+        # compute_seed_quality() will score.
+        if tasks and parsed_plan is not None:
+            _kc = self._kaizen_config or PlanIngestionKaizenConfig()
+            _enrichment_diag = enrich_tasks_deterministic(
+                tasks,
+                parsed_plan.features,
+                plan_text=parsed_plan.raw_text,
+                refine_suggestions=refine_suggestions or None,
+                enrich_negative_scope=_kc.enrich_negative_scope,
+                enrich_requirement_refs=_kc.enrich_requirement_refs,
+                enrich_target_files=_kc.enrich_target_files,
+                enrich_api_signatures=_kc.enrich_api_signatures,
+                enrich_refine_suggestions=_kc.enrich_refine_suggestions,
+                enrich_req_proximity_chars=_kc.enrich_req_proximity_chars,
+            )
 
         # --- Build common artifacts and onboarding_var ---
         def _build_seed_artifacts() -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
@@ -4572,7 +4637,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         tracking_result.get("state_file_count", 0) if tracking_result else 0,
                     )
 
-        return EmitResult(config_path, review_config, context_seed_path, tracking_result, tasks)
+        return EmitResult(config_path, review_config, context_seed_path, tracking_result, tasks, _enrichment_diag)
 
     # ------------------------------------------------------------------
     # Main execution
@@ -4634,6 +4699,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         # Kaizen config: prompt suffixes + threshold override (REQ-KPI-500)
         self._kaizen_config: Optional[PlanIngestionKaizenConfig] = None
         _kaizen_config_path = config.get("kaizen_config_path")
+        if not _kaizen_config_path:
+            # Auto-discover kaizen-config.json in output or ancestor dirs
+            # (mirrors run-atomic.sh which places it at pipeline-output/$NAME/)
+            for _candidate in [output_dir, output_dir.parent, output_dir.parent.parent]:
+                _auto = _candidate / "kaizen-config.json"
+                if _auto.is_file():
+                    _kaizen_config_path = str(_auto)
+                    logger.info("Kaizen config auto-discovered at %s", _auto)
+                    break
         if _kaizen_config_path:
             _kp = Path(str(_kaizen_config_path)).expanduser()
             if _kp.is_file():
@@ -5171,6 +5245,11 @@ class PlanIngestionWorkflow(WorkflowBase):
 
                 _refine_profile: Optional[Dict[str, Any]] = None
 
+                # Kaizen overrides for REFINE (REQ-KPI-500 extension)
+                _kz = getattr(self, "_kaizen_config", None)
+                if _kz and _kz.refine_rounds_override is not None:
+                    review_rounds = _kz.refine_rounds_override
+
                 if route == ContractorRoute.PRIME:
                     # Give the reviewer the plan markdown as context
                     _plan_str = str(plan_path)
@@ -5183,7 +5262,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                             "For each task, cross-reference the plan markdown "
                             "and requirements to add: (1) a fenced code example "
                             "showing the primary class/function signature, "
-                            "(2) negative scope — what the task should NOT do, "
+                            "(2) negative scope — what the task should NOT do "
+                            "(extract exclusions from the plan's Dependencies, "
+                            "Notes, and Out-of-Scope sections; also infer "
+                            "boundaries from sibling tasks to prevent overlap), "
                             "(3) error handling patterns from the implementation "
                             "contract, (4) requirements references (REQ-xxx IDs). "
                             "Prioritize tasks with thin descriptions."
@@ -5215,6 +5297,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if _refine_triage is None:
                         _refine_triage = True
 
+                # Apply kaizen overrides after defaults are set
+                if _kz:
+                    if _kz.refine_scope_override:
+                        _refine_scope = _kz.refine_scope_override
+                    if _kz.refine_review_profile:
+                        _refine_profile = _kz.refine_review_profile
+
                 rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
                     doc_path,
                     review_rounds,
@@ -5233,6 +5322,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.extend(refine_steps)
             state.total_cost += refine_cost
             step_costs["refine"] = refine_cost
+
+            # Kaizen prompt/response capture for REFINE rounds
+            if self._kaizen_output_dir and refine_steps:
+                for _rs_idx, _rs in enumerate(refine_steps):
+                    _rs_prompt = _rs.input or ""
+                    _rs_response = _rs.output or ""
+                    if _rs_prompt or _rs_response:
+                        persist_prompt_response(
+                            self._kaizen_output_dir,
+                            f"refine_round{_rs_idx}",
+                            str(_rs_prompt),
+                            str(_rs_response),
+                        )
 
             cost_err = _check_cost("refine")
 
@@ -5399,6 +5501,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 seed_quality_score=_seed_score,
                 quality_warnings=_seed_warnings,
                 task_density=_task_density,
+                enrichment=emit_result.enrichment_diagnostic,
             )
             persist_diagnostic(_diag, output_dir)
 
