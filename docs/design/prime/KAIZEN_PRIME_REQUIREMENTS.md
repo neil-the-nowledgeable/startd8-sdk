@@ -103,6 +103,7 @@ Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`.
 | **Layer 4 — Cross-Run Aggregation** | | | | |
 | REQ-KZ-400 | Cross-run trend script | cap-dev-pipe | PLANNED | K-2 |
 | REQ-KZ-401 | Failure pattern persistence | cap-dev-pipe | PLANNED | K-2 |
+| REQ-KZ-401a | Escalation pattern quality (reason subtyping, thresholds, auto-resolve) | startd8-sdk + cap-dev-pipe | PLANNED | K-2 |
 | REQ-KZ-402 | Cost trend tracking | cap-dev-pipe | PLANNED | K-2 |
 | **Layer 5 — Feedback Loop** | | | | |
 | REQ-KZ-500 | Kaizen config file format | cap-dev-pipe | PLANNED | K-3 |
@@ -345,7 +346,7 @@ Output: `pipeline-output/{project}/kaizen-trends.json` + `kaizen-trends.md` cont
 
 ### REQ-KZ-401: Failure Pattern Persistence
 
-Cross-feature patterns detected by post-mortem (minimum 2 occurrences per `_CROSS_FEATURE_PATTERN_MIN`) SHALL be accumulated across runs in `pipeline-output/{project}/kaizen-patterns.json`. Each pattern entry tracks:
+Cross-feature patterns detected by post-mortem SHALL be accumulated across runs in `pipeline-output/{project}/kaizen-patterns.json`. Each pattern entry tracks:
 
 ```json
 {
@@ -359,6 +360,25 @@ Cross-feature patterns detected by post-mortem (minimum 2 occurrences per `_CROS
 ```
 
 **Leverages:** `PostMortemReport.cross_feature_patterns` already identifies these patterns per run. The trend script (REQ-KZ-400) performs the cross-run deduplication.
+
+#### REQ-KZ-401a: Escalation Pattern Quality (2026-03-10)
+
+Run-025/028 analysis revealed that the `repeated_escalation` pattern type has a high false positive rate due to six design gaps. The following refinements apply to escalation pattern detection in `prime_postmortem.py`:
+
+**1. Reason subtyping:** Escalation patterns SHALL be subtyped by reason: `repeated_escalation:ast_failure`, `repeated_escalation:tier_too_high`, `repeated_escalation:not_decomposable`, etc. This replaces the current single `repeated_escalation` type, making each pattern independently actionable.
+
+**2. Threshold increase:** The minimum threshold for escalation patterns SHALL be raised from 2 to **3 distinct features** AND **5 total element escalations** combined. The current `_CROSS_FEATURE_PATTERN_MIN = 2` produces noise from trivial co-occurrences.
+
+**3. Element-level frequency:** `CrossFeaturePattern.frequency` for escalation patterns SHALL count total escalated elements, not distinct features. A new `affected_feature_count` field tracks the feature count separately. This prevents a single heavily-escalated feature from inflating the signal.
+
+**4. Dynamic severity:** Escalation pattern severity SHALL scale with impact:
+- `"high"`: ≥5 features affected OR ≥10 element escalations
+- `"medium"`: ≥3 features OR ≥5 element escalations (current detection threshold)
+- `"low"`: below detection threshold (not emitted)
+
+**5. Auto-resolution:** The trend script (REQ-KZ-400) SHALL mark a pattern as `resolved: true` when it has been absent for 2+ consecutive runs after its `last_seen_run`.
+
+**6. Suggestion templates:** Each escalation reason subtype SHALL have a corresponding entry in `_CAUSE_TO_SUGGESTION` (REQ-KZ-501). The current implementation has no template for `repeated_escalation`, causing detected patterns to produce no actionable output.
 
 ### REQ-KZ-402: Cost Trend Tracking
 

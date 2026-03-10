@@ -48,7 +48,9 @@ _PASS_THRESHOLD = 0.8
 _PARTIAL_THRESHOLD = 0.4
 _POSTMORTEM_TIMEOUT_S = 300
 _COST_OUTLIER_FACTOR = 2.0  # Feature costing 2x+ average is an outlier
-_CROSS_FEATURE_PATTERN_MIN = 2  # Minimum occurrences for a pattern
+_CROSS_FEATURE_PATTERN_MIN = 2  # Minimum occurrences for repeated_root_cause
+_ESCALATION_MIN_FEATURES = 3   # Minimum distinct features for escalation patterns (REQ-KZ-401a)
+_ESCALATION_MIN_ELEMENTS = 5   # Minimum total element escalations (REQ-KZ-401a)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -270,6 +272,9 @@ class CrossFeaturePattern:
     affected_features: List[str] = dataclasses.field(default_factory=list)
     frequency: int = 0
     severity: str = "medium"
+    # For escalation patterns: distinct feature count separate from element
+    # frequency (REQ-KZ-401a). Defaults to len(affected_features) when not set.
+    affected_feature_count: int = 0
 
 
 @dataclasses.dataclass
@@ -668,27 +673,38 @@ class PrimePostMortemEvaluator:
                     severity="high" if len(fids) >= 3 else "medium",
                 ))
 
-        # Pattern 2: Repeated escalation reason
-        esc_features: Dict[str, List[str]] = {}
+        # Pattern 2: Repeated escalation reason — subtyped by reason (REQ-KZ-401a)
+        # Track both element count (total escalations) and feature count separately.
+        esc_elements: Dict[str, int] = {}       # reason → total element escalations
+        esc_feature_sets: Dict[str, List[str]] = {}  # reason → feature IDs (with dupes)
         for fpm in features:
             for elem in fpm.elements:
                 if elem.escalation_reason:
-                    esc_features.setdefault(
-                        elem.escalation_reason, []
-                    ).append(fpm.feature_id)
+                    reason = elem.escalation_reason
+                    esc_elements[reason] = esc_elements.get(reason, 0) + 1
+                    esc_feature_sets.setdefault(reason, []).append(fpm.feature_id)
 
-        for reason, fids in esc_features.items():
-            unique_fids = list(dict.fromkeys(fids))  # Deduplicate, preserve order
-            if len(unique_fids) >= _CROSS_FEATURE_PATTERN_MIN:
+        for reason, fids in esc_feature_sets.items():
+            unique_fids = list(dict.fromkeys(fids))
+            element_count = esc_elements[reason]
+            # Dual threshold: enough features AND enough total elements
+            if (len(unique_fids) >= _ESCALATION_MIN_FEATURES
+                    and element_count >= _ESCALATION_MIN_ELEMENTS):
+                # Dynamic severity based on scope
+                if len(unique_fids) >= 5 or element_count >= 10:
+                    severity = "high"
+                else:
+                    severity = "medium"
                 patterns.append(CrossFeaturePattern(
-                    pattern_type="repeated_escalation",
+                    pattern_type=f"repeated_escalation:{reason}",
                     description=(
-                        f"Escalation reason '{reason}' across "
-                        f"{len(unique_fids)} features"
+                        f"Escalation reason '{reason}': {element_count} elements "
+                        f"across {len(unique_fids)} features"
                     ),
                     affected_features=unique_fids,
-                    frequency=len(unique_fids),
-                    severity="medium",
+                    frequency=element_count,
+                    severity=severity,
+                    affected_feature_count=len(unique_fids),
                 ))
 
         # Pattern 3: Cost outliers

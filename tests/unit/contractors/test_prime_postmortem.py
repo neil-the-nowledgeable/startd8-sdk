@@ -342,6 +342,74 @@ class TestPrimePostMortemEvaluator:
         assert "f1" in repeated[0].affected_features
         assert "f2" in repeated[0].affected_features
 
+    def test_escalation_pattern_subtyped_by_reason(self, evaluator, tmp_path):
+        """REQ-KZ-401a: escalation patterns are subtyped and use dual threshold."""
+        # Build 4 features with ast_failure escalation across 3 features, 6 elements
+        def _elem(esc_reason=""):
+            e = {"element_name": "fn", "success": not esc_reason, "tier": "SIMPLE"}
+            if esc_reason:
+                e["escalation"] = {"reason": esc_reason}
+            return e
+
+        def _file_results(elements):
+            return {"micro_prime_file_results": [{"file_path": "x.py", "element_results": elements}]}
+
+        history = [
+            _make_history_entry("f1", success=True, generation_metadata=_file_results(
+                [_elem("ast_failure"), _elem("ast_failure")],
+            )),
+            _make_history_entry("f2", success=True, generation_metadata=_file_results(
+                [_elem("ast_failure"), _elem("ast_failure")],
+            )),
+            _make_history_entry("f3", success=True, generation_metadata=_file_results(
+                [_elem("ast_failure"), _elem("ast_failure")],
+            )),
+            _make_history_entry("f4", success=True),
+        ]
+        result_dict = _make_result_dict(history)
+        queue_state = _make_queue_state({
+            "f1": {"status": "complete"}, "f2": {"status": "complete"},
+            "f3": {"status": "complete"}, "f4": {"status": "complete"},
+        })
+
+        report = evaluator.evaluate(result_dict, queue_state, output_dir=str(tmp_path))
+
+        esc = [p for p in report.cross_feature_patterns
+               if p.pattern_type.startswith("repeated_escalation:")]
+        assert len(esc) == 1
+        assert esc[0].pattern_type == "repeated_escalation:ast_failure"
+        # Frequency = total element escalations (6), not feature count (3)
+        assert esc[0].frequency == 6
+        assert esc[0].affected_feature_count == 3
+        assert set(esc[0].affected_features) == {"f1", "f2", "f3"}
+
+    def test_escalation_below_threshold_suppressed(self, evaluator, tmp_path):
+        """REQ-KZ-401a: 2 features with 2 elements should NOT trigger (below threshold)."""
+        def _elem(esc_reason=""):
+            e = {"name": "fn", "success": not esc_reason, "tier": "SIMPLE"}
+            if esc_reason:
+                e["escalation"] = {"reason": esc_reason}
+            return e
+
+        history = [
+            _make_history_entry("f1", success=True, generation_metadata={
+                "element_results": [_elem("ast_failure")],
+            }),
+            _make_history_entry("f2", success=True, generation_metadata={
+                "element_results": [_elem("ast_failure")],
+            }),
+        ]
+        result_dict = _make_result_dict(history)
+        queue_state = _make_queue_state({
+            "f1": {"status": "complete"}, "f2": {"status": "complete"},
+        })
+
+        report = evaluator.evaluate(result_dict, queue_state, output_dir=str(tmp_path))
+
+        esc = [p for p in report.cross_feature_patterns
+               if p.pattern_type.startswith("repeated_escalation:")]
+        assert len(esc) == 0  # Below both thresholds
+
     def test_per_feature_error_guard(self, evaluator, tmp_path):
         """A feature that raises during evaluation should not crash the report."""
         history = [

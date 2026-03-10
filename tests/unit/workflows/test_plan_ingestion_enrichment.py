@@ -266,6 +266,58 @@ class TestRequirementRefInjection:
 
         assert count == 0
 
+    def test_feature_name_fallback_when_title_renamed(self):
+        """Tier 2: TRANSFORM renamed title → fall back to ParsedFeature.name."""
+        plan_text = "The Email Service Dockerfile implements REQ-PMS-001 for containerization."
+        # Task title was renamed by TRANSFORM (not found in plan)
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Build the container.")]
+        tasks[0]["title"] = "Dockerfile — emailservice"  # Renamed by TRANSFORM
+
+        feature_index = {
+            "F-1": FakeFeature("F-1", name="Email Service Dockerfile"),
+        }
+
+        count = _enrich_requirement_refs(
+            tasks, plan_text, proximity_chars=500, feature_index=feature_index,
+        )
+
+        assert count == 1
+        ctx = tasks[0]["config"]["context"]
+        assert "REQ-PMS-001" in ctx.get("requirements_refs", [])
+
+    def test_feature_name_fallback_not_used_when_title_works(self):
+        """Tier 1 title match succeeds → feature name fallback not invoked."""
+        plan_text = "The Email Service implements REQ-PI-003."
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Implement.")]
+        tasks[0]["title"] = "Email Service"
+
+        feature_index = {
+            "F-1": FakeFeature("F-1", name="Email Service Original Name"),
+        }
+
+        count = _enrich_requirement_refs(
+            tasks, plan_text, proximity_chars=500, feature_index=feature_index,
+        )
+
+        assert count == 1
+        assert "REQ-PI-003" in tasks[0]["config"]["context"].get("requirements_refs", [])
+
+    def test_feature_name_fallback_short_name_skipped(self):
+        """Feature name shorter than threshold → not used for search."""
+        plan_text = "The API implements REQ-PI-003."
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Build it.")]
+        tasks[0]["title"] = "Renamed Task"
+
+        feature_index = {
+            "F-1": FakeFeature("F-1", name="API"),  # Too short (3 chars)
+        }
+
+        count = _enrich_requirement_refs(
+            tasks, plan_text, proximity_chars=500, feature_index=feature_index,
+        )
+
+        assert count == 0
+
     def test_extract_req_refs_empty_plan(self):
         refs = _extract_req_refs_near_feature("", "Email Service")
         assert refs == []

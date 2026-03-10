@@ -242,16 +242,35 @@ def _enrich_requirement_refs(
     tasks: List[Dict[str, Any]],
     plan_text: str,
     proximity_chars: int = 500,
+    feature_index: Optional[Dict[str, Any]] = None,
 ) -> int:
-    """Append ## Requirements References section and populate structured field."""
+    """Append ## Requirements References section and populate structured field.
+
+    Uses a 2-tier search strategy:
+    1. Title proximity: search plan text near the task title
+    2. Feature name fallback: if title search fails (e.g. TRANSFORM renamed
+       the title), search using the original ParsedFeature.name instead
+    """
     count = 0
     for task in tasks:
         title = task.get("title", "")
-        # Skip proximity search for very short titles — generic names like
-        # "API" or "Service" would match ubiquitously and inject spurious refs.
-        if len(title) < _MIN_FEATURE_NAME_CHARS:
-            continue
-        refs = _extract_req_refs_near_feature(plan_text, title, proximity_chars)
+        refs: List[str] = []
+
+        # Tier 1: title-based proximity search
+        if len(title) >= _MIN_FEATURE_NAME_CHARS:
+            refs = _extract_req_refs_near_feature(plan_text, title, proximity_chars)
+
+        # Tier 2: feature name fallback — TRANSFORM may rename titles
+        if not refs and feature_index:
+            fid = _get_task_feature_id(task)
+            feat = feature_index.get(fid)
+            if feat:
+                feat_name = getattr(feat, "name", "") or ""
+                if feat_name and feat_name != title and len(feat_name) >= _MIN_FEATURE_NAME_CHARS:
+                    refs = _extract_req_refs_near_feature(
+                        plan_text, feat_name, proximity_chars,
+                    )
+
         if not refs:
             continue
 
@@ -477,6 +496,7 @@ def enrich_tasks_deterministic(
         try:
             diag.requirement_refs_added = _enrich_requirement_refs(
                 tasks, plan_text, enrich_req_proximity_chars,
+                feature_index=feature_index,
             )
         except Exception:
             logger.warning("ENRICH-A: requirement_refs step failed", exc_info=True)

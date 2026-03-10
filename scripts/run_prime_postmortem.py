@@ -270,6 +270,39 @@ _CAUSE_TO_SUGGESTION: dict[str, dict] = {
         "phase": "draft",
         "hint": "Inspect the failure message and add a targeted fix rather than regenerating the whole file.",
     },
+    # Escalation reason subtypes (REQ-KZ-401a)
+    "repeated_escalation:ast_failure": {
+        "phase": "draft",
+        "hint": "Emit syntactically valid Python; run a mental parse check. If generating function bodies, always include the def line.",
+    },
+    "repeated_escalation:tier_too_high": {
+        "phase": "spec",
+        "hint": "Decompose into simpler sub-elements; complex features need finer granularity in the spec.",
+    },
+    "repeated_escalation:not_decomposable": {
+        "phase": "spec",
+        "hint": "Elements that resist decomposition may need manual splitting or should be routed to cloud-tier generation.",
+    },
+    "repeated_escalation:structural_mismatch": {
+        "phase": "draft",
+        "hint": "Match the exact class/function structure of the target file. Do not reorganize or rename anchors.",
+    },
+    "repeated_escalation:empty_response": {
+        "phase": "draft",
+        "hint": "Always return code content. If unsure, emit a minimal valid stub rather than nothing.",
+    },
+    "repeated_escalation:timeout": {
+        "phase": "spec",
+        "hint": "Reduce element scope to fit within generation time budgets. Split large elements.",
+    },
+    "repeated_escalation:repair_exhausted": {
+        "phase": "draft",
+        "hint": "Generate cleaner code that requires fewer repair steps. Match target file conventions exactly.",
+    },
+    "repeated_escalation:circuit_breaker": {
+        "phase": "spec",
+        "hint": "Reduce batch size or complexity to stay within circuit breaker thresholds.",
+    },
 }
 
 
