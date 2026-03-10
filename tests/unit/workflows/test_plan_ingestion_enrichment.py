@@ -14,7 +14,9 @@ from startd8.workflows.builtin.plan_ingestion_enrichment import (
     _enrich_refine_suggestions,
     _enrich_requirement_refs,
     _enrich_target_files,
+    _ensure_task_context,
     _extract_req_refs_near_feature,
+    _infer_target_files_from_title,
     enrich_tasks_deterministic,
 )
 
@@ -105,6 +107,31 @@ class TestNegativeScopeForwarding:
 
         assert count == 0
 
+    def test_string_negative_scope_wrapped(self):
+        """P3: bare string negative_scope → wrapped in list, not exploded to chars."""
+        feat = FakeFeature("F-1")
+        # Simulate schema drift: negative_scope is a bare string
+        feat.negative_scope = "no caching"  # type: ignore[assignment]
+        tasks = [_make_task("PI-001", feature_id="F-1")]
+
+        count = _enrich_negative_scope(tasks, {"F-1": feat})
+
+        assert count == 1
+        assert tasks[0]["config"]["context"]["negative_scope"] == ["no caching"]
+
+    def test_missing_context_key_creates_it(self):
+        """R2: task without context key → _ensure_task_context creates it."""
+        task = {"task_id": "PI-001", "config": {"task_description": ""}}
+        assert "context" not in task["config"]
+
+        feat = FakeFeature("F-1", negative_scope=["no auth"])
+        # Manually set feature_id in the context that _ensure_task_context will create
+        task["config"]["context"] = {"feature_id": "F-1"}
+        count = _enrich_negative_scope([task], {"F-1": feat})
+
+        assert count == 1
+        assert task["config"]["context"]["negative_scope"] == ["no auth"]
+
 
 # ── REQ-TDE-102: Target Files Inference ───────────────────────────────
 
@@ -143,6 +170,40 @@ class TestTargetFilesInference:
 
         assert count == 0
         assert tasks[0]["config"]["context"]["target_files"] == ["existing.py"]
+
+    def test_target_files_tier3_convention(self):
+        """Tier 3: task title with service-role pattern → inferred path."""
+        features = [FakeFeature("F-1")]
+        tasks = [_make_task("PI-001", feature_id="F-1")]
+        tasks[0]["title"] = "Email Service — gRPC Server"
+
+        count = _enrich_target_files(tasks, {"F-1": features[0]})
+
+        assert count == 1
+        ctx = tasks[0]["config"]["context"]
+        assert ctx.get("_target_files_inferred") is True
+        assert any("email_service" in f for f in ctx["target_files"])
+
+    def test_target_files_tier3_no_role_suffix(self):
+        """Tier 3: title without role suffix → no inference."""
+        features = [FakeFeature("F-1")]
+        tasks = [_make_task("PI-001", feature_id="F-1")]
+        tasks[0]["title"] = "Email Service"
+
+        count = _enrich_target_files(tasks, {"F-1": features[0]})
+
+        assert count == 0
+
+    def test_missing_context_key_creates_it(self):
+        """R3: task without context key → target files still set."""
+        task = {"task_id": "PI-001", "config": {"task_description": ""}}
+        task["config"]["context"] = {"feature_id": "F-1"}
+        features = [FakeFeature("F-1", target_files=["server.py"])]
+
+        count = _enrich_target_files([task], {"F-1": features[0]})
+
+        assert count == 1
+        assert task["config"]["context"]["target_files"] == ["server.py"]
 
 
 # ── REQ-TDE-101: Requirement Reference Injection ─────────────────────
@@ -185,6 +246,16 @@ class TestRequirementRefInjection:
             description="This implements REQ-PI-003 already.",
         )]
         tasks[0]["title"] = "Email Service"
+
+        count = _enrich_requirement_refs(tasks, plan_text)
+
+        assert count == 0
+
+    def test_short_title_skipped(self):
+        """P2: title shorter than _MIN_FEATURE_NAME_CHARS → skipped to avoid false positives."""
+        plan_text = "The API implements REQ-PI-003 for all services."
+        tasks = [_make_task("PI-001", description="Build the API.")]
+        tasks[0]["title"] = "API"  # Too short (3 chars < 8)
 
         count = _enrich_requirement_refs(tasks, plan_text)
 
@@ -322,6 +393,22 @@ class TestRefineSuggestionMapping:
 
         assert count == 0
 
+    def test_placement_no_false_positive_substring(self):
+        """P1: placement 'server.py' must NOT match 'test_server.py'."""
+        tasks = [
+            _make_task("PI-001", description="Implement.", target_files=["test_server.py"]),
+            _make_task("PI-002", description="Implement.", target_files=["emailservice/server.py"]),
+        ]
+        suggestions = [
+            {"placement": "server.py", "area": "x", "rationale": "Fix it"},
+        ]
+
+        _enrich_refine_suggestions(tasks, suggestions)
+
+        # Should only match PI-002 (exact suffix match), not PI-001
+        assert "Fix it" not in tasks[0]["config"]["task_description"]
+        assert "Fix it" in tasks[1]["config"]["task_description"]
+
     def test_unmapped_suggestions_shared(self):
         """Suggestions that match no task → appended to all tasks as shared guidance."""
         tasks = [
@@ -425,6 +512,27 @@ class TestEnrichOrchestrator:
         diag = enrich_tasks_deterministic([], [])
         assert diag.tasks_enriched == 0
         assert diag.tasks_skipped == 0
+
+    def test_step_failure_does_not_block_others(self):
+        """E1: if one step raises, subsequent steps still run."""
+        from unittest.mock import patch
+
+        features = [
+            FakeFeature("F-1", negative_scope=["no auth"], api_signatures=["def f(): ..."]),
+        ]
+        tasks = [_make_task("PI-001", feature_id="F-1", description="Implement.")]
+
+        # Make negative_scope step raise, but api_signatures should still run
+        with patch(
+            "startd8.workflows.builtin.plan_ingestion_enrichment._enrich_negative_scope",
+            side_effect=RuntimeError("boom"),
+        ):
+            diag = enrich_tasks_deterministic(tasks, features)
+
+        # negative_scope failed → count stays 0
+        assert diag.negative_scope_added == 0
+        # api_signatures should have run successfully
+        assert diag.api_signatures_added == 1
 
 
 # ── REQ-TDE-300: Config Extension ─────────────────────────────────────
@@ -602,3 +710,52 @@ class TestDensityScoreIntegration:
         density_after = compute_task_density(tasks)
         assert density_after[0].has_code_examples  # API signatures added code block
         assert density_after[0].has_negative_scope  # negative scope forwarded
+
+
+# ── Tier 3: Convention-based Target File Inference ─────────────────────
+
+
+class TestInferTargetFilesFromTitle:
+    def test_service_grpc_server(self):
+        result = _infer_target_files_from_title("Email Service — gRPC Server")
+        assert result == ["email_service/email_service_grpc_server.py"]
+
+    def test_service_client(self):
+        result = _infer_target_files_from_title("Payment Service — Client")
+        assert result == ["payment_service/payment_service_client.py"]
+
+    def test_no_role_suffix(self):
+        """Single-part title → no inference."""
+        result = _infer_target_files_from_title("Email Service")
+        assert result == []
+
+    def test_empty_title(self):
+        result = _infer_target_files_from_title("")
+        assert result == []
+
+    def test_dash_separator(self):
+        """Regular dash also works as separator."""
+        result = _infer_target_files_from_title("Cart Service - Redis Cache")
+        assert result == ["cart_service/cart_service_redis_cache.py"]
+
+
+# ── _ensure_task_context (R2/R3 fix) ──────────────────────────────────
+
+
+class TestEnsureTaskContext:
+    def test_creates_missing_context(self):
+        task: dict = {"config": {"task_description": "x"}}
+        ctx = _ensure_task_context(task)
+        ctx["foo"] = "bar"
+        assert task["config"]["context"]["foo"] == "bar"
+
+    def test_preserves_existing_context(self):
+        task: dict = {"config": {"context": {"existing": True}}}
+        ctx = _ensure_task_context(task)
+        assert ctx["existing"] is True
+
+    def test_creates_missing_config_and_context(self):
+        task: dict = {}
+        ctx = _ensure_task_context(task)
+        ctx["key"] = "val"
+        assert task["config"]["context"]["key"] == "val"

@@ -31,6 +31,33 @@ _REQ_PATTERN = re.compile(r"\bREQ(?:[-_]\w+)+", re.IGNORECASE)
 # Maximum API signatures appended per task (REQ-TDE-103)
 _MAX_SIGNATURES_PER_TASK = 5
 
+# Feature names shorter than this are too generic for proximity matching
+# (e.g., "API", "Service") and would match ubiquitously in plan text.
+_MIN_FEATURE_NAME_CHARS = 8
+
+
+def _task_density_key(task: Dict[str, Any]) -> tuple:
+    """Snapshot the 4 density-relevant signals of a task for change detection."""
+    cfg = task.get("config", {})
+    ctx = cfg.get("context", {})
+    desc = cfg.get("task_description", "") or ""
+    return (
+        bool(ctx.get("negative_scope")),
+        bool(ctx.get("target_files")),
+        bool(_REQ_PATTERN.search(desc)),
+        "```" in desc,
+    )
+
+
+def _ensure_task_context(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the task's context dict, creating it if absent.
+
+    Uses ``setdefault`` to guarantee the returned dict is the *same*
+    reference stored in the task — writes to the returned dict persist.
+    """
+    config = task.setdefault("config", {})
+    return config.setdefault("context", {})
+
 
 def _build_feature_index(
     features: list,
@@ -54,7 +81,7 @@ def _enrich_negative_scope(
     """Copy ParsedFeature.negative_scope to task context (no-clobber)."""
     count = 0
     for task in tasks:
-        ctx = task.get("config", {}).get("context", {})
+        ctx = _ensure_task_context(task)
         if ctx.get("negative_scope"):
             logger.debug(
                 "ENRICH-A: skipping negative_scope for %s (already set)",
@@ -64,7 +91,13 @@ def _enrich_negative_scope(
         fid = _get_task_feature_id(task)
         feat = feature_index.get(fid)
         if feat and feat.negative_scope:
-            ctx["negative_scope"] = list(feat.negative_scope)
+            # Guard against schema drift: if negative_scope is a bare
+            # string instead of a list, wrap it rather than exploding
+            # into a list of characters.
+            ns = feat.negative_scope
+            if isinstance(ns, str):
+                ns = [ns]
+            ctx["negative_scope"] = list(ns)
             count += 1
     return count
 
@@ -80,11 +113,11 @@ def _enrich_target_files(
 
     Tier 1: Copy from ParsedFeature.target_files
     Tier 2: Regex extraction from description via extract_target_files()
-    Tier 3: Convention-based (not implemented yet — tagged as _inferred)
+    Tier 3: Convention-based from task title (tagged ``_inferred: true``)
     """
     count = 0
     for task in tasks:
-        ctx = task.get("config", {}).get("context", {})
+        ctx = _ensure_task_context(task)
         if ctx.get("target_files"):
             continue
 
@@ -105,7 +138,44 @@ def _enrich_target_files(
             count += 1
             continue
 
+        # Tier 3: convention-based from task title (REQ-TDE-102)
+        inferred = _infer_target_files_from_title(task.get("title", ""))
+        if inferred:
+            ctx["target_files"] = inferred
+            ctx["_target_files_inferred"] = True
+            count += 1
+
     return count
+
+
+def _infer_target_files_from_title(title: str) -> List[str]:
+    """Derive a plausible target file path from a task title.
+
+    Uses simple naming conventions:
+    - "X Service — gRPC Server" → ``x_service/x_service_server.py``
+    - "X Service — Client" → ``x_service/x_service_client.py``
+
+    Returns an empty list if no convention matches.
+    """
+    if not title:
+        return []
+
+    # Normalise: "Email Service — gRPC Server" → ("email_service", "grpc_server")
+    parts = re.split(r"\s*[—–-]\s*", title, maxsplit=1)
+    service_slug = re.sub(r"[^a-z0-9]+", "_", parts[0].strip().lower()).strip("_")
+    if not service_slug:
+        return []
+
+    suffix_slug = ""
+    if len(parts) > 1:
+        suffix_slug = re.sub(r"[^a-z0-9]+", "_", parts[1].strip().lower()).strip("_")
+
+    # Only infer when the title follows the "Service — Role" pattern
+    if not suffix_slug:
+        return []
+
+    filename = f"{service_slug}_{suffix_slug}.py"
+    return [f"{service_slug}/{filename}"]
 
 
 # ── Step 3: Requirement Reference Injection (REQ-TDE-101) ────────────
@@ -165,6 +235,10 @@ def _enrich_requirement_refs(
             continue
 
         title = task.get("title", "")
+        # Skip proximity search for very short titles — generic names like
+        # "API" or "Service" would match ubiquitously and inject spurious refs.
+        if len(title) < _MIN_FEATURE_NAME_CHARS:
+            continue
         refs = _extract_req_refs_near_feature(plan_text, title, proximity_chars)
         if not refs:
             continue
@@ -251,10 +325,12 @@ def _enrich_refine_suggestions(
 
         matched = False
 
-        # Strategy 1: placement field matches a task's target_files
+        # Strategy 1: placement field matches a task's target_files.
+        # Use exact match or parent-containment (not bare substring `in`)
+        # to avoid false positives like "server.py" matching "test_server.py".
         if placement:
             for tf, tf_tasks in file_to_tasks.items():
-                if placement in tf or tf in placement:
+                if tf == placement or tf.endswith("/" + placement) or placement.endswith("/" + tf):
                     for t in tf_tasks:
                         tid = t.get("task_id", "")
                         mapped_suggestions.setdefault(tid, []).append(text)
@@ -325,10 +401,14 @@ def enrich_tasks_deterministic(
     enrich_api_signatures: bool = True,
     enrich_refine_suggestions: bool = True,
     enrich_req_proximity_chars: int = 500,
-) -> Dict[str, Any]:
+) -> Any:
     """Run all deterministic enrichment steps on *tasks* in-place (REQ-TDE-105).
 
-    Returns an enrichment diagnostic dict (REQ-TDE-400).
+    Each step is wrapped in a try/except so a failure in one step never
+    blocks subsequent steps — enrichment is advisory, like diagnostic
+    persistence.
+
+    Returns an ``EnrichmentDiagnostic`` (REQ-TDE-400).
     """
     from .plan_ingestion_diagnostics import EnrichmentDiagnostic
 
@@ -336,59 +416,55 @@ def enrich_tasks_deterministic(
     diag = EnrichmentDiagnostic()
     feature_index = _build_feature_index(features)
 
-    tasks_before = set()
-    for t in tasks:
-        cfg = t.get("config", {})
-        ctx = cfg.get("context", {})
-        desc = cfg.get("task_description", "") or ""
-        key = (
-            bool(ctx.get("negative_scope")),
-            bool(ctx.get("target_files")),
-            bool(_REQ_PATTERN.search(desc)),
-            "```" in desc,
-        )
-        tasks_before.add((t.get("task_id", ""), key))
+    # Snapshot density signals before enrichment (O(1) lookup via dict)
+    keys_before: Dict[str, tuple] = {
+        t.get("task_id", ""): _task_density_key(t) for t in tasks
+    }
 
     # Step 1: Negative scope forwarding (REQ-TDE-100)
     if enrich_negative_scope:
-        diag.negative_scope_added = _enrich_negative_scope(tasks, feature_index)
+        try:
+            diag.negative_scope_added = _enrich_negative_scope(tasks, feature_index)
+        except Exception:
+            logger.warning("ENRICH-A: negative_scope step failed", exc_info=True)
 
     # Step 2: Target files inference (REQ-TDE-102)
     if enrich_target_files:
-        diag.target_files_inferred = _enrich_target_files(tasks, feature_index)
+        try:
+            diag.target_files_inferred = _enrich_target_files(tasks, feature_index)
+        except Exception:
+            logger.warning("ENRICH-A: target_files step failed", exc_info=True)
 
     # Step 3: Requirement reference injection (REQ-TDE-101)
     if enrich_requirement_refs:
-        diag.requirement_refs_added = _enrich_requirement_refs(
-            tasks, plan_text, enrich_req_proximity_chars,
-        )
+        try:
+            diag.requirement_refs_added = _enrich_requirement_refs(
+                tasks, plan_text, enrich_req_proximity_chars,
+            )
+        except Exception:
+            logger.warning("ENRICH-A: requirement_refs step failed", exc_info=True)
 
     # Step 4: API signature stubs (REQ-TDE-103)
     if enrich_api_signatures:
-        diag.api_signatures_added = _enrich_api_signatures(tasks, feature_index)
+        try:
+            diag.api_signatures_added = _enrich_api_signatures(tasks, feature_index)
+        except Exception:
+            logger.warning("ENRICH-A: api_signatures step failed", exc_info=True)
 
     # Step 5: REFINE suggestion mapping (REQ-TDE-104)
     if enrich_refine_suggestions and refine_suggestions:
-        diag.refine_suggestions_mapped = _enrich_refine_suggestions(
-            tasks, refine_suggestions,
-        )
+        try:
+            diag.refine_suggestions_mapped = _enrich_refine_suggestions(
+                tasks, refine_suggestions,
+            )
+        except Exception:
+            logger.warning("ENRICH-A: refine_suggestions step failed", exc_info=True)
 
-    # Count enriched vs skipped tasks
+    # Count enriched vs skipped tasks (O(n) with dict lookup)
     for t in tasks:
-        cfg = t.get("config", {})
-        ctx = cfg.get("context", {})
-        desc = cfg.get("task_description", "") or ""
-        key = (
-            bool(ctx.get("negative_scope")),
-            bool(ctx.get("target_files")),
-            bool(_REQ_PATTERN.search(desc)),
-            "```" in desc,
-        )
         tid = t.get("task_id", "")
-        before_key = next(
-            (bk for bt, bk in tasks_before if bt == tid), None,
-        )
-        if before_key is not None and key != before_key:
+        before_key = keys_before.get(tid)
+        if before_key is not None and _task_density_key(t) != before_key:
             diag.tasks_enriched += 1
         else:
             diag.tasks_skipped += 1
