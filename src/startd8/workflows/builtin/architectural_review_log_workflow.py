@@ -91,6 +91,9 @@ from .architectural_review_log_helpers import (  # noqa: F401 — re-exports
     _max_review_round,
     _extract_table_ids,
     _extract_untriaged_suggestions,
+    _render_review_json_to_markdown,
+    _validate_json_review,
+    _validate_review_output,
     _validate_snippet,
     _validate_triage_output,
     _validate_apply_output,
@@ -649,7 +652,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         except (OSError, UnicodeDecodeError) as e:
                             _logger.warning("Failed to append feature suggestions: %s", e, exc_info=True)
 
-                ok, message, ids = _validate_snippet(response_text, round_number, max_suggestions, allowed_areas=allowed_areas)
+                ok, message, ids, output_fmt, parsed_json = _validate_review_output(
+                    response_text, round_number, max_suggestions, allowed_areas=allowed_areas,
+                )
+
+                # JSON output → render as markdown for document append
+                if ok and output_fmt == "json" and parsed_json is not None:
+                    response_text = _render_review_json_to_markdown(
+                        parsed_json, round_number, reviewer_label, scope,
+                    )
+
                 if not ok:
                     _logger.warning(
                         "Validation failed for R%d (%s): %s",
@@ -660,14 +672,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                     retry_prompt = (
                         f"Your previous response failed validation: {message}\n\n"
-                        f"Please regenerate the review snippet for Round R{round_number}. "
-                        f"Requirements:\n"
-                        f"- Start with: #### Review Round R{round_number}\n"
-                        f"- Table header row EXACTLY (plain text, no bold): | {' | '.join(REQUIRED_COLUMNS)} |\n"
-                        f"- IDs: R{round_number}-S1, R{round_number}-S2, etc.\n"
-                        f"- Area must be one of: {', '.join(sorted(ALLOWED_AREAS))}\n"
-                        f"- Severity must be one of: {', '.join(sorted(ALLOWED_SEVERITIES))}\n"
-                        f"- Do NOT wrap output in code blocks (no ```)\n\n"
+                        f"Please regenerate the review for Round R{round_number}. "
+                        f"Return ONLY a JSON object wrapped in ```json fences.\n\n"
+                        f"Required JSON schema:\n"
+                        f'{{"round": {round_number}, "reviewer": "{reviewer_label}", '
+                        f'"date": "...", "scope": "{scope}", '
+                        f'"suggestions": [{{"id": "R{round_number}-S1", '
+                        f'"area": "<one of: {", ".join(sorted(ALLOWED_AREAS))}>",'
+                        f' "severity": "<one of: {", ".join(sorted(ALLOWED_SEVERITIES))}>",'
+                        f' "suggestion": "...", "rationale": "..."}}]}}\n\n'
+                        f"Do NOT produce a markdown table — return JSON only.\n\n"
                         f"Original prompt:\n{prompt}"
                     )
                     self._emit_progress(
@@ -680,8 +694,14 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         retry_input, retry_output, retry_cost = _extract_token_metrics(retry_token_usage)
                         totals.add(retry_input, retry_output, retry_cost, retry_time_ms)
 
-                        ok2, message2, ids = _validate_snippet(retry_text, round_number, max_suggestions, allowed_areas=allowed_areas)
+                        ok2, message2, ids, retry_fmt, retry_parsed = _validate_review_output(
+                            retry_text, round_number, max_suggestions, allowed_areas=allowed_areas,
+                        )
                         if ok2:
+                            if retry_fmt == "json" and retry_parsed is not None:
+                                retry_text = _render_review_json_to_markdown(
+                                    retry_parsed, round_number, reviewer_label, scope,
+                                )
                             _logger.info(
                                 "Validation retry succeeded for R%d (%s)",
                                 round_number,

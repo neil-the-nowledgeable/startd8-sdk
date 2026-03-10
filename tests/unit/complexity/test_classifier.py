@@ -4,6 +4,7 @@ import pytest
 
 from startd8.complexity.classifier import classify_tier
 from startd8.complexity.models import (
+    ClassificationResult,
     ComplexityRoutingConfig,
     ComplexityTier,
     TaskComplexitySignals,
@@ -372,3 +373,37 @@ class TestRelaxedSimple:
         )
         assert tier is ComplexityTier.SIMPLE
         assert "relaxed" in reason
+
+
+# ── ClassificationResult signal threading ──────────────────────────
+
+
+class TestClassificationResultSignals:
+    def test_returns_classification_result(self):
+        """classify_tier must return a ClassificationResult, not a plain tuple."""
+        result = classify_tier(_signals(blast_radius=10))
+        assert isinstance(result, ClassificationResult)
+
+    def test_signals_threaded_complex(self):
+        signals = _signals(blast_radius=10, edit_mode="edit")
+        result = classify_tier(signals)
+        assert result.signals is signals
+        assert result.tier is ComplexityTier.COMPLEX
+
+    def test_signals_threaded_simple(self):
+        signals = _signals(**TestSimpleEligibility.SIMPLE_SIGNALS)
+        result = classify_tier(signals)
+        assert result.signals is signals
+        assert result.tier is ComplexityTier.SIMPLE
+
+    def test_signals_threaded_moderate(self):
+        signals = _signals()
+        result = classify_tier(signals)
+        assert result.signals is signals
+        assert result.tier is ComplexityTier.MODERATE
+
+    def test_tuple_unpacking_still_works(self):
+        """Backward compat: tier, reason = classify_tier(...) must work."""
+        tier, reason = classify_tier(_signals(has_dynamic_dispatch=True))
+        assert tier is ComplexityTier.COMPLEX
+        assert "dynamic_dispatch" in reason

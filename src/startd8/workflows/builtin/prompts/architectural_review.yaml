@@ -22,24 +22,41 @@ prompts:
       {context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
       - You MUST output ONLY an appendable markdown snippet for Appendix C.
       {dual_doc_instruction}
-      Required output format (append-only snippet):
-      - Start with:
-        #### Review Round R{round_number}
-      - Then include:
-        - **Reviewer**: {reviewer_label}
-        - **Date**: {now_utc}
-        - **Scope**: {scope}
-      - Then output a markdown table with these EXACT column headers (plain text, no bold/italic formatting in headers):
-        | {cols} |
-        | {sep} |
-        Copy the header row above verbatim. Do NOT wrap column names in ** or _.
-        Rows must use IDs R{round_number}-S1..R{round_number}-S{max_suggestions} (you may output fewer rows).
-        Area must be one of: {areas_list}.
-        Severity must be one of: critical, high, medium, low.
-      - After the table, if you agree with any untriaged suggestions from prior rounds (in Appendix C but NOT in Appendix A or B), add:
-        **Endorsements** (prior untriaged suggestions this reviewer agrees with):
-        - <ID>: <one-sentence reason you agree>
-        This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage. Only endorse suggestions you genuinely believe should be implemented. Do NOT endorse your own suggestions.
+      Return ONLY the JSON object wrapped in ```json fences. Do NOT produce a markdown table or any other text outside the fenced block.
+
+      Required JSON schema:
+      ```json
+      {{
+        "round": {round_number},
+        "reviewer": "{reviewer_label}",
+        "date": "{now_utc}",
+        "scope": "{scope}",
+        "suggestions": [
+          {{
+            "id": "R{round_number}-S1",
+            "area": "<one of: {areas_list}>",
+            "severity": "<one of: critical, high, medium, low>",
+            "suggestion": "<the improvement>",
+            "rationale": "<why this matters>",
+            "proposed_placement": "<where in the document>",
+            "validation_approach": "<how to verify>"
+          }}
+        ],
+        "endorsements": [
+          {{
+            "id": "<prior suggestion ID, e.g. R1-S2>",
+            "reason": "<one-sentence reason you agree>"
+          }}
+        ]
+      }}
+      ```
+
+      Rules:
+      - Output up to {max_suggestions} suggestions, numbered R{round_number}-S1 through R{round_number}-S{max_suggestions}.
+      - Area must be one of: {areas_list}.
+      - Severity must be one of: critical, high, medium, low.
+      - "proposed_placement" and "validation_approach" are optional (omit if not applicable).
+      - "endorsements" is optional — only include if you agree with untriaged suggestions from prior rounds (in Appendix C but NOT in Appendix A or B). Do NOT endorse your own suggestions.
       {document_section}
 
   triage:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, Iterator, Union
 
 
 class ComplexityTier(str, Enum):
@@ -76,6 +76,27 @@ class TaskComplexitySignals:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging."""
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClassificationResult:
+    """Keiyaku-compliant classification output (K-10).
+
+    Carries the full signal context alongside the tier decision,
+    enabling downstream consumers (decomposer, observability) to
+    make informed decisions without re-deriving signals.
+
+    Supports tuple unpacking for backward compatibility::
+
+        tier, reason = classify_tier(signals)  # still works
+    """
+
+    tier: ComplexityTier
+    reason: str
+    signals: TaskComplexitySignals
+
+    def __iter__(self) -> Iterator[Union[ComplexityTier, str]]:
+        return iter((self.tier, self.reason))
 
 
 class AssemblyStrategy(str, Enum):

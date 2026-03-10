@@ -3,6 +3,7 @@
 import pytest
 
 from startd8.complexity.models import (
+    ClassificationResult,
     ComplexityRoutingConfig,
     ComplexityTier,
     TaskComplexitySignals,
@@ -116,3 +117,52 @@ class TestComplexityRoutingConfig:
         assert cfg.enabled is True
         assert cfg.blast_radius_complex_threshold == 5
         assert cfg.loc_simple_max == 150
+
+
+# ── ClassificationResult ───────────────────────────────────────────
+
+
+class TestClassificationResult:
+    def _make_result(self, **signal_overrides) -> ClassificationResult:
+        signals = TaskComplexitySignals(**signal_overrides)
+        return ClassificationResult(
+            tier=ComplexityTier.MODERATE,
+            reason="test reason",
+            signals=signals,
+        )
+
+    def test_tuple_unpacking_backward_compat(self):
+        """tier, reason = result must work for backward compat."""
+        result = self._make_result(blast_radius=3)
+        tier, reason = result
+        assert tier is ComplexityTier.MODERATE
+        assert reason == "test reason"
+
+    def test_signals_preserved(self):
+        result = self._make_result(blast_radius=7, edit_mode="edit")
+        assert result.signals.blast_radius == 7
+        assert result.signals.edit_mode == "edit"
+
+    def test_frozen_immutability(self):
+        result = self._make_result()
+        with pytest.raises(AttributeError):
+            result.tier = ComplexityTier.COMPLEX  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            result.reason = "changed"  # type: ignore[misc]
+
+    def test_iter_yields_two_elements(self):
+        result = self._make_result()
+        items = list(result)
+        assert len(items) == 2
+        assert items[0] is ComplexityTier.MODERATE
+        assert items[1] == "test reason"
+
+    def test_signals_are_same_object(self):
+        """Signals in the result should be the exact same object passed in."""
+        signals = TaskComplexitySignals(blast_radius=5)
+        result = ClassificationResult(
+            tier=ComplexityTier.COMPLEX,
+            reason="high blast",
+            signals=signals,
+        )
+        assert result.signals is signals

@@ -328,6 +328,178 @@ def _validate_snippet(
     return True, "ok", unique_ids
 
 
+# ---------------------------------------------------------------------------
+# RV-901: JSON review validator
+# ---------------------------------------------------------------------------
+
+_REQUIRED_SUGGESTION_FIELDS = {"id", "suggestion", "rationale"}
+
+
+def _validate_json_review(
+    raw_text: str,
+    round_number: int,
+    max_suggestions: int,
+    allowed_areas: Optional[Set[str]] = None,
+) -> Tuple[bool, str, List[str], Optional[Dict[str, Any]]]:
+    """Validate a JSON-format review output (RV-900/901).
+
+    Returns ``(ok, message, suggestion_ids, parsed_data)``.
+    *parsed_data* is the validated (and possibly auto-corrected) dict when
+    *ok* is True, or ``None`` otherwise.
+    """
+    cleaned = _strip_json_fences(raw_text.strip())
+    try:
+        data = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        return False, "Not valid JSON", [], None
+
+    if not isinstance(data, dict):
+        return False, "Expected a JSON object with 'suggestions' key", [], None
+
+    suggestions = data.get("suggestions")
+    if suggestions is None:
+        return False, "Missing 'suggestions' key", [], None
+    if not isinstance(suggestions, list):
+        return False, "Expected 'suggestions' to be an array", [], None
+
+    if not suggestions:
+        return True, "No suggestions found (which is valid)", [], data
+
+    areas = allowed_areas or ALLOWED_AREAS
+    ids: List[str] = []
+    auto_idx = 1
+
+    for s in suggestions:
+        if not isinstance(s, dict):
+            continue
+
+        # Default missing area/severity rather than rejecting
+        s.setdefault("area", "unknown")
+        s.setdefault("severity", "medium")
+
+        # Auto-correct IDs
+        raw_id = s.get("id", "")
+        m = re.match(r"R(\d+)-S(\d+)$", raw_id)
+        if m:
+            if int(m.group(1)) != round_number:
+                s["id"] = f"R{round_number}-S{m.group(2)}"
+        else:
+            s["id"] = f"R{round_number}-S{auto_idx}"
+            auto_idx += 1
+
+        ids.append(s["id"])
+
+        # Warn on non-standard values (but don't fail)
+        if s["area"].lower() not in areas:
+            _logger.debug("Non-standard Area '%s'; accepted.", s["area"])
+        if s["severity"].lower() not in ALLOWED_SEVERITIES:
+            _logger.debug("Non-standard Severity '%s'; accepted.", s["severity"])
+
+    # Renumber sequentially to fill gaps
+    for i, s in enumerate(suggestions, 1):
+        s["id"] = f"R{round_number}-S{i}"
+    ids = [s["id"] for s in suggestions]
+
+    # Check max suggestions
+    if len(ids) > max_suggestions:
+        return False, f"Too many suggestions: {len(ids)} > {max_suggestions}", ids, None
+
+    data["suggestions"] = suggestions
+    return True, "ok", ids, data
+
+
+# ---------------------------------------------------------------------------
+# RV-902: JSON-to-markdown renderer
+# ---------------------------------------------------------------------------
+
+
+def _render_review_json_to_markdown(
+    data: Dict[str, Any],
+    round_number: int,
+    reviewer_label: str,
+    scope: str,
+) -> str:
+    """Render validated JSON review data as a markdown review-round block.
+
+    The output passes ``_validate_snippet()`` (round-trip safe).
+    """
+    lines: List[str] = []
+    lines.append(f"#### Review Round R{round_number}")
+    lines.append("")
+    lines.append(f"- **Reviewer**: {reviewer_label}")
+    lines.append(f"- **Date**: {data.get('date', _now_utc())}")
+    lines.append(f"- **Scope**: {scope}")
+    lines.append("")
+
+    # Table header
+    cols = REQUIRED_COLUMNS
+    lines.append("| " + " | ".join(cols) + " |")
+    lines.append("| " + " | ".join("----" for _ in cols) + " |")
+
+    # Table rows
+    for s in data.get("suggestions", []):
+        def _esc(v: str) -> str:
+            return v.replace("|", "\\|")
+
+        row = [
+            _esc(str(s.get("id", ""))),
+            _esc(str(s.get("area", "unknown")).title()),
+            _esc(str(s.get("severity", "medium")).title()),
+            _esc(str(s.get("suggestion", ""))),
+            _esc(str(s.get("rationale", ""))),
+            _esc(str(s.get("proposed_placement", _OPTIONAL_COLUMN_DEFAULT))),
+            _esc(str(s.get("validation_approach", _OPTIONAL_COLUMN_DEFAULT))),
+        ]
+        lines.append("| " + " | ".join(row) + " |")
+
+    # Endorsements
+    endorsements = data.get("endorsements") or []
+    if endorsements:
+        lines.append("")
+        lines.append("**Endorsements** (prior untriaged suggestions this reviewer agrees with):")
+        for e in endorsements:
+            lines.append(f"- {e.get('id', '?')}: {e.get('reason', 'Agreed')}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# RV-901: Dual-format validator dispatcher
+# ---------------------------------------------------------------------------
+
+
+def _validate_review_output(
+    raw_text: str,
+    round_number: int,
+    max_suggestions: int,
+    allowed_areas: Optional[Set[str]] = None,
+) -> Tuple[bool, str, List[str], str, Optional[Dict[str, Any]]]:
+    """Validate reviewer output, trying JSON first, then markdown table.
+
+    Returns ``(ok, message, ids, format, parsed_json_or_none)``.
+    *format* is ``"json"``, ``"markdown_table"``, or ``"unknown"``.
+    """
+    # Try JSON first
+    json_ok, json_msg, json_ids, parsed = _validate_json_review(
+        raw_text, round_number, max_suggestions, allowed_areas,
+    )
+    if json_ok:
+        _logger.info("Review R%d: validated as JSON (%d suggestions)", round_number, len(json_ids))
+        return True, json_msg, json_ids, "json", parsed
+
+    # Fall back to markdown table
+    md_ok, md_msg, md_ids = _validate_snippet(
+        raw_text, round_number, max_suggestions, allowed_areas=allowed_areas,
+    )
+    if md_ok:
+        _logger.info("Review R%d: validated as markdown table (%d suggestions)", round_number, len(md_ids))
+        return True, md_msg, md_ids, "markdown_table", None
+
+    # Both failed
+    combined = f"JSON: {json_msg}; Markdown: {md_msg}"
+    return False, combined, [], "unknown", None
+
+
 def _validate_triage_output(
     raw_text: str,
     untriaged_ids: List[str],

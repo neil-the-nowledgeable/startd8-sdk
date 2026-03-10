@@ -25,6 +25,7 @@ from startd8.forward_manifest import (
     ForwardFileSpec,
     ForwardManifest,
 )
+from startd8.complexity.models import TaskComplexitySignals
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element_with_details
 from startd8.micro_prime.decomposition.core import (
@@ -896,6 +897,7 @@ class ModerateDecomposer:
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        complexity_signals: Optional[TaskComplexitySignals] = None,
     ) -> bool:
         """Lightweight viability check for dry-run reports only.
 
@@ -919,6 +921,7 @@ class ModerateDecomposer:
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        complexity_signals: Optional[TaskComplexitySignals] = None,
         *,
         context: Optional[DecompositionContext] = None,
     ) -> Optional[DecompositionPlan]:
@@ -929,6 +932,14 @@ class ModerateDecomposer:
         filters in one pass.
 
         Args:
+            element: Element to decompose.
+            file_spec: File spec for context.
+            manifest: Full forward manifest.
+            classification_reason: Human-readable classification reason.
+            classification_signals: Optional set of classification signal names.
+            complexity_signals: Optional TaskComplexitySignals from the
+                classifier (Keiyaku D-1). Threaded from classify_tier() via
+                ClassificationResult for downstream strategy use.
             context: Optional DecompositionContext. When provided, the context
                 fields (config, manifest, etc.) are used; the positional args
                 are still required for backward compatibility but the context

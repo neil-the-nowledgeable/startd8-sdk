@@ -7,6 +7,7 @@ Artisan, Prime Contractor, and Micro Prime subsystems.
 from .classifier import classify_tier, log_tier_distribution
 from .models import (
     AssemblyStrategy,
+    ClassificationResult,
     ComplexityRoutingConfig,
     ComplexityTier,
     RejectionReason,
@@ -22,6 +23,7 @@ from .signals import (
 
 __all__ = [
     "AssemblyStrategy",
+    "ClassificationResult",
     "ComplexityTier",
     "RejectionReason",
     "TaskComplexitySignals",
