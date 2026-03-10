@@ -133,6 +133,7 @@ class GPT4Agent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stop: Optional[list] = None,
     ):
         """
         Make the raw API call to OpenAI.
@@ -148,6 +149,8 @@ class GPT4Agent(BaseAgent):
                 takes precedence over the instance-level ``self.max_tokens``.
             temperature: Optional sampling temperature override. When provided,
                 passed to the API call. If None, the API default is used.
+            stop: Optional list of stop sequences. When provided, the API will
+                stop generating when any of these sequences is encountered.
         """
         messages = []
         if system_prompt is not None:
@@ -161,6 +164,8 @@ class GPT4Agent(BaseAgent):
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if stop is not None:
+            kwargs["stop"] = stop
 
         return await self.async_client.chat.completions.create(**kwargs)
 
@@ -170,6 +175,7 @@ class GPT4Agent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stop: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
@@ -187,6 +193,8 @@ class GPT4Agent(BaseAgent):
                 This is thread-safe — it avoids mutating the shared agent.
             temperature: Optional sampling temperature override. When provided,
                 passed to the API call. If None, the API default is used.
+            stop: Optional list of stop sequences. When provided, the API will
+                stop generating when any of these sequences is encountered.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -208,11 +216,13 @@ class GPT4Agent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
+                    stop=stop,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
+                    stop=stop,
                 )
 
         except RetryError as e:
@@ -590,6 +600,7 @@ class OpenAICompatibleAgent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stop: Optional[list] = None,
     ):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
@@ -605,6 +616,8 @@ class OpenAICompatibleAgent(BaseAgent):
                 takes precedence over the instance-level ``self.max_tokens``.
             temperature: Optional sampling temperature override. When provided,
                 passed to the API call. If None, the API default is used.
+            stop: Optional list of stop sequences. When provided, the API will
+                stop generating when any of these sequences is encountered.
         """
         messages = []
         if system_prompt is not None:
@@ -618,6 +631,8 @@ class OpenAICompatibleAgent(BaseAgent):
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if stop is not None:
+            kwargs["stop"] = stop
 
         return await self.async_client.chat.completions.create(**kwargs)
 
@@ -627,6 +642,7 @@ class OpenAICompatibleAgent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stop: Optional[list] = None,
     ) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
@@ -644,6 +660,8 @@ class OpenAICompatibleAgent(BaseAgent):
                 This is thread-safe — it avoids mutating the shared agent.
             temperature: Optional sampling temperature override. When provided,
                 passed to the API call. If None, the API default is used.
+            stop: Optional list of stop sequences. When provided, the API will
+                stop generating when any of these sequences is encountered.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -664,11 +682,13 @@ class OpenAICompatibleAgent(BaseAgent):
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
+                    stop=stop,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt,
                     max_tokens=max_tokens, temperature=temperature,
+                    stop=stop,
                 )
 
             end_time = time.time()

@@ -124,6 +124,14 @@ _ERROR_PATTERNS: List[Tuple[re.Pattern, RootCause, PipelineStage]] = [
      RootCause.DEPENDENCY_BLOCKED, PipelineStage.INTEGRATION),
     (re.compile(r"generation.*error|generation.*fail", re.IGNORECASE),
      RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
+    # Agent API contract errors — TypeError/unexpected keyword from
+    # mismatched agent.generate() signatures (Run-027: 'stop' kwarg).
+    (re.compile(r"unexpected keyword argument|TypeError.*agenerate|TypeError.*generate", re.IGNORECASE),
+     RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
+    # Catch-all: "Exception during code generation" wrapper from
+    # develop_feature()'s except block — the real error is in the suffix.
+    (re.compile(r"Exception during code generation", re.IGNORECASE),
+     RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
 ]
 
 # Maps EscalationReason string values to (RootCause, PipelineStage)

@@ -20,6 +20,27 @@ logger = get_logger(__name__)
 # Maximum number of .py files to scan when computing blast_radius.
 _BLAST_RADIUS_SCAN_LIMIT = 500
 
+# Directories excluded from blast radius scans — historical artifacts,
+# generated outputs, and tool state inflate the count without representing
+# live source.  Run-027 Kaizen: `logger` stem matched 35+ files across
+# archive/ and .cap-dev-pipe/pipeline-output/, triggering false COMPLEX.
+_BLAST_RADIUS_EXCLUDED_DIRS: frozenset[str] = frozenset({
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".startd8",
+    ".cap-dev-pipe",
+    "archive",
+    "generated",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+})
+
 
 def detect_cross_file_edges(
     target_files: List[str],
@@ -176,27 +197,68 @@ def _compute_blast_radius(
     """Count .py files under *project_root* that import any target file.
 
     Bounded scan: stops after ``_BLAST_RADIUS_SCAN_LIMIT`` files.
+
+    Uses path-qualified import patterns to avoid false positives from
+    common module names (e.g. ``logger``, ``utils``, ``config``).  For a
+    target ``src/emailservice/logger.py``, matches:
+    - ``from emailservice.logger import ...``
+    - ``from emailservice import logger``
+    - ``import emailservice.logger``
+    In addition to the legacy bare-stem match ``import logger`` for
+    flat-layout projects.
+
+    Excludes non-source directories (archives, generated output, tool
+    state) via ``_BLAST_RADIUS_EXCLUDED_DIRS`` — Run-027 Kaizen showed
+    these inflating blast_radius from 0 to 35+ for ``logger.py``.
     """
     if not target_files:
         return 0
 
-    # Build set of module-like names from target file stems
-    target_stems = set()
+    # Build qualified and bare import patterns for each target file.
+    # Example for "src/emailservice/logger.py":
+    #   qualified: ["emailservice.logger", "emailservice import logger"]
+    #   bare:      ["import logger", "from logger"]
+    import_patterns: List[str] = []
     for tf in target_files:
         try:
-            stem = Path(tf).stem
-            if stem and stem != "__init__":
-                target_stems.add(stem)
+            p = Path(tf)
+            stem = p.stem
+            if not stem or stem == "__init__":
+                continue
+
+            # Qualified patterns from parent package(s)
+            parts = list(p.with_suffix("").parts)
+            # Strip leading "src" — it's a filesystem convention, not a package
+            if parts and parts[0] == "src":
+                parts = parts[1:]
+            if len(parts) >= 2:
+                # "emailservice.logger" (dotted module path)
+                dotted = ".".join(parts)
+                import_patterns.append(f"import {dotted}")
+                import_patterns.append(f"from {dotted}")
+                # "from emailservice import logger"
+                parent_dotted = ".".join(parts[:-1])
+                import_patterns.append(f"from {parent_dotted} import {stem}")
+            # Bare stem fallback for flat layouts
+            import_patterns.append(f"import {stem}")
+            import_patterns.append(f"from {stem} import")
         except (TypeError, ValueError):
             pass
 
-    if not target_stems:
+    if not import_patterns:
         return 0
 
     count = 0
     scanned = 0
     try:
-        for dirpath, _dirnames, filenames in os.walk(project_root):
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            # Prune excluded directories in-place (modifying dirnames
+            # prevents os.walk from descending into them).
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in _BLAST_RADIUS_EXCLUDED_DIRS
+            ]
+
             for fname in filenames:
                 if not fname.endswith(".py"):
                     continue
@@ -216,8 +278,8 @@ def _compute_blast_radius(
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read(8192)  # Only scan first 8KB
-                    for stem in target_stems:
-                        if f"import {stem}" in content or f"from {stem}" in content:
+                    for pattern in import_patterns:
+                        if pattern in content:
                             count += 1
                             break
                 except OSError as exc:
