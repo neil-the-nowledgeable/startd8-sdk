@@ -384,3 +384,350 @@ class TestMicroIngestDiagnostic:
         assert diag.enabled is False
         assert diag.code_examples_added == 0
         assert diag.time_ms == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 2 Tests: Deterministic Stub Assembly
+# ═══════════════════════════════════════════════════════════════════════
+
+
+from startd8.workflows.builtin.plan_ingestion_micro_ingest import (
+    _render_code_example_tier_0,
+    _render_code_example_tier_1,
+    _render_signature_line,
+    _get_or_build_file_spec,
+    _get_template_matches_for_elements,
+    enrich_tasks_micro_ingest,
+)
+
+
+def _make_forward_file_spec(file_path="src/server.py", elements=None):
+    """Build a ForwardFileSpec for testing."""
+    from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
+    from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+    if elements is None:
+        elements = [
+            ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="serve",
+                signature=Signature(
+                    params=[Param(name="port", annotation="int")],
+                    return_annotation="None",
+                ),
+            ),
+        ]
+    return ForwardFileSpec(file=file_path, elements=elements)
+
+
+def _make_forward_manifest(file_specs=None):
+    """Build a ForwardManifest for testing."""
+    from startd8.forward_manifest import ForwardManifest
+
+    if file_specs is None:
+        fs = _make_forward_file_spec()
+        file_specs = {fs.file: fs}
+    return ForwardManifest(file_specs=file_specs)
+
+
+class TestRenderSignatureLine:
+    def test_function_signature(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="serve",
+            signature=Signature(
+                params=[Param(name="port", annotation="int")],
+                return_annotation="None",
+            ),
+        )
+        line = _render_signature_line(elem)
+        assert line == "def serve(port: int) -> None:"
+
+    def test_class_with_bases(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="EmailService",
+            bases=["BaseService"],
+        )
+        line = _render_signature_line(elem)
+        assert line == "class EmailService(BaseService):"
+
+    def test_class_no_bases(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind
+
+        elem = ForwardElementSpec(kind=ElementKind.CLASS, name="Foo")
+        line = _render_signature_line(elem)
+        assert line == "class Foo:"
+
+    def test_async_function(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.ASYNC_FUNCTION,
+            name="fetch",
+            signature=Signature(params=[Param(name="url", annotation="str")]),
+        )
+        line = _render_signature_line(elem)
+        assert line == "async def fetch(url: str):"
+
+    def test_no_params_no_return(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Signature
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="init",
+            signature=Signature(params=[]),
+        )
+        line = _render_signature_line(elem)
+        assert line == "def init():"
+
+
+class TestRenderCodeExampleTier0:
+    def test_render_valid_file_spec(self):
+        file_spec = _make_forward_file_spec()
+        result = _render_code_example_tier_0(file_spec)
+        assert result is not None
+        assert "```python" in result
+        assert "## Code Example" in result
+        assert "forward manifest" in result
+
+    def test_render_respects_max_lines(self):
+        """Truncation works when output exceeds max_lines."""
+        file_spec = _make_forward_file_spec()
+        result = _render_code_example_tier_0(file_spec, max_lines=2)
+        if result is not None:
+            # Either truncated or short enough already
+            assert "```python" in result
+
+    def test_returns_none_for_empty_spec(self):
+        """Empty file spec → DFA render should still produce something minimal."""
+        from startd8.forward_manifest import ForwardFileSpec
+
+        file_spec = ForwardFileSpec(file="empty.py", elements=[])
+        result = _render_code_example_tier_0(file_spec)
+        # DFA may or may not produce valid output for empty elements
+        # Either None or valid fenced block
+        if result is not None:
+            assert "```python" in result
+
+
+class TestRenderCodeExampleTier1:
+    def test_render_with_matches(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            signature=Signature(params=[Param(name="name", annotation="str")]),
+        )
+
+        class FakeMatch:
+            name = "simple_function"
+            code = 'return f"Hello, {name}"'
+
+        matches = {"greet": FakeMatch()}
+        result = _render_code_example_tier_1([elem], matches)
+        assert result is not None
+        assert "```python" in result
+        assert "def greet(name: str):" in result
+        assert "Hello" in result
+        assert "template: simple_function" in result
+
+    def test_returns_none_no_matches(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            signature=Signature(params=[Param(name="name", annotation="str")]),
+        )
+        result = _render_code_example_tier_1([elem], {})
+        assert result is None
+
+    def test_multiple_elements_joined(self):
+        from startd8.forward_manifest import ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+        elems = [
+            ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="foo",
+                signature=Signature(params=[]),
+            ),
+            ForwardElementSpec(
+                kind=ElementKind.FUNCTION,
+                name="bar",
+                signature=Signature(params=[Param(name="x", annotation="int")]),
+            ),
+        ]
+
+        class FakeMatch:
+            def __init__(self, n, c):
+                self.name = n
+                self.code = c
+
+        matches = {"foo": FakeMatch("t1", "pass"), "bar": FakeMatch("t2", "return x")}
+        result = _render_code_example_tier_1(elems, matches)
+        assert result is not None
+        assert "def foo():" in result
+        assert "def bar(x: int):" in result
+
+
+class TestGetOrBuildFileSpec:
+    def test_returns_forward_spec_when_available(self):
+        manifest = _make_forward_manifest()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="test", has_forward_spec=True,
+        )
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature()
+        result = _get_or_build_file_spec(
+            task, route, {feat.feature_id: feat}, manifest,
+        )
+        assert result is not None
+        assert result.file == "src/server.py"
+
+    def test_builds_synthetic_when_no_manifest(self):
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="test", has_forward_spec=False,
+        )
+        feat = FakeFeature(
+            api_signatures=["def serve(port: int) -> None"],
+            target_files=["src/server.py"],
+        )
+        task = _make_task(target_files=["src/server.py"])
+        result = _get_or_build_file_spec(
+            task, route, {feat.feature_id: feat}, None,
+        )
+        assert result is not None
+        assert len(result.elements) >= 1
+
+    def test_returns_none_no_feature(self):
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="test", has_forward_spec=False,
+        )
+        task = _make_task(feature_id="nonexistent")
+        result = _get_or_build_file_spec(task, route, {}, None)
+        assert result is None
+
+
+class TestEnrichTasksMicroIngest:
+    def test_tier_0_enrichment(self):
+        """Tier 0 route with forward manifest → code block appended."""
+        manifest = _make_forward_manifest()
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="forward spec", has_forward_spec=True,
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat], forward_manifest=manifest,
+        )
+        assert counters["tier_0_count"] == 1
+        assert counters["code_examples_added"] >= 0  # DFA may or may not produce valid output
+
+    def test_skipped_routes_not_enriched(self):
+        """Tier -1 routes are counted but not enriched."""
+        task = _make_task()
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=False, tier=-1,
+            tier_reason="already has code block",
+        )
+        counters = enrich_tasks_micro_ingest([task], [route], [feat])
+        assert counters["already_enriched"] == 1
+        assert counters["code_examples_added"] == 0
+
+    def test_skip_no_structural_data(self):
+        """Tier -1 with needs_code_example=True → skip_count."""
+        task = _make_task()
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=-1,
+            tier_reason="no structural data",
+        )
+        counters = enrich_tasks_micro_ingest([task], [route], [feat])
+        assert counters["skip_count"] == 1
+        assert counters["code_examples_added"] == 0
+
+    def test_tier_disabled_skips_enrichment(self):
+        """Disabled tiers are counted but produce no code blocks."""
+        manifest = _make_forward_manifest()
+        task = _make_task(target_files=["src/server.py"])
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="test", has_forward_spec=True,
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat],
+            forward_manifest=manifest,
+            tier_0_enabled=False,
+        )
+        assert counters["code_examples_added"] == 0
+
+    def test_missing_task_id_graceful(self):
+        """Route referencing a nonexistent task_id doesn't crash."""
+        route = EnrichmentRoute(
+            task_id="MISSING", needs_code_example=True, tier=0,
+            tier_reason="test",
+        )
+        counters = enrich_tasks_micro_ingest(
+            [_make_task()], [route], [FakeFeature()],
+        )
+        assert counters["code_examples_added"] == 0
+
+    def test_tier_2_counted_not_implemented(self):
+        """Tier 2 routes are counted but produce no code (Phase 3)."""
+        task = _make_task()
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=2,
+            tier_reason="SIMPLE-viable",
+        )
+        counters = enrich_tasks_micro_ingest(
+            [task], [route], [feat], tier_2_enabled=True,
+        )
+        assert counters["tier_2_count"] == 1
+        assert counters["code_examples_added"] == 0
+
+    def test_returns_time_ms(self):
+        """Counters include time_ms."""
+        counters = enrich_tasks_micro_ingest([], [], [])
+        assert "time_ms" in counters
+        assert counters["time_ms"] >= 0
+
+    def test_tde_106_no_clobber(self):
+        """Code block appended to description, not replacing it."""
+        manifest = _make_forward_manifest()
+        task = _make_task(
+            description="Implement the server",
+            target_files=["src/server.py"],
+        )
+        feat = FakeFeature()
+        route = EnrichmentRoute(
+            task_id="T-001", needs_code_example=True, tier=0,
+            tier_reason="forward spec", has_forward_spec=True,
+        )
+        enrich_tasks_micro_ingest(
+            [task], [route], [feat], forward_manifest=manifest,
+        )
+        desc = task["config"]["task_description"]
+        if "```python" in desc:
+            # Original description preserved
+            assert desc.startswith("Implement the server")

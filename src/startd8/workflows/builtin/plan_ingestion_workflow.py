@@ -4388,6 +4388,30 @@ class PlanIngestionWorkflow(WorkflowBase):
                     exc_info=True,
                 )
 
+        # --- REQ-MI-2xx: Micro-Ingest deterministic stub assembly ---
+        _mi_counters: Optional[Dict[str, Any]] = None
+        if _mi_report is not None and _mi_report.routes:
+            try:
+                from .plan_ingestion_micro_ingest import enrich_tasks_micro_ingest
+
+                _mi_counters = enrich_tasks_micro_ingest(
+                    tasks,
+                    _mi_report.routes,
+                    parsed_plan.features,
+                    forward_manifest=forward_manifest,
+                    tier_0_enabled=_kc.micro_ingest_tier_0_enabled,
+                    tier_1_enabled=_kc.micro_ingest_tier_1_enabled,
+                    tier_2_enabled=_kc.micro_ingest_tier_2_enabled,
+                    max_lines=_kc.micro_ingest_max_lines,
+                    ollama_timeout_s=_kc.micro_ingest_ollama_timeout_s,
+                    ollama_per_element_s=_kc.micro_ingest_ollama_per_element_s,
+                )
+            except Exception:
+                logger.warning(
+                    "micro_ingest: enrichment failed — skipping",
+                    exc_info=True,
+                )
+
         # --- Build common artifacts and onboarding_var ---
         def _build_seed_artifacts() -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
             """Build artifacts dict, onboarding_var, and source_checksum from resolved onboarding."""

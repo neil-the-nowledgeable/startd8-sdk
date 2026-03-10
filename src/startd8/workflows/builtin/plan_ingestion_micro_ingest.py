@@ -550,15 +550,14 @@ def _check_template_matches(elements: List[Any]) -> List[str]:
     Returns a list of template names that matched.
     """
     try:
-        from startd8.micro_prime.templates import TemplateRegistry
+        from startd8.micro_prime.templates import try_template_match_with_name
     except ImportError:
         return []
 
-    registry = TemplateRegistry()
     matched: List[str] = []
     for elem in elements:
         try:
-            result = registry.try_template_match_with_name(elem, None, [])
+            result = try_template_match_with_name(elem, None, [])
             if result is not None:
                 matched.append(result.name)
         except (TypeError, AttributeError, ValueError):
@@ -587,3 +586,291 @@ def _filter_simple_viable(elements: List[Any]) -> List[Any]:
             viable.append(elem)
 
     return viable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 2: Deterministic Stub Assembly (REQ-MI-2xx)
+# ═══════════════════════════════════════════════════════════════════════
+
+# DFA skeleton sentinel header (stripped from enrichment output)
+_SKELETON_SENTINEL_PREFIX = "# [STARTD8-SKELETON]"
+
+
+def _render_code_example_tier_0(
+    file_spec: Any,
+    max_lines: int = 80,
+) -> Optional[str]:
+    """Render a ForwardFileSpec as a fenced code block for task enrichment.
+
+    Uses DeterministicFileAssembler.render_file() and wraps the output
+    in markdown.  Returns None if rendering or AST validation fails.
+    """
+    try:
+        from startd8.utils.file_assembler import DeterministicFileAssembler
+    except ImportError:
+        return None
+
+    assembler = DeterministicFileAssembler()
+    try:
+        source = assembler.render_file(file_spec)
+    except Exception:
+        logger.debug("micro_ingest.tier_0: DFA render_file() failed", exc_info=True)
+        return None
+
+    # Validate produced source
+    try:
+        import ast as _ast
+        _ast.parse(source)
+    except SyntaxError:
+        logger.debug("micro_ingest.tier_0: DFA output failed AST validation")
+        return None
+
+    # Strip sentinel header
+    lines = source.splitlines()
+    if lines and lines[0].startswith(_SKELETON_SENTINEL_PREFIX):
+        lines = lines[1:]
+
+    # Truncate if needed
+    truncated = False
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        truncated = True
+
+    body = "\n".join(lines).strip()
+    if truncated:
+        line_count = len(source.splitlines())
+        body += f"\n# ... (truncated after {max_lines} lines of {line_count}; see forward manifest for full spec)"
+
+    return f"## Code Example (from forward manifest)\n```python\n{body}\n```"
+
+
+def _render_signature_line(elem: Any) -> str:
+    """Render a ForwardElementSpec into its def/class signature line."""
+    kind_str = str(getattr(elem, "kind", "")).lower()
+    name = getattr(elem, "name", "unknown")
+
+    if "class" in kind_str:
+        bases = getattr(elem, "bases", [])
+        bases_str = f"({', '.join(bases)})" if bases else ""
+        return f"class {name}{bases_str}:"
+
+    sig = getattr(elem, "signature", None)
+    params_str = ""
+    if sig and sig.params:
+        parts = []
+        for p in sig.params:
+            if p.annotation:
+                parts.append(f"{p.name}: {p.annotation}")
+            else:
+                parts.append(p.name)
+        params_str = ", ".join(parts)
+
+    ret = ""
+    if sig and sig.return_annotation:
+        ret = f" -> {sig.return_annotation}"
+
+    prefix = "async def" if "async" in kind_str else "def"
+    return f"{prefix} {name}({params_str}){ret}:"
+
+
+def _render_code_example_tier_1(
+    elements: List[Any],
+    template_matches: Dict[str, Any],
+) -> Optional[str]:
+    """Render template-matched elements as a fenced code block.
+
+    Each template body is wrapped in its full signature for context.
+    Returns None if no elements produce output.
+    """
+    import textwrap
+
+    parts: List[str] = []
+    match_names: List[str] = []
+    for elem in elements:
+        match = template_matches.get(getattr(elem, "name", ""))
+        if not match:
+            continue
+        sig_line = _render_signature_line(elem)
+        body = textwrap.indent(match.code, "    ")
+        parts.append(f"{sig_line}\n{body}")
+        match_names.append(match.name)
+
+    if not parts:
+        return None
+
+    body = "\n\n".join(parts)
+    names_str = ", ".join(dict.fromkeys(match_names))  # dedupe, preserve order
+    return f"## Code Example (from template: {names_str})\n```python\n{body}\n```"
+
+
+def _get_or_build_file_spec(
+    task: Dict[str, Any],
+    route: EnrichmentRoute,
+    feature_index: Dict[str, Any],
+    forward_manifest: Optional[Any],
+) -> Optional[Any]:
+    """Get ForwardFileSpec from manifest or build synthetic from signatures."""
+    ctx = task.get("config", {}).get("context", {})
+    target_files = ctx.get("target_files", [])
+
+    # Try real manifest first
+    if forward_manifest and route.has_forward_spec:
+        matched = _select_target_file(target_files, forward_manifest)
+        if matched:
+            return forward_manifest.file_specs.get(matched)
+
+    # Build synthetic from api_signatures
+    feature_id = ctx.get("feature_id", "")
+    feat = feature_index.get(feature_id)
+    if not feat:
+        return None
+
+    api_sigs = getattr(feat, "api_signatures", []) or []
+    if not api_sigs:
+        return None
+
+    parsed_elements = []
+    for s in api_sigs:
+        parsed = _parse_api_signature(s)
+        if parsed:
+            spec = _build_forward_element_spec(parsed)
+            if spec:
+                parsed_elements.append(spec)
+
+    if not parsed_elements:
+        return None
+
+    target = target_files[0] if target_files else "unknown.py"
+    return _build_synthetic_file_spec(
+        target,
+        parsed_elements,
+        runtime_dependencies=getattr(feat, "runtime_dependencies", None),
+        protocol=getattr(feat, "protocol", ""),
+    )
+
+
+def _get_template_matches_for_elements(
+    elements: List[Any],
+) -> Dict[str, Any]:
+    """Run template matching on a list of ForwardElementSpec, return name→TemplateMatch."""
+    try:
+        from startd8.micro_prime.templates import try_template_match_with_name
+    except ImportError:
+        return {}
+
+    matches: Dict[str, Any] = {}
+    for elem in elements:
+        try:
+            result = try_template_match_with_name(elem, None, [])
+            if result is not None:
+                matches[elem.name] = result
+        except (TypeError, AttributeError, ValueError):
+            continue
+    return matches
+
+
+# ── Enrichment Executor (REQ-MI-200–205) ─────────────────────────────
+
+
+def enrich_tasks_micro_ingest(
+    tasks: List[Dict[str, Any]],
+    routes: List[EnrichmentRoute],
+    features: list,
+    forward_manifest: Optional[Any] = None,
+    *,
+    tier_0_enabled: bool = True,
+    tier_1_enabled: bool = True,
+    tier_2_enabled: bool = False,
+    max_lines: int = 80,
+    ollama_timeout_s: int = 30,
+    ollama_per_element_s: int = 10,
+    micro_prime_engine: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Run Micro-Ingest enrichment on tasks (in-place).
+
+    Phase 2: Tier 0 + Tier 1 only (deterministic, zero LLM).
+    Phase 3: Tier 2 (Ollama) when tier_2_enabled=True.
+
+    Returns a dict of diagnostic counters for MicroIngestDiagnostic.
+    """
+    t0 = time.monotonic()
+    task_index = {t.get("task_id", ""): t for t in tasks}
+    feature_index = {f.feature_id: f for f in features}
+
+    counters = {
+        "enabled": True,
+        "total_tasks": len(tasks),
+        "already_enriched": 0,
+        "tier_0_count": 0,
+        "tier_1_count": 0,
+        "tier_2_count": 0,
+        "skip_count": 0,
+        "code_examples_added": 0,
+    }
+
+    for route in routes:
+        if route.tier == -1:
+            if not route.needs_code_example:
+                counters["already_enriched"] += 1
+            else:
+                counters["skip_count"] += 1
+            continue
+
+        task = task_index.get(route.task_id)
+        if not task:
+            continue
+
+        code_block = None
+
+        if route.tier == 0 and tier_0_enabled:
+            counters["tier_0_count"] += 1
+            file_spec = _get_or_build_file_spec(
+                task, route, feature_index, forward_manifest,
+            )
+            if file_spec:
+                code_block = _render_code_example_tier_0(file_spec, max_lines)
+
+        elif route.tier == 1 and tier_1_enabled:
+            counters["tier_1_count"] += 1
+            file_spec = _get_or_build_file_spec(
+                task, route, feature_index, forward_manifest,
+            )
+            if file_spec and getattr(file_spec, "elements", None):
+                template_matches = _get_template_matches_for_elements(
+                    file_spec.elements,
+                )
+                if template_matches:
+                    code_block = _render_code_example_tier_1(
+                        file_spec.elements, template_matches,
+                    )
+
+        elif route.tier == 2:
+            counters["tier_2_count"] += 1
+            # Phase 3: Ollama generation — not yet implemented
+
+        if code_block:
+            # Append to task description (TDE-106 no-clobber: classifier
+            # already verified no existing code block)
+            cfg = task.get("config", {})
+            desc = cfg.get("task_description", "") or ""
+            cfg["task_description"] = f"{desc}\n\n{code_block}"
+            counters["code_examples_added"] += 1
+            logger.debug(
+                "micro_ingest: appended code example to %s (tier %d)",
+                route.task_id, route.tier,
+            )
+
+    counters["time_ms"] = int((time.monotonic() - t0) * 1000)
+
+    logger.info(
+        "micro_ingest.enrich: %d code examples added "
+        "(tier_0=%d tier_1=%d tier_2=%d skip=%d) in %dms",
+        counters["code_examples_added"],
+        counters["tier_0_count"],
+        counters["tier_1_count"],
+        counters["tier_2_count"],
+        counters["skip_count"],
+        counters["time_ms"],
+    )
+
+    return counters
