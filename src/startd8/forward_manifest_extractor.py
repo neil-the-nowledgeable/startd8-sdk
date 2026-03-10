@@ -18,6 +18,7 @@ See docs/design/forward-manifest/Phase_3_Forward_Manifest_Extractor_Requirements
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
