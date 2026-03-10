@@ -891,11 +891,77 @@ def _extract_implementation_contracts(raw_text: str) -> Dict[str, str]:
     return contracts
 
 
+def _scope_contract_to_files(
+    contract_text: str,
+    target_files: List[str],
+) -> str:
+    """Extract only the sections of a contract relevant to *target_files*.
+
+    Contracts use backtick-wrapped filenames as section headers, e.g.::
+
+        `email_server.py` (201 lines):
+        - Class `BaseEmailService` ...
+
+        `email_client.py` (40 lines):
+        - Function `send_confirmation_email` ...
+
+    For a sub-feature targeting only ``email_client.py``, this function
+    returns only the ``email_client.py`` section.  If no file-specific
+    sections are found, the full contract is returned (safe fallback).
+
+    QP-2 + QP-4: prevents sub-features from inheriting the full parent
+    contract, reducing token waste and cross-contamination.
+    """
+    if not target_files:
+        return contract_text
+
+    # Build a set of bare filenames for matching.
+    bare_targets = {os.path.basename(f) for f in target_files}
+
+    # Split contract at backtick-wrapped filename headers.
+    # Pattern matches lines like:  `some_file.py` (NNN lines):
+    #                           or: `some_file.py`:
+    _FILE_HEADER = re.compile(
+        r"^(`[^`]+\.\w+`)\s*(?:\([^)]*\)\s*)?:\s*$", re.MULTILINE,
+    )
+    parts = _FILE_HEADER.split(contract_text)
+    # parts: [preamble, "`file1.py`", body1, "`file2.py`", body2, ...]
+
+    if len(parts) < 3:
+        # No file-specific sections found — return full contract.
+        return contract_text
+
+    scoped_sections: List[str] = []
+    preamble = parts[0].strip()
+
+    for i in range(1, len(parts) - 1, 2):
+        header_raw = parts[i]             # e.g. "`email_client.py`"
+        body = parts[i + 1]
+        # Strip backticks for matching.
+        filename = header_raw.strip("`").strip()
+        if os.path.basename(filename) in bare_targets:
+            scoped_sections.append(f"{header_raw}:{body.rstrip()}")
+
+    if not scoped_sections:
+        # Target files didn't match any section header — return full contract
+        # rather than returning nothing.
+        return contract_text
+
+    # Include preamble (often has class hierarchy notes) plus matched sections.
+    result = preamble + "\n\n" + "\n\n".join(scoped_sections) if preamble else "\n\n".join(scoped_sections)
+    return result.strip()
+
+
 def _enrich_features_from_plan(
     features: List[ParsedFeature],
     raw_text: str,
 ) -> int:
     """Enrich ParsedFeature descriptions with Implementation Contract text from the plan.
+
+    For sub-features (suffixed IDs like F-001a), the contract is scoped to
+    only the sections relevant to that sub-feature's ``target_files``,
+    preventing token waste from duplicating the full parent contract across
+    every sub-feature (QP-2 + QP-4).
 
     Mutates features in place.  Returns the count of features enriched.
     """
@@ -909,9 +975,15 @@ def _enrich_features_from_plan(
         # suffixed IDs (e.g. F-001a, F-001b).  Strip the suffix to
         # match the plan's F-NNN heading.
         base_id = re.sub(r"[a-z]+$", "", feat.feature_id)
+        is_sub = base_id != feat.feature_id
         contract = contracts.get(feat.feature_id) or contracts.get(base_id)
         if not contract:
             continue
+
+        # QP-2+QP-4: scope sub-feature contracts to their target files.
+        if is_sub and feat.target_files:
+            contract = _scope_contract_to_files(contract, feat.target_files)
+
         # Only enrich if the contract adds meaningful length beyond the
         # existing summary description.
         if len(contract) > len(feat.description or ""):
@@ -4541,6 +4613,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             seed_dict = seed.to_dict()
 
             # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)
+            # NOTE (QP-5): compute_task_density MUST run after all enrichment
+            # steps (deterministic + micro-ingest) so density metrics reflect
+            # the enriched state.  Moving enrichment after this point will
+            # silently deflate seed_quality_score.
             _task_density = compute_task_density(seed_dict.get("tasks", []))
             _sq_score, _sq_warnings = compute_seed_quality(
                 seed_dict, task_density=_task_density,

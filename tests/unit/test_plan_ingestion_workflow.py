@@ -27,6 +27,7 @@ from startd8.workflows.builtin.plan_ingestion_workflow import (
     _extract_implementation_contracts,
     _extract_json_from_response,
     _parse_context_files,
+    _scope_contract_to_files,
 )
 
 
@@ -2693,3 +2694,130 @@ class TestEnrichFeaturesFromPlan:
         count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
         assert count == 1
         assert "CustomJsonFormatter" in features[0].description
+
+    def test_sub_feature_gets_scoped_contract(self):
+        """QP-2+QP-4: sub-feature with target_files gets only matching section."""
+        plan = textwrap.dedent("""\
+            ### F-010: Multi-File Service
+
+            **Description:**
+            A multi-file gRPC service.
+
+            **Implementation contract:**
+
+            `server.py` (150 lines):
+            - Class `ServiceImpl` with `Handle()` method
+            - Function `start(port)` creates gRPC server
+
+            `client.py` (40 lines):
+            - Function `send_request(addr, payload)` opens channel
+
+            `templates/index.html` (20 lines):
+            - Jinja2 template with order summary block
+
+            **Dependencies:** `grpcio`
+        """)
+        feat_a = ParsedFeature(
+            feature_id="F-010a", name="Server",
+            description="Short.", target_files=["src/svc/server.py"],
+        )
+        feat_b = ParsedFeature(
+            feature_id="F-010b", name="Client",
+            description="Short.", target_files=["src/svc/client.py"],
+        )
+        features = [feat_a, feat_b]
+        count = _enrich_features_from_plan(features, plan)
+        assert count == 2
+        # F-010a should have server.py content only
+        assert "ServiceImpl" in feat_a.description
+        assert "send_request" not in feat_a.description
+        # F-010b should have client.py content only
+        assert "send_request" in feat_b.description
+        assert "ServiceImpl" not in feat_b.description
+
+    def test_sub_feature_no_target_files_gets_full_contract(self):
+        """Sub-feature without target_files gets the full parent contract."""
+        features = [self._make_feature("F-002a", "Sub-feature")]
+        # target_files is [] by default from _make_feature
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 1
+        assert "BaseEmailService" in features[0].description
+
+    def test_non_sub_feature_gets_full_contract(self):
+        """Non-suffixed feature always gets full contract even with target_files."""
+        feat = ParsedFeature(
+            feature_id="F-002", name="Email Service",
+            description="Short.", target_files=["src/emailservice/email_server.py"],
+        )
+        count = _enrich_features_from_plan([feat], PLAN_WITH_CONTRACTS)
+        assert count == 1
+        # Full contract, not scoped
+        assert "BaseEmailService" in feat.description
+        assert "DummyEmailService" in feat.description
+
+
+# ---------------------------------------------------------------------------
+# Contract Scoping (QP-2 + QP-4)
+# ---------------------------------------------------------------------------
+
+MULTI_FILE_CONTRACT = textwrap.dedent("""\
+    General notes about the service architecture.
+
+    `server.py` (150 lines):
+    - Class `ServiceImpl` with `Handle()` method
+    - Function `start(port)` creates gRPC server
+
+    `client.py` (40 lines):
+    - Function `send_request(addr, payload)` opens channel
+
+    `templates/index.html` (20 lines):
+    - Jinja2 template with order summary block
+""").strip()
+
+
+class TestScopeContractToFiles:
+    """Tests for _scope_contract_to_files()."""
+
+    def test_scopes_to_single_file(self):
+        result = _scope_contract_to_files(MULTI_FILE_CONTRACT, ["src/svc/server.py"])
+        assert "ServiceImpl" in result
+        assert "send_request" not in result
+        assert "Jinja2 template" not in result
+
+    def test_scopes_to_multiple_files(self):
+        result = _scope_contract_to_files(
+            MULTI_FILE_CONTRACT,
+            ["src/svc/server.py", "src/svc/client.py"],
+        )
+        assert "ServiceImpl" in result
+        assert "send_request" in result
+        assert "Jinja2 template" not in result
+
+    def test_preserves_preamble(self):
+        result = _scope_contract_to_files(MULTI_FILE_CONTRACT, ["client.py"])
+        assert "General notes" in result
+        assert "send_request" in result
+
+    def test_no_target_files_returns_full(self):
+        result = _scope_contract_to_files(MULTI_FILE_CONTRACT, [])
+        assert result == MULTI_FILE_CONTRACT
+
+    def test_no_matching_files_returns_full(self):
+        """If target files don't match any section, return full contract."""
+        result = _scope_contract_to_files(MULTI_FILE_CONTRACT, ["unknown.py"])
+        assert result == MULTI_FILE_CONTRACT
+
+    def test_contract_without_file_headers_returns_full(self):
+        """Contract with no file-specific sections returns unchanged."""
+        simple = "- Class `Foo` with method `bar()`\n- Function `baz()`"
+        result = _scope_contract_to_files(simple, ["server.py"])
+        assert result == simple
+
+    def test_bare_filename_matching(self):
+        """Target files with paths match section headers with bare filenames."""
+        result = _scope_contract_to_files(
+            MULTI_FILE_CONTRACT,
+            ["deep/nested/path/client.py"],
+        )
+        assert "send_request" in result
+        assert "ServiceImpl" not in result
