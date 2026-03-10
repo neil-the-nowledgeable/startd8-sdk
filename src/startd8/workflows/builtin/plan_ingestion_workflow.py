@@ -2865,6 +2865,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         enable_prompt_caching: Optional[bool] = None,
         enable_triage: Optional[bool] = None,
         providers: Optional[List[str]] = None,
+        custom_review_profile: Optional[Dict[str, Any]] = None,
     ) -> Tuple[int, List[StepResult], float, Dict[str, Any]]:
         if review_rounds <= 0:
             return 0, [], 0.0, {}
@@ -2882,6 +2883,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             "max_suggestions": 10,
             "init_if_missing": True,
         }
+        if custom_review_profile:
+            review_config["custom_review_profile"] = custom_review_profile
         if providers:
             review_config["providers"] = providers
         if scope:
@@ -5156,19 +5159,76 @@ class PlanIngestionWorkflow(WorkflowBase):
                     0, [], 0.0, {},
                 )
             else:
+                # ── Enrichment-aware REFINE configuration ──
+                # For prime route: include the plan markdown as a context
+                # file so the reviewer can cross-reference implementation
+                # contracts, and set a scope that directs the reviewer to
+                # enrich task descriptions for code generation.
+                _refine_context = list(context_files or [])
+                _refine_scope = scope
+                _refine_apply = config.get("enable_apply")
+                _refine_triage = config.get("enable_triage")
+
+                _refine_profile: Optional[Dict[str, Any]] = None
+
+                if route == ContractorRoute.PRIME:
+                    # Give the reviewer the plan markdown as context
+                    _plan_str = str(plan_path)
+                    if _plan_str not in _refine_context:
+                        _refine_context.append(_plan_str)
+
+                    if not _refine_scope:
+                        _refine_scope = (
+                            "Enrich task descriptions for code generation. "
+                            "For each task, cross-reference the plan markdown "
+                            "and requirements to add: (1) a fenced code example "
+                            "showing the primary class/function signature, "
+                            "(2) negative scope — what the task should NOT do, "
+                            "(3) error handling patterns from the implementation "
+                            "contract, (4) requirements references (REQ-xxx IDs). "
+                            "Prioritize tasks with thin descriptions."
+                        )
+
+                    # Custom review profile focused on enrichment rather
+                    # than architectural critique.
+                    _refine_profile = {
+                        "persona": (
+                            "senior software engineer preparing task specifications "
+                            "for an AI code generator"
+                        ),
+                        "focus": (
+                            "enriching task descriptions with concrete code examples, "
+                            "explicit negative scope boundaries, error handling "
+                            "patterns, and requirements traceability references"
+                        ),
+                        "areas": [
+                            "completeness", "clarity", "testability",
+                            "architecture", "security", "maintainability",
+                            "scalability",
+                        ],
+                    }
+
+                    # Default to triage+apply so enrichment suggestions
+                    # are integrated into the YAML before EMIT reads it.
+                    if _refine_apply is None:
+                        _refine_apply = True
+                    if _refine_triage is None:
+                        _refine_triage = True
+
                 rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
                     doc_path,
                     review_rounds,
                     review_quality_tier,
-                    scope,
-                    context_files,
+                    _refine_scope,
+                    _refine_context or None,
                     list(requirements_docs.keys()) if requirements_docs else None,
                     warn_cost_usd,
                     max_cost_usd,
-                    enable_apply=config.get("enable_apply"),
+                    enable_apply=_refine_apply,
                     enable_prompt_caching=config.get("enable_prompt_caching"),
-                    enable_triage=config.get("enable_triage"),
+                    enable_triage=_refine_triage,
                     providers=review_providers,
+                    custom_review_profile=_refine_profile,
                 )
             steps.extend(refine_steps)
             state.total_cost += refine_cost
