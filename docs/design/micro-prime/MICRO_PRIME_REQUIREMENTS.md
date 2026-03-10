@@ -1326,9 +1326,28 @@ Persistent, index-addressable element store that closes the cross-task element r
 
 ---
 
-## 16. Data Flow
+## 16. Keiyaku Compliance (Cross-Cutting)
 
-### 11.1 Dual Entry Points
+> **Design Principle:** [KEIYAKU_DESIGN_PRINCIPLE.md](../../design-princples/KEIYAKU_DESIGN_PRINCIPLE.md) — every agent-to-agent boundary uses typed, validated contracts.
+
+Batch 1 introduced four boundary contracts to replace untyped returns and prose-based handoffs:
+
+| Contract | Module | Boundary | Replaces |
+|----------|--------|----------|----------|
+| `ClassificationResult` | `complexity/classifier.py` | `classify_tier()` → all consumers | `(tier, str)` tuple |
+| `EscalationHandoff` | `micro_prime/models.py` | Engine → cloud escalation | Ad-hoc dict construction |
+| `EscalationRepairOutcome` | `micro_prime/models.py` | Repair → escalation/observability | Prose error strings |
+| `SemanticVerificationResult` | `micro_prime/models.py` | Semantic verify → engine (pre-defined) | (unwired — contract ready for A2) |
+
+**REQ-MP-1010: Contract-First Boundary Rule.** All new LLM-calling boundaries in the Micro Prime subsystem MUST define a typed JSON input/output contract (dataclass or Pydantic model) before implementation begins. This prevents the gradual accumulation of untyped agent boundaries that Batch 1 was created to address.
+
+> **Full boundary inventory:** [KEIYAKU_GAP_ANALYSIS.md](../../design-princples/KEIYAKU_GAP_ANALYSIS.md)
+
+---
+
+## 17. Data Flow
+
+### 17.1 Dual Entry Points
 
 ```
 ┌─────────────────────────────┐    ┌──────────────────────────────────┐
@@ -1358,7 +1377,7 @@ Persistent, index-addressable element store that closes the cross-task element r
                             ▼
 ```
 
-### 11.2 Engine Internals
+### 17.2 Engine Internals
 
 ```
 MicroPrimeEngine.process_elements()
@@ -1405,7 +1424,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 17. Traceability Matrix
+## 18. Traceability Matrix
 
 | Requirement | Implementation File | Test File | Status |
 |------------|-------------------|-----------|--------|
@@ -1465,9 +1484,9 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 18. Verification Strategy
+## 19. Verification Strategy
 
-### 13.1 Experiment Rounds (Pre-Integration)
+### 19.1 Experiment Rounds (Pre-Integration)
 
 | Round | Focus | Measures |
 |-------|-------|----------|
@@ -1476,7 +1495,7 @@ MicroPrimeEngine.process_elements()
 | 2c | Repair pipeline (Layer 4) | Recovery rate per step, net syntax rate |
 | 2d | Combined (all layers) | End-to-end usable rate, cost savings |
 
-### 13.2 Unit Tests (~60 tests across 4 files)
+### 19.2 Unit Tests (~60 tests across 4 files)
 
 | File | Count | Coverage |
 |------|-------|----------|
@@ -1485,7 +1504,7 @@ MicroPrimeEngine.process_elements()
 | `test_body_splicing.py` | ~10 | Splice into skeleton, indent normalization, multi-element files |
 | `test_experiment_integration.py` | ~10 | End-to-end: manifest → template/generate → repair → validate |
 
-### 13.3 Integration Acceptance Criteria
+### 19.3 Integration Acceptance Criteria
 
 | Criterion | Measurement |
 |-----------|-------------|
@@ -1496,7 +1515,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 19. Related Documents
+## 20. Related Documents
 
 | Document | Relationship |
 |----------|-------------|

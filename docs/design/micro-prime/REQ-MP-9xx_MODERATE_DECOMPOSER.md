@@ -229,6 +229,10 @@ Sub-elements:
 - For method decomposition, helper methods are inserted into the class scope and include `self`/`cls` as appropriate
 - When `ClassificationSignal` is available, it is the sole source for API/orchestrator exclusion; reason-string parsing is only used as a fallback and SHOULD emit a debug log for traceability
 
+> **Keiyaku note (D-1):** `classify_tier()` now returns `ClassificationResult` (dataclass in `complexity/classifier.py`) which carries the full `TaskComplexitySignals` alongside tier and reason. This is threaded to the decomposer via the `complexity_signals` parameter on `decompose()`. Both `ClassDecomposeStrategy` and `FunctionChainStrategy` can consume structured signals instead of parsing reason strings. See [KEIYAKU_DESIGN_PRINCIPLE.md](../../design-princples/KEIYAKU_DESIGN_PRINCIPLE.md).
+
+> **Keiyaku constraint (REQ-MP-903):** Any future LLM-assisted decomposition strategy MUST define a typed JSON output contract (dataclass or Pydantic model) before implementation begins — see Gap A-3 in [KEIYAKU_GAP_ANALYSIS.md](../../design-princples/KEIYAKU_GAP_ANALYSIS.md).
+
 ---
 
 ### REQ-MP-903: Engine Integration — `_handle_moderate`

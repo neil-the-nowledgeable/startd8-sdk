@@ -6,9 +6,10 @@ local-first code generation engine.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,10 @@ class EscalationContext:
     repair_steps_applied: list[str] = field(default_factory=list)
     repaired_code: Optional[str] = None
     error: str = ""
+    # Keiyaku-compliant structured handoff (K-6) — set when repair data
+    # is available, None otherwise. Callers should prefer this over the
+    # prose fields above when constructing escalation prompts.
+    escalation_handoff: Optional["EscalationHandoff"] = None
 
 
 @dataclass
@@ -64,6 +69,139 @@ class EscalationResult:
     last_code: Optional[str] = None
     last_error: Optional[str] = None
     context: Optional[EscalationContext] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Keiyaku boundary contracts (K-6, K-9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class RepairStepOutcome:
+    """Keiyaku-compliant repair step record (K-9).
+
+    Structured representation of a single repair pipeline step outcome,
+    preserving machine-readable diagnostics across boundary crossings.
+    """
+
+    step: str  # e.g. "fence_strip", "indent_normalize"
+    modified: bool
+    ast_valid_after: bool
+    detail: str  # what the step did, e.g. "Removed ```python fence"
+
+
+@dataclass(frozen=True)
+class EscalationRepairOutcome:
+    """Keiyaku-compliant repair pipeline outcome (K-9).
+
+    Structured boundary contract for repair results flowing to
+    escalation (K-6) and observability (REQ-MP-603).
+    """
+
+    element_fqn: str
+    ast_valid_before: bool
+    ast_valid_after: bool
+    steps: List[RepairStepOutcome]
+    final_verdict: str  # "recovered", "failed", "unchanged"
+    lines_before: int
+    lines_after: int
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-compatible dict for escalation handoff."""
+        return {
+            "repair_outcome": {
+                "element_fqn": self.element_fqn,
+                "ast_valid_before": self.ast_valid_before,
+                "ast_valid_after": self.ast_valid_after,
+                "steps": [
+                    {
+                        "step": s.step,
+                        "modified": s.modified,
+                        "ast_valid_after": s.ast_valid_after,
+                        "detail": s.detail,
+                    }
+                    for s in self.steps
+                ],
+                "final_verdict": self.final_verdict,
+                "lines_before": self.lines_before,
+                "lines_after": self.lines_after,
+            }
+        }
+
+
+@dataclass(frozen=True)
+class EscalationHandoff:
+    """Keiyaku-compliant escalation contract (K-6).
+
+    Structured handoff from local agent (Ollama) to cloud agent,
+    replacing prose '## Prior Local Model Attempt' injection.
+    """
+
+    element_fqn: str
+    original_tier: str  # "SIMPLE" or "MODERATE"
+    local_model: str  # e.g. "startd8-coder"
+    attempt_count: int
+    failure_category: str  # matches EscalationReason enum value
+    failure_message: str
+    raw_output_lines: int
+    repair: Optional[EscalationRepairOutcome]  # None if repair wasn't attempted
+    element_signature: str  # canonical signature from manifest
+    element_kind: str  # "METHOD", "FUNCTION", "CLASS"
+    parent_class: Optional[str]
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-compatible dict for prompt injection."""
+        d: dict = {
+            "escalation": {
+                "element_fqn": self.element_fqn,
+                "original_tier": self.original_tier,
+                "local_model": self.local_model,
+                "attempt_count": self.attempt_count,
+                "failure": {
+                    "category": self.failure_category,
+                    "message": self.failure_message,
+                    "raw_output_lines": self.raw_output_lines,
+                },
+                "element_spec": {
+                    "signature": self.element_signature,
+                    "kind": self.element_kind,
+                    "parent_class": self.parent_class,
+                },
+            }
+        }
+        if self.repair is not None:
+            d["escalation"]["repair_applied"] = self.repair.to_dict()[
+                "repair_outcome"
+            ]["steps"]
+        return d
+
+    def to_prompt_section(self) -> str:
+        """Render as structured prompt section for cloud model.
+
+        Produces both JSON (machine-readable) and summary (human-readable)
+        so the cloud model can parse either format.
+        """
+        data = self.to_dict()
+        lines = [
+            "## Prior Local Model Attempt (Structured)",
+            "",
+            "```json",
+            json.dumps(data, indent=2),
+            "```",
+            "",
+            (
+                f"**Summary:** {self.failure_category} after "
+                f"{self.attempt_count} attempt(s) "
+                f"on {self.local_model}. {self.failure_message}"
+            ),
+        ]
+        if self.repair and self.repair.steps:
+            applied = [s.step for s in self.repair.steps if s.modified]
+            if applied:
+                lines.append(
+                    f"**Repair steps applied:** {', '.join(applied)}"
+                )
+        return "\n".join(lines)
 
 
 @dataclass
@@ -217,6 +355,151 @@ class MicroPrimeConfig(BaseModel):
     moderate_ollama_whole_skip_signals: set[str] = {"external_api", "orchestrator", "app_server_instance"}
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
+
+
+@dataclass(frozen=True)
+class VerificationIssue:
+    """Single issue found during semantic verification (K-7)."""
+
+    severity: str  # "critical", "high", "medium", "low" (aligned with GateSeverity)
+    category: str  # e.g. "missing_error_handling", "type_mismatch", "unused_parameter"
+    description: str  # human-readable explanation
+    line_hint: Optional[int] = None  # approximate line number, if known
+    suggested_fix: Optional[str] = None  # optional remediation hint
+
+
+@dataclass(frozen=True)
+class SemanticVerificationResult:
+    """Keiyaku-compliant semantic verification output contract (K-7).
+
+    Defines the expected JSON schema for LLM-based semantic verification.
+    The LLM prompt should request output in this shape; the validator
+    parses and constructs this dataclass from the response.
+
+    Schema version: 1.0.0 (frozen per Keiyaku Rule 6 / ContextCore v1 policy).
+
+    JSON schema for LLM prompt::
+
+        {
+          "verdict": "pass|fail|inconclusive",
+          "confidence": 0.85,
+          "issues": [
+            {
+              "severity": "high",
+              "category": "missing_error_handling",
+              "description": "Division by total_count without zero check",
+              "line_hint": 7,
+              "suggested_fix": "Add guard: if total_count == 0: return 0.0"
+            }
+          ],
+          "element_fqn": "module.ClassName.calculate_ratio"
+        }
+    """
+
+    verdict: str  # "pass", "fail", "inconclusive"
+    confidence: float  # 0.0-1.0
+    issues: tuple  # tuple[VerificationIssue, ...] (frozen requires hashable)
+    element_fqn: str
+
+    # Valid verdict values (for validation)
+    VALID_VERDICTS = ("pass", "fail", "inconclusive")
+
+    @classmethod
+    def from_json(cls, data: dict, element_fqn: str) -> "SemanticVerificationResult":
+        """Parse LLM JSON output into typed result.
+
+        Applies Keiyaku Rule 5: fail-open on format, fail-closed on content.
+        Auto-corrects where unambiguous, warns on non-standard values.
+        """
+        verdict = data.get("verdict", "inconclusive")
+        if verdict not in cls.VALID_VERDICTS:
+            verdict = "inconclusive"  # auto-correct unknown verdicts
+
+        confidence = data.get("confidence", 0.5)
+        confidence = max(0.0, min(1.0, float(confidence)))  # clamp to [0, 1]
+
+        issues = []
+        for item in data.get("issues", []):
+            issues.append(VerificationIssue(
+                severity=item.get("severity", "medium"),
+                category=item.get("category", "unknown"),
+                description=item.get("description", "(not provided)"),
+                line_hint=item.get("line_hint"),
+                suggested_fix=item.get("suggested_fix"),
+            ))
+
+        return cls(
+            verdict=verdict,
+            confidence=confidence,
+            issues=tuple(issues),
+            element_fqn=data.get("element_fqn", element_fqn),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to JSON-compatible dict."""
+        return {
+            "verification": {
+                "verdict": self.verdict,
+                "confidence": self.confidence,
+                "issues": [
+                    {
+                        "severity": i.severity,
+                        "category": i.category,
+                        "description": i.description,
+                        "line_hint": i.line_hint,
+                        "suggested_fix": i.suggested_fix,
+                    }
+                    for i in self.issues
+                ],
+                "element_fqn": self.element_fqn,
+            }
+        }
+
+    @property
+    def passed(self) -> bool:
+        """Convenience: did verification pass?"""
+        return self.verdict == "pass"
+
+    @property
+    def has_critical_issues(self) -> bool:
+        """Convenience: any critical issues?"""
+        return any(i.severity == "critical" for i in self.issues)
+
+
+def validate_semantic_verification_json(
+    raw_text: str,
+    element_fqn: str,
+) -> tuple:  # (ok: bool, result_or_error: SemanticVerificationResult | str)
+    """Validate and parse LLM semantic verification output.
+
+    Applies Keiyaku dual-format pattern:
+    1. Strip ``json`` fences
+    2. Parse JSON
+    3. Construct SemanticVerificationResult via from_json()
+    4. Return (True, result) or (False, error_message)
+    """
+    import json
+    import re
+
+    text = raw_text.strip()
+    # Strip ```json ... ``` fences
+    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return (False, f"JSON parse error: {exc}")
+
+    if not isinstance(data, dict):
+        return (False, f"Expected JSON object, got {type(data).__name__}")
+
+    try:
+        result = SemanticVerificationResult.from_json(data, element_fqn)
+        return (True, result)
+    except (TypeError, KeyError, ValueError) as exc:
+        return (False, f"Schema construction error: {exc}")
 
 
 class MicroPrimeElementMetrics(BaseModel):

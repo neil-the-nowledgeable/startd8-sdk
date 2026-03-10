@@ -315,6 +315,8 @@ Please generate a correct implementation.
 - Syntax-invalid code includes the error message and repair attempt in escalation context
 - The escalation context uses the existing `last_error` injection pattern from `_execute_chunk_inner()`
 
+> **Keiyaku note (K-9):** Repair results flowing to escalation and observability now use the `EscalationRepairOutcome` typed contract (`micro_prime/models.py`). The `to_escalation_repair_outcome()` factory in `micro_prime/repair.py` converts internal repair state into this boundary contract. See [KEIYAKU_DESIGN_PRINCIPLE.md](../../design-princples/KEIYAKU_DESIGN_PRINCIPLE.md).
+
 ---
 
 ### REQ-MP-406: Non-Destructive Guarantee

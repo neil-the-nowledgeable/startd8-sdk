@@ -132,6 +132,7 @@ class DecompositionStrategy(Protocol):
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        external_dependency_count: Optional[int] = None,
     ) -> bool: ...
 
     def plan(
@@ -223,6 +224,7 @@ class ClassDecomposeStrategy:
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        external_dependency_count: Optional[int] = None,
     ) -> bool:
         """Fast check: can this strategy decompose this element?"""
         if not self._config.class_decompose_enabled:
@@ -645,6 +647,7 @@ class FunctionChainStrategy:
         manifest: ForwardManifest,
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
+        external_dependency_count: Optional[int] = None,
     ) -> bool:
         if not self._config.function_chain_enabled:
             return False
@@ -657,10 +660,16 @@ class FunctionChainStrategy:
 
         # Exclude API/orchestrator classifications
         if classification_signals is not None:
-            disqualifying = {"external_api", "external_imports",
-                             "orchestrator", "app_server_instance"}
-            if classification_signals & disqualifying:
+            # Always-rejected signals
+            always_reject = {"external_api", "external_imports",
+                             "app_server_instance"}
+            if classification_signals & always_reject:
                 return False
+            # Orchestrators allowed when external deps are low enough
+            if "orchestrator" in classification_signals:
+                max_deps = self._config.orchestrator_decomp_max_external_deps
+                if external_dependency_count is None or external_dependency_count > max_deps:
+                    return False
         else:
             # Fallback: reason-string matching
             reason_lower = classification_reason.lower()
@@ -898,6 +907,7 @@ class ModerateDecomposer:
         classification_reason: str,
         classification_signals: Optional[set[str]] = None,
         complexity_signals: Optional[TaskComplexitySignals] = None,
+        external_dependency_count: Optional[int] = None,
     ) -> bool:
         """Lightweight viability check for dry-run reports only.
 
@@ -910,6 +920,7 @@ class ModerateDecomposer:
             s.can_handle(
                 element, file_spec, manifest, classification_reason,
                 classification_signals,
+                external_dependency_count=external_dependency_count,
             )
             for s in self._strategies
         )
@@ -924,6 +935,7 @@ class ModerateDecomposer:
         complexity_signals: Optional[TaskComplexitySignals] = None,
         *,
         context: Optional[DecompositionContext] = None,
+        external_dependency_count: Optional[int] = None,
     ) -> Optional[DecompositionPlan]:
         """Produce a decomposition plan, or None if no strategy applies.
 
@@ -944,6 +956,9 @@ class ModerateDecomposer:
                 fields (config, manifest, etc.) are used; the positional args
                 are still required for backward compatibility but the context
                 takes precedence for new features (recursion, etc.).
+            external_dependency_count: Number of external dependencies for
+                the element. Used by FunctionChainStrategy to relax orchestrator
+                rejection when dep count is below threshold.
         """
         if not self._config.decomposition_enabled:
             return None
@@ -952,6 +967,7 @@ class ModerateDecomposer:
             if s.can_handle(
                 element, file_spec, manifest, classification_reason,
                 classification_signals,
+                external_dependency_count=external_dependency_count,
             ):
                 plan = s.plan(
                     element, file_spec, manifest, classification_reason,

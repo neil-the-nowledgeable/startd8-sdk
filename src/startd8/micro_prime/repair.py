@@ -632,6 +632,94 @@ def run_repair_pipeline(
     )
 
 
+def to_escalation_repair_outcome(
+    element_fqn: str,
+    raw_code: str,
+    result: RepairResult,
+) -> "EscalationRepairOutcome":
+    """Convert internal RepairResult to Keiyaku boundary contract (K-9).
+
+    Translates the internal repair pipeline result into a structured
+    ``EscalationRepairOutcome`` suitable for escalation handoffs and
+    observability, preserving machine-readable diagnostics.
+
+    Args:
+        element_fqn: Fully-qualified element name (e.g. "MyClass.my_method").
+        raw_code: The original code before any repair steps.
+        result: The RepairResult from ``run_repair_pipeline``.
+
+    Returns:
+        An ``EscalationRepairOutcome`` with structured step records.
+    """
+    from startd8.micro_prime.models import (
+        EscalationRepairOutcome,
+        RepairStepOutcome,
+    )
+
+    step_outcomes = []
+    for sr in result.step_results:
+        # Derive a human-readable detail from step metrics
+        detail_parts = []
+        if sr.modified:
+            detail_parts.append(f"{sr.step_name} modified code")
+        if sr.metrics.get("reverted"):
+            detail_parts.append("reverted (broke valid code)")
+        if sr.metrics.get("nodes_removed"):
+            detail_parts.append(
+                f"removed {sr.metrics['nodes_removed']} node(s)"
+            )
+        if sr.metrics.get("wrapped_body_lines"):
+            detail_parts.append(
+                f"wrapped {sr.metrics['wrapped_body_lines']} body line(s)"
+            )
+        if sr.metrics.get("replaced_def_lines"):
+            detail_parts.append(
+                f"replaced {sr.metrics['replaced_def_lines']} def line(s)"
+            )
+        if sr.metrics.get("imports_added"):
+            detail_parts.append(
+                f"added {sr.metrics['imports_added']} import(s)"
+            )
+        if sr.metrics.get("imports_removed"):
+            detail_parts.append(
+                f"removed {sr.metrics['imports_removed']} duplicate import(s)"
+            )
+        detail = "; ".join(detail_parts) if detail_parts else "no change"
+
+        # Determine AST validity after this step — use metrics if available
+        ast_valid = sr.metrics.get("valid", None)
+        if ast_valid is None:
+            # For non-ast_validate steps, infer from result validity
+            ast_valid = result.ast_valid_after
+
+        step_outcomes.append(RepairStepOutcome(
+            step=sr.step_name,
+            modified=sr.modified,
+            ast_valid_after=bool(ast_valid),
+            detail=detail,
+        ))
+
+    # Determine final verdict
+    if result.repair_recovered:
+        verdict = "recovered"
+    elif result.ast_valid_before == result.ast_valid_after and not result.steps_applied:
+        verdict = "unchanged"
+    elif not result.ast_valid_after:
+        verdict = "failed"
+    else:
+        verdict = "recovered" if result.steps_applied else "unchanged"
+
+    return EscalationRepairOutcome(
+        element_fqn=element_fqn,
+        ast_valid_before=result.ast_valid_before,
+        ast_valid_after=result.ast_valid_after,
+        steps=step_outcomes,
+        final_verdict=verdict,
+        lines_before=len(raw_code.splitlines()) if raw_code else 0,
+        lines_after=len(result.code.splitlines()) if result.code else 0,
+    )
+
+
 def repair(
     raw_output: str,
     target: ForwardElementSpec,

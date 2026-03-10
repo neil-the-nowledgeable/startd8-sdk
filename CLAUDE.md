@@ -342,6 +342,16 @@ The SDK routes code generation tasks by complexity tier:
 - `micro_prime/splicer.py` — Splices generated code into existing files
 - `micro_prime/prime_adapter.py` — Bridges PrimeContractor ↔ MicroPrime
 
+### Keiyaku A2A Contracts (Micro Prime)
+
+Agent-to-agent boundaries in Micro Prime use typed contracts per the [Keiyaku Design Principle](docs/design-princples/KEIYAKU_DESIGN_PRINCIPLE.md):
+- `ClassificationResult` — carries `TaskComplexitySignals` from classifier to decomposer (K-10)
+- `EscalationHandoff` — structured JSON handoff replacing prose escalation context (K-6)
+- `EscalationRepairOutcome` — structured repair diagnostics at escalation boundary (K-9)
+- `SemanticVerificationResult` — pre-defined contract for LLM semantic verification (K-7)
+
+See `docs/design/micro-prime/KEIYAKU_GAP_ANALYSIS.md` for the full boundary inventory.
+
 ### Repair Pipeline
 
 Post-generation repair for syntax, lint, and import errors:
@@ -440,6 +450,7 @@ Agents are specified as `provider:model` strings:
 - Use `ModelCatalogEntry.agent_spec` for model defaults — don't scatter hardcoded model strings
 - When modifying `context_seed/` subpackage, verify new symbols are re-exported in `context_seed_handlers.py` compat wrapper
 - When splitting modules, run `grep -rn 'from old_module import\|patch.*old_module' tests/` to find all symbols and patch targets that need forwarding
+- When adding new LLM-calling boundaries in `micro_prime/`, define JSON input/output contracts before implementation (REQ-MP-1010, Keiyaku compliance gate)
 
 ### Must Avoid
 - Don't hardcode API keys - they come from environment variables

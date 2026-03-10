@@ -1453,6 +1453,7 @@ class MicroPrimeCodeGenerator:
         raw_output: str = "",
         repaired_code: str = "",
         repair_steps: Optional[list[str]] = None,
+        escalation_handoff: Optional["EscalationHandoff"] = None,
     ) -> Optional[tuple[str, int, int]]:
         """Single direct LLM call for one escalated element.
 
@@ -1466,27 +1467,35 @@ class MicroPrimeCodeGenerator:
             skeleton=skeleton, token_budget=4096,
         )
 
-        # Append escalation context so cloud model can learn from local failure
-        if escalation_reason:
-            prompt += f"\n\n# Escalation context: {escalation_reason}"
-        if last_error:
-            prompt += f"\n# Previous error: {last_error}"
-        if retry_context:
-            prompt += f"\n\n# Retry context: {retry_context}"
-        if raw_output or repaired_code or last_code:
-            truncated = raw_output or last_code
-            if len(truncated) > 2000:
-                truncated = truncated[:2000] + "\n# ... [truncated]"
-            prompt += "\n\n# Prior local model attempt:"
-            prompt += "\n# Repair steps attempted: "
-            prompt += ", ".join(repair_steps or []) or "none"
-            prompt += "\n```python\n" + truncated + "\n```"
-            if repaired_code and repaired_code != truncated:
-                repaired = repaired_code
-                if len(repaired) > 2000:
-                    repaired = repaired[:2000] + "\n# ... [truncated]"
-                prompt += "\n\n# Repaired output:"
-                prompt += "\n```python\n" + repaired + "\n```"
+        # Keiyaku (K-6): Use structured handoff when available,
+        # falling back to prose injection for backward compatibility.
+        if escalation_handoff is not None:
+            prompt += "\n\n" + escalation_handoff.to_prompt_section()
+            if retry_context:
+                prompt += f"\n\n# Retry context: {retry_context}"
+        else:
+            # Legacy prose injection path — preserved for call sites
+            # that don't yet produce an EscalationHandoff.
+            if escalation_reason:
+                prompt += f"\n\n# Escalation context: {escalation_reason}"
+            if last_error:
+                prompt += f"\n# Previous error: {last_error}"
+            if retry_context:
+                prompt += f"\n\n# Retry context: {retry_context}"
+            if raw_output or repaired_code or last_code:
+                truncated = raw_output or last_code
+                if len(truncated) > 2000:
+                    truncated = truncated[:2000] + "\n# ... [truncated]"
+                prompt += "\n\n# Prior local model attempt:"
+                prompt += "\n# Repair steps attempted: "
+                prompt += ", ".join(repair_steps or []) or "none"
+                prompt += "\n```python\n" + truncated + "\n```"
+                if repaired_code and repaired_code != truncated:
+                    repaired = repaired_code
+                    if len(repaired) > 2000:
+                        repaired = repaired[:2000] + "\n# ... [truncated]"
+                    prompt += "\n\n# Repaired output:"
+                    prompt += "\n```python\n" + repaired + "\n```"
 
         agent = self._get_cloud_agent()
         result_text, _time_ms, token_usage = agent.generate(
@@ -1607,6 +1616,7 @@ class MicroPrimeCodeGenerator:
                 raw_output = ""
                 repaired_code = ""
                 esc_ctx = er.escalation.context if er.escalation else None
+                handoff = None
                 if esc_ctx:
                     raw_output = esc_ctx.raw_output or ""
                     repaired_code = esc_ctx.repaired_code or ""
@@ -1615,6 +1625,8 @@ class MicroPrimeCodeGenerator:
                     if esc_ctx.error:
                         prompt_error = esc_ctx.error
                         last_error = esc_ctx.error
+                    # Keiyaku (K-6): prefer structured handoff when available
+                    handoff = esc_ctx.escalation_handoff
 
                 attempts = 0
                 success = False
@@ -1649,6 +1661,7 @@ class MicroPrimeCodeGenerator:
                         raw_output=raw_output,
                         repaired_code=repaired_code,
                         repair_steps=repair_steps,
+                        escalation_handoff=handoff,
                     )
                     if gen_result is None:
                         last_error = "empty_response"

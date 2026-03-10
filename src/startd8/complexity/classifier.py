@@ -70,17 +70,20 @@ def classify_tier(
                 ComplexityTier.TRIVIAL,
                 f"non-Python file ({signals.file_extension}) "
                 f"below trivial LOC threshold ({signals.estimated_loc} <= {cfg.non_python_trivial_loc_max})",
+                signals,
             )
         if signals.estimated_loc <= cfg.non_python_simple_loc_max:
             return _emit(
                 ComplexityTier.SIMPLE,
                 f"non-Python file ({signals.file_extension}) "
                 f"below simple LOC threshold ({signals.estimated_loc} <= {cfg.non_python_simple_loc_max})",
+                signals,
             )
         return _emit(
             ComplexityTier.COMPLEX,
             f"non-Python file ({signals.file_extension}) "
             f"above simple LOC threshold ({signals.estimated_loc} > {cfg.non_python_simple_loc_max})",
+            signals,
         )
 
     # --- COMPLEX: any trigger fires ---
@@ -149,6 +152,7 @@ def classify_tier(
             ComplexityTier.SIMPLE,
             f"relaxed SIMPLE: create-mode, blast_radius={signals.blast_radius} "
             f"<= {cfg.simple_relaxed_blast_radius_max}",
+            signals,
         )
 
     # --- Default: MODERATE ---

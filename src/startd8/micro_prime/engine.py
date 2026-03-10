@@ -45,11 +45,13 @@ from startd8.micro_prime.decomposition.core import (
     policy_from_config,
 )
 from startd8.micro_prime.context import MicroPrimeContext
-from startd8.complexity.models import RejectionReason
+from startd8.complexity.models import RejectionReason, TaskComplexitySignals
 from startd8.micro_prime.models import (
     ElementResult,
     EscalationContext,
+    EscalationHandoff,
     EscalationReason,
+    EscalationRepairOutcome,
     EscalationResult,
     FileResult,
     MicroPrimeConfig,
@@ -57,7 +59,11 @@ from startd8.micro_prime.models import (
     TierClassification,
 )
 from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_examples
-from startd8.micro_prime.repair import build_repair_attribution, run_repair_pipeline
+from startd8.micro_prime.repair import (
+    build_repair_attribution,
+    run_repair_pipeline,
+    to_escalation_repair_outcome,
+)
 from startd8.micro_prime.splicer import splice_body_into_skeleton
 from startd8.micro_prime.templates import TemplateRegistry
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
@@ -502,6 +508,7 @@ def build_escalation_context(
     repair_steps: Optional[list[str]] = None,
     local_model: Optional[str] = None,
     element_fqn: Optional[str] = None,
+    escalation_handoff: Optional[EscalationHandoff] = None,
 ) -> EscalationResult:
     """Build a reusable EscalationResult for element escalation.
 
@@ -516,6 +523,9 @@ def build_escalation_context(
         detail: Human-readable detail string.
         last_code: Optional last generated code before escalation.
         last_error: Optional error string.
+        escalation_handoff: Optional Keiyaku-compliant structured handoff
+            (K-6). When provided, attached to the EscalationContext for
+            downstream consumers to use instead of prose fields.
 
     Returns:
         An EscalationResult populated with the provided context.
@@ -523,7 +533,7 @@ def build_escalation_context(
     if element_fqn is None:
         element_fqn = element_name
     context = None
-    if raw_output or repaired_code or repair_steps or local_model:
+    if raw_output or repaired_code or repair_steps or local_model or escalation_handoff:
         context = EscalationContext(
             element_fqn=element_fqn,
             local_model=local_model or "",
@@ -531,6 +541,7 @@ def build_escalation_context(
             repair_steps_applied=repair_steps or [],
             repaired_code=repaired_code,
             error=last_error or detail,
+            escalation_handoff=escalation_handoff,
         )
 
     return EscalationResult(
@@ -539,6 +550,50 @@ def build_escalation_context(
         last_code=last_code,
         last_error=last_error,
         context=context,
+    )
+
+
+def _build_escalation_handoff(
+    element: ForwardElementSpec,
+    tier: TierClassification,
+    local_model: str,
+    attempt_count: int,
+    reason: EscalationReason,
+    failure_message: str,
+    raw_output: Optional[str] = None,
+    repair_outcome: Optional[EscalationRepairOutcome] = None,
+) -> EscalationHandoff:
+    """Build a Keiyaku-compliant EscalationHandoff from element data (K-6).
+
+    Centralises handoff construction so that all escalation sites in
+    ``_handle_simple`` produce consistently structured contracts.
+    """
+    sig_str = ""
+    if element.signature:
+        params = ", ".join(
+            f"{p.name}: {p.annotation}" if p.annotation else p.name
+            for p in element.signature.params
+        )
+        ret = f" -> {element.signature.return_annotation}" if element.signature.return_annotation else ""
+        sig_str = f"({params}){ret}"
+
+    element_fqn = (
+        f"{element.parent_class}.{element.name}"
+        if element.parent_class else element.name
+    )
+
+    return EscalationHandoff(
+        element_fqn=element_fqn,
+        original_tier=tier.value.upper(),
+        local_model=local_model,
+        attempt_count=attempt_count,
+        failure_category=reason.value,
+        failure_message=failure_message,
+        raw_output_lines=len((raw_output or "").splitlines()),
+        repair=repair_outcome,
+        element_signature=sig_str,
+        element_kind=element.kind.value.upper(),
+        parent_class=element.parent_class,
     )
 
 
@@ -696,6 +751,7 @@ class MicroPrimeEngine:
         design_doc_sections: Optional[list[str]] = None,
         task_description: Optional[str] = None,
         classification_signals: Optional[frozenset[str]] = None,
+        complexity_signals: Optional[TaskComplexitySignals] = None,
     ) -> ElementResult:
         """Process a single element with a pre-computed tier classification.
 
@@ -715,6 +771,8 @@ class MicroPrimeEngine:
             classification_signals: Structured signal names from classification
                 (e.g. ``{"orchestrator", "external_api"}``).  Forwarded to
                 the decomposer for strategy selection (REQ-MP-902).
+            complexity_signals: Optional TaskComplexitySignals threaded from
+                classify_tier() via ClassificationResult (Keiyaku D-1).
 
         Returns:
             ElementResult with success/failure and optional code.
@@ -875,6 +933,7 @@ class MicroPrimeEngine:
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
                 classification_signals=set(classification_signals) if classification_signals else None,
+                complexity_signals=complexity_signals,
             )
         else:
             # COMPLEX only — immediate escalation
@@ -1251,8 +1310,15 @@ class MicroPrimeEngine:
         design_doc_sections: Optional[list[str]] = None,
         task_description: Optional[str] = None,
         classification_signals: Optional[set[str]] = None,
+        complexity_signals: Optional[TaskComplexitySignals] = None,
     ) -> ElementResult:
-        """Handle MODERATE tier: attempt decomposition, then escalate."""
+        """Handle MODERATE tier: attempt decomposition, then escalate.
+
+        Args:
+            complexity_signals: Optional TaskComplexitySignals threaded from
+                classify_tier() via ClassificationResult (Keiyaku D-1).
+                Forwarded to the decomposer for strategy-level decisions.
+        """
         start_time = time.monotonic()
 
         # Leaf-only constraint (Phase 1, Step 7): decomposed sub-elements
@@ -1357,6 +1423,7 @@ class MicroPrimeEngine:
         plan = self._decomposer.decompose(
             element, file_spec, manifest, reasoning,
             classification_signals=classification_signals,
+            complexity_signals=complexity_signals,
         )
         if plan is None:
             _record_decomp_rejected(file_path, "no_strategy")
@@ -2203,6 +2270,7 @@ class MicroPrimeEngine:
             # Run repair pipeline
             repair_steps: list[str] = []
             repair_attribution = None
+            repair_result = None
             if self._config.repair_enabled:
                 repair_result = run_repair_pipeline(
                     code, element, file_spec, skeleton_source=skeleton,
@@ -2219,6 +2287,17 @@ class MicroPrimeEngine:
                     logger.warning(
                         "AST invalid after repair for %s (attempt %d/%d)",
                         element.name, local_attempt, max_local_attempts,
+                    )
+                    # Build Keiyaku-compliant structured handoff (K-6/K-9)
+                    esc_repair = to_escalation_repair_outcome(
+                        element_fqn, raw_output, repair_result,
+                    )
+                    handoff = _build_escalation_handoff(
+                        element, TierClassification.SIMPLE, model_name,
+                        local_attempt, EscalationReason.AST_FAILURE,
+                        repair_result.last_error or "ast.parse() failed",
+                        raw_output=raw_output,
+                        repair_outcome=esc_repair,
                     )
                     last_escalation_result = ElementResult(
                         element_name=element.name,
@@ -2250,6 +2329,7 @@ class MicroPrimeEngine:
                             repair_steps=repair_steps,
                             local_model=model_name,
                             element_fqn=element_fqn,
+                            escalation_handoff=handoff,
                         ),
                     )
                     if is_last_attempt:
@@ -2267,6 +2347,19 @@ class MicroPrimeEngine:
         # Structural verification (REQ-MP-512)
         structural_ok, structural_reason = _structural_verify(code, element)
         if not structural_ok:
+            # Build Keiyaku handoff if repair was run
+            struct_handoff = None
+            if self._config.repair_enabled and repair_result is not None:
+                struct_repair = to_escalation_repair_outcome(
+                    element_fqn, raw_output, repair_result,
+                )
+                struct_handoff = _build_escalation_handoff(
+                    element, TierClassification.SIMPLE, model_name,
+                    local_attempt, EscalationReason.STRUCTURAL_MISMATCH,
+                    structural_reason or "structural_verification_failed",
+                    raw_output=raw_output,
+                    repair_outcome=struct_repair,
+                )
             return ElementResult(
                 element_name=element.name,
                 file_path=file_path,
@@ -2297,6 +2390,7 @@ class MicroPrimeEngine:
                     repair_steps=repair_steps,
                     local_model=model_name,
                     element_fqn=element_fqn,
+                    escalation_handoff=struct_handoff,
                 ),
             )
 
@@ -2306,6 +2400,19 @@ class MicroPrimeEngine:
                 code, element, file_spec, contracts, skeleton,
             )
             if not semantic_ok:
+                # Build Keiyaku handoff if repair was run
+                sem_handoff = None
+                if self._config.repair_enabled and repair_result is not None:
+                    sem_repair = to_escalation_repair_outcome(
+                        element_fqn, raw_output, repair_result,
+                    )
+                    sem_handoff = _build_escalation_handoff(
+                        element, TierClassification.SIMPLE, model_name,
+                        local_attempt, EscalationReason.SEMANTIC_FAILURE,
+                        semantic_reason or "semantic_verification_failed",
+                        raw_output=raw_output,
+                        repair_outcome=sem_repair,
+                    )
                 return ElementResult(
                     element_name=element.name,
                     file_path=file_path,
@@ -2336,6 +2443,7 @@ class MicroPrimeEngine:
                         repair_steps=repair_steps,
                         local_model=model_name,
                         element_fqn=element_fqn,
+                        escalation_handoff=sem_handoff,
                     ),
                 )
 
