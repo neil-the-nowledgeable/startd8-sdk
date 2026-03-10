@@ -872,7 +872,11 @@ def _enrich_features_from_plan(
 
     enriched = 0
     for feat in features:
-        contract = contracts.get(feat.feature_id)
+        # PARSE may split multi-file features into sub-features with
+        # suffixed IDs (e.g. F-001a, F-001b).  Strip the suffix to
+        # match the plan's F-NNN heading.
+        base_id = re.sub(r"[a-z]+$", "", feat.feature_id)
+        contract = contracts.get(feat.feature_id) or contracts.get(base_id)
         if not contract:
             continue
         # Only enrich if the contract adds meaningful length beyond the

@@ -2675,3 +2675,21 @@ class TestEnrichFeaturesFromPlan:
         features = [self._make_feature("F-002", "Short.")]
         _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
         assert len(features[0].description) > 200
+
+    def test_suffixed_feature_ids_match_parent_contract(self):
+        """PARSE splits F-001 into F-001a, F-001b — both should get F-001's contract."""
+        features = [
+            self._make_feature("F-001a", "Logger for emailservice"),
+            self._make_feature("F-001b", "Logger for recommendationservice"),
+        ]
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 2
+        assert "CustomJsonFormatter" in features[0].description
+        assert "CustomJsonFormatter" in features[1].description
+
+    def test_exact_match_takes_priority_over_suffix_strip(self):
+        """If both F-001 and F-001a exist in contracts, exact match wins."""
+        features = [self._make_feature("F-001", "Exact match")]
+        count = _enrich_features_from_plan(features, PLAN_WITH_CONTRACTS)
+        assert count == 1
+        assert "CustomJsonFormatter" in features[0].description
