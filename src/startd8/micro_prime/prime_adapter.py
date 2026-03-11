@@ -24,7 +24,11 @@ from startd8.contractors.protocols import (
     GenerationResult,
 )
 from startd8.element_id import make_element_id
-from startd8.element_registry import ElementEntry, ElementRegistry
+from startd8.element_registry import (
+    ElementEntry,
+    ElementRegistry,
+    compute_element_context_checksum,
+)
 from startd8.forward_manifest import (
     ForwardElementSpec,
     ForwardFileSpec,
@@ -974,7 +978,7 @@ class MicroPrimeCodeGenerator:
                 self._element_registry.set_phase_status(
                     element_id, "post_assembly", "validated",
                 )
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
                 logger.warning(
                     "Element registry write failed for %s in %s: %s",
                     er.element_name,
@@ -1048,12 +1052,20 @@ class MicroPrimeCodeGenerator:
                 )
 
                 try:
+                    # Compute context checksum so staleness detection works
+                    # on future runs (same shared function as engine + EMIT).
+                    ctx_checksum = compute_element_context_checksum(
+                        element_name=node.name,
+                        element_kind=kind,
+                        parent_class=parent_class or "",
+                    )
                     entry = ElementEntry(
                         element_id=element_id,
                         kind=kind,
                         name=node.name,
                         file_path=rel_path,
                         parent_class=parent_class,
+                        context_checksum=ctx_checksum,
                         extra={
                             "code": code,
                             "generator": "cloud-backfill",
@@ -1065,7 +1077,7 @@ class MicroPrimeCodeGenerator:
                         element_id, "cloud_backfill", "validated",
                     )
                     backfilled += 1
-                except Exception as exc:  # noqa: BLE001
+                except (OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
                     logger.warning(
                         "Registry backfill failed for %s in %s: %s",
                         node.name, rel_path, exc,

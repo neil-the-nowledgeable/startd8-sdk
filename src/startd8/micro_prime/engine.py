@@ -496,14 +496,18 @@ def _compute_context_checksum(
     """Compute a structural context checksum for cache staleness detection.
 
     Delegates to the shared ``compute_element_context_checksum`` so that the
-    same algorithm is used everywhere.
+    same algorithm is used everywhere (plan ingestion EMIT, engine, backfill).
     """
     sig_str = str(element.signature) if element.signature else ""
+    bases_list = [str(b) for b in (getattr(element, "bases", None) or [])]
+    dec_list = [str(d) for d in (getattr(element, "decorators", None) or [])]
     return compute_element_context_checksum(
         element_name=element.name,
         element_kind=element.kind.value if hasattr(element.kind, "value") else str(element.kind),
         signature=sig_str,
         parent_class=element.parent_class or "",
+        bases=bases_list or None,
+        decorators=dec_list or None,
     )
 
 
@@ -1601,6 +1605,7 @@ class MicroPrimeEngine:
             logger.warning(
                 "File-whole Ollama call failed for %s: %s", file_path, e,
             )
+            self._record_local_failure()
             return None
 
         gen_time = (time.monotonic() - start_time) * 1000
@@ -2624,6 +2629,13 @@ class MicroPrimeEngine:
                 input_tokens += attempt_in_tokens
                 output_tokens += attempt_out_tokens
             except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
+                # T1-1: Use correct escalation reason — connection/timeout
+                # errors are infrastructure issues, not empty responses.
+                esc_reason = (
+                    EscalationReason.TIMEOUT
+                    if isinstance(e, TimeoutError)
+                    else EscalationReason.OLLAMA_UNAVAILABLE
+                )
                 logger.warning(
                     "Ollama generation failed for %s (attempt %d/%d): %s",
                     element.name, local_attempt, max_local_attempts, e,
@@ -2640,11 +2652,13 @@ class MicroPrimeEngine:
                     verification_verdict="skipped",
                     model=model_name,
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
                     escalation=build_escalation_context(
                         element_name=element.name,
                         file_path=file_path,
                         tier=TierClassification.SIMPLE,
-                        reason=EscalationReason.EMPTY_RESPONSE,
+                        reason=esc_reason,
                         detail=str(e),
                         local_model=model_name,
                         element_fqn=element_fqn,
@@ -2652,7 +2666,9 @@ class MicroPrimeEngine:
                 )
                 if is_last_attempt:
                     return _GenerationOutcome(
-                        code="", raw_output="", failure=last_escalation_result,
+                        code="", raw_output="",
+                        input_tokens=input_tokens, output_tokens=output_tokens,
+                        failure=last_escalation_result,
                     )
                 continue
 
@@ -2980,9 +2996,14 @@ class MicroPrimeEngine:
             from startd8.utils.agent_resolution import resolve_agent_spec
 
             agent_spec = f"{self._config.provider}:{self._config.model}"
-            self._ollama_agent = resolve_agent_spec(
-                agent_spec, max_tokens=self._config.max_tokens,
-            )
+            try:
+                self._ollama_agent = resolve_agent_spec(
+                    agent_spec, max_tokens=self._config.max_tokens,
+                )
+            except Exception as exc:
+                raise ConnectionError(
+                    f"Failed to create Ollama agent ({agent_spec}): {exc}"
+                ) from exc
 
         result_text, time_ms, token_usage = self._ollama_agent.generate(
             prompt,

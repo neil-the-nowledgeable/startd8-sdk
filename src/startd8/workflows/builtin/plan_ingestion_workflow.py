@@ -1489,7 +1489,11 @@ def _mottainai_pre_assembly(
     # importing at module level would create circular dependencies.
     try:
         from startd8.element_id import make_element_id
-        from startd8.element_registry import ElementEntry, ElementRegistry
+        from startd8.element_registry import (
+            ElementEntry,
+            ElementRegistry,
+            compute_element_context_checksum,
+        )
         from startd8.complexity.classifier import classify_tier
         from startd8.complexity.signals import extract_signals_from_element
     except ImportError:
@@ -1541,8 +1545,28 @@ def _mottainai_pre_assembly(
             # Qualified name for the tier map
             qualified = f"{parent_cls}.{elem_name}" if parent_cls else elem_name
 
-            # FR-MPA-011: Compute context checksum
-            ctx_checksum = _element_context_checksum(element, contracts)
+            # FR-MPA-011: Compute context checksum via shared function
+            # (ensures EMIT and IMPLEMENT produce identical checksums)
+            elem_sig = getattr(element, "signature", None)
+            elem_bases = [str(b) for b in (getattr(element, "bases", None) or [])]
+            elem_decs = [str(d) for d in (getattr(element, "decorators", None) or [])]
+            elem_contract_ids = []
+            elem_name_local = getattr(element, "name", "")
+            parent_cls_local = getattr(element, "parent_class", None)
+            for c in contracts:
+                fn = getattr(c, "function_name", None)
+                cn = getattr(c, "class_name", None)
+                if fn == elem_name_local or (cn is not None and cn == parent_cls_local):
+                    elem_contract_ids.append(str(getattr(c, "contract_id", "")))
+            ctx_checksum = compute_element_context_checksum(
+                element_name=elem_name_local,
+                element_kind=kind_str,
+                signature=str(elem_sig) if elem_sig else "",
+                parent_class=parent_cls or "",
+                contract_checksums=elem_contract_ids or None,
+                bases=elem_bases or None,
+                decorators=elem_decs or None,
+            )
 
             # Generate deterministic element ID
             element_id = getattr(element, "source_contract_id", None) or ""

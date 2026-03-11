@@ -133,12 +133,17 @@ def compute_element_context_checksum(
     signature: str = "",
     parent_class: str = "",
     contract_checksums: list[str] | None = None,
+    bases: list[str] | None = None,
+    decorators: list[str] | None = None,
 ) -> str:
     """Hash the element's structural context for staleness detection.
 
     Produces a 16-hex-char SHA-256 prefix that captures the element's identity
     and structural surroundings.  When any input changes the checksum changes,
     signalling that a cached ``ElementEntry`` is stale and must be regenerated.
+
+    **Important:** All callers (plan ingestion EMIT, micro prime engine, etc.)
+    must use this shared function to ensure checksum consistency across phases.
 
     Parameters
     ----------
@@ -154,10 +159,20 @@ def compute_element_context_checksum(
     contract_checksums:
         Checksums of ``InterfaceContract`` objects that bind this element.
         Order-independent (sorted internally).
+    bases:
+        Base class names for class elements.  Order-independent (sorted
+        internally).  ``None`` or empty list if not applicable.
+    decorators:
+        Decorator names/expressions for the element.  Order-independent
+        (sorted internally).  ``None`` or empty list if not applicable.
     """
     parts = [element_name, element_kind, signature, parent_class]
     if contract_checksums:
         parts.extend(sorted(contract_checksums))
+    if bases:
+        parts.append(",".join(sorted(bases)))
+    if decorators:
+        parts.append(",".join(sorted(decorators)))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
