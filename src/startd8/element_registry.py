@@ -258,6 +258,44 @@ def _sanitize_run_id(run_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Legacy ID alias mapping
+# ---------------------------------------------------------------------------
+
+# Maps current prefix → legacy prefix(es) and vice-versa so that registry
+# entries persisted under an older ID scheme are still reachable.
+_PREFIX_ALIASES: dict[str, list[str]] = {
+    "fn/": ["function/"],
+    "function/": ["fn/"],
+    "cls/": ["class/"],
+    "class/": ["cls/"],
+}
+
+
+def _legacy_id_aliases(element_id: str) -> list[str]:
+    """Return alternative IDs to try when *element_id* is not found.
+
+    Handles prefix migrations (``fn/`` ↔ ``function/``, ``cls/`` ↔ ``class/``)
+    and hash suffix changes by trying prefix swaps.  Returns an empty list
+    when no alias is applicable.
+    """
+    aliases: list[str] = []
+    for prefix, alt_prefixes in _PREFIX_ALIASES.items():
+        if element_id.startswith(prefix):
+            suffix = element_id[len(prefix):]
+            for alt in alt_prefixes:
+                aliases.append(alt + suffix)
+            # Also try matching by name only (strip hash suffix)
+            # to handle hash changes across ID scheme versions.
+            dash_idx = suffix.rfind("-")
+            if dash_idx > 0:
+                name_part = suffix[:dash_idx]
+                for alt in alt_prefixes:
+                    aliases.append(alt + name_part)
+            break
+    return aliases
+
+
+# ---------------------------------------------------------------------------
 # ElementRegistry
 # ---------------------------------------------------------------------------
 
@@ -425,16 +463,53 @@ class ElementRegistry:
     # Core CRUD
     # ------------------------------------------------------------------
 
+    def _resolve_id(self, element_id: str) -> Optional[ElementEntry]:
+        """Resolve *element_id* to an ``ElementEntry``, trying legacy aliases.
+
+        Must be called while holding ``self._lock`` and after ``_ensure_loaded()``.
+        Returns ``None`` if neither the canonical ID nor any alias matches.
+        """
+        entry = self._index.get(element_id)
+        if entry is not None:
+            return entry
+        # Try legacy prefix aliases before declaring a miss.
+        # Phase 1: exact alias matches (prefix swap, same hash).
+        # Phase 2: name-prefix scan (prefix swap, different hash).
+        for alias in _legacy_id_aliases(element_id):
+            entry = self._index.get(alias)
+            if entry is not None:
+                logger.info(
+                    "element_registry legacy alias hit: %s → %s",
+                    element_id, alias,
+                )
+                return entry
+            # Name-prefix scan: alias without hash suffix matches
+            # the start of an index key (handles hash changes).
+            if "-" not in alias:  # this is a name-only alias
+                for idx_id, idx_entry in self._index.items():
+                    if idx_id.startswith(alias + "-"):
+                        logger.info(
+                            "element_registry legacy prefix hit: %s → %s",
+                            element_id, idx_id,
+                        )
+                        return idx_entry
+        return None
+
     def get(self, element_id: str) -> Optional[ElementEntry]:
         """
         Return the ``ElementEntry`` for *element_id*, or ``None`` if absent.
+
+        Tries the canonical *element_id* first, then falls back to legacy
+        ID format aliases (e.g. ``fn/`` ↔ ``function/``, ``cls/`` ↔ ``class/``)
+        so that registry entries persisted under an older ID scheme are still
+        reachable after a prefix migration.
 
         Thread-safe.
         """
         with self._lock:
             self._ensure_loaded()
             self._ensure_metrics()
-            entry = self._index.get(element_id)
+            entry = self._resolve_id(element_id)
             if entry is not None:
                 logger.debug("element_registry.get hit: %s", element_id)
                 if self._hits_counter is not None:
@@ -466,11 +541,11 @@ class ElementRegistry:
         """
         Return ``True`` if *element_id* is present in the registry.
 
-        Thread-safe.
+        Checks legacy ID aliases, consistent with :meth:`get`.  Thread-safe.
         """
         with self._lock:
             self._ensure_loaded()
-            return element_id in self._index
+            return self._resolve_id(element_id) is not None
 
     def remove(self, element_id: str) -> bool:
         """
@@ -570,7 +645,7 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
-            entry = self._index.get(element_id)
+            entry = self._resolve_id(element_id)
             if entry is None:
                 logger.warning(
                     "set_phase_status: element %r not found — ignoring", element_id
@@ -604,7 +679,7 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
-            entry = self._index.get(element_id)
+            entry = self._resolve_id(element_id)
             if entry is None:
                 return None
             records = entry.phases.get(phase, [])
@@ -636,7 +711,7 @@ class ElementRegistry:
         """
         with self._lock:
             self._ensure_loaded()
-            entry = self._index.get(element_id)
+            entry = self._resolve_id(element_id)
             if entry is None:
                 return []
             all_records: list[PhaseRecord] = [
