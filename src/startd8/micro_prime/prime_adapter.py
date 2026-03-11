@@ -238,6 +238,34 @@ def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
     return None
 
 
+@dataclasses.dataclass
+class _FileProcessingState:
+    """Mutable state carrier for generate() sub-steps."""
+
+    all_file_results: list = dataclasses.field(default_factory=list)
+    file_results_by_path: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    generated_files: list = dataclasses.field(default_factory=list)  # list[Path]
+    written_file_paths: set = dataclasses.field(default_factory=set)  # set[str]
+    total_input: int = 0
+    total_output: int = 0
+    escalated_files: list = dataclasses.field(default_factory=list)  # list[str]
+    local_element_count: int = 0
+    template_count: int = 0
+    ollama_count: int = 0
+    escalated_element_count: int = 0
+    decomposed_count: int = 0
+    decomposition_failure_count: int = 0
+    element_escalation_cost: float = 0.0
+    element_escalation_count: int = 0
+    element_escalation_attempt_cost: float = 0.0
+    element_escalation_attempt_count: int = 0
+    effective_file_count: int = 0
+    incomplete_files: list = dataclasses.field(default_factory=list)  # list[str]
+    stub_escalated: list = dataclasses.field(default_factory=list)  # list[str]
+    reg_hits: int = 0
+    reg_misses: int = 0
+
+
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
 
@@ -339,30 +367,99 @@ class MicroPrimeCodeGenerator:
             context, manifest, target_files, ollama_ok,
         )
 
-        # Existing target files for size-regression escalation guard
-        existing_files: Dict[str, str] = mp_context.existing_file_contents
+        st = _FileProcessingState()
 
-        # Process target files through the engine
-        all_file_results: list = []
-        file_results_by_path: Dict[str, Any] = {}
-        generated_files: list[Path] = []
-        written_file_paths: set[str] = set()  # relative paths that were successfully written
-        total_input = 0
-        total_output = 0
-        escalated_files: list[str] = []
-        local_element_count = 0
-        template_count = 0
-        ollama_count = 0
-        escalated_element_count = 0
-        decomposed_count = 0
-        decomposition_failure_count = 0
+        # Phase 1: Process target files through the engine
+        self._process_target_files(
+            st, target_files, manifest, skeletons, mp_context, task, context,
+        )
+
+        local_file_count = len(st.generated_files)
+
+        partial_files = sum(
+            1 for fp in target_files
+            if fp not in st.escalated_files and fp not in st.written_file_paths
+        )
+        logger.info(
+            "Micro Prime: %d elements local (%d files), %d escalated "
+            "(%d files to fallback, %d partial kept)",
+            st.local_element_count,
+            local_file_count,
+            st.escalated_element_count,
+            len(st.escalated_files),
+            partial_files,
+        )
+
+        # Phase 2: Element-level escalation for partial files
+        self._handle_partial_escalations(
+            st, target_files, task, context, manifest, ollama_ok,
+        )
+
+        # Phase 3: Post-generation file-level repair (lint + import completion)
+        if st.generated_files:
+            self._run_post_generation_repair(st.generated_files)
+
+        # Phase 4: Post-assembly validation + effective file count
+        self._validate_and_finalize_files(st)
+
+        # REQ-MP-1103: Count element registry hits/misses for metadata
+        st.reg_hits, st.reg_misses = self._count_registry_hits_misses(
+            st.all_file_results,
+        )
+        logger.info(
+            "Element registry: %d hits, %d misses",
+            st.reg_hits, st.reg_misses,
+        )
+
+        # Phase 5: File-level fallback delegation or local-only return
+        if st.escalated_files and not self._config.escalation_enabled:
+            logger.warning(
+                "Cloud escalation disabled (escalation_enabled=False) — "
+                "keeping %d file(s) as partial local output: %s",
+                len(st.escalated_files),
+                ", ".join(st.escalated_files),
+            )
+        elif st.escalated_files and self._fallback is not None and self._config.escalation_enabled:
+            return self._generate_with_fallback(
+                st, target_files, task, context, local_file_count,
+            )
+
+        return GenerationResult(
+            success=st.effective_file_count > 0,
+            generated_files=st.generated_files,
+            input_tokens=st.total_input,
+            output_tokens=st.total_output,
+            cost_usd=st.element_escalation_attempt_cost,
+            model=f"{self._config.provider}:{self._config.model}",
+            metadata=self._build_generation_metadata(
+                st, local_file_count,
+                micro_prime_only=st.element_escalation_attempt_count == 0,
+                lead_agent_spec=getattr(self, "lead_agent", None),
+                drafter_agent_spec=getattr(self, "drafter_agent", None),
+            ),
+        )
+
+    # ── generate() sub-steps ──────────────────────────────────────────
+
+    def _process_target_files(
+        self,
+        st: _FileProcessingState,
+        target_files: List[str],
+        manifest: ForwardManifest,
+        skeletons: dict[str, str],
+        mp_context: MicroPrimeContext,
+        task: str,
+        context: Dict[str, Any],
+    ) -> None:
+        """Process each target file through the engine, writing results to disk."""
+        existing_files: Dict[str, str] = mp_context.existing_file_contents
 
         for file_path in target_files:
             file_spec = manifest.file_specs.get(file_path)
             skeleton = skeletons.get(file_path, "")
 
             if file_spec is None or not skeleton:
-                escalated_files.append(file_path)
+                st.escalated_files.append(file_path)
                 continue
 
             # REQ-DDS-002: Thread design_doc_sections to engine
@@ -374,16 +471,11 @@ class MicroPrimeCodeGenerator:
                 design_doc_sections=_dds if _dds else None,
                 task_description=_task_desc,
             )
-            all_file_results.append(file_result)
-            file_results_by_path[file_path] = file_result
+            st.all_file_results.append(file_result)
+            st.file_results_by_path[file_path] = file_result
 
             if file_result.filled_skeleton:
-                # Size-regression escalation guard: if the filled skeleton is
-                # significantly smaller than the existing target file, escalate
-                # to the fallback generator instead of writing a tiny skeleton.
-                # Uses semantic line count (non-blank, non-comment) to avoid
-                # penalising lean Ollama output against verbose cloud-generated
-                # files with rich docstrings and inline comments.
+                # Size-regression escalation guard
                 existing_content = existing_files.get(file_path, "")
                 if existing_content:
                     filled_sem = _semantic_line_count(file_result.filled_skeleton)
@@ -396,17 +488,15 @@ class MicroPrimeCodeGenerator:
                             "lines vs %d existing (%.0f%%) — escalating to fallback",
                             file_path, filled_sem, existing_sem, ratio * 100,
                         )
-                        escalated_files.append(file_path)
+                        st.escalated_files.append(file_path)
                         continue
 
                 # REQ-MP-703: Write filled skeleton to disk
-                # Strip the skeleton sentinel — it's a build marker, not output.
                 final_content = file_result.filled_skeleton.replace(
                     _SKELETON_MARKER + "\n", "",
                 ).replace(_SKELETON_MARKER, "")
 
-                # Phase 1, Step 9: ast.parse syntax gate AFTER sentinel strip.
-                # Validates the content that will actually be written to disk.
+                # Phase 1, Step 9: ast.parse syntax gate AFTER sentinel strip
                 try:
                     ast.parse(final_content)
                 except SyntaxError as syn_err:
@@ -414,13 +504,13 @@ class MicroPrimeCodeGenerator:
                         "Micro Prime ast.parse gate failed for %s: %s — skipping write",
                         file_path, syn_err,
                     )
-                    escalated_files.append(file_path)
+                    st.escalated_files.append(file_path)
                     continue
                 output_path = self._output_dir / file_path
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(final_content, encoding="utf-8")
-                generated_files.append(output_path)
-                written_file_paths.add(file_path)
+                st.generated_files.append(output_path)
+                st.written_file_paths.add(file_path)
                 logger.info(
                     "Micro Prime wrote %s (%d lines, %d elements filled)",
                     file_path,
@@ -430,20 +520,20 @@ class MicroPrimeCodeGenerator:
 
             # Track tokens and element counts
             for er in file_result.element_results:
-                total_input += er.input_tokens
-                total_output += er.output_tokens
+                st.total_input += er.input_tokens
+                st.total_output += er.output_tokens
                 if er.success:
-                    local_element_count += 1
+                    st.local_element_count += 1
                     if er.template_used:
-                        template_count += 1
+                        st.template_count += 1
                     else:
-                        ollama_count += 1
+                        st.ollama_count += 1
                 if er.escalation is not None:
-                    escalated_element_count += 1
+                    st.escalated_element_count += 1
                     if er.escalation.reason == EscalationReason.DECOMPOSITION_FAILED:
-                        decomposition_failure_count += 1
+                        st.decomposition_failure_count += 1
                 if er.decomposition_metadata is not None:
-                    decomposed_count += 1
+                    st.decomposed_count += 1
 
             # OTel metrics (REQ-MP-705)
             if _elements_local_counter is not None:
@@ -463,133 +553,112 @@ class MicroPrimeCodeGenerator:
                         )
 
             # Element-level escalation: only delegate the whole file to
-            # fallback when ZERO elements succeeded locally.  When some
-            # elements were filled successfully, keep the partial skeleton
-            # (Mottainai — don't waste locally-produced assets).
+            # fallback when ZERO elements succeeded locally (Mottainai).
             if file_result.escalated_count > 0 and file_result.success_count == 0:
-                escalated_files.append(file_path)
+                st.escalated_files.append(file_path)
 
-        local_file_count = len(generated_files)
-
-        partial_files = sum(
-            1 for fp in target_files
-            if fp not in escalated_files and fp not in written_file_paths
-        )
-        logger.info(
-            "Micro Prime: %d elements local (%d files), %d escalated "
-            "(%d files to fallback, %d partial kept)",
-            local_element_count,
-            local_file_count,
-            escalated_element_count,
-            len(escalated_files),
-            partial_files,
-        )
-
-        # Element-level escalation: for files where SOME elements succeeded
-        # but others were escalated, delegate escalated elements to cloud
-        # and splice results into the partial skeleton (REQ-MP-505/512).
-        element_escalation_cost = 0.0
-        element_escalation_count = 0
-        element_escalation_attempt_cost = 0.0
-        element_escalation_attempt_count = 0
+    def _handle_partial_escalations(
+        self,
+        st: _FileProcessingState,
+        target_files: List[str],
+        task: str,
+        context: Dict[str, Any],
+        manifest: ForwardManifest,
+        ollama_ok: bool,
+    ) -> None:
+        """Handle element-level escalation for partially-filled files."""
         partial_escalation_candidates = [
             fp for fp in target_files
-            if fp not in escalated_files
-            and (fr := file_results_by_path.get(fp))
+            if fp not in st.escalated_files
+            and (fr := st.file_results_by_path.get(fp))
             and fr.escalated_count > 0 and fr.success_count > 0
         ]
         cloud_escalation_available = (
             self._cloud_agent_spec is not None
             and self._config.escalation_enabled
         )
-        element_escalation_allowed = bool(ollama_ok)
-        if partial_escalation_candidates and self._fallback is not None and not cloud_escalation_available and self._config.escalation_enabled:
+        ollama_available = bool(ollama_ok)
+
+        # T2-1+T2-2: Exclusive decision tree for partial escalation candidates.
+        # Priority: cloud element escalation > file-level fallback > keep partial.
+        if partial_escalation_candidates and cloud_escalation_available:
+            # Tier 2: element-level cloud escalation (works even if Ollama is down)
             for fp in partial_escalation_candidates:
-                if fp not in escalated_files:
-                    escalated_files.append(fp)
-                    # Remove from written/generated so downstream repair and
-                    # assembly defect check skip this file — it will be
-                    # regenerated by the fallback generator.
-                    written_file_paths.discard(fp)
-                    _out = self._output_dir / fp
-                    generated_files[:] = [p for p in generated_files if p != _out]
-                    try:
-                        _out.unlink()
-                    except OSError:
-                        pass
-            logger.info(
-                "No cloud agent for per-element retry — delegating %d file(s) to fallback",
-                len(partial_escalation_candidates),
-            )
-        if partial_escalation_candidates and not element_escalation_allowed:
-            for fp in partial_escalation_candidates:
-                if fp not in escalated_files:
-                    escalated_files.append(fp)
-                    written_file_paths.discard(fp)
-                    _out = self._output_dir / fp
-                    generated_files[:] = [p for p in generated_files if p != _out]
-                    try:
-                        _out.unlink()
-                    except OSError:
-                        pass
-            logger.info(
-                "Ollama unavailable — skipping element-level escalation for %d file(s)",
-                len(partial_escalation_candidates),
-            )
-        if partial_escalation_candidates and not cloud_escalation_available:
-            logger.debug(
-                "Skipping element-level escalation for %d file(s) — no cloud agent configured",
-                len(partial_escalation_candidates),
-            )
-        if cloud_escalation_available and element_escalation_allowed:
-            for fp in partial_escalation_candidates:
-                fr = file_results_by_path[fp]
+                fr = st.file_results_by_path[fp]
                 try:
                     esc_result = self._escalate_elements_to_cloud(
                         fp, fr, task, context, manifest,
                     )
                     if esc_result:
-                        total_input += esc_result.input_tokens
-                        total_output += esc_result.output_tokens
-                        element_escalation_attempt_cost += esc_result.cost_usd
-                        element_escalation_attempt_count += 1
+                        st.total_input += esc_result.input_tokens
+                        st.total_output += esc_result.output_tokens
+                        st.element_escalation_attempt_cost += esc_result.cost_usd
+                        st.element_escalation_attempt_count += 1
                         if esc_result.success:
-                            element_escalation_cost += esc_result.cost_usd
-                            element_escalation_count += 1
+                            st.element_escalation_cost += esc_result.cost_usd
+                            st.element_escalation_count += 1
                 except (OSError, ValueError, RuntimeError, TypeError):
-                    # Narrow catch per [SDK Leg 11 #28] — let
-                    # KeyboardInterrupt / SystemExit propagate.
+                    # Narrow catch per [SDK Leg 11 #28]
                     logger.warning(
                         "Element-level cloud escalation failed for %s, "
                         "keeping partial skeleton",
                         fp, exc_info=True,
                     )
+        elif partial_escalation_candidates and self._fallback is not None and self._config.escalation_enabled:
+            # Tier 3: no cloud agent — delegate entire file(s) to fallback
+            self._demote_to_fallback(st, partial_escalation_candidates)
+            logger.info(
+                "No cloud agent for per-element retry — delegating %d file(s) to fallback",
+                len(partial_escalation_candidates),
+            )
+        elif partial_escalation_candidates and not ollama_available and self._fallback is not None:
+            # Ollama down + no cloud agent — delegate to fallback
+            self._demote_to_fallback(st, partial_escalation_candidates)
+            logger.info(
+                "Ollama unavailable, no cloud agent — delegating %d file(s) to fallback",
+                len(partial_escalation_candidates),
+            )
+        elif partial_escalation_candidates:
+            logger.debug(
+                "No escalation path available for %d file(s) — keeping partial output",
+                len(partial_escalation_candidates),
+            )
 
-        # Post-generation file-level repair (lint + import completion)
-        if generated_files:
-            self._run_post_generation_repair(generated_files)
+    def _demote_to_fallback(
+        self,
+        st: _FileProcessingState,
+        candidates: list[str],
+    ) -> None:
+        """Move candidate files from written/generated to escalated."""
+        for fp in candidates:
+            if fp not in st.escalated_files:
+                st.escalated_files.append(fp)
+                st.written_file_paths.discard(fp)
+                _out = self._output_dir / fp
+                st.generated_files[:] = [p for p in st.generated_files if p != _out]
+                try:
+                    _out.unlink()
+                except OSError:
+                    pass
 
-        # Post-assembly file-level validation: detect files that are
-        # structurally incomplete even when all elements pass individually.
-        # Checks: (1) remaining `raise NotImplementedError` stubs,
-        # (2) `[STARTD8-SKELETON]` markers, (3) nested duplicate functions.
-        # Incomplete files are escalated to fallback or excluded from
-        # effective count.
-        stub_escalated: list[str] = []
-        for file_path in list(written_file_paths):
-            if file_path in escalated_files:
-                continue  # Already scheduled for fallback — skip
-            fr = file_results_by_path.get(file_path)
+    def _validate_and_finalize_files(
+        self,
+        st: _FileProcessingState,
+    ) -> None:
+        """Detect assembly defects and compute effective file count."""
+        # Post-assembly file-level validation
+        for file_path in list(st.written_file_paths):
+            if file_path in st.escalated_files:
+                continue
+            fr = st.file_results_by_path.get(file_path)
             if fr is None or not fr.filled_skeleton or not fr.element_results:
                 continue
             output_path = self._output_dir / file_path
-            # Re-read from disk in case post-generation repair modified it
             try:
                 content = output_path.read_text(encoding="utf-8")
             except OSError:
                 continue
 
-            # Check for assembly defects
             defect = _detect_assembly_defect(content, file_path)
             if defect is not None:
                 if self._fallback is not None:
@@ -598,168 +667,136 @@ class MicroPrimeCodeGenerator:
                         "— escalating to fallback",
                         file_path, defect,
                     )
-                    stub_escalated.append(file_path)
-                    written_file_paths.discard(file_path)
-                    generated_files[:] = [p for p in generated_files if p != output_path]
-                    escalated_files.append(file_path)
+                    st.stub_escalated.append(file_path)
+                    st.written_file_paths.discard(file_path)
+                    st.generated_files[:] = [
+                        p for p in st.generated_files if p != output_path
+                    ]
+                    st.escalated_files.append(file_path)
                     try:
                         output_path.unlink()
                     except OSError:
                         pass
                 else:
-                    # No fallback available — keep the partial file but
-                    # exclude from effective count so success=false.
                     logger.warning(
                         "Micro Prime file %s has assembly defect: %s "
                         "(no fallback available)",
                         file_path, defect,
                     )
-                    stub_escalated.append(file_path)
+                    st.stub_escalated.append(file_path)
             else:
                 # REQ-MP-1103: Register validated elements in the registry
                 self._register_validated_elements(file_path, fr)
 
-        # Compute effective file count based on element fill rate.
-        # Files where <min_element_fill_rate of elements were filled are
-        # considered incomplete and excluded from the success check.
-        # Files with remaining stubs (stub_escalated) are always excluded.
-        effective_file_count = 0
-        incomplete_files: list[str] = []
-        for file_path in written_file_paths:
-            if file_path in stub_escalated:
-                incomplete_files.append(file_path)
+        # Compute effective file count based on element fill rate
+        for file_path in st.written_file_paths:
+            if file_path in st.stub_escalated:
+                st.incomplete_files.append(file_path)
                 continue
-            fr = file_results_by_path.get(file_path)
+            fr = st.file_results_by_path.get(file_path)
             if fr is None:
-                effective_file_count += 1
+                st.effective_file_count += 1
                 continue
             total = len(fr.element_results)
             filled = sum(1 for er in fr.element_results if er.success)
             rate = filled / total if total > 0 else 1.0
             if rate >= self._config.min_element_fill_rate:
-                effective_file_count += 1
+                st.effective_file_count += 1
             else:
-                incomplete_files.append(file_path)
+                st.incomplete_files.append(file_path)
                 logger.warning(
                     "File %s has low element fill rate: %d/%d (%.0f%%) — marking as incomplete",
                     file_path, filled, total, rate * 100,
                 )
 
-        # REQ-MP-1103: Count element registry hits/misses for metadata
-        reg_hits, reg_misses = self._count_registry_hits_misses(all_file_results)
-        logger.info(
-            "Element registry: %d hits, %d misses",
-            reg_hits, reg_misses,
+    def _build_generation_metadata(
+        self,
+        st: _FileProcessingState,
+        local_file_count: int,
+        **extra: Any,
+    ) -> dict:
+        """Build the shared metadata dict for GenerationResult."""
+        meta: dict = {
+            "micro_prime_files_written": local_file_count,
+            "effective_file_count": st.effective_file_count,
+            "incomplete_files": st.incomplete_files,
+            "micro_prime_elements": st.local_element_count,
+            "micro_prime_template_hits": st.template_count,
+            "micro_prime_ollama_generations": st.ollama_count,
+            "micro_prime_decomposed_count": st.decomposed_count,
+            "micro_prime_decomposition_failures": st.decomposition_failure_count,
+            "micro_prime_cost_usd": 0.0,
+            "element_escalation_cost_usd": st.element_escalation_cost,
+            "element_escalation_count": st.element_escalation_count,
+            "element_escalation_attempt_cost_usd": st.element_escalation_attempt_cost,
+            "element_escalation_attempt_count": st.element_escalation_attempt_count,
+            "prime.element_registry_hit": st.reg_hits,
+            "prime.element_registry_miss": st.reg_misses,
+            "micro_prime_file_results": [
+                _serialize_file_result(fr) for fr in st.all_file_results
+            ],
+        }
+        meta.update(extra)
+        return meta
+
+    def _generate_with_fallback(
+        self,
+        st: _FileProcessingState,
+        target_files: List[str],
+        task: str,
+        context: Dict[str, Any],
+        local_file_count: int,
+    ) -> GenerationResult:
+        """Delegate escalated files to cloud fallback and return combined result."""
+        logger.warning(
+            "Escalating %d file(s) to cloud fallback: %s",
+            len(st.escalated_files),
+            ", ".join(st.escalated_files),
         )
+        fallback_context = self._with_escalation_context(
+            context, st.all_file_results,
+        )
+        fallback_result = self._delegate_to_fallback(
+            task, fallback_context, st.escalated_files,
+        )
+        st.generated_files.extend(fallback_result.generated_files)
+        st.total_input += fallback_result.input_tokens
 
-        # Mottainai: only delegate files that had escalations to the fallback.
-        # Files where all elements were handled locally are kept as-is.
-        if escalated_files and not self._config.escalation_enabled:
-            logger.info(
-                "Cloud escalation disabled (escalation_enabled=False) — "
-                "keeping %d file(s) as partial local output: %s",
-                len(escalated_files),
-                ", ".join(escalated_files),
+        # L6: Backfill registry from cloud output for future run reuse
+        if fallback_result.success and self._element_registry is not None:
+            backfill_count = self._backfill_registry_from_cloud(
+                fallback_result.generated_files,
+                feature_id=context.get("feature_id", "unknown"),
             )
-        elif escalated_files and self._fallback is not None and self._config.escalation_enabled:
-            logger.warning(
-                "Escalating %d file(s) to cloud fallback: %s",
-                len(escalated_files),
-                ", ".join(escalated_files),
-            )
-            fallback_context = self._with_escalation_context(
-                context, all_file_results,
-            )
-            fallback_result = self._delegate_to_fallback(
-                task, fallback_context, escalated_files,
-            )
-            generated_files.extend(fallback_result.generated_files)
-            total_input += fallback_result.input_tokens
-
-            # L6: Backfill registry from cloud output for future run reuse
-            if fallback_result.success and self._element_registry is not None:
-                backfill_count = self._backfill_registry_from_cloud(
-                    fallback_result.generated_files,
-                    feature_id=context.get("feature_id", "unknown"),
+            if backfill_count > 0:
+                logger.info(
+                    "Backfilled %d elements from cloud fallback into registry",
+                    backfill_count,
                 )
-                if backfill_count > 0:
-                    logger.info(
-                        "Backfilled %d elements from cloud fallback into registry",
-                        backfill_count,
-                    )
-            # The generation is successful if the fallback succeeded AND
-            # either there were no locally-handled files, or the ones that
-            # were handled locally met the effective fill rate.
-            local_files_kept = sum(1 for fp in target_files if fp not in escalated_files)
-            local_success = True if local_files_kept == 0 else (effective_file_count > 0)
-            
-            return GenerationResult(
-                success=fallback_result.success and local_success,
-                generated_files=generated_files,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                cost_usd=fallback_result.cost_usd + element_escalation_attempt_cost,
-                model=f"micro-prime+{fallback_result.model}",
-                metadata={
-                    "micro_prime_files_written": local_file_count,
-                    "effective_file_count": effective_file_count,
-                    "incomplete_files": incomplete_files,
-                    "fallback_files_delegated": len(escalated_files),
-                    "fallback_files_written": len(fallback_result.generated_files),
-                    "micro_prime_elements": local_element_count,
-                    "micro_prime_template_hits": template_count,
-                    "micro_prime_ollama_generations": ollama_count,
-                    "fallback_elements": escalated_element_count,
-                    "micro_prime_decomposed_count": decomposed_count,
-                    "micro_prime_decomposition_failures": decomposition_failure_count,
-                    "micro_prime_cost_usd": 0.0,
-                    "fallback_cost_usd": fallback_result.cost_usd,
-                    "element_escalation_cost_usd": element_escalation_cost,
-                    "element_escalation_count": element_escalation_count,
-                    "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
-                    "element_escalation_attempt_count": element_escalation_attempt_count,
-                    "prime.element_registry_hit": reg_hits,
-                    "prime.element_registry_miss": reg_misses,
-                    "micro_prime_file_results": [
-                        _serialize_file_result(fr) for fr in all_file_results
-                    ],
-                    # Forward raw LLM responses from fallback for Kaizen capture
-                    **{k: v for k, v in (fallback_result.metadata or {}).items()
-                       if k in ("spec_raw_response", "draft_raw_response",
-                                "review_raw_response", "lead_agent_spec",
-                                "drafter_agent_spec")},
-                },
-            )
+
+        local_files_kept = sum(1 for fp in target_files if fp not in st.escalated_files)
+        local_success = True if local_files_kept == 0 else (st.effective_file_count > 0)
 
         return GenerationResult(
-            success=effective_file_count > 0,
-            generated_files=generated_files,
-            input_tokens=total_input,
-            output_tokens=total_output,
-            cost_usd=element_escalation_attempt_cost,
-            model=f"{self._config.provider}:{self._config.model}",
+            success=fallback_result.success and local_success,
+            generated_files=st.generated_files,
+            input_tokens=st.total_input,
+            output_tokens=st.total_output,
+            cost_usd=fallback_result.cost_usd + st.element_escalation_attempt_cost,
+            model=f"micro-prime+{fallback_result.model}",
             metadata={
-                "micro_prime_only": element_escalation_attempt_count == 0,
-                "micro_prime_files_written": local_file_count,
-                "effective_file_count": effective_file_count,
-                "incomplete_files": incomplete_files,
-                "micro_prime_elements": local_element_count,
-                "micro_prime_template_hits": template_count,
-                "micro_prime_ollama_generations": ollama_count,
-                "micro_prime_decomposed_count": decomposed_count,
-                "micro_prime_decomposition_failures": decomposition_failure_count,
-                "micro_prime_cost_usd": 0.0,
-                "element_escalation_cost_usd": element_escalation_cost,
-                "element_escalation_count": element_escalation_count,
-                "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
-                "element_escalation_attempt_count": element_escalation_attempt_count,
-                "prime.element_registry_hit": reg_hits,
-                "prime.element_registry_miss": reg_misses,
-                "micro_prime_file_results": [
-                    _serialize_file_result(fr) for fr in all_file_results
-                ],
-                "lead_agent_spec": getattr(self, "lead_agent", None),
-                "drafter_agent_spec": getattr(self, "drafter_agent", None),
+                **self._build_generation_metadata(
+                    st, local_file_count,
+                    fallback_files_delegated=len(st.escalated_files),
+                    fallback_files_written=len(fallback_result.generated_files),
+                    fallback_elements=st.escalated_element_count,
+                    fallback_cost_usd=fallback_result.cost_usd,
+                ),
+                # Forward raw LLM responses from fallback for Kaizen capture
+                **{k: v for k, v in (fallback_result.metadata or {}).items()
+                   if k in ("spec_raw_response", "draft_raw_response",
+                            "review_raw_response", "lead_agent_spec",
+                            "drafter_agent_spec")},
             },
         )
 
@@ -901,8 +938,9 @@ class MicroPrimeCodeGenerator:
             if not er.success or not er.code:
                 continue
 
+            kind_str = er.element_kind or "unknown"
             element_id = make_element_id(
-                kind=er.tier.value if er.tier else "unknown",
+                kind=kind_str,
                 name=er.element_name,
                 file_path=file_path,
                 parent_class=er.parent_class,
@@ -920,7 +958,7 @@ class MicroPrimeCodeGenerator:
                 else:
                     entry = ElementEntry(
                         element_id=element_id,
-                        kind=er.tier.value if er.tier else "unknown",
+                        kind=kind_str,
                         name=er.element_name,
                         file_path=file_path,
                         parent_class=er.parent_class,
@@ -1573,6 +1611,10 @@ class MicroPrimeCodeGenerator:
 
         file_spec = manifest.file_specs.get(file_path)
         if file_spec is None:
+            logger.warning(
+                "No file spec in manifest for %s — cannot escalate elements",
+                file_path,
+            )
             return None
 
         # Collect escalated element results and their specs.
