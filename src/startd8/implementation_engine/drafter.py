@@ -17,6 +17,7 @@ from ..truncation_detection import (
     get_expected_sections_for_code,
 )
 from .budget import (
+    DRAFT_SIZE_EXPLOSION_THRESHOLD,
     DRAFT_SIZE_REGRESSION_MIN_LINES,
     DRAFT_SIZE_REGRESSION_THRESHOLD,
     EXISTING_FILES_BUDGET_BYTES,
@@ -433,27 +434,43 @@ def detect_size_regression(
     existing_files: Optional[Dict[str, str]],
     implementation_code: str,
 ) -> bool:
-    """Check if draft output is catastrophically smaller than existing files.
+    """Check if draft output is catastrophically smaller OR larger than existing files.
 
-    Returns True when extracted code is less than threshold of total existing
-    file size and existing files exceed minimum line count.
+    Returns True when:
+    - extracted code is less than DRAFT_SIZE_REGRESSION_THRESHOLD of existing
+      (catastrophic truncation), OR
+    - extracted code exceeds DRAFT_SIZE_EXPLOSION_THRESHOLD × existing
+      (hallucination/duplication — CR-H3).
+
+    Only applies when existing files exceed DRAFT_SIZE_REGRESSION_MIN_LINES.
     """
     if not existing_files or not implementation_code:
         return False
     existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
         return False
+    if existing_total <= DRAFT_SIZE_REGRESSION_MIN_LINES:
+        return False
     extracted_lines = len(implementation_code.splitlines())
-    if (
-        existing_total > DRAFT_SIZE_REGRESSION_MIN_LINES
-        and extracted_lines / existing_total < DRAFT_SIZE_REGRESSION_THRESHOLD
-    ):
+    ratio = extracted_lines / existing_total
+
+    # Lower bound — catastrophic truncation
+    if ratio < DRAFT_SIZE_REGRESSION_THRESHOLD:
         logger.warning(
             "Draft size regression: %d lines vs %d existing (%.0f%%)",
-            extracted_lines, existing_total,
-            100 * extracted_lines / existing_total,
+            extracted_lines, existing_total, 100 * ratio,
         )
         return True
+
+    # CR-H3: Upper bound — size explosion (hallucination/duplication)
+    if ratio > DRAFT_SIZE_EXPLOSION_THRESHOLD:
+        logger.warning(
+            "Draft size explosion: %d lines vs %d existing (%.0f%%) — "
+            "possible hallucination or duplication",
+            extracted_lines, existing_total, 100 * ratio,
+        )
+        return True
+
     return False
 
 

@@ -482,21 +482,31 @@ def run_file_repair(
 
     route = route_failures(diagnostics, config)
 
-    # Determine the error category for circuit breaker tracking
-    error_categories = sorted({d.category for d in diagnostics})
-    cb_key = "|".join(error_categories) if error_categories else "unknown"
+    # CR-H4: Determine per-category circuit breaker keys.
+    # Track each error category individually so that recurring failures in
+    # one category aren't masked by varying companion categories.
+    error_categories = sorted({d.category for d in diagnostics}) or ["unknown"]
 
-    # Circuit breaker check (REQ-RPL-502)
-    cb_count = _circuit_breaker_state.get(cb_key, 0)
-    if cb_count >= config.circuit_breaker_threshold:
+    # Circuit breaker check (REQ-RPL-502) — trip if ANY individual category
+    # has exceeded the threshold.
+    tripped_categories = [
+        cat for cat in error_categories
+        if _circuit_breaker_state.get(cat, 0) >= config.circuit_breaker_threshold
+    ]
+    if tripped_categories:
+        tripped_detail = ", ".join(
+            f"{cat}({_circuit_breaker_state.get(cat, 0)})"
+            for cat in tripped_categories
+        )
         logger.info(
-            "Circuit breaker open for category '%s' (%d consecutive failures, threshold %d) — skipping repair",
-            cb_key, cb_count, config.circuit_breaker_threshold,
+            "Circuit breaker open for categories [%s] (threshold %d) — skipping repair",
+            tripped_detail, config.circuit_breaker_threshold,
         )
         duration_ms = (time.monotonic() - repair_start) * 1000
-        # Emit skipped metrics
+        # Emit skipped metrics — use first category for OTel label
+        cb_label = tripped_categories[0] if tripped_categories else "unknown"
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_key})
+            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_label})
         if _repair_wall_clock is not None:
             _repair_wall_clock.record(duration_ms)
         return RepairOutcome(
@@ -504,10 +514,13 @@ def run_file_repair(
             any_modified=False,
         )
 
+    # OTel label for metrics — use first category for consistency
+    cb_label = error_categories[0] if error_categories else "unknown"
+
     if not route.steps:
         duration_ms = (time.monotonic() - repair_start) * 1000
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_key})
+            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_label})
         if _repair_wall_clock is not None:
             _repair_wall_clock.record(duration_ms)
         return RepairOutcome(
@@ -577,22 +590,23 @@ def run_file_repair(
                 step_results=step_results,
             ))
 
-        # Update circuit breaker state
-        if any_modified:
-            # Success — reset counter for this category
-            _circuit_breaker_state[cb_key] = 0
-        else:
-            # Failure — increment
-            _circuit_breaker_state[cb_key] = cb_count + 1
+        # CR-H4: Update circuit breaker state per individual category
+        for cat in error_categories:
+            if any_modified:
+                # Success — reset counter for this category
+                _circuit_breaker_state[cat] = 0
+            else:
+                # Failure — increment
+                _circuit_breaker_state[cat] = _circuit_breaker_state.get(cat, 0) + 1
 
         duration_ms = (time.monotonic() - repair_start) * 1000
         outcome_label = "success" if any_modified else "failure"
 
         # Emit OTel metrics (REQ-RPL-401)
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": outcome_label, "error_category": cb_key})
+            _repair_attempts.add(1, {"outcome": outcome_label, "error_category": cb_label})
         if any_modified and _repair_success is not None:
-            _repair_success.add(1, {"error_category": cb_key})
+            _repair_success.add(1, {"error_category": cb_label})
         if _repair_wall_clock is not None:
             _repair_wall_clock.record(duration_ms)
 

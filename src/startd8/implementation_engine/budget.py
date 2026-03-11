@@ -7,7 +7,7 @@ Total prompt budget follows the micro_prime pattern: a hard token cap with
 priority-ordered section removal when the prompt exceeds budget.
 """
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 __all__ = [
@@ -28,6 +28,7 @@ __all__ = [
     "truncate_arch_context",
     "estimate_tokens",
     "enforce_prompt_budget",
+    "budget_tokens_for_tier",
 ]
 
 
@@ -51,6 +52,11 @@ SEARCH_REPLACE_LINE_THRESHOLD: int = 50
 DRAFT_SIZE_REGRESSION_THRESHOLD: float = 0.20  # 20% of existing
 DRAFT_SIZE_REGRESSION_MIN_LINES: int = 50
 
+# CR-H3: Size explosion detection — upper bound.
+# Draft with > EXPLOSION_THRESHOLD × existing lines is flagged as hallucinated/duplicated.
+# Only applies when existing files exceed MIN_LINES (skip for very small files).
+DRAFT_SIZE_EXPLOSION_THRESHOLD: float = 3.0  # 300% of existing
+
 # Supplementary context budgets for optional prompt sections.
 # T1 drafter agents get a smaller budget; T2 reviewer agents get more.
 SUPPLEMENTARY_BUDGET_CHARS: int = 4_000   # ~1000 tokens — draft prompt (T1)
@@ -61,6 +67,37 @@ ENRICHMENT_BUDGET_CHARS: int = 8_000      # ~2000 tokens — review prompt (T2)
 TOTAL_SPEC_BUDGET_TOKENS: int = 4_096     # Spec prompt (architect agent)
 TOTAL_DRAFT_BUDGET_TOKENS: int = 8_192    # Draft prompt (includes existing files)
 CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
+
+# CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
+# files need more prompt headroom for context injection; TRIVIAL tasks need
+# less.  Callers use ``budget_tokens_for_tier()`` to get the adjusted budget.
+_TIER_BUDGET_MULTIPLIERS: Dict[str, float] = {
+    "TRIVIAL": 0.75,
+    "SIMPLE": 1.0,
+    "MODERATE": 1.25,
+    "COMPLEX": 1.75,
+}
+
+
+def budget_tokens_for_tier(
+    base_budget: int,
+    tier: Optional[str] = None,
+) -> int:
+    """Return tier-adjusted token budget.
+
+    Args:
+        base_budget: Base token budget (e.g. TOTAL_DRAFT_BUDGET_TOKENS).
+        tier: Complexity tier string (TRIVIAL/SIMPLE/MODERATE/COMPLEX).
+            When None or unrecognized, returns base_budget unchanged.
+
+    Returns:
+        Adjusted token budget (always >= base_budget * 0.5 to prevent
+        starvation).
+    """
+    if not tier:
+        return base_budget
+    multiplier = _TIER_BUDGET_MULTIPLIERS.get(tier.upper(), 1.0)
+    return max(int(base_budget * multiplier), base_budget // 2)
 
 
 def truncate_with_marker(text: str, max_chars: int,
