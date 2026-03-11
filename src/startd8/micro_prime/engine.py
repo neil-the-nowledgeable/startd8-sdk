@@ -1670,6 +1670,222 @@ class MicroPrimeEngine:
 
     # ─── Private handlers ─────────────────────────────────────────────
 
+    def _moderate_escalation_result(
+        self,
+        element: ForwardElementSpec,
+        file_path: str,
+        reasoning: str,
+        reason: "EscalationReason",
+        detail: str,
+        *,
+        verification_verdict: str = "skipped",
+        decomposition_metadata: Optional[dict] = None,
+        generation_time_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        last_code: Optional[str] = None,
+        last_error: Optional[str] = None,
+    ) -> ElementResult:
+        """Build a failure ElementResult for MODERATE tier with escalation."""
+        esc_kwargs: dict = dict(
+            element_name=element.name,
+            file_path=file_path,
+            tier=TierClassification.MODERATE,
+            reason=reason,
+            detail=detail,
+        )
+        if last_code is not None:
+            esc_kwargs["last_code"] = last_code
+        if last_error is not None:
+            esc_kwargs["last_error"] = last_error
+
+        return ElementResult(
+            element_name=element.name,
+            file_path=file_path,
+            tier=TierClassification.MODERATE,
+            classification_reason=reasoning,
+            success=False,
+            verification_verdict=verification_verdict,
+            escalation=build_escalation_context(**esc_kwargs),
+            decomposition_metadata=decomposition_metadata,
+            generation_time_ms=generation_time_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+    def _generate_sub_elements(
+        self,
+        plan: "GenerationPlan",
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+        start_time: float,
+        design_doc_sections: Optional[list[str]],
+        task_description: Optional[str],
+    ) -> "tuple[Optional[dict[str, str]], int, int, Optional[ElementResult]]":
+        """Generate all sub-elements from a decomposition plan.
+
+        Returns:
+            (sub_results, total_input, total_output, failure) where failure
+            is None on success and an ElementResult on any sub-element failure.
+            Does NOT rollback self._completed — caller handles that.
+        """
+        sub_results: dict[str, str] = {}
+        total_input = 0
+        total_output = 0
+
+        for sub in sorted(plan.sub_elements, key=lambda s: s.assembly_order):
+            if sub.deterministic:
+                code = self._extract_class_shell(element, skeleton)
+                if code is not None:
+                    sub_results[sub.name] = code
+                    logger.info(
+                        "Sub-element %s: deterministic extraction (0ms)", sub.name,
+                    )
+                    continue
+                logger.warning(
+                    "Shell extraction failed for %s, abandoning decomposition",
+                    element.name,
+                )
+                _record_decomp_failed(plan.strategy, file_path, "shell_extraction")
+                return None, total_input, total_output, self._moderate_escalation_result(
+                    element, file_path, reasoning,
+                    EscalationReason.DECOMPOSITION_FAILED,
+                    "Shell extraction failed",
+                    decomposition_metadata={
+                        "rejection_reason": RejectionReason.SKELETON_MISMATCH.value,
+                    },
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            if sub.element_spec is None:
+                return None, total_input, total_output, self._moderate_escalation_result(
+                    element, file_path, reasoning,
+                    EscalationReason.DECOMPOSITION_FAILED,
+                    f"Missing element_spec for sub-element {sub.name}",
+                    decomposition_metadata={
+                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
+                    },
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            sub_spec = sub.element_spec
+            if sub.prompt_context:
+                doc_hint = (
+                    f"{sub_spec.docstring_hint}\nContext: {sub.prompt_context}"
+                    if sub_spec.docstring_hint
+                    else sub.prompt_context
+                )
+                if len(doc_hint) > 512:
+                    doc_hint = doc_hint[:509] + "..."
+                sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
+
+            _record_sub_element(plan.strategy, "simple")
+            sub_result = self._handle_simple(
+                sub_spec, file_spec, skeleton, contracts,
+                file_path, f"sub-element of {element.name}",
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+            )
+            total_input += sub_result.input_tokens
+            total_output += sub_result.output_tokens
+
+            if not sub_result.success or not sub_result.code:
+                self._record_local_failure()
+                logger.warning(
+                    "Sub-element %s failed — abandoning decomposition of %s",
+                    sub.name, element.name,
+                )
+                _record_decomp_failed(plan.strategy, file_path, "sub_element_failed")
+                return None, total_input, total_output, self._moderate_escalation_result(
+                    element, file_path, reasoning,
+                    EscalationReason.DECOMPOSITION_FAILED,
+                    f"Sub-element {sub.name} failed",
+                    last_code=sub_result.code,
+                    last_error=(
+                        sub_result.escalation.detail
+                        if sub_result.escalation else None
+                    ),
+                    decomposition_metadata={
+                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
+                    },
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            # Sub-element success does not reset the breaker — the outer
+            # _process_element_with_tier handles that based on the overall
+            # MODERATE result.
+            sub_results[sub.name] = sub_result.code
+
+        return sub_results, total_input, total_output, None
+
+    def _assemble_and_verify_moderate(
+        self,
+        plan: "GenerationPlan",
+        sub_results: dict[str, str],
+        skeleton: str,
+        element: ForwardElementSpec,
+        file_path: str,
+        reasoning: str,
+        start_time: float,
+        total_input: int,
+        total_output: int,
+    ) -> "tuple[Optional[str], float, Optional[ElementResult]]":
+        """Assemble sub-element results and run structural verification.
+
+        Returns:
+            (assembled_code, assembly_time_ms, failure) where failure is None
+            on success and an ElementResult on assembly/verification failure.
+        """
+        assemble_start = time.monotonic()
+        assembled = self._decomposer.assemble(plan, sub_results, skeleton)
+        assembly_time_ms = (time.monotonic() - assemble_start) * 1000
+        _record_assembly_time(plan.strategy, file_path, assembly_time_ms)
+        gen_time = (time.monotonic() - start_time) * 1000
+
+        if assembled is None:
+            _record_decomp_failed(plan.strategy, file_path, "assembly_failed")
+            return None, assembly_time_ms, self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.DECOMPOSITION_FAILED,
+                "Assembly failed",
+                decomposition_metadata={
+                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
+                },
+                generation_time_ms=gen_time,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        structural_ok, structural_reason = _structural_verify(assembled, element)
+        if not structural_ok:
+            _record_decomp_failed(plan.strategy, file_path, "structural_verification")
+            return None, assembly_time_ms, self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.DECOMPOSITION_FAILED,
+                "Assembled code failed structural verification",
+                verification_verdict="fail",
+                last_code=assembled,
+                last_error=structural_reason or "structural_verification_failed",
+                decomposition_metadata={
+                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
+                },
+                generation_time_ms=gen_time,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        return assembled, assembly_time_ms, None
+
     def _handle_moderate(
         self,
         element: ForwardElementSpec,
@@ -1700,20 +1916,10 @@ class MicroPrimeEngine:
 
         # Circuit breaker gate (R1-S1)
         if self._circuit_open:
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.CIRCUIT_BREAKER,
-                    detail="Circuit breaker open",
-                ),
+            return self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.CIRCUIT_BREAKER,
+                "Circuit breaker open",
             )
 
         # Ollama-whole attempt (Kaizen run-017 recalibration): try single-shot
@@ -1756,37 +1962,17 @@ class MicroPrimeEngine:
 
         # Null-guard for standalone process_element() path (R1-S5)
         if manifest is None:
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.TIER_TOO_HIGH,
-                    detail="Manifest unavailable — cannot decompose",
-                ),
+            return self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.TIER_TOO_HIGH,
+                "Manifest unavailable — cannot decompose",
             )
 
         if not self._config.decomposition_enabled:
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.TIER_TOO_HIGH,
-                    detail="Decomposition disabled",
-                ),
+            return self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.TIER_TOO_HIGH,
+                "Decomposition disabled",
             )
 
         # Single entry point (R3-S2)
@@ -1799,20 +1985,10 @@ class MicroPrimeEngine:
         )
         if plan is None:
             _record_decomp_rejected(file_path, "no_strategy")
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.NOT_DECOMPOSABLE,
-                    detail="No decomposition strategy applies",
-                ),
+            return self._moderate_escalation_result(
+                element, file_path, reasoning,
+                EscalationReason.NOT_DECOMPOSABLE,
+                "No decomposition strategy applies",
                 decomposition_metadata={
                     "rejection_reason": RejectionReason.NO_TEMPLATE_MATCH.value,
                 },
@@ -1824,198 +2000,31 @@ class MicroPrimeEngine:
         )
         _record_decomp_attempted(plan.strategy, file_path)
 
+        # Checkpoint few-shot history for rollback on failure
+        completed_len = len(self._completed)
+
         # Generate each sub-element
-        sub_results: dict[str, str] = {}
-        total_input = 0
-        total_output = 0
-        completed_len = len(self._completed)  # stage few-shot history
+        sub_results, total_input, total_output, failure = self._generate_sub_elements(
+            plan, element, file_spec, skeleton, contracts, file_path,
+            reasoning, start_time, design_doc_sections, task_description,
+        )
+        if failure is not None:
+            self._completed = self._completed[:completed_len]
+            return failure
 
-        for sub in sorted(plan.sub_elements, key=lambda s: s.assembly_order):
-            if sub.deterministic:
-                # Extract from skeleton — no LLM needed
-                code = self._extract_class_shell(element, skeleton)
-                if code is not None:
-                    sub_results[sub.name] = code
-                    logger.info(
-                        "Sub-element %s: deterministic extraction (0ms)", sub.name,
-                    )
-                    continue
-                else:
-                    # Shell extraction failed — abandon
-                    logger.warning(
-                        "Shell extraction failed for %s, abandoning decomposition",
-                        element.name,
-                    )
-                    _record_decomp_failed(plan.strategy, file_path, "shell_extraction")
-                    self._completed = self._completed[:completed_len]
-                    return ElementResult(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=TierClassification.MODERATE,
-                        classification_reason=reasoning,
-                        success=False,
-                        verification_verdict="skipped",
-                        escalation=build_escalation_context(
-                            element_name=element.name,
-                            file_path=file_path,
-                            tier=TierClassification.MODERATE,
-                            reason=EscalationReason.DECOMPOSITION_FAILED,
-                            detail="Shell extraction failed",
-                        ),
-                        decomposition_metadata={
-                            "rejection_reason": RejectionReason.SKELETON_MISMATCH.value,
-                        },
-                        generation_time_ms=(time.monotonic() - start_time) * 1000,
-                        input_tokens=total_input,
-                        output_tokens=total_output,
-                    )
+        assert sub_results is not None  # guaranteed when failure is None
 
-            # Generate via _handle_simple
-            if sub.element_spec is None:
-                self._completed = self._completed[:completed_len]
-                return ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    classification_reason=reasoning,
-                    success=False,
-                    verification_verdict="skipped",
-                    escalation=build_escalation_context(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=TierClassification.MODERATE,
-                        reason=EscalationReason.DECOMPOSITION_FAILED,
-                        detail=f"Missing element_spec for sub-element {sub.name}",
-                    ),
-                    decomposition_metadata={
-                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
-                    },
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=total_input,
-                    output_tokens=total_output,
-                )
+        # Assemble and verify
+        assembled, assembly_time_ms, failure = self._assemble_and_verify_moderate(
+            plan, sub_results, skeleton, element, file_path,
+            reasoning, start_time, total_input, total_output,
+        )
+        if failure is not None:
+            self._completed = self._completed[:completed_len]
+            return failure
 
-            sub_spec = sub.element_spec
-            if sub.prompt_context:
-                doc_hint = (
-                    f"{sub_spec.docstring_hint}\nContext: {sub.prompt_context}"
-                    if sub_spec.docstring_hint
-                    else sub.prompt_context
-                )
-                if len(doc_hint) > 512:
-                    doc_hint = doc_hint[:509] + "..."
-                sub_spec = sub_spec.model_copy(update={"docstring_hint": doc_hint})
-
-            _record_sub_element(plan.strategy, "simple")
-            sub_result = self._handle_simple(
-                sub_spec, file_spec, skeleton, contracts,
-                file_path, f"sub-element of {element.name}",
-                design_doc_sections=design_doc_sections,
-                task_description=task_description,
-            )
-            total_input += sub_result.input_tokens
-            total_output += sub_result.output_tokens
-
-            if not sub_result.success or not sub_result.code:
-                self._record_local_failure()
-                logger.warning(
-                    "Sub-element %s failed — abandoning decomposition of %s",
-                    sub.name, element.name,
-                )
-                _record_decomp_failed(plan.strategy, file_path, "sub_element_failed")
-                self._completed = self._completed[:completed_len]
-                return ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    classification_reason=reasoning,
-                    success=False,
-                    verification_verdict="skipped",
-                    escalation=build_escalation_context(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=TierClassification.MODERATE,
-                        reason=EscalationReason.DECOMPOSITION_FAILED,
-                        detail=f"Sub-element {sub.name} failed",
-                        last_code=sub_result.code,
-                        last_error=(
-                            sub_result.escalation.detail
-                            if sub_result.escalation else None
-                        ),
-                    ),
-                    decomposition_metadata={
-                        "rejection_reason": RejectionReason.EMPTY_OUTPUT.value,
-                    },
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=total_input,
-                    output_tokens=total_output,
-                )
-
-            # Sub-element success does not reset the breaker — the outer
-            # _process_element_with_tier handles that based on the overall
-            # MODERATE result.
-            sub_results[sub.name] = sub_result.code
-
-        # All sub-elements succeeded — assemble
-        assemble_start = time.monotonic()
-        assembled = self._decomposer.assemble(plan, sub_results, skeleton)
-        assembly_time_ms = (time.monotonic() - assemble_start) * 1000
-        _record_assembly_time(plan.strategy, file_path, assembly_time_ms)
+        assert assembled is not None  # guaranteed when failure is None
         gen_time = (time.monotonic() - start_time) * 1000
-
-        if assembled is None:
-            _record_decomp_failed(plan.strategy, file_path, "assembly_failed")
-            self._completed = self._completed[:completed_len]
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.DECOMPOSITION_FAILED,
-                    detail="Assembly failed",
-                ),
-                decomposition_metadata={
-                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
-                },
-                generation_time_ms=gen_time,
-                input_tokens=total_input,
-                output_tokens=total_output,
-            )
-
-        # Structural verification (R3-S4)
-        structural_ok, structural_reason = _structural_verify(assembled, element)
-        if not structural_ok:
-            _record_decomp_failed(plan.strategy, file_path, "structural_verification")
-            self._completed = self._completed[:completed_len]
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.MODERATE,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="fail",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.MODERATE,
-                    reason=EscalationReason.DECOMPOSITION_FAILED,
-                    detail="Assembled code failed structural verification",
-                    last_code=assembled,
-                    last_error=structural_reason or "structural_verification_failed",
-                ),
-                decomposition_metadata={
-                    "rejection_reason": RejectionReason.RENDER_CONTRACT_VIOLATION.value,
-                },
-                generation_time_ms=gen_time,
-                input_tokens=total_input,
-                output_tokens=total_output,
-            )
 
         logger.info(
             "Decomposition succeeded for %s: %d/%d sub-elements, %.0fms",
