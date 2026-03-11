@@ -46,11 +46,11 @@ MODE_STANDALONE: str = "standalone"
 #: Execution mode for pipeline operation — full seed context exploitation.
 MODE_PIPELINE: str = "pipeline"
 
-#: Set of all recognized execution modes.
+#: Set of all recognized execution modes — single source of truth for validation.
 VALID_MODES: frozenset = frozenset({MODE_STANDALONE, MODE_PIPELINE})
 
-#: Valid execution modes for state persistence — single source of truth for validation.
-VALID_EXECUTION_MODES: frozenset = frozenset({"standalone", "pipeline"})
+#: CR-L2: Alias for backward compatibility — was a duplicate frozenset.
+VALID_EXECUTION_MODES: frozenset = VALID_MODES
 
 #: Internal: minimum number of pipeline signal keys (with non-None values)
 #: required to trigger pipeline mode during auto-detection.
