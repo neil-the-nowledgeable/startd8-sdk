@@ -551,26 +551,31 @@ class ElementRegistry:
         """
         Delete the entry for *element_id*.
 
+        Resolves legacy ID aliases, consistent with :meth:`get`.
         Returns ``True`` if the element existed and was removed, ``False`` if
         it was not found.  Thread-safe.
         """
         with self._lock:
             self._ensure_loaded()
             self._ensure_metrics()
-            if element_id not in self._index:
+            entry = self._resolve_id(element_id)
+            if entry is None:
                 return False
+            # Use the entry's actual element_id for deletion — the caller
+            # may have provided a legacy alias that differs from the index key.
+            actual_id = entry.element_id
             try:
-                self._entry_path(element_id).unlink(missing_ok=True)
+                self._entry_path(actual_id).unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning(
                     "ElementRegistry: unlink failed for element %r — %s",
-                    element_id,
+                    actual_id,
                     exc,
                 )
-            del self._index[element_id]
+            del self._index[actual_id]
             logger.info(
                 "element_registry.invalidation",
-                extra={"element_id": element_id},
+                extra={"element_id": actual_id},
             )
             if self._invalidations_counter is not None:
                 self._invalidations_counter.add(1)
@@ -875,12 +880,28 @@ class ElementRegistry:
         with self._lock:
             self._ensure_loaded()
             registry_ids = set(self._index.keys())
-            backup_ids = set(backup_files.keys())
+
+            # Resolve each backup ID through legacy aliases so that
+            # fn/X and function/X are correctly matched rather than
+            # appearing as spurious missing/extra entries.
+            matched: list[str] = []
+            missing: list[str] = []
+            resolved_registry_ids: set[str] = set()
+
+            for backup_id in sorted(backup_files.keys()):
+                entry = self._resolve_id(backup_id)
+                if entry is not None:
+                    matched.append(backup_id)
+                    resolved_registry_ids.add(entry.element_id)
+                else:
+                    missing.append(backup_id)
+
+            extra = sorted(registry_ids - resolved_registry_ids)
 
         return ReconciliationReport(
-            matched=sorted(registry_ids & backup_ids),
-            missing=sorted(backup_ids - registry_ids),
-            extra=sorted(registry_ids - backup_ids),
+            matched=matched,
+            missing=missing,
+            extra=extra,
             tool=backup_tool,
         )
 
@@ -895,11 +916,12 @@ class ElementRegistry:
         time-sorted history, plus a ``current_phases`` dict mapping each
         phase to its latest status.
 
+        Resolves legacy ID aliases, consistent with :meth:`get`.
         Returns ``None`` if the element does not exist.  Thread-safe.
         """
         with self._lock:
             self._ensure_loaded()
-            entry = self._index.get(element_id)
+            entry = self._resolve_id(element_id)
             if entry is None:
                 return None
 
