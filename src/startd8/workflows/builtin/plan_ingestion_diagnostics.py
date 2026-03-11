@@ -354,15 +354,16 @@ def compute_seed_quality(
         else:
             ctx_complete = 0.0
 
-        # Weights rebalanced to fit 0.10 for structured context (was 6×, now 7×).
+        # Weights rebalanced: structured context raised to 0.18 (was 0.10)
+        # to reflect its outsized impact on downstream code generation quality.
         score = round(
-            0.18 * desc_ratio
-            + 0.18 * target_ratio
-            + 0.14 * schema_score
-            + 0.14 * coverage_score
+            0.16 * desc_ratio
+            + 0.16 * target_ratio
+            + 0.12 * schema_score
+            + 0.12 * coverage_score
             + 0.13 * depth_score
             + 0.13 * richness_score
-            + 0.10 * ctx_complete,
+            + 0.18 * ctx_complete,
             4,
         )
 

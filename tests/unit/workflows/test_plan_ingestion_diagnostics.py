@@ -364,8 +364,8 @@ class TestComputeSeedQualityWithDensity:
         )
         score, _ = compute_seed_quality(seed, task_density=[])
         # desc=0, target=0, schema=1, coverage=1, depth=0, richness=0, ctx=0
-        # 0.14 + 0.14 = 0.28
-        assert score == pytest.approx(0.28, abs=0.01)
+        # 0.12 + 0.12 = 0.24
+        assert score == pytest.approx(0.24, abs=0.01)
 
 
 # ── build_diagnostic ─────────────────────────────────────────────────

@@ -17,7 +17,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from dataclasses import replace as _dataclass_replace
-from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Set, Tuple, Union
 
 import yaml
 
@@ -126,6 +126,8 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "runtime_dependencies",
     "design_doc_sections",
     "artifact_types_addressed",
+    "requirements_refs",
+    "refinement_suggestions",
 })
 
 # JSON Schema for ArtisanContextSeed (Item 6 — validation before write)
@@ -897,59 +899,140 @@ def _scope_contract_to_files(
 ) -> str:
     """Extract only the sections of a contract relevant to *target_files*.
 
-    Contracts use backtick-wrapped filenames as section headers, e.g.::
+    Handles three contract formats:
 
-        `email_server.py` (201 lines):
-        - Class `BaseEmailService` ...
-
-        `email_client.py` (40 lines):
-        - Function `send_confirmation_email` ...
+    1. **Backtick filename headers** — e.g. `` `email_server.py` (201 lines): ``
+       followed by a body.  Matched by suffix against *target_files*.
+    2. **Bold service-name bullets** — e.g. ``- **emailservice:** sets ...``
+       found under a "Per-service specifics:" heading.  Matched by extracting
+       the service directory from *target_files*.
+    3. **Backtick path headers with shared basenames** — e.g.
+       `` `emailservice/requirements.in`: `` where all sub-features share the
+       same basename.  Matched by path suffix rather than bare basename.
 
     For a sub-feature targeting only ``email_client.py``, this function
     returns only the ``email_client.py`` section.  If no file-specific
     sections are found, the full contract is returned (safe fallback).
 
-    QP-2 + QP-4: prevents sub-features from inheriting the full parent
-    contract, reducing token waste and cross-contamination.
+    QP-2 + QP-4 + QP-5: prevents sub-features from inheriting the full
+    parent contract, reducing token waste and cross-contamination.
     """
     if not target_files:
         return contract_text
 
-    # Build a set of bare filenames for matching.
-    bare_targets = {os.path.basename(f) for f in target_files}
-
-    # Split contract at backtick-wrapped filename headers.
+    # --- Strategy 1: backtick-wrapped filename headers ---
     # Pattern matches lines like:  `some_file.py` (NNN lines):
     #                           or: `some_file.py`:
+    #                           or: `dir/some_file.ext`:
     _FILE_HEADER = re.compile(
         r"^(`[^`]+\.\w+`)\s*(?:\([^)]*\)\s*)?:\s*$", re.MULTILINE,
     )
     parts = _FILE_HEADER.split(contract_text)
     # parts: [preamble, "`file1.py`", body1, "`file2.py`", body2, ...]
 
-    if len(parts) < 3:
-        # No file-specific sections found — return full contract.
-        return contract_text
+    if len(parts) >= 3:
+        scoped_sections: List[str] = []
+        preamble = parts[0].strip()
 
-    scoped_sections: List[str] = []
-    preamble = parts[0].strip()
+        for i in range(1, len(parts) - 1, 2):
+            header_raw = parts[i]             # e.g. "`email_client.py`"
+            body = parts[i + 1]
+            # Strip backticks for matching.
+            header_path = header_raw.strip("`").strip()
+            if _path_matches_targets(header_path, target_files):
+                scoped_sections.append(f"{header_raw}:{body.rstrip()}")
 
-    for i in range(1, len(parts) - 1, 2):
-        header_raw = parts[i]             # e.g. "`email_client.py`"
-        body = parts[i + 1]
-        # Strip backticks for matching.
-        filename = header_raw.strip("`").strip()
-        if os.path.basename(filename) in bare_targets:
-            scoped_sections.append(f"{header_raw}:{body.rstrip()}")
+        if scoped_sections:
+            result = (
+                preamble + "\n\n" + "\n\n".join(scoped_sections)
+                if preamble
+                else "\n\n".join(scoped_sections)
+            )
+            return result.strip()
 
-    if not scoped_sections:
-        # Target files didn't match any section header — return full contract
-        # rather than returning nothing.
-        return contract_text
+        # Backtick sections found but none matched — fall through to
+        # strategy 2 rather than returning everything.
 
-    # Include preamble (often has class hierarchy notes) plus matched sections.
-    result = preamble + "\n\n" + "\n\n".join(scoped_sections) if preamble else "\n\n".join(scoped_sections)
-    return result.strip()
+    # --- Strategy 2: bold service-name bullets ---
+    # Handles: "Per-service specifics:\n- **emailservice:** ..."
+    scoped = _scope_by_service_bullets(contract_text, target_files)
+    if scoped is not None:
+        return scoped
+
+    # No scoping matched — return full contract.
+    return contract_text
+
+
+def _path_matches_targets(header_path: str, target_files: List[str]) -> bool:
+    """Check if a contract section header path matches any target file.
+
+    Uses suffix matching so ``emailservice/requirements.in`` matches
+    ``src/emailservice/requirements.in``.  Falls back to basename matching
+    only when the header is a bare filename (no directory component),
+    avoiding false positives when multiple sections share the same basename
+    (e.g. ``requirements.in``).
+    """
+    header_norm = header_path.replace("\\", "/")
+    header_has_dir = "/" in header_norm
+    for tf in target_files:
+        tf_norm = tf.replace("\\", "/")
+        # Exact match, or header is a suffix of the target path.
+        if tf_norm == header_norm or tf_norm.endswith("/" + header_norm):
+            return True
+        # Basename match only for bare filenames (no directory component).
+        if not header_has_dir and os.path.basename(tf_norm) == header_norm:
+            return True
+    return False
+
+
+def _scope_by_service_bullets(
+    contract_text: str,
+    target_files: List[str],
+) -> Optional[str]:
+    """Scope a contract using bold service-name bullet items.
+
+    Detects the pattern::
+
+        Per-service specifics:
+        - **emailservice:** sets ENABLE_PROFILER=1 ...
+        - **recommendationservice:** sets PORT=8080 ...
+
+    Extracts the preamble (everything before the bullet block) plus only
+    the bullet(s) whose bold name matches a directory component in
+    *target_files*.  Returns ``None`` if the pattern is not found.
+    """
+    # Extract service directory names from target file paths.
+    # e.g. "src/emailservice/Dockerfile" → "emailservice"
+    service_dirs: Set[str] = set()
+    for tf in target_files:
+        parts = tf.replace("\\", "/").split("/")
+        # Take the directory component just before the filename.
+        if len(parts) >= 2:
+            service_dirs.add(parts[-2].lower())
+
+    if not service_dirs:
+        return None
+
+    # Find bold bullet items: "- **name:** ..."
+    _BOLD_BULLET = re.compile(r"^- \*\*(\w+):\*\*\s+", re.MULTILINE)
+    bullets = list(_BOLD_BULLET.finditer(contract_text))
+    if not bullets:
+        return None
+
+    # Split contract into preamble + per-bullet sections.
+    preamble = contract_text[: bullets[0].start()].rstrip()
+    matched_bullets: List[str] = []
+    for idx, m in enumerate(bullets):
+        name = m.group(1).lower()
+        # End of this bullet is the start of the next, or end of text.
+        end = bullets[idx + 1].start() if idx + 1 < len(bullets) else len(contract_text)
+        if name in service_dirs:
+            matched_bullets.append(contract_text[m.start(): end].rstrip())
+
+    if not matched_bullets:
+        return None
+
+    return (preamble + "\n" + "\n".join(matched_bullets)).strip()
 
 
 def _enrich_features_from_plan(
@@ -2435,6 +2518,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 dependency_graph=json.dumps(parsed_plan.dependency_graph),
             )
             out_filename = "PLAN-ingested.md"
+
+        # Import guidance: downstream code generators benefit from explicit
+        # import requirements in task descriptions.  This default suffix is
+        # always appended; kaizen overrides may extend it further.
+        prompt += (
+            "\n\nIMPORTANT — for each task, include an `imports` field listing "
+            "the specific Python imports (standard library, third-party, and "
+            "intra-project) that the implementation will need.  Use fully-"
+            "qualified module paths (e.g. `from pathlib import Path`, "
+            "`import typing`).  This enables the code generator to produce "
+            "correct import blocks without guessing."
+        )
 
         if getattr(self, "_kaizen_config", None) and self._kaizen_config.transform_prompt_suffix:
             prompt += self._kaizen_config.transform_prompt_suffix
@@ -5467,6 +5562,18 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.extend(refine_steps)
             state.total_cost += refine_cost
             step_costs["refine"] = refine_cost
+
+            # Guard: if REFINE was attempted but produced zero rounds,
+            # the review workflow failed silently — warn and clear output
+            # so EMIT doesn't consume invalid/empty review data.
+            if not skip_arc_review and rounds_completed == 0 and refine_cost > 0:
+                logger.warning(
+                    "REFINE produced 0 rounds but cost $%.4f — review may have "
+                    "failed silently; clearing review_output to prevent downstream "
+                    "consumption of invalid data",
+                    refine_cost,
+                )
+                review_output = {}
 
             # Kaizen prompt/response capture for REFINE rounds
             if self._kaizen_output_dir and refine_steps:
