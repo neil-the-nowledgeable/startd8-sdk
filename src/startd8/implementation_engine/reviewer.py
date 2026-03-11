@@ -29,7 +29,16 @@ __all__ = [
 
 logger = get_logger(__name__)
 
-_pricing = PricingService()
+# CR-M3: Lazy initialization — avoids import-time side effects
+_pricing: Optional[PricingService] = None
+
+
+def _get_pricing() -> PricingService:
+    """Return the module-level PricingService, creating it lazily."""
+    global _pricing
+    if _pricing is None:
+        _pricing = PricingService()
+    return _pricing
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +460,10 @@ def review_draft(
     # Also try to extract constraints from the spec object itself if the
     # caller didn't pass them explicitly.
     effective_constraints = spec_constraints
-    if not effective_constraints and hasattr(spec, "spec_constraints"):
-        effective_constraints = getattr(spec, "spec_constraints", None)
+    if not effective_constraints:
+        fallback = getattr(spec, "spec_constraints", None)
+        if isinstance(fallback, list):
+            effective_constraints = fallback
     constraint_section = _build_constraint_verification_section(effective_constraints)
 
     template = get_template("review")
@@ -505,7 +516,7 @@ def review_draft(
         time_ms=response_time_ms,
     )
 
-    review.cost = _pricing.calculate_total_cost(
+    review.cost = _get_pricing().calculate_total_cost(
         getattr(agent, "model", "unknown"),
         review.input_tokens,
         review.output_tokens,

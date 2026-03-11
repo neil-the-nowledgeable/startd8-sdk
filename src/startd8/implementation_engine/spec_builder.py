@@ -44,7 +44,16 @@ __all__ = [
 
 logger = get_logger(__name__)
 
-_pricing = PricingService()
+# CR-M3: Lazy initialization — avoids import-time side effects
+_pricing: Optional["PricingService"] = None
+
+
+def _get_pricing() -> "PricingService":
+    """Return the module-level PricingService, creating it lazily."""
+    global _pricing
+    if _pricing is None:
+        _pricing = PricingService()
+    return _pricing
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +64,13 @@ _pricing = PricingService()
 def safe_json_dumps(obj: Any, indent: int = 2) -> str:
     """JSON dumps that handles non-serializable objects gracefully."""
     def default(o: Any) -> Any:
-        if hasattr(o, "dict"):
-            return o.dict()
+        # CR-M1: Check model_dump() (Pydantic v2) before dict() (v1 legacy).
+        # hasattr(o, "dict") is True on all objects in Python 3, so checking
+        # it first would shadow the Pydantic v2 method.
         if hasattr(o, "model_dump"):
             return o.model_dump()
+        if hasattr(o, "dict") and callable(o.dict):
+            return o.dict()
         return str(o)
     return json.dumps(obj, indent=indent, default=default)
 
@@ -742,7 +754,7 @@ def build_spec(
         time_ms=response_time_ms,
     )
 
-    spec.cost = _pricing.calculate_total_cost(
+    spec.cost = _get_pricing().calculate_total_cost(
         getattr(agent, "model", "unknown"),
         spec.input_tokens,
         spec.output_tokens,

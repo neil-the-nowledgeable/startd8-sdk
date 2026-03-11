@@ -68,7 +68,16 @@ __all__ = [
 
 logger = get_logger(__name__)
 
-_pricing = PricingService()
+# CR-M3: Lazy initialization — avoids import-time side effects
+_pricing: Optional[PricingService] = None
+
+
+def _get_pricing() -> PricingService:
+    """Return the module-level PricingService, creating it lazily."""
+    global _pricing
+    if _pricing is None:
+        _pricing = PricingService()
+    return _pricing
 
 
 # ---------------------------------------------------------------------------
@@ -102,13 +111,40 @@ def _get_output_template(name: str) -> str:
 def _resolve_draft_mode(
     existing_files: Optional[Dict[str, str]] = None,
     skeleton_fill: bool = False,
+    edit_mode: Optional[Dict] = None,
 ) -> str:
     """Determine draft mode from context.
 
     Returns one of the ``DRAFT_MODE_*`` constants.
+
+    CR-M2: When ``edit_mode`` classification is available, use it to
+    determine whether any files are explicitly classified as edits —
+    this is more reliable than the line-count heuristic alone.
     """
     if skeleton_fill:
         return DRAFT_MODE_SKELETON_FILL
+
+    # CR-M2: If edit_mode explicitly classifies files, trust it
+    if edit_mode and edit_mode.get("per_file"):
+        has_edit_files = any(
+            info.get("mode") == "edit"
+            for info in edit_mode["per_file"].values()
+            if isinstance(info, dict)
+        )
+        if has_edit_files and existing_files:
+            # Check if any edit-classified file is large enough for search/replace
+            per_file = edit_mode["per_file"]
+            for fpath, content in (existing_files or {}).items():
+                file_info = per_file.get(fpath, {})
+                if (
+                    isinstance(file_info, dict)
+                    and file_info.get("mode") == "edit"
+                    and len((content or "").splitlines()) >= SEARCH_REPLACE_LINE_THRESHOLD
+                ):
+                    return DRAFT_MODE_SEARCH_REPLACE
+            return DRAFT_MODE_EDIT
+
+    # Fallback: line-count heuristic
     if existing_files and any(
         len((c or "").splitlines()) >= SEARCH_REPLACE_LINE_THRESHOLD
         for c in existing_files.values()
@@ -130,23 +166,27 @@ _MODE_TO_TEMPLATE = {
 def get_drafter_system_prompt(
     existing_files: Optional[Dict[str, str]] = None,
     skeleton_fill: bool = False,
+    edit_mode: Optional[Dict] = None,
 ) -> Tuple[str, str]:
     """Return mode-specific drafter system prompt and the resolved mode name.
 
     Args:
         existing_files: Existing file contents for edit-mode detection.
         skeleton_fill: When True, selects skeleton-fill mode (FR-MPA-005).
+        edit_mode: Edit mode classification dict (CR-M2).
 
     Returns:
         Tuple of (system_prompt_text, draft_mode_name).
 
     Rules (priority order):
     - skeleton_fill=True -> skeleton_fill
+    - edit_mode classifies files as edit + file >= 50 lines -> search_replace
+    - edit_mode classifies files as edit -> edit
     - existing_files and any file >= 50 lines -> search_replace
     - existing_files present -> edit
     - otherwise -> create
     """
-    mode = _resolve_draft_mode(existing_files, skeleton_fill)
+    mode = _resolve_draft_mode(existing_files, skeleton_fill, edit_mode)
     template_key = _MODE_TO_TEMPLATE[mode]
     prompt = get_template(template_key)
 
@@ -688,10 +728,11 @@ def create_draft(
     # Determine skeleton fill eligibility (FR-MPA-005)
     skeleton_fill = _detect_skeleton_fill(context, target_files)
 
-    # Resolve system prompt mode and log it
+    # Resolve system prompt mode and log it (CR-M2: pass edit_mode)
     sys_prompt, draft_mode = get_drafter_system_prompt(
         existing_files=existing_files,
         skeleton_fill=skeleton_fill,
+        edit_mode=edit_mode,
     )
 
     # Start OTel span for the draft operation
@@ -892,7 +933,7 @@ def create_draft(
             raw_response=response_text,
         )
 
-        draft.cost = _pricing.calculate_total_cost(
+        draft.cost = _get_pricing().calculate_total_cost(
             getattr(agent, "model", "unknown"),
             draft.input_tokens,
             draft.output_tokens,
