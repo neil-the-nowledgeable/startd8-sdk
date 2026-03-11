@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec, InterfaceContract
 from startd8.logging_config import get_logger
+from startd8.micro_prime._ast_utils import find_element_node
 from startd8.micro_prime.models import RepairAttribution, RepairStepResult
 from startd8.repair.models import ElementContext, RepairContext
 from startd8.repair.steps.duplicate_removal import DuplicateRemovalStep
@@ -104,55 +105,8 @@ def _step_over_generation_trim(
             metrics={"parse_failed": True},
         )
 
-    target_name = element.name
     lines = code.splitlines()
-    is_constant = element.kind in (
-        ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS,
-    )
-
-    target_node = None
-
-    if is_constant:
-        for node in tree.body:
-            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                if node.target.id == target_name:
-                    target_node = node
-                    break
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == target_name:
-                        target_node = node
-                        break
-            if target_node is not None:
-                break
-    elif element.kind == ElementKind.CLASS:
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == target_name:
-                target_node = node
-                break
-    else:
-        # Functions/methods: allow class wrapper containing target method
-        if element.parent_class:
-            for node in tree.body:
-                if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
-                    for child in node.body:
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == target_name:
-                            target_node = child
-                            break
-                if target_node is not None:
-                    break
-        if target_node is None:
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == target_name:
-                    target_node = node
-                    break
-                if isinstance(node, ast.ClassDef):
-                    for child in node.body:
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == target_name:
-                            target_node = child
-                            break
-                if target_node is not None:
-                    break
+    target_node = find_element_node(tree, element, search_all_classes=True)
 
     if target_node is None:
         return RepairStepResult(
@@ -465,22 +419,7 @@ def _step_signature_reconcile(
             step_name="signature_reconcile", modified=False, code=code,
         )
 
-    # Find the target function — prefer class-scoped match for methods,
-    # then fall back to top-level to avoid matching nested functions.
-    target_node = None
-    if element.parent_class:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
-                        target_node = child
-                        break
-                break
-    if target_node is None:
-        for node in ast.iter_child_nodes(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
-                target_node = node
-                break
+    target_node = find_element_node(tree, element)
 
     if target_node is None:
         return RepairStepResult(
@@ -906,22 +845,7 @@ def _find_skeleton_indent(
         return None
 
     lines = skeleton.splitlines()
-    target = None
-
-    if element.parent_class:
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
-                        target = child
-                        break
-            if target is not None:
-                break
-    else:
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
-                target = node
-                break
+    target = find_element_node(tree, element)
 
     if target is None:
         return None

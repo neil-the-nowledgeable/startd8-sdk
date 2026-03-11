@@ -272,6 +272,28 @@ def _record_recursion_rejected(
 
 
 @dataclass
+class _ClassifiedElement:
+    """Pre-classified element with tier and contracts for process_file (M-3).
+
+    Replaces the 9-element bare tuple that was fragile to positional
+    destructuring errors.
+    """
+
+    priority: int
+    element: ForwardElementSpec
+    contracts: list[InterfaceContract]
+    tier: TierClassification
+    reasoning: str
+    file_import_bump: int
+    element_api_adjustment: int
+    classification_signals: frozenset[str]
+
+    @property
+    def sort_key(self) -> tuple[int, str]:
+        return (self.priority, self.element.name)
+
+
+@dataclass
 class _GraphExecutionResult:
     """Result from executing a full DecompositionPlanGraph."""
 
@@ -1256,10 +1278,7 @@ class MicroPrimeEngine:
         # Pre-classify to determine processing order (REQ-MP-704).
         # Classification results are cached to avoid redundant work in
         # process_element() — each element is classified exactly once.
-        classified: list[
-            tuple[int, str, ForwardElementSpec, list[InterfaceContract],
-                  TierClassification, str, int, int, frozenset[str]]
-        ] = []
+        classified: list[_ClassifiedElement] = []
 
         for element in enriched_file_spec.elements:
             contracts = self._get_element_contracts(element, enriched_file_spec, manifest)
@@ -1270,40 +1289,41 @@ class MicroPrimeEngine:
             )
             priority = self._TIER_PRIORITY.get(tier, 2)
             classified.append(
-                (
-                    priority,
-                    element.name,
-                    element,
-                    contracts,
-                    tier,
-                    reasoning,
-                    details.file_import_bump,
-                    details.element_api_adjustment,
-                    details.classification_signals,
+                _ClassifiedElement(
+                    priority=priority,
+                    element=element,
+                    contracts=contracts,
+                    tier=tier,
+                    reasoning=reasoning,
+                    file_import_bump=details.file_import_bump,
+                    element_api_adjustment=details.element_api_adjustment,
+                    classification_signals=details.classification_signals,
                 )
             )
 
-        classified.sort(key=lambda x: (x[0], x[1]))
+        classified.sort(key=lambda c: c.sort_key)
 
         if classified:
             _summary = ", ".join(
-                f"{e.name}={t.value}" for _, _, e, _, t, _, _, _, _ in classified
+                f"{c.element.name}={c.tier.value}" for c in classified
             )
             logger.info(
                 "Element classification for %s: %s",
                 file_spec.file, _summary,
             )
 
-        for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust, cls_signals in classified:
+        for c in classified:
+            element = c.element
+            contracts = c.contracts
             result = self._process_element_with_tier(
                 element, enriched_file_spec, current_skeleton, contracts,
-                tier=pre_tier, reasoning=pre_reasoning,
-                api_file_import_bump=file_bump,
-                api_element_adjustment=elem_adjust,
+                tier=c.tier, reasoning=c.reasoning,
+                api_file_import_bump=c.file_import_bump,
+                api_element_adjustment=c.element_api_adjustment,
                 ollama_available=ollama_available,
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
-                classification_signals=cls_signals,
+                classification_signals=c.classification_signals,
             )
             file_result.element_results.append(result)
 

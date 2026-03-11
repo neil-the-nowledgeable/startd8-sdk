@@ -397,19 +397,13 @@ def _find_target_node(
     tree: ast.AST,
     element: ForwardElementSpec,
 ) -> Optional[ast.AST]:
-    """Find the AST node for the target element."""
-    if element.parent_class:
-        for node in getattr(tree, "body", []):
-            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
-                        return child
-        return None
+    """Find the AST node for the target element.
 
-    for node in getattr(tree, "body", []):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == element.name:
-            return node
-    return None
+    Delegates to the shared ``find_element_node`` helper (X-1).
+    """
+    from startd8.micro_prime._ast_utils import find_element_node
+
+    return find_element_node(tree, element)  # type: ignore[arg-type]
 
 
 def _find_stub_line_via_ast(

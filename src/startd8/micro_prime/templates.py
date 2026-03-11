@@ -733,20 +733,6 @@ class TemplateRegistry:
             extra_templates=self._active_templates(),
         )
 
-    def _try_match(
-        self,
-        element: ForwardElementSpec,
-        file_spec: Optional[ForwardFileSpec],
-        contracts: list[InterfaceContract],
-    ) -> Optional[CodeTemplate]:
-        """Internal matching logic — returns template or None."""
-        if file_spec is None:
-            return None
-        for template in self._active_templates():
-            if _safe_match(template, element, file_spec, contracts):
-                return template
-        return None
-
     def is_trivial(
         self,
         element: ForwardElementSpec,
@@ -760,7 +746,10 @@ class TemplateRegistry:
             from startd8.forward_manifest import ForwardFileSpec
             file_spec = ForwardFileSpec(file="", elements=[], imports=[])
         contracts = contracts or []
-        return self._try_match(element, file_spec, contracts) is not None
+        return try_template_match_with_name(
+            element, file_spec, contracts,
+            extra_templates=self._active_templates(),
+        ) is not None
 
 
 def _validate_ast(body: str, element: ForwardElementSpec) -> bool:

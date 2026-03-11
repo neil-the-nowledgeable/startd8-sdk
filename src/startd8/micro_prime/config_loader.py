@@ -74,7 +74,7 @@ def _parse_micro_prime_settings(
 
     try:
         return MicroPrimeConfig(**config_data), cloud_agent_spec
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         logger.warning(
             "Micro Prime config parse failed: %s", exc,
         )
