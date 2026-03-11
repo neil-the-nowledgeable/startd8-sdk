@@ -60,6 +60,7 @@ from startd8.micro_prime.models import (
 )
 from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_examples
 from startd8.micro_prime.repair import (
+    RepairResult,
     build_repair_attribution,
     run_repair_pipeline,
     to_escalation_repair_outcome,
@@ -318,6 +319,31 @@ class _NodeExecutionResult:
     output_tokens: int = 0
     llm_calls: int = 0
     rejection_reason: Optional[str] = None
+
+
+@dataclass
+class _GenerationOutcome:
+    """Carries state from the Ollama retry loop to post-loop verification.
+
+    Replaces ~15 scattered local variables that were shared between the
+    generation loop and the structural/semantic verification sections
+    of ``_handle_simple``.
+    """
+
+    code: str
+    raw_output: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    local_attempt: int = 1
+    ast_valid_before: bool = False
+    ast_valid_after: bool = False
+    repair_recovered: bool = False
+    repaired_code: Optional[str] = None
+    repair_steps: list[str] = dc_field(default_factory=list)
+    repair_attribution: Optional[RepairAttribution] = None
+    repair_result: Optional[RepairResult] = None
+    # If the loop exhausted all attempts, this holds the failure result.
+    failure: Optional[ElementResult] = None
 
 
 def _signature_from_ast_args(
@@ -2421,8 +2447,43 @@ class MicroPrimeEngine:
             if element.parent_class else element.name
         )
 
-        # REQ-MP-1006: Template-first short-circuit — if element matches a template,
-        # render immediately without invoking Ollama.
+        # Sections 2–3: template / decomposer short-circuits
+        shortcircuit = self._try_simple_shortcircuit(
+            element, file_spec, contracts, file_path, reasoning,
+        )
+        if shortcircuit is not None:
+            return shortcircuit
+
+        # Sections 4–6: prompt construction + Ollama retry loop
+        outcome = self._generate_with_retry(
+            element, file_spec, skeleton, contracts, file_path,
+            reasoning, model_name, element_fqn, start_time,
+            design_doc_sections=design_doc_sections,
+            task_description=task_description,
+        )
+        if outcome.failure is not None:
+            return outcome.failure
+
+        # Sections 7–9: structural + semantic verification, success assembly
+        return self._verify_and_build_result(
+            element, file_spec, skeleton, contracts, file_path,
+            reasoning, model_name, element_fqn, start_time, outcome,
+        )
+
+    def _try_simple_shortcircuit(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+    ) -> Optional[ElementResult]:
+        """Attempt template match or function-body decomposition.
+
+        Returns an ``ElementResult`` if the element was handled without
+        invoking Ollama, or ``None`` to proceed to generation.
+        """
+        # REQ-MP-1006: Template-first short-circuit
         template_match = self._templates.match(element, file_spec, contracts)
         if template_match is not None:
             logger.info(
@@ -2455,9 +2516,8 @@ class MicroPrimeEngine:
             self._metrics.record(result)
             return result
 
-        # Phase 3: Function-body decomposition — try to decompose SIMPLE function
-        # into template-renderable clauses before falling back to Ollama.
-        decomposer = getattr(self, "_function_body_decomposer", None)
+        # Phase 3: Function-body decomposition
+        decomposer = self._function_body_decomposer
         if self._config.enable_simple_decomposer and decomposer is not None:
             _record_simple_decompose_attempted(file_path)
             decomposed_code = decomposer.try_decompose(
@@ -2498,9 +2558,30 @@ class MicroPrimeEngine:
                 )
                 self._metrics.record(result)
                 return result
-            else:
-                _record_simple_decompose_rejected(file_path)
+            _record_simple_decompose_rejected(file_path)
 
+        return None
+
+    def _generate_with_retry(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+        model_name: str,
+        element_fqn: str,
+        start_time: float,
+        *,
+        design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
+    ) -> _GenerationOutcome:
+        """Build prompt, call Ollama with retry, run repair pipeline.
+
+        Returns a ``_GenerationOutcome``.  If all attempts fail,
+        ``outcome.failure`` holds the escalation ``ElementResult``.
+        """
         # Build few-shot examples
         few_shot = None
         if self._config.few_shot_enabled:
@@ -2509,7 +2590,6 @@ class MicroPrimeEngine:
                 max_examples=self._config.max_few_shot_examples,
             )
 
-        # Build prompt
         prompt = build_body_prompt(
             element, file_spec, contracts,
             skeleton=skeleton,
@@ -2520,7 +2600,6 @@ class MicroPrimeEngine:
             domain_constraints=self._current_domain_constraints,
         )
 
-        # Generate via Ollama with local retry
         max_local_attempts = max(1, self._config.local_max_attempts)
         last_escalation_result = None
         input_tokens = 0
@@ -2563,7 +2642,9 @@ class MicroPrimeEngine:
                     ),
                 )
                 if is_last_attempt:
-                    return last_escalation_result
+                    return _GenerationOutcome(
+                        code="", raw_output="", failure=last_escalation_result,
+                    )
                 continue
 
             if not code or not code.strip():
@@ -2596,7 +2677,11 @@ class MicroPrimeEngine:
                     ),
                 )
                 if is_last_attempt:
-                    return last_escalation_result
+                    return _GenerationOutcome(
+                        code="", raw_output="",
+                        input_tokens=input_tokens, output_tokens=output_tokens,
+                        failure=last_escalation_result,
+                    )
                 continue
 
             raw_output = code
@@ -2626,7 +2711,6 @@ class MicroPrimeEngine:
                         "AST invalid after repair for %s (attempt %d/%d)",
                         element.name, local_attempt, max_local_attempts,
                     )
-                    # Build Keiyaku-compliant structured handoff (K-6/K-9)
                     esc_repair = to_escalation_repair_outcome(
                         element_fqn, raw_output, repair_result,
                     )
@@ -2671,31 +2755,68 @@ class MicroPrimeEngine:
                         ),
                     )
                     if is_last_attempt:
-                        return last_escalation_result
+                        return _GenerationOutcome(
+                            code=code, raw_output=raw_output,
+                            input_tokens=input_tokens, output_tokens=output_tokens,
+                            failure=last_escalation_result,
+                        )
                     continue
 
-            # Generation + repair succeeded, break out of retry loop
+            # Generation + repair succeeded
             if local_attempt > 1:
                 logger.info(
                     "Ollama succeeded for %s on attempt %d/%d",
                     element.name, local_attempt, max_local_attempts,
                 )
-            break
+            return _GenerationOutcome(
+                code=code,
+                raw_output=raw_output,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                local_attempt=local_attempt,
+                ast_valid_before=ast_valid_before,
+                ast_valid_after=ast_valid_after,
+                repair_recovered=repair_recovered,
+                repaired_code=repaired_code,
+                repair_steps=repair_steps,
+                repair_attribution=repair_attribution,
+                repair_result=repair_result,
+            )
+
+        # Should not reach here — loop always returns — but satisfy type checker
+        return _GenerationOutcome(  # pragma: no cover
+            code="", raw_output="", failure=last_escalation_result,
+        )
+
+    def _verify_and_build_result(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+        model_name: str,
+        element_fqn: str,
+        start_time: float,
+        outcome: _GenerationOutcome,
+    ) -> ElementResult:
+        """Run structural + semantic verification and build the final result."""
+        code = outcome.code
 
         # Structural verification (REQ-MP-512)
         structural_ok, structural_reason = _structural_verify(code, element)
         if not structural_ok:
-            # Build Keiyaku handoff if repair was run
             struct_handoff = None
-            if self._config.repair_enabled and repair_result is not None:
+            if self._config.repair_enabled and outcome.repair_result is not None:
                 struct_repair = to_escalation_repair_outcome(
-                    element_fqn, raw_output, repair_result,
+                    element_fqn, outcome.raw_output, outcome.repair_result,
                 )
                 struct_handoff = _build_escalation_handoff(
                     element, TierClassification.SIMPLE, model_name,
-                    local_attempt, EscalationReason.STRUCTURAL_MISMATCH,
+                    outcome.local_attempt, EscalationReason.STRUCTURAL_MISMATCH,
                     structural_reason or "structural_verification_failed",
-                    raw_output=raw_output,
+                    raw_output=outcome.raw_output,
                     repair_outcome=struct_repair,
                 )
             return ElementResult(
@@ -2705,16 +2826,16 @@ class MicroPrimeEngine:
                 classification_reason=reasoning,
                 success=False,
                 code=code,
-                repair_steps_applied=repair_steps,
-                repair_attribution=repair_attribution,
-                repair_recovered=repair_recovered,
-                ast_valid_before_repair=ast_valid_before,
-                ast_valid_after_repair=ast_valid_after,
+                repair_steps_applied=outcome.repair_steps,
+                repair_attribution=outcome.repair_attribution,
+                repair_recovered=outcome.repair_recovered,
+                ast_valid_before_repair=outcome.ast_valid_before,
+                ast_valid_after_repair=outcome.ast_valid_after,
                 verification_verdict="fail",
                 model=model_name,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                input_tokens=outcome.input_tokens,
+                output_tokens=outcome.output_tokens,
                 escalation=build_escalation_context(
                     element_name=element.name,
                     file_path=file_path,
@@ -2723,9 +2844,9 @@ class MicroPrimeEngine:
                     detail="Structural verification failed after repair",
                     last_code=code,
                     last_error=structural_reason or "structural_verification_failed",
-                    raw_output=raw_output,
-                    repaired_code=repaired_code or code,
-                    repair_steps=repair_steps,
+                    raw_output=outcome.raw_output,
+                    repaired_code=outcome.repaired_code or code,
+                    repair_steps=outcome.repair_steps,
                     local_model=model_name,
                     element_fqn=element_fqn,
                     escalation_handoff=struct_handoff,
@@ -2738,17 +2859,16 @@ class MicroPrimeEngine:
                 code, element, file_spec, contracts, skeleton,
             )
             if not semantic_ok:
-                # Build Keiyaku handoff if repair was run
                 sem_handoff = None
-                if self._config.repair_enabled and repair_result is not None:
+                if self._config.repair_enabled and outcome.repair_result is not None:
                     sem_repair = to_escalation_repair_outcome(
-                        element_fqn, raw_output, repair_result,
+                        element_fqn, outcome.raw_output, outcome.repair_result,
                     )
                     sem_handoff = _build_escalation_handoff(
                         element, TierClassification.SIMPLE, model_name,
-                        local_attempt, EscalationReason.SEMANTIC_FAILURE,
+                        outcome.local_attempt, EscalationReason.SEMANTIC_FAILURE,
                         semantic_reason or "semantic_verification_failed",
-                        raw_output=raw_output,
+                        raw_output=outcome.raw_output,
                         repair_outcome=sem_repair,
                     )
                 return ElementResult(
@@ -2758,16 +2878,16 @@ class MicroPrimeEngine:
                     classification_reason=reasoning,
                     success=False,
                     code=code,
-                    repair_steps_applied=repair_steps,
-                    repair_attribution=repair_attribution,
-                    repair_recovered=repair_recovered,
-                    ast_valid_before_repair=ast_valid_before,
-                    ast_valid_after_repair=ast_valid_after,
+                    repair_steps_applied=outcome.repair_steps,
+                    repair_attribution=outcome.repair_attribution,
+                    repair_recovered=outcome.repair_recovered,
+                    ast_valid_before_repair=outcome.ast_valid_before,
+                    ast_valid_after_repair=outcome.ast_valid_after,
                     verification_verdict="fail",
                     model=model_name,
                     generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
+                    input_tokens=outcome.input_tokens,
+                    output_tokens=outcome.output_tokens,
                     escalation=build_escalation_context(
                         element_name=element.name,
                         file_path=file_path,
@@ -2776,9 +2896,9 @@ class MicroPrimeEngine:
                         detail="Semantic verification failed",
                         last_code=code,
                         last_error=semantic_reason or "semantic_verification_failed",
-                        raw_output=raw_output,
-                        repaired_code=repaired_code or code,
-                        repair_steps=repair_steps,
+                        raw_output=outcome.raw_output,
+                        repaired_code=outcome.repaired_code or code,
+                        repair_steps=outcome.repair_steps,
                         local_model=model_name,
                         element_fqn=element_fqn,
                         escalation_handoff=sem_handoff,
@@ -2797,7 +2917,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": code,
             "syntax_valid": True,
-            "repair_steps_count": len(repair_steps) if repair_steps else 0,
+            "repair_steps_count": len(outcome.repair_steps),
         })
 
         return ElementResult(
@@ -2807,16 +2927,16 @@ class MicroPrimeEngine:
             classification_reason=reasoning,
             success=True,
             code=code,
-            repair_steps_applied=repair_steps,
-            repair_attribution=repair_attribution,
-            repair_recovered=repair_recovered,
-            ast_valid_before_repair=ast_valid_before,
-            ast_valid_after_repair=ast_valid_after,
+            repair_steps_applied=outcome.repair_steps,
+            repair_attribution=outcome.repair_attribution,
+            repair_recovered=outcome.repair_recovered,
+            ast_valid_before_repair=outcome.ast_valid_before,
+            ast_valid_after_repair=outcome.ast_valid_after,
             verification_verdict="pass",
             model=model_name,
             generation_time_ms=gen_time,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
         )
 
     # Stop sequences for complete-function output mode (REQ-MP-206).
