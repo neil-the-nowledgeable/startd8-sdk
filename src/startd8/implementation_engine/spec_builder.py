@@ -722,6 +722,10 @@ def build_spec(
     technical_approach = parse_section_content(response_text, "Technical Approach")
     code_structure = parse_section_content(response_text, "Code Structure")
 
+    # CR-C2: Extract machine-readable MUST/MUST_NOT constraints from the
+    # spec text for downstream review-phase enforcement.
+    machine_constraints = extract_spec_constraints(response_text)
+
     spec = SpecResult(
         spec_id=spec_id,
         task_summary=task_description,
@@ -731,6 +735,7 @@ def build_spec(
         code_structure=code_structure if code_structure else None,
         edge_cases=edge_cases,
         constraints=constraints,
+        spec_constraints=machine_constraints,
         raw_spec=response_text,
         input_tokens=token_usage.input if token_usage else 0,
         output_tokens=token_usage.output if token_usage else 0,

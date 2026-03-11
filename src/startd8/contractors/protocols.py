@@ -29,6 +29,22 @@ class GenerationResult:
     model: str = ''
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def quality_score(self) -> Optional[int]:
+        """Quality score from the generation pipeline (0-100), or None if not scored.
+
+        Generators that include an LLM review loop (e.g. PrimaryContractorCodeGenerator)
+        populate ``metadata["quality_score"]``.  Generators without review (e.g.
+        MicroPrimeCodeGenerator for TRIVIAL/SIMPLE tiers) may omit it.
+        """
+        val = self.metadata.get("quality_score")
+        if val is not None:
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return None
+        return None
+
 @dataclass
 class SizeEstimate:
     """Estimated size of generated output."""

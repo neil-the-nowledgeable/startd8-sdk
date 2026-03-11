@@ -59,6 +59,18 @@ _DETECTION_THRESHOLD: int = 1
 #: Plan document load cap (PC-B5). Reduces from 60KB to 16KB for token savings.
 _PLAN_LOAD_MAX_BYTES: int = 16_384
 
+#: CR-C1: Minimum quality score for accepting generation results from
+#: generators that lack an internal review loop.  Results below this
+#: threshold trigger an error-informed regeneration attempt.
+_MIN_QUALITY_SCORE: int = 60
+
+#: CR-C1: Quality score assumed when a generator does not provide one.
+#: Set conservatively below _MIN_QUALITY_SCORE so unscored results from
+#: non-reviewing generators trigger the quality gate on the first pass,
+#: prompting escalation or re-generation.  PrimaryContractorCodeGenerator
+#: always provides a score, so this only affects MicroPrime and custom generators.
+_UNSCORED_QUALITY_FALLBACK: Optional[int] = None  # None = skip gate for unscored
+
 #: PC-O1, PC-O3: Budget for existing file content when populating gen_context.
 #: Matches lead_contractor_workflow._EXISTING_FILES_BUDGET_BYTES (40KB).
 _EXISTING_FILES_BUDGET_BYTES: int = 40 * 1024
@@ -3319,7 +3331,7 @@ class PrimeContractorWorkflow:
             if not self._check_staleness(feature):
                 feature.status = FeatureStatus.GENERATED
                 self._save_queue_state_with_mode()
-                return gen_context
+                return True  # CR-H1: return bool, not gen_context dict
 
             # Phase 5: Complexity routing — select tier-specific generator
             generator = self.code_generator
@@ -3396,6 +3408,44 @@ class PrimeContractorWorkflow:
             # Captured regardless of success/fail so we can analyze why it failed.
             self._persist_kaizen_prompts(feature, gen_context, result=result)
 
+            # CR-C1: Quality gate — check quality_score from generation result.
+            # Generators with an internal review loop (PrimaryContractorCodeGenerator)
+            # populate metadata["quality_score"]; others (MicroPrime, custom) may not.
+            # When a score is present and below _MIN_QUALITY_SCORE, mark the
+            # generation as failed so it enters the error-informed retry path
+            # (which may escalate the generator tier).
+            if result.success and result.quality_score is not None:
+                if result.quality_score < _MIN_QUALITY_SCORE:
+                    logger.warning(
+                        "Quality gate FAILED for '%s': score=%d < threshold=%d — "
+                        "marking for regeneration",
+                        feature.name,
+                        result.quality_score,
+                        _MIN_QUALITY_SCORE,
+                        extra={
+                            "feature_name": feature.name,
+                            "quality_score": result.quality_score,
+                            "quality_threshold": _MIN_QUALITY_SCORE,
+                            "model": result.model,
+                        },
+                    )
+                    # Preserve the generated files so error-informed retry can
+                    # reference them, but mark the feature as failed with the
+                    # quality feedback so the LLM can improve.
+                    feature.generated_files = [str(f) for f in result.generated_files]
+                    quality_feedback = result.metadata.get("review_feedback", "")
+                    error_msg = (
+                        f"Quality score {result.quality_score}/100 below threshold "
+                        f"{_MIN_QUALITY_SCORE}."
+                    )
+                    if quality_feedback:
+                        error_msg += f" Review feedback: {quality_feedback[:500]}"
+                    self.queue.fail_feature(feature.id, error_msg)
+                    self.total_cost_usd += result.cost_usd
+                    self.total_input_tokens += result.input_tokens
+                    self.total_output_tokens += result.output_tokens
+                    return False
+
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED
@@ -3409,8 +3459,8 @@ class PrimeContractorWorkflow:
                         feature.metadata = {}
                     feature.metadata["_generation_result_metadata"] = result.metadata
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
-                logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
-                
+                logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out, quality=%s", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, result.quality_score or "unscored", extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model, 'quality_score': result.quality_score})
+
                 # Micro Prime dry-run: classification-only, skip integration
                 if result.metadata and result.metadata.get("dry_run"):
                     self.queue.complete_feature(feature.id)

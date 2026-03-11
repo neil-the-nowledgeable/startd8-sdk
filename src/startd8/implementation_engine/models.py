@@ -38,6 +38,11 @@ class SpecResult:
     examples: List[str] = field(default_factory=list)
     raw_spec: str = ""
 
+    # CR-C2: Machine-readable constraints extracted from spec text for
+    # downstream review-phase enforcement.  Each entry is a dict with
+    # ``type`` (MUST/MUST_NOT), ``text``, and ``source`` keys.
+    spec_constraints: List[Dict[str, str]] = field(default_factory=list)
+
     # Telemetry
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     input_tokens: int = 0

@@ -286,6 +286,51 @@ def _validate_against_manifest(
 
 
 # ---------------------------------------------------------------------------
+# CR-C2: Spec constraint verification section
+# ---------------------------------------------------------------------------
+
+def _build_constraint_verification_section(
+    spec_constraints: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """Build a constraint verification checklist for the review prompt.
+
+    Formats machine-readable MUST/MUST_NOT constraints extracted from the
+    spec into a numbered checklist the reviewer must verify against the
+    implementation.
+
+    Args:
+        spec_constraints: List of constraint dicts with ``type``, ``text``,
+            and ``source`` keys (from ``extract_spec_constraints()``).
+
+    Returns:
+        Formatted constraint verification section, or empty string if no
+        constraints are available.
+    """
+    if not spec_constraints:
+        return ""
+
+    lines = [
+        "## Constraint Verification Checklist",
+        "",
+        "The spec defined the following constraints. For EACH constraint, "
+        "verify whether the implementation satisfies it and report any "
+        "violations as BLOCKING issues.",
+        "",
+    ]
+    for i, c in enumerate(spec_constraints, 1):
+        ctype = c.get("type", "MUST")
+        text = c.get("text", "")
+        lines.append(f"{i}. **[{ctype}]** {text}")
+
+    lines.append("")
+    lines.append(
+        "For each constraint, state SATISFIED or VIOLATED. "
+        "Any VIOLATED constraint is a BLOCKING issue."
+    )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Review system prompt loader
 # ---------------------------------------------------------------------------
 
@@ -325,6 +370,8 @@ def review_draft(
     target_files: Optional[List[str]] = None,
     # Full context dict (for supplementary sections)
     context: Optional[Dict[str, Any]] = None,
+    # CR-C2: Machine-readable constraints from spec for enforcement
+    spec_constraints: Optional[List[Dict[str, str]]] = None,
 ) -> ReviewResult:
     """Review a draft implementation.
 
@@ -400,6 +447,14 @@ def review_draft(
         has_prior_review=prior_review is not None,
     )
 
+    # CR-C2: Build constraint verification checklist from spec constraints.
+    # Also try to extract constraints from the spec object itself if the
+    # caller didn't pass them explicitly.
+    effective_constraints = spec_constraints
+    if not effective_constraints and hasattr(spec, "spec_constraints"):
+        effective_constraints = getattr(spec, "spec_constraints", None)
+    constraint_section = _build_constraint_verification_section(effective_constraints)
+
     template = get_template("review")
     prompt = template.format(
         task_description=task_description,
@@ -410,6 +465,12 @@ def review_draft(
         prior_issues_section=prior_issues,
         convergence_instructions=convergence,
     )
+
+    # Append constraint verification section after the main prompt.
+    # This is appended rather than templated to avoid breaking existing
+    # YAML templates that don't have a {constraint_section} placeholder.
+    if constraint_section:
+        prompt = prompt + "\n\n" + constraint_section
 
     sys_prompt = _get_review_system_prompt()
     if sys_prompt:
