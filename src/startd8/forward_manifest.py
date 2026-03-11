@@ -293,6 +293,7 @@ class ForwardFileSpec(BaseModel):
     elements: list[ForwardElementSpec] = Field(default_factory=list)
     imports: list[ForwardImportSpec] = Field(default_factory=list)
     dependencies: Optional[ForwardDependencies] = None
+    language: Optional[str] = None  # FR-DFA-009: "python", "dockerfile", "go", etc.
 
 
 class ForwardManifest(BaseModel):

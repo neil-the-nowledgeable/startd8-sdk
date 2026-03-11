@@ -4338,9 +4338,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                     ForwardManifest,
                 )
 
+                from startd8.micro_prime.lang_detect import detect_language
+
                 file_specs: Dict[str, ForwardFileSpec] = {}
                 for fpath, elems in file_elements.items():
-                    file_specs[fpath] = ForwardFileSpec(file=fpath, elements=elems)
+                    lang = detect_language(fpath)
+                    # Only set language explicitly for non-Python files;
+                    # Python files keep language=None for backward compat.
+                    file_specs[fpath] = ForwardFileSpec(
+                        file=fpath,
+                        elements=elems,
+                        language=lang if lang != "python" else None,
+                    )
 
                 forward_manifest = ForwardManifest(
                     contracts=contracts,

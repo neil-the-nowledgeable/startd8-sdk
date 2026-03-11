@@ -414,6 +414,11 @@ class DeterministicExtractor:
             contracts.extend(self._extract_runtime_dependencies(feature))
             contracts.extend(self._extract_protocol(feature))
 
+            # FR-DFA-003: Produce file_elements entries for non-Python target
+            # files (e.g. Dockerfiles) so they receive a ForwardFileSpec
+            # downstream.  Empty elements list signals single-unit file.
+            self._register_non_python_targets(feature, file_elements)
+
         # Shared files across features
         contracts.extend(self._extract_shared_files(features))
 
@@ -546,12 +551,57 @@ class DeterministicExtractor:
                 updated.append(spec)
             file_elements[filepath] = updated
 
+    @staticmethod
+    def _register_non_python_targets(
+        feature: ParsedFeature,
+        file_elements: dict[str, list[ForwardElementSpec]],
+    ) -> None:
+        """Register non-Python target files so they receive ForwardFileSpecs.
+
+        Dockerfiles and other non-Python files have no AST-extractable
+        elements, but they need a file_elements entry (even empty) so the
+        downstream ``ForwardManifest`` builder creates a ``ForwardFileSpec``
+        for them.  Without this, ``prime_adapter._generate_skeletons()``
+        sees ``file_spec is None`` and bypasses the file entirely.
+        """
+        from startd8.micro_prime.lang_detect import detect_language
+
+        for target in feature.target_files or []:
+            if target in file_elements:
+                continue  # already registered (e.g. Python file with elements)
+            lang = detect_language(target)
+            if lang != "unknown" and lang != "python":
+                file_elements[target] = []  # empty elements = single-unit file
+                logger.debug(
+                    "FR-DFA-003: Registered non-Python target %s (lang=%s) "
+                    "with empty element list",
+                    target, lang,
+                )
+
+    # File extensions that support Python API signature extraction.
+    _PYTHON_EXTENSIONS = frozenset((".py", ".pyi"))
+
     def _extract_api_signatures(
         self,
         feature: ParsedFeature,
         file_elements: dict[str, list[ForwardElementSpec]],
     ) -> list[InterfaceContract]:
         """Parse api_signatures into FUNCTION_NAME contracts + ForwardElementSpecs."""
+        # Skip signature extraction for non-Python files (Dockerfile, .in, .yaml, etc.)
+        if feature.target_files:
+            ext = Path(feature.target_files[0]).suffix.lower()
+            # Files with no extension (e.g. "Dockerfile") get ext=""
+            if ext not in self._PYTHON_EXTENSIONS:
+                if feature.api_signatures:
+                    logger.debug(
+                        "Feature %s targets non-Python file %s; "
+                        "skipping %d api_signature(s)",
+                        feature.feature_id,
+                        feature.target_files[0],
+                        len(feature.api_signatures),
+                    )
+                return []
+
         contracts: list[InterfaceContract] = []
         total_signatures = len(feature.api_signatures)
         skipped_signatures = 0

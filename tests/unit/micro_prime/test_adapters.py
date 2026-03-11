@@ -477,7 +477,12 @@ class MyClass:
         assert not result.success
 
     def test_fallback_files_not_rewritten(self, tmp_path, sample_manifest):
-        """Files delegated to fallback are NOT written by the adapter."""
+        """Files delegated to fallback are NOT written by the adapter.
+
+        FR-DFA-001: src/other.py has no file_spec → bypass_files (not
+        escalated).  Bypass files always delegate to fallback regardless
+        of escalation_enabled.
+        """
         fallback = MagicMock()
         fallback_path = tmp_path / "fallback" / "other.py"
         fallback.generate.return_value = MagicMock(
@@ -487,6 +492,7 @@ class MyClass:
             output_tokens=50,
             model="fallback-model",
             cost_usd=0.01,
+            metadata={},
         )
 
         # Manifest has one file, but we request two — the second has no spec
@@ -501,10 +507,11 @@ class MyClass:
             ["src/mypackage/utils.py", "src/other.py"],
         )
 
-        # Fallback was called because src/other.py has no file_spec
-        fallback.generate.assert_called_once()
-        # Metadata tracks both sources
-        assert result.metadata["fallback_files_written"] == 1
+        # Fallback was called — at least once for bypass (src/other.py),
+        # possibly also for element escalation of src/mypackage/utils.py
+        assert fallback.generate.call_count >= 1
+        # FR-DFA-001: metadata tracks bypass files separately
+        assert result.metadata["bypass_file_count"] == 1
 
     def test_metadata_mixed_local_and_fallback(self, tmp_path, sample_manifest, filled_skeleton):
         """Metadata correctly separates local vs fallback file counts."""

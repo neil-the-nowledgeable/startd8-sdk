@@ -253,6 +253,7 @@ class _FileProcessingState:
     total_input: int = 0
     total_output: int = 0
     escalated_files: list = dataclasses.field(default_factory=list)  # list[str]
+    bypass_files: list = dataclasses.field(default_factory=list)  # FR-DFA-001: files MP can't process
     local_element_count: int = 0
     template_count: int = 0
     ollama_count: int = 0
@@ -348,7 +349,7 @@ class MicroPrimeCodeGenerator:
         # Prime Contractor has no SCAFFOLD phase, so stubs are produced on
         # demand using DeterministicFileAssembler.
         if manifest is not None and not skeletons:
-            skeletons = self._generate_skeletons(manifest, target_files)
+            skeletons = self._generate_skeletons(manifest, target_files, context)
 
         if manifest is None:
             logger.warning(
@@ -382,15 +383,18 @@ class MicroPrimeCodeGenerator:
 
         partial_files = sum(
             1 for fp in target_files
-            if fp not in st.escalated_files and fp not in st.written_file_paths
+            if fp not in st.escalated_files
+            and fp not in st.bypass_files
+            and fp not in st.written_file_paths
         )
         logger.info(
             "Micro Prime: %d elements local (%d files), %d escalated "
-            "(%d files to fallback, %d partial kept)",
+            "(%d files to fallback, %d bypass, %d partial kept)",
             st.local_element_count,
             local_file_count,
             st.escalated_element_count,
             len(st.escalated_files),
+            len(st.bypass_files),
             partial_files,
         )
 
@@ -415,7 +419,32 @@ class MicroPrimeCodeGenerator:
             st.reg_hits, st.reg_misses,
         )
 
-        # Phase 5: File-level fallback delegation or local-only return
+        # Phase 5a: FR-DFA-001 — Bypass files always delegate to fallback
+        # (regardless of escalation_enabled).  These are files MP fundamentally
+        # cannot process (no ForwardFileSpec / no skeleton), NOT files where
+        # element-level generation failed.
+        if st.bypass_files and self._fallback is not None:
+            logger.info(
+                "Delegating %d bypass file(s) to fallback (unsupported "
+                "locally): %s",
+                len(st.bypass_files),
+                ", ".join(st.bypass_files),
+            )
+            bypass_result = self._delegate_to_fallback(
+                task, context, st.bypass_files,
+            )
+            st.generated_files.extend(bypass_result.generated_files)
+            st.total_input += bypass_result.input_tokens
+            st.total_output += bypass_result.output_tokens
+        elif st.bypass_files:
+            logger.warning(
+                "No fallback generator available — %d file(s) cannot be "
+                "processed locally and will be skipped: %s",
+                len(st.bypass_files),
+                ", ".join(st.bypass_files),
+            )
+
+        # Phase 5b: Element-escalated files respect escalation_enabled
         if st.escalated_files and not self._config.escalation_enabled:
             logger.warning(
                 "Cloud escalation disabled (escalation_enabled=False) — "
@@ -463,7 +492,27 @@ class MicroPrimeCodeGenerator:
             skeleton = skeletons.get(file_path, "")
 
             if file_spec is None or not skeleton:
-                st.escalated_files.append(file_path)
+                # FR-DFA-001: File-level bypass — MP can't process this file
+                # type at all (no manifest entry or no skeleton).  Distinct
+                # from element-level escalation where MP tried but elements
+                # were too complex.
+                st.bypass_files.append(file_path)
+                continue
+
+            # FR-DFA-003: Dockerfile file-level processing — no element engine
+            lang = getattr(file_spec, "language", None)
+            if lang == "dockerfile":
+                output_path = self._output_dir / file_path
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(skeleton, encoding="utf-8")
+                st.generated_files.append(output_path)
+                st.written_file_paths.add(file_path)
+                st.effective_file_count += 1
+                logger.info(
+                    "Micro Prime wrote Dockerfile %s (%d lines, passthrough)",
+                    file_path,
+                    skeleton.count("\n") + 1,
+                )
                 continue
 
             # REQ-DDS-002: Thread design_doc_sections to engine
@@ -723,6 +772,7 @@ class MicroPrimeCodeGenerator:
         meta: dict = {
             "micro_prime_files_written": local_file_count,
             "effective_file_count": st.effective_file_count,
+            "bypass_file_count": len(st.bypass_files),
             "incomplete_files": st.incomplete_files,
             "micro_prime_elements": st.local_element_count,
             "micro_prime_template_hits": st.template_count,
@@ -1338,11 +1388,15 @@ class MicroPrimeCodeGenerator:
         self,
         manifest: ForwardManifest,
         target_files: List[str],
+        context: Optional[Dict[str, Any]] = None,
     ) -> dict[str, str]:
         """Generate stub skeletons from manifest for target files only.
 
         Uses ``DeterministicFileAssembler`` to render ``ForwardFileSpec``
         elements into Python source with ``raise NotImplementedError`` stubs.
+        For Dockerfiles, uses existing file content as the skeleton (MVP
+        passthrough — FR-DFA-003).
+
         Only the current feature's target files are rendered (not the entire
         manifest).  Per-file failures are logged and skipped — they do not
         block other files.
@@ -1356,12 +1410,36 @@ class MicroPrimeCodeGenerator:
             element_registry=self._element_registry,
         )
         skeletons: dict[str, str] = {}
+        existing_files: Dict[str, str] = (
+            dict((context or {}).get("existing_files") or {})
+        )
 
         for file_path in target_files:
             file_spec = manifest.file_specs.get(file_path)
             if file_spec is None:
                 logger.debug("No file_spec for %s, skipping skeleton", file_path)
                 continue
+
+            # FR-DFA-003: Dockerfile skeleton = existing content (passthrough)
+            lang = getattr(file_spec, "language", None)
+            if lang == "dockerfile":
+                existing = existing_files.get(file_path, "")
+                if existing:
+                    skeletons[file_path] = existing
+                    logger.debug(
+                        "Dockerfile skeleton for %s: passthrough existing "
+                        "content (%d lines)",
+                        file_path,
+                        existing.count("\n") + 1,
+                    )
+                else:
+                    logger.debug(
+                        "No existing content for Dockerfile %s, skipping "
+                        "skeleton (create-mode deferred)",
+                        file_path,
+                    )
+                continue
+
             try:
                 source = assembler.render_file(file_spec)
                 skeletons[file_path] = source
