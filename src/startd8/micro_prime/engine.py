@@ -494,6 +494,33 @@ _CODE_GEN_SYSTEM_PROMPT = (
     "Use 4-space indentation consistently."
 )
 
+# Separate system prompt for element-level body generation (Fix 1).
+# The body prompt builder asks for indented body lines only (no def line),
+# which contradicts _CODE_GEN_SYSTEM_PROMPT's "include the def line".
+# Small local models cannot resolve conflicting system/user instructions
+# reliably — they fall back to default behaviour (markdown fences, import
+# blocks, wrong indentation).  Aligning the system prompt with the user
+# prompt eliminates this confusion.
+_ELEMENT_BODY_SYSTEM_PROMPT = (
+    "You are a Python code generator. "
+    "Output ONLY the indented body lines of the target function — no def line, "
+    "no class wrapper, no imports, no markdown fences, no explanations. "
+    "Use 4-space indentation consistently. Output code and NOTHING else."
+)
+
+# System prompt for file-level Ollama-whole generation.
+# Instead of decomposing into individual element bodies, the model receives
+# the complete skeleton file and fills ALL stubs in one pass.
+_FILE_WHOLE_SYSTEM_PROMPT = (
+    "You are a Python code generator. "
+    "You are given a skeleton Python file with `raise NotImplementedError` stubs. "
+    "Replace EVERY `raise NotImplementedError` with a working implementation. "
+    "Output the COMPLETE Python file with all stubs filled in. "
+    "Do NOT add markdown fences, explanations, or any text outside the code. "
+    "Do NOT remove or rewrite existing imports, class definitions, or signatures. "
+    "Preserve the file structure exactly — only replace stub bodies."
+)
+
 
 def build_escalation_context(
     element_name: str,
@@ -597,6 +624,119 @@ def _build_escalation_handoff(
     )
 
 
+def _build_file_whole_prompt(
+    skeleton: str,
+    file_spec: ForwardFileSpec,
+    task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
+) -> str:
+    """Build a prompt for file-level Ollama-whole generation.
+
+    Instead of asking for individual element bodies, this sends the full
+    skeleton and asks the model to fill ALL stubs in one pass.  This matches
+    how the model naturally generates code (complete files) and avoids the
+    body-only fragmentation that confuses small local models.
+
+    Args:
+        skeleton: Complete skeleton file with ``raise NotImplementedError`` stubs.
+        file_spec: File spec for context (imports, element names).
+        task_description: Optional feature-level description from seed.
+        domain_constraints: Optional domain constraints from plan ingestion.
+
+    Returns:
+        The constructed prompt string.
+    """
+    sections: list[str] = []
+
+    sections.append(
+        "# Fill in ALL `raise NotImplementedError` stubs in this file."
+    )
+    sections.append(
+        "# Output the COMPLETE file with every stub replaced by a working implementation."
+    )
+    sections.append(
+        "# Do NOT change imports, class names, function signatures, or file structure."
+    )
+    sections.append("")
+
+    if task_description:
+        sections.append(f"# Task context: {task_description}")
+        sections.append("")
+
+    if domain_constraints:
+        sections.append("# Domain constraints (MUST follow these):")
+        for dc in domain_constraints:
+            sections.append(f"# - {dc}")
+        sections.append("")
+
+    sections.append("# --- Skeleton file (fill in the stubs) ---")
+    sections.append(skeleton)
+
+    return "\n".join(sections)
+
+
+def _validate_file_whole_result(
+    generated_code: str,
+    skeleton: str,
+    file_spec: ForwardFileSpec,
+) -> tuple[bool, str]:
+    """Validate a file-level Ollama-whole generation result.
+
+    Checks:
+    1. AST parses successfully
+    2. No remaining ``raise NotImplementedError`` stubs
+    3. All expected elements are present in the AST
+    4. No skeleton markers remain
+
+    Returns:
+        (success, reason) tuple.
+    """
+    # Strip markdown fences if present
+    code = generated_code.strip()
+    if code.startswith("```"):
+        lines = code.splitlines()
+        # Remove first line (```python or ```)
+        lines = lines[1:]
+        # Remove last line if it's a closing fence
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        code = "\n".join(lines).strip()
+
+    if not code:
+        return False, "empty output"
+
+    # AST parse
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"ast.parse() failed: {e}"
+
+    # Check for remaining stubs
+    if "raise NotImplementedError" in code:
+        return False, "contains unfilled NotImplementedError stubs"
+
+    # Check for skeleton markers
+    if "# [STARTD8-SKELETON]" in code:
+        return False, "contains skeleton markers"
+
+    # Verify expected elements exist in AST
+    expected_names = {el.name for el in file_spec.elements}
+    found_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found_names.add(target.id)
+
+    missing = expected_names - found_names
+    if missing:
+        return False, f"missing elements: {', '.join(sorted(missing))}"
+
+    return True, "all checks passed"
+
+
 class MicroPrimeEngine:
     """Main orchestrator for local-first code generation.
 
@@ -651,6 +791,8 @@ class MicroPrimeEngine:
             )
         # Manifest reference for _handle_moderate (set by process_file, None for process_element)
         self._current_manifest: Optional[ForwardManifest] = None
+        # Domain constraints set by process_file, None for process_element
+        self._current_domain_constraints: Optional[list[str]] = None
         # Cached Ollama agent (C-1: avoid re-creation per element)
         self._ollama_agent: Optional[Any] = None
         # Cached semantic verification agent (optional)
@@ -671,6 +813,30 @@ class MicroPrimeEngine:
             self._file_circuit_open
             or self._run_consecutive_failures >= self._RUN_BREAKER_THRESHOLD
         )
+
+    def _record_local_failure(self) -> None:
+        """Increment circuit breaker counters and trip breakers if thresholds are met.
+
+        Centralises the per-file and per-run breaker mutation that was
+        previously duplicated in ``_process_element_with_tier`` and
+        ``_handle_moderate``.
+        """
+        self._consecutive_failures += 1
+        self._run_consecutive_failures += 1
+        if (
+            self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
+            and not self._file_circuit_open
+        ):
+            self._file_circuit_open = True
+            logger.warning(
+                "Circuit breaker tripped (per-file): %d consecutive local failures",
+                self._consecutive_failures,
+            )
+        if self._run_consecutive_failures == self._RUN_BREAKER_THRESHOLD:
+            logger.warning(
+                "Circuit breaker tripped (per-run): %d consecutive failures across files",
+                self._run_consecutive_failures,
+            )
 
     def reset_circuit_breaker(self) -> None:
         """Reset the per-file circuit breaker to closed state.
@@ -937,6 +1103,11 @@ class MicroPrimeEngine:
             )
         else:
             # COMPLEX only — immediate escalation
+            logger.info(
+                "Element %s in %s classified as COMPLEX — immediate escalation "
+                "(reason: %s)",
+                element.name, file_path, reasoning,
+            )
             result = ElementResult(
                 element_name=element.name,
                 file_path=file_path,
@@ -999,22 +1170,7 @@ class MicroPrimeEngine:
                         element_id, exc,
                     )
         elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
-            self._consecutive_failures += 1
-            self._run_consecutive_failures += 1
-            if (
-                self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
-                and not self._file_circuit_open
-            ):
-                self._file_circuit_open = True
-                logger.warning(
-                    "Circuit breaker tripped (per-file): %d consecutive local failures",
-                    self._consecutive_failures,
-                )
-            if self._run_consecutive_failures == self._RUN_BREAKER_THRESHOLD:
-                logger.warning(
-                    "Circuit breaker tripped (per-run): %d consecutive failures across files",
-                    self._run_consecutive_failures,
-                )
+            self._record_local_failure()
 
         self._metrics.record(result)
         return result
@@ -1082,6 +1238,21 @@ class MicroPrimeEngine:
                         element.name, file_spec.file,
                     )
 
+        # ── File-level Ollama-whole attempt ──
+        # For small files, try generating the complete file in one Ollama
+        # call before decomposing into individual elements.  This avoids
+        # the body-only prompt format that small models handle poorly.
+        if ollama_available and self._is_file_ollama_whole_eligible(
+            enriched_file_spec, skeleton,
+        ):
+            file_whole_result = self._attempt_file_ollama_whole(
+                enriched_file_spec, skeleton,
+                task_description=task_description,
+                domain_constraints=domain_constraints,
+            )
+            if file_whole_result is not None:
+                return file_whole_result
+
         # Pre-classify to determine processing order (REQ-MP-704).
         # Classification results are cached to avoid redundant work in
         # process_element() — each element is classified exactly once.
@@ -1113,6 +1284,15 @@ class MicroPrimeEngine:
             )
 
         classified.sort(key=lambda x: (x[0], x[1]))
+
+        if classified:
+            _summary = ", ".join(
+                f"{e.name}={t.value}" for _, _, e, _, t, _, _, _, _ in classified
+            )
+            logger.info(
+                "Element classification for %s: %s",
+                file_spec.file, _summary,
+            )
 
         for _, _, element, contracts, pre_tier, pre_reasoning, file_bump, elem_adjust, cls_signals in classified:
             result = self._process_element_with_tier(
@@ -1295,6 +1475,152 @@ class MicroPrimeEngine:
             )
             return False
         return True
+
+    # ─── File-level Ollama-whole ────────────────────────────────────
+
+    def _is_file_ollama_whole_eligible(
+        self,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+    ) -> bool:
+        """Check if a file qualifies for single-shot Ollama generation.
+
+        Eligible when:
+        - Feature is enabled in config
+        - Element count ≤ max_elements threshold
+        - Estimated LOC ≤ max_loc threshold
+        - Skeleton has at least one ``raise NotImplementedError`` stub
+        """
+        if not self._config.file_ollama_whole_enabled:
+            return False
+        element_count = len(file_spec.elements)
+        if element_count > self._config.file_ollama_whole_max_elements:
+            logger.debug(
+                "File-whole skipped for %s: %d elements > %d max",
+                file_spec.file, element_count,
+                self._config.file_ollama_whole_max_elements,
+            )
+            return False
+        skeleton_lines = len(skeleton.splitlines())
+        if skeleton_lines > self._config.file_ollama_whole_max_loc:
+            logger.debug(
+                "File-whole skipped for %s: %d lines > %d max",
+                file_spec.file, skeleton_lines,
+                self._config.file_ollama_whole_max_loc,
+            )
+            return False
+        if "raise NotImplementedError" not in skeleton:
+            logger.debug(
+                "File-whole skipped for %s: no stubs in skeleton",
+                file_spec.file,
+            )
+            return False
+        return True
+
+    def _attempt_file_ollama_whole(
+        self,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        task_description: Optional[str] = None,
+        domain_constraints: Optional[list[str]] = None,
+    ) -> Optional[FileResult]:
+        """Attempt to generate all elements in one Ollama call.
+
+        Sends the complete skeleton file to the model and asks it to fill
+        ALL ``raise NotImplementedError`` stubs in a single pass.  This avoids
+        the body-only fragmentation that confuses small local models.
+
+        Returns:
+            FileResult if successful, None if the attempt failed (caller
+            should fall through to element-by-element processing).
+        """
+        file_path = file_spec.file
+        logger.info(
+            "Attempting file-level Ollama-whole for %s (%d elements, %d lines)",
+            file_path, len(file_spec.elements), len(skeleton.splitlines()),
+        )
+
+        prompt = _build_file_whole_prompt(
+            skeleton, file_spec,
+            task_description=task_description,
+            domain_constraints=domain_constraints,
+        )
+
+        start_time = time.monotonic()
+        try:
+            raw_code, input_tokens, output_tokens = self._generate_ollama(
+                prompt, system_prompt=_FILE_WHOLE_SYSTEM_PROMPT,
+            )
+        except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
+            logger.warning(
+                "File-whole Ollama call failed for %s: %s", file_path, e,
+            )
+            return None
+
+        gen_time = (time.monotonic() - start_time) * 1000
+
+        if not raw_code or not raw_code.strip():
+            logger.warning("File-whole returned empty output for %s", file_path)
+            return None
+
+        # Validate the generated file
+        valid, reason = _validate_file_whole_result(raw_code, skeleton, file_spec)
+
+        if not valid:
+            logger.info(
+                "File-whole validation failed for %s: %s — falling through to element-by-element",
+                file_path, reason,
+            )
+            return None
+
+        # Strip fences for the final code (validation already handles this
+        # internally, but we need the clean version for the result).
+        code = raw_code.strip()
+        if code.startswith("```"):
+            lines = code.splitlines()
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            code = "\n".join(lines).strip()
+
+        logger.info(
+            "File-whole succeeded for %s — %d elements filled in one shot",
+            file_path, len(file_spec.elements),
+        )
+
+        # Build successful element results for each element
+        model_name = f"{self._config.provider}:{self._config.model}"
+        file_result = FileResult(file_path=file_path)
+        per_element_tokens_in = input_tokens // max(len(file_spec.elements), 1)
+        per_element_tokens_out = output_tokens // max(len(file_spec.elements), 1)
+
+        for element in file_spec.elements:
+            result = ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.SIMPLE,
+                classification_reason="file_ollama_whole",
+                parent_class=element.parent_class,
+                element_kind=element.kind.value if element.kind else None,
+                success=True,
+                code=code,
+                repair_recovered=False,
+                ast_valid_before_repair=True,
+                ast_valid_after_repair=True,
+                verification_verdict="pass",
+                model=model_name,
+                generation_time_ms=gen_time / max(len(file_spec.elements), 1),
+                input_tokens=per_element_tokens_in,
+                output_tokens=per_element_tokens_out,
+                decomposition_metadata={
+                    "strategy": "file_ollama_whole",
+                    "llm_calls": 1,
+                },
+            )
+            file_result.element_results.append(result)
+
+        file_result.filled_skeleton = code
+        return file_result
 
     # ─── Private handlers ─────────────────────────────────────────────
 
@@ -1545,17 +1871,7 @@ class MicroPrimeEngine:
             total_output += sub_result.output_tokens
 
             if not sub_result.success or not sub_result.code:
-                self._consecutive_failures += 1
-                self._run_consecutive_failures += 1
-                if (
-                    self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
-                    and not self._file_circuit_open
-                ):
-                    self._file_circuit_open = True
-                    logger.warning(
-                        "Circuit breaker tripped (per-file): %d consecutive sub-element failures",
-                        self._consecutive_failures,
-                    )
+                self._record_local_failure()
                 logger.warning(
                     "Sub-element %s failed — abandoning decomposition of %s",
                     sub.name, element.name,
@@ -2181,7 +2497,7 @@ class MicroPrimeEngine:
             token_budget=self._config.input_token_budget,
             design_doc_sections=design_doc_sections,
             task_description=task_description,
-            domain_constraints=getattr(self, "_current_domain_constraints", None),
+            domain_constraints=self._current_domain_constraints,
         )
 
         # Generate via Ollama with local retry
@@ -2194,7 +2510,9 @@ class MicroPrimeEngine:
             is_last_attempt = local_attempt == max_local_attempts
 
             try:
-                code, attempt_in_tokens, attempt_out_tokens = self._generate_ollama(prompt)
+                code, attempt_in_tokens, attempt_out_tokens = self._generate_ollama(
+                    prompt, system_prompt=_ELEMENT_BODY_SYSTEM_PROMPT,
+                )
                 input_tokens += attempt_in_tokens
                 output_tokens += attempt_out_tokens
             except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
@@ -2496,13 +2814,19 @@ class MicroPrimeEngine:
         "\n\n\n",            # Triple newline — generation exhausted
     ]
 
-    def _generate_ollama(self, prompt: str) -> tuple[str, int, int]:
+    def _generate_ollama(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> tuple[str, int, int]:
         """Generate code using the Ollama provider.
 
-        Returns (code, input_tokens, output_tokens).
-        """
-        from startd8.utils.code_extraction import extract_code_from_response
+        Returns (raw_text, input_tokens, output_tokens).
 
+        The raw LLM text is returned without pre-extraction so that the
+        repair pipeline's ``fence_strip`` step can handle fence removal
+        in one place (Fix 3 — removes redundant extract_code_from_response).
+        """
         if self._ollama_agent is None:
             from startd8.utils.agent_resolution import resolve_agent_spec
 
@@ -2513,12 +2837,10 @@ class MicroPrimeEngine:
 
         result_text, time_ms, token_usage = self._ollama_agent.generate(
             prompt,
-            system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+            system_prompt=system_prompt or _CODE_GEN_SYSTEM_PROMPT,
             temperature=self._config.temperature,
             stop=self._OLLAMA_STOP_SEQUENCES,
         )
-
-        code = extract_code_from_response(result_text)
 
         input_tokens = 0
         output_tokens = 0
@@ -2526,7 +2848,7 @@ class MicroPrimeEngine:
             input_tokens = getattr(token_usage, "input", 0) or 0
             output_tokens = getattr(token_usage, "output", 0) or 0
 
-        return code, input_tokens, output_tokens
+        return result_text, input_tokens, output_tokens
 
     def _semantic_verify(
         self,

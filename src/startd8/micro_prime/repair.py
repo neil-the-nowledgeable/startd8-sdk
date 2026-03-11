@@ -21,6 +21,7 @@ Micro-prime-specific steps (2, 3, 6) remain local.
 from __future__ import annotations
 
 import ast
+import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -189,6 +190,139 @@ def _step_over_generation_trim(
     )
 
 
+# Line-anchored pattern for markdown fence markers.  The old ``"```" in s``
+# test matched backtick sequences inside string literals, producing false
+# positives.  This regex requires the fence to be at the start of a line
+# (with optional whitespace) followed by an optional language tag.
+_FENCE_LINE_RE = re.compile(r"^\s*```[\w]*\s*$", re.MULTILINE)
+
+
+def _detect_definition_line(code: str) -> bool:
+    """Return True if *code* already starts with a def/class/decorator."""
+    stripped = code.lstrip()
+    return stripped.startswith(("def ", "async def ", "class ", "@"))
+
+
+def _strip_residual_fences(code: str) -> tuple[str, bool]:
+    """Strip residual markdown fences that survived fence_strip.
+
+    Returns ``(cleaned_code, was_modified)``.  If fences are found they are
+    removed via ``extract_code_from_response``; otherwise the input is
+    returned unchanged.  (run-019/022 defence)
+    """
+    if not _FENCE_LINE_RE.search(code):
+        return code, False
+    cleaned = extract_code_from_response(code)
+    if cleaned != code:
+        logger.debug(
+            "bare_statement_wrap: stripped residual fences from body (%d→%d chars)",
+            len(code), len(cleaned),
+        )
+        return cleaned, True
+    return code, False
+
+
+def _hoist_leading_imports(
+    raw_lines: list[str],
+    file_spec: Optional[ForwardFileSpec],
+) -> tuple[list[str], list[str]]:
+    """Separate leading import lines from body lines.
+
+    Returns ``(hoisted_imports, body_lines)`` where *hoisted_imports* are
+    module-level imports to place above the def line and *body_lines* is the
+    remaining code.  Imports that reference symbols defined in the same file
+    (per *file_spec*) are dropped to avoid F811.  (run-014, run-017)
+    """
+    hoisted: list[str] = []
+    first_body_idx = 0
+    for i, line in enumerate(raw_lines):
+        lstripped = line.lstrip()
+        if not lstripped:
+            continue
+        if lstripped.startswith(("import ", "from ")):
+            hoisted.append(lstripped)
+            first_body_idx = i + 1
+        else:
+            break
+
+    # Drop imports referencing symbols defined in the same file.
+    if hoisted and file_spec is not None:
+        local_names = {el.name for el in file_spec.elements}
+        filtered: list[str] = []
+        for imp in hoisted:
+            if imp.startswith("from ") and " import " in imp:
+                imported_part = imp.split(" import ", 1)[1]
+                imported_names = [
+                    n.strip().split(" as ")[0].strip() for n in imported_part.split(",")
+                ]
+                if all(n in local_names for n in imported_names):
+                    logger.debug(
+                        "Dropping hoisted import %r — all names defined locally", imp,
+                    )
+                    continue
+            filtered.append(imp)
+        hoisted = filtered
+
+    body_lines = raw_lines[first_body_idx:]
+    # Strip leading blank lines so indent calculation starts at real code.
+    while body_lines and not body_lines[0].strip():
+        body_lines = body_lines[1:]
+
+    return hoisted, body_lines if body_lines else ["pass"]
+
+
+def _normalize_body_indentation(body_lines: list[str]) -> list[str]:
+    """Normalise body lines to zero indent before re-indenting under the def.
+
+    Handles two Ollama patterns:
+    1. All lines share a non-zero minimum indent — strip it uniformly.
+    2. First line at column 0, rest carry spurious indent — strip common
+       indent of lines 2+ *unless* line 1 ends with ``:`` (genuine block).
+    """
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in body_lines
+        if line.strip()
+    ]
+    if not indents:
+        return body_lines
+
+    min_indent = min(indents)
+    if min_indent > 0:
+        return [
+            line[min_indent:] if line.strip() else ""
+            for line in body_lines
+        ]
+
+    if len(indents) >= 2 and indents[0] == 0:
+        first_content = body_lines[0].strip()
+        is_block_start = first_content.endswith(":")
+        rest_indents = [i for i in indents[1:] if i > 0]
+        if rest_indents and not is_block_start:
+            strip = min(rest_indents)
+            return [body_lines[0]] + [
+                line[strip:] if line.strip() else ""
+                for line in body_lines[1:]
+            ]
+
+    return body_lines
+
+
+def _wrap_body_in_def(
+    sig_line: str,
+    body_lines: list[str],
+    hoisted_imports: list[str],
+) -> str:
+    """Indent *body_lines* under *sig_line* and prepend hoisted imports."""
+    indented = "\n".join(
+        f"    {line}" if line.strip() else "" for line in body_lines
+    )
+    wrapped = f"{sig_line}\n{indented}"
+    if hoisted_imports:
+        wrapped = "\n".join(hoisted_imports) + "\n\n" + wrapped
+    return wrapped
+
+
 def _step_bare_statement_wrap(
     code: str,
     element: ForwardElementSpec,
@@ -205,80 +339,30 @@ def _step_bare_statement_wrap(
             step_name="bare_statement_wrap", modified=False, code=code,
         )
 
-    # Check if the code already starts with def/async def/class
-    stripped = code.lstrip()
-    if stripped.startswith(("def ", "async def ", "class ")):
+    if _detect_definition_line(code):
         return RepairStepResult(
             step_name="bare_statement_wrap", modified=False, code=code,
         )
 
-    # Also check if it starts with a decorator
-    if stripped.startswith("@"):
+    # Strip residual fences that survived fence_strip (run-019/022).
+    code, fences_stripped = _strip_residual_fences(code)
+    if fences_stripped and _detect_definition_line(code):
         return RepairStepResult(
-            step_name="bare_statement_wrap", modified=False, code=code,
+            step_name="bare_statement_wrap", modified=True, code=code,
         )
 
-    # Looks like body-only output — wrap it
     sig_line = _build_def_line(element)
     if sig_line is None:
         return RepairStepResult(
             step_name="bare_statement_wrap", modified=False, code=code,
         )
 
-    # Hoist leading import statements above the def line instead of
-    # wrapping them inside the function body.  Run-014 showed Ollama
-    # generating ``import os\n\nif "X" in os.environ: ...`` for
-    # initStackdriverProfiling — the import must be at module level,
-    # not inside the function.
-    raw_lines = code.splitlines()
-    hoisted_imports: list[str] = []
-    first_body_idx = 0
-    for i, line in enumerate(raw_lines):
-        lstripped = line.lstrip()
-        if not lstripped:
-            continue
-        if lstripped.startswith(("import ", "from ")):
-            hoisted_imports.append(lstripped)
-            first_body_idx = i + 1
-        else:
-            break
+    hoisted_imports, body_lines = _hoist_leading_imports(
+        code.splitlines(), file_spec,
+    )
 
-    # Drop hoisted imports that reference symbols defined in the same file.
-    # Run-017: Ollama generated ``from custom_json_formatter import
-    # CustomJsonFormatter`` inside getJSONLogger, but CustomJsonFormatter is
-    # a class defined in the same file.  Hoisting that import creates F811.
-    if hoisted_imports and file_spec is not None:
-        local_names = {el.name for el in file_spec.elements}
-        filtered: list[str] = []
-        for imp in hoisted_imports:
-            # ``from mod import Name`` — check Name against local definitions
-            if imp.startswith("from ") and " import " in imp:
-                imported_part = imp.split(" import ", 1)[1]
-                imported_names = [n.strip().split(" as ")[0].strip() for n in imported_part.split(",")]
-                if all(n in local_names for n in imported_names):
-                    logger.debug(
-                        "Dropping hoisted import %r — all names defined locally", imp,
-                    )
-                    continue
-            filtered.append(imp)
-        hoisted_imports = filtered
-
-    # Dedent body first.  Ollama often returns body-only output where the
-    # first line is unindented and subsequent lines carry a spurious 4-space
-    # indent (relative to a def that Ollama omitted).  Normalise all body
-    # lines to zero indent before re-indenting under the def.
-    body_lines = raw_lines[first_body_idx:]
-    # Strip leading blank lines so the indent[0] index corresponds to
-    # the first actual code line (not a blank separator after imports).
-    while body_lines and not body_lines[0].strip():
-        body_lines = body_lines[1:]
-    if not body_lines:
-        body_lines = ["pass"]
-
-    # Re-check after import hoisting: if the remaining body already starts
-    # with def/class/decorator, don't wrap — just reassemble with hoisted
-    # imports.  This happens when over_generation_trim extracts a complete
-    # function with imports prepended (run-016 getJSONLogger pattern).
+    # After hoisting, if the body already starts with def/class/decorator,
+    # don't wrap — just reassemble with hoisted imports (run-016 pattern).
     first_body_stripped = body_lines[0].lstrip() if body_lines else ""
     if first_body_stripped.startswith(("def ", "async def ", "class ", "@")):
         reassembled = "\n".join(body_lines)
@@ -290,41 +374,9 @@ def _step_bare_statement_wrap(
             code=reassembled,
             metrics={"hoisted_imports": len(hoisted_imports), "already_wrapped": True},
         )
-    indents = [
-        len(line) - len(line.lstrip())
-        for line in body_lines
-        if line.strip()
-    ]
-    if indents:
-        min_indent = min(indents)
-        if min_indent > 0:
-            body_lines = [
-                line[min_indent:] if line.strip() else ""
-                for line in body_lines
-            ]
-        elif len(indents) >= 2 and indents[0] == 0:
-            # First line at column 0, rest indented — Ollama body-only pattern.
-            # Strip the common indent of lines 2+ so all lines align.
-            # BUT: skip this when the first non-blank line ends with `:`
-            # (e.g. `if`, `for`, `while`, `with`) — the subsequent indent
-            # represents genuine block nesting, not Ollama body-only spurious
-            # indent.
-            first_content = body_lines[0].strip() if body_lines else ""
-            is_block_start = first_content.endswith(":")
-            rest_indents = [i for i in indents[1:] if i > 0]
-            if rest_indents and not is_block_start:
-                strip = min(rest_indents)
-                body_lines = [body_lines[0]] + [
-                    line[strip:] if line.strip() else ""
-                    for line in body_lines[1:]
-                ]
-    # Indent body under the def
-    indented = "\n".join(f"    {line}" if line.strip() else "" for line in body_lines)
-    wrapped = f"{sig_line}\n{indented}"
 
-    # Prepend hoisted imports above the def line
-    if hoisted_imports:
-        wrapped = "\n".join(hoisted_imports) + "\n\n" + wrapped
+    body_lines = _normalize_body_indentation(body_lines)
+    wrapped = _wrap_body_in_def(sig_line, body_lines, hoisted_imports)
 
     return RepairStepResult(
         step_name="bare_statement_wrap",

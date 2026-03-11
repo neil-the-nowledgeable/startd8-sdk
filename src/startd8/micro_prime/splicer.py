@@ -42,6 +42,24 @@ def _dedent_lines(lines: list[str]) -> list[str]:
     ]
 
 
+def _leading_whitespace(line: str) -> str:
+    """Return the leading whitespace of *line*."""
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _reindent_body(body: str, target_indent: str) -> list[str]:
+    """Dedent *body* to zero indent and re-indent every line to *target_indent*.
+
+    Returns a list of reindented lines.  Empty lines become empty strings
+    (preserving visual separation without trailing whitespace).
+    """
+    dedented = textwrap.dedent(body).splitlines()
+    return [
+        target_indent + line if line.strip() else ""
+        for line in dedented
+    ]
+
+
 def _collect_leading_imports(code: str) -> list[str]:
     """Extract leading **single-line** import statements from generated code.
 
@@ -170,7 +188,7 @@ def _splice_function_body(
 
     # Determine the indentation of the stub
     stub_line = lines[stub_idx]
-    stub_indent = stub_line[: len(stub_line) - len(stub_line.lstrip())]
+    stub_indent = _leading_whitespace(stub_line)
 
     # Collect imports that _extract_body will strip so we can re-inject them.
     element_imports = _collect_leading_imports(body)
@@ -180,11 +198,7 @@ def _splice_function_body(
 
     # Re-indent the body to match the stub's indentation while preserving
     # relative indentation (e.g. nested if/else, loops within the body).
-    dedented = textwrap.dedent(extracted_body).splitlines()
-    reindented = [
-        stub_indent + line if line.strip() else ""
-        for line in dedented
-    ]
+    reindented = _reindent_body(extracted_body, stub_indent)
 
     # Replace the stub line with the body
     new_lines = lines[:stub_idx] + reindented + lines[stub_idx + 1:]
@@ -238,7 +252,7 @@ def _splice_class_body(
 
     # Detect class body indentation
     class_line = lines[class_node.lineno - 1]
-    class_indent = class_line[: len(class_line) - len(class_line.lstrip())]
+    class_indent = _leading_whitespace(class_line)
     body_indent = class_indent + "    "
 
     # Remove class-level NotImplementedError stubs
@@ -346,12 +360,8 @@ def _splice_class_body(
                 if stub_idx is not None:
                     res_lines = result.splitlines()
                     stub_line = res_lines[stub_idx]
-                    stub_indent = stub_line[: len(stub_line) - len(stub_line.lstrip())]
-                    dedented = textwrap.dedent(init_body).splitlines()
-                    reindented = [
-                        stub_indent + line if line.strip() else ""
-                        for line in dedented
-                    ]
+                    stub_indent = _leading_whitespace(stub_line)
+                    reindented = _reindent_body(init_body, stub_indent)
                     res_lines = res_lines[:stub_idx] + reindented + res_lines[stub_idx + 1:]
                     result = "\n".join(res_lines)
         else:
@@ -486,7 +496,7 @@ def _splice_constant(
 
     # Get the indentation
     original_line = lines[target_idx]
-    indent = original_line[: len(original_line) - len(original_line.lstrip())]
+    indent = _leading_whitespace(original_line)
 
     # Build replacement lines
     body_lines = body.strip().splitlines()
@@ -659,6 +669,9 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
         tree = ast.parse(stripped)
         if tree.body and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
             func = tree.body[0]
+            if not func.body:
+                # Empty function body (shouldn't happen, but guard it)
+                return "pass"
             # Get the body lines (everything after the def line and docstring)
             all_lines = stripped.splitlines()
             # Find where the body starts (skip def line and docstring)

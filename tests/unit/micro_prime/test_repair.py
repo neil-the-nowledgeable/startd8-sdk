@@ -637,3 +637,192 @@ class TestSignatureReconcileCallable:
         # Should not break — the def line ends with ":"
         assert "register" in result.code
         assert "pass" in result.code
+
+
+class TestFenceStripSeesRawOutput:
+    """Verify fence_strip works on raw Ollama output (Fix 3).
+
+    Before Fix 3, _generate_ollama() called extract_code_from_response()
+    before the repair pipeline, making fence_strip a no-op in production.
+    Now raw text flows to repair, and fence_strip handles fence removal.
+    """
+
+    def test_fence_strip_on_raw_ollama_output(self, simple_function_element):
+        """Pipeline should strip fences when given raw markdown-fenced code."""
+        raw_ollama = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
+        result = run_repair_pipeline(raw_ollama, simple_function_element)
+        assert "```" not in result.code
+        assert result.ast_valid is True
+        # fence_strip step should have reported modified=True
+        fence_step = next(
+            (r for r in result.step_results if r.step_name == "fence_strip"), None,
+        )
+        assert fence_step is not None
+        assert fence_step.modified is True
+
+    def test_fence_strip_with_body_only_output(self, simple_function_element):
+        """Raw output with fence + body-only code should be stripped then wrapped."""
+        raw_ollama = "```python\nreturn key\n```"
+        result = run_repair_pipeline(raw_ollama, simple_function_element)
+        assert "```" not in result.code
+        # bare_statement_wrap should have kicked in after fence removal
+        bare_step = next(
+            (r for r in result.step_results if r.step_name == "bare_statement_wrap"), None,
+        )
+        assert bare_step is not None
+
+
+class TestNonUniformIndentRepair:
+    """Verify indent_normalize fixes non-uniform indentation (Fix 2).
+
+    Ollama frequently returns body code with corrupted indentation where
+    textwrap.dedent() is a no-op (no common leading whitespace).
+    The structural_reindent strategy infers indent from block structure.
+    """
+
+    def test_nonuniform_indent_in_wrapped_function(self):
+        """Mixed 4/16/12-space indent after bare_statement_wrap."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="add_fields",
+            signature=Signature(
+                params=[
+                    Param(name="log_record"),
+                    Param(name="record"),
+                    Param(name="message_dict"),
+                ],
+                return_annotation=None,
+            ),
+        )
+        # Simulates run-028 failure: bare_statement_wrap wrapped body with
+        # non-uniform indentation from Ollama
+        code = (
+            "def add_fields(log_record, record, message_dict):\n"
+            "    if 'timestamp' not in log_record:\n"
+            "                log_record['timestamp'] = record.created\n"
+            "            if 'severity' in log_record:\n"
+            "                log_record['severity'] = log_record['severity'].upper()\n"
+            "            else:\n"
+            "                log_record['severity'] = record.levelname"
+        )
+        result = _step_indent_normalize(code, elem)
+        assert result.modified is True
+        # Must parse after repair
+        ast.parse(result.code)
+        # All key logic must survive
+        assert "timestamp" in result.code
+        assert "severity" in result.code
+
+    def test_pipeline_recovers_nonuniform_indent(self):
+        """Full pipeline should recover from non-uniform indentation."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="add_fields",
+            signature=Signature(
+                params=[
+                    Param(name="log_record"),
+                    Param(name="record"),
+                    Param(name="message_dict"),
+                ],
+                return_annotation=None,
+            ),
+        )
+        # Raw body-only output with non-uniform indentation (no def line)
+        raw = (
+            "if 'timestamp' not in log_record:\n"
+            "            log_record['timestamp'] = record.created\n"
+            "        if 'severity' in log_record:\n"
+            "            log_record['severity'] = log_record['severity'].upper()\n"
+            "        else:\n"
+            "            log_record['severity'] = record.levelname"
+        )
+        result = run_repair_pipeline(raw, elem)
+        assert result.ast_valid is True
+        assert result.repair_recovered is True
+
+
+class TestBareStatementWrapFenceGuard:
+    """Verify bare_statement_wrap strips residual fences before wrapping.
+
+    Run-019/022 regression: fence_strip peels the outer layer but inner
+    fences survive.  bare_statement_wrap must detect and strip them rather
+    than embedding them inside a function body.
+    """
+
+    def test_residual_fence_stripped_before_wrap(self):
+        """Body starting with ```python should have fences stripped."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="getJSONLogger",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="logging.Logger",
+            ),
+        )
+        # After outer fence_strip, inner fence remains
+        code = "```python\nimport logging\nlogger = logging.getLogger(name)\nreturn logger\n```"
+        result = _step_bare_statement_wrap(code, elem)
+        assert "```" not in result.code
+        assert result.modified is True
+
+    def test_residual_fence_reveals_def_line(self):
+        """If stripping residual fences reveals a def line, don't re-wrap."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="getJSONLogger",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="logging.Logger",
+            ),
+        )
+        code = (
+            "```python\n"
+            "def getJSONLogger(name: str) -> logging.Logger:\n"
+            "    logger = logging.getLogger(name)\n"
+            "    return logger\n"
+            "```"
+        )
+        result = _step_bare_statement_wrap(code, elem)
+        assert "```" not in result.code
+        assert result.code.strip().startswith("def getJSONLogger")
+        # Should not have double-wrapped (def inside def)
+        assert result.code.count("def getJSONLogger") == 1
+
+    def test_no_fence_no_change(self):
+        """Body without fences is wrapped normally (no regression)."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="foo",
+            signature=Signature(
+                params=[],
+                return_annotation="int",
+            ),
+        )
+        code = "return 42"
+        result = _step_bare_statement_wrap(code, elem)
+        assert result.modified is True
+        assert "def foo" in result.code
+        assert "return 42" in result.code
+
+
+class TestSystemPromptSplit:
+    """Verify _CODE_GEN_SYSTEM_PROMPT vs _ELEMENT_BODY_SYSTEM_PROMPT (Fix 1)."""
+
+    def test_system_prompts_are_distinct(self):
+        from startd8.micro_prime.engine import (
+            _CODE_GEN_SYSTEM_PROMPT,
+            _ELEMENT_BODY_SYSTEM_PROMPT,
+        )
+        assert _CODE_GEN_SYSTEM_PROMPT != _ELEMENT_BODY_SYSTEM_PROMPT
+
+    def test_element_body_prompt_no_def_line_instruction(self):
+        from startd8.micro_prime.engine import _ELEMENT_BODY_SYSTEM_PROMPT
+        # Must NOT contain contradictory "include the def line" instruction
+        assert "including the `def` line" not in _ELEMENT_BODY_SYSTEM_PROMPT
+        # Must instruct body-only output
+        assert "body" in _ELEMENT_BODY_SYSTEM_PROMPT.lower()
+
+    def test_code_gen_prompt_includes_def_line(self):
+        from startd8.micro_prime.engine import _CODE_GEN_SYSTEM_PROMPT
+        # Whole-file prompt should still ask for complete definition
+        assert "def" in _CODE_GEN_SYSTEM_PROMPT

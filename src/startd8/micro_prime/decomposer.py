@@ -532,7 +532,7 @@ def _is_async(element: ForwardElementSpec) -> bool:
 # until ClassificationSignal enum is available — see REQ-MP-902 note).
 # Values are lowercase — compared against reason_lower at match site.
 _API_ORCHESTRATOR_REASON_MARKERS = frozenset({
-    "external API",
+    "external api",
     "external imports",
     "orchestrator",
     "app/server instance",

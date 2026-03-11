@@ -30,6 +30,11 @@ _LOCAL_COST_PER_M_OUTPUT = 0.0
 _CLOUD_COST_PER_M_INPUT = 0.80   # $/1M input tokens (Haiku)
 _CLOUD_COST_PER_M_OUTPUT = 4.00  # $/1M output tokens (Haiku)
 
+# Baseline token estimates per element for cloud-savings calculation.
+# Represents the average tokens a cloud LLM would use per simple element.
+_BASELINE_INPUT_TOKENS_PER_ELEMENT = 500
+_BASELINE_OUTPUT_TOKENS_PER_ELEMENT = 500
+
 
 def _tier_label(tier: TierClassification | str) -> str:
     """Return normalized tier label for experiment schema output."""
@@ -186,11 +191,9 @@ def generate_cost_report(
         + total_output * _LOCAL_COST_PER_M_OUTPUT / 1_000_000
     )
 
-    baseline_input_tokens = 500
-    baseline_output_tokens = 500
     baseline_per_element_usd = (
-        baseline_input_tokens * _CLOUD_COST_PER_M_INPUT / 1_000_000
-        + baseline_output_tokens * _CLOUD_COST_PER_M_OUTPUT / 1_000_000
+        _BASELINE_INPUT_TOKENS_PER_ELEMENT * _CLOUD_COST_PER_M_INPUT / 1_000_000
+        + _BASELINE_OUTPUT_TOKENS_PER_ELEMENT * _CLOUD_COST_PER_M_OUTPUT / 1_000_000
     )
     baseline_all_cloud_usd = total * baseline_per_element_usd
     actual_cloud_usd = escalated * baseline_per_element_usd
