@@ -36,6 +36,14 @@ from .registry import get_registry
 
 logger = get_logger(__name__)
 
+# AC-R7: Generator-native OTel observability for prime contractor
+try:
+    from opentelemetry import trace as _trace
+    _prime_tracer = _trace.get_tracer("startd8.prime_contractor")
+except ImportError:
+    from .artisan_contractor import _NoOpTracer
+    _prime_tracer = _NoOpTracer()
+
 # ---------------------------------------------------------------------------
 # Execution Mode Constants (F-004)
 # ---------------------------------------------------------------------------
@@ -639,6 +647,11 @@ class PrimeContractorWorkflow:
         # Tier escalation (REQ-RPL-500) — generator saved before escalation
         self._pre_escalation_generator = None
         self._escalation_threshold: int = 2  # attempts before escalation
+        # AC-R3: Content-addressable generation cache
+        from .generation_cache import GenerationCache
+        self._generation_cache = GenerationCache(
+            cache_dir=self.project_root / ".startd8" / "state" / "generation_cache",
+        )
         # Resume state: load from disk if resuming
         self._resume_mode: Optional[str] = None
         if resume:
@@ -2737,7 +2750,19 @@ class PrimeContractorWorkflow:
                 if val is not None and hasattr(val, "dict"):
                     serializable_context[key] = val.dict()
 
-            prompts = self._build_phase_prompts(feature, serializable_context)
+            # AC-R2: Prefer generator-native prompts when available,
+            # avoiding the parallel prompt-construction in _build_phase_prompts().
+            gen_prompts: Dict[str, str] = {}
+            if result is not None and hasattr(result, "prompts") and result.prompts:
+                # Map generator prompt keys to Kaizen filename convention
+                for key, content in result.prompts.items():
+                    gen_prompts[f"{key}_prompt.md"] = content
+                for key, content in (result.responses or {}).items():
+                    gen_prompts[f"{key}_response.md"] = content
+            if gen_prompts:
+                prompts = gen_prompts
+            else:
+                prompts = self._build_phase_prompts(feature, serializable_context)
             self._write_prompt_files(prompt_dir, feature, prompts, serializable_context)
             if result is not None:
                 self._capture_response_files(prompt_dir, feature, result)
@@ -3159,6 +3184,12 @@ class PrimeContractorWorkflow:
                 self._save_queue_state_with_mode()
                 return True  # CR-H1: return bool, not gen_context dict
 
+            # Phase 4b: Content-addressable cache lookup (AC-R3)
+            cache_hit = self._try_generation_cache(feature, gen_context)
+            if cache_hit is not None:
+                self._accept_generation_result(feature, cache_hit)
+                return True
+
             # Phase 5: Complexity routing
             generator = self._route_complexity(feature, gen_context)
 
@@ -3171,11 +3202,24 @@ class PrimeContractorWorkflow:
                 return True
 
             # Phase 7: Code generation (the actual LLM call)
-            result: GenerationResult = generator.generate(
-                task=feature.description,
-                context=gen_context,
-                target_files=feature.target_files,
-            )
+            with _prime_tracer.start_as_current_span(
+                "prime_contractor.feature.generate",
+                attributes={
+                    "feature.id": feature.id,
+                    "feature.name": feature.name,
+                    "feature.target_files_count": len(feature.target_files or []),
+                },
+            ) as gen_span:
+                result: GenerationResult = generator.generate(
+                    task=feature.description,
+                    context=gen_context,
+                    target_files=feature.target_files,
+                )
+                gen_span.set_attribute("generation.success", result.success)
+                gen_span.set_attribute("generation.cost_usd", result.cost_usd)
+                gen_span.set_attribute("generation.input_tokens", result.input_tokens)
+                gen_span.set_attribute("generation.output_tokens", result.output_tokens)
+                gen_span.set_attribute("generation.model", result.model)
 
             # Kaizen: persist prompts + responses (REQ-KZ-200, 201) — non-fatal
             self._persist_kaizen_prompts(feature, gen_context, result=result)
@@ -3186,6 +3230,7 @@ class PrimeContractorWorkflow:
 
             # Phase 9: Result handling
             if result.success:
+                self._cache_generation_result(feature, result, gen_context)
                 self._accept_generation_result(feature, result)
                 # Micro Prime dry-run: classification-only, skip integration
                 if result.metadata and result.metadata.get("dry_run"):
@@ -3503,6 +3548,97 @@ class PrimeContractorWorkflow:
         self.total_input_tokens += result.input_tokens
         self.total_output_tokens += result.output_tokens
         return False
+
+    # ------------------------------------------------------------------
+    # AC-R3: Content-addressable generation cache
+    # ------------------------------------------------------------------
+
+    def _make_generation_cache_key(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Compute content-addressable cache key for a feature."""
+        try:
+            from .generation_cache import make_cache_key
+            import hashlib as _hashlib
+            import json as _json
+
+            # Context hash: hash of sorted JSON-serializable context keys
+            ctx_payload = _json.dumps(
+                {k: str(v) for k, v in sorted(gen_context.items())},
+                sort_keys=True,
+            )
+            context_hash = _hashlib.sha256(ctx_payload.encode()).hexdigest()
+            model = getattr(self.code_generator, "lead_agent", "") or ""
+            return make_cache_key(feature.description, context_hash, model)
+        except Exception as exc:
+            logger.debug("Cache key computation failed: %s", exc)
+            return None
+
+    def _try_generation_cache(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> Optional[GenerationResult]:
+        """Phase 4b: Check content-addressable generation cache (AC-R3).
+
+        Returns a GenerationResult on cache hit, None on miss.
+        """
+        if self.force_regenerate:
+            return None
+        key = self._make_generation_cache_key(feature, gen_context)
+        if key is None:
+            return None
+        cached = self._generation_cache.get(key)
+        if cached is None:
+            return None
+        # Reconstruct GenerationResult from cached dict
+        try:
+            generated_files = [Path(p) for p in cached.get("generated_files", [])]
+            # Verify files still exist on disk
+            if not all(f.exists() for f in generated_files):
+                logger.info(
+                    "Generation cache hit but files missing on disk for '%s'",
+                    feature.name,
+                )
+                self._generation_cache.invalidate(key)
+                return None
+            return GenerationResult(
+                success=True,
+                generated_files=generated_files,
+                input_tokens=0,
+                output_tokens=0,
+                cost_usd=0.0,
+                iterations=0,
+                model=cached.get("model", ""),
+                metadata={
+                    **cached.get("metadata", {}),
+                    "cache_hit": True,
+                    "cache_key": key[:12],
+                },
+            )
+        except Exception as exc:
+            logger.debug("Cache result reconstruction failed: %s", exc)
+            return None
+
+    def _cache_generation_result(
+        self, feature: FeatureSpec, result: GenerationResult,
+        gen_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Store a successful generation result in the content-addressable cache."""
+        if gen_context is None:
+            return
+        key = self._make_generation_cache_key(feature, gen_context)
+        if key is None:
+            return
+        self._generation_cache.put(key, {
+            "success": True,
+            "generated_files": [str(f) for f in result.generated_files],
+            "model": result.model,
+            "metadata": {
+                k: v for k, v in (result.metadata or {}).items()
+                if isinstance(v, (str, int, float, bool, list, dict, type(None)))
+            },
+            "cost_usd": result.cost_usd,
+            "iterations": result.iterations,
+        })
 
     def _accept_generation_result(
         self, feature: FeatureSpec, result: GenerationResult,

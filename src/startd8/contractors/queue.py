@@ -266,6 +266,14 @@ class FeatureQueue:
                 dependencies=dependencies,
                 target_files=target_files,
             )
+            # AC-R5: Bridge pre-enriched copy_source_task_id from seed context
+            copy_src_id = context.get("copy_source_task_id")
+            if copy_src_id and spec.copy_source_task_id is None:
+                spec.copy_source_task_id = copy_src_id
+                copy_src_file = context.get("copy_source_file")
+                if copy_src_file:
+                    spec.copy_source_file = copy_src_file
+
             # Mottainai Gap 9: preserve seed enrichment through the queue
             # boundary so prime gen_context can access it downstream.
             enrichment = task.get("_enrichment", {})

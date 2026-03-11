@@ -90,6 +90,7 @@ class EnrichmentDiagnostic:
     target_files_inferred: int = 0
     api_signatures_added: int = 0
     refine_suggestions_mapped: int = 0
+    copy_source_detected: int = 0
     tasks_enriched: int = 0
     tasks_skipped: int = 0
     time_ms: int = 0

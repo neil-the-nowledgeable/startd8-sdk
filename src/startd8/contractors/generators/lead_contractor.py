@@ -18,6 +18,14 @@ from ..protocols import (
 
 logger = get_logger(__name__)
 
+# AC-R7: Generator-native OTel observability
+try:
+    from opentelemetry import trace as _trace
+    _gen_tracer = _trace.get_tracer("startd8.primary_contractor")
+except ImportError:
+    from ..artisan_contractor import _NoOpTracer
+    _gen_tracer = _NoOpTracer()
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -168,6 +176,27 @@ class PrimaryContractorCodeGenerator:
         Returns:
             GenerationResult with success status and generated file paths
         """
+        # AC-R7: Generator-native span wrapping the entire generate() call
+        with _gen_tracer.start_as_current_span(
+            "primary_contractor.generate",
+            attributes={
+                "generator.lead_agent": self.lead_agent,
+                "generator.drafter_agent": self.drafter_agent,
+                "generator.max_iterations": self.max_iterations,
+                "task.description_preview": task[:500] if task else "",
+                "target_files.count": len(target_files),
+            },
+        ) as span:
+            return self._generate_inner(task, context, target_files, span)
+
+    def _generate_inner(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        target_files: List[str],
+        span: Any,
+    ) -> GenerationResult:
+        """Inner generate logic wrapped by OTel span."""
         try:
             # Import the workflow
             from startd8.workflows.builtin.lead_contractor_workflow import (
@@ -203,6 +232,10 @@ class PrimaryContractorCodeGenerator:
             result = workflow.run(config=config)
 
             if not result.success:
+                span.set_attribute("generation.success", False)
+                span.add_event("generation_failed", {
+                    "error": result.error or "workflow failed",
+                })
                 return GenerationResult(
                     success=False,
                     error=result.error or "Primary Contractor workflow failed",
@@ -431,15 +464,44 @@ class PrimaryContractorCodeGenerator:
                         stubbed,
                     )
 
+            # AC-R2: Populate generator-native prompt/response observability
+            gen_prompts: Dict[str, str] = {}
+            gen_responses: Dict[str, str] = {}
+            if lc_summary.get("spec_raw"):
+                gen_prompts["spec"] = lc_summary["spec_raw"]
+            for draft in lc_summary.get("drafts_raw", []):
+                iteration = draft.get("iteration", 1)
+                gen_responses[f"draft_{iteration}"] = draft.get("implementation", "")
+            for review in lc_summary.get("reviews_raw", []):
+                iteration = review.get("iteration", 1)
+                gen_responses[f"review_{iteration}"] = review.get("review_text", "")
+
+            # AC-R7: Record generation outcome on span
+            in_tokens = result.metrics.input_tokens if result.metrics else 0
+            out_tokens = result.metrics.output_tokens if result.metrics else 0
+            cost = result.metrics.total_cost if result.metrics else 0.0
+            iterations = result.metadata.get("total_iterations", 1)
+            span.set_attribute("generation.success", True)
+            span.set_attribute("generation.input_tokens", in_tokens)
+            span.set_attribute("generation.output_tokens", out_tokens)
+            span.set_attribute("generation.cost_usd", cost)
+            span.set_attribute("generation.iterations", iterations)
+            span.add_event("generation_completed", {
+                "files_generated": len(generated_files),
+                "iterations": iterations,
+            })
+
             return GenerationResult(
                 success=True,
                 generated_files=generated_files,
-                input_tokens=result.metrics.input_tokens if result.metrics else 0,
-                output_tokens=result.metrics.output_tokens if result.metrics else 0,
-                cost_usd=result.metrics.total_cost if result.metrics else 0.0,
-                iterations=result.metadata.get("total_iterations", 1),
+                input_tokens=in_tokens,
+                output_tokens=out_tokens,
+                cost_usd=cost,
+                iterations=iterations,
                 model=self.lead_agent,
                 metadata=gen_metadata,
+                prompts=gen_prompts,
+                responses=gen_responses,
             )
 
         except ImportError as e:

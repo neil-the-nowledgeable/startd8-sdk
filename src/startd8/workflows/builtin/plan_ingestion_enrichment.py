@@ -457,6 +457,69 @@ def _enrich_refine_suggestions(
     return count
 
 
+# ── Step 6: Copy Source Detection (AC-R5) ─────────────────────────────
+
+
+def _enrich_copy_source(
+    tasks: List[Dict[str, Any]],
+    feature_index: Dict[str, Any],
+) -> int:
+    """Detect identical-copy tasks and emit copy_source_task_id (no-clobber).
+
+    Uses the same duplication/modification signal heuristics as
+    ``copy_detection.detect_copy_task()`` but operates on raw task dicts
+    and ParsedFeature objects during plan ingestion, so that the
+    PrimeContractor's Phase 0 copy shortcut can find pre-tagged tasks
+    without runtime detection overhead.
+    """
+    from ...contractors.copy_detection import (
+        _DUPLICATION_SIGNALS,
+        _MODIFICATION_SIGNALS,
+    )
+
+    count = 0
+    for task in tasks:
+        ctx = _ensure_task_context(task)
+        if ctx.get("copy_source_task_id"):
+            continue
+
+        fid = _get_task_feature_id(task)
+        feat = feature_index.get(fid)
+        if not feat:
+            continue
+
+        description = (feat.description or "").lower()
+
+        # Check duplication signals
+        has_dup = any(sig in description for sig in _DUPLICATION_SIGNALS)
+        if not has_dup:
+            continue
+
+        # Exclude copy-and-modify tasks
+        has_mod = any(sig in description for sig in _MODIFICATION_SIGNALS)
+        if has_mod:
+            continue
+
+        # Require exactly one dependency
+        deps = feat.dependencies
+        if len(deps) != 1:
+            continue
+
+        ctx["copy_source_task_id"] = deps[0]
+        # Infer source file from the predecessor's target_files if available
+        predecessor = feature_index.get(deps[0])
+        if predecessor and len(predecessor.target_files) == 1:
+            ctx["copy_source_file"] = predecessor.target_files[0]
+
+        logger.debug(
+            "ENRICH-A: copy_source_task_id=%s for %s",
+            deps[0], task.get("task_id", "?"),
+        )
+        count += 1
+
+    return count
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────
 
 
@@ -471,6 +534,7 @@ def enrich_tasks_deterministic(
     enrich_target_files: bool = True,
     enrich_api_signatures: bool = True,
     enrich_refine_suggestions: bool = True,
+    enrich_copy_source: bool = True,
     enrich_req_proximity_chars: int = 500,
 ) -> Any:
     """Run all deterministic enrichment steps on *tasks* in-place (REQ-TDE-105).
@@ -533,6 +597,13 @@ def enrich_tasks_deterministic(
         except Exception:
             logger.warning("ENRICH-A: refine_suggestions step failed", exc_info=True)
 
+    # Step 6: Copy source detection (AC-R5)
+    if enrich_copy_source:
+        try:
+            diag.copy_source_detected = _enrich_copy_source(tasks, feature_index)
+        except Exception:
+            logger.warning("ENRICH-A: copy_source step failed", exc_info=True)
+
     # Snapshot density signals after enrichment
     diag.after = _compute_density_snapshot(tasks)
 
@@ -550,7 +621,7 @@ def enrich_tasks_deterministic(
     # Per-step counts
     logger.info(
         "ENRICH-A: %d/%d tasks enriched (neg_scope=%d, req_refs=%d, "
-        "target_files=%d, api_sigs=%d, refine_sug=%d) in %dms",
+        "target_files=%d, api_sigs=%d, refine_sug=%d, copy_src=%d) in %dms",
         diag.tasks_enriched,
         len(tasks),
         diag.negative_scope_added,
@@ -558,6 +629,7 @@ def enrich_tasks_deterministic(
         diag.target_files_inferred,
         diag.api_signatures_added,
         diag.refine_suggestions_mapped,
+        diag.copy_source_detected,
         diag.time_ms,
     )
 
