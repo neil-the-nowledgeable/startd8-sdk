@@ -7,24 +7,26 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
+
+Language = Literal["python", "dockerfile", "go", "proto", "unknown"]
 
 
-_EXTENSION_TO_LANG: dict[str, str] = {
+_EXTENSION_TO_LANG: dict[str, Language] = {
     ".py": "python",
     ".pyi": "python",
     ".go": "go",
     ".proto": "proto",
 }
 
-_FILENAME_TO_LANG: dict[str, str] = {
+_FILENAME_TO_LANG: dict[str, Language] = {
     "Dockerfile": "dockerfile",
 }
 
 _DOCKERFILE_PATTERN = re.compile(r"^Dockerfile(\..+)?$", re.IGNORECASE)
 
 
-def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> str:
+def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Language:
     """Detect language from file path or explicit override.
 
     Args:
