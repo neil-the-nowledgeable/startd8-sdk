@@ -3072,6 +3072,18 @@ class PrimeContractorWorkflow:
         """
         Develop a feature using the configured CodeGenerator.
 
+        Orchestrates 10 phases (AC-R1 refactor):
+          0. Copy shortcut (identical-copy tasks bypass generation)
+          1. Preflight validation
+          2. Mottainai reuse (skip if generated files still current)
+          3. Context assembly (build gen_context for generator)
+          4. Staleness detection (skip if cached result is current)
+          5. Complexity routing (select tier-specific generator)
+          6. Element cache assembly (skip if all elements in registry)
+          7. Code generation (the actual LLM call)
+          8. Quality gate (reject low-score output)
+          9. Result handling (persist state, accumulate cost)
+
         Args:
             prior_error: If provided, error feedback from a previous failed
                 attempt (e.g., checkpoint lint/import errors). Injected into
@@ -3083,6 +3095,8 @@ class PrimeContractorWorkflow:
         is_retry = prior_error is not None
         label = 'RE-DEVELOPING' if is_retry else 'DEVELOPING'
         logger.info('%s FEATURE: %s', label, feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id, 'is_retry': is_retry})
+
+        # Phase 1: Preflight
         should_proceed, decomposition_info = self.pre_flight_validation(feature)
         if not should_proceed:
             reason = decomposition_info.get('reason', 'Size exceeds safe limits')
@@ -3090,11 +3104,114 @@ class PrimeContractorWorkflow:
             self.queue.fail_feature(feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}")
             return False
         self.queue.start_feature(feature.id)
-        # Phase 0 (REQ-MP-1002): File copy early-exit for identical-copy tasks.
-        # If copy_source_task_id is not already set, attempt detection from
-        # description signals + depends_on.  This bridges the gap where plan
-        # ingestion produces "Identical copy" language but doesn't set the
-        # explicit field.
+
+        # Phase 0: Copy shortcut
+        copy_result = self._try_copy_shortcut(feature)
+        if copy_result is not None:
+            return copy_result
+
+        if self.dry_run:
+            logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
+            simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
+            feature.generated_files = simulated_files
+            feature.status = FeatureStatus.GENERATED
+            self._save_queue_state_with_mode()
+            return True
+        if not self.code_generator:
+            logger.error("No code generator configured for feature '%s'", feature.name)
+            self.queue.fail_feature(feature.id, 'No code generator configured')
+            return False
+
+        self._log_element_registry_availability(feature)
+
+        logger.info("Running code generation for '%s'...", feature.name)
+        try:
+            # Phase 2: Mottainai reuse
+            reuse_result = self._try_mottainai_reuse(feature)
+            if reuse_result is not None:
+                return reuse_result
+
+            # Phase 3: Context assembly
+            gen_context = self._build_generation_context(feature, prior_error)
+
+            # Walkthrough mode: persist prompts, skip LLM calls
+            if self.walkthrough:
+                self._persist_walkthrough_prompts(feature, gen_context)
+                feature.generated_files = [
+                    f"walkthrough/{feature.id}/{Path(t).name}"
+                    for t in feature.target_files
+                ] if feature.target_files else [
+                    f"walkthrough/{feature.id}/code.py"
+                ]
+                feature.status = FeatureStatus.GENERATED
+                self._save_queue_state_with_mode()
+                return True
+
+            # Thread additional context into gen_context
+            self._thread_supplemental_context(feature, gen_context)
+
+            # Kaizen: persist real-run prompts (REQ-KZ-200) — non-fatal
+            self._persist_kaizen_prompts(feature, gen_context, result=None)
+
+            # Phase 4: Staleness detection
+            if not self._check_staleness(feature):
+                feature.status = FeatureStatus.GENERATED
+                self._save_queue_state_with_mode()
+                return True  # CR-H1: return bool, not gen_context dict
+
+            # Phase 5: Complexity routing
+            generator = self._route_complexity(feature, gen_context)
+
+            # Phase 6: Element cache assembly
+            cache_result = self._try_element_cache_assembly(feature)
+            if cache_result is not None:
+                result = cache_result
+                self._persist_kaizen_prompts(feature, gen_context, result=result)
+                self._accept_generation_result(feature, result)
+                return True
+
+            # Phase 7: Code generation (the actual LLM call)
+            result: GenerationResult = generator.generate(
+                task=feature.description,
+                context=gen_context,
+                target_files=feature.target_files,
+            )
+
+            # Kaizen: persist prompts + responses (REQ-KZ-200, 201) — non-fatal
+            self._persist_kaizen_prompts(feature, gen_context, result=result)
+
+            # Phase 8: Quality gate
+            if not self._check_quality_gate(feature, result):
+                return False
+
+            # Phase 9: Result handling
+            if result.success:
+                self._accept_generation_result(feature, result)
+                # Micro Prime dry-run: classification-only, skip integration
+                if result.metadata and result.metadata.get("dry_run"):
+                    self.queue.complete_feature(feature.id)
+                    self._save_queue_state_with_mode()
+                return True
+            else:
+                error_msg = result.error or 'Code generation failed'
+                logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
+                self.queue.fail_feature(feature.id, error_msg)
+                return False
+        except Exception as e:
+            error_msg = f'Exception during code generation: {e}'
+            logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
+            self.queue.fail_feature(feature.id, error_msg)
+            return False
+
+    # ── develop_feature phase methods (AC-R1) ─────────────────────────
+
+    def _try_copy_shortcut(self, feature: FeatureSpec) -> Optional[bool]:
+        """Phase 0: Detect and execute file-copy shortcut.
+
+        Returns True (success), False (failure), or None (not a copy task).
+        """
+        # REQ-MP-1002: If copy_source_task_id is not already set, attempt
+        # detection from description signals + depends_on.
         if feature.copy_source_task_id is None:
             from .copy_detection import detect_copy_task
 
@@ -3133,350 +3250,277 @@ class PrimeContractorWorkflow:
                 return False
         # REQ-MP-1003: Detect copy-and-modify tasks — inject predecessor as reference.
         self._inject_copy_and_modify_context(feature)
+        return None
 
-        if self.dry_run:
-            logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
-            simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
-            feature.generated_files = simulated_files
-            feature.status = FeatureStatus.GENERATED
-            self._save_queue_state_with_mode()
-            return True
-        if not self.code_generator:
-            logger.error("No code generator configured for feature '%s'", feature.name)
-            self.queue.fail_feature(feature.id, 'No code generator configured')
-            return False
-
-        # ER-012: Log element registry availability for this feature
-        if self._element_registry and self.seed_forward_manifest:
-            try:
-                fm = self.seed_forward_manifest
-                manifest_obj = fm if hasattr(fm, "file_specs") else None
-                if manifest_obj and hasattr(manifest_obj, "file_specs"):
-                    elements_from_cache = 0
-                    elements_total = 0
-                    for path in feature.target_files or []:
-                        file_spec = manifest_obj.file_specs.get(path)
-                        if file_spec:
-                            for elem in getattr(file_spec, "elements", []):
-                                elements_total += 1
-                                eid = getattr(elem, "source_contract_id", None)
-                                if eid:
-                                    cached = self._element_registry.get(eid)
-                                    if cached and cached.extra.get("code"):
-                                        elements_from_cache += 1
-                    if elements_total > 0:
-                        logger.info(
-                            "Feature '%s': %d/%d elements available in registry",
-                            feature.name, elements_from_cache, elements_total,
-                        )
-            except Exception as exc:
-                logger.debug("Element registry pre-check failed: %s", exc)
-
-        logger.info("Running code generation for '%s'...", feature.name)
+    def _log_element_registry_availability(self, feature: FeatureSpec) -> None:
+        """ER-012: Log element registry cache availability for this feature."""
+        if not (self._element_registry and self.seed_forward_manifest):
+            return
         try:
-            # Mottainai Gap 14: skip generation if files already exist on disk.
-            # Now with provenance/staleness awareness (Task 6).
-            if feature.generated_files and not self.force_regenerate:
-                provenance = self._check_file_provenance(feature.generated_files)
-                all_current = all(v == "current" for v in provenance.values())
-                has_stale = any(v == "stale" for v in provenance.values())
-                has_missing = any(v == "missing" for v in provenance.values())
-
-                if all_current:
-                    preview = feature.generated_files[:3]
-                    suffix = f" ... (+{len(feature.generated_files) - 3})" if len(feature.generated_files) > 3 else ""
+            fm = self.seed_forward_manifest
+            manifest_obj = fm if hasattr(fm, "file_specs") else None
+            if manifest_obj and hasattr(manifest_obj, "file_specs"):
+                elements_from_cache = 0
+                elements_total = 0
+                for path in feature.target_files or []:
+                    file_spec = manifest_obj.file_specs.get(path)
+                    if file_spec:
+                        for elem in getattr(file_spec, "elements", []):
+                            elements_total += 1
+                            eid = getattr(elem, "source_contract_id", None)
+                            if eid:
+                                cached = self._element_registry.get(eid)
+                                if cached and cached.extra.get("code"):
+                                    elements_from_cache += 1
+                if elements_total > 0:
                     logger.info(
-                        "Mottainai: reusing %d existing generated file(s) for '%s': %s%s",
-                        len(feature.generated_files), feature.name, preview, suffix,
+                        "Feature '%s': %d/%d elements available in registry",
+                        feature.name, elements_from_cache, elements_total,
                     )
-                    feature.status = FeatureStatus.GENERATED
-                    self.queue.save_state()
-                    return True
-                elif has_stale and not has_missing:
-                    stale_files = [f for f, v in provenance.items() if v == "stale"]
-                    logger.warning(
-                        "Mottainai: %d stale file(s) for '%s' — regenerating: %s",
-                        len(stale_files), feature.name, stale_files[:3],
-                    )
-                elif has_missing:
-                    missing = [f for f, v in provenance.items() if v == "missing"]
-                    logger.info(
-                        "Mottainai: %d missing file(s) for '%s' — generating: %s",
-                        len(missing), feature.name, missing[:3],
-                    )
+        except Exception as exc:
+            logger.debug("Element registry pre-check failed: %s", exc)
 
-            # Build gen_context via strategy (Phase 2: FR-004/FR-005/FR-006)
-            self._current_enrichment = None
-            domain_constraints_list = None
-            output_constraint_str = None
-            if feature.target_files:
-                enrichment = self._get_domain_enrichment(feature)
-                if enrichment is not None:
-                    self._current_enrichment = enrichment
-                    domain_constraints_list = enrichment.prompt_constraints
-                    logger.info("Domain constraints applied for '%s': %d constraints (domain=%s)", feature.name, len(enrichment.prompt_constraints), enrichment.domain.value, extra={'feature_name': feature.name, 'domain': enrichment.domain.value})
-                else:
-                    from startd8.workflows.builtin.prompts import get_template as _get_ctx_template
-                    output_constraint_str = _get_ctx_template("prime_context", "output_constraint").strip()
+    def _try_mottainai_reuse(self, feature: FeatureSpec) -> Optional[bool]:
+        """Phase 2: Mottainai Gap 14 — skip generation if files still current.
 
-            # Pre-format prior error feedback (prompt template dependency stays here)
-            prior_error_feedback = None
-            if prior_error:
-                from startd8.workflows.builtin.prompts import format_prompt as _fmt_ctx
-                prior_error_feedback = _fmt_ctx(
-                    "prime_context", "prior_error_feedback", prior_error=prior_error,
-                ).strip()
+        Returns True (reused), or None (must generate).
+        """
+        if not (feature.generated_files and not self.force_regenerate):
+            return None
 
-            # Assemble seed data dict for strategy (avoids SeedContext import cycle)
-            seed_data = {
-                "onboarding_metadata": self.onboarding_metadata,
-                "architectural_context": self.architectural_context,
-                "design_calibration": self.design_calibration,
-                "plan_document_text": self.plan_document_text,
-                "service_metadata": self.seed_service_metadata,
-                "forward_manifest": self.seed_forward_manifest,  # REQ-PC-FM-003
-            }
-            feature_data = {
-                "name": feature.name,
-                "id": feature.id,
-                "target_files": feature.target_files,
-                "description": feature.description,
-                "metadata": feature.metadata,
-            }
+        provenance = self._check_file_provenance(feature.generated_files)
+        all_current = all(v == "current" for v in provenance.values())
+        has_stale = any(v == "stale" for v in provenance.values())
+        has_missing = any(v == "missing" for v in provenance.values())
 
-            gen_context = self._context_strategy.resolve_task_context(
-                feature_data=feature_data,
-                seed_data=seed_data,
-                domain_constraints=domain_constraints_list,
-                output_constraint=output_constraint_str,
-                prior_error_feedback=prior_error_feedback,
-            )
-
-            # REQ-PEM-008: Thread validation flag to LeadContractorWorkflow
-            # for spec-to-draft validation gating. Pipeline mode enables it;
-            # standalone skips (consistent with ModeConfig.enable_post_validation).
-            # CLI --validate/--no-validate override the mode default.
-            if self._validation_override is not None:
-                gen_context["_run_validators"] = self._validation_override
-            else:
-                gen_context["_run_validators"] = (
-                    self.execution_mode == ExecutionMode.PIPELINE.value
-                )
-
-            # Log service metadata injection (kept at workflow level for observability)
-            if self.seed_service_metadata and "service_metadata" in gen_context:
-                logger.info(
-                    "Context injection: service_metadata for '%s' (transport=%s, deps=%d)",
-                    feature.name,
-                    self.seed_service_metadata.get('transport_protocol', 'unset'),
-                    len(self.seed_service_metadata.get('runtime_dependencies', [])),
-                )
-
+        if all_current:
+            preview = feature.generated_files[:3]
+            suffix = f" ... (+{len(feature.generated_files) - 3})" if len(feature.generated_files) > 3 else ""
             logger.info(
-                "Context resolved via %s strategy for '%s' (%d keys)",
-                self._context_strategy.mode,
-                feature.name,
-                len(gen_context),
-                extra={"strategy_mode": self._context_strategy.mode, "context_keys": list(gen_context.keys())},
+                "Mottainai: reusing %d existing generated file(s) for '%s': %s%s",
+                len(feature.generated_files), feature.name, preview, suffix,
             )
-
-            # PC-O1: Populate existing_files for edit tasks when target_files exist
-            self._populate_existing_files(feature, gen_context)
-
-            # REQ-MP-701: Forward deserialized ForwardManifest for Micro Prime
-            if self._forward_manifest is not None:
-                gen_context["manifest"] = self._forward_manifest
-
-            # FR-MPA-007: Forward pre-rendered skeletons from seed so
-            # MicroPrimeCodeGenerator skips _generate_skeletons() fallback.
-            if self._skeleton_sources and "skeletons" not in gen_context:
-                gen_context["skeletons"] = dict(self._skeleton_sources)
-
-            # REQ-DDS-002: Thread design_doc_sections from feature metadata
-            _design_sections = feature.metadata.get("design_doc_sections", [])
-            if _design_sections:
-                gen_context["design_doc_sections"] = _design_sections
-
-            # Walkthrough mode: persist prompts, skip LLM calls
-            if self.walkthrough:
-                self._persist_walkthrough_prompts(feature, gen_context)
-                feature.generated_files = [
-                    f"walkthrough/{feature.id}/{Path(t).name}"
-                    for t in feature.target_files
-                ] if feature.target_files else [
-                    f"walkthrough/{feature.id}/code.py"
-                ]
-                feature.status = FeatureStatus.GENERATED
-                self._save_queue_state_with_mode()
-                return True
-
-            # REQ-MP-1003: Thread reference_implementation into gen_context
-            ref_impl = feature.metadata.get("_reference_implementation") if feature.metadata else None
-            if ref_impl:
-                gen_context["reference_implementation"] = ref_impl
-                logger.info(
-                    "Injected reference_implementation for '%s' (%d chars)",
-                    feature.name, len(ref_impl),
-                )
-
-            # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal, hints added to gen_context
-            if self._kaizen_config:
-                self._apply_kaizen_hints(gen_context)
-
-            # Kaizen: persist real-run prompts (REQ-KZ-200) — non-fatal
-            # Captured here even if cached, so we have the prompt for correlation analysis.
-            self._persist_kaizen_prompts(feature, gen_context, result=None)
-
-            # Phase 4: Staleness detection — skip generation if cached result is current
-            if not self._check_staleness(feature):
-                feature.status = FeatureStatus.GENERATED
-                self._save_queue_state_with_mode()
-                return True  # CR-H1: return bool, not gen_context dict
-
-            # Phase 5: Complexity routing — select tier-specific generator
-            generator = self.code_generator
-            if self._complexity_routing_enabled and self._complexity_router is not None:
-                try:
-                    from startd8.complexity import (
-                        classify_tier,
-                        extract_signals_from_feature,
-                    )
-
-                    signals = extract_signals_from_feature(
-                        feature, self.project_root,
-                    )
-                    tier, reason = classify_tier(signals, self._complexity_config)
-                    generator = self._complexity_router.select(tier) or generator
-                    # D3: Route tier-specific agent spec for cloud escalation
-                    tier_agent_spec = self._complexity_router.select_agent_spec(tier)
-                    if tier_agent_spec:
-                        gen_context["_tier_agent_spec"] = tier_agent_spec
-                    # Stash classification in feature metadata for forensics
-                    if feature.metadata is None:
-                        feature.metadata = {}
-                    feature.metadata["_complexity_tier"] = tier.value
-                    feature.metadata["_complexity_reason"] = reason
-                    feature.metadata["_complexity_signals"] = signals.to_dict()
-                    logger.info(
-                        "Complexity routing for '%s': tier=%s, reason=%s",
-                        feature.name,
-                        tier.value,
-                        reason,
-                    )
-                except Exception as exc:  # Catch-all: graceful fallback to default generator
-                    logger.warning(
-                        "Complexity routing failed for '%s', using default generator: %s",
-                        feature.name,
-                        exc,
-                        exc_info=True,
-                    )
-
-            # REQ-MP-1105: Cross-task element cache assembly — skip LLM if
-            # all elements for this feature are already in the registry.
-            cache_result = self._try_element_cache_assembly(feature)
-            if cache_result is not None:
-                result = cache_result
-                # Persist kaizen prompts even for cache hits
-                self._persist_kaizen_prompts(feature, gen_context, result=result)
-                feature.generated_files = [str(f) for f in result.generated_files]
-                feature.status = FeatureStatus.GENERATED
-                self._save_queue_state_with_mode()
-                self.total_cost_usd += result.cost_usd  # 0.0
-                if feature.metadata is None:
-                    feature.metadata = {}
-                feature.metadata["_generation_result_metadata"] = result.metadata
-                self.instrumentor.emit_metric(
-                    "prime_contractor.feature_cost",
-                    result.cost_usd,
-                    {"feature_name": feature.name, "model": result.model},
-                )
-                logger.info(
-                    "Element cache assembly for '%s': cost=$%.4f, strategy=%s",
-                    feature.name,
-                    result.cost_usd,
-                    result.metadata.get("strategy", "element_reuse"),
-                )
-                return True
-
-            result: GenerationResult = generator.generate(
-                task=feature.description,
-                context=gen_context,
-                target_files=feature.target_files,
+            feature.status = FeatureStatus.GENERATED
+            self.queue.save_state()
+            return True
+        elif has_stale and not has_missing:
+            stale_files = [f for f, v in provenance.items() if v == "stale"]
+            logger.warning(
+                "Mottainai: %d stale file(s) for '%s' — regenerating: %s",
+                len(stale_files), feature.name, stale_files[:3],
             )
+        elif has_missing:
+            missing = [f for f, v in provenance.items() if v == "missing"]
+            logger.info(
+                "Mottainai: %d missing file(s) for '%s' — generating: %s",
+                len(missing), feature.name, missing[:3],
+            )
+        return None
 
-            # Kaizen: persist real-run prompts + responses (REQ-KZ-200, 201) — non-fatal
-            # Captured regardless of success/fail so we can analyze why it failed.
-            self._persist_kaizen_prompts(feature, gen_context, result=result)
-
-            # CR-C1: Quality gate — check quality_score from generation result.
-            # Generators with an internal review loop (PrimaryContractorCodeGenerator)
-            # populate metadata["quality_score"]; others (MicroPrime, custom) may not.
-            # When a score is present and below _MIN_QUALITY_SCORE, mark the
-            # generation as failed so it enters the error-informed retry path
-            # (which may escalate the generator tier).
-            if result.success and result.quality_score is not None:
-                if result.quality_score < _MIN_QUALITY_SCORE:
-                    logger.warning(
-                        "Quality gate FAILED for '%s': score=%d < threshold=%d — "
-                        "marking for regeneration",
-                        feature.name,
-                        result.quality_score,
-                        _MIN_QUALITY_SCORE,
-                        extra={
-                            "feature_name": feature.name,
-                            "quality_score": result.quality_score,
-                            "quality_threshold": _MIN_QUALITY_SCORE,
-                            "model": result.model,
-                        },
-                    )
-                    # Preserve the generated files so error-informed retry can
-                    # reference them, but mark the feature as failed with the
-                    # quality feedback so the LLM can improve.
-                    feature.generated_files = [str(f) for f in result.generated_files]
-                    quality_feedback = result.metadata.get("review_feedback", "")
-                    error_msg = (
-                        f"Quality score {result.quality_score}/100 below threshold "
-                        f"{_MIN_QUALITY_SCORE}."
-                    )
-                    if quality_feedback:
-                        error_msg += f" Review feedback: {quality_feedback[:500]}"
-                    self.queue.fail_feature(feature.id, error_msg)
-                    self.total_cost_usd += result.cost_usd
-                    self.total_input_tokens += result.input_tokens
-                    self.total_output_tokens += result.output_tokens
-                    return False
-
-            if result.success:
-                feature.generated_files = [str(f) for f in result.generated_files]
-                feature.status = FeatureStatus.GENERATED
-                self._save_queue_state_with_mode()
-                self.total_cost_usd += result.cost_usd
-                self.total_input_tokens += result.input_tokens
-                self.total_output_tokens += result.output_tokens
-                feature._cost_usd = result.cost_usd  # stash for history
-                if result.metadata:
-                    if feature.metadata is None:
-                        feature.metadata = {}
-                    feature.metadata["_generation_result_metadata"] = result.metadata
-                self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
-                logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out, quality=%s", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, result.quality_score or "unscored", extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model, 'quality_score': result.quality_score})
-
-                # Micro Prime dry-run: classification-only, skip integration
-                if result.metadata and result.metadata.get("dry_run"):
-                    self.queue.complete_feature(feature.id)
-                    self._save_queue_state_with_mode()
-                    return True
-                return True
+    def _build_generation_context(
+        self, feature: FeatureSpec, prior_error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Phase 3: Build gen_context via context resolution strategy."""
+        self._current_enrichment = None
+        domain_constraints_list = None
+        output_constraint_str = None
+        if feature.target_files:
+            enrichment = self._get_domain_enrichment(feature)
+            if enrichment is not None:
+                self._current_enrichment = enrichment
+                domain_constraints_list = enrichment.prompt_constraints
+                logger.info("Domain constraints applied for '%s': %d constraints (domain=%s)", feature.name, len(enrichment.prompt_constraints), enrichment.domain.value, extra={'feature_name': feature.name, 'domain': enrichment.domain.value})
             else:
-                error_msg = result.error or 'Code generation failed'
-                logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
-                self.queue.fail_feature(feature.id, error_msg)
-                return False
-        except Exception as e:
-            error_msg = f'Exception during code generation: {e}'
-            logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
-            self.queue.fail_feature(feature.id, error_msg)
-            return False
+                from startd8.workflows.builtin.prompts import get_template as _get_ctx_template
+                output_constraint_str = _get_ctx_template("prime_context", "output_constraint").strip()
+
+        prior_error_feedback = None
+        if prior_error:
+            from startd8.workflows.builtin.prompts import format_prompt as _fmt_ctx
+            prior_error_feedback = _fmt_ctx(
+                "prime_context", "prior_error_feedback", prior_error=prior_error,
+            ).strip()
+
+        seed_data = {
+            "onboarding_metadata": self.onboarding_metadata,
+            "architectural_context": self.architectural_context,
+            "design_calibration": self.design_calibration,
+            "plan_document_text": self.plan_document_text,
+            "service_metadata": self.seed_service_metadata,
+            "forward_manifest": self.seed_forward_manifest,  # REQ-PC-FM-003
+        }
+        feature_data = {
+            "name": feature.name,
+            "id": feature.id,
+            "target_files": feature.target_files,
+            "description": feature.description,
+            "metadata": feature.metadata,
+        }
+
+        gen_context = self._context_strategy.resolve_task_context(
+            feature_data=feature_data,
+            seed_data=seed_data,
+            domain_constraints=domain_constraints_list,
+            output_constraint=output_constraint_str,
+            prior_error_feedback=prior_error_feedback,
+        )
+
+        # REQ-PEM-008: Thread validation flag
+        if self._validation_override is not None:
+            gen_context["_run_validators"] = self._validation_override
+        else:
+            gen_context["_run_validators"] = (
+                self.execution_mode == ExecutionMode.PIPELINE.value
+            )
+
+        if self.seed_service_metadata and "service_metadata" in gen_context:
+            logger.info(
+                "Context injection: service_metadata for '%s' (transport=%s, deps=%d)",
+                feature.name,
+                self.seed_service_metadata.get('transport_protocol', 'unset'),
+                len(self.seed_service_metadata.get('runtime_dependencies', [])),
+            )
+
+        logger.info(
+            "Context resolved via %s strategy for '%s' (%d keys)",
+            self._context_strategy.mode,
+            feature.name,
+            len(gen_context),
+            extra={"strategy_mode": self._context_strategy.mode, "context_keys": list(gen_context.keys())},
+        )
+
+        # PC-O1: Populate existing_files for edit tasks
+        self._populate_existing_files(feature, gen_context)
+
+        # REQ-MP-701: Forward deserialized ForwardManifest for Micro Prime
+        if self._forward_manifest is not None:
+            gen_context["manifest"] = self._forward_manifest
+
+        # FR-MPA-007: Forward pre-rendered skeletons from seed
+        if self._skeleton_sources and "skeletons" not in gen_context:
+            gen_context["skeletons"] = dict(self._skeleton_sources)
+
+        # REQ-DDS-002: Thread design_doc_sections from feature metadata
+        _design_sections = feature.metadata.get("design_doc_sections", [])
+        if _design_sections:
+            gen_context["design_doc_sections"] = _design_sections
+
+        return gen_context
+
+    def _thread_supplemental_context(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> None:
+        """Thread reference implementation and Kaizen hints into gen_context."""
+        # REQ-MP-1003: Thread reference_implementation
+        ref_impl = feature.metadata.get("_reference_implementation") if feature.metadata else None
+        if ref_impl:
+            gen_context["reference_implementation"] = ref_impl
+            logger.info(
+                "Injected reference_implementation for '%s' (%d chars)",
+                feature.name, len(ref_impl),
+            )
+
+        # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal
+        if self._kaizen_config:
+            self._apply_kaizen_hints(gen_context)
+
+    def _route_complexity(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> "CodeGenerator":
+        """Phase 5: Select tier-specific generator via complexity routing."""
+        generator = self.code_generator
+        if not (self._complexity_routing_enabled and self._complexity_router is not None):
+            return generator
+        try:
+            from startd8.complexity import (
+                classify_tier,
+                extract_signals_from_feature,
+            )
+
+            signals = extract_signals_from_feature(
+                feature, self.project_root,
+            )
+            tier, reason = classify_tier(signals, self._complexity_config)
+            generator = self._complexity_router.select(tier) or generator
+            # D3: Route tier-specific agent spec for cloud escalation
+            tier_agent_spec = self._complexity_router.select_agent_spec(tier)
+            if tier_agent_spec:
+                gen_context["_tier_agent_spec"] = tier_agent_spec
+            # Stash classification in feature metadata for forensics
+            if feature.metadata is None:
+                feature.metadata = {}
+            feature.metadata["_complexity_tier"] = tier.value
+            feature.metadata["_complexity_reason"] = reason
+            feature.metadata["_complexity_signals"] = signals.to_dict()
+            logger.info(
+                "Complexity routing for '%s': tier=%s, reason=%s",
+                feature.name,
+                tier.value,
+                reason,
+            )
+        except Exception as exc:  # Catch-all: graceful fallback to default generator
+            logger.warning(
+                "Complexity routing failed for '%s', using default generator: %s",
+                feature.name,
+                exc,
+                exc_info=True,
+            )
+        return generator
+
+    def _check_quality_gate(self, feature: FeatureSpec, result: GenerationResult) -> bool:
+        """Phase 8: CR-C1 quality gate — reject low-score generation output.
+
+        Returns True if quality is acceptable (or unscored), False if rejected.
+        """
+        if not (result.success and result.quality_score is not None):
+            return True
+        if result.quality_score >= _MIN_QUALITY_SCORE:
+            return True
+
+        logger.warning(
+            "Quality gate FAILED for '%s': score=%d < threshold=%d — "
+            "marking for regeneration",
+            feature.name,
+            result.quality_score,
+            _MIN_QUALITY_SCORE,
+            extra={
+                "feature_name": feature.name,
+                "quality_score": result.quality_score,
+                "quality_threshold": _MIN_QUALITY_SCORE,
+                "model": result.model,
+            },
+        )
+        feature.generated_files = [str(f) for f in result.generated_files]
+        quality_feedback = result.metadata.get("review_feedback", "")
+        error_msg = (
+            f"Quality score {result.quality_score}/100 below threshold "
+            f"{_MIN_QUALITY_SCORE}."
+        )
+        if quality_feedback:
+            error_msg += f" Review feedback: {quality_feedback[:500]}"
+        self.queue.fail_feature(feature.id, error_msg)
+        self.total_cost_usd += result.cost_usd
+        self.total_input_tokens += result.input_tokens
+        self.total_output_tokens += result.output_tokens
+        return False
+
+    def _accept_generation_result(
+        self, feature: FeatureSpec, result: GenerationResult,
+    ) -> None:
+        """Phase 9: Persist a successful generation result."""
+        feature.generated_files = [str(f) for f in result.generated_files]
+        feature.status = FeatureStatus.GENERATED
+        self._save_queue_state_with_mode()
+        self.total_cost_usd += result.cost_usd
+        self.total_input_tokens += result.input_tokens
+        self.total_output_tokens += result.output_tokens
+        feature._cost_usd = result.cost_usd  # stash for history
+        if result.metadata:
+            if feature.metadata is None:
+                feature.metadata = {}
+            feature.metadata["_generation_result_metadata"] = result.metadata
+        self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
+        logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out, quality=%s", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, result.quality_score or "unscored", extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model, 'quality_score': result.quality_score})
 
     def _get_domain_enrichment(self, feature: FeatureSpec):
         """Lazy-init DomainChecklist and return enrichment for a feature."""

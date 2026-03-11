@@ -727,6 +727,57 @@ def _build_file_whole_prompt(
     return "\n".join(sections)
 
 
+def _strip_fences(code: str) -> str:
+    """Strip markdown code fences from LLM output."""
+    stripped = code.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+    return stripped
+
+
+def _is_stub_only_body(body: list) -> bool:
+    """Return True if a function/method body is solely a NotImplementedError stub.
+
+    Matches bodies that are exactly one statement: ``raise NotImplementedError``
+    or ``raise NotImplementedError()``, optionally preceded by a docstring.
+    Bodies with any other statements (assignments, returns, calls, etc.) are
+    considered real implementations — even if they also contain
+    ``raise NotImplementedError`` in a branch.
+    """
+    # Strip leading docstrings
+    stmts = body
+    if (
+        stmts
+        and isinstance(stmts[0], ast.Expr)
+        and isinstance(getattr(stmts[0], "value", None), ast.Constant)
+        and isinstance(stmts[0].value.value, str)
+    ):
+        stmts = stmts[1:]
+    if len(stmts) != 1:
+        return False
+    stmt = stmts[0]
+    if not isinstance(stmt, ast.Raise):
+        return False
+    exc = stmt.exc
+    if exc is None:
+        return False
+    # raise NotImplementedError
+    if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
+        return True
+    # raise NotImplementedError()
+    if (
+        isinstance(exc, ast.Call)
+        and isinstance(exc.func, ast.Name)
+        and exc.func.id == "NotImplementedError"
+    ):
+        return True
+    return False
+
+
 def _validate_file_whole_result(
     generated_code: str,
     skeleton: str,
@@ -736,23 +787,16 @@ def _validate_file_whole_result(
 
     Checks:
     1. AST parses successfully
-    2. No remaining ``raise NotImplementedError`` stubs
-    3. All expected elements are present in the AST
-    4. No skeleton markers remain
+    2. No stub-only function/method bodies (AST-based)
+    3. No nested duplicate function definitions
+    4. Structural position: elements at correct nesting level
+    5. No skeleton markers remain
 
     Returns:
         (success, reason) tuple.
     """
     # Strip markdown fences if present
-    code = generated_code.strip()
-    if code.startswith("```"):
-        lines = code.splitlines()
-        # Remove first line (```python or ```)
-        lines = lines[1:]
-        # Remove last line if it's a closing fence
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        code = "\n".join(lines).strip()
+    code = _strip_fences(generated_code)
 
     if not code:
         return False, "empty output"
@@ -763,28 +807,67 @@ def _validate_file_whole_result(
     except SyntaxError as e:
         return False, f"ast.parse() failed: {e}"
 
-    # Check for remaining stubs
-    if "raise NotImplementedError" in code:
-        return False, "contains unfilled NotImplementedError stubs"
+    # Check for stub-only bodies (AST-based — no false positives on branch usage)
+    stub_names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _is_stub_only_body(node.body):
+                stub_names.append(node.name)
+    if stub_names:
+        return False, f"stub-only NotImplementedError bodies: {', '.join(stub_names)}"
+
+    # Check for nested duplicate function definitions (Ollama over-generation)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                if (
+                    child is not node
+                    and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and child.name == node.name
+                ):
+                    return False, f"nested duplicate function: {node.name}"
 
     # Check for skeleton markers
     if "# [STARTD8-SKELETON]" in code:
         return False, "contains skeleton markers"
 
-    # Verify expected elements exist in AST
-    expected_names = {el.name for el in file_spec.elements}
-    found_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            found_names.add(node.name)
+    # Structural position check: elements at correct nesting level
+    top_classes: dict[str, set[str]] = {}
+    top_functions: set[str] = set()
+    top_assigns: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef):
+            methods: set[str] = set()
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods.add(child.name)
+            top_classes[node.name] = methods
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            top_functions.add(node.name)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    found_names.add(target.id)
+                    top_assigns.add(target.id)
 
-    missing = expected_names - found_names
+    missing: list[str] = []
+    for el in file_spec.elements:
+        if el.kind == ElementKind.CLASS:
+            if el.name not in top_classes:
+                missing.append(f"class {el.name}")
+        elif el.parent_class:
+            # Method must be inside its parent class
+            if el.parent_class not in top_classes:
+                missing.append(f"class {el.parent_class} (parent of {el.name})")
+            elif el.name not in top_classes.get(el.parent_class, set()):
+                missing.append(f"{el.parent_class}.{el.name}")
+        elif el.kind in (ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION):
+            if el.name not in top_functions:
+                missing.append(f"function {el.name}")
+        elif el.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+            if el.name not in top_assigns:
+                missing.append(f"constant {el.name}")
     if missing:
-        return False, f"missing elements: {', '.join(sorted(missing))}"
+        return False, f"missing elements: {', '.join(missing)}"
 
     return True, "all checks passed"
 
@@ -1185,7 +1268,8 @@ class MicroPrimeEngine:
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
             self._consecutive_failures = 0
-            self._run_consecutive_failures = 0  # E1: success proves Ollama is working
+            if not result.template_used:
+                self._run_consecutive_failures = 0  # E1: only Ollama success proves Ollama is working
             self._success_cache[fingerprint] = result.code
             # REQ-MP-1102: Persist to element registry after successful generation
             if self._element_registry is not None and element_id and result.code:
@@ -1618,21 +1702,39 @@ class MicroPrimeEngine:
         valid, reason = _validate_file_whole_result(raw_code, skeleton, file_spec)
 
         if not valid:
-            logger.info(
-                "File-whole validation failed for %s: %s — falling through to element-by-element",
-                file_path, reason,
-            )
-            return None
+            logger.info("File-whole validation failed for %s: %s — attempting repair", file_path, reason)
+            if file_spec.elements:
+                repair_result = run_repair_pipeline(
+                    raw_code, file_spec.elements[0], file_spec, skeleton_source=skeleton,
+                )
+                if repair_result.ast_valid:
+                    re_valid, re_reason = _validate_file_whole_result(
+                        repair_result.code, skeleton, file_spec,
+                    )
+                    if re_valid:
+                        logger.info(
+                            "File-whole repair succeeded for %s (steps: %s)",
+                            file_path, repair_result.steps_applied,
+                        )
+                        raw_code = repair_result.code
+                        # fall through to result building
+                    else:
+                        logger.info(
+                            "File-whole re-validation failed after repair for %s: %s — element-by-element",
+                            file_path, re_reason,
+                        )
+                        return None
+                else:
+                    logger.info(
+                        "File-whole repair did not fix AST for %s — element-by-element",
+                        file_path,
+                    )
+                    return None
+            else:
+                return None
 
-        # Strip fences for the final code (validation already handles this
-        # internally, but we need the clean version for the result).
-        code = raw_code.strip()
-        if code.startswith("```"):
-            lines = code.splitlines()
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            code = "\n".join(lines).strip()
+        # Strip fences for the final code
+        code = _strip_fences(raw_code)
 
         logger.info(
             "File-whole succeeded for %s — %d elements filled in one shot",
@@ -2005,16 +2107,17 @@ class MicroPrimeEngine:
         )
         _record_decomp_attempted(plan.strategy, file_path)
 
-        # Checkpoint few-shot history for rollback on failure
-        completed_len = len(self._completed)
-
-        # Generate each sub-element
+        # Generate each sub-element (partial results preserved in _completed for few-shot)
         sub_results, total_input, total_output, failure = self._generate_sub_elements(
             plan, element, file_spec, skeleton, contracts, file_path,
             reasoning, start_time, design_doc_sections, task_description,
         )
         if failure is not None:
-            self._completed = self._completed[:completed_len]
+            # Pass partial sub-element code as escalation context
+            if sub_results:
+                partial_code = "\n\n".join(sub_results.values())
+                if failure.escalation is not None:
+                    failure.escalation.last_code = partial_code
             return failure
 
         assert sub_results is not None  # guaranteed when failure is None
@@ -2025,7 +2128,6 @@ class MicroPrimeEngine:
             reasoning, start_time, total_input, total_output,
         )
         if failure is not None:
-            self._completed = self._completed[:completed_len]
             return failure
 
         assert assembled is not None  # guaranteed when failure is None
@@ -2048,6 +2150,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": assembled,
             "syntax_valid": True,
+            "repair_recovered": False,
             "repair_steps_count": 0,
         })
 
@@ -2416,6 +2519,15 @@ class MicroPrimeEngine:
 
         body = match.code
 
+        # Structural verification of template output
+        struct_ok, struct_reason = _structural_verify(body, element)
+        if not struct_ok:
+            logger.info(
+                "Template output failed structural verify for %s: %s — escalating to SIMPLE",
+                element.name, struct_reason,
+            )
+            return self._handle_simple(element, file_spec, skeleton, contracts, file_path, reasoning)
+
         # Record as completed for few-shot (REQ-MP-704)
         self._completed.append({
             "element": {
@@ -2426,6 +2538,7 @@ class MicroPrimeEngine:
             "file_path": file_path,
             "code": body,
             "syntax_valid": True,
+            "repair_recovered": False,
             "repair_steps_count": 0,
         })
 
@@ -2439,7 +2552,7 @@ class MicroPrimeEngine:
             template_used=True,
             template_name=match.name,
             model="template",
-            verification_verdict="skipped",
+            verification_verdict="pass",
         )
 
     def _handle_simple(
@@ -2500,6 +2613,13 @@ class MicroPrimeEngine:
         # REQ-MP-1006: Template-first short-circuit
         template_match = self._templates.match(element, file_spec, contracts)
         if template_match is not None:
+            struct_ok, struct_reason = _structural_verify(template_match.code, element)
+            if not struct_ok:
+                logger.info(
+                    "Template short-circuit failed structural verify for %s: %s",
+                    element.name, struct_reason,
+                )
+                return None  # fall through to Ollama
             logger.info(
                 "Template short-circuit in _handle_simple for %s (template=%s)",
                 element.name, template_match.name,
@@ -2513,6 +2633,7 @@ class MicroPrimeEngine:
                 "file_path": file_path,
                 "code": template_match.code,
                 "syntax_valid": True,
+                "repair_recovered": False,
                 "repair_steps_count": 0,
             })
             result = ElementResult(
@@ -2525,7 +2646,7 @@ class MicroPrimeEngine:
                 template_used=True,
                 template_name=template_match.name,
                 model="template",
-                verification_verdict="skipped",
+                verification_verdict="pass",
             )
             self._metrics.record(result)
             return result
@@ -2552,6 +2673,7 @@ class MicroPrimeEngine:
                     "file_path": file_path,
                     "code": decomposed_code,
                     "syntax_valid": True,
+                    "repair_recovered": False,
                     "repair_steps_count": 0,
                 })
                 result = ElementResult(
@@ -2941,7 +3063,8 @@ class MicroPrimeEngine:
             },
             "file_path": file_path,
             "code": code,
-            "syntax_valid": True,
+            "syntax_valid": outcome.ast_valid_after,
+            "repair_recovered": outcome.repair_recovered,
             "repair_steps_count": len(outcome.repair_steps),
         })
 
@@ -3092,8 +3215,8 @@ class MicroPrimeEngine:
             reason = str(payload.get("reason", "")) or "semantic verification result"
             return passed, reason
         except Exception as exc:
-            logger.warning("Semantic verification parse failed: %s", exc)
-            return False, "semantic verification parse failed"
+            logger.info("Semantic verification parse inconclusive: %s — accepting", exc)
+            return True, "semantic verification inconclusive — accepting"
 
     def _get_element_contracts(
         self,

@@ -517,9 +517,18 @@ def main() -> int:
     if args.micro_prime_dry_run:
         args.micro_prime = True
     if args.micro_prime:
+        from startd8.micro_prime.config_loader import load_micro_prime_settings
         from startd8.micro_prime.models import MicroPrimeConfig
 
-        mp_config_kwargs: dict[str, Any] = {}
+        # Load .startd8/micro_prime.json as base, then overlay CLI args.
+        # This ensures project-level settings (e.g. escalation_enabled=false)
+        # are respected even when CLI flags are passed.
+        base_config, _cloud_agent_spec = load_micro_prime_settings(
+            workflow.project_root,
+        )
+        mp_config_kwargs: dict[str, Any] = base_config.model_dump()
+
+        # CLI args override file-based settings
         if args.micro_prime_model is not None:
             mp_config_kwargs["model"] = args.micro_prime_model
         if args.micro_prime_max_tokens is not None:

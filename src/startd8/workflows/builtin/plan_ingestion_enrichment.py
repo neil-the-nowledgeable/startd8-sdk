@@ -246,10 +246,12 @@ def _enrich_requirement_refs(
 ) -> int:
     """Append ## Requirements References section and populate structured field.
 
-    Uses a 2-tier search strategy:
+    Uses a 3-tier search strategy:
     1. Title proximity: search plan text near the task title
     2. Feature name fallback: if title search fails (e.g. TRANSFORM renamed
        the title), search using the original ParsedFeature.name instead
+    3. Parent heading fallback: for sub-features (F-001a), strip the suffix
+       and search near the ``### F-001:`` heading in the plan text
     """
     count = 0
     for task in tasks:
@@ -270,6 +272,20 @@ def _enrich_requirement_refs(
                     refs = _extract_req_refs_near_feature(
                         plan_text, feat_name, proximity_chars,
                     )
+
+        # Tier 3: parent feature heading fallback — for sub-features
+        # (F-001a → F-001), search near the plan's ### F-NNN: heading.
+        # This handles cases where PARSE splits a multi-file feature into
+        # sub-features with renamed titles that don't appear in the plan.
+        if not refs and plan_text:
+            fid = _get_task_feature_id(task)
+            base_id = re.sub(r"[a-z]+$", "", fid)  # F-001a → F-001
+            if base_id and base_id != fid:
+                # Search for the heading marker in the plan text
+                heading_marker = f"### {base_id}:"
+                refs = _extract_req_refs_near_feature(
+                    plan_text, heading_marker, proximity_chars,
+                )
 
         if not refs:
             continue

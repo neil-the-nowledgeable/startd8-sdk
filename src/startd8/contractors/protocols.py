@@ -28,6 +28,12 @@ class GenerationResult:
     iterations: int = 1
     model: str = ''
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # AC-R2: Generator-native prompt observability — generators that support
+    # it populate these dicts so the workflow can persist them without building
+    # parallel prompt-construction logic.  Keys are phase names (e.g.
+    # "spec_system", "draft_user"), values are the prompt/response strings.
+    prompts: Dict[str, str] = field(default_factory=dict)
+    responses: Dict[str, str] = field(default_factory=dict)
 
     @property
     def quality_score(self) -> Optional[int]:

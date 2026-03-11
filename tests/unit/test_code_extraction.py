@@ -391,3 +391,102 @@ class TestStubMissingFallback:
         result = extract_multi_file_code("", ["a.py", "b.py"], stub_missing=True)
         # Empty response returns {} even with stub_missing (early return)
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Unclosed fence block handling (Fix 4 — getJSONLogger escalation fix)
+# ---------------------------------------------------------------------------
+
+class TestUnclosedFenceBlock:
+    """extract_code_from_response must handle unclosed ````` blocks.
+
+    Local models (Ollama) often output a code fence opening with no
+    closing ````` — the output is truncated.  The prior regex required
+    both markers, so ``fence_strip`` returned "no change" and the raw
+    fenced text cascaded through repair as invalid syntax.
+    """
+
+    def test_unclosed_fence_strips_opening_marker(self):
+        """Unclosed fence block: opening ``` with no closing ```."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = "```python\nimport json\nimport logging\nfrom jsonlogger import JsonFormatter\nimport sys"
+        result = extract_code_from_response(raw)
+        assert not result.startswith("```"), "Opening fence should be stripped"
+        assert "import json" in result
+        assert "import logging" in result
+
+    def test_unclosed_fence_with_language_tag(self):
+        """Unclosed fence with language tag."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = "```python\ndef foo():\n    return 42"
+        result = extract_code_from_response(raw)
+        assert result.startswith("def foo():")
+
+    def test_unclosed_fence_no_language_tag(self):
+        """Unclosed fence without language tag."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = "```\nx = 1\ny = 2"
+        result = extract_code_from_response(raw)
+        assert "x = 1" in result
+        assert not result.startswith("```")
+
+    def test_closed_fence_still_works(self):
+        """Closed fence blocks still work as before."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = "```python\ndef bar():\n    pass\n```"
+        result = extract_code_from_response(raw)
+        assert result == "def bar():\n    pass"
+
+    def test_getjsonlogger_exact_failure_pattern(self):
+        """Reproduce exact run-029 getJSONLogger failure.
+
+        Ollama returned unclosed fence + import block instead of body.
+        fence_strip must at least strip the fence so repair can proceed.
+        """
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        # Exact raw output from run-029 queue state
+        raw = "```python\nimport json\nimport logging\nfrom jsonlogger import JsonFormatter\nimport sys"
+        result = extract_code_from_response(raw)
+        # After stripping, should NOT contain backticks
+        assert "```" not in result
+        # Should contain the actual code lines
+        assert "import json" in result
+
+
+class TestUnclosedFenceRunRegression:
+    """Verify the unclosed fence fix handles the actual run-019/022 patterns.
+
+    In those runs, Ollama returned an unclosed fence block.  Without the
+    unclosed fence handler, fence_strip was a no-op and the raw fenced text
+    cascaded into bare_statement_wrap, embedding fences in the function body.
+    """
+
+    def test_unclosed_fence_with_imports_only(self):
+        """Run-019 pattern: unclosed fence wrapping only imports."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = "```python\nimport logging\nfrom jsonlogformatter import JsonFormatter"
+        result = extract_code_from_response(raw)
+        assert "```" not in result
+        assert "import logging" in result
+        assert "from jsonlogformatter" in result
+
+    def test_unclosed_fence_with_full_function(self):
+        """Unclosed fence wrapping a complete function."""
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        raw = (
+            "```python\n"
+            "def getJSONLogger(name: str) -> logging.Logger:\n"
+            "    logger = logging.getLogger(name)\n"
+            "    return logger"
+        )
+        result = extract_code_from_response(raw)
+        assert "```" not in result
+        assert "def getJSONLogger" in result
+        assert "return logger" in result

@@ -271,6 +271,20 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
     pattern = r'```(?:\w+)?\s*\n(.*?)```'
     matches = re.findall(pattern, response, re.DOTALL)
 
+    if not matches:
+        # Handle unclosed fence blocks: opening ``` without a closing ```.
+        # Common with local models (Ollama) that truncate output mid-block.
+        unclosed_pattern = r'^```(?:\w+)?\s*\n(.*)'
+        unclosed_match = re.match(unclosed_pattern, response.strip(), re.DOTALL)
+        if unclosed_match:
+            content = unclosed_match.group(1).strip()
+            if content:
+                matches = [content]
+                logger.debug(
+                    "Stripped unclosed fence block (%d chars extracted)",
+                    len(content),
+                )
+
     if matches:
         # Return the first (and typically main) code block
         extracted = matches[0].strip()

@@ -38,7 +38,7 @@ from startd8.forward_manifest import (
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.context import MicroPrimeContext
-from startd8.micro_prime.engine import MicroPrimeEngine, _CODE_GEN_SYSTEM_PROMPT
+from startd8.micro_prime.engine import MicroPrimeEngine, _CODE_GEN_SYSTEM_PROMPT, _is_stub_only_body
 from startd8.micro_prime.models import (
     EscalationReason,
     FileResult,
@@ -213,20 +213,27 @@ def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
     """Return a human-readable defect description, or ``None`` if clean.
 
     Checks for three classes of assembly defect:
-    1. Remaining ``raise NotImplementedError`` stubs
+    1. Remaining ``raise NotImplementedError`` stub-only functions/methods
     2. ``[STARTD8-SKELETON]`` markers (skeleton was never fully assembled)
     3. Nested duplicate function definitions (Ollama over-generation artifact)
     """
-    if "raise NotImplementedError" in content:
-        return "remaining `raise NotImplementedError` stubs"
     if _SKELETON_MARKER in content:
         return "`[STARTD8-SKELETON]` marker still present"
-    # Nested duplicate: a function whose body contains a def with the same name
     if file_path.endswith(".py"):
         try:
             tree = ast.parse(content)
         except SyntaxError:
             return "file does not parse (SyntaxError)"
+        # Check 1: stub-only function/method bodies (AST-precise)
+        stub_names: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _is_stub_only_body(node.body):
+                    stub_names.append(node.name)
+        if stub_names:
+            names = ", ".join(f"`{n}`" for n in stub_names)
+            return f"remaining `raise NotImplementedError` stubs in {names}"
+        # Check 3: nested duplicate function definitions
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for child in ast.walk(node):
@@ -239,6 +246,72 @@ def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
                             f"nested duplicate function `{node.name}` "
                             f"(Ollama over-generation)"
                         )
+    elif "raise NotImplementedError" in content:
+        # Non-Python files: fall back to string check
+        return "remaining `raise NotImplementedError` stubs"
+    return None
+
+
+def _check_structural_integrity(
+    content: str,
+    element_results: list,
+    file_path: str,
+) -> Optional[str]:
+    """Verify that successfully generated elements exist in the final AST.
+
+    For each element result with ``success=True``, confirm the corresponding
+    AST node exists in the output: ClassDef for classes, FunctionDef for
+    functions, and methods nested inside their parent class.  Returns a
+    human-readable defect string on the first structural mismatch, or
+    ``None`` if all elements are present.
+    """
+    if not file_path.endswith(".py"):
+        return None
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None  # Already caught by ast.parse gate; don't double-report
+
+    # Build lookup: top-level names and class→method sets
+    top_classes: dict[str, ast.ClassDef] = {}
+    top_functions: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef):
+            top_classes[node.name] = node
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            top_functions.add(node.name)
+
+    class_methods: dict[str, set[str]] = {}
+    for cls_name, cls_node in top_classes.items():
+        methods: set[str] = set()
+        for child in cls_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                methods.add(child.name)
+        class_methods[cls_name] = methods
+
+    missing: list[str] = []
+    for er in element_results:
+        if not er.success:
+            continue
+        kind = getattr(er, "element_kind", None) or ""
+        name = er.element_name
+        parent = getattr(er, "parent_class", None)
+
+        if kind == "class":
+            if name not in top_classes:
+                missing.append(f"class `{name}`")
+        elif parent:
+            # Method/property/nested constant — must be inside parent class
+            if parent not in top_classes:
+                missing.append(f"class `{parent}` (parent of `{name}`)")
+            elif name not in class_methods.get(parent, set()):
+                missing.append(f"`{parent}.{name}`")
+        elif kind in ("function", "async_function"):
+            if name not in top_functions:
+                missing.append(f"function `{name}`")
+
+    if missing:
+        return "structural integrity: missing " + ", ".join(missing)
     return None
 
 
@@ -534,12 +607,23 @@ class MicroPrimeCodeGenerator:
                     filled_sem = _semantic_line_count(file_result.filled_skeleton)
                     existing_sem = _semantic_line_count(existing_content)
                     existing_raw = existing_content.count("\n") + 1
+                    # Scale threshold by element fill rate: a partially-filled
+                    # skeleton (unfilled stubs = 1 line each) should not be
+                    # compared against the full existing file at the same bar.
+                    total_el = len(file_result.element_results)
+                    filled_el = sum(
+                        1 for er in file_result.element_results if er.success
+                    )
+                    fill_rate = filled_el / total_el if total_el > 0 else 1.0
+                    effective_threshold = _SIZE_REGRESSION_THRESHOLD * fill_rate
                     ratio = filled_sem / existing_sem if existing_sem > 0 else 1.0
-                    if ratio < _SIZE_REGRESSION_THRESHOLD and existing_raw >= _MIN_EXISTING_LINES:
+                    if ratio < effective_threshold and existing_raw >= _MIN_EXISTING_LINES:
                         logger.warning(
                             "Micro Prime size-regression guard: %s has %d semantic "
-                            "lines vs %d existing (%.0f%%) — escalating to fallback",
-                            file_path, filled_sem, existing_sem, ratio * 100,
+                            "lines vs %d existing (%.0f%%, fill rate %.0f%%) "
+                            "— escalating to fallback",
+                            file_path, filled_sem, existing_sem,
+                            ratio * 100, fill_rate * 100,
                         )
                         st.escalated_files.append(file_path)
                         continue
@@ -713,8 +797,12 @@ class MicroPrimeCodeGenerator:
                 continue
 
             defect = _detect_assembly_defect(content, file_path)
+            if defect is None:
+                defect = _check_structural_integrity(
+                    content, fr.element_results, file_path,
+                )
             if defect is not None:
-                if self._fallback is not None:
+                if self._fallback is not None and self._config.escalation_enabled:
                     logger.warning(
                         "Micro Prime file %s has assembly defect: %s "
                         "— escalating to fallback",
@@ -733,7 +821,7 @@ class MicroPrimeCodeGenerator:
                 else:
                     logger.warning(
                         "Micro Prime file %s has assembly defect: %s "
-                        "(no fallback available)",
+                        "(escalation disabled — keeping partial output)",
                         file_path, defect,
                     )
                     st.stub_escalated.append(file_path)
@@ -744,7 +832,13 @@ class MicroPrimeCodeGenerator:
         # Compute effective file count based on element fill rate
         for file_path in st.written_file_paths:
             if file_path in st.stub_escalated:
-                st.incomplete_files.append(file_path)
+                # When escalation is disabled the partial file is the best
+                # output we can produce — count it as effective so the
+                # caller doesn't treat the entire generation as a failure.
+                if not self._config.escalation_enabled:
+                    st.effective_file_count += 1
+                else:
+                    st.incomplete_files.append(file_path)
                 continue
             fr = st.file_results_by_path.get(file_path)
             if fr is None:

@@ -467,9 +467,13 @@ def _is_usable_example(ce: dict) -> bool:
     return True
 
 
-def _repair_sort_key(ce: dict) -> int:
-    """Sort key preferring examples with fewer repair steps (E2: quality weighting)."""
-    return ce.get("repair_steps_count", 0)
+def _repair_sort_key(ce: dict) -> tuple[bool, int]:
+    """Sort key preferring non-repaired examples, then fewer repair steps (E2: quality weighting).
+
+    Tuple sort: non-repaired (False=0) sorts before repaired (True=1),
+    then by step count ascending.
+    """
+    return (ce.get("repair_recovered", False), ce.get("repair_steps_count", 0))
 
 
 def find_few_shot_examples(

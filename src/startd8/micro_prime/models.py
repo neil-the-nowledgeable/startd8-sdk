@@ -353,6 +353,14 @@ class MicroPrimeConfig(BaseModel):
     # Ollama-whole for MODERATE elements (before decomposition)
     moderate_ollama_whole_enabled: bool = True
     moderate_ollama_whole_skip_signals: set[str] = {"external_api", "orchestrator", "app_server_instance"}
+    # File-level Ollama-whole: generate the entire file in one shot instead
+    # of decomposing into individual element-body prompts.  Targets small
+    # files where element-by-element generation creates unnecessary fragility.
+    # Thresholds raised from 5/60 → 8/100 based on calibration data showing
+    # Ollama handles files up to ~100 lines reliably (AC-R4).
+    file_ollama_whole_enabled: bool = True
+    file_ollama_whole_max_elements: int = 8
+    file_ollama_whole_max_loc: int = 100
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

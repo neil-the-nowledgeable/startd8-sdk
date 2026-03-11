@@ -84,6 +84,44 @@ class TestIndentNormalizeStep:
         result = step(code, ctx, Path("t.py"), element_context=None)
         assert result.modified is True
 
+    def test_structural_reindent_nonuniform_body(self):
+        """Strategy 6: Fix non-uniform indentation that textwrap.dedent cannot handle."""
+        step = IndentNormalizeStep()
+        # Ollama-style corrupted output: body lines with mixed 0/12/16-space indent
+        # wrapped by bare_statement_wrap into a def with 4-space base.
+        code = (
+            "def add_fields(log_record, record, message_dict):\n"
+            "    if 'timestamp' not in log_record:\n"
+            "                log_record['timestamp'] = record.created\n"
+            "            if 'severity' in log_record:\n"
+            "                log_record['severity'] = log_record['severity'].upper()\n"
+            "            else:\n"
+            "                log_record['severity'] = record.levelname"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("t.py"), element_context=None)
+        assert result.modified is True
+        assert result.metrics.get("strategy", "").startswith("structural_reindent")
+        # Verify the result actually parses
+        import ast
+        ast.parse(result.code)
+
+    def test_structural_reindent_method_body(self):
+        """Strategy 6: Fix non-uniform method body indentation."""
+        step = IndentNormalizeStep()
+        # Body-only code with non-uniform indentation (method context)
+        code = (
+            "if x > 0:\n"
+            "            return x\n"
+            "        else:\n"
+            "            return -x"
+        )
+        ec = ElementContext(parent_class="MyClass")
+        ctx = RepairContext()
+        result = step(code, ctx, Path("t.py"), element_context=ec)
+        # Should attempt structural reindent since dedent won't help
+        assert result.code is not None
+
 
 class TestManifestImportCompletion:
     def test_no_element_context_skips(self):
