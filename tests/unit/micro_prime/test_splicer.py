@@ -13,6 +13,7 @@ from startd8.micro_prime.splicer import (
     _extract_body,
     _find_def_line,
     _find_stub_after_def,
+    _get_all_skeleton_methods,
     _get_implemented_methods,
     _inject_imports,
     _strip_duplicate_methods,
@@ -481,6 +482,22 @@ class TestClassBodyDeduplication:
         result = _get_implemented_methods(class_node)
         assert result == {"bar"}
 
+    def test_get_all_skeleton_methods_includes_stubs(self):
+        """All methods are returned, including stubs."""
+        code = (
+            "class Foo:\n"
+            "    def bar(self):\n"
+            "        return 1\n"
+            "    def baz(self):\n"
+            "        raise NotImplementedError\n"
+            "    def qux(self):\n"
+            "        pass\n"
+        )
+        tree = ast.parse(code)
+        class_node = tree.body[0]
+        result = _get_all_skeleton_methods(class_node)
+        assert result == {"bar", "baz", "qux"}
+
     def test_strip_duplicate_methods_removes_full_def(self):
         """Full def blocks matching implemented methods are stripped."""
         body_lines = [
@@ -578,5 +595,51 @@ class TestClassBodyDeduplication:
         assert result is not None
         # Bare statements should be stripped; method still present
         assert "def SendOrderConfirmation" in result
+        assert result.count("def SendOrderConfirmation") == 1
+        ast.parse(result)
+
+    def test_class_splice_stub_on_stub_no_f811(self):
+        """Stub methods in CLASS body are stripped when skeleton also has stubs.
+
+        Regression: run-038 F811 — send_email defined twice because
+        _get_implemented_methods only returned non-stubs, so stub-on-stub
+        duplicates slipped through the dedup gate.
+        """
+        skeleton = (
+            "class EmailService(BaseEmailService):\n"
+            "    def __init__(self):\n"
+            "        raise NotImplementedError\n"
+            "\n"
+            "    def send_email(client, email_address, content):\n"
+            "        raise NotImplementedError\n"
+            "\n"
+            "    def SendOrderConfirmation(self, request, context):\n"
+            "        raise NotImplementedError\n"
+        )
+        # CLASS body from Ollama — includes stub versions of the same methods
+        body = (
+            "def __init__(self):\n"
+            "    self.client = None\n"
+            "\n"
+            "def send_email(client, email_address, content):\n"
+            "    pass\n"
+            "\n"
+            "def SendOrderConfirmation(self, request, context):\n"
+            "    try:\n"
+            "        self.template.render(order=request.order)\n"
+            "        return Empty()\n"
+            "    except Exception:\n"
+            "        raise\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="EmailService",
+            bases=["BaseEmailService"],
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        assert result.count("def send_email") == 1, (
+            f"F811: send_email defined {result.count('def send_email')} times"
+        )
         assert result.count("def SendOrderConfirmation") == 1
         ast.parse(result)

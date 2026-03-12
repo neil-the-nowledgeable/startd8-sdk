@@ -238,6 +238,20 @@ def _get_implemented_methods(class_node: ast.ClassDef) -> set[str]:
     return implemented
 
 
+def _get_all_skeleton_methods(class_node: ast.ClassDef) -> set[str]:
+    """Return names of ALL methods in *class_node* (stubs included).
+
+    Used by the deduplication gate: any method that already exists in the
+    skeleton class — whether implemented or stub — should be stripped from
+    the CLASS element body to avoid F811 redefinition errors.
+    """
+    return {
+        stmt.name
+        for stmt in class_node.body
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def _strip_duplicate_methods(
     body_lines: list[str],
     implemented: set[str],
@@ -410,14 +424,14 @@ def _splice_class_body(
     # When both CLASS and METHOD elements are in the element list, methods
     # are spliced first (SIMPLE/TRIVIAL tier).  The CLASS body from Ollama
     # may include those same method implementations, causing duplicates
-    # and bare-statement bugs.  Strip any method defs whose names already
-    # have non-stub bodies in the skeleton class.
-    implemented = _get_implemented_methods(class_node)
-    if implemented:
-        body_lines = _strip_duplicate_methods(body_lines, implemented)
+    # and bare-statement bugs.  Strip ANY method that already exists in the
+    # skeleton class — including stubs — to prevent F811 redefinition errors.
+    existing = _get_all_skeleton_methods(class_node)
+    if existing:
+        body_lines = _strip_duplicate_methods(body_lines, existing)
         logger.debug(
-            "Stripped %d already-implemented methods from class body for %s: %s",
-            len(implemented), element.name, implemented,
+            "Stripped %d existing skeleton methods from class body for %s: %s",
+            len(existing), element.name, existing,
         )
 
     # Split out __init__ block if present in assembled body
