@@ -45,18 +45,23 @@ class TestComplexTriggers:
         assert tier is ComplexityTier.COMPLEX
         assert "caller_count" in reason
 
-    def test_edit_mode_with_low_callers_not_complex(self):
-        tier, _ = classify_tier(
+    def test_edit_mode_with_low_callers_default_complex(self):
+        """Edit mode with low callers doesn't trigger COMPLEX via the
+        edit_mode+callers rule, but falls through to default (COMPLEX)."""
+        tier, reason = classify_tier(
             _signals(edit_mode="edit", caller_count=2)
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "default" in reason  # hit default, not the edit_mode trigger
 
-    def test_create_mode_with_high_callers_not_complex(self):
-        """caller_count trigger only fires in edit mode."""
-        tier, _ = classify_tier(
+    def test_create_mode_with_high_callers_default_complex(self):
+        """caller_count trigger only fires in edit mode; create mode
+        with high callers falls through to default (COMPLEX)."""
+        tier, reason = classify_tier(
             _signals(edit_mode="create", caller_count=10)
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "default" in reason
 
     def test_mro_depth(self):
         tier, reason = classify_tier(_signals(mro_depth=5))
@@ -80,19 +85,23 @@ class TestComplexTriggers:
         assert tier is ComplexityTier.COMPLEX
         assert "cross-file" in reason
 
-    def test_multi_file_no_edges_not_complex(self):
-        """Multi-file alone (without edges) is not a COMPLEX trigger."""
-        tier, _ = classify_tier(
+    def test_multi_file_no_edges_default_complex(self):
+        """Multi-file alone (without edges) doesn't trigger COMPLEX via the
+        multi-file rule, but falls through to default (COMPLEX)."""
+        tier, reason = classify_tier(
             _signals(target_file_count=3, has_cross_file_edges=False)
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "default" in reason
 
-    def test_single_file_with_edges_not_complex(self):
-        """Single file + edges flag doesn't trigger COMPLEX."""
-        tier, _ = classify_tier(
+    def test_single_file_with_edges_default_complex(self):
+        """Single file + edges flag doesn't trigger COMPLEX via multi-file rule,
+        but falls through to default (COMPLEX)."""
+        tier, reason = classify_tier(
             _signals(target_file_count=1, has_cross_file_edges=True)
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "default" in reason
 
 
 # ── SIMPLE eligibility (all conditions must pass) ────────────────────
@@ -120,7 +129,7 @@ class TestSimpleEligibility:
             _signals(**{**self.SIMPLE_SIGNALS, "manifest_coverage": "partial"}),
             _config(simple_relaxed_enabled=False),
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_simple_if_manifest_partial_relaxed(self):
         """Relaxed gate (default) accepts partial manifest + create mode."""
@@ -136,7 +145,7 @@ class TestSimpleEligibility:
             _signals(**{**self.SIMPLE_SIGNALS, "blast_radius": 1}),
             _config(simple_relaxed_enabled=False),
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_simple_if_blast_radius_small_relaxed(self):
         """Relaxed gate (default) accepts small blast_radius + create mode."""
@@ -150,39 +159,39 @@ class TestSimpleEligibility:
         tier, _ = classify_tier(
             _signals(**{**self.SIMPLE_SIGNALS, "edit_mode": "edit"})
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_not_simple_if_callers(self):
         tier, _ = classify_tier(
             _signals(**{**self.SIMPLE_SIGNALS, "caller_count": 1})
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_not_simple_if_loc_too_high(self):
         tier, _ = classify_tier(
             _signals(**{**self.SIMPLE_SIGNALS, "estimated_loc": 200})
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_not_simple_if_multi_file(self):
         tier, _ = classify_tier(
             _signals(**{**self.SIMPLE_SIGNALS, "target_file_count": 2})
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
 
-# ── Default → MODERATE ───────────────────────────────────────────────
+# ── Default → COMPLEX (was MODERATE before AC-R3-R7) ──────────────────
 
 
-class TestModerateDefault:
+class TestComplexDefault:
     def test_default_signals(self):
         tier, reason = classify_tier(_signals())
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
         assert "default" in reason
 
     def test_edit_mode_unknown(self):
         tier, _ = classify_tier(_signals(edit_mode="unknown"))
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
 
 # ── Config threshold overrides ───────────────────────────────────────
@@ -190,12 +199,14 @@ class TestModerateDefault:
 
 class TestThresholdOverrides:
     def test_custom_blast_radius_threshold(self):
-        """Raise threshold so blast_radius=6 no longer triggers COMPLEX."""
-        tier, _ = classify_tier(
+        """Raise threshold so blast_radius=6 no longer triggers COMPLEX via blast_radius rule."""
+        tier, reason = classify_tier(
             _signals(blast_radius=6),
             _config(blast_radius_complex_threshold=10),
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "blast_radius" not in reason  # trigger didn't fire
+        assert "default" in reason
 
     def test_custom_loc_simple_max(self):
         """Raise SIMPLE LOC limit so estimated_loc=200 qualifies."""
@@ -221,12 +232,14 @@ class TestThresholdOverrides:
         assert tier is ComplexityTier.COMPLEX
 
     def test_custom_caller_threshold(self):
-        """Raise caller threshold so caller_count=4 does not trigger COMPLEX."""
-        tier, _ = classify_tier(
+        """Raise caller threshold so caller_count=4 does not trigger COMPLEX via caller rule."""
+        tier, reason = classify_tier(
             _signals(edit_mode="edit", caller_count=4),
             _config(caller_count_complex_threshold=5),
         )
-        assert tier is not ComplexityTier.COMPLEX
+        assert tier is ComplexityTier.COMPLEX
+        assert "caller_count" not in reason  # trigger didn't fire
+        assert "default" in reason
 
 
 # ── None config uses defaults ────────────────────────────────────────
@@ -270,7 +283,7 @@ class TestNonPythonRouting:
     def test_python_file_not_affected(self):
         """Python files should NOT take the non-Python path."""
         tier, _ = classify_tier(_signals(file_extension=".py"))
-        assert tier is ComplexityTier.MODERATE  # default
+        assert tier is ComplexityTier.COMPLEX  # default
 
     def test_requirements_txt_trivial(self):
         tier, reason = classify_tier(
@@ -319,8 +332,8 @@ class TestRelaxedSimple:
         assert tier is ComplexityTier.SIMPLE
         assert "relaxed" in reason
 
-    def test_blast_radius_3_still_moderate(self):
-        """blast_radius=3 exceeds the relaxed threshold → MODERATE."""
+    def test_blast_radius_3_still_complex(self):
+        """blast_radius=3 exceeds the relaxed threshold → COMPLEX (default)."""
         tier, _ = classify_tier(
             _signals(
                 blast_radius=3,
@@ -330,7 +343,7 @@ class TestRelaxedSimple:
                 target_file_count=1,
             ),
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_edit_mode_not_relaxed(self):
         """Edit-mode elements are NOT eligible for relaxed SIMPLE."""
@@ -343,10 +356,10 @@ class TestRelaxedSimple:
                 target_file_count=1,
             ),
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_relaxed_disabled(self):
-        """With simple_relaxed_enabled=False, blast_radius=1 stays MODERATE."""
+        """With simple_relaxed_enabled=False, blast_radius=1 stays COMPLEX (default)."""
         tier, _ = classify_tier(
             _signals(
                 blast_radius=1,
@@ -357,7 +370,7 @@ class TestRelaxedSimple:
             ),
             _config(simple_relaxed_enabled=False),
         )
-        assert tier is ComplexityTier.MODERATE
+        assert tier is ComplexityTier.COMPLEX
 
     def test_partial_manifest_create_mode(self):
         """Partial manifest coverage + create mode + blast_radius=0 → relaxed SIMPLE."""
@@ -396,11 +409,11 @@ class TestClassificationResultSignals:
         assert result.signals is signals
         assert result.tier is ComplexityTier.SIMPLE
 
-    def test_signals_threaded_moderate(self):
+    def test_signals_threaded_default_complex(self):
         signals = _signals()
         result = classify_tier(signals)
         assert result.signals is signals
-        assert result.tier is ComplexityTier.MODERATE
+        assert result.tier is ComplexityTier.COMPLEX
 
     def test_tuple_unpacking_still_works(self):
         """Backward compat: tier, reason = classify_tier(...) must work."""

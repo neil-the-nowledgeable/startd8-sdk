@@ -45,7 +45,7 @@ def classify_tier(
 
     1. COMPLEX triggers — any single trigger fires.
     2. SIMPLE eligibility — all conditions must pass.
-    3. Default: MODERATE.
+    3. Default: COMPLEX (was MODERATE before AC-R3-R7).
 
     Args:
         signals: Complexity signals for the task.
@@ -155,8 +155,15 @@ def classify_tier(
             signals,
         )
 
-    # --- Default: MODERATE ---
-    return _emit(ComplexityTier.MODERATE, "default (no COMPLEX triggers, SIMPLE conditions not fully met)", signals)
+    # --- Default: COMPLEX (AC-R3-R7) ---
+    # Changed from MODERATE → COMPLEX to collapse the MODERATE tier.
+    # MODERATE existed to justify the decomposition pipeline (decomposer +
+    # splicer + per-element repair = ~2,483 lines of compensatory code).
+    # With file-whole thresholds raised to 30 elements / 300 LOC (AC-R3-R4),
+    # files below those thresholds use file-whole generation.  Files above
+    # them route to cloud (LeadContractor) — more expensive per-call but
+    # eliminates the decomposition failure modes.
+    return _emit(ComplexityTier.COMPLEX, "default (no COMPLEX triggers, SIMPLE conditions not fully met)", signals)
 
 
 def _emit(

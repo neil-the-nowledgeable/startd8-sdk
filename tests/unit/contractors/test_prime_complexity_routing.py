@@ -228,7 +228,7 @@ class TestDevelopFeatureRouting:
             wf.develop_feature(feature)
 
         default_gen.generate.assert_called_once()
-        assert feature.metadata["_complexity_tier"] == "moderate"
+        assert feature.metadata["_complexity_tier"] == "complex"
 
     @_apply_develop_patches
     def test_classification_error_graceful_fallback(self, *_mocks):
