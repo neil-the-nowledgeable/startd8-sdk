@@ -508,9 +508,31 @@ class MicroPrimeCodeGenerator:
             bypass_result = self._delegate_to_fallback(
                 task, context, st.bypass_files,
             )
-            st.generated_files.extend(bypass_result.generated_files)
-            st.total_input += bypass_result.input_tokens
-            st.total_output += bypass_result.output_tokens
+            if bypass_result.success:
+                st.generated_files.extend(bypass_result.generated_files)
+                st.effective_file_count += len(bypass_result.generated_files)
+                st.total_input += bypass_result.input_tokens
+                st.total_output += bypass_result.output_tokens
+            else:
+                # Propagate fallback error so it surfaces in postmortem
+                # instead of the generic "Code generation failed".
+                logger.error(
+                    "Fallback generator failed for bypass files %s: %s",
+                    st.bypass_files,
+                    bypass_result.error or "unknown error",
+                )
+                return GenerationResult(
+                    success=False,
+                    generated_files=st.generated_files,
+                    input_tokens=st.total_input + bypass_result.input_tokens,
+                    output_tokens=st.total_output + bypass_result.output_tokens,
+                    cost_usd=st.element_escalation_attempt_cost + bypass_result.cost_usd,
+                    model=f"{self._config.provider}:{self._config.model}",
+                    error=bypass_result.error or (
+                        f"Fallback generation failed for bypass files: "
+                        f"{', '.join(st.bypass_files)}"
+                    ),
+                )
         elif st.bypass_files:
             logger.warning(
                 "No fallback generator available — %d file(s) cannot be "

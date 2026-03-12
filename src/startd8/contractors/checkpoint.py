@@ -551,40 +551,8 @@ class IntegrationCheckpoint:
     @staticmethod
     def _is_stub_body(body: List[Any]) -> bool:
         """Return True if a function body is a stub (pass, ..., or raise NotImplementedError)."""
-        if not body:
-            return True
-        # Filter out docstrings (first Expr(Constant(str)))
-        stmts = body
-        if (
-            len(stmts) >= 1
-            and isinstance(stmts[0], ast.Expr)
-            and isinstance(stmts[0].value, ast.Constant)
-            and isinstance(stmts[0].value.value, str)
-        ):
-            stmts = stmts[1:]
-        if not stmts:
-            return True
-        if len(stmts) != 1:
-            return False
-        stmt = stmts[0]
-        # pass
-        if isinstance(stmt, ast.Pass):
-            return True
-        # ... (Ellipsis)
-        if (
-            isinstance(stmt, ast.Expr)
-            and isinstance(stmt.value, ast.Constant)
-            and stmt.value.value is ...
-        ):
-            return True
-        # raise NotImplementedError(...)
-        if isinstance(stmt, ast.Raise) and stmt.exc is not None:
-            exc = stmt.exc
-            if isinstance(exc, ast.Call):
-                exc = exc.func
-            if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
-                return True
-        return False
+        from startd8.utils.ast_checks import is_stub_body
+        return is_stub_body(body)
 
     def check_duplicates(self, files: List[Path]) -> CheckpointResult:
         """Detect duplicate class or function definitions at the same scope level.

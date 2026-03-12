@@ -86,12 +86,24 @@ __all__ = [
     "VALID_MODES",
     "VALID_EXECUTION_MODES",
     "ExecutionMode",
-    "ModeConfig",
     "SeedContext",
     "PrimeContractorWorkflow",
     "PrimeContractorListener",
     "FeatureSpecUnit",
 ]
+
+
+# ---------------------------------------------------------------------------
+# KaizenConfig: Grouped configuration for Kaizen prompt capture (REQ-KZ-200)
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class KaizenConfig:
+    """Grouped configuration for Kaizen prompt capture and hints."""
+
+    enabled: bool = False
+    prompt_dir: Optional[Path] = None
+    config: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +234,7 @@ class SeedContext:
 
 
 # ---------------------------------------------------------------------------
-# ExecutionMode Enum and ModeConfig Dataclass (F-001)
+# ExecutionMode Enum (F-001)
 # ---------------------------------------------------------------------------
 
 class ExecutionMode(enum.Enum):
@@ -234,81 +246,6 @@ class ExecutionMode(enum.Enum):
 
     STANDALONE = "standalone"
     PIPELINE = "pipeline"
-
-
-@dataclass(frozen=True)
-class ModeConfig:
-    """Immutable per-mode configuration for Prime Contractor execution.
-
-    Constructed via ModeConfig.for_mode() factory for correct defaults,
-    or directly for testing. Override individual fields via
-    dataclasses.replace(config, field=value).
-
-    Attributes:
-        mode: Active execution mode (STANDALONE or PIPELINE)
-        use_onboarding_context: Exploit onboarding metadata (False for STANDALONE, True for PIPELINE)
-        use_architectural_context: Exploit architectural context (False for STANDALONE, True for PIPELINE)
-        use_design_calibration: Exploit design calibration (False for STANDALONE, True for PIPELINE)
-        enable_provenance_tracking: Track generation provenance (False for STANDALONE, True for PIPELINE)
-        enable_post_validation: Enable post-generation validation hookpoints (False for STANDALONE, True for PIPELINE)
-        max_context_depth: Pipeline context traversal depth (0 for STANDALONE, 3 for PIPELINE)
-    """
-
-    mode: ExecutionMode = ExecutionMode.STANDALONE
-    use_onboarding_context: bool = False
-    use_architectural_context: bool = False
-    use_design_calibration: bool = False
-    enable_provenance_tracking: bool = False
-    enable_post_validation: bool = False
-    max_context_depth: int = 0
-
-    @classmethod
-    def for_mode(cls, mode: ExecutionMode) -> "ModeConfig":
-        """Factory: build ModeConfig with correct per-mode defaults.
-
-        Args:
-            mode: ExecutionMode (STANDALONE or PIPELINE)
-
-        Returns:
-            ModeConfig instance with mode-appropriate defaults
-        """
-        if mode is ExecutionMode.PIPELINE:
-            return cls(
-                mode=ExecutionMode.PIPELINE,
-                use_onboarding_context=True,
-                use_architectural_context=True,
-                use_design_calibration=True,
-                enable_provenance_tracking=True,
-                enable_post_validation=True,
-                max_context_depth=3,
-            )
-        # STANDALONE: all defaults are already correct (False/0)
-        return cls(mode=ExecutionMode.STANDALONE)
-
-    @classmethod
-    def from_string(cls, mode_str: str) -> "ModeConfig":
-        """Construct from CLI string argument.
-
-        Args:
-            mode_str: String representation of ExecutionMode (case-insensitive, whitespace-tolerant)
-
-        Returns:
-            ModeConfig instance with mode-appropriate defaults
-
-        Raises:
-            ValueError: If mode_str is not a valid ExecutionMode value
-        """
-        try:
-            mode = ExecutionMode(mode_str.lower().strip())
-        except ValueError:
-            valid = ", ".join(m.value for m in ExecutionMode)
-            raise ValueError(
-                f"Invalid execution mode '{mode_str}'. Valid modes: {valid}"
-            )
-        return cls.for_mode(mode)
-
-
-_EDIT_FIRST_VALIDATED: bool = True  # F-000: Remove after edit-first pipeline validated; see lifecycle in design doc
 
 
 # ---------------------------------------------------------------------------
@@ -605,20 +542,13 @@ class PrimeContractorWorkflow:
         self._current_enrichment = None  # per-feature enrichment cache
         # SeedContext — structured container for pipeline context (replaces ad-hoc attributes)
         self._seed_context: Optional[SeedContext] = None
-        # Backward-compat ad-hoc attributes (deprecated, use seed_context via properties instead)
-        self.seed_onboarding: Dict[str, Any] = {}
-        self.seed_architectural_context: Dict[str, Any] = {}
-        self.seed_design_calibration: Dict[str, Any] = {}
         self.seed_service_metadata: Dict[str, Any] = {}
         self.seed_forward_manifest: Optional[Dict[str, Any]] = None  # REQ-PC-FM-002
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
         self.walkthrough: bool = walkthrough
         # Kaizen prompt capture (REQ-KZ-200) — off by default, enabled via --kaizen flag
-        self._kaizen_enabled: bool = False
-        self._kaizen_prompt_dir: Optional[Path] = None
-        # Kaizen config (REQ-KZ-502) — loaded from kaizen-config.json when --kaizen-config is set
-        self._kaizen_config: Optional[dict] = None
+        self._kaizen = KaizenConfig()
         # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
         self._validation_override: Optional[bool] = None  # None = use mode default
         self.strict_validation: bool = False
@@ -1315,15 +1245,15 @@ class PrimeContractorWorkflow:
 
         Non-fatal: logs a warning and continues without reference on any error.
         """
-        from .copy_detection import detect_copy_and_modify, compress_reference, validate_copy_path
+        from .copy_detection import CopyModifySource, detect_copy, compress_reference, validate_copy_path
 
         predecessor = None
         deps = feature.dependencies or []
         if len(deps) == 1:
             predecessor = self.queue.get_feature(deps[0])
 
-        cm = detect_copy_and_modify(feature, predecessor=predecessor)
-        if cm is None:
+        cm = detect_copy(feature, predecessor=predecessor)
+        if not isinstance(cm, CopyModifySource):
             return
 
         # Look up predecessor and read its output.
@@ -1511,29 +1441,6 @@ class PrimeContractorWorkflow:
                 )
             setattr(ctx, key, value)  # will raise if frozen
 
-    def _sync_legacy_attributes(self) -> None:
-        """Sync legacy ad-hoc attributes to SeedContext for backward compatibility.
-
-        Called at setup boundary to ensure any code that assigned to
-        self.seed_onboarding, self.seed_architectural_context, etc. directly
-        is reflected in the typed SeedContext container.
-
-        This is a one-time sync; post-execution updates to legacy attributes
-        are ignored (they do not affect the frozen SeedContext).
-        """
-        try:
-            if self.seed_onboarding and not self.seed_context.onboarding_metadata:
-                self.seed_context.onboarding_metadata = self.seed_onboarding
-                logger.debug("Synced legacy seed_onboarding to SeedContext")
-            if self.seed_architectural_context and not self.seed_context.architectural_context:
-                self.seed_context.architectural_context = self.seed_architectural_context
-                logger.debug("Synced legacy seed_architectural_context to SeedContext")
-            if self.seed_design_calibration and not self.seed_context.design_calibration:
-                self.seed_context.design_calibration = self.seed_design_calibration
-                logger.debug("Synced legacy seed_design_calibration to SeedContext")
-        except AttributeError:
-            # Already frozen, ignore
-            pass
 
     def load_seed_context(
         self,
@@ -1548,8 +1455,8 @@ class PrimeContractorWorkflow:
         initializes the SeedContext container. Also populates backward-compat
         legacy attributes and loads plan document text if referenced.
 
-        This replaces the ad-hoc pattern of assigning workflow.seed_onboarding,
-        workflow.seed_architectural_context, etc. in runner scripts.
+        This replaces the ad-hoc pattern of assigning workflow context
+        attributes directly in runner scripts.
 
         Args:
             seed_data: Raw seed JSON dictionary (from prime-context-seed.json).
@@ -1596,10 +1503,6 @@ class PrimeContractorWorkflow:
             design_calibration=design_calibration or None,
         )
 
-        # Backward-compat legacy attributes (deprecated)
-        self.seed_onboarding = onboarding
-        self.seed_architectural_context = architectural_context
-        self.seed_design_calibration = design_calibration
         self.seed_service_metadata = service_metadata
         self.seed_forward_manifest = forward_manifest if isinstance(forward_manifest, dict) else None
 
@@ -2595,14 +2498,14 @@ class PrimeContractorWorkflow:
 
         Failures are non-fatal — logged and silently ignored.
         """
-        if not self._kaizen_config:
+        if not self._kaizen.config:
             return
         try:
             seen_hashes: set = set()
             phase_counts: Dict[str, int] = {}
             hints_collected: list = []
 
-            for h in self._kaizen_config.get("prompt_hints") or []:
+            for h in self._kaizen.config.get("prompt_hints") or []:
                 if not isinstance(h, dict):
                     continue
                 phase = h.get("phase", "all")
@@ -2647,14 +2550,14 @@ class PrimeContractorWorkflow:
         The run_id subdirectory provides run isolation (R1-S1).
         Failures are non-fatal — logged and silently swallowed.
 
-        Only called when self._kaizen_enabled is True.
+        Only called when self._kaizen.enabled is True.
         """
-        if not self._kaizen_enabled or self._kaizen_prompt_dir is None:
+        if not self._kaizen.enabled or self._kaizen.prompt_dir is None:
             return
         try:
             run_id = os.environ.get("KAIZEN_RUN_ID", "standalone")
             safe_fid = self._sanitize_feature_id(feature.id)
-            prompt_dir = self._kaizen_prompt_dir / run_id / safe_fid
+            prompt_dir = self._kaizen.prompt_dir / run_id / safe_fid
 
             # REQ-KZ-BUG-004: Ensure context is JSON serializable (no raw ForwardManifest objects)
             serializable_context = dict(gen_context)
@@ -3167,14 +3070,14 @@ class PrimeContractorWorkflow:
         # REQ-MP-1002: If copy_source_task_id is not already set, attempt
         # detection from description signals + depends_on.
         if feature.copy_source_task_id is None:
-            from .copy_detection import detect_copy_task
+            from .copy_detection import CopySource, detect_copy
 
             predecessor = None
             deps = feature.dependencies or []
             if len(deps) == 1:
                 predecessor = self.queue.get_feature(deps[0])
-            copy_source = detect_copy_task(feature, predecessor=predecessor)
-            if copy_source is not None:
+            copy_source = detect_copy(feature, predecessor=predecessor)
+            if isinstance(copy_source, CopySource):
                 feature.copy_source_task_id = copy_source.predecessor_id
                 if copy_source.source_file:
                     feature.copy_source_file = copy_source.source_file
@@ -3375,7 +3278,7 @@ class PrimeContractorWorkflow:
             )
 
         # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal
-        if self._kaizen_config:
+        if self._kaizen.config:
             self._apply_kaizen_hints(gen_context)
 
     def _route_complexity(
@@ -3478,7 +3381,10 @@ class PrimeContractorWorkflow:
             )
             context_hash = _hashlib.sha256(ctx_payload.encode()).hexdigest()
             model = getattr(self.code_generator, "lead_agent", "") or ""
-            return make_cache_key(feature.description, context_hash, model)
+            return make_cache_key(
+                feature.description, context_hash, model,
+                target_files=feature.target_files or None,
+            )
         except Exception as exc:
             logger.debug("Cache key computation failed: %s", exc)
             return None
@@ -3710,8 +3616,6 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
-        # Sync any legacy ad-hoc attributes to SeedContext before freezing
-        self._sync_legacy_attributes()
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
         logger.info(

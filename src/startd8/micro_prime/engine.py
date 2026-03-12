@@ -739,43 +739,7 @@ def _strip_fences(code: str) -> str:
     return stripped
 
 
-def _is_stub_only_body(body: list) -> bool:
-    """Return True if a function/method body is solely a NotImplementedError stub.
-
-    Matches bodies that are exactly one statement: ``raise NotImplementedError``
-    or ``raise NotImplementedError()``, optionally preceded by a docstring.
-    Bodies with any other statements (assignments, returns, calls, etc.) are
-    considered real implementations — even if they also contain
-    ``raise NotImplementedError`` in a branch.
-    """
-    # Strip leading docstrings
-    stmts = body
-    if (
-        stmts
-        and isinstance(stmts[0], ast.Expr)
-        and isinstance(getattr(stmts[0], "value", None), ast.Constant)
-        and isinstance(stmts[0].value.value, str)
-    ):
-        stmts = stmts[1:]
-    if len(stmts) != 1:
-        return False
-    stmt = stmts[0]
-    if not isinstance(stmt, ast.Raise):
-        return False
-    exc = stmt.exc
-    if exc is None:
-        return False
-    # raise NotImplementedError
-    if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
-        return True
-    # raise NotImplementedError()
-    if (
-        isinstance(exc, ast.Call)
-        and isinstance(exc.func, ast.Name)
-        and exc.func.id == "NotImplementedError"
-    ):
-        return True
-    return False
+from startd8.utils.ast_checks import is_stub_only_body as _is_stub_only_body  # noqa: E402
 
 
 def _validate_file_whole_result(
@@ -1820,6 +1784,60 @@ class MicroPrimeEngine:
             output_tokens=output_tokens,
         )
 
+    def _try_moderate_ollama_whole(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+        classification_signals: Optional[set[str]],
+        design_doc_sections: Optional[list[str]],
+        task_description: Optional[str],
+    ) -> Optional[ElementResult]:
+        """Attempt single-shot Ollama generation for a MODERATE element.
+
+        Returns an ElementResult on success, None to fall through to decomposition.
+        Many MODERATE elements are generatable as a whole — decomposition adds
+        complexity and failure modes (29% moderate vs 10% simple in run-017).
+        """
+        if not (
+            self._config.moderate_ollama_whole_enabled
+            and element.decomposition_source is None
+            and self._is_ollama_whole_eligible(classification_signals)
+        ):
+            return None
+
+        _record_moderate_ollama_whole_attempted(file_path)
+        logger.info(
+            "Attempting Ollama-whole for MODERATE element %s before decomposition",
+            element.name,
+        )
+        result = self._handle_simple(
+            element, file_spec, skeleton, contracts, file_path,
+            f"moderate_ollama_whole: {reasoning}",
+            design_doc_sections=design_doc_sections,
+            task_description=task_description,
+        )
+        if result.success:
+            _record_moderate_ollama_whole_succeeded(file_path)
+            result.tier = TierClassification.MODERATE
+            result.decomposition_metadata = {
+                "strategy": "ollama_whole",
+                "llm_calls": 1,
+            }
+            logger.info(
+                "Ollama-whole succeeded for MODERATE element %s — skipping decomposition",
+                element.name,
+            )
+            return result
+        logger.info(
+            "Ollama-whole failed for %s — falling through to decomposition",
+            element.name,
+        )
+        return None
+
     def _generate_sub_elements(
         self,
         plan: "GenerationPlan",
@@ -2029,43 +2047,14 @@ class MicroPrimeEngine:
                 "Circuit breaker open",
             )
 
-        # Ollama-whole attempt (Kaizen run-017 recalibration): try single-shot
-        # local generation before decomposition.  Many MODERATE elements are
-        # generatable as a whole by Ollama — decomposition adds complexity and
-        # failure modes (29% moderate vs 10% simple failure rate in run-017).
-        if (
-            self._config.moderate_ollama_whole_enabled
-            and element.decomposition_source is None
-            and self._is_ollama_whole_eligible(classification_signals)
-        ):
-            _record_moderate_ollama_whole_attempted(file_path)
-            logger.info(
-                "Attempting Ollama-whole for MODERATE element %s before decomposition",
-                element.name,
-            )
-            ollama_result = self._handle_simple(
-                element, file_spec, skeleton, contracts, file_path,
-                f"moderate_ollama_whole: {reasoning}",
-                design_doc_sections=design_doc_sections,
-                task_description=task_description,
-            )
-            if ollama_result.success:
-                _record_moderate_ollama_whole_succeeded(file_path)
-                # Re-stamp tier as MODERATE (handle_simple stamps SIMPLE)
-                ollama_result.tier = TierClassification.MODERATE
-                ollama_result.decomposition_metadata = {
-                    "strategy": "ollama_whole",
-                    "llm_calls": 1,
-                }
-                logger.info(
-                    "Ollama-whole succeeded for MODERATE element %s — skipping decomposition",
-                    element.name,
-                )
-                return ollama_result
-            logger.info(
-                "Ollama-whole failed for %s — falling through to decomposition",
-                element.name,
-            )
+        # Ollama-whole attempt before decomposition (Kaizen run-017).
+        ollama_result = self._try_moderate_ollama_whole(
+            element, file_spec, skeleton, contracts, file_path,
+            reasoning, classification_signals, design_doc_sections,
+            task_description,
+        )
+        if ollama_result is not None:
+            return ollama_result
 
         # Null-guard for standalone process_element() path (R1-S5)
         if manifest is None:

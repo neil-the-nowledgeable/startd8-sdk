@@ -35,6 +35,7 @@ def make_cache_key(
     description: str,
     context_hash: str,
     model: str,
+    target_files: Optional[List[str]] = None,
 ) -> str:
     """Compute a SHA-256 cache key from generation inputs.
 
@@ -42,11 +43,15 @@ def make_cache_key(
         description: Feature/task description text.
         context_hash: Hash of the generation context (caller computes).
         model: Model agent spec string (e.g. "ollama:qwen2.5-coder:7b").
+        target_files: Sorted list of target file paths.  Prevents cache
+            collisions when two tasks share description + context but
+            target different files.
 
     Returns:
         Hex-encoded SHA-256 digest.
     """
-    payload = f"{description}\x00{context_hash}\x00{model}"
+    files_part = "\x01".join(sorted(target_files)) if target_files else ""
+    payload = f"{description}\x00{context_hash}\x00{model}\x00{files_part}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

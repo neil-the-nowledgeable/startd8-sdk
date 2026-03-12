@@ -68,81 +68,32 @@ def _infer_source_file(
     return source_file
 
 
-def detect_copy_task(feature: Any, predecessor: Optional[Any] = None) -> Optional[CopySource]:
-    """Detect whether *feature* is an identical-copy task.
-
-    Args:
-        feature: A ``FeatureSpec``-like object (duck-typed).
-        predecessor: Optional predecessor ``FeatureSpec`` used for fallback
-            inference of ``copy_source_file`` when not explicitly set.
-
-    Returns:
-        A :class:`CopySource` if the feature qualifies, otherwise ``None``.
-    """
-    # If copy_source_task_id is already set, trust it.
-    if feature.copy_source_task_id is not None:
-        source_file = _infer_source_file(feature, predecessor)
-        return CopySource(
-            predecessor_id=feature.copy_source_task_id,
-            source_file=source_file or "",
-        )
-
-    description = (feature.description or "").lower()
-
-    # Check for duplication signals.
-    has_duplication = any(signal in description for signal in _DUPLICATION_SIGNALS)
-    if not has_duplication:
-        return None
-
-    # Check for modification signals — if both present, this is
-    # copy_and_modify, not file_copy.
-    has_modification = any(signal in description for signal in _MODIFICATION_SIGNALS)
-    if has_modification:
-        logger.debug(
-            "Feature '%s' has both duplication and modification signals — "
-            "not a file_copy task",
-            getattr(feature, "name", feature.id),
-        )
-        return None
-
-    # Require exactly one dependency.
-    dependencies = getattr(feature, "dependencies", [])
-    if len(dependencies) != 1:
-        logger.debug(
-            "Feature '%s' has %d dependencies (need exactly 1 for copy detection)",
-            getattr(feature, "name", feature.id),
-            len(dependencies),
-        )
-        return None
-
-    predecessor_id = dependencies[0]
-    source_file = _infer_source_file(feature, predecessor)
-
-    return CopySource(
-        predecessor_id=predecessor_id,
-        source_file=source_file or "",
-    )
-
-
-def detect_copy_and_modify(
+def detect_copy(
     feature: Any, predecessor: Optional[Any] = None,
-) -> Optional[CopyModifySource]:
-    """Detect whether *feature* is a copy-and-modify task (REQ-MP-1003).
+) -> "Optional[CopySource | CopyModifySource]":
+    """Detect whether *feature* is a copy or copy-and-modify task.
 
-    A copy-and-modify task has BOTH duplication signals AND modification
-    signals in its description, plus exactly one dependency. The predecessor's
-    output should be injected as reference context for LLM generation.
+    Classification logic:
+    - ``copy_source_task_id`` explicitly set → CopySource (trusted)
+    - Duplication signals only + 1 dependency → CopySource
+    - Duplication + modification signals + 1 dependency → CopyModifySource
+    - Otherwise → None
 
     Args:
         feature: A ``FeatureSpec``-like object (duck-typed).
         predecessor: Optional predecessor for source file inference.
 
     Returns:
-        A :class:`CopyModifySource` if the feature qualifies, otherwise ``None``.
+        ``CopySource``, ``CopyModifySource``, or ``None``.
     """
-    # Skip if explicit copy_source_task_id is set — that's a pure file copy.
-    if getattr(feature, "copy_source_task_id", None) is not None:
-        return None
+    # Explicit copy_source_task_id — trust it as a pure file copy.
+    copy_source_task_id = getattr(feature, "copy_source_task_id", None)
+    if copy_source_task_id is not None:
+        source_file = _infer_source_file(feature, predecessor)
+        return CopySource(
+            predecessor_id=copy_source_task_id,
+            source_file=source_file or "",
+        )
 
     description = (getattr(feature, "description", None) or "").lower()
 
@@ -150,27 +101,52 @@ def detect_copy_and_modify(
     if not has_duplication:
         return None
 
-    has_modification = any(signal in description for signal in _MODIFICATION_SIGNALS)
-    if not has_modification:
-        return None
-
+    # Require exactly one dependency.
     dependencies = getattr(feature, "dependencies", [])
     if len(dependencies) != 1:
+        feature_name = getattr(feature, "name", getattr(feature, "id", "?"))
+        logger.debug(
+            "Feature '%s' has %d dependencies (need exactly 1 for copy detection)",
+            feature_name, len(dependencies),
+        )
         return None
 
     predecessor_id = dependencies[0]
     source_file = _infer_source_file(feature, predecessor)
 
-    logger.info(
-        "Feature '%s' detected as copy_and_modify from predecessor '%s'",
-        getattr(feature, "name", getattr(feature, "id", "?")),
-        predecessor_id,
-    )
+    has_modification = any(signal in description for signal in _MODIFICATION_SIGNALS)
+    if has_modification:
+        feature_name = getattr(feature, "name", getattr(feature, "id", "?"))
+        logger.info(
+            "Feature '%s' detected as copy_and_modify from predecessor '%s'",
+            feature_name, predecessor_id,
+        )
+        return CopyModifySource(
+            predecessor_id=predecessor_id,
+            source_file=source_file or "",
+        )
 
-    return CopyModifySource(
+    return CopySource(
         predecessor_id=predecessor_id,
         source_file=source_file or "",
     )
+
+
+# Backward-compat aliases for existing call sites.
+def detect_copy_task(
+    feature: Any, predecessor: Optional[Any] = None,
+) -> Optional[CopySource]:
+    """Detect identical-copy tasks. Delegates to :func:`detect_copy`."""
+    result = detect_copy(feature, predecessor)
+    return result if isinstance(result, CopySource) else None
+
+
+def detect_copy_and_modify(
+    feature: Any, predecessor: Optional[Any] = None,
+) -> Optional[CopyModifySource]:
+    """Detect copy-and-modify tasks. Delegates to :func:`detect_copy`."""
+    result = detect_copy(feature, predecessor)
+    return result if isinstance(result, CopyModifySource) else None
 
 
 # Default token budget for reference_implementation injection (REQ-MP-1003).

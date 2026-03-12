@@ -24,34 +24,7 @@ from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 logger = get_logger(__name__)
 
 
-def _is_stub_body(body: list[ast.stmt]) -> bool:
-    """Return True if the function/method body is solely ``raise NotImplementedError``."""
-    # Filter out docstrings (Expr nodes with a Constant string).
-    stmts = [
-        s
-        for s in body
-        if not (
-            isinstance(s, ast.Expr)
-            and isinstance(s.value, ast.Constant)
-        )
-    ]
-    if len(stmts) != 1:
-        return False
-    stmt = stmts[0]
-    if not isinstance(stmt, ast.Raise):
-        return False
-    exc = stmt.exc
-    if exc is None:
-        return False
-    # raise NotImplementedError
-    if isinstance(exc, ast.Name) and exc.id == "NotImplementedError":
-        return True
-    # raise NotImplementedError(...)
-    if isinstance(exc, ast.Call):
-        func = exc.func
-        if isinstance(func, ast.Name) and func.id == "NotImplementedError":
-            return True
-    return False
+from startd8.utils.ast_checks import is_stub_only_body as _is_stub_body  # noqa: E402
 
 
 def _make_spec_id(file_path: str, line: int, name: str) -> str:
