@@ -17,11 +17,12 @@ class TestClassifyTierLogging:
         assert tier is ComplexityTier.COMPLEX
         assert any("tier=complex" in r.message for r in caplog.records)
 
-    def test_logs_moderate_default(self, caplog):
+    def test_logs_complex_default(self, caplog):
+        """Default tier is COMPLEX (AC-R3-R7: collapsed MODERATE)."""
         signals = TaskComplexitySignals()
         with caplog.at_level(logging.INFO, logger="startd8.complexity.classifier"):
             classify_tier(signals)
-        assert any("tier=moderate" in r.message for r in caplog.records)
+        assert any("tier=complex" in r.message for r in caplog.records)
 
     def test_logs_simple(self, caplog):
         signals = TaskComplexitySignals(

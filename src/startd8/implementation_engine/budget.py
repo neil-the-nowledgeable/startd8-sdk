@@ -71,10 +71,13 @@ CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
 # CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
 # files need more prompt headroom for context injection; TRIVIAL tasks need
 # less.  Callers use ``budget_tokens_for_tier()`` to get the adjusted budget.
+# AC-R4-R2: MODERATE aligned to COMPLEX (1.25 → 1.75) since the default tier
+# collapsed from MODERATE → COMPLEX (AC-R3-R7).  Tasks formerly classified as
+# MODERATE now receive COMPLEX budgets to avoid under-budgeted prompts.
 _TIER_BUDGET_MULTIPLIERS: Dict[str, float] = {
     "TRIVIAL": 0.75,
     "SIMPLE": 1.0,
-    "MODERATE": 1.25,
+    "MODERATE": 1.75,
     "COMPLEX": 1.75,
 }
 
