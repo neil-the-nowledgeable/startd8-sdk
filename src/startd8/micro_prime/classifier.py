@@ -235,7 +235,11 @@ def classify_element_with_details(
     file_import_bump = _import_complexity_bump(file_spec, external_pkgs)
     if file_import_bump > 0:
         signals.add("external_imports")
-        complexity_score += file_import_bump
+        # Cap the score contribution so imports don't dominate all other
+        # signals.  Raw count is preserved in file_import_bump for the
+        # hard gate in _check_api_dependencies().
+        capped_bump = _cap_import_score(file_import_bump)
+        complexity_score += capped_bump
         reasons.append(f"external APIs: {file_import_bump} packages")
 
     # Pass 2: Per-element refinement (REQ-MP-511)
@@ -385,6 +389,26 @@ def _get_external_api_packages(config: MicroPrimeConfig) -> set[str]:
     if config.external_api_packages:
         return {p.strip() for p in config.external_api_packages if p and p.strip()}
     return set(_DEFAULT_EXTERNAL_API_PACKAGES)
+
+
+def _cap_import_score(raw_count: int) -> int:
+    """Cap import-based score contribution to prevent domination.
+
+    Raw import count is useful for the hard gate in _check_api_dependencies()
+    but adding it directly to the scoring path lets a single signal overwhelm
+    all others (max ±2 each).  Tiered buckets keep imports influential without
+    making them decisive.
+
+    Returns:
+        1 for 1-3 imports, 2 for 4-6, 3 for 7+.
+    """
+    if raw_count <= 0:
+        return 0
+    if raw_count <= 3:
+        return 1
+    if raw_count <= 6:
+        return 2
+    return 3
 
 
 def _import_complexity_bump(

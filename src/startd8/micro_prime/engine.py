@@ -1463,6 +1463,40 @@ class MicroPrimeEngine:
                         last_code=result.code,
                     )
 
+        # ── File-whole retry on total escalation ──
+        # When every element escalated (0% fill) and the file is small,
+        # retry file-whole generation instead of giving up.  The element
+        # classifier may have been too aggressive (e.g. import-heavy but
+        # structurally simple files).  File-whole uses the full skeleton
+        # prompt which gives the model more context than body-only.
+        success_count = sum(1 for er in file_result.element_results if er.success)
+        escalated_count = sum(1 for er in file_result.element_results if er.escalation)
+        if (
+            success_count == 0
+            and escalated_count > 0
+            and ollama_available
+            and self._is_file_ollama_whole_eligible(enriched_file_spec, skeleton)
+        ):
+            logger.info(
+                "All %d elements escalated for %s — retrying file-whole generation",
+                escalated_count, file_spec.file,
+            )
+            retry_result = self._attempt_file_ollama_whole(
+                enriched_file_spec, skeleton,
+                task_description=task_description,
+                domain_constraints=domain_constraints,
+            )
+            if retry_result is not None:
+                logger.info(
+                    "File-whole retry succeeded for %s (%d elements)",
+                    file_spec.file, escalated_count,
+                )
+                return retry_result
+            logger.info(
+                "File-whole retry also failed for %s — proceeding with escalation",
+                file_spec.file,
+            )
+
         # Post-splice defect detection: if skeleton markers or
         # `raise NotImplementedError` stubs remain, the skeleton is
         # incomplete.  Mark remaining stub elements as failed so the
