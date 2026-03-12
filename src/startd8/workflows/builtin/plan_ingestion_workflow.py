@@ -468,7 +468,10 @@ Use ## for top-level sections, ### for subsections.
 
 _INPUT_TRUNCATION = 200   # Max chars of prompt stored in StepResult.input
 _OUTPUT_TRUNCATION = 500  # Max chars of response stored in StepResult.output
-_REQ_ID_PATTERN = re.compile(r"\b(?:REQ|FR|NFR|R)[-_]?\d+\b", re.IGNORECASE)
+# Matches simple (REQ-001) and multi-segment (REQ-PMS-001) requirement IDs.
+_REQ_ID_PATTERN = re.compile(
+    r"\b(?:REQ|FR|NFR|R)(?:[-_][A-Za-z0-9]+)+\b", re.IGNORECASE,
+)
 
 # Depth tier calibration — channel adaptation pattern
 # (brief/standard/comprehensive map to feature complexity)
@@ -1687,10 +1690,13 @@ class PlanIngestionWorkflow(WorkflowBase):
     ) -> Dict[str, Any]:
         """Compute translation-quality metrics used for routing safeguards."""
         requirement_hints = requirements_hints or {}
-        requirement_ids = sorted(requirement_hints.keys())
-        if not requirement_ids:
-            requirements_corpus = "\n\n".join(requirements_docs.values())
-            requirement_ids = _extract_requirement_ids(requirements_corpus)
+        # Always extract IDs from requirements docs AND merge with hints —
+        # hints may only contain pipeline-innate IDs, missing plan-specific
+        # ones like REQ-PMS-*.  (Bug fix: hints were treated as exhaustive.)
+        hint_ids = set(requirement_hints.keys())
+        requirements_corpus = "\n\n".join(requirements_docs.values())
+        extracted_ids = set(_extract_requirement_ids(requirements_corpus))
+        requirement_ids = sorted(hint_ids | extracted_ids)
 
         # ── Classify pipeline-innate vs project-specific requirements ──
         pipeline_innate_ids: List[str] = []
@@ -1711,13 +1717,33 @@ class PlanIngestionWorkflow(WorkflowBase):
             artifact_type = hint.get("satisfied_by_artifact", "artifact")
             req_to_feature[rid] = [f"__pipeline_artifact:{artifact_type}"]
 
-        # Match project-specific requirements against plan text
+        # Match project-specific requirements against plan text.
+        # Strategy 1: search parsed feature fields (id, name, description).
+        # Strategy 2 (fallback): search the raw plan text for co-occurrence of
+        # the requirement ID and feature IDs — catches traceability tables like
+        # "| REQ-PMS-001 | F-002 |" and "**Satisfies:** REQ-PMS-001" lines that
+        # PARSE strips from feature descriptions.
+        feature_ids_set = {f.feature_id for f in parsed_plan.features}
+        raw_text = getattr(parsed_plan, "raw_text", "") or ""
+
         for rid in project_specific_ids:
             rid_pattern = re.compile(r'\b' + re.escape(rid) + r'\b', re.IGNORECASE)
+            # Strategy 1: feature field search
             matched_features = [
                 f.feature_id for f in parsed_plan.features
                 if rid_pattern.search(f"{f.feature_id} {f.name} {f.description}")
             ]
+            # Strategy 2: raw plan text proximity search
+            if not matched_features and raw_text:
+                for m in rid_pattern.finditer(raw_text):
+                    # Look in a ±500 char window around the requirement mention
+                    start = max(0, m.start() - 500)
+                    end = min(len(raw_text), m.end() + 500)
+                    window = raw_text[start:end]
+                    for fid in feature_ids_set:
+                        if re.search(r'\b' + re.escape(fid) + r'\b', window):
+                            matched_features.append(fid)
+                matched_features = sorted(set(matched_features))
             req_to_feature[rid] = matched_features
 
         req_acceptance: Dict[str, List[str]] = {}

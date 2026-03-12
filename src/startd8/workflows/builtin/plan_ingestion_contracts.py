@@ -17,7 +17,10 @@ from .plan_ingestion_models import ParsedFeature
 logger = get_logger(__name__)
 
 # Requirement ID pattern — shared with plan_ingestion_workflow.py
-_REQ_ID_PATTERN = re.compile(r"\b(?:REQ|FR|NFR|R)[-_]?\d+\b", re.IGNORECASE)
+# Matches simple (REQ-001) and multi-segment (REQ-PMS-001, NFR-SEC-42) IDs.
+_REQ_ID_PATTERN = re.compile(
+    r"\b(?:REQ|FR|NFR|R)(?:[-_][A-Za-z0-9]+)+\b", re.IGNORECASE,
+)
 
 
 def _extract_implementation_contracts(raw_text: str) -> Dict[str, str]:
