@@ -216,6 +216,99 @@ def _splice_function_body(
     return result
 
 
+def _get_implemented_methods(class_node: ast.ClassDef) -> set[str]:
+    """Return names of methods in *class_node* that have non-stub bodies.
+
+    A method is considered "implemented" if its body is anything other than
+    a single ``pass`` or ``raise NotImplementedError``.  These methods were
+    already spliced by SIMPLE/TRIVIAL element processing and should not be
+    duplicated when the CLASS element body is inserted.
+    """
+    implemented: set[str] = set()
+    for stmt in class_node.body:
+        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if len(stmt.body) == 1:
+            only = stmt.body[0]
+            if isinstance(only, ast.Pass):
+                continue
+            if _is_not_implemented_raise(only):
+                continue
+        implemented.add(stmt.name)
+    return implemented
+
+
+def _strip_duplicate_methods(
+    body_lines: list[str],
+    implemented: set[str],
+) -> list[str]:
+    """Remove method definitions and bare method-body fragments from *body_lines*.
+
+    Two cases are handled:
+
+    1. **Full ``def`` blocks** whose name is in *implemented* — the entire
+       method (def line + indented body) is removed.
+    2. **Bare statements** that are clearly method-body content appearing at
+       the base indentation level (``return …``, ``self.…``, ``raise …``) —
+       these are artifacts of Ollama generating a method body without the
+       ``def`` line.  They would cause ``SyntaxError`` at class level.
+    """
+    # Determine base indentation (the indentation of the first non-blank line).
+    # Only bare-statement stripping applies at this level; indented lines
+    # within method bodies are always preserved.
+    base_indent = 0
+    for line in body_lines:
+        if line.strip():
+            base_indent = len(line) - len(line.lstrip())
+            break
+
+    result: list[str] = []
+    skip_indent: Optional[int] = None  # indentation level of def being skipped
+
+    for line in body_lines:
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped) if stripped else 0
+
+        # If we're inside a method block being skipped, continue until dedent.
+        if skip_indent is not None:
+            if not stripped:
+                continue  # skip blank lines within skipped method
+            if indent > skip_indent:
+                continue  # still inside skipped method body
+            skip_indent = None  # dedented — stop skipping
+
+        # Check for method def lines whose names are already implemented.
+        if stripped.startswith(("def ", "async def ")):
+            matched = False
+            for prefix in ("async def ", "def "):
+                if stripped.startswith(prefix):
+                    rest = stripped[len(prefix):]
+                    name = rest.split("(")[0].strip()
+                    if name in implemented:
+                        skip_indent = indent
+                        matched = True
+                    break
+            if matched:
+                continue
+            result.append(line)
+            continue
+
+        # Strip bare statements that cannot legally appear at class level.
+        # Only at the base indentation — deeper lines belong to method bodies.
+        if (
+            stripped
+            and indent == base_indent
+            and not stripped.startswith(("#", "@", "class "))
+            and stripped.startswith(("return ", "return\n", "self.", "raise "))
+        ):
+            logger.debug("Stripping bare method-body fragment: %s", stripped[:60])
+            continue
+
+        result.append(line)
+
+    return result
+
+
 def _splice_class_body(
     body: str,
     element: ForwardElementSpec,
@@ -282,8 +375,52 @@ def _splice_class_body(
         if start < insert_idx:
             insert_idx -= (end - start + 1)
 
-    # Split out __init__ block if present in assembled body
+    # Guard: if Ollama generated the entire class definition (including the
+    # ``class ClassName(Base):`` header), strip the header and extract only
+    # the class body.  Without this, _splice_class_body would indent the
+    # entire class definition and insert it under the skeleton's class
+    # header, producing a nested duplicate (e.g. ``class X: class X: ...``).
     body_lines = body.splitlines()
+    _first_code = ""
+    for _bl in body_lines:
+        _stripped_bl = _bl.strip()
+        if _stripped_bl and not _stripped_bl.startswith(("#", "import ", "from ")):
+            _first_code = _stripped_bl
+            break
+    if _first_code.startswith("class ") and element.name in _first_code:
+        try:
+            _body_tree = ast.parse(body)
+            for _node in _body_tree.body:
+                if isinstance(_node, ast.ClassDef) and _node.name == element.name:
+                    # Extract only the class body (everything after the class header)
+                    _all = body.splitlines()
+                    _body_start = _node.body[0].lineno - 1
+                    _body_content = "\n".join(_all[_body_start:])
+                    body = textwrap.dedent(_body_content)
+                    body_lines = body.splitlines()
+                    logger.debug(
+                        "Stripped class header from generated body for %s",
+                        element.name,
+                    )
+                    break
+        except SyntaxError:
+            pass  # fall through to normal splice path
+
+    # ── Deduplication gate (run-038 fix) ──
+    # When both CLASS and METHOD elements are in the element list, methods
+    # are spliced first (SIMPLE/TRIVIAL tier).  The CLASS body from Ollama
+    # may include those same method implementations, causing duplicates
+    # and bare-statement bugs.  Strip any method defs whose names already
+    # have non-stub bodies in the skeleton class.
+    implemented = _get_implemented_methods(class_node)
+    if implemented:
+        body_lines = _strip_duplicate_methods(body_lines, implemented)
+        logger.debug(
+            "Stripped %d already-implemented methods from class body for %s: %s",
+            len(implemented), element.name, implemented,
+        )
+
+    # Split out __init__ block if present in assembled body
     init_block: Optional[list[str]] = None
     init_start = None
     init_indent = 0

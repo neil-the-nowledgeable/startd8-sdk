@@ -233,17 +233,19 @@ def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
         if stub_names:
             names = ", ".join(f"`{n}`" for n in stub_names)
             return f"remaining `raise NotImplementedError` stubs in {names}"
-        # Check 3: nested duplicate function definitions
+        # Check 3: nested duplicate function/class definitions
+        _def_class_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, _def_class_types):
                 for child in ast.walk(node):
                     if (
                         child is not node
-                        and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and isinstance(child, _def_class_types)
                         and child.name == node.name
                     ):
+                        kind = "class" if isinstance(node, ast.ClassDef) else "function"
                         return (
-                            f"nested duplicate function `{node.name}` "
+                            f"nested duplicate {kind} `{node.name}` "
                             f"(Ollama over-generation)"
                         )
     elif "raise NotImplementedError" in content:

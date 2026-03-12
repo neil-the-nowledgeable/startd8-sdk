@@ -1691,3 +1691,32 @@ class TestDetectAssemblyDefect:
         # Non-.py file with nested function text should not trigger AST check
         code = "def foo():\n    def foo():\n        pass\n"
         assert _detect_assembly_defect(code, "foo.html") is None
+
+    def test_detects_nested_duplicate_class(self) -> None:
+        """Nested duplicate class definitions are caught (splicer over-generation)."""
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = (
+            "class EmailService:\n"
+            "    class EmailService:\n"
+            "        def send(self):\n"
+            "            pass\n"
+            "    def send(self):\n"
+            "        pass\n"
+        )
+        result = _detect_assembly_defect(code, "email.py")
+        assert result is not None
+        assert "nested duplicate" in result
+        assert "class" in result
+        assert "EmailService" in result
+
+    def test_allows_differently_named_nested_class(self) -> None:
+        """A nested class with a different name is not a defect."""
+        from startd8.micro_prime.prime_adapter import _detect_assembly_defect
+
+        code = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        pass\n"
+        )
+        assert _detect_assembly_defect(code, "nested.py") is None

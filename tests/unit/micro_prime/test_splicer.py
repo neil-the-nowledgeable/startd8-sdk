@@ -13,7 +13,9 @@ from startd8.micro_prime.splicer import (
     _extract_body,
     _find_def_line,
     _find_stub_after_def,
+    _get_implemented_methods,
     _inject_imports,
+    _strip_duplicate_methods,
     splice_body_into_skeleton,
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
@@ -400,3 +402,181 @@ class TestSpliceImportReinjection:
         result = splice_body_into_skeleton(body, element, skeleton)
         assert result is not None
         assert result.count("from datetime import datetime") == 1
+
+
+class TestSpliceClassBodyStripsHeader:
+    """Regression: Ollama may generate the entire class definition for a CLASS element.
+
+    The splicer must strip the ``class ClassName(Base):`` header and splice
+    only the class body.  Without this, the skeleton ends up with a nested
+    duplicate class (e.g. ``class X: class X: ...``).
+    """
+
+    def test_class_header_stripped_from_body(self):
+        """When body starts with class header, splicer strips it."""
+        skeleton = (
+            "class DummyService(BaseService):\n"
+            "    \"\"\"Dummy service.\"\"\"\n"
+            "\n"
+            "    def send(self, msg: str) -> None:\n"
+            "        raise NotImplementedError\n"
+        )
+        # Ollama generates the entire class definition
+        body = (
+            "class DummyService(BaseService):\n"
+            "    def __init__(self):\n"
+            "        self.logger = None\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="DummyService",
+            signature=Signature(params=[], return_annotation=None),
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        # Must NOT have a nested class definition
+        assert result.count("class DummyService") == 1
+        # Body content should still be present
+        assert "self.logger = None" in result
+        # Must parse
+        ast.parse(result)
+
+    def test_body_only_class_not_modified(self):
+        """When body is already body-only (no class header), splice works normally."""
+        skeleton = (
+            "class MyService:\n"
+            "    \"\"\"Service.\"\"\"\n"
+            "\n"
+            "    pass\n"
+        )
+        body = "x: int = 42"
+        element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="MyService",
+            signature=Signature(params=[], return_annotation=None),
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        assert result.count("class MyService") == 1
+        assert "x: int = 42" in result
+        ast.parse(result)
+
+
+class TestClassBodyDeduplication:
+    """Tests for run-038 class/method duplicate prevention."""
+
+    def test_get_implemented_methods_detects_non_stub(self):
+        """Methods with real bodies are detected as implemented."""
+        code = (
+            "class Foo:\n"
+            "    def bar(self):\n"
+            "        return 1\n"
+            "    def baz(self):\n"
+            "        raise NotImplementedError\n"
+            "    def qux(self):\n"
+            "        pass\n"
+        )
+        tree = ast.parse(code)
+        class_node = tree.body[0]
+        result = _get_implemented_methods(class_node)
+        assert result == {"bar"}
+
+    def test_strip_duplicate_methods_removes_full_def(self):
+        """Full def blocks matching implemented methods are stripped."""
+        body_lines = [
+            "def bar(self):",
+            "    return 1",
+            "def baz(self):",
+            "    return 2",
+        ]
+        result = _strip_duplicate_methods(body_lines, {"bar"})
+        assert len(result) == 2
+        assert "def baz(self):" in result[0]
+
+    def test_strip_duplicate_methods_strips_bare_return(self):
+        """Bare return statements at class level are stripped."""
+        body_lines = [
+            "self.logger.info('hello')",
+            "return demo_pb2.Empty()",
+        ]
+        result = _strip_duplicate_methods(body_lines, set())
+        assert len(result) == 0
+
+    def test_strip_duplicate_methods_preserves_class_attrs(self):
+        """Class-level attributes are preserved."""
+        body_lines = [
+            "x: int = 42",
+            "y: str = 'hello'",
+        ]
+        result = _strip_duplicate_methods(body_lines, set())
+        assert len(result) == 2
+
+    def test_class_splice_no_duplicate_methods_run038(self):
+        """End-to-end: CLASS splice doesn't duplicate already-spliced methods.
+
+        Reproduces the run-038 failure pattern where DummyEmailService
+        and EmailService had duplicate method definitions after both
+        CLASS and METHOD elements were processed.
+        """
+        # Skeleton after SIMPLE method elements have been spliced in
+        skeleton = (
+            "class EmailService(BaseEmailService):\n"
+            "    def __init__(self):\n"
+            "        raise NotImplementedError\n"
+            "\n"
+            "    def send_email(self, addr, content):\n"
+            "        self.client.send(addr, content)\n"  # already spliced
+            "\n"
+            "    def SendOrderConfirmation(self, request, context):\n"
+            "        return Empty()\n"  # already spliced
+        )
+        # Ollama generates full class body (including method implementations)
+        body = (
+            "class EmailService(BaseEmailService):\n"
+            "    def __init__(self):\n"
+            "        self.client = None\n"
+            "\n"
+            "    def send_email(self, addr, content):\n"
+            "        self.client.send(addr, content)\n"
+            "\n"
+            "    def SendOrderConfirmation(self, request, context):\n"
+            "        return Empty()\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="EmailService",
+            bases=["BaseEmailService"],
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        # No duplicate methods
+        assert result.count("def send_email") == 1
+        assert result.count("def SendOrderConfirmation") == 1
+        ast.parse(result)
+
+    def test_class_splice_bare_body_stripped_run038(self):
+        """CLASS splice strips bare method-body content that Ollama generates
+        without a def line (the DummyEmailService bare-statement bug).
+        """
+        # Skeleton after SIMPLE SendOrderConfirmation was spliced
+        skeleton = (
+            "class DummyEmailService(BaseEmailService):\n"
+            "    def SendOrderConfirmation(self, request, context):\n"
+            "        return Empty()\n"  # already spliced
+        )
+        # Ollama generates just the method body (no def line) as class-level content
+        body = (
+            "self.logger.info('sending')\n"
+            "return Empty()\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="DummyEmailService",
+            bases=["BaseEmailService"],
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        # Bare statements should be stripped; method still present
+        assert "def SendOrderConfirmation" in result
+        assert result.count("def SendOrderConfirmation") == 1
+        ast.parse(result)
