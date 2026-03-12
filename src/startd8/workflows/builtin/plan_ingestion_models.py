@@ -7,7 +7,8 @@ plan ingestion pipeline: parse → assess → transform → refine → emit.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from .schema_versions import ARTISAN_SCHEMA_VERSION
 
@@ -15,6 +16,7 @@ from .schema_versions import ARTISAN_SCHEMA_VERSION
 __all__ = [
     "ContractorRoute",
     "IngestionPhase",
+    "PlanIngestionConfig",
     "ParsedFeature",
     "ParsedPlan",
     "ComplexityScore",
@@ -40,6 +42,169 @@ class IngestionPhase(str, Enum):
     EMIT = "emit"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+def _as_bool_cfg(raw: Any, default: bool) -> bool:
+    """Parse truthy/falsy config values (internal to PlanIngestionConfig)."""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_file_list_cfg(raw: Union[str, list, None]) -> List[str]:
+    """Parse a file list from string (comma-separated) or list."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        return [f.strip() for f in raw.split(",") if f.strip()]
+    return list(raw)
+
+
+@dataclass
+class PlanIngestionConfig:
+    """Typed configuration for PlanIngestionWorkflow (AC-R1).
+
+    Consolidates 30+ config.get() calls and their parsing/casting/defaulting
+    into a single typed model. Created via ``from_dict(config)`` at the top
+    of ``_execute()``.
+    """
+
+    # Required
+    plan_path: Path = field(default_factory=lambda: Path("."))
+    output_dir: Path = field(default_factory=lambda: Path("."))
+
+    # Routing & complexity
+    complexity_threshold: int = 40
+    force_route: Optional[str] = "prime"  # AC-R3 default
+
+    # Review
+    review_rounds: int = 2
+    skip_arc_review: bool = False
+    review_quality_tier: str = "flagship"
+    review_providers: Optional[List[str]] = None
+
+    # LLM settings
+    llm_read_timeout_seconds: float = 300.0
+    llm_max_attempts: int = 1
+    enable_heuristic_parse_fallback: bool = True
+
+    # Scope & files
+    scope: Optional[str] = None
+    context_files: Optional[List[str]] = None
+    contextcore_export_dir: Optional[str] = None
+    requirements_files: List[str] = field(default_factory=list)
+
+    # Cost
+    warn_cost_usd: Optional[float] = None
+    max_cost_usd: Optional[float] = None
+
+    # Quality gates
+    min_export_coverage: float = 0.0
+    low_quality_policy: str = "bias_artisan"
+    min_requirements_coverage: float = 70.0
+    min_artifact_mapping_coverage: float = 70.0
+    max_contract_conflicts: int = 2
+
+    # Kaizen
+    kaizen_capture: bool = False
+    kaizen_config_path: Optional[str] = None
+
+    # Task tracking
+    generate_task_tracking: bool = False
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    sprint_id: Optional[str] = None
+    install_to_contextcore: bool = False
+    emit_ndjson_events: bool = True
+
+    # Misc
+    project_root: Optional[str] = None
+    contextcore_yaml: Optional[str] = None
+    force_regenerate: bool = False
+
+    @classmethod
+    def from_dict(cls, config: Dict[str, Any]) -> "PlanIngestionConfig":
+        """Parse a raw config dict into a typed PlanIngestionConfig.
+
+        Consolidates all casting, parsing, and defaulting that was previously
+        scattered across 30+ lines at the top of ``_execute()``.
+        """
+        plan_path = Path(str(config["plan_path"])).expanduser().resolve()
+        output_dir = Path(str(config.get("output_dir", "."))).expanduser().resolve()
+
+        # Optional float fields
+        _raw_warn = config.get("warn_cost_usd")
+        warn_cost_usd = float(_raw_warn) if _raw_warn is not None else None
+        _raw_max = config.get("max_cost_usd")
+        max_cost_usd = float(_raw_max) if _raw_max is not None else None
+
+        # Requirements consolidation
+        requirements_files = _parse_file_list_cfg(config.get("requirements_files"))
+        requirements_path = config.get("requirements_path")
+        if requirements_path:
+            requirements_files = [str(requirements_path)] + requirements_files
+
+        # Low quality policy with validation
+        _VALID_QUALITY_POLICIES = {"fail", "bias_artisan"}
+        low_quality_policy = str(config.get("low_quality_policy", "bias_artisan")).strip().lower()
+        if low_quality_policy not in _VALID_QUALITY_POLICIES:
+            low_quality_policy = "bias_artisan"
+
+        # Context files parsing
+        _raw_cf = config.get("context_files")
+        context_files: Optional[List[str]] = None
+        if _raw_cf:
+            if isinstance(_raw_cf, str):
+                context_files = [f.strip() for f in _raw_cf.split(",") if f.strip()]
+            else:
+                context_files = list(_raw_cf)
+
+        return cls(
+            plan_path=plan_path,
+            output_dir=output_dir,
+            complexity_threshold=int(config.get("complexity_threshold", 40)),
+            force_route=config.get("force_route", "prime"),
+            review_rounds=int(config.get("review_rounds", 2)),
+            skip_arc_review=_as_bool_cfg(config.get("skip_arc_review"), False),
+            review_quality_tier=str(config.get("review_quality_tier", "flagship")),
+            review_providers=config.get("providers"),
+            llm_read_timeout_seconds=float(config.get("llm_read_timeout_seconds", 300)),
+            llm_max_attempts=int(config.get("llm_max_attempts", 1)),
+            enable_heuristic_parse_fallback=_as_bool_cfg(
+                config.get("enable_heuristic_parse_fallback"), True,
+            ),
+            scope=config.get("scope"),
+            context_files=context_files,
+            contextcore_export_dir=config.get("contextcore_export_dir"),
+            requirements_files=requirements_files,
+            warn_cost_usd=warn_cost_usd,
+            max_cost_usd=max_cost_usd,
+            min_export_coverage=float(config.get("min_export_coverage", 0)),
+            low_quality_policy=low_quality_policy,
+            min_requirements_coverage=float(config.get("min_requirements_coverage", 70)),
+            min_artifact_mapping_coverage=float(config.get("min_artifact_mapping_coverage", 70)),
+            max_contract_conflicts=int(config.get("max_contract_conflicts", 2)),
+            kaizen_capture=_as_bool_cfg(config.get("kaizen"), False),
+            kaizen_config_path=config.get("kaizen_config_path"),
+            generate_task_tracking=config.get("generate_task_tracking", False),
+            project_id=config.get("project_id"),
+            project_name=config.get("project_name"),
+            sprint_id=config.get("sprint_id"),
+            install_to_contextcore=config.get("install_to_contextcore", False),
+            emit_ndjson_events=config.get("emit_ndjson_events", True),
+            project_root=config.get("project_root"),
+            contextcore_yaml=config.get("contextcore_yaml"),
+            force_regenerate=config.get("force_regenerate", False),
+        )
 
 
 @dataclass

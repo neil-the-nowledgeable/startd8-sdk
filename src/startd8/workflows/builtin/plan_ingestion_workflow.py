@@ -67,6 +67,7 @@ from .plan_ingestion_models import (
     IngestionState,
     ParsedFeature,
     ParsedPlan,
+    PlanIngestionConfig,
 )
 from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
 from ...logging_config import get_logger
@@ -3810,55 +3811,39 @@ class PlanIngestionWorkflow(WorkflowBase):
         steps: List[StepResult] = []
         state = IngestionState()
 
-        plan_path = Path(str(config["plan_path"])).expanduser().resolve()
-        output_dir = Path(str(config.get("output_dir", "."))).expanduser().resolve()
-        threshold = int(config.get("complexity_threshold", 40))
-        # AC-R3: Default to prime — Artisan workflow is on hold, Prime is the
-        # only active construction path.  Pass force_route=None to re-enable
-        # LLM-based routing when Artisan resumes.
-        force_route = config.get("force_route", "prime")
-        review_rounds = int(config.get("review_rounds", 2))
-        skip_arc_review = _as_bool(config.get("skip_arc_review"), False)
-        review_quality_tier = str(config.get("review_quality_tier", "flagship"))
-        review_providers: Optional[List[str]] = config.get("providers")
-        contextcore_export_dir = config.get("contextcore_export_dir")
-        min_export_coverage = float(config.get("min_export_coverage", 0))
-        scope = config.get("scope")
-        _raw_warn = config.get("warn_cost_usd")
-        warn_cost_usd = float(_raw_warn) if _raw_warn is not None else None
-        _raw_max = config.get("max_cost_usd")
-        max_cost_usd = float(_raw_max) if _raw_max is not None else None
-        context_files = _parse_context_files(config.get("context_files"))
-        llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 300))
-        llm_max_attempts = int(config.get("llm_max_attempts", 1))
-        enable_heuristic_parse_fallback = _as_bool(
-            config.get("enable_heuristic_parse_fallback"), True
-        )
-        requirements_path = config.get("requirements_path")
-        requirements_files = _parse_file_list(config.get("requirements_files"))
-        if requirements_path:
-            requirements_files = [str(requirements_path)] + requirements_files
-        _VALID_QUALITY_POLICIES = {"fail", "bias_artisan"}
-        low_quality_policy = str(config.get("low_quality_policy", "bias_artisan")).strip().lower()
-        if low_quality_policy not in _VALID_QUALITY_POLICIES:
-            logger.warning(
-                "Unrecognized low_quality_policy %r — defaulting to 'bias_artisan'. "
-                "Valid values: %s",
-                low_quality_policy, _VALID_QUALITY_POLICIES,
-            )
-            low_quality_policy = "bias_artisan"
-        min_requirements_coverage = float(config.get("min_requirements_coverage", 70))
-        min_artifact_mapping_coverage = float(config.get("min_artifact_mapping_coverage", 70))
-        max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
-        timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
-        retry_config = RetryConfig(max_attempts=llm_max_attempts)
-        kaizen_capture = _as_bool(config.get("kaizen"), False)
-        self._kaizen_capture = kaizen_capture
+        # AC-R1: Typed config replaces 30+ config.get() calls.
+        cfg = PlanIngestionConfig.from_dict(config)
+
+        # Local aliases for the most-referenced fields (used dozens of times
+        # across phase methods that receive them as parameters).
+        plan_path = cfg.plan_path
+        output_dir = cfg.output_dir
+        threshold = cfg.complexity_threshold
+        force_route = cfg.force_route
+        review_rounds = cfg.review_rounds
+        skip_arc_review = cfg.skip_arc_review
+        review_quality_tier = cfg.review_quality_tier
+        review_providers = cfg.review_providers
+        contextcore_export_dir = cfg.contextcore_export_dir
+        min_export_coverage = cfg.min_export_coverage
+        scope = cfg.scope
+        warn_cost_usd = cfg.warn_cost_usd
+        max_cost_usd = cfg.max_cost_usd
+        context_files = cfg.context_files
+        enable_heuristic_parse_fallback = cfg.enable_heuristic_parse_fallback
+        requirements_files = cfg.requirements_files
+        low_quality_policy = cfg.low_quality_policy
+        min_requirements_coverage = cfg.min_requirements_coverage
+        min_artifact_mapping_coverage = cfg.min_artifact_mapping_coverage
+        max_contract_conflicts = cfg.max_contract_conflicts
+        timeout_config = TimeoutConfig(read=cfg.llm_read_timeout_seconds)
+        retry_config = RetryConfig(max_attempts=cfg.llm_max_attempts)
+        self._kaizen_capture = cfg.kaizen_capture
         self._kaizen_output_dir = output_dir
 
         # Kaizen config: prompt suffixes + threshold override (REQ-KPI-500)
         self._kaizen_config: Optional[PlanIngestionKaizenConfig] = None
-        _kaizen_config_path = config.get("kaizen_config_path")
+        _kaizen_config_path = cfg.kaizen_config_path
         if not _kaizen_config_path:
             # Auto-discover kaizen-config.json in output or ancestor dirs
             # (mirrors run-atomic.sh which places it at pipeline-output/$NAME/)
@@ -3930,16 +3915,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         # Task tracking (opt-in)
-        generate_task_tracking = config.get("generate_task_tracking", False)
         tracking_config = None
-        if generate_task_tracking:
+        if cfg.generate_task_tracking:
             from .plan_ingestion_models import TaskTrackingConfig
             tracking_config = TaskTrackingConfig(
-                project_id=config.get("project_id"),
-                project_name=config.get("project_name"),
-                sprint_id=config.get("sprint_id"),
-                install_to_contextcore=config.get("install_to_contextcore", False),
-                emit_ndjson_events=config.get("emit_ndjson_events", True),
+                project_id=cfg.project_id,
+                project_name=cfg.project_name,
+                sprint_id=cfg.sprint_id,
+                install_to_contextcore=cfg.install_to_contextcore,
+                emit_ndjson_events=cfg.emit_ndjson_events,
             )
 
         total_steps = 6  # preflight, parse, assess, transform, refine, emit
@@ -4016,15 +4000,14 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # --- DISCOVER .contextcore.yaml (needed by both PREFLIGHT and MANIFEST) ---
             contextcore_yaml: Optional[Path] = None
-            _raw_cc_yaml = config.get("contextcore_yaml")
+            _raw_cc_yaml = cfg.contextcore_yaml
             if _raw_cc_yaml is not None:
                 contextcore_yaml = Path(str(_raw_cc_yaml)).expanduser()
             else:
                 # Auto-discover: project_root (most specific), output_dir, cwd
                 candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
-                project_root = config.get("project_root")
-                if project_root:
-                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
+                if cfg.project_root:
+                    candidates.insert(0, Path(cfg.project_root) / ".contextcore.yaml")
                 for candidate in candidates:
                     if candidate.exists():
                         contextcore_yaml = candidate
@@ -4400,8 +4383,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 # enrich task descriptions for code generation.
                 _refine_context = list(context_files or [])
                 _refine_scope = scope
-                _refine_apply = config.get("enable_apply")
-                _refine_triage = config.get("enable_triage")
+                _refine_apply = config.get("enable_apply")   # not in cfg — refine-only
+                _refine_triage = config.get("enable_triage")  # not in cfg — refine-only
 
                 _refine_profile: Optional[Dict[str, Any]] = None
 
@@ -4528,11 +4511,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
-            _emit_project_root = (
-                Path(config.get("project_root"))
-                if config.get("project_root")
-                else None
-            )
+            _emit_project_root = Path(cfg.project_root) if cfg.project_root else None
 
             emit_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,
@@ -4548,7 +4527,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 review_output=review_output,
                 project_metadata=project_metadata,
                 project_root=_emit_project_root,
-                force_regenerate=config.get("force_regenerate", False),
+                force_regenerate=cfg.force_regenerate,
             )
 
             # Emit deterministic traceability report for downstream auditing.
