@@ -26,6 +26,10 @@ from startd8.micro_prime.models import (
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
 
+# AC-R4-R5: decomposition_enabled defaults to False; tests that exercise
+# decomposition must opt in explicitly.
+_DECOMP_CONFIG = MicroPrimeConfig(decomposition_enabled=True)
+
 
 # ── Enum Tests (REQ-MP-1004) ─────────────────────────────────────────
 
@@ -117,7 +121,7 @@ class TestClassDecomposeAllTrivial:
         mock_registry.is_trivial.return_value = True
 
         strategy = ClassDecomposeStrategy(
-            config=MicroPrimeConfig(),
+            config=_DECOMP_CONFIG,
             template_registry=mock_registry,
         )
         plan = strategy.plan(
@@ -142,7 +146,7 @@ class TestClassDecomposeAllTrivial:
         mock_registry.is_trivial.return_value = False
 
         strategy = ClassDecomposeStrategy(
-            config=MicroPrimeConfig(),
+            config=_DECOMP_CONFIG,
             template_registry=mock_registry,
         )
         plan = strategy.plan(
@@ -160,7 +164,7 @@ class TestClassDecomposeAllTrivial:
         flags should remain at their default values."""
         class_elem, file_spec, manifest = _make_class_file_spec()
 
-        strategy = ClassDecomposeStrategy(config=MicroPrimeConfig())
+        strategy = ClassDecomposeStrategy(config=_DECOMP_CONFIG)
         plan = strategy.plan(
             class_elem, file_spec, manifest,
             classification_reason="class definition",
@@ -193,7 +197,7 @@ class TestTemplateShortCircuit:
         mock_registry = MagicMock()
         mock_registry.match.return_value = mock_match
 
-        config = MicroPrimeConfig()
+        config = _DECOMP_CONFIG
         engine = MicroPrimeEngine(
             config=config,
             template_registry=mock_registry,
@@ -241,7 +245,7 @@ class TestTemplateShortCircuit:
         mock_registry = MagicMock()
         mock_registry.match.return_value = None
 
-        config = MicroPrimeConfig()
+        config = _DECOMP_CONFIG
         engine = MicroPrimeEngine(
             config=config,
             template_registry=mock_registry,
@@ -295,7 +299,7 @@ class TestDecomposerWiring:
 
         mock_registry = MagicMock()
         engine = MicroPrimeEngine(
-            config=MicroPrimeConfig(),
+            config=_DECOMP_CONFIG,
             template_registry=mock_registry,
         )
 

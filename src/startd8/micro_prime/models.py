@@ -333,7 +333,11 @@ class MicroPrimeConfig(BaseModel):
     simple_threshold: int = 0
     docstring_length_threshold: int = 200
     # Decomposer settings (REQ-MP-908)
-    decomposition_enabled: bool = True
+    # AC-R4-R5: Default off — decomposition is the primary source of accidental
+    # complexity (decomposer 1,029 + splicer 856 + element repair 1,015 lines).
+    # MODERATE elements now prefer Ollama-whole (moderate_ollama_whole_enabled)
+    # or escalate to cloud.  Pass decomposition_enabled=True to opt in.
+    decomposition_enabled: bool = False
     max_sub_elements: int = 5
     max_helpers_per_function: int = 4
     decomposition_confidence_threshold: float = 0.6

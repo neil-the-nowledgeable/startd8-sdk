@@ -24,6 +24,10 @@ from startd8.micro_prime.decomposer import (
 from startd8.micro_prime.models import MicroPrimeConfig
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
+# AC-R4-R5: decomposition_enabled defaults to False; tests that exercise
+# decomposition must opt in explicitly.
+_DECOMP_CONFIG = MicroPrimeConfig(decomposition_enabled=True)
+
 
 # ── ClassDecomposeStrategy Tests (REQ-MP-901) ───────────────────────
 
@@ -425,7 +429,7 @@ class TestModerateDecomposer:
         self, class_element_with_methods, class_file_spec, class_manifest,
     ):
         """can_decompose returns True for decomposable class."""
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         assert decomposer.can_decompose(
             class_element_with_methods, class_file_spec, class_manifest,
             "class definition; long docstring",
@@ -440,7 +444,7 @@ class TestModerateDecomposer:
             name="process_data",
             signature=Signature(params=[], return_annotation="None"),
         )
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         assert decomposer.can_decompose(
             func, class_file_spec, class_manifest, "scoring",
         ) is False
@@ -460,7 +464,7 @@ class TestModerateDecomposer:
         self, class_element_with_methods, class_file_spec, class_manifest,
     ):
         """decompose() returns a plan with 1 sub-element for CustomJsonFormatter."""
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         plan = decomposer.decompose(
             class_element_with_methods, class_file_spec, class_manifest,
             "class definition; long docstring",
@@ -486,7 +490,7 @@ class TestModerateDecomposer:
         self, class_element_with_methods, class_file_spec, class_manifest,
     ):
         """decompose() is the single entry point — returns plan directly."""
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         plan = decomposer.decompose(
             class_element_with_methods, class_file_spec, class_manifest,
             "class definition; long docstring",
@@ -528,7 +532,7 @@ class TestModerateDecomposer:
         self, class_element_with_methods, class_file_spec, class_manifest,
     ):
         """assemble() delegates to the matching strategy."""
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         plan = decomposer.decompose(
             class_element_with_methods, class_file_spec, class_manifest,
             "class definition",
@@ -997,7 +1001,7 @@ class TestModerateDecomposerFunctionChain:
             file="src/orders.py", imports=[], elements=[func],
         )
         manifest = ForwardManifest(file_specs={"src/orders.py": file_spec})
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         assert decomposer.can_decompose(
             func, file_spec, manifest, "scoring",
         ) is True
@@ -1016,7 +1020,7 @@ class TestModerateDecomposerFunctionChain:
             file="src/orders.py", imports=[], elements=[func],
         )
         manifest = ForwardManifest(file_specs={"src/orders.py": file_spec})
-        decomposer = ModerateDecomposer()
+        decomposer = ModerateDecomposer(config=_DECOMP_CONFIG)
         plan = decomposer.decompose(
             func, file_spec, manifest, "scoring",
         )
@@ -1040,6 +1044,7 @@ class TestHandleModerateInEngine:
         from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
 
         config = MicroPrimeConfig(
+            decomposition_enabled=True,  # AC-R4-R5: opt in
             enable_simple_decomposer=False,
             moderate_ollama_whole_enabled=False,
         )
@@ -1093,7 +1098,7 @@ class TestHandleModerateInEngine:
         """inspect_decomposition returns viability info for dry-run."""
         from startd8.micro_prime.engine import MicroPrimeEngine
 
-        engine = MicroPrimeEngine()
+        engine = MicroPrimeEngine(config=_DECOMP_CONFIG)
         info = engine.inspect_decomposition(
             class_element_with_methods, class_file_spec, class_manifest,
             "class definition; long docstring",
@@ -1108,7 +1113,7 @@ class TestHandleModerateInEngine:
         """inspect_decomposition returns not viable when manifest is None."""
         from startd8.micro_prime.engine import MicroPrimeEngine
 
-        engine = MicroPrimeEngine()
+        engine = MicroPrimeEngine(config=_DECOMP_CONFIG)
         info = engine.inspect_decomposition(
             class_element_with_methods, class_file_spec, None,
             "class definition",

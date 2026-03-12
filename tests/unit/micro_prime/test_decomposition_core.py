@@ -33,7 +33,8 @@ from startd8.utils.code_manifest import ElementKind, Param, Signature
 
 @pytest.fixture
 def config() -> MicroPrimeConfig:
-    return MicroPrimeConfig()
+    # AC-R4-R5: decomposition_enabled defaults to False; opt in for tests.
+    return MicroPrimeConfig(decomposition_enabled=True)
 
 
 @pytest.fixture
@@ -570,6 +571,11 @@ class TestBackwardCompatibility:
 
 class TestRecursionConfigDefaults:
     """REQ-MP-915: config defaults preserve current behavior (no recursion)."""
+
+    def test_decomposition_disabled_by_default(self):
+        """AC-R4-R5: decomposition_enabled defaults to False."""
+        config = MicroPrimeConfig()
+        assert config.decomposition_enabled is False
 
     def test_recursion_config_defaults(self):
         config = MicroPrimeConfig()

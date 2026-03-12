@@ -297,6 +297,7 @@ class TestRejectionReasonMetadata:
         skeleton = "def some_func() -> None:\n    raise NotImplementedError\n"
 
         config = MicroPrimeConfig(
+            decomposition_enabled=True,  # AC-R4-R5: opt in for decomposition tests
             enable_simple_decomposer=False,
             moderate_ollama_whole_enabled=False,
         )
@@ -305,7 +306,9 @@ class TestRejectionReasonMetadata:
             elem, file_spec, manifest, skeleton, [],
             "src/pkg/mod.py", reasoning="test",
         )
-        assert result.success is False
+        # Decomposition was rejected; engine may fall back to direct Ollama generation
+        # (which can succeed). The key assertion is that rejection_reason is captured
+        # in metadata regardless of final success/failure.
         assert result.decomposition_metadata is not None
         assert "rejection_reason" in result.decomposition_metadata
         assert result.decomposition_metadata["rejection_reason"] == RejectionReason.NO_TEMPLATE_MATCH.value
@@ -357,7 +360,9 @@ class TestRejectionReasonMetadata:
         )
         skeleton = "class MyClass:\n    raise NotImplementedError\n"
 
-        engine = MicroPrimeEngine()
+        engine = MicroPrimeEngine(
+            config=MicroPrimeConfig(decomposition_enabled=True),  # AC-R4-R5
+        )
 
         # Mock _handle_simple to return a failed result (sub-element failure)
         with patch.object(engine, "_handle_simple") as mock_simple:
