@@ -207,12 +207,12 @@ def main() -> int:
     )
     # Micro Prime local generation (REQ-MP-700)
     parser.add_argument(
-        "--micro-prime", action="store_true", default=True,
-        help="Enable Micro Prime as primary generator with LeadContractor fallback (default: on)",
+        "--micro-prime", action="store_true", default=False,
+        help="Enable Micro Prime element-by-element generation with LeadContractor fallback (default: off, AC-R4-R3)",
     )
     parser.add_argument(
         "--no-micro-prime", action="store_true",
-        help="Disable Micro Prime (use LeadContractor only)",
+        help="Disable Micro Prime (use LeadContractor only, redundant when --micro-prime is not passed)",
     )
     parser.add_argument(
         "--micro-prime-model", default=None,
@@ -589,8 +589,8 @@ def main() -> int:
             else output_dir / "kaizen-prompts"
         )
         kaizen_dir.mkdir(parents=True, exist_ok=True)
-        workflow._kaizen_enabled = True
-        workflow._kaizen_prompt_dir = kaizen_dir
+        workflow._kaizen.enabled = True
+        workflow._kaizen.prompt_dir = kaizen_dir
         # Expose redaction config path via env so _load_redaction_config() can read it
         # without requiring an additional constructor argument (consistent with R2-S7).
         if args.kaizen_redactions:
@@ -599,7 +599,7 @@ def main() -> int:
 
     # Wire Kaizen config hint injection (REQ-KZ-502)
     if args.kaizen_config:
-        workflow._kaizen_config = workflow._load_kaizen_config(args.kaizen_config)
+        workflow._kaizen.config = workflow._load_kaizen_config(args.kaizen_config)
 
     # Reset failed and blocked features so they are retried.
     # The state file persists FAILED/BLOCKED from prior runs, but the
@@ -680,7 +680,7 @@ def main() -> int:
     if args.kaizen:
         logger.info(
             "Kaizen: enabled (dir=%s, redactions=%s)",
-            workflow._kaizen_prompt_dir,
+            workflow._kaizen.prompt_dir,
             args.kaizen_redactions or "none",
         )
 
