@@ -366,8 +366,8 @@ class MicroPrimeConfig(BaseModel):
     # (run-038) → 30/300 (AC-R3 Run 3).  Only files above these thresholds
     # use element-by-element processing.
     file_ollama_whole_enabled: bool = True
-    file_ollama_whole_max_elements: int = 30
-    file_ollama_whole_max_loc: int = 300
+    file_ollama_whole_max_elements: int = 60
+    file_ollama_whole_max_loc: int = 600
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

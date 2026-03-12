@@ -570,6 +570,7 @@ _FILE_WHOLE_SYSTEM_PROMPT = (
     "Output the COMPLETE Python file with all stubs filled in. "
     "Do NOT add markdown fences, explanations, or any text outside the code. "
     "Do NOT remove or rewrite existing imports, class definitions, or signatures. "
+    "Do NOT define a function inside itself (no nested duplicates). "
     "Preserve the file structure exactly — only replace stub bodies."
 )
 
@@ -721,6 +722,20 @@ def _build_file_whole_prompt(
             sections.append(f"# - {dc}")
         sections.append("")
 
+    # Element manifest — explicit listing of what to implement
+    implementable = [e for e in file_spec.elements if e.kind != ElementKind.CLASS]
+    if implementable:
+        sections.append(f"# Elements to implement ({len(implementable)} total):")
+        for i, el in enumerate(implementable, 1):
+            fqn = f"{el.parent_class}.{el.name}" if el.parent_class else el.name
+            hint = ""
+            if el.docstring_hint:
+                hint = f' — "{el.docstring_hint}"'
+            elif el.signature and el.signature.return_annotation:
+                hint = f" -> {el.signature.return_annotation}"
+            sections.append(f"# {i}. {fqn}{hint}")
+        sections.append("")
+
     sections.append("# --- Skeleton file (fill in the stubs) ---")
     sections.append(skeleton)
 
@@ -746,7 +761,7 @@ def _validate_file_whole_result(
     generated_code: str,
     skeleton: str,
     file_spec: ForwardFileSpec,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, list[str]]:
     """Validate a file-level Ollama-whole generation result.
 
     Checks:
@@ -757,30 +772,24 @@ def _validate_file_whole_result(
     5. No skeleton markers remain
 
     Returns:
-        (success, reason) tuple.
+        (success, reason, missing_elements) tuple.  ``missing_elements`` is
+        populated for soft failures (stubs/missing) but empty for hard failures
+        (syntax error, nested duplicates, skeleton markers).  Callers can use
+        the missing list for partial acceptance.
     """
     # Strip markdown fences if present
     code = _strip_fences(generated_code)
 
     if not code:
-        return False, "empty output"
+        return False, "empty output", []
 
-    # AST parse
+    # AST parse — hard fail
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
-        return False, f"ast.parse() failed: {e}"
+        return False, f"ast.parse() failed: {e}", []
 
-    # Check for stub-only bodies (AST-based — no false positives on branch usage)
-    stub_names: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if _is_stub_only_body(node.body):
-                stub_names.append(node.name)
-    if stub_names:
-        return False, f"stub-only NotImplementedError bodies: {', '.join(stub_names)}"
-
-    # Check for nested duplicate function definitions (Ollama over-generation)
+    # Check for nested duplicate function definitions — hard fail
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for child in ast.walk(node):
@@ -789,11 +798,24 @@ def _validate_file_whole_result(
                     and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and child.name == node.name
                 ):
-                    return False, f"nested duplicate function: {node.name}"
+                    return False, f"nested duplicate function: {node.name}", []
 
-    # Check for skeleton markers
+    # Check for skeleton markers — hard fail
     if "# [STARTD8-SKELETON]" in code:
-        return False, "contains skeleton markers"
+        return False, "contains skeleton markers", []
+
+    # ── Soft-fail collection ──
+    # Stubs and missing elements are collected for partial acceptance.
+    soft_missing: list[str] = []
+
+    # Check for stub-only bodies (AST-based — no false positives on branch usage)
+    stub_names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _is_stub_only_body(node.body):
+                stub_names.append(node.name)
+    if stub_names:
+        soft_missing.extend(stub_names)
 
     # Structural position check: elements at correct nesting level
     top_classes: dict[str, set[str]] = {}
@@ -814,26 +836,43 @@ def _validate_file_whole_result(
                     top_assigns.add(target.id)
 
     missing: list[str] = []
+    missing_element_names: list[str] = []
     for el in file_spec.elements:
         if el.kind == ElementKind.CLASS:
             if el.name not in top_classes:
                 missing.append(f"class {el.name}")
+                missing_element_names.append(el.name)
         elif el.parent_class:
-            # Method must be inside its parent class
+            fqn = f"{el.parent_class}.{el.name}"
             if el.parent_class not in top_classes:
                 missing.append(f"class {el.parent_class} (parent of {el.name})")
+                missing_element_names.append(el.name)
             elif el.name not in top_classes.get(el.parent_class, set()):
-                missing.append(f"{el.parent_class}.{el.name}")
+                missing.append(fqn)
+                missing_element_names.append(el.name)
         elif el.kind in (ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION):
             if el.name not in top_functions:
                 missing.append(f"function {el.name}")
+                missing_element_names.append(el.name)
         elif el.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
             if el.name not in top_assigns:
                 missing.append(f"constant {el.name}")
-    if missing:
-        return False, f"missing elements: {', '.join(missing)}"
+                missing_element_names.append(el.name)
 
-    return True, "all checks passed"
+    soft_missing.extend(missing_element_names)
+
+    if stub_names and missing:
+        reason = (
+            f"stub-only NotImplementedError bodies: {', '.join(stub_names)}; "
+            f"missing elements: {', '.join(missing)}"
+        )
+        return False, reason, soft_missing
+    if stub_names:
+        return False, f"stub-only NotImplementedError bodies: {', '.join(stub_names)}", soft_missing
+    if missing:
+        return False, f"missing elements: {', '.join(missing)}", soft_missing
+
+    return True, "all checks passed", []
 
 
 class MicroPrimeEngine:
@@ -1628,14 +1667,20 @@ class MicroPrimeEngine:
         ALL ``raise NotImplementedError`` stubs in a single pass.  This avoids
         the body-only fragmentation that confuses small local models.
 
+        Supports:
+        - Adaptive max_tokens based on skeleton size
+        - Single retry with failure feedback
+        - Partial acceptance: keep successfully filled elements, escalate the rest
+
         Returns:
-            FileResult if successful, None if the attempt failed (caller
-            should fall through to element-by-element processing).
+            FileResult if successful (full or partial), None if the attempt
+            failed entirely (caller should fall through to element-by-element).
         """
         file_path = file_spec.file
+        skeleton_lines = len(skeleton.splitlines())
         logger.info(
             "Attempting file-level Ollama-whole for %s (%d elements, %d lines)",
-            file_path, len(file_spec.elements), len(skeleton.splitlines()),
+            file_path, len(file_spec.elements), skeleton_lines,
         )
 
         prompt = _build_file_whole_prompt(
@@ -1644,35 +1689,70 @@ class MicroPrimeEngine:
             domain_constraints=domain_constraints,
         )
 
+        # Adaptive max_tokens: scale output budget with skeleton size
+        file_whole_max_tokens = max(
+            self._config.max_tokens,
+            skeleton_lines * 4,  # ~4 tokens per output line
+        )
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_llm_calls = 0
         start_time = time.monotonic()
-        try:
-            raw_code, input_tokens, output_tokens = self._generate_ollama(
-                prompt, system_prompt=_FILE_WHOLE_SYSTEM_PROMPT,
+        raw_code: Optional[str] = None
+        last_reason = ""
+        last_missing: list[str] = []
+
+        for attempt in range(self._config.local_max_attempts):
+            current_prompt = prompt
+            if attempt > 0 and last_reason:
+                current_prompt = (
+                    f"# RETRY: Previous attempt issues: {last_reason}\n"
+                    f"# Fix ONLY the issues above. Keep everything else.\n\n"
+                    + prompt
+                )
+
+            try:
+                attempt_code, inp_tok, out_tok = self._generate_ollama(
+                    current_prompt,
+                    system_prompt=_FILE_WHOLE_SYSTEM_PROMPT,
+                    max_tokens=file_whole_max_tokens,
+                )
+            except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
+                logger.warning(
+                    "File-whole Ollama call failed for %s (attempt %d): %s",
+                    file_path, attempt + 1, e,
+                )
+                self._record_local_failure()
+                return None
+
+            total_input_tokens += inp_tok
+            total_output_tokens += out_tok
+            total_llm_calls += 1
+
+            if not attempt_code or not attempt_code.strip():
+                logger.warning("File-whole returned empty output for %s (attempt %d)", file_path, attempt + 1)
+                last_reason = "empty output"
+                continue
+
+            raw_code = attempt_code
+
+            # Validate
+            valid, reason, missing = _validate_file_whole_result(raw_code, skeleton, file_spec)
+            if valid:
+                break  # Full success
+
+            # Try repair
+            logger.info(
+                "File-whole validation failed for %s (attempt %d): %s — attempting repair",
+                file_path, attempt + 1, reason,
             )
-        except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
-            logger.warning(
-                "File-whole Ollama call failed for %s: %s", file_path, e,
-            )
-            self._record_local_failure()
-            return None
-
-        gen_time = (time.monotonic() - start_time) * 1000
-
-        if not raw_code or not raw_code.strip():
-            logger.warning("File-whole returned empty output for %s", file_path)
-            return None
-
-        # Validate the generated file
-        valid, reason = _validate_file_whole_result(raw_code, skeleton, file_spec)
-
-        if not valid:
-            logger.info("File-whole validation failed for %s: %s — attempting repair", file_path, reason)
             if file_spec.elements:
                 repair_result = run_repair_pipeline(
                     raw_code, file_spec.elements[0], file_spec, skeleton_source=skeleton,
                 )
                 if repair_result.ast_valid:
-                    re_valid, re_reason = _validate_file_whole_result(
+                    re_valid, re_reason, re_missing = _validate_file_whole_result(
                         repair_result.code, skeleton, file_spec,
                     )
                     if re_valid:
@@ -1681,59 +1761,118 @@ class MicroPrimeEngine:
                             file_path, repair_result.steps_applied,
                         )
                         raw_code = repair_result.code
-                        # fall through to result building
+                        valid = True
+                        reason = re_reason
+                        missing = re_missing
+                        break
                     else:
-                        logger.info(
-                            "File-whole re-validation failed after repair for %s: %s — element-by-element",
-                            file_path, re_reason,
-                        )
-                        return None
-                else:
-                    logger.info(
-                        "File-whole repair did not fix AST for %s — element-by-element",
-                        file_path,
-                    )
-                    return None
-            else:
-                return None
+                        reason = re_reason
+                        missing = re_missing
+
+            last_reason = reason
+            last_missing = missing
+        else:
+            # All attempts exhausted — try partial acceptance
+            valid = False
+            reason = last_reason
+            missing = last_missing
+
+        gen_time = (time.monotonic() - start_time) * 1000
+
+        if raw_code is None:
+            return None
 
         # Strip fences for the final code
         code = _strip_fences(raw_code)
 
-        logger.info(
-            "File-whole succeeded for %s — %d elements filled in one shot",
-            file_path, len(file_spec.elements),
-        )
+        # ── Partial acceptance ──
+        # If validation failed but we have parseable code with some elements
+        # filled, accept the successes and escalate the rest.
+        missing_set: set[str] = set()
+        if not valid and missing:
+            total_elements = len(file_spec.elements)
+            filled_count = total_elements - len(missing)
+            fill_rate = filled_count / max(total_elements, 1)
 
-        # Build successful element results for each element
+            if fill_rate >= self._config.min_element_fill_rate:
+                logger.info(
+                    "File-whole partial acceptance for %s: %d/%d filled (%.0f%%), "
+                    "escalating %d elements: %s",
+                    file_path, filled_count, total_elements,
+                    fill_rate * 100, len(missing), missing,
+                )
+                missing_set = set(missing)
+            else:
+                logger.info(
+                    "File-whole fill rate too low for %s: %d/%d (%.0f%% < %.0f%% threshold)",
+                    file_path, filled_count, total_elements,
+                    fill_rate * 100, self._config.min_element_fill_rate * 100,
+                )
+                return None
+        elif not valid:
+            # Hard failure (no missing list) — cannot partially accept
+            return None
+
+        if valid:
+            logger.info(
+                "File-whole succeeded for %s — %d elements filled in %d call(s)",
+                file_path, len(file_spec.elements), total_llm_calls,
+            )
+
+        # Build element results
         model_name = f"{self._config.provider}:{self._config.model}"
         file_result = FileResult(file_path=file_path)
-        per_element_tokens_in = input_tokens // max(len(file_spec.elements), 1)
-        per_element_tokens_out = output_tokens // max(len(file_spec.elements), 1)
+        per_element_tokens_in = total_input_tokens // max(len(file_spec.elements), 1)
+        per_element_tokens_out = total_output_tokens // max(len(file_spec.elements), 1)
 
         for element in file_spec.elements:
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.SIMPLE,
-                classification_reason="file_ollama_whole",
-                parent_class=element.parent_class,
-                element_kind=element.kind.value if element.kind else None,
-                success=True,
-                code=code,
-                repair_recovered=False,
-                ast_valid_before_repair=True,
-                ast_valid_after_repair=True,
-                verification_verdict="pass",
-                model=model_name,
-                generation_time_ms=gen_time / max(len(file_spec.elements), 1),
-                input_tokens=per_element_tokens_in,
-                output_tokens=per_element_tokens_out,
-                decomposition_metadata={
-                    "strategy": "file_ollama_whole",
-                    "llm_calls": 1,
-                },
-            )
+            is_missing = element.name in missing_set
+            if is_missing:
+                escalation = EscalationResult(
+                    reason=EscalationReason.OLLAMA_WHOLE_FAILED,
+                    detail=f"file-whole partial: element {element.name} not filled",
+                )
+                result = ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason="file_ollama_whole_partial",
+                    parent_class=element.parent_class,
+                    element_kind=element.kind.value if element.kind else None,
+                    success=False,
+                    escalation=escalation,
+                    model=model_name,
+                    generation_time_ms=gen_time / max(len(file_spec.elements), 1),
+                    input_tokens=per_element_tokens_in,
+                    output_tokens=per_element_tokens_out,
+                    decomposition_metadata={
+                        "strategy": "file_ollama_whole_partial",
+                        "llm_calls": total_llm_calls,
+                    },
+                )
+            else:
+                result = ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason="file_ollama_whole",
+                    parent_class=element.parent_class,
+                    element_kind=element.kind.value if element.kind else None,
+                    success=True,
+                    code=code,
+                    repair_recovered=False,
+                    ast_valid_before_repair=True,
+                    ast_valid_after_repair=True,
+                    verification_verdict="pass",
+                    model=model_name,
+                    generation_time_ms=gen_time / max(len(file_spec.elements), 1),
+                    input_tokens=per_element_tokens_in,
+                    output_tokens=per_element_tokens_out,
+                    decomposition_metadata={
+                        "strategy": "file_ollama_whole",
+                        "llm_calls": total_llm_calls,
+                    },
+                )
             file_result.element_results.append(result)
 
         file_result.filled_skeleton = code
@@ -3124,6 +3263,7 @@ class MicroPrimeEngine:
         self,
         prompt: str,
         system_prompt: str | None = None,
+        max_tokens: int | None = None,
     ) -> tuple[str, int, int]:
         """Generate code using the Ollama provider.
 
@@ -3146,11 +3286,16 @@ class MicroPrimeEngine:
                     f"Failed to create Ollama agent ({agent_spec}): {exc}"
                 ) from exc
 
-        result_text, time_ms, token_usage = self._ollama_agent.generate(
-            prompt,
+        gen_kwargs: dict[str, Any] = dict(
             system_prompt=system_prompt or _CODE_GEN_SYSTEM_PROMPT,
             temperature=self._config.temperature,
             stop=self._OLLAMA_STOP_SEQUENCES,
+        )
+        if max_tokens is not None:
+            gen_kwargs["max_tokens"] = max_tokens
+
+        result_text, time_ms, token_usage = self._ollama_agent.generate(
+            prompt, **gen_kwargs,
         )
 
         input_tokens = 0
