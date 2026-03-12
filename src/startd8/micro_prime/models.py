@@ -354,13 +354,16 @@ class MicroPrimeConfig(BaseModel):
     moderate_ollama_whole_enabled: bool = True
     moderate_ollama_whole_skip_signals: set[str] = {"external_api", "orchestrator", "app_server_instance"}
     # File-level Ollama-whole: generate the entire file in one shot instead
-    # of decomposing into individual element-body prompts.  Targets small
-    # files where element-by-element generation creates unnecessary fragility.
-    # Thresholds raised from 5/60 → 8/100 based on calibration data showing
-    # Ollama handles files up to ~100 lines reliably (AC-R4).
+    # of decomposing into individual element-body prompts.  Targets files
+    # where element-by-element generation creates unnecessary fragility.
+    # Thresholds raised from 8/100 → 15/150 based on run-038 analysis:
+    # email_server.py (13 elements, 41-line skeleton) should qualify but
+    # was excluded by the old max_elements=8, causing cascading circuit
+    # breaker failures when element-by-element processing hit transient
+    # Ollama issues.
     file_ollama_whole_enabled: bool = True
-    file_ollama_whole_max_elements: int = 8
-    file_ollama_whole_max_loc: int = 100
+    file_ollama_whole_max_elements: int = 15
+    file_ollama_whole_max_loc: int = 150
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
 

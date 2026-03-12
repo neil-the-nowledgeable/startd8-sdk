@@ -884,8 +884,8 @@ class MicroPrimeEngine:
         metrics_collector: Optional metrics collector for observability.
     """
 
-    _CIRCUIT_BREAKER_THRESHOLD: int = 3   # per-file
-    _RUN_BREAKER_THRESHOLD: int = 5       # per-run (E1: cross-file systemic failure)
+    _CIRCUIT_BREAKER_THRESHOLD: int = 8   # per-file (raised from 3: run-038 showed 3 is too aggressive for files with many elements)
+    _RUN_BREAKER_THRESHOLD: int = 12     # per-run (E1: cross-file systemic failure; raised proportionally)
     _TIER_PRIORITY: dict[TierClassification, int] = {
         TierClassification.TRIVIAL: 0,
         TierClassification.SIMPLE: 1,

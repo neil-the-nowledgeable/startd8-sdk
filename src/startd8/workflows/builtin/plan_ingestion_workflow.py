@@ -8,6 +8,7 @@ Pipeline:  parse → assess → transform → refine → emit
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -541,6 +542,55 @@ def _extract_json_from_response(response: str) -> dict:
     """Extract JSON from an LLM response, handling code fences."""
     text = extract_code_from_response(response, language="json")
     return json.loads(text)
+
+
+def _extract_imports_from_existing(
+    file_path: str,
+    project_root: Optional[Path],
+) -> list:
+    """Extract import specs from an existing file on disk.
+
+    Parses the file's AST to discover ``import`` and ``from ... import``
+    statements.  Returns a list of ``ForwardImportSpec``-compatible dicts
+    (Pydantic will coerce them on assignment).  Returns an empty list if
+    the file does not exist, is not Python, or cannot be parsed.
+
+    This ensures the element classifier has import context for files that
+    already exist (run-038: empty imports caused the classifier to miss
+    external API signals, leading to SIMPLE classification and cascading
+    circuit breaker failures).
+    """
+    if project_root is None:
+        return []
+    full_path = project_root / file_path
+    if not full_path.is_file() or full_path.suffix not in (".py", ".pyi"):
+        return []
+    try:
+        source = full_path.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError):
+        return []
+
+    from startd8.forward_manifest import ForwardImportSpec
+
+    specs: list = []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                specs.append(ForwardImportSpec(
+                    kind="import",
+                    module=alias.name,
+                    alias=alias.asname,
+                ))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None:
+                continue
+            specs.append(ForwardImportSpec(
+                kind="from",
+                module=node.module,
+                names=[a.name for a in node.names],
+            ))
+    return specs
 
 
 def _as_bool(raw: Any, default: bool) -> bool:
@@ -4345,9 +4395,17 @@ class PlanIngestionWorkflow(WorkflowBase):
                     lang = detect_language(fpath)
                     # Only set language explicitly for non-Python files;
                     # Python files keep language=None for backward compat.
+                    # Enrich with imports from existing file on disk
+                    # so the element classifier and prompt builder have
+                    # import context (run-038: empty imports caused
+                    # classifier to miss external API signals).
+                    file_imports = _extract_imports_from_existing(
+                        fpath, project_root,
+                    )
                     file_specs[fpath] = ForwardFileSpec(
                         file=fpath,
                         elements=elems,
+                        imports=file_imports,
                         language=lang if lang != "python" else None,
                     )
 
