@@ -86,14 +86,28 @@ def _step_fence_strip(
     return _shared_fence_strip(code, ctx, Path("<element>"))
 
 
-_OCTAL_LITERAL_RE = re.compile(
+_LEADING_ZERO_INT_RE = re.compile(
     r"""
     (?<![.\w])   # not preceded by dot (float) or word char (identifier/hex/bin)
-    0([0-7]+)    # leading zero followed by octal digits
+    0(\d+)       # leading zero followed by any digits
     (?!\w)       # not followed by word char (e.g. 0x, 0b, 0o, variable)
     """,
     re.VERBOSE,
 )
+
+
+def _leading_zero_replacer(match: re.Match) -> str:
+    """Replace leading-zero integer: octal digits → 0o prefix, else strip zero."""
+    digits = match.group(1)
+    # All zeros (00, 000) → just 0
+    stripped = digits.lstrip("0")
+    if not stripped:
+        return "0"
+    if all(c in "01234567" for c in digits):
+        # Pure octal digits (e.g. 0755) → 0o755
+        return f"0o{digits}"
+    # Contains 8 or 9 (e.g. 09, 0855) → strip leading zero (decimal intent)
+    return stripped
 
 
 def _step_octal_literal_fix(
@@ -102,15 +116,18 @@ def _step_octal_literal_fix(
     file_spec: Optional[ForwardFileSpec] = None,
     skeleton_source: Optional[str] = None,
 ) -> RepairStepResult:
-    """Step 2: Fix Python 2 octal literals (0NNN → 0oNNN) (REQ-MP-408).
+    """Step 2: Fix leading-zero integer literals (REQ-MP-408).
 
-    Ollama models sometimes generate Python 2-style octal literals like
-    ``050`` (port 40) or ``0644`` (file permissions).  Python 3 rejects
-    these with ``SyntaxError: leading zeros in decimal integer literals``.
-    This step converts them to valid ``0o`` prefix notation before any
-    AST-dependent steps run.
+    Python 3 rejects ALL leading-zero integer literals with
+    ``SyntaxError: leading zeros in decimal integer literals``.
+    Ollama models generate these in two forms:
+
+    - Python 2-style octals: ``0755``, ``0644`` → converted to ``0o755``, ``0o644``
+    - Decimal with stray leading zero: ``09``, ``0855`` → stripped to ``9``, ``855``
+
+    This step runs before any AST-dependent steps.
     """
-    fixed, count = _OCTAL_LITERAL_RE.subn(r"0o\1", code)
+    fixed, count = _LEADING_ZERO_INT_RE.subn(_leading_zero_replacer, code)
     return RepairStepResult(
         step_name="octal_literal_fix",
         modified=count > 0,

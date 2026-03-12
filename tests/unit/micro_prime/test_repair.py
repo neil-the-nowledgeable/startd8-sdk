@@ -112,6 +112,42 @@ class TestOctalLiteralFix:
         assert result.modified is False
         assert result.metrics["octal_literals_fixed"] == 0
 
+    def test_fixes_leading_zero_with_digit_8(self, simple_function_element):
+        """Ollama generates 09 — not valid octal, strip leading zero."""
+        code = "port = 09\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert result.code == "port = 9\n"
+
+    def test_fixes_leading_zero_with_digit_9(self, simple_function_element):
+        """Ollama generates 0855 — contains 8, strip leading zero."""
+        code = "x = 0855\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert result.code == "x = 855\n"
+
+    def test_fixes_leading_zero_decimal_port(self, simple_function_element):
+        """Ollama generates 08080 — clearly decimal intent, strip leading zero."""
+        code = "port = 08080\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert result.code == "port = 8080\n"
+
+    def test_all_zeros_becomes_zero(self, simple_function_element):
+        """Edge case: 00 → 0 (not empty string)."""
+        code = "x = 00\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert result.code == "x = 0\n"
+
+    def test_pipeline_fixes_leading_zero_decimal(self, simple_function_element):
+        """Integration: pipeline should fix non-octal leading-zero literal."""
+        code = "def get_name(self, key: str) -> str:\n    return 09\n"
+        result = run_repair_pipeline(code, simple_function_element)
+        assert result.ast_valid is True
+        assert "09" not in result.code
+        assert "9" in result.code
+
     def test_pipeline_fixes_octal_before_ast(self, simple_function_element):
         """Integration: pipeline should fix octal so ast_validate passes."""
         code = "def get_name(self, key: str) -> str:\n    return 050\n"

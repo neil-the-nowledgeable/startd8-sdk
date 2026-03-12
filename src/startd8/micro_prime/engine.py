@@ -2081,6 +2081,35 @@ class MicroPrimeEngine:
         )
         if plan is None:
             _record_decomp_rejected(file_path, "no_strategy")
+            # Run-038 fix: standalone functions (e.g. main()) classified as
+            # MODERATE via orchestrator heuristic may not be decomposable.
+            # Fall back to direct Ollama generation before escalating —
+            # many "orchestrator" functions are simple enough for Ollama.
+            if element.parent_class is None and element.kind in (
+                ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION,
+            ):
+                logger.info(
+                    "Decomposition rejected for standalone function %s — "
+                    "trying direct Ollama generation as fallback",
+                    element.name,
+                )
+                ollama_fallback = self._handle_simple(
+                    element, file_spec, skeleton, contracts, file_path,
+                    f"moderate_decomp_fallback: {reasoning}",
+                    design_doc_sections=design_doc_sections,
+                    task_description=task_description,
+                )
+                if ollama_fallback.success:
+                    ollama_fallback.tier = TierClassification.MODERATE
+                    ollama_fallback.decomposition_metadata = {
+                        "strategy": "decomp_fallback_simple",
+                        "rejection_reason": RejectionReason.NO_TEMPLATE_MATCH.value,
+                    }
+                    return ollama_fallback
+                logger.info(
+                    "Direct Ollama fallback also failed for %s — escalating",
+                    element.name,
+                )
             return self._moderate_escalation_result(
                 element, file_path, reasoning,
                 EscalationReason.NOT_DECOMPOSABLE,

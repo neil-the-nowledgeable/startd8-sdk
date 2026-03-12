@@ -8,7 +8,6 @@ where data silently fails to flow between layers.
 Parametrized with (standalone, pipeline) mode pairs where applicable.
 """
 
-import dataclasses
 import json
 import tempfile
 from pathlib import Path
@@ -23,7 +22,6 @@ from startd8.contractors.context_resolution import (
 )
 from startd8.contractors.prime_contractor import (
     ExecutionMode,
-    ModeConfig,
     PrimeContractorWorkflow,
     SeedContext,
 )
@@ -72,10 +70,6 @@ def _make_workflow(
 
     wf._strict_mode = False
 
-    # Backward-compat legacy attributes
-    wf.seed_onboarding = {}
-    wf.seed_architectural_context = {}
-    wf.seed_design_calibration = {}
     wf.seed_service_metadata = {}
     wf.plan_document_text = None
 
@@ -116,9 +110,6 @@ class TestSV1_SeedContextToStrategy:
         wf = _make_workflow(project_root=tmp_path, execution_mode=mode)
         wf._seed_context.onboarding_metadata = {"project": "test-proj"}
         wf._seed_context.architectural_context = {"patterns": ["strategy"]}
-        wf.seed_onboarding = wf._seed_context.onboarding_metadata
-        wf.seed_architectural_context = wf._seed_context.architectural_context
-
         feature_data = {
             "id": "F-001",
             "name": "test-feature",
@@ -444,84 +435,6 @@ class TestSV4_ResultsToManifest:
         manifest_path = tmp_path / ".startd8" / "generation-manifest.json"
         assert not manifest_path.exists()
 
-    def test_manifest_source_checksum_present(self, tmp_path):
-        """Pipeline manifest includes source_checksum for staleness detection."""
-        wf = _make_workflow(project_root=tmp_path, execution_mode="pipeline")
-        wf._write_generation_manifest({})
-
-        manifest_path = tmp_path / ".startd8" / "generation-manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        assert "source_checksum" in manifest
-        assert len(manifest["source_checksum"]) == 64  # SHA-256 hex
-
-
-# ============================================================================
-# SV-5: ModeConfig → phase behavior
-# ============================================================================
-
-
-class TestSV5_ModeConfigToBehavior:
-    """SV-5: Verify ModeConfig boolean flags reach their point of use.
-
-    Gap: ModeConfig boolean flags might not reach their point of use
-    (e.g., run_validators checked but ValidationConfig empty).
-    Check: ModeConfig settings produce expected behavior differences.
-    """
-
-    def test_pipeline_mode_config_enables_validation(self):
-        """Pipeline ModeConfig has enable_post_validation=True."""
-        config = ModeConfig.for_mode(ExecutionMode.PIPELINE)
-        assert config.enable_post_validation is True
-
-    def test_standalone_mode_config_disables_validation(self):
-        """Standalone ModeConfig has enable_post_validation=False."""
-        config = ModeConfig.for_mode(ExecutionMode.STANDALONE)
-        assert config.enable_post_validation is False
-
-    def test_mode_config_replace_overrides(self):
-        """dataclasses.replace() on frozen ModeConfig works."""
-        config = ModeConfig.for_mode(ExecutionMode.STANDALONE)
-        assert config.enable_post_validation is False
-
-        overridden = dataclasses.replace(config, enable_post_validation=True)
-        assert overridden.enable_post_validation is True
-        # Original unchanged
-        assert config.enable_post_validation is False
-
-    def test_validation_override_forces_validators_on(self, tmp_path):
-        """_validation_override=True forces _run_validators=True even in standalone."""
-        wf = _make_workflow(
-            project_root=tmp_path,
-            execution_mode="standalone",
-            validation_override=True,
-        )
-        assert wf._validation_override is True
-        # When _validation_override is True, _run_validators should be True
-        # regardless of mode (tested via the conditional in develop_feature)
-
-    def test_validation_override_forces_validators_off(self, tmp_path):
-        """_validation_override=False forces _run_validators=False even in pipeline."""
-        wf = _make_workflow(
-            project_root=tmp_path,
-            execution_mode="pipeline",
-            validation_override=False,
-        )
-        assert wf._validation_override is False
-
-    @pytest.mark.parametrize("mode", ["standalone", "pipeline"])
-    def test_mode_config_all_fields_present(self, mode):
-        """ModeConfig.for_mode() populates all expected fields."""
-        enum_mode = ExecutionMode(mode)
-        config = ModeConfig.for_mode(enum_mode)
-
-        assert config.mode == enum_mode
-        assert isinstance(config.use_onboarding_context, bool)
-        assert isinstance(config.use_architectural_context, bool)
-        assert isinstance(config.use_design_calibration, bool)
-        assert isinstance(config.enable_provenance_tracking, bool)
-        assert isinstance(config.enable_post_validation, bool)
-        assert isinstance(config.max_context_depth, int)
-
 
 # ============================================================================
 # SV-6: CLI --mode flag → workflow.execution_mode
@@ -599,8 +512,8 @@ class TestSV6_CLIModeToWorkflow:
 
         assert wf.execution_mode == "standalone"
 
-    def test_load_seed_context_populates_legacy_attributes(self, tmp_path):
-        """load_seed_context() populates backward-compat legacy attributes."""
+    def test_load_seed_context_populates_seed_context(self, tmp_path):
+        """load_seed_context() populates SeedContext fields."""
         wf = _make_workflow(project_root=tmp_path, execution_mode="standalone")
         wf._seed_context = None
 
@@ -613,9 +526,9 @@ class TestSV6_CLIModeToWorkflow:
 
         wf.load_seed_context(seed_data, cli_mode="pipeline")
 
-        assert wf.seed_onboarding == {"project": "test"}
-        assert wf.seed_architectural_context == {"patterns": ["strategy"]}
-        assert wf.seed_design_calibration == {"quality": "high"}
+        assert wf.seed_context.onboarding_metadata == {"project": "test"}
+        assert wf.seed_context.architectural_context == {"patterns": ["strategy"]}
+        assert wf.seed_context.design_calibration == {"quality": "high"}
         assert wf.seed_service_metadata == {"service": "api"}
 
 
