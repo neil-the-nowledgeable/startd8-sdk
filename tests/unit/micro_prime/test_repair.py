@@ -1,4 +1,4 @@
-"""Tests for the Micro Prime Repair Pipeline (REQ-MP-400–407)."""
+"""Tests for the Micro Prime Repair Pipeline (REQ-MP-400–408)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from startd8.micro_prime.repair import (
     _step_future_import_reorder,
     _step_import_completion,
     _step_indent_normalize,
+    _step_octal_literal_fix,
     _step_over_generation_trim,
     _step_signature_reconcile,
     _try_parse,
@@ -47,8 +48,84 @@ class TestFenceStrip:
         assert result.code == ""
 
 
+class TestOctalLiteralFix:
+    """Tests for Step 2: Octal literal fix (REQ-MP-408)."""
+
+    def test_fixes_port_number(self, simple_function_element):
+        """Ollama generates 050 for port 40."""
+        code = "port = 050\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert result.code == "port = 0o50\n"
+        assert result.metrics["octal_literals_fixed"] == 1
+
+    def test_fixes_file_permissions(self, simple_function_element):
+        """Ollama generates 0644 for file permissions."""
+        code = "os.chmod(path, 0644)\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert "0o644" in result.code
+        assert result.metrics["octal_literals_fixed"] == 1
+
+    def test_fixes_multiple_literals(self, simple_function_element):
+        code = "a = 050\nb = 0777\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is True
+        assert "0o50" in result.code
+        assert "0o777" in result.code
+        assert result.metrics["octal_literals_fixed"] == 2
+
+    def test_preserves_hex_literals(self, simple_function_element):
+        code = "x = 0xFF\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_preserves_binary_literals(self, simple_function_element):
+        code = "x = 0b1010\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_preserves_valid_octal(self, simple_function_element):
+        """Already-valid 0o prefix should not be double-prefixed."""
+        code = "x = 0o644\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_preserves_float_literals(self, simple_function_element):
+        code = "x = 0.5\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_preserves_zero(self, simple_function_element):
+        code = "x = 0\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_no_change_no_modification(self, simple_function_element):
+        code = "def main():\n    return 42\n"
+        result = _step_octal_literal_fix(code, simple_function_element)
+        assert result.modified is False
+        assert result.metrics["octal_literals_fixed"] == 0
+
+    def test_pipeline_fixes_octal_before_ast(self, simple_function_element):
+        """Integration: pipeline should fix octal so ast_validate passes."""
+        code = "def get_name(self, key: str) -> str:\n    return 050\n"
+        result = run_repair_pipeline(code, simple_function_element)
+        assert result.ast_valid is True
+        assert "0o50" in result.code
+        assert any(
+            s.step_name == "octal_literal_fix" and s.modified
+            for s in result.step_results
+        )
+
+
 class TestOverGenerationTrim:
-    """Tests for Step 2: Over-generation trim (REQ-MP-401)."""
+    """Tests for Step 3: Over-generation trim (REQ-MP-401)."""
 
     def test_trims_extra_functions(self, simple_function_element):
         code = (
@@ -359,7 +436,7 @@ class TestRunRepairPipeline:
         code = "def get_name(self, key: str) -> str:\n    return key"
         result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         assert result.code == code  # Already valid, no changes needed
-        assert len(result.step_results) == 9  # All 9 steps run
+        assert len(result.step_results) == 10  # All 10 steps run
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
@@ -382,8 +459,9 @@ class TestRunRepairPipeline:
         result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         step_names = [s.step_name for s in result.step_results]
         assert "fence_strip" in step_names
+        assert "octal_literal_fix" in step_names
         assert "ast_validate" in step_names
-        assert len(step_names) == 9
+        assert len(step_names) == 10
 
 
 class TestBuildDefLine:

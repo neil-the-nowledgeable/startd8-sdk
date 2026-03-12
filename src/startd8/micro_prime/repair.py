@@ -1,21 +1,23 @@
-"""Manifest-Guided Repair Pipeline (REQ-MP-400–407).
+"""Manifest-Guided Repair Pipeline (REQ-MP-400–408).
 
-An 8-step ordered pipeline that repairs LLM-generated code before splicing
+A 10-step ordered pipeline that repairs LLM-generated code before splicing
 into skeleton files. Each step is non-destructive: if it would break
 previously valid code, its changes are reverted (REQ-MP-406).
 
 Steps:
     1. Fence stripping — remove markdown code fences
-    2. Over-generation trim — remove AST nodes not matching target FQN
-    3. Bare statement wrapping — wrap body-only output in def/class
-    4. Future import reorder — move ``from __future__`` to file top
-    5. Indentation normalize — re-indent to 4-space
-    6. Signature reconcile — restore canonical signature from manifest
-    7. Import completion — add missing imports
-    8. AST validation — final gate
+    2. Octal literal fix — convert Py2 octal ``0NNN`` → Py3 ``0oNNN``
+    3. Over-generation trim — remove AST nodes not matching target FQN
+    4. Bare statement wrapping — wrap body-only output in def/class
+    5. Future import reorder — move ``from __future__`` to file top
+    6. Indentation normalize — re-indent to 4-space
+    7. Signature reconcile — restore canonical signature from manifest
+    8. Import completion — add missing imports
+    9. Duplicate removal — remove duplicate imports
+   10. AST validation — final gate
 
-Shared steps (1, 4, 5, 7, 8) delegate to ``startd8.repair.steps``.
-Micro-prime-specific steps (2, 3, 6) remain local.
+Shared steps (1, 5, 6, 8, 9, 10) delegate to ``startd8.repair.steps``.
+Micro-prime-specific steps (2, 3, 4, 7) remain local.
 """
 
 from __future__ import annotations
@@ -84,13 +86,46 @@ def _step_fence_strip(
     return _shared_fence_strip(code, ctx, Path("<element>"))
 
 
+_OCTAL_LITERAL_RE = re.compile(
+    r"""
+    (?<![.\w])   # not preceded by dot (float) or word char (identifier/hex/bin)
+    0([0-7]+)    # leading zero followed by octal digits
+    (?!\w)       # not followed by word char (e.g. 0x, 0b, 0o, variable)
+    """,
+    re.VERBOSE,
+)
+
+
+def _step_octal_literal_fix(
+    code: str,
+    element: ForwardElementSpec,
+    file_spec: Optional[ForwardFileSpec] = None,
+    skeleton_source: Optional[str] = None,
+) -> RepairStepResult:
+    """Step 2: Fix Python 2 octal literals (0NNN → 0oNNN) (REQ-MP-408).
+
+    Ollama models sometimes generate Python 2-style octal literals like
+    ``050`` (port 40) or ``0644`` (file permissions).  Python 3 rejects
+    these with ``SyntaxError: leading zeros in decimal integer literals``.
+    This step converts them to valid ``0o`` prefix notation before any
+    AST-dependent steps run.
+    """
+    fixed, count = _OCTAL_LITERAL_RE.subn(r"0o\1", code)
+    return RepairStepResult(
+        step_name="octal_literal_fix",
+        modified=count > 0,
+        code=fixed,
+        metrics={"octal_literals_fixed": count},
+    )
+
+
 def _step_over_generation_trim(
     code: str,
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
     skeleton_source: Optional[str] = None,
 ) -> RepairStepResult:
-    """Step 2: Remove AST nodes not matching the target element (REQ-MP-401).
+    """Step 3: Remove AST nodes not matching the target element (REQ-MP-401).
 
     If the LLM generated extra functions, classes, or statements beyond the
     target element, trim them. Only applies when the code parses successfully.
@@ -539,6 +574,7 @@ def _step_ast_validate(
 # Ordered list of repair steps
 _REPAIR_STEPS = [
     _step_fence_strip,
+    _step_octal_literal_fix,
     _step_over_generation_trim,
     _step_bare_statement_wrap,
     _step_future_import_reorder,
