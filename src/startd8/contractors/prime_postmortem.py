@@ -24,7 +24,7 @@ import uuid
 from collections import Counter
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from startd8.logging_config import get_logger
 
@@ -261,6 +261,7 @@ class FeaturePostMortem:
     anti_patterns: List[str] = dataclasses.field(default_factory=list)
     requirement_score: float = 0.0
     verdict: str = ""
+    force_regenerated: bool = False
 
 
 @dataclasses.dataclass
@@ -353,6 +354,7 @@ class PrimePostMortemEvaluator:
         queue_state: Dict[str, Any],
         seed_tasks: Optional[List[Dict]] = None,
         output_dir: str = ".",
+        force_regenerated_ids: Optional[Set[str]] = None,
     ) -> PrimePostMortemReport:
         """Evaluate a PrimeContractor run and produce a post-mortem report.
 
@@ -397,7 +399,13 @@ class PrimePostMortemEvaluator:
             seed_task = seed_by_id.get(fid)
 
             try:
-                fpm = self._evaluate_feature(feature_dict, hist_entry, seed_task, fid)
+                is_force_regen = (
+                    fid in force_regenerated_ids if force_regenerated_ids else False
+                )
+                fpm = self._evaluate_feature(
+                    feature_dict, hist_entry, seed_task, fid,
+                    force_regenerated=is_force_regen,
+                )
                 report.features.append(fpm)
                 all_elements.extend(fpm.elements)
             except Exception:
@@ -466,6 +474,7 @@ class PrimePostMortemEvaluator:
         history_entry: Optional[Dict[str, Any]],
         seed_task: Optional[Dict[str, Any]],
         fallback_id: str = "",
+        force_regenerated: bool = False,
     ) -> FeaturePostMortem:
         """Evaluate a single feature."""
         fid = feature_dict.get("id", fallback_id)
@@ -565,6 +574,7 @@ class PrimePostMortemEvaluator:
             elements=elements,
             requirement_score=requirement_score,
             verdict=verdict,
+            force_regenerated=force_regenerated,
         )
 
     def _score_requirements(

@@ -31,6 +31,14 @@ if _SDK_SRC.is_dir():
     sys.path.insert(0, str(_SDK_SRC))
 
 from startd8.contractors.prime_postmortem import PrimePostMortemEvaluator
+from startd8.contractors.batch_postmortem import (
+    BatchPostMortemEvaluator,
+    append_run_to_ledger,
+    compute_seed_checksum,
+    derive_batch_id,
+    load_or_create_ledger,
+    save_ledger,
+)
 
 
 def _discover_artifacts(run_dir: Path) -> dict:
@@ -136,6 +144,21 @@ def main():
         default=20,
         help="Max runs to retain in kaizen index (default: 20, range: 5-200).",
     )
+    parser.add_argument(
+        "--seed-path",
+        type=Path,
+        help="Seed file path for batch identity (SHA256 of contents).",
+    )
+    parser.add_argument(
+        "--batch-ledger-dir",
+        type=Path,
+        help="Directory for batch-ledger.json (default: auto-resolve pipeline base).",
+    )
+    parser.add_argument(
+        "--skip-batch",
+        action="store_true",
+        help="Skip batch post-mortem analysis.",
+    )
     args = parser.parse_args()
 
     # Discover or use explicit paths
@@ -194,6 +217,22 @@ def main():
     if args.update_index:
         _update_kaizen_index(output_dir, keep=args.kaizen_keep)
 
+    # -----------------------------------------------------------------------
+    # Batch post-mortem analysis
+    # -----------------------------------------------------------------------
+    if not args.skip_batch and args.seed_path and args.seed_path.is_file():
+        try:
+            _run_batch_postmortem(
+                seed_path=args.seed_path,
+                result_dict=result_dict,
+                queue_state=queue_state,
+                seed_tasks=seed_tasks,
+                output_dir=output_dir,
+                batch_ledger_dir=args.batch_ledger_dir,
+            )
+        except Exception as exc:
+            print(f"  Batch post-mortem failed (non-fatal): {exc}", file=sys.stderr)
+
     # Print summary
     print()
     print("=" * 60)
@@ -213,6 +252,102 @@ def main():
     print()
     print(f"  Report:   {output_dir}/prime-postmortem-report.json")
     print(f"  Summary:  {output_dir}/prime-postmortem-summary.md")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Batch post-mortem
+# ---------------------------------------------------------------------------
+
+
+def _run_batch_postmortem(
+    seed_path: Path,
+    result_dict: dict,
+    queue_state: dict,
+    seed_tasks: list | None,
+    output_dir: Path,
+    batch_ledger_dir: Path | None,
+) -> None:
+    """Run batch-aware cross-run post-mortem analysis."""
+    # 1. Compute batch identity
+    checksum = compute_seed_checksum(str(seed_path))
+    batch_id = derive_batch_id(checksum)
+
+    # 2. Resolve ledger directory
+    if batch_ledger_dir:
+        ledger_dir = batch_ledger_dir
+    else:
+        ledger_dir = _resolve_pipeline_base(output_dir)
+    ledger_path = str(ledger_dir / "batch-ledger.json")
+
+    # 3. Determine total tasks from seed
+    total_tasks = 0
+    if seed_tasks:
+        total_tasks = len(seed_tasks)
+    else:
+        try:
+            seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+            total_tasks = len(seed_data.get("tasks", []))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 4. Load or create ledger
+    ledger = load_or_create_ledger(ledger_path, str(seed_path), checksum, total_tasks)
+
+    # 5. Build per-feature results from history
+    per_feature_results: dict = {}
+    for entry in result_dict.get("history", []):
+        fid = entry.get("feature_id", "")
+        if fid:
+            per_feature_results[fid] = entry
+
+    if not per_feature_results:
+        print("  Batch post-mortem: no features to record — skipping.")
+        return
+
+    # 6. Append current run
+    run_id = _resolve_run_id(output_dir)
+    import datetime
+    timestamp = datetime.datetime.now().isoformat()
+
+    ledger = append_run_to_ledger(
+        ledger, run_id, timestamp, per_feature_results, queue_state, seed_tasks
+    )
+
+    # 7. Save ledger
+    save_ledger(ledger, ledger_path)
+
+    # 8. Evaluate batch post-mortem
+    evaluator = BatchPostMortemEvaluator()
+    report = evaluator.evaluate(ledger)
+
+    # 9. Write batch outputs
+    evaluator.write_outputs(report, str(output_dir))
+
+    # 10. Print batch summary
+    print()
+    print("  Batch Post-Mortem:")
+    print(f"    Batch ID:    {report.batch_id}")
+    print(f"    Verdict:     {report.batch_verdict}")
+    print(
+        f"    Progress:    {report.cumulative_passed}/{report.total_tasks} "
+        f"({report.remaining} remaining)"
+    )
+    print(f"    Runs:        {report.runs_completed}")
+    if report.persistent_failures:
+        print(f"    Persistent:  {len(report.persistent_failures)} task(s)")
+    if report.newly_resolved:
+        print(f"    Resolved:    {len(report.newly_resolved)} task(s) this run")
+    if report.force_regenerated:
+        print(f"    Force-regen: {len(report.force_regenerated)} task(s)")
+    if report.velocity:
+        print(
+            f"    Velocity:    {report.velocity.tasks_per_run_avg} tasks/run "
+            f"({report.velocity.trend})"
+        )
+    if report.cumulative_cost:
+        print(f"    Total cost:  ${report.cumulative_cost.total_usd:.4f}")
+    print(f"    Ledger:      {ledger_path}")
     print()
 
 
