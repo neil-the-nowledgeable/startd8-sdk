@@ -12,7 +12,7 @@ class TestRepairConfig:
     def test_defaults(self):
         c = RepairConfig()
         assert c.repair_enabled is True
-        assert c.repairable_categories == frozenset({"syntax", "import", "lint"})
+        assert c.repairable_categories == frozenset({"syntax", "import", "lint", "semantic"})
         assert c.pre_checkpoint_repair is False
         assert c.staging_root is None
         assert c.circuit_breaker_threshold == 3

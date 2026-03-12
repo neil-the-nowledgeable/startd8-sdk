@@ -19,6 +19,7 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    SemanticMethodFixStep,
 )
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ _CANONICAL_ORDER = [
     "import_completion",
     "duplicate_removal",
     "extended_lint_fix",
+    "semantic_method_fix",
     "ast_validate",
 ]
 
@@ -44,6 +46,7 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH"),
     ("import", "missing_import", ["import_completion", "duplicate_removal", "ast_validate"], "HIGH"),
     ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "import_completion", "duplicate_removal", "extended_lint_fix", "ast_validate"], "MEDIUM"),
+    ("semantic", "semantic_error", ["semantic_method_fix", "ast_validate"], "HIGH"),
 ]
 
 # Step name → step class constructor
@@ -56,6 +59,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "import_completion": ErrorDrivenImportCompletion,
     "duplicate_removal": DuplicateRemovalStep,
     "extended_lint_fix": ExtendedLintFixStep,
+    "semantic_method_fix": SemanticMethodFixStep,
     "ast_validate": AstValidateStep,
 }
 

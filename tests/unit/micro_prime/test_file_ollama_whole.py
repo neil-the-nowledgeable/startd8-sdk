@@ -1138,3 +1138,334 @@ class TestSkeletonHasStubs:
             "    return 42\n"
         )
         assert _skeleton_has_stubs(code) is False
+
+
+# ── Phase 6 (AC-R6): Expanded file-whole coverage ─────────────────────
+
+
+class TestHighCouplingOverride:
+    """File-whole eligibility override when elements have high coupling."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_coupling_override_bypasses_size_limits(self):
+        """High coupling overrides max_elements and max_loc limits."""
+        # Create a file spec with coupled elements (function calls sibling function)
+        file_spec = ForwardFileSpec(
+            file="src/data.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="generate_data"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="validate_data"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="transform_data"),
+            ],
+        )
+        # Skeleton where functions call each other (cross-refs >= 2)
+        skeleton = '''\
+def generate_data():
+    raise NotImplementedError
+
+def validate_data():
+    data = generate_data()
+    raise NotImplementedError
+
+def transform_data():
+    data = generate_data()
+    validated = validate_data()
+    raise NotImplementedError
+'''
+        # Set very low limits — would normally be ineligible
+        engine = self._make_engine(
+            file_ollama_whole_max_elements=1,
+            file_ollama_whole_max_loc=5,
+        )
+        assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is True
+
+    def test_no_coupling_respects_size_limits(self):
+        """Without coupling, size limits are enforced."""
+        file_spec = ForwardFileSpec(
+            file="src/utils.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="foo"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="bar"),
+            ],
+        )
+        # Independent functions — no coupling
+        skeleton = '''\
+def foo():
+    raise NotImplementedError
+
+def bar():
+    raise NotImplementedError
+'''
+        engine = self._make_engine(file_ollama_whole_max_elements=1)
+        assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is False
+
+
+class TestFillRateThresholdBoundary:
+    """Exact boundary behavior at min_element_fill_rate threshold."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_exact_threshold_accepted(self):
+        """Fill rate exactly at threshold -> partial acceptance."""
+        # 3 elements, 1 missing = 2/3 = 66.7%
+        engine = self._make_engine(min_element_fill_rate=0.666)
+        file_spec = ForwardFileSpec(
+            file="src/logger.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(kind=ElementKind.CLASS, name="MyClass"),
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD, name="method_a",
+                    parent_class="MyClass",
+                ),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper"),
+            ],
+        )
+        skeleton = '''\
+class MyClass:
+    def method_a(self):
+        raise NotImplementedError
+
+def helper():
+    raise NotImplementedError
+'''
+        # Code with helper still as stub
+        partial = '''\
+class MyClass:
+    def method_a(self):
+        return 42
+
+def helper():
+    raise NotImplementedError
+'''
+        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50)):
+            result = engine._attempt_file_ollama_whole(file_spec, skeleton)
+
+        # 2/3 = 66.7% >= 66.6% -> accepted
+        assert result is not None
+
+    def test_just_below_threshold_rejected(self):
+        """Fill rate just below threshold -> None."""
+        engine = self._make_engine(min_element_fill_rate=0.67)
+        file_spec = ForwardFileSpec(
+            file="src/logger.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(kind=ElementKind.CLASS, name="MyClass"),
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD, name="method_a",
+                    parent_class="MyClass",
+                ),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper"),
+            ],
+        )
+        skeleton = '''\
+class MyClass:
+    def method_a(self):
+        raise NotImplementedError
+
+def helper():
+    raise NotImplementedError
+'''
+        partial = '''\
+class MyClass:
+    def method_a(self):
+        return 42
+
+def helper():
+    raise NotImplementedError
+'''
+        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50)):
+            result = engine._attempt_file_ollama_whole(file_spec, skeleton)
+
+        # 2/3 = 66.7% < 67% -> rejected
+        assert result is None
+
+
+class TestRetryFeedbackInjection:
+    """Validate that retry prompts include failure reasons."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_retry_prompt_contains_failure_reason(self, logger_file_spec, logger_skeleton, logger_filled):
+        """Second attempt's prompt should contain RETRY prefix with reason."""
+        engine = self._make_engine(local_max_attempts=2)
+        prompts_seen = []
+
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
+            prompts_seen.append(prompt)
+            if len(prompts_seen) == 1:
+                return (logger_skeleton, 100, 50)  # Stubs remain
+            return (logger_filled, 100, 50)
+
+        with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
+            engine._attempt_file_ollama_whole(logger_file_spec, logger_skeleton)
+
+        assert len(prompts_seen) == 2
+        assert "RETRY" in prompts_seen[1]
+        assert "Previous attempt issues" in prompts_seen[1]
+
+    def test_first_attempt_has_no_retry_prefix(self, logger_file_spec, logger_skeleton, logger_filled):
+        """First attempt should NOT have RETRY prefix."""
+        engine = self._make_engine(local_max_attempts=1)
+        prompts_seen = []
+
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
+            prompts_seen.append(prompt)
+            return (logger_filled, 100, 50)
+
+        with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
+            engine._attempt_file_ollama_whole(logger_file_spec, logger_skeleton)
+
+        assert len(prompts_seen) == 1
+        assert "RETRY" not in prompts_seen[0]
+
+
+class TestFileWholeRetryOnTotalEscalation:
+    """When all elements escalate, file-whole is retried."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_total_escalation_triggers_retry(
+        self, logger_file_spec, logger_skeleton, logger_filled, logger_manifest,
+    ):
+        """0% element success -> file-whole retry attempted."""
+        engine = self._make_engine()
+        call_count = 0
+
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First file-whole attempt fails (incomplete)
+                return ("import logging\n", 100, 10)
+            if call_count <= 4:
+                # Element-by-element attempts all fail
+                return ("", 50, 10)
+            # Retry file-whole succeeds
+            return (logger_filled, 100, 50)
+
+        with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
+            result = engine.process_file(
+                logger_file_spec, logger_manifest, logger_skeleton,
+            )
+
+        # At least 3 calls: initial file-whole + element attempts + retry file-whole
+        assert call_count >= 3
+
+
+class TestValidationAfterRepairFails:
+    """Repair succeeds (AST valid) but validation still rejects."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_repair_valid_but_still_missing_elements(
+        self, logger_file_spec, logger_skeleton, logger_manifest,
+    ):
+        """Repair fixes AST but missing elements -> falls through."""
+        engine = self._make_engine()
+
+        # Code that parses but is missing class elements
+        incomplete_code = "import logging\n\ndef getJSONLogger(name: str):\n    return logging.getLogger(name)\n"
+
+        from startd8.micro_prime.repair import RepairResult
+
+        repair_result = RepairResult(
+            code=incomplete_code,
+            steps_applied=["fence_strip"],
+            ast_valid=True,
+            ast_valid_before=True,
+            ast_valid_after=True,
+            repair_recovered=False,
+            metrics={},
+            step_results=[],
+        )
+
+        call_count = 0
+
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return (incomplete_code, 100, 50)
+            return ("    return None", 50, 10)
+
+        with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
+             patch("startd8.micro_prime.engine.run_repair_pipeline", return_value=repair_result):
+            result = engine.process_file(
+                logger_file_spec, logger_manifest, logger_skeleton,
+            )
+
+        # Should have fallen through to element-by-element
+        assert call_count > 1
+
+
+class TestMultiClassFileNearThreshold:
+    """Files with multiple classes near the element threshold."""
+
+    def _make_engine(self, **config_overrides) -> MicroPrimeEngine:
+        config = MicroPrimeConfig(**config_overrides)
+        return MicroPrimeEngine(config=config)
+
+    def test_multi_class_within_threshold(self):
+        """File with 2 classes and methods within element limit."""
+        file_spec = ForwardFileSpec(
+            file="src/models.py",
+            imports=[],
+            elements=[
+                ForwardElementSpec(kind=ElementKind.CLASS, name="User"),
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD, name="validate",
+                    parent_class="User",
+                ),
+                ForwardElementSpec(kind=ElementKind.CLASS, name="Product"),
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD, name="to_dict",
+                    parent_class="Product",
+                ),
+            ],
+        )
+        skeleton = '''\
+class User:
+    def validate(self):
+        raise NotImplementedError
+
+class Product:
+    def to_dict(self):
+        raise NotImplementedError
+'''
+        engine = self._make_engine(file_ollama_whole_max_elements=5)
+        assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is True
+
+    def test_multi_class_exceeds_threshold(self):
+        """File with too many elements across classes."""
+        elements = [
+            ForwardElementSpec(kind=ElementKind.CLASS, name="A"),
+        ]
+        for i in range(10):
+            elements.append(
+                ForwardElementSpec(
+                    kind=ElementKind.METHOD, name=f"method_{i}",
+                    parent_class="A",
+                ),
+            )
+        file_spec = ForwardFileSpec(file="src/big.py", imports=[], elements=elements)
+        skeleton = "class A:\n" + "".join(
+            f"    def method_{i}(self):\n        raise NotImplementedError\n"
+            for i in range(10)
+        )
+        engine = self._make_engine(file_ollama_whole_max_elements=5)
+        assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is False

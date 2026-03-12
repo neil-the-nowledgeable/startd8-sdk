@@ -16,9 +16,9 @@ from startd8.forward_manifest import (
 from startd8.micro_prime.engine import (
     MicroPrimeEngine,
     _enrich_file_spec_from_skeleton,
-    _structural_verify,
     _strip_fences,
 )
+from startd8.micro_prime.structural_verify import structural_verify as _structural_verify
 from startd8.micro_prime.models import (
     EscalationReason,
     MicroPrimeConfig,

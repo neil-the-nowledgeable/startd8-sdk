@@ -90,6 +90,16 @@ class LintDiagnostic(Diagnostic):
         self.category = "lint"
 
 
+@dataclass
+class SemanticDiagnostic(Diagnostic):
+    """Semantic correctness violation detected by structural verification."""
+
+    defect_type: str = ""  # "missing_self", "datetime_confusion", etc.
+
+    def __post_init__(self) -> None:
+        self.category = "semantic"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step & pipeline results
 # ═══════════════════════════════════════════════════════════════════════════

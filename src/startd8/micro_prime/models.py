@@ -333,8 +333,9 @@ class MicroPrimeConfig(BaseModel):
     simple_threshold: int = 0
     docstring_length_threshold: int = 200
     # Decomposer settings (REQ-MP-908)
-    # AC-R4-R5: Default off — decomposition is the primary source of accidental
-    # complexity (decomposer 1,029 + splicer 856 + element repair 1,015 lines).
+    # FALLBACK — decomposition is the primary source of accidental complexity
+    # (decomposer 1,029 + splicer 856 + element repair 1,015 lines).
+    # Only used when file-whole is ineligible or fails.
     # MODERATE elements now prefer Ollama-whole (moderate_ollama_whole_enabled)
     # or escalate to cloud.  Pass decomposition_enabled=True to opt in.
     decomposition_enabled: bool = False
@@ -357,14 +358,11 @@ class MicroPrimeConfig(BaseModel):
     # Ollama-whole for MODERATE elements (before decomposition)
     moderate_ollama_whole_enabled: bool = True
     moderate_ollama_whole_skip_signals: set[str] = {"external_api", "orchestrator", "app_server_instance"}
-    # File-level Ollama-whole: generate the entire file in one shot instead
-    # of decomposing into individual element-body prompts.  Targets files
-    # where element-by-element generation creates unnecessary fragility.
-    # Thresholds raised aggressively (AC-R3-R4) to route most files through
-    # the file-whole path, bypassing the element-by-element decomposition
-    # pipeline (12,252 lines of compensatory code).  History: 8/100 → 15/150
-    # (run-038) → 30/300 (AC-R3 Run 3).  Only files above these thresholds
-    # use element-by-element processing.
+    # PRIMARY generation path — generate the entire file in one shot instead
+    # of decomposing into individual element-body prompts.  File-whole avoids
+    # the 5 lossy information boundaries of element-by-element processing.
+    # Thresholds raised aggressively (AC-R3-R4) to route most files here.
+    # Only files above these thresholds fall through to element-by-element.
     file_ollama_whole_enabled: bool = True
     file_ollama_whole_max_elements: int = 60
     file_ollama_whole_max_loc: int = 600
