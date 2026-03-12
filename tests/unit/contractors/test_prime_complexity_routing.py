@@ -51,13 +51,15 @@ def _make_feature(name="test-feature", target_files=None, description="Implement
     feat.metadata = metadata if metadata is not None else {}
     feat.status = None
     feat.generated_files = []
+    feat.copy_source_task_id = None
+    feat.copy_source_file = None
+    feat.dependencies = []
     return feat
 
 
 # Shared patches for develop_feature internals
 _DEVELOP_PATCHES = [
     patch(f"{_WORKFLOW_PREFIX}.pre_flight_validation", return_value=(True, {})),
-    patch(f"{_WORKFLOW_PREFIX}._check_staleness", return_value=True),
     patch(f"{_WORKFLOW_PREFIX}._populate_existing_files"),
     patch(f"{_WORKFLOW_PREFIX}._save_queue_state_with_mode"),
     patch(f"{_WORKFLOW_PREFIX}._get_domain_enrichment", return_value=None),

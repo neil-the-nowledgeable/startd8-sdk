@@ -45,6 +45,7 @@ class TestSnapshotRestore:
     def test_snapshot_and_restore_existing_file(self, tmp_path):
         """Snapshot an existing file, overwrite it, restore, verify content."""
         wf = self._make_workflow(tmp_path)
+        engine = wf._engine
         target = tmp_path / "src" / "module.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         original_content = textwrap.dedent("""\
@@ -54,7 +55,7 @@ class TestSnapshotRestore:
         target.write_text(original_content)
 
         # Snapshot
-        wf._snapshot_target(target)
+        engine._snapshot_target(target)
         snapshot_path = target.with_suffix(".py.pre_integration")
         assert snapshot_path.exists()
         assert snapshot_path.read_text() == original_content
@@ -64,67 +65,70 @@ class TestSnapshotRestore:
         assert target.read_text() != original_content
 
         # Restore
-        assert wf._restore_target(target) is True
+        assert engine._restore_target(target) is True
         assert target.read_text() == original_content
 
         # Cleanup
-        removed = wf._cleanup_snapshots([target])
+        removed = engine._cleanup_snapshots([target])
         assert removed == 1
         assert not snapshot_path.exists()
-        assert str(target) not in wf._pre_integration_snapshots
+        assert str(target) not in engine._pre_integration_snapshots
 
     def test_snapshot_absent_file_restore_deletes(self, tmp_path):
         """Snapshot a non-existent target, create it, restore → deleted."""
         wf = self._make_workflow(tmp_path)
+        engine = wf._engine
         target = tmp_path / "src" / "new_module.py"
         target.parent.mkdir(parents=True, exist_ok=True)
         assert not target.exists()
 
         # Snapshot records None
-        wf._snapshot_target(target)
-        assert wf._pre_integration_snapshots[str(target)] is None
+        engine._snapshot_target(target)
+        assert engine._pre_integration_snapshots[str(target)] is None
 
         # Simulate merge creating the file
         target.write_text("class New: pass\n")
         assert target.exists()
 
         # Restore should delete it
-        assert wf._restore_target(target) is True
+        assert engine._restore_target(target) is True
         assert not target.exists()
 
     def test_snapshot_idempotent(self, tmp_path):
         """Calling _snapshot_target twice doesn't overwrite the first snapshot."""
         wf = self._make_workflow(tmp_path)
+        engine = wf._engine
         target = tmp_path / "mod.py"
         target.write_text("v1")
 
-        wf._snapshot_target(target)
+        engine._snapshot_target(target)
         snapshot_path = target.with_suffix(".py.pre_integration")
         assert snapshot_path.read_text() == "v1"
 
         # Overwrite target, call snapshot again — should be a no-op
         target.write_text("v2")
-        wf._snapshot_target(target)
+        engine._snapshot_target(target)
         assert snapshot_path.read_text() == "v1"  # still v1
 
     def test_restore_no_snapshot_returns_false(self, tmp_path):
         """_restore_target returns False when no snapshot exists."""
         wf = self._make_workflow(tmp_path)
         target = tmp_path / "unknown.py"
-        assert wf._restore_target(target) is False
+        assert wf._engine._restore_target(target) is False
 
     def test_cleanup_all(self, tmp_path):
         """_cleanup_snapshots(None) cleans everything."""
         wf = self._make_workflow(tmp_path)
+        engine = wf._engine
         for name in ("a.py", "b.py"):
             f = tmp_path / name
             f.write_text(f"# {name}")
-            wf._snapshot_target(f)
+            engine._snapshot_target(f)
 
-        assert len(wf._pre_integration_snapshots) == 2
-        removed = wf._cleanup_snapshots(None)
+        assert len(engine._pre_integration_snapshots) == 2
+        removed = engine._cleanup_snapshots(None)
         assert removed == 2
-        assert len(wf._pre_integration_snapshots) == 0
+        assert len(engine._pre_integration_snapshots) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +138,14 @@ class TestSnapshotRestore:
 class TestPreValidate:
     """Verify IntegrationCheckpoint.pre_validate catches errors before merge."""
 
-    def test_check_lint_catches_e741(self, tmp_path):
-        """Regression: check_lint with concise output detects E741."""
+    def test_check_lint_downgrades_e741_to_warning(self, tmp_path):
+        """E741 (ambiguous variable name) is downgraded to warning, not error."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         bad_file = tmp_path / "ambiguous.py"
         bad_file.write_text("l = 1\n")
         result = checkpoint.check_lint([bad_file])
-        assert result.status == CheckpointStatus.FAILED
-        assert any("E741" in e for e in result.errors)
+        # E741 is intentionally downgraded — does not cause FAILED status
+        assert result.status == CheckpointStatus.PASSED
 
     def test_valid_generated_file_passes(self, tmp_path):
         """Clean generated file → PASSED."""
@@ -166,19 +170,18 @@ class TestPreValidate:
         assert result.status == CheckpointStatus.FAILED
         assert len(result.errors) > 0
 
-    def test_lint_error_fails(self, tmp_path):
-        """Generated file with E741 (ambiguous variable name) → FAILED."""
+    def test_lint_e741_downgraded_in_pre_validate(self, tmp_path):
+        """E741 (ambiguous variable name) is downgraded — pre_validate passes."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         gen_file = tmp_path / "generated" / "lint_bad.py"
         gen_file.parent.mkdir(parents=True, exist_ok=True)
-        # E741: ambiguous variable name 'l'
+        # E741: ambiguous variable name 'l' — downgraded to style warning
         gen_file.write_text("l = 1\nO = 2\n")
         result = checkpoint.pre_validate([gen_file])
-        assert result.status == CheckpointStatus.FAILED
-        assert any("E741" in e for e in result.errors)
+        assert result.status == CheckpointStatus.PASSED
 
-    def test_multiple_files_aggregates_errors(self, tmp_path):
-        """Errors from multiple files (syntax + lint) are combined."""
+    def test_multiple_files_syntax_error_fails_e741_downgraded(self, tmp_path):
+        """Syntax error → FAILED; E741 alone → downgraded (not counted as error)."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         gen_dir = tmp_path / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -187,12 +190,13 @@ class TestPreValidate:
         bad_syntax.write_text("def x(\n")
 
         bad_lint = gen_dir / "lint_bad.py"
-        bad_lint.write_text("l = 1\n")  # E741
+        bad_lint.write_text("l = 1\n")  # E741 — downgraded to warning
 
         result = checkpoint.pre_validate([bad_syntax, bad_lint])
         assert result.status == CheckpointStatus.FAILED
-        # Should have errors from both files
-        assert len(result.errors) >= 2
+        # Syntax error is a real error; E741 is not counted as error
+        assert len(result.errors) >= 1
+        assert any("syntax_bad" in e.lower() or "SyntaxError" in e for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +271,8 @@ class TestRetryIntegration:
         assert feature.integration_attempts == 1
 
         # Snapshot + merge manually (SimpleMergeStrategy = overwrite)
-        wf._snapshot_target(target_file)
+        engine = wf._engine
+        engine._snapshot_target(target_file)
         shutil.copy2(gen_file_1, target_file)
         assert target_file.read_text() == attempt1_code
 
@@ -302,7 +307,7 @@ class TestRetryIntegration:
         assert feature.integration_attempts == 2
 
         # Restore from snapshot (as integrate_feature would)
-        restored = wf._restore_target(target_file)
+        restored = engine._restore_target(target_file)
         assert restored is True
         assert target_file.read_text() == original_content  # back to original!
 
@@ -329,36 +334,14 @@ class TestSourceLint:
         "src/startd8/contractors/checkpoint.py",
     ])
     def test_ruff_no_new_errors(self, filepath):
-        """Run ruff and verify no errors come from our new code.
-
-        Note: prime_contractor.py has pre-existing import warnings in
-        the LLM-generated FeatureProcessor class at the bottom. We
-        check that checkpoint.py is fully clean, and for prime_contractor.py
-        we verify no errors reference our new methods/lines.
-        """
+        """Run ruff and verify no lint errors (E7, E9, F selectors)."""
         result = subprocess.run(
             ["python3", "-m", "ruff", "check", filepath, "--select=E7,E9,F"],
             capture_output=True,
             text=True,
             timeout=30,
         )
-        if filepath.endswith("checkpoint.py"):
-            assert result.returncode == 0, f"checkpoint.py has lint errors:\n{result.stdout}"
-        else:
-            # prime_contractor.py has pre-existing warnings — just verify
-            # none reference our new methods
-            new_method_names = [
-                "_snapshot_target",
-                "_restore_target",
-                "_cleanup_snapshots",
-                "_pre_integration_snapshots",
-                "pre_validate",
-            ]
-            for line in result.stdout.strip().split("\n"):
-                for method in new_method_names:
-                    assert method not in line, (
-                        f"Lint error in new code ({method}): {line}"
-                    )
+        assert result.returncode == 0, f"{filepath} has lint errors:\n{result.stdout}"
 
 
 # ---------------------------------------------------------------------------
@@ -434,16 +417,15 @@ class TestPreValidateAutoFix:
                 checkpoint.pre_validate([gen_file])
         assert any("skipped" in msg for msg in caplog.messages)
 
-    def test_unfixable_errors_still_caught(self, tmp_path):
-        """Auto-fix can't fix E741 (ambiguous name) — lint check still catches it."""
+    def test_e741_downgraded_after_autofix(self, tmp_path):
+        """Auto-fix can't fix E741 — but it's downgraded so pre_validate passes."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         gen_file = tmp_path / "generated" / "ambig.py"
         gen_file.parent.mkdir(parents=True, exist_ok=True)
-        # E741: ambiguous variable name 'l'
+        # E741: ambiguous variable name 'l' — downgraded to style warning
         gen_file.write_text("l = 1\n")
         result = checkpoint.pre_validate([gen_file])
-        assert result.status == CheckpointStatus.FAILED
-        assert any("E741" in e for e in result.errors)
+        assert result.status == CheckpointStatus.PASSED
 
     def test_non_python_files_skipped(self, tmp_path):
         """Auto-fix only runs on .py files; .json etc. are skipped."""

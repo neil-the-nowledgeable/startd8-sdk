@@ -3,7 +3,6 @@ import enum
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -17,8 +16,6 @@ from .checkpoint import IntegrationCheckpoint
 from .context_resolution import (
     ContextStrategy as ContextResolutionStrategy,
     StandaloneContextStrategy,
-    PipelineContextStrategy,
-    create_strategy,
 )
 from .integration_engine import IntegrationEngine
 from .protocols import (
@@ -635,6 +632,8 @@ class PrimeContractorWorkflow:
         self._strict_mode = strict_mode
         # ForwardManifest (REQ-MP-701) — deserialized once in load_seed_context()
         self._forward_manifest = None
+        # FR-MPA-007: Skeleton sources — populated in load_seed_context()
+        self._skeleton_sources: dict[str, str] = {}
         # Complexity routing (REQ-MP-807) — off by default, enabled via enable_complexity_routing()
         self._complexity_routing_enabled = False
         self._complexity_config: Optional[Any] = None
@@ -1743,97 +1742,17 @@ class PrimeContractorWorkflow:
     # -----------------------------------------------------------------------
 
     # -----------------------------------------------------------------------
-    # Phase 4: Generation Manifest, Staleness Detection, Validation Hookpoint
+    # Generation Manifest (run provenance, pipeline mode only)
+    # R2: Staleness detection removed — subsumed by content-addressable
+    # generation cache (AC-R3). Manifest write retained for run provenance.
     # -----------------------------------------------------------------------
 
-    _MANIFEST_SCHEMA_VERSION = "1.0.0"
+    _MANIFEST_SCHEMA_VERSION = "1.1.0"
     _MANIFEST_FILENAME = "generation-manifest.json"
-
-    def _compute_source_checksum(self) -> str:
-        """Compute SHA-256 of canonical seed JSON for staleness detection.
-
-        Uses sorted keys for canonical representation so that logically
-        identical seeds produce the same checksum regardless of dict ordering.
-        """
-        seed_dict = self.seed_context.to_dict() if self._seed_context else {}
-        canonical = json.dumps(seed_dict, sort_keys=True, default=str)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     def _manifest_path(self) -> Path:
         """Return the path to the generation manifest file."""
         return self.project_root / ".startd8" / self._MANIFEST_FILENAME
-
-    def _read_existing_manifest(self) -> Optional[Dict[str, Any]]:
-        """Read existing generation manifest, returning None if absent or corrupt."""
-        path = self._manifest_path()
-        if not path.exists():
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning(
-                "Could not read generation manifest at %s: %s",
-                path, exc,
-            )
-            return None
-
-    def _check_staleness(self, feature: FeatureSpec) -> bool:
-        """Check if a feature can be reused from a previous generation.
-
-        Returns True if the feature should be regenerated, False if cached
-        results can be reused.
-
-        Conditions for reuse (all must hold):
-        - Pipeline mode active
-        - force_regenerate is False
-        - Existing manifest exists and is parsable
-        - source_checksum matches current seed's checksum
-        - Feature ID appears in the manifest's feature list
-
-        Returns:
-            True if feature needs regeneration, False if cache is valid.
-        """
-        if self.force_regenerate:
-            logger.info(
-                "Staleness check: forced regeneration for '%s'", feature.name,
-            )
-            return True
-
-        if self.execution_mode != ExecutionMode.PIPELINE.value:
-            return True  # Standalone always regenerates
-
-        manifest = self._read_existing_manifest()
-        if manifest is None:
-            logger.info("Staleness check: no provenance — regenerating '%s'", feature.name)
-            return True
-
-        manifest_checksum = manifest.get("source_checksum")
-        if not manifest_checksum:
-            logger.info("Staleness check: no checksum in manifest — regenerating '%s'", feature.name)
-            return True
-
-        current_checksum = self._compute_source_checksum()
-        if manifest_checksum != current_checksum:
-            logger.info(
-                "Staleness check: stale (checksum mismatch) — regenerating '%s'",
-                feature.name,
-            )
-            return True
-
-        # Check if feature was previously generated
-        features_in_manifest = manifest.get("features", {})
-        if feature.id not in features_in_manifest:
-            logger.info(
-                "Staleness check: feature '%s' (id='%s') not in manifest — "
-                "regenerating (manifest keys: %s)",
-                feature.name,
-                feature.id,
-                list(features_in_manifest.keys()),
-            )
-            return True
-
-        logger.info("Staleness check: current — reusing cached '%s'", feature.name)
-        return False
 
     # ------------------------------------------------------------------
     # REQ-MP-1105: Cross-task element cache assembly
@@ -2132,9 +2051,8 @@ class PrimeContractorWorkflow:
     def _write_generation_manifest(self, result_dict: Dict[str, Any]) -> None:
         """Write generation manifest to disk (pipeline mode only).
 
-        The manifest captures provenance for staleness detection and
-        reproducibility. Written with 0o600 permissions since it contains
-        cost data.
+        The manifest captures run provenance (costs, features, config).
+        Written with 0o600 permissions since it contains cost data.
 
         I/O errors are logged but do not fail the workflow.
         """
@@ -2143,7 +2061,6 @@ class PrimeContractorWorkflow:
 
         manifest = {
             "schema_version": self._MANIFEST_SCHEMA_VERSION,
-            "source_checksum": self._compute_source_checksum(),
             "execution_mode": self.execution_mode,
             "effective_config": {
                 "mode": self.execution_mode,
@@ -2177,12 +2094,8 @@ class PrimeContractorWorkflow:
                 json.dumps(manifest, indent=2, default=str),
                 encoding="utf-8",
             )
-            # Restrict permissions: cost data is sensitive
             os.chmod(path, 0o600)
-            logger.info(
-                "Generation manifest written to %s (checksum=%s)",
-                path, manifest["source_checksum"][:12],
-            )
+            logger.info("Generation manifest written to %s", path)
         except OSError as exc:
             logger.warning(
                 "Failed to write generation manifest to %s: %s",
@@ -3097,12 +3010,12 @@ class PrimeContractorWorkflow:
         """
         Develop a feature using the configured CodeGenerator.
 
-        Orchestrates 10 phases (AC-R1 refactor):
+        Orchestrates 9 phases (AC-R1 refactor, R2 staleness removal):
           0. Copy shortcut (identical-copy tasks bypass generation)
           1. Preflight validation
           2. Mottainai reuse (skip if generated files still current)
           3. Context assembly (build gen_context for generator)
-          4. Staleness detection (skip if cached result is current)
+          4. Content-addressable cache lookup (AC-R3)
           5. Complexity routing (select tier-specific generator)
           6. Element cache assembly (skip if all elements in registry)
           7. Code generation (the actual LLM call)
@@ -3178,13 +3091,9 @@ class PrimeContractorWorkflow:
             # Kaizen: persist real-run prompts (REQ-KZ-200) — non-fatal
             self._persist_kaizen_prompts(feature, gen_context, result=None)
 
-            # Phase 4: Staleness detection
-            if not self._check_staleness(feature):
-                feature.status = FeatureStatus.GENERATED
-                self._save_queue_state_with_mode()
-                return True  # CR-H1: return bool, not gen_context dict
+            # R2: Staleness detection removed — subsumed by AC-R3 cache below.
 
-            # Phase 4b: Content-addressable cache lookup (AC-R3)
+            # Phase 4: Content-addressable cache lookup (AC-R3)
             cache_hit = self._try_generation_cache(feature, gen_context)
             if cache_hit is not None:
                 self._accept_generation_result(feature, cache_hit)
@@ -4045,366 +3954,6 @@ class PrimeContractorWorkflow:
         logger.info('Cleaned %d item(s) from workspace', removed)
         return removed
 
-class FeatureProcessor:
-    """
-    Processes decomposed features according to enterprise requirements.
-    
-    This processor implements a five-stage pipeline:
-    1. Input Validation - Ensures data integrity
-    2. Normalization - Standardizes format
-    3. Enrichment - Adds metadata and context
-    4. Analysis - Derives insights (type, dependencies, complexity)
-    5. Finalization - Returns processed feature
-    
-    Thread-safe for concurrent processing scenarios.
-    """
-    FEATURE_TYPES = ['frontend', 'backend', 'data', 'testing', 'devops', 'general']
-    REQUIRED_FIELDS = ['id', 'description', 'parent_feature_id']
-    COMPLEXITY_KEYWORDS = ['integrate', 'complex', 'multiple', 'various', 'comprehensive', 'advanced', 'sophisticated', 'intricate', 'elaborate', 'extensive']
-    TYPE_KEYWORDS = {'frontend': ['ui', 'interface', 'display', 'view', 'component', 'screen', 'frontend'], 'backend': ['api', 'endpoint', 'service', 'backend', 'server', 'microservice'], 'data': ['database', 'schema', 'migration', 'query', 'storage', 'data'], 'testing': ['test', 'validation', 'verify', 'check', 'assert', 'quality'], 'devops': ['deploy', 'infrastructure', 'configuration', 'pipeline', 'ci/cd']}
-    VERSION = '1.0.0'
-    MAX_DESCRIPTION_LENGTH = 1000
-    PRIORITY_MIN = 1
-    PRIORITY_MAX = 5
-    COMPLEXITY_MIN = 1
-    COMPLEXITY_MAX = 10
 
-    def __init__(self):
-        """Initialize the FeatureProcessor."""
-        logger.info(f'FeatureProcessor initialized (version {self.VERSION})')
+# [R1: FeatureProcessor class deleted — vestigial LLM-generated code, never imported/exported]
 
-    def _process_decomposed_feature(self, feature: Dict[str, Any], parent_context: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
-        """
-        Process a single decomposed feature with comprehensive validation and enrichment.
-
-        Args:
-            feature: Raw decomposed feature dictionary containing:
-                - id (str): Unique identifier
-                - description (str): Feature description text
-                - parent_feature_id (str): ID of parent feature
-                - type (str, optional): Feature type
-                - priority (int, optional): Priority level (1-5)
-            parent_context: Optional context from parent feature for inheritance.
-                Expected to contain fields like "tags", "category".
-
-        Returns:
-            Dict[str, Any]: Processed feature with all enrichments applied:
-                - All original fields (normalized)
-                - metadata: Processing information and status
-                - dependencies: Extracted feature dependencies
-                - complexity_score: Calculated complexity (1-10)
-                - type: Inferred or validated feature type
-
-        Raises:
-            ValueError: If required fields are missing or validation fails
-            TypeError: If field types are incorrect
-
-        Example:
-            >>> processor = FeatureProcessor()
-            >>> feature = {
-            ...     "id": "FEAT-001",
-            ...     "description": "Create API endpoint",
-            ...     "parent_feature_id": "EPIC-100"
-            ... }
-            >>> result = processor._process_decomposed_feature(feature)
-        """
-        if parent_context is None:
-            parent_context = {}
-        processed_feature = feature.copy()
-        original_id = processed_feature.get('id', 'N/A')
-        warnings = []
-        try:
-            logger.debug(f"Processing feature '{original_id}': Stage 1 - Validation")
-            self._validate_feature_fields(processed_feature)
-            if not processed_feature.get('description', '').strip():
-                raise ValueError(f"Feature '{original_id}': Description cannot be empty")
-            parent_id = processed_feature.get('parent_feature_id')
-            if not isinstance(parent_id, str) or not parent_id.strip():
-                raise ValueError(f"Feature '{original_id}': Invalid or empty parent_feature_id")
-            additional_fields = {}
-            standard_fields = {'id', 'description', 'type', 'parent_feature_id', 'priority'}
-            keys_to_remove = []
-            for key, value in processed_feature.items():
-                if key not in standard_fields:
-                    additional_fields[key] = value
-                    keys_to_remove.append(key)
-            for key in keys_to_remove:
-                del processed_feature[key]
-            if additional_fields:
-                processed_feature['additional_fields'] = additional_fields
-                logger.debug(f"Feature '{original_id}': Moved {len(additional_fields)} extra fields")
-            logger.debug(f"Processing feature '{original_id}': Stage 2 - Normalization")
-            processed_feature['description'] = self._normalize_description(processed_feature['description'])
-            logger.debug(f"Processing feature '{original_id}': Stage 3 - Enrichment")
-            processed_feature['metadata'] = {'processed_at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'), 'processing_status': 'success', 'version': self.VERSION, 'warnings': warnings}
-            for key, value in parent_context.items():
-                if key not in processed_feature or processed_feature[key] is None:
-                    processed_feature[key] = value
-                    logger.debug(f"Feature '{original_id}': Inherited '{key}' from parent context")
-            processed_feature = self._process_priority(processed_feature, original_id, warnings)
-            logger.debug(f"Processing feature '{original_id}': Stage 4 - Analysis")
-            processed_feature = self._process_feature_type(processed_feature, original_id, warnings)
-            dependencies = self._extract_dependencies(processed_feature['description'])
-            processed_feature['dependencies'] = dependencies
-            if dependencies:
-                logger.info(f"Feature '{original_id}': Found {len(dependencies)} dependencies")
-                if original_id in dependencies:
-                    warning_msg = f"Feature '{original_id}' has a circular dependency on itself"
-                    warnings.append(warning_msg)
-                    logger.warning(warning_msg)
-            complexity_score = self._calculate_complexity_score(processed_feature['description'], dependencies)
-            processed_feature['complexity_score'] = complexity_score
-            logger.info(f"Feature '{original_id}': Complexity score = {complexity_score}")
-            processed_feature['metadata']['warnings'] = warnings
-            logger.info(f"Feature '{original_id}': Successfully processed")
-        except (ValueError, TypeError) as e:
-            logger.error(f"Feature '{original_id}': Processing failed - {e}")
-            processed_feature = self._create_error_response(processed_feature, feature, original_id, str(e))
-            raise
-        except Exception as e:
-            logger.error(f"Feature '{original_id}': Unexpected error - {e}", exc_info=True)
-            processed_feature = self._create_error_response(processed_feature, feature, original_id, f'Unexpected error: {str(e)}')
-            raise
-        return processed_feature
-
-    def _validate_feature_fields(self, feature: Dict[str, Any]) -> None:
-        """
-        Validate required fields exist and have correct types.
-
-        Args:
-            feature: Feature dictionary to validate
-
-        Raises:
-            ValueError: If required field is missing or invalid
-            TypeError: If field has incorrect type
-        """
-        feature_id = feature.get('id', 'N/A')
-        for field in self.REQUIRED_FIELDS:
-            if field not in feature or feature[field] is None:
-                raise ValueError(f"Feature '{feature_id}': Missing required field '{field}'")
-        if not isinstance(feature['id'], str):
-            raise TypeError(f"Feature '{feature_id}': Field 'id' must be a string")
-        if not isinstance(feature['description'], str):
-            raise TypeError(f"Feature '{feature_id}': Field 'description' must be a string")
-        if not isinstance(feature['parent_feature_id'], str):
-            raise TypeError(f"Feature '{feature_id}': Field 'parent_feature_id' must be a string")
-        if 'priority' in feature and feature['priority'] is not None:
-            if not isinstance(feature['priority'], int):
-                try:
-                    int(feature['priority'])
-                except (ValueError, TypeError):
-                    raise TypeError(f"Feature '{feature_id}': Field 'priority' must be an integer")
-        if len(feature['description']) > self.MAX_DESCRIPTION_LENGTH:
-            logger.warning(f"Feature '{feature_id}': Description exceeds {self.MAX_DESCRIPTION_LENGTH} characters")
-
-    def _normalize_description(self, description: str) -> str:
-        """
-        Normalize feature description text.
-
-        - Trims leading/trailing whitespace
-        - Replaces multiple spaces with single space
-        - Preserves original casing for domain-specific terms
-
-        Args:
-            description: Raw description text
-
-        Returns:
-            str: Normalized description
-        """
-        description = description.strip()
-        description = re.sub('\\s+', ' ', description)
-        return description
-
-    def _process_priority(self, feature: Dict[str, Any], feature_id: str, warnings: List[str]) -> Dict[str, Any]:
-        """
-        Process and validate priority field.
-
-        Args:
-            feature: Feature dictionary
-            feature_id: Feature identifier for logging
-            warnings: List to append warnings to
-
-        Returns:
-            Dict[str, Any]: Feature with processed priority
-        """
-        if 'priority' not in feature or feature['priority'] is None:
-            feature['priority'] = 3
-            logger.info(f"Feature '{feature_id}': Priority defaulted to 3")
-        else:
-            priority = feature['priority']
-            if not isinstance(priority, int):
-                try:
-                    priority = int(priority)
-                except (ValueError, TypeError):
-                    raise TypeError(f"Feature '{feature_id}': Priority must be an integer")
-            if not self.PRIORITY_MIN <= priority <= self.PRIORITY_MAX:
-                clamped = max(self.PRIORITY_MIN, min(priority, self.PRIORITY_MAX))
-                warning_msg = f'Priority {priority} out of range ({self.PRIORITY_MIN}-{self.PRIORITY_MAX}), clamped to {clamped}'
-                warnings.append(warning_msg)
-                feature['priority'] = clamped
-                logger.warning(f"Feature '{feature_id}': {warning_msg}")
-            else:
-                feature['priority'] = priority
-        return feature
-
-    def _process_feature_type(self, feature: Dict[str, Any], feature_id: str, warnings: List[str]) -> Dict[str, Any]:
-        """
-        Process and validate feature type field.
-
-        Args:
-            feature: Feature dictionary
-            feature_id: Feature identifier for logging
-            warnings: List to append warnings to
-
-        Returns:
-            Dict[str, Any]: Feature with processed type
-        """
-        if 'type' not in feature or not feature['type']:
-            inferred_type = self._infer_feature_type(feature['description'])
-            feature['type'] = inferred_type
-            if inferred_type == 'general':
-                warnings.append("Feature type could not be inferred, defaulted to 'general'")
-                logger.info(f"Feature '{feature_id}': Type defaulted to 'general'")
-            else:
-                logger.info(f"Feature '{feature_id}': Type inferred as '{inferred_type}'")
-        elif feature['type'] not in self.FEATURE_TYPES:
-            warning_msg = f"Provided type '{feature['type']}' is not recognized, defaulted to 'general'"
-            warnings.append(warning_msg)
-            feature['type'] = 'general'
-            logger.warning(f"Feature '{feature_id}': {warning_msg}")
-        else:
-            logger.info(f"Feature '{feature_id}': Using provided type '{feature['type']}'")
-        return feature
-
-    def _infer_feature_type(self, description: str) -> str:
-        """
-        Infer feature type from description using keyword matching.
-
-        Uses case-insensitive word boundary matching to identify feature type
-        based on domain-specific keywords.
-
-        Args:
-            description: Feature description text
-
-        Returns:
-            str: Inferred feature type (one of FEATURE_TYPES)
-        """
-        description_lower = description.lower()
-        type_scores = {ftype: 0 for ftype in self.FEATURE_TYPES}
-        for ftype, keywords in self.TYPE_KEYWORDS.items():
-            for keyword in keywords:
-                if re.search('\\b' + re.escape(keyword) + '\\b', description_lower):
-                    type_scores[ftype] += 1
-        max_score = max(type_scores.values())
-        if max_score == 0:
-            return 'general'
-        for ftype in self.FEATURE_TYPES:
-            if type_scores.get(ftype, 0) == max_score:
-                return ftype
-        return 'general'
-
-    def _extract_dependencies(self, description: str) -> List[str]:
-        """
-        Extract dependency references from description.
-
-        Identifies dependencies through:
-        - Explicit phrases: "depends on", "requires", "integrates with", etc.
-        - Capitalized component names: "Analytics API", "Database Migration"
-
-        Args:
-            description: Feature description text
-
-        Returns:
-            List[str]: List of unique dependency identifiers
-        """
-        dependencies = []
-        description_lower = description.lower()
-        explicit_patterns = ['depends on ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'requires ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'integrates with ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'uses ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'built on ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))']
-        for pattern in explicit_patterns:
-            matches = re.findall(pattern, description_lower)
-            for match in matches:
-                dep_name = match.strip()
-                if dep_name and dep_name not in dependencies:
-                    dependencies.append(dep_name)
-        potential_deps = re.findall('\\b([A-Z][a-z]+(?:[\\s-]+[A-Z][a-z]+)*)\\b', description)
-        exclude_words = {'a', 'an', 'the', 'for', 'with', 'and', 'or', 'this', 'that', 'create', 'build', 'implement', 'add', 'update', 'feature'}
-        for dep in potential_deps:
-            cleaned_dep = dep.strip()
-            if cleaned_dep and cleaned_dep not in dependencies and (cleaned_dep.lower() not in exclude_words) and (len(cleaned_dep) > 2):
-                dependencies.append(cleaned_dep)
-        seen = set()
-        unique_deps = []
-        for dep in dependencies:
-            dep_lower = dep.lower()
-            if dep_lower not in seen:
-                seen.add(dep_lower)
-                unique_deps.append(dep.strip())
-        return unique_deps
-
-    def _count_complexity_keywords(self, description: str) -> int:
-        """
-        Count complexity-indicating keywords in description.
-
-        Args:
-            description: Feature description text
-
-        Returns:
-            int: Count of complexity keywords found
-        """
-        count = 0
-        description_lower = description.lower()
-        for keyword in self.COMPLEXITY_KEYWORDS:
-            if re.search('\\b' + re.escape(keyword) + '\\b', description_lower):
-                count += 1
-        return count
-
-    def _calculate_complexity_score(self, description: str, dependencies: List[str]) -> int:
-        """
-        Calculate complexity score on 1-10 scale.
-
-        Scoring factors:
-        - Description length (up to 5 points)
-        - Dependency count (up to 3 points)
-        - Complexity keywords (up to 2 points)
-
-        Args:
-            description: Feature description text
-            dependencies: List of feature dependencies
-
-        Returns:
-            int: Complexity score (1-10)
-        """
-        base_score = min(len(description) / 20, 5)
-        dependency_score = min(len(dependencies) * 0.5, 3)
-        keyword_count = self._count_complexity_keywords(description)
-        keyword_score = min(keyword_count * 0.5, 2)
-        total_score = base_score + dependency_score + keyword_score
-        final_score = max(self.COMPLEXITY_MIN, min(round(total_score), self.COMPLEXITY_MAX))
-        return final_score
-
-    def _create_error_response(self, processed_feature: Dict[str, Any], original_feature: Dict[str, Any], feature_id: str, error_message: str) -> Dict[str, Any]:
-        """
-        Create consistent error response structure.
-
-        Args:
-            processed_feature: Partially processed feature
-            original_feature: Original input feature
-            feature_id: Feature identifier
-            error_message: Error description
-
-        Returns:
-            Dict[str, Any]: Feature with error metadata
-        """
-        if 'metadata' not in processed_feature:
-            processed_feature['metadata'] = {}
-        processed_feature['metadata'].update({'processing_status': 'failed', 'error': error_message, 'processed_at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'), 'version': self.VERSION, 'warnings': []})
-        processed_feature.setdefault('id', feature_id)
-        processed_feature.setdefault('description', original_feature.get('description'))
-        processed_feature.setdefault('parent_feature_id', original_feature.get('parent_feature_id'))
-        processed_feature.setdefault('type', 'general')
-        processed_feature.setdefault('priority', 3)
-        processed_feature.setdefault('dependencies', [])
-        processed_feature.setdefault('complexity_score', 0)
-        return processed_feature
-logger = get_logger(__name__)
-MAX_INTEGRATION_ATTEMPTS = 6
