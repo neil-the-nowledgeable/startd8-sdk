@@ -12,6 +12,7 @@ from .models import Diagnostic, RepairRoute
 from .steps import (
     AstValidateStep,
     BracketBalanceStep,
+    ClassBodyDeduplicationStep,
     DuplicateRemovalStep,
     ErrorDrivenImportCompletion,
     ExtendedLintFixStep,
@@ -31,6 +32,7 @@ _CANONICAL_ORDER = [
     "future_import_reorder",
     "indent_normalize",
     "bracket_balance",
+    "class_body_dedup",
     "import_completion",
     "duplicate_removal",
     "extended_lint_fix",
@@ -39,9 +41,9 @@ _CANONICAL_ORDER = [
 
 # Routing table: category → (matched_pattern, step_names, confidence)
 _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
-    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "ast_validate"], "HIGH"),
+    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH"),
     ("import", "missing_import", ["import_completion", "duplicate_removal", "ast_validate"], "HIGH"),
-    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "duplicate_removal", "extended_lint_fix", "ast_validate"], "MEDIUM"),
+    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "import_completion", "duplicate_removal", "extended_lint_fix", "ast_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor
@@ -50,6 +52,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "future_import_reorder": FutureImportReorderStep,
     "indent_normalize": IndentNormalizeStep,
     "bracket_balance": BracketBalanceStep,
+    "class_body_dedup": ClassBodyDeduplicationStep,
     "import_completion": ErrorDrivenImportCompletion,
     "duplicate_removal": DuplicateRemovalStep,
     "extended_lint_fix": ExtendedLintFixStep,
