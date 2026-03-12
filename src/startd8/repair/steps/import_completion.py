@@ -24,6 +24,38 @@ from ..models import (
     RepairStepResult,
 )
 
+# Well-known package import corrections.  LLM-generated skeletons often
+# produce incorrect module paths (e.g. ``from humanmessage import HumanMessage``
+# instead of ``from langchain_core.messages import HumanMessage``).  When the
+# ManifestImportCompletion step encounters a ``from X import Y`` whose module
+# matches a key here, it rewrites the module to the correct path.
+#
+# Format: {wrong_module: correct_module}
+_KNOWN_IMPORT_CORRECTIONS: dict[str, str] = {
+    # LangChain ecosystem
+    "humanmessage": "langchain_core.messages",
+    "aimessage": "langchain_core.messages",
+    "systemmessage": "langchain_core.messages",
+    "basemessage": "langchain_core.messages",
+    "chatgooglegenerativeai": "langchain_google_genai",
+    "langchain.chains": "langchain_google_genai",
+    # Locust
+    "fasthttpuser": "locust",
+    "httpuser": "locust",
+    "taskset": "locust",
+    "between": "locust",
+    # Faker
+    "fake": "faker",
+    # Flask
+    "flask_app": "flask",
+    # gRPC
+    "grpc_health": "grpc_health.v1",
+    "health_pb2": "grpc_health.v1.health_pb2",
+    # Google Cloud
+    "googleapicallerror": "google.api_core.exceptions",
+    "templateerror": "jinja2",
+}
+
 
 def _find_import_insertion_line(lines: list[str]) -> int:
     """Find the line index where new imports should be inserted.
@@ -160,8 +192,12 @@ class ManifestImportCompletion:
             if hasattr(imp, "kind") and imp.kind == "from":
                 for name in imp.names:
                     if name in used_names and name not in existing_imports:
+                        # Correct well-known wrong module paths from LLM skeletons
+                        module = _KNOWN_IMPORT_CORRECTIONS.get(
+                            imp.module.lower(), imp.module,
+                        )
                         names_str = ", ".join(imp.names)
-                        missing_imports.append(f"from {imp.module} import {names_str}")
+                        missing_imports.append(f"from {module} import {names_str}")
                         for imp_name in imp.names:
                             if imp_name not in import_names:
                                 import_names.append(imp_name)
@@ -171,8 +207,12 @@ class ManifestImportCompletion:
                 mod_base = imp.module.split(".")[0]
                 effective_name = getattr(imp, "alias", None) or mod_base
                 if effective_name in used_names and effective_name not in existing_imports:
+                    # Correct well-known wrong module paths from LLM skeletons
+                    module = _KNOWN_IMPORT_CORRECTIONS.get(
+                        imp.module.lower(), imp.module,
+                    )
                     alias_str = f" as {imp.alias}" if getattr(imp, "alias", None) else ""
-                    missing_imports.append(f"import {imp.module}{alias_str}")
+                    missing_imports.append(f"import {module}{alias_str}")
                     if effective_name not in import_names:
                         import_names.append(effective_name)
                     existing_imports.add(effective_name)
@@ -256,6 +296,9 @@ class ErrorDrivenImportCompletion:
                         module = resolved[0] if isinstance(resolved, tuple) else module
                 except Exception:
                     pass  # Fall back to heuristic
+
+            # Correct well-known wrong module paths from LLM output
+            module = _KNOWN_IMPORT_CORRECTIONS.get(module.lower(), module)
 
             if diag.name:
                 missing_imports.append(f"from {module} import {diag.name}")

@@ -570,7 +570,7 @@ class DeterministicExtractor:
             if target in file_elements:
                 continue  # already registered (e.g. Python file with elements)
             lang = detect_language(target)
-            if lang != "unknown" and lang != "python":
+            if lang != "python":
                 file_elements[target] = []  # empty elements = single-unit file
                 logger.debug(
                     "FR-DFA-003: Registered non-Python target %s (lang=%s) "

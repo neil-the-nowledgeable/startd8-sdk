@@ -505,7 +505,16 @@ def _enrich_copy_source(
         if len(deps) != 1:
             continue
 
-        ctx["copy_source_task_id"] = deps[0]
+        # Use the task dict's depends_on (already remapped to PI-xxx IDs)
+        # instead of feat.dependencies (which has original F-xxx IDs).
+        # The queue stores tasks by PI-xxx IDs, so copy_source_task_id
+        # must use the same namespace.
+        task_deps = task.get("depends_on", [])
+        if len(task_deps) != 1:
+            continue
+        source_task_id = task_deps[0]
+
+        ctx["copy_source_task_id"] = source_task_id
         # Infer source file from the predecessor's target_files if available
         predecessor = feature_index.get(deps[0])
         if predecessor and len(predecessor.target_files) == 1:
@@ -513,7 +522,7 @@ def _enrich_copy_source(
 
         logger.debug(
             "ENRICH-A: copy_source_task_id=%s for %s",
-            deps[0], task.get("task_id", "?"),
+            source_task_id, task.get("task_id", "?"),
         )
         count += 1
 

@@ -757,6 +757,74 @@ def _strip_fences(code: str) -> str:
 from startd8.utils.ast_checks import is_stub_only_body as _is_stub_only_body  # noqa: E402
 
 
+def _remove_toplevel_nested_duplicates(code: str) -> str:
+    """Remove top-level functions that duplicate nested functions.
+
+    When the decomposer creates separate elements for inner functions
+    (e.g. Flask ``@app.route`` handlers nested inside a factory function),
+    the splicer may insert the generated code as a top-level function,
+    creating a duplicate.  This function detects and removes the
+    top-level copy, keeping the nested definition intact.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    # Collect names of functions defined *inside* other top-level functions
+    nested_names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for child in ast.walk(node):
+                if (
+                    child is not node
+                    and isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                ):
+                    nested_names.add(child.name)
+
+    if not nested_names:
+        return code
+
+    # Find top-level functions whose name matches a nested function
+    to_remove: list[ast.AST] = []
+    for node in ast.iter_child_nodes(tree):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in nested_names
+            # Only remove if it's NOT the parent that contains the nested def
+            and not any(
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == node.name
+                and child is not node
+                for child in ast.walk(node)
+            )
+        ):
+            to_remove.append(node)
+
+    if not to_remove:
+        return code
+
+    # Remove by line range (process bottom-up to preserve line numbers)
+    lines = code.splitlines()
+    for node in sorted(to_remove, key=lambda n: n.lineno, reverse=True):
+        start = node.lineno - 1  # 0-based
+        end = node.end_lineno  # already 1-based, so this is exclusive
+        # Include any decorators
+        if node.decorator_list:
+            start = node.decorator_list[0].lineno - 1
+        # Remove trailing blank lines
+        while end < len(lines) and lines[end].strip() == "":
+            end += 1
+        logger.info(
+            "Removed duplicate top-level function '%s' (lines %d–%d) "
+            "— already defined as nested function",
+            node.name, start + 1, end,
+        )
+        del lines[start:end]
+
+    return "\n".join(lines)
+
+
 def _validate_file_whole_result(
     generated_code: str,
     skeleton: str,
@@ -1520,6 +1588,12 @@ class MicroPrimeEngine:
                         "Stub remains for %s after splice loop — marking as failed",
                         er.element_name,
                     )
+
+        # Post-splice cleanup: remove top-level functions that duplicate
+        # nested functions inside another top-level function.  This happens
+        # when the decomposer creates separate elements for a factory's inner
+        # functions (e.g. Flask @app.route handlers inside create_app()).
+        current_skeleton = _remove_toplevel_nested_duplicates(current_skeleton)
 
         file_result.filled_skeleton = current_skeleton
         return file_result

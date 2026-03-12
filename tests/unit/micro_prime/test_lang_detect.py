@@ -33,9 +33,17 @@ class TestDetectLanguage:
         assert detect_language("DOCKERFILE") == "dockerfile"
 
     def test_unknown_extension(self):
-        assert detect_language("README.md") == "unknown"
         assert detect_language("main.rs") == "unknown"
-        assert detect_language("config.yaml") == "unknown"
+        assert detect_language("data.parquet") == "unknown"
+
+    def test_text_extension(self):
+        """Common text/config files now detected as 'text' for pipeline registration."""
+        assert detect_language("README.md") == "text"
+        assert detect_language("config.yaml") == "text"
+        assert detect_language("requirements.txt") == "text"
+        assert detect_language("setup.cfg") == "text"
+        assert detect_language("app.json") == "text"
+        assert detect_language("style.css") == "text"
 
     def test_explicit_override(self):
         """explicit_lang takes precedence over file extension."""

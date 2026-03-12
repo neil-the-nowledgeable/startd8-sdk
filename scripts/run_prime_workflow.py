@@ -652,6 +652,19 @@ def main() -> int:
     # Apply task filter if specified
     if task_filter:
         filter_set = set(task_filter)
+        # When --force-regenerate + --task-filter, reset filtered COMPLETE
+        # features to PENDING so they are re-processed.  Without this,
+        # completed features are skipped by get_next_feature().
+        if workflow.force_regenerate:
+            for fid in filter_set:
+                feature = workflow.queue.features.get(fid)
+                if feature and feature.status == FeatureStatus.COMPLETE:
+                    feature.status = FeatureStatus.PENDING
+                    feature.integration_attempts = 0
+                    logger.info(
+                        "Force-regenerate: reset COMPLETE feature %s to PENDING",
+                        fid,
+                    )
         # Mark non-filtered features as complete to skip them
         for fid, feature in workflow.queue.features.items():
             if fid not in filter_set and feature.status in (
