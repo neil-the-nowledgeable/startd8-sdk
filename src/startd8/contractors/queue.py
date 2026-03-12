@@ -249,6 +249,17 @@ class FeatureQueue:
         data = _json.loads(path.read_text(encoding="utf-8"))
         tasks = data.get("tasks", [])
 
+        # Build plan-level feature_id → task_id mapping so we can resolve
+        # copy_source_task_id references that use plan IDs (e.g. F-001a)
+        # instead of seed task IDs (e.g. PI-001).
+        plan_id_to_task_id: Dict[str, str] = {}
+        for task in tasks:
+            task_id = task.get("task_id", task.get("id", ""))
+            ctx = task.get("config", {}).get("context", {})
+            plan_fid = ctx.get("feature_id")
+            if plan_fid and task_id:
+                plan_id_to_task_id[plan_fid] = task_id
+
         added = []
         for task in tasks:
             task_id = task.get("task_id", task.get("id", ""))
@@ -266,10 +277,18 @@ class FeatureQueue:
                 dependencies=dependencies,
                 target_files=target_files,
             )
-            # AC-R5: Bridge pre-enriched copy_source_task_id from seed context
+            # AC-R5: Bridge pre-enriched copy_source_task_id from seed context.
+            # Resolve plan-level IDs (F-xxx) to task IDs (PI-xxx) so
+            # _handle_file_copy can find the predecessor in the queue.
             copy_src_id = context.get("copy_source_task_id")
             if copy_src_id and spec.copy_source_task_id is None:
-                spec.copy_source_task_id = copy_src_id
+                resolved = plan_id_to_task_id.get(copy_src_id, copy_src_id)
+                if resolved != copy_src_id:
+                    logger.debug(
+                        "Resolved copy_source_task_id '%s' → '%s' for task '%s'",
+                        copy_src_id, resolved, task_id,
+                    )
+                spec.copy_source_task_id = resolved
                 copy_src_file = context.get("copy_source_file")
                 if copy_src_file:
                     spec.copy_source_file = copy_src_file
