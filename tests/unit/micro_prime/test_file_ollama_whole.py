@@ -1152,14 +1152,14 @@ class TestHighCouplingOverride:
 
     def test_coupling_override_bypasses_size_limits(self):
         """High coupling overrides max_elements and max_loc limits."""
-        # Create a file spec with coupled elements (function calls sibling function)
+        _sig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/data.py",
             imports=[],
             elements=[
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="generate_data"),
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="validate_data"),
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="transform_data"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="generate_data", signature=_sig),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="validate_data", signature=_sig),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="transform_data", signature=_sig),
             ],
         )
         # Skeleton where functions call each other (cross-refs >= 2)
@@ -1185,12 +1185,13 @@ def transform_data():
 
     def test_no_coupling_respects_size_limits(self):
         """Without coupling, size limits are enforced."""
+        _sig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/utils.py",
             imports=[],
             elements=[
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="foo"),
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="bar"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="foo", signature=_sig),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="bar", signature=_sig),
             ],
         )
         # Independent functions — no coupling
@@ -1216,6 +1217,8 @@ class TestFillRateThresholdBoundary:
         """Fill rate exactly at threshold -> partial acceptance."""
         # 3 elements, 1 missing = 2/3 = 66.7%
         engine = self._make_engine(min_element_fill_rate=0.666)
+        _sig = Signature(params=[Param(name="self")])
+        _fsig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/logger.py",
             imports=[],
@@ -1223,9 +1226,9 @@ class TestFillRateThresholdBoundary:
                 ForwardElementSpec(kind=ElementKind.CLASS, name="MyClass"),
                 ForwardElementSpec(
                     kind=ElementKind.METHOD, name="method_a",
-                    parent_class="MyClass",
+                    parent_class="MyClass", signature=_sig,
                 ),
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper", signature=_fsig),
             ],
         )
         skeleton = '''\
@@ -1254,6 +1257,8 @@ def helper():
     def test_just_below_threshold_rejected(self):
         """Fill rate just below threshold -> None."""
         engine = self._make_engine(min_element_fill_rate=0.67)
+        _sig = Signature(params=[Param(name="self")])
+        _fsig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/logger.py",
             imports=[],
@@ -1261,9 +1266,9 @@ def helper():
                 ForwardElementSpec(kind=ElementKind.CLASS, name="MyClass"),
                 ForwardElementSpec(
                     kind=ElementKind.METHOD, name="method_a",
-                    parent_class="MyClass",
+                    parent_class="MyClass", signature=_sig,
                 ),
-                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper"),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="helper", signature=_fsig),
             ],
         )
         skeleton = '''\
@@ -1422,6 +1427,7 @@ class TestMultiClassFileNearThreshold:
 
     def test_multi_class_within_threshold(self):
         """File with 2 classes and methods within element limit."""
+        _sig = Signature(params=[Param(name="self")])
         file_spec = ForwardFileSpec(
             file="src/models.py",
             imports=[],
@@ -1429,12 +1435,12 @@ class TestMultiClassFileNearThreshold:
                 ForwardElementSpec(kind=ElementKind.CLASS, name="User"),
                 ForwardElementSpec(
                     kind=ElementKind.METHOD, name="validate",
-                    parent_class="User",
+                    parent_class="User", signature=_sig,
                 ),
                 ForwardElementSpec(kind=ElementKind.CLASS, name="Product"),
                 ForwardElementSpec(
                     kind=ElementKind.METHOD, name="to_dict",
-                    parent_class="Product",
+                    parent_class="Product", signature=_sig,
                 ),
             ],
         )
@@ -1452,6 +1458,7 @@ class Product:
 
     def test_multi_class_exceeds_threshold(self):
         """File with too many elements across classes."""
+        _sig = Signature(params=[Param(name="self")])
         elements = [
             ForwardElementSpec(kind=ElementKind.CLASS, name="A"),
         ]
@@ -1459,7 +1466,7 @@ class Product:
             elements.append(
                 ForwardElementSpec(
                     kind=ElementKind.METHOD, name=f"method_{i}",
-                    parent_class="A",
+                    parent_class="A", signature=_sig,
                 ),
             )
         file_spec = ForwardFileSpec(file="src/big.py", imports=[], elements=elements)

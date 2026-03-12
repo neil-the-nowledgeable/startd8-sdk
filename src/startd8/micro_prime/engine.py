@@ -132,6 +132,12 @@ class _EngineMetrics:
 
 _engine_metrics = _EngineMetrics()
 
+# Backward-compatible module-level counter aliases for tests that patch
+# these directly (e.g., test_recursion_observability.py).
+_recursion_attempted = _engine_metrics._counters.get("recursion_attempted")
+_recursion_succeeded = _engine_metrics._counters.get("recursion_succeeded")
+_recursion_rejected = _engine_metrics._counters.get("recursion_rejected")
+
 
 def _record_decomp_attempted(strategy: str, file_path: str) -> None:
     _engine_metrics.record("decomp_attempted", 1, {"strategy": strategy, "file_path": file_path})
