@@ -113,8 +113,44 @@ _WELL_KNOWN_IMPORTS: dict[str, tuple[str, str]] = {
     "Tuple": ("typing", "Tuple"),
     # gRPC
     "grpc": ("grpc", ""),
+    "ServicerContext": ("grpc", "ServicerContext"),
+    "server": ("grpc", "server"),
+    # gRPC health
+    "HealthServicer": ("grpc_health.v1.health", "HealthServicer"),
+    "health_pb2": ("grpc_health.v1", "health_pb2"),
+    "health_pb2_grpc": ("grpc_health.v1", "health_pb2_grpc"),
+    # Locust (load testing)
+    "HttpUser": ("locust", "HttpUser"),
+    "FastHttpUser": ("locust", "FastHttpUser"),
+    "TaskSet": ("locust", "TaskSet"),
+    "between": ("locust", "between"),
+    "task": ("locust", "task"),
+    "events": ("locust", "events"),
+    # Jinja2 (templates)
+    "Environment": ("jinja2", "Environment"),
+    "FileSystemLoader": ("jinja2", "FileSystemLoader"),
+    "TemplateError": ("jinja2", "TemplateError"),
+    "TemplateNotFound": ("jinja2", "TemplateNotFound"),
+    "Template": ("jinja2", "Template"),
+    # Google Cloud / Gemini
+    "ChatGoogleGenerativeAI": ("langchain_google_genai", "ChatGoogleGenerativeAI"),
+    "GoogleGenerativeAIEmbeddings": ("langchain_google_genai", "GoogleGenerativeAIEmbeddings"),
+    # LangChain
+    "HumanMessage": ("langchain_core.messages", "HumanMessage"),
+    "SystemMessage": ("langchain_core.messages", "SystemMessage"),
+    "AIMessage": ("langchain_core.messages", "AIMessage"),
+    "Document": ("langchain_core.documents", "Document"),
+    # Faker
+    "Faker": ("faker", "Faker"),
+    # dataclasses
     "dataclass": ("dataclasses", "dataclass"),
     "field": ("dataclasses", "field"),
+    # concurrent.futures
+    "ThreadPoolExecutor": ("concurrent.futures", "ThreadPoolExecutor"),
+    "futures": ("concurrent", "futures"),
+    # Protobuf
+    "descriptor": ("google.protobuf", "descriptor"),
+    "message": ("google.protobuf", "message"),
 }
 
 

@@ -137,6 +137,23 @@ class DeterministicFileAssembler:
         # Deterministic ordering: sort by file path
         for file_path in sorted(manifest.file_specs.keys()):
             file_spec = manifest.file_specs[file_path]
+
+            # Skip non-Python files — render_file() produces Python skeletons
+            # and ast.parse() only validates Python.  Non-Python targets
+            # (Dockerfiles, HTML, YAML, etc.) are handled by direct-copy in
+            # the integration engine.
+            lang = getattr(file_spec, "language", None)
+            if lang and lang != "python":
+                logger.debug(
+                    "Skipping non-Python file %s (language=%s)", file_path, lang,
+                )
+                continue
+            if not file_path.endswith(".py"):
+                logger.debug(
+                    "Skipping non-Python file %s (extension check)", file_path,
+                )
+                continue
+
             try:
                 source = self.render_file(file_spec)
                 # Validate via ast.parse

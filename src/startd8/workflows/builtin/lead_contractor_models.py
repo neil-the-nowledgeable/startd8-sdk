@@ -283,7 +283,8 @@ class PrimaryContractorResult:
         if self.spec:
             summary["spec_raw"] = self.spec.raw_spec
         summary["drafts_raw"] = [
-            {"iteration": d.iteration, "implementation": d.implementation}
+            {"iteration": d.iteration, "implementation": d.implementation,
+             "raw_response": d.raw_response}
             for d in self.drafts
         ]
         summary["reviews_raw"] = [

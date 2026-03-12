@@ -554,6 +554,17 @@ class MicroPrimeCodeGenerator:
                 st, target_files, task, context, local_file_count,
             )
 
+        # Build per-file responses for Kaizen capture (REQ-KZ-201).
+        # Keys use "draft_{file_path}" convention so _persist_kaizen_prompts
+        # writes them as response files alongside prompts.
+        gen_responses: Dict[str, str] = {}
+        for fr in st.all_file_results:
+            skeleton = getattr(fr, "filled_skeleton", None)
+            if skeleton:
+                fp = getattr(fr, "file_path", None) or "unknown"
+                safe_key = str(fp).replace("/", "_").replace(".", "_")
+                gen_responses[f"draft_{safe_key}"] = skeleton
+
         return GenerationResult(
             success=st.effective_file_count > 0,
             generated_files=st.generated_files,
@@ -567,6 +578,7 @@ class MicroPrimeCodeGenerator:
                 lead_agent_spec=getattr(self, "lead_agent", None),
                 drafter_agent_spec=getattr(self, "drafter_agent", None),
             ),
+            responses=gen_responses,
         )
 
     # ── generate() sub-steps ──────────────────────────────────────────

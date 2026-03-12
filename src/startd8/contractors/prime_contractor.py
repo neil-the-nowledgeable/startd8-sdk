@@ -2490,7 +2490,11 @@ class PrimeContractorWorkflow:
                 # Map generator prompt keys to Kaizen filename convention
                 for key, content in result.prompts.items():
                     gen_prompts[f"{key}_prompt.md"] = content
-                for key, content in (result.responses or {}).items():
+            # Responses are captured independently — un-gated from prompts
+            # so that micro-prime results or partial Lead Contractor results
+            # still produce response files even when prompts are empty.
+            if result is not None and hasattr(result, "responses") and result.responses:
+                for key, content in result.responses.items():
                     gen_prompts[f"{key}_response.md"] = content
             if gen_prompts:
                 prompts = gen_prompts

@@ -848,6 +848,49 @@ class TestErrorAttribution:
         )
         assert all(r.phase == "materialize" for r in results)
 
+    def test_render_specs_skips_non_python_by_language(self):
+        """Non-Python files (language='dockerfile') are skipped, not rendered as Python stubs."""
+        manifest = ForwardManifest(file_specs={
+            "src/emailservice/Dockerfile": ForwardFileSpec(
+                file="src/emailservice/Dockerfile",
+                elements=[],
+                imports=[],
+                language="dockerfile",
+            ),
+            "src/emailservice/server.py": ForwardFileSpec(
+                file="src/emailservice/server.py",
+                elements=[ForwardElementSpec(
+                    name="main",
+                    kind=ElementKind.FUNCTION,
+                    signature=Signature(params=[]),
+                )],
+                imports=[],
+                language="python",
+            ),
+        })
+        assembler = DeterministicFileAssembler()
+        result = assembler.render_specs(manifest)
+        # Python file is rendered
+        assert "src/emailservice/server.py" in result.specs
+        # Dockerfile is skipped — not rendered as Python stub
+        assert "src/emailservice/Dockerfile" not in result.specs
+        assert len(result.failures) == 0
+
+    def test_render_specs_skips_non_python_by_extension(self):
+        """Non-.py files without language field are skipped by extension check."""
+        manifest = ForwardManifest(file_specs={
+            "src/app/Dockerfile": ForwardFileSpec(
+                file="src/app/Dockerfile",
+                elements=[],
+                imports=[],
+                # language=None (default)
+            ),
+        })
+        assembler = DeterministicFileAssembler()
+        result = assembler.render_specs(manifest)
+        assert "src/app/Dockerfile" not in result.specs
+        assert len(result.failures) == 0
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FileStubResult + ScaffoldPhaseOutput models
