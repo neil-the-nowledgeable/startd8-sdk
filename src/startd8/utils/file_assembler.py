@@ -497,9 +497,12 @@ class DeterministicFileAssembler:
         annotation = ""
         if elem.signature and elem.signature.return_annotation:
             annotation = f": {elem.signature.return_annotation}"
+        elif getattr(elem, "type_annotation", None):
+            annotation = f": {elem.type_annotation}"
 
-        # Use ... as placeholder value for typed constants
-        return f"{indent}{elem.name}{annotation} = ..."
+        # Use value_repr if available, otherwise ... as placeholder
+        value = getattr(elem, "value_repr", None) or "..."
+        return f"{indent}{elem.name}{annotation} = {value}"
 
     def _render_signature(self, sig: Signature) -> str:
         """Render a Signature model to a parameter string."""

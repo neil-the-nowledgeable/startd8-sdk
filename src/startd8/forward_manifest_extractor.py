@@ -283,6 +283,37 @@ def _parse_class_signature(
     return (class_name, bases)
 
 
+# Pattern: "name = value" or "name: type = value"
+_VARIABLE_ASSIGN_PATTERN = re.compile(
+    r"^([A-Za-z_]\w*)\s*(?::\s*([^=]+?))?\s*=\s*(.+)$",
+)
+
+
+def _parse_variable_pattern(
+    sig_str: str,
+) -> Optional[tuple[str, Optional[str], Optional[str]]]:
+    """Parse a variable/constant assignment pattern.
+
+    Recognises:
+    - ``"fake = Faker()"``
+    - ``"MAX_RETRIES: int = 3"``
+    - ``"PRODUCT_IDS: list[str] = [...]"``
+
+    Returns ``(var_name, type_annotation_or_None, value_repr)`` or ``None``.
+    """
+    cleaned = sig_str.strip().rstrip(";")
+    # Skip function / class definitions — handled by other parsers
+    if cleaned.startswith(("def ", "async def ", "class ", "Class ")):
+        return None
+    m = _VARIABLE_ASSIGN_PATTERN.match(cleaned)
+    if not m:
+        return None
+    var_name = m.group(1)
+    type_ann = m.group(2).strip() if m.group(2) else None
+    value_repr = m.group(3).strip()
+    return (var_name, type_ann, value_repr)
+
+
 def _format_signature_for_binding(
     func_name: str, sig: Optional[Signature]
 ) -> str:
@@ -643,6 +674,27 @@ class DeterministicExtractor:
                         source_contract_id=contract_id,
                     )
                     file_elements.setdefault(target_file, []).append(spec)
+                continue
+
+            # --- Try variable/constant assignment pattern ---
+            var_parsed = _parse_variable_pattern(sig_str)
+            if var_parsed and feature.target_files:
+                var_name, type_ann, value_repr = var_parsed
+                target_file = feature.target_files[0]
+                # UPPER_SNAKE_CASE → CONSTANT, else VARIABLE
+                is_upper = var_name == var_name.upper() and "_" in var_name
+                kind = ElementKind.CONSTANT if is_upper else ElementKind.VARIABLE
+                spec = ForwardElementSpec(
+                    kind=kind,
+                    name=var_name,
+                    type_annotation=type_ann,
+                    value_repr=value_repr,
+                )
+                file_elements.setdefault(target_file, []).append(spec)
+                logger.debug(
+                    "Variable/constant %r (%s) extracted for %s in feature %s",
+                    var_name, kind.value, target_file, feature.feature_id,
+                )
                 continue
 
             # --- Try function/method signature ---

@@ -20,6 +20,7 @@ from startd8.forward_manifest import (
 from startd8.micro_prime.engine import (
     MicroPrimeEngine,
     _build_file_whole_prompt,
+    _skeleton_has_stubs,
     _validate_file_whole_result,
 )
 from startd8.micro_prime.models import MicroPrimeConfig
@@ -297,7 +298,7 @@ class TestProcessFileWithFileWhole:
         # First call = file-whole (returns garbage), subsequent = element-by-element
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -360,7 +361,7 @@ class TestProcessFileWithFileWhole:
 
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -418,7 +419,7 @@ def getJSONLogger(name: str) -> logging.Logger:
 
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -460,7 +461,7 @@ def getJSONLogger(name: str) -> logging.Logger:
 
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -785,7 +786,7 @@ def getJSONLogger(name: str) -> logging.Logger:
 
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -945,7 +946,7 @@ class TestRetryWithFeedback:
         # First call: partial (stub remains), second call: fully filled
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -988,7 +989,7 @@ def getJSONLogger(name: str) -> logging.Logger:
 '''
         call_count = 0
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
             return (bad_code, 100, 50)
@@ -1053,7 +1054,7 @@ class TestAdaptiveMaxTokens:
 
         captured_kwargs = {}
 
-        def mock_generate(prompt, system_prompt=None, max_tokens=None):
+        def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             captured_kwargs["max_tokens"] = max_tokens
             return (logger_filled, 100, 50)
 
@@ -1068,3 +1069,72 @@ class TestAdaptiveMaxTokens:
         # Let's just check it was passed
         assert captured_kwargs.get("max_tokens") is not None
         assert captured_kwargs["max_tokens"] >= 2048
+
+
+# ── _skeleton_has_stubs AST-based detection (AC-R3) ────────────────────
+
+
+class TestSkeletonHasStubs:
+    """Validates AST-based stub detection replaces naive string search."""
+
+    def test_actual_stub_detected(self):
+        """A function body that is only `raise NotImplementedError` -> True."""
+        code = "def foo():\n    raise NotImplementedError\n"
+        assert _skeleton_has_stubs(code) is True
+
+    def test_stub_with_docstring_detected(self):
+        """Docstring + raise NotImplementedError is still a stub -> True."""
+        code = 'def foo():\n    """Docstring."""\n    raise NotImplementedError()\n'
+        assert _skeleton_has_stubs(code) is True
+
+    def test_conditional_raise_not_stub(self):
+        """raise NotImplementedError inside an if-branch is NOT a stub -> False."""
+        code = (
+            "def foo(x):\n"
+            "    if x is None:\n"
+            "        raise NotImplementedError('subclass must override')\n"
+            "    return x + 1\n"
+        )
+        assert _skeleton_has_stubs(code) is False
+
+    def test_string_literal_not_stub(self):
+        """String containing 'raise NotImplementedError' is NOT a stub -> False."""
+        code = (
+            "def foo():\n"
+            "    msg = 'should raise NotImplementedError here'\n"
+            "    return msg\n"
+        )
+        assert _skeleton_has_stubs(code) is False
+
+    def test_no_stubs_returns_false(self):
+        """Fully implemented functions -> False."""
+        code = "def foo():\n    return 42\n\ndef bar():\n    return 'hello'\n"
+        assert _skeleton_has_stubs(code) is False
+
+    def test_syntax_error_falls_back_to_string(self):
+        """Unparseable skeleton falls back to string check."""
+        code = "def broken(:\n    raise NotImplementedError\n"
+        assert _skeleton_has_stubs(code) is True
+
+    def test_syntax_error_no_match_returns_false(self):
+        """Unparseable skeleton without the string -> False."""
+        code = "def broken(:\n    return 42\n"
+        assert _skeleton_has_stubs(code) is False
+
+    def test_method_stub_detected(self):
+        """Method inside a class with stub body -> True."""
+        code = (
+            "class Foo:\n"
+            "    def bar(self):\n"
+            "        raise NotImplementedError\n"
+        )
+        assert _skeleton_has_stubs(code) is True
+
+    def test_comment_containing_phrase_not_stub(self):
+        """Comment with 'raise NotImplementedError' is not a stub -> False."""
+        code = (
+            "def foo():\n"
+            "    # TODO: raise NotImplementedError for unsupported types\n"
+            "    return 42\n"
+        )
+        assert _skeleton_has_stubs(code) is False

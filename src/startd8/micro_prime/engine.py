@@ -71,159 +71,114 @@ from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 logger = get_logger(__name__)
 
-# OTel decomposition metrics (REQ-MP-906) — optional dependency
-try:
-    from opentelemetry import metrics as otel_metrics
+# ── OTel decomposition metrics (REQ-MP-906, AC-R5) ──────────────────
+#
+# Consolidated into _EngineMetrics to eliminate 15 counters × 15 wrappers
+# of repeating try/except + None-check boilerplate.
 
-    _meter = otel_metrics.get_meter("startd8.micro_prime")
-    _decomp_attempted = _meter.create_counter(
-        "micro_prime.decomposition_attempted",
-        description="Decomposition plans created",
-    )
-    _decomp_succeeded = _meter.create_counter(
-        "micro_prime.decomposition_succeeded",
-        description="Decomposition plans where all sub-elements succeeded",
-    )
-    _decomp_failed = _meter.create_counter(
-        "micro_prime.decomposition_failed",
-        description="Decomposition plans abandoned (sub-element or assembly failure)",
-    )
-    _decomp_rejected = _meter.create_counter(
-        "micro_prime.decomposition_rejected",
-        description="Elements where decompose() returned None",
-    )
-    _sub_elements_generated = _meter.create_counter(
-        "micro_prime.sub_elements_generated",
-        description="Individual sub-element generation attempts",
-    )
-    _decomp_time_ms = _meter.create_histogram(
-        "micro_prime.decomposition_time_ms",
-        description="End-to-end time for decompose + generate + assemble",
-        unit="ms",
-    )
-    _assembly_time_ms = _meter.create_histogram(
-        "micro_prime.assembly_time_ms",
-        description="Time spent in decomposer assembly step",
-        unit="ms",
-    )
-    # Phase 3: Simple decompose OTel counters
-    _simple_decompose_attempted = _meter.create_counter(
-        "micro_prime.simple_decompose_attempted",
-        description="SIMPLE function body decomposition attempts",
-    )
-    _simple_decompose_succeeded = _meter.create_counter(
-        "micro_prime.simple_decompose_succeeded",
-        description="SIMPLE function body decompositions that produced code",
-    )
-    _simple_decompose_rejected = _meter.create_counter(
-        "micro_prime.simple_decompose_rejected",
-        description="SIMPLE function body decompositions that fell back to LLM",
-    )
-    # Recursion metrics (REQ-MP-914)
-    _recursion_attempted = _meter.create_counter(
-        "micro_prime.recursion_attempted",
-        description="Recursive decomposition attempts",
-    )
-    _recursion_succeeded = _meter.create_counter(
-        "micro_prime.recursion_succeeded",
-        description="Recursive decomposition successes",
-    )
-    _recursion_rejected = _meter.create_counter(
-        "micro_prime.recursion_rejected",
-        description="Recursive decomposition rejections",
-    )
-    # Ollama-whole for MODERATE elements (Kaizen run-017 recalibration)
-    _moderate_ollama_whole_attempted = _meter.create_counter(
-        "micro_prime.moderate_ollama_whole_attempted",
-        description="MODERATE elements where Ollama-whole was tried before decomposition",
-    )
-    _moderate_ollama_whole_succeeded = _meter.create_counter(
-        "micro_prime.moderate_ollama_whole_succeeded",
-        description="MODERATE elements resolved by Ollama-whole (no decomposition needed)",
-    )
-except ImportError:
-    _decomp_attempted = None
-    _decomp_succeeded = None
-    _decomp_failed = None
-    _decomp_rejected = None
-    _sub_elements_generated = None
-    _decomp_time_ms = None
-    _simple_decompose_attempted = None
-    _simple_decompose_succeeded = None
-    _simple_decompose_rejected = None
-    _recursion_attempted = None
-    _recursion_succeeded = None
-    _recursion_rejected = None
-    _moderate_ollama_whole_attempted = None
-    _moderate_ollama_whole_succeeded = None
+
+class _EngineMetrics:
+    """Lazy OTel metric registry — single try/except for all counters."""
+
+    _COUNTERS = {
+        "decomp_attempted": ("micro_prime.decomposition_attempted", "Decomposition plans created"),
+        "decomp_succeeded": ("micro_prime.decomposition_succeeded", "Decomposition plans where all sub-elements succeeded"),
+        "decomp_failed": ("micro_prime.decomposition_failed", "Decomposition plans abandoned (sub-element or assembly failure)"),
+        "decomp_rejected": ("micro_prime.decomposition_rejected", "Elements where decompose() returned None"),
+        "sub_elements_generated": ("micro_prime.sub_elements_generated", "Individual sub-element generation attempts"),
+        "simple_decompose_attempted": ("micro_prime.simple_decompose_attempted", "SIMPLE function body decomposition attempts"),
+        "simple_decompose_succeeded": ("micro_prime.simple_decompose_succeeded", "SIMPLE function body decompositions that produced code"),
+        "simple_decompose_rejected": ("micro_prime.simple_decompose_rejected", "SIMPLE function body decompositions that fell back to LLM"),
+        "recursion_attempted": ("micro_prime.recursion_attempted", "Recursive decomposition attempts"),
+        "recursion_succeeded": ("micro_prime.recursion_succeeded", "Recursive decomposition successes"),
+        "recursion_rejected": ("micro_prime.recursion_rejected", "Recursive decomposition rejections"),
+        "moderate_ollama_whole_attempted": ("micro_prime.moderate_ollama_whole_attempted", "MODERATE elements where Ollama-whole was tried before decomposition"),
+        "moderate_ollama_whole_succeeded": ("micro_prime.moderate_ollama_whole_succeeded", "MODERATE elements resolved by Ollama-whole (no decomposition needed)"),
+    }
+
+    _HISTOGRAMS = {
+        "decomp_time_ms": ("micro_prime.decomposition_time_ms", "End-to-end time for decompose + generate + assemble", "ms"),
+        "assembly_time_ms": ("micro_prime.assembly_time_ms", "Time spent in decomposer assembly step", "ms"),
+    }
+
+    def __init__(self) -> None:
+        self._counters: dict[str, Any] = {}
+        self._histograms: dict[str, Any] = {}
+        self._available = False
+        try:
+            from opentelemetry import metrics as otel_metrics
+
+            meter = otel_metrics.get_meter("startd8.micro_prime")
+            for key, (name, desc) in self._COUNTERS.items():
+                self._counters[key] = meter.create_counter(name, description=desc)
+            for key, (name, desc, unit) in self._HISTOGRAMS.items():
+                self._histograms[key] = meter.create_histogram(name, description=desc, unit=unit)
+            self._available = True
+        except ImportError:
+            pass
+
+    def record(self, name: str, value: int, attrs: dict[str, str]) -> None:
+        """Increment a counter by *value* with *attrs*."""
+        counter = self._counters.get(name)
+        if counter is not None:
+            counter.add(value, attrs)
+
+    def record_histogram(self, name: str, value: float, attrs: dict[str, str]) -> None:
+        """Record a histogram observation."""
+        histogram = self._histograms.get(name)
+        if histogram is not None:
+            histogram.record(value, attrs)
+
+
+_engine_metrics = _EngineMetrics()
 
 
 def _record_decomp_attempted(strategy: str, file_path: str) -> None:
-    if _decomp_attempted is not None:
-        _decomp_attempted.add(1, {"strategy": strategy, "file_path": file_path})
+    _engine_metrics.record("decomp_attempted", 1, {"strategy": strategy, "file_path": file_path})
 
 
 def _record_decomp_succeeded(strategy: str, file_path: str) -> None:
-    if _decomp_succeeded is not None:
-        _decomp_succeeded.add(1, {"strategy": strategy, "file_path": file_path})
+    _engine_metrics.record("decomp_succeeded", 1, {"strategy": strategy, "file_path": file_path})
 
 
-def _record_decomp_failed(
-    strategy: str, file_path: str, failure_reason: str,
-) -> None:
-    if _decomp_failed is not None:
-        _decomp_failed.add(1, {
-            "strategy": strategy, "file_path": file_path,
-            "failure_reason": failure_reason,
-        })
+def _record_decomp_failed(strategy: str, file_path: str, failure_reason: str) -> None:
+    _engine_metrics.record("decomp_failed", 1, {"strategy": strategy, "file_path": file_path, "failure_reason": failure_reason})
 
 
 def _record_decomp_rejected(file_path: str, rejection_reason: str) -> None:
-    if _decomp_rejected is not None:
-        _decomp_rejected.add(1, {
-            "file_path": file_path, "rejection_reason": rejection_reason,
-        })
+    _engine_metrics.record("decomp_rejected", 1, {"file_path": file_path, "rejection_reason": rejection_reason})
 
 
 def _record_sub_element(strategy: str, tier: str) -> None:
-    if _sub_elements_generated is not None:
-        _sub_elements_generated.add(1, {"strategy": strategy, "tier": tier})
+    _engine_metrics.record("sub_elements_generated", 1, {"strategy": strategy, "tier": tier})
 
 
 def _record_decomp_time(strategy: str, duration_ms: float) -> None:
-    if _decomp_time_ms is not None:
-        _decomp_time_ms.record(duration_ms, {"strategy": strategy})
+    _engine_metrics.record_histogram("decomp_time_ms", duration_ms, {"strategy": strategy})
 
 
 def _record_assembly_time(strategy: str, file_path: str, duration_ms: float) -> None:
-    """Emit assembly_time_ms OTel histogram (REQ-MP-906)."""
-    if _assembly_time_ms is not None:
-        _assembly_time_ms.record(duration_ms, {"strategy": strategy, "file": file_path})
+    _engine_metrics.record_histogram("assembly_time_ms", duration_ms, {"strategy": strategy, "file": file_path})
 
 
 def _record_simple_decompose_attempted(file_path: str) -> None:
-    if _simple_decompose_attempted is not None:
-        _simple_decompose_attempted.add(1, {"file_path": file_path})
+    _engine_metrics.record("simple_decompose_attempted", 1, {"file_path": file_path})
 
 
 def _record_simple_decompose_succeeded(file_path: str) -> None:
-    if _simple_decompose_succeeded is not None:
-        _simple_decompose_succeeded.add(1, {"file_path": file_path})
+    _engine_metrics.record("simple_decompose_succeeded", 1, {"file_path": file_path})
 
 
 def _record_simple_decompose_rejected(file_path: str) -> None:
-    if _simple_decompose_rejected is not None:
-        _simple_decompose_rejected.add(1, {"file_path": file_path})
+    _engine_metrics.record("simple_decompose_rejected", 1, {"file_path": file_path})
 
 
 def _record_moderate_ollama_whole_attempted(file_path: str) -> None:
-    if _moderate_ollama_whole_attempted is not None:
-        _moderate_ollama_whole_attempted.add(1, {"file_path": file_path})
+    _engine_metrics.record("moderate_ollama_whole_attempted", 1, {"file_path": file_path})
 
 
 def _record_moderate_ollama_whole_succeeded(file_path: str) -> None:
-    if _moderate_ollama_whole_succeeded is not None:
-        _moderate_ollama_whole_succeeded.add(1, {"file_path": file_path})
+    _engine_metrics.record("moderate_ollama_whole_succeeded", 1, {"file_path": file_path})
 
 
 # Depth label cardinality cap (REQ-MP-914, R2-F3): depths beyond this
@@ -755,6 +710,27 @@ def _strip_fences(code: str) -> str:
 
 
 from startd8.utils.ast_checks import is_stub_only_body as _is_stub_only_body  # noqa: E402
+
+
+def _skeleton_has_stubs(skeleton: str) -> bool:
+    """Return True if any function/method body in *skeleton* is a NotImplementedError stub.
+
+    Uses AST parsing + ``is_stub_only_body()`` to avoid false positives on
+    conditional ``raise NotImplementedError`` branches and string literals
+    containing the phrase.  Falls back to string search if AST parsing fails
+    (e.g. skeleton has placeholder syntax).
+    """
+    try:
+        tree = ast.parse(skeleton)
+    except SyntaxError:
+        # Fallback: if the skeleton can't be parsed, use the string check
+        # as a conservative approximation.
+        return "raise NotImplementedError" in skeleton
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if _is_stub_only_body(node.body):
+                return True
+    return False
 
 
 def _remove_toplevel_nested_duplicates(code: str) -> str:
@@ -1409,6 +1385,10 @@ class MicroPrimeEngine:
         Returns:
             FileResult with all element results and updated skeleton.
         """
+        # Routing hierarchy (AC-R1):
+        # 1. File-whole Ollama (primary) — complete file in one shot
+        # 2. Element-by-element (fallback) — when file-whole ineligible or fails
+        # 3. Cloud escalation (last resort) — per-element cloud retry
         file_result = FileResult(file_path=file_spec.file)
         self.reset_circuit_breaker()
         self._current_manifest = manifest
@@ -1459,6 +1439,13 @@ class MicroPrimeEngine:
             )
             if file_whole_result is not None:
                 return file_whole_result
+
+        # File-whole was either ineligible or failed — fall through to
+        # element-by-element generation (AC-R1 fallback path).
+        logger.info(
+            "File-whole ineligible or failed for %s — falling through to element-by-element (fallback path)",
+            file_spec.file,
+        )
 
         # Pre-classify to determine processing order (REQ-MP-704).
         # Classification results are cached to avoid redundant work in
@@ -1569,8 +1556,9 @@ class MicroPrimeEngine:
         # `raise NotImplementedError` stubs remain, the skeleton is
         # incomplete.  Mark remaining stub elements as failed so the
         # fill-rate gate in prime_adapter catches partial skeletons
-        # instead of writing them to disk.
-        _has_stubs = "raise NotImplementedError" in current_skeleton
+        # instead of writing them to disk.  Uses AST-based stub detection
+        # (AC-R3) to avoid false positives on branch/comment usage.
+        _has_stubs = _skeleton_has_stubs(current_skeleton)
         _has_marker = "# [STARTD8-SKELETON]" in current_skeleton
         if _has_stubs or _has_marker:
             for er in file_result.element_results:
@@ -1735,9 +1723,30 @@ class MicroPrimeEngine:
         - Element count ≤ max_elements threshold
         - Estimated LOC ≤ max_loc threshold
         - Skeleton has at least one ``raise NotImplementedError`` stub
+
+        Also eligible (overriding size limits) when elements have high
+        within-file coupling — shared globals, inter-function calls, or
+        class methods sharing instance state.
         """
         if not self._config.file_ollama_whole_enabled:
             return False
+        if not _skeleton_has_stubs(skeleton):
+            logger.debug(
+                "File-whole skipped for %s: no stubs in skeleton",
+                file_spec.file,
+            )
+            return False
+
+        # Coupling override: prefer file-whole for coupled files regardless
+        # of size, because element-by-element generation loses cross-element
+        # context (run-042 PI-003, PI-008, PI-009 first-pass failures).
+        if _has_high_within_file_coupling(file_spec, skeleton):
+            logger.info(
+                "File-whole PREFERRED for %s: high within-file coupling detected",
+                file_spec.file,
+            )
+            return True
+
         element_count = len(file_spec.elements)
         if element_count > self._config.file_ollama_whole_max_elements:
             logger.debug(
@@ -1752,12 +1761,6 @@ class MicroPrimeEngine:
                 "File-whole skipped for %s: %d lines > %d max",
                 file_spec.file, skeleton_lines,
                 self._config.file_ollama_whole_max_loc,
-            )
-            return False
-        if "raise NotImplementedError" not in skeleton:
-            logger.debug(
-                "File-whole skipped for %s: no stubs in skeleton",
-                file_spec.file,
             )
             return False
         return True
@@ -1825,6 +1828,7 @@ class MicroPrimeEngine:
                     current_prompt,
                     system_prompt=_FILE_WHOLE_SYSTEM_PROMPT,
                     max_tokens=file_whole_max_tokens,
+                    stop_sequences=self._FILE_WHOLE_STOP_SEQUENCES,
                 )
             except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
                 logger.warning(
@@ -3367,15 +3371,36 @@ class MicroPrimeEngine:
         "\n\n\n",            # Triple newline — generation exhausted
     ]
 
+    # File-whole mode needs the LLM to produce a complete multi-definition
+    # file, so the element-level stop sequences (which cut at ``\n\ndef ``,
+    # ``\n\nclass ``, etc.) must be suppressed.  We keep only the
+    # prompt-echo guards and the triple-newline exhaustion marker.
+    _FILE_WHOLE_STOP_SEQUENCES: list[str] = [
+        "\nif __name__",     # Common Python trailer
+        "\n# Task:",         # Model echoing prompt template
+        "\n# Implement",     # Model echoing prompt template
+        "\n# Define",        # Model echoing constant prompt template
+        "\n# Now implement",  # Model echoing "Now implement this:" marker
+        "\n\n\n",            # Triple newline — generation exhausted
+    ]
+
     def _generate_ollama(
         self,
         prompt: str,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
+        *,
+        stop_sequences: list[str] | None = None,
     ) -> tuple[str, int, int]:
         """Generate code using the Ollama provider.
 
         Returns (raw_text, input_tokens, output_tokens).
+
+        Args:
+            stop_sequences: Override stop sequences.  Pass an explicit list
+                to replace the default element-level stops (e.g. use
+                ``_FILE_WHOLE_STOP_SEQUENCES`` for file-whole mode).
+                ``None`` uses ``_OLLAMA_STOP_SEQUENCES`` (element-body default).
 
         The raw LLM text is returned without pre-extraction so that the
         repair pipeline's ``fence_strip`` step can handle fence removal
@@ -3394,10 +3419,14 @@ class MicroPrimeEngine:
                     f"Failed to create Ollama agent ({agent_spec}): {exc}"
                 ) from exc
 
+        effective_stops = (
+            stop_sequences if stop_sequences is not None
+            else self._OLLAMA_STOP_SEQUENCES
+        )
         gen_kwargs: dict[str, Any] = dict(
             system_prompt=system_prompt or _CODE_GEN_SYSTEM_PROMPT,
             temperature=self._config.temperature,
-            stop=self._OLLAMA_STOP_SEQUENCES,
+            stop=effective_stops,
         )
         if max_tokens is not None:
             gen_kwargs["max_tokens"] = max_tokens
@@ -3506,217 +3535,107 @@ class MicroPrimeEngine:
         return []
 
 
-def _ast_parse_valid(code: str, element: ForwardElementSpec) -> bool:
-    """Return True if the code parses as a full element (method wrapper-aware)."""
-    is_method = bool(element.parent_class)
-    try:
-        ast.parse(code)
-        return True
-    except SyntaxError:
-        if is_method:
-            try:
-                import textwrap
+def _has_high_within_file_coupling(
+    file_spec: ForwardFileSpec,
+    skeleton: str,
+) -> bool:
+    """Detect within-file element coupling that makes element-by-element risky.
 
-                wrapped = "class _Wrapper:\n" + textwrap.indent(code, "    ")
-                ast.parse(wrapped)
-                return True
-            except SyntaxError:
-                return False
+    Returns True when the skeleton shows signs of cross-element dependencies:
+    1. Module-level globals referenced by multiple functions/methods
+    2. Functions/methods that call other functions/methods in the same file
+    3. Classes with methods sharing instance state (``self.x`` writes in one
+       method, reads in another)
+
+    This is a skeleton-based heuristic (no call graph required) so it works
+    even when the manifest doesn't carry call graph data.
+    """
+    try:
+        tree = ast.parse(skeleton)
+    except SyntaxError:
         return False
 
+    # Collect element names from the file spec for reference matching.
+    element_names = {e.name for e in file_spec.elements}
 
-def _structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, str]:
-    """Verify structural correctness of generated code.
+    # 1. Module-level global assignments (e.g., fake = Faker(), product_ids = [...])
+    module_globals: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    module_globals.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(
+            getattr(node, "target", None), ast.Name
+        ):
+            module_globals.add(node.target.id)
 
-    Checks:
-    - AST parses successfully
-    - For functions: target function exists and body is non-empty
-    - For constants: target assignment exists
-    - No remaining NotImplementedError stubs
-    - Return statements present when return annotation is non-None
-    """
-    is_method = bool(element.parent_class)
+    # 2. Scan function/method bodies for references to sibling elements
+    #    or module-level globals.
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            functions.append(node)
 
-    def _render_def_line(target: ForwardElementSpec) -> Optional[str]:
-        if target.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS):
-            return None
-        if target.kind == ElementKind.CLASS:
-            bases = f"({', '.join(target.bases)})" if target.bases else ""
-            return f"class {target.name}{bases}:"
-        prefix = "async def" if target.kind in (
-            ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-        ) else "def"
-        sig = "()"
-        if target.signature:
-            from startd8.utils.file_assembler import DeterministicFileAssembler
+    cross_refs = 0
+    global_refs = 0
+    for func in functions:
+        for node in ast.walk(func):
+            if isinstance(node, ast.Name):
+                if node.id in element_names and node.id != func.name:
+                    cross_refs += 1
+                if node.id in module_globals:
+                    global_refs += 1
 
-            assembler = DeterministicFileAssembler(element_registry=None)
-            sig = assembler._render_signature(target.signature)
-        ret = ""
-        if target.signature and target.signature.return_annotation:
-            ret = f" -> {target.signature.return_annotation}"
-        return f"{prefix} {target.name}{sig}{ret}:"
+    # 3. Class instance state sharing: count self.X writes in __init__ vs reads
+    #    in other methods.
+    init_writes: set[str] = set()
+    other_reads: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    is_init = child.name == "__init__"
+                    for sub in ast.walk(child):
+                        if isinstance(sub, ast.Attribute) and isinstance(
+                            getattr(sub, "value", None), ast.Name
+                        ):
+                            if sub.value.id == "self":
+                                if is_init:
+                                    init_writes.add(sub.attr)
+                                else:
+                                    other_reads.add(sub.attr)
 
-    def _wrap_body(body: str, target: ForwardElementSpec) -> Optional[str]:
-        def_line = _render_def_line(target)
-        if def_line is None:
-            return None
-        wrapped = def_line + "\n" + textwrap.indent(body, "    ")
-        if target.parent_class:
-            wrapped = "class _Wrapper:\n" + textwrap.indent(wrapped, "    ")
-        return wrapped
+    shared_attrs = init_writes & other_reads
 
-    # AST parse
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        wrapped = _wrap_body(code, element)
-        if wrapped is None:
-            return False, "ast.parse() failed"
-        try:
-            tree = ast.parse(wrapped)
-        except SyntaxError:
-            return False, "ast.parse() failed"
+    # Heuristic: any of these signals suggest coupling.
+    # - Module globals referenced by functions → splicer will lose them
+    # - Functions calling sibling functions → body-only prompts miss context
+    # - Shared instance attributes → method isolation loses class context
+    has_coupling = (
+        (global_refs >= 2 and len(module_globals) >= 1)
+        or cross_refs >= 2
+        or len(shared_attrs) >= 2
+    )
 
-    # Check the target exists
-    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == element.name:
-                        return True, "constant assignment found"
-            elif isinstance(node, ast.AnnAssign):
-                if isinstance(node.target, ast.Name) and node.target.id == element.name:
-                    return True, "annotated assignment found"
-        return False, "constant assignment not found"
+    if has_coupling:
+        logger.debug(
+            "Coupling signals for %s: global_refs=%d, cross_refs=%d, "
+            "shared_attrs=%d (%s)",
+            file_spec.file, global_refs, cross_refs,
+            len(shared_attrs), ", ".join(sorted(shared_attrs)[:5]),
+        )
 
-    # For CLASS elements, verify the class name exists in the AST (R1-S3)
-    if element.kind == ElementKind.CLASS:
-        if code.strip() == "pass":
-            return True, "class shell pass"
-        # Reject any remaining NotImplementedError stubs in class body.
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Raise) and _is_not_implemented(node):
-                return False, "contains NotImplementedError"
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == element.name:
-                return True, "class definition found"
-        # The assembled code from ModerateDecomposer is the body of the class. 
-        # Since it successfully parsed via ast.parse(code) above, and assemble()
-        # already verified it can reside inside a class block, we accept it.
-        return True, "class body passed syntax check"
-
-    # For functions/methods: verify the target name exists in the AST.
-    target_node = None
-    if is_method and element.parent_class:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
-                        target_node = child
-                        break
-                if target_node is not None:
-                    break
-        # Fallback: code may be a bare def without class wrapper (common from
-        # body-generation prompts). Check top-level before expensive wrapping.
-        if target_node is None:
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
-                    target_node = node
-                    break
-    else:
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
-                target_node = node
-                break
-
-    if target_node is None:
-        # Body-only generation: wrap into a synthetic def and re-parse.
-        wrapped = _wrap_body(code, element)
-        if wrapped is None:
-            return False, "target function not found"
-        try:
-            tree = ast.parse(wrapped)
-        except SyntaxError:
-            return False, "target function not found"
-
-        if element.parent_class:
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef) and node.name == "_Wrapper":
-                    for child in node.body:
-                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
-                            target_node = child
-                            break
-                    if target_node is not None:
-                        break
-        else:
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == element.name:
-                    target_node = node
-                    break
-
-        if target_node is None:
-            return False, "target function not found"
-
-    # Check for NotImplementedError stub — only direct body, not nested defs
-    for node in _walk_body_only(target_node):
-        if isinstance(node, ast.Raise) and _is_not_implemented(node):
-            return False, "contains NotImplementedError"
-
-    # Check return statements for non-None annotations — direct body only
-    if element.signature and element.signature.return_annotation:
-        ret_ann = element.signature.return_annotation
-        if ret_ann not in ("None", "none"):
-            has_return = any(
-                isinstance(n, ast.Return) and n.value is not None
-                for n in _walk_body_only(target_node)
-            )
-            if not has_return:
-                return False, f"missing return for -> {ret_ann}"
-
-    # Body must have at least one non-docstring statement
-    body_stmts = []
-    for stmt in target_node.body:
-        if isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant):
-            if isinstance(stmt.value.value, str):
-                continue
-        body_stmts.append(stmt)
-    if not body_stmts:
-        return False, "function body empty"
-
-    return True, "structural checks passed"
+    return has_coupling
 
 
-def _walk_body_only(
-    func_node: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> Iterator[ast.AST]:
-    """Walk all AST nodes inside *func_node* except nested function bodies.
-
-    This prevents false positives when a generated function contains inner
-    helper functions — e.g. a ``raise NotImplementedError`` in a nested stub
-    should not flag the outer function as incomplete.
-    """
-    for child in ast.iter_child_nodes(func_node):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Yield the def node itself (for decorators/name checks) but
-            # do NOT descend into its body.
-            yield child
-            continue
-        yield child
-        yield from ast.walk(child)
-
-
-def _is_not_implemented(node: ast.Raise) -> bool:
-    """Return True if a raise node corresponds to NotImplementedError."""
-    if node.exc is None:
-        return False
-    exc = node.exc
-    if isinstance(exc, ast.Call):
-        func = exc.func
-        if isinstance(func, ast.Name):
-            return func.id == "NotImplementedError"
-        if isinstance(func, ast.Attribute):
-            return func.attr == "NotImplementedError"
-    if isinstance(exc, ast.Name):
-        return exc.id == "NotImplementedError"
-    return False
+# ── Structural verification (AC-R4) ──────────────────────────────────
+# Extracted to startd8.micro_prime.structural_verify for testability.
+# Aliased here to preserve all 4 internal call sites unchanged.
+from startd8.micro_prime.structural_verify import (  # noqa: E402
+    ast_parse_valid as _ast_parse_valid,
+    check_class_body_statements as _check_class_body_statements,
+    structural_verify as _structural_verify,
+    _is_not_implemented,
+    _walk_body_only,
+)

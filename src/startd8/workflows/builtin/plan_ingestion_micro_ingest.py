@@ -140,6 +140,34 @@ def _parse_api_signature(sig: str) -> Optional[dict]:
     if not sig or not sig.strip():
         return None
 
+    # --- Variable/constant assignment pattern (before normalization) ---
+    cleaned = sig.strip().rstrip(";")
+    # Strip surrounding backticks/quotes
+    for ch in ("`", '"', "'"):
+        if cleaned.startswith(ch) and cleaned.endswith(ch):
+            cleaned = cleaned.strip(ch).strip()
+    if not cleaned.startswith(("def ", "async def ", "class ", "Class ")):
+        var_match = re.match(
+            r"^([A-Za-z_]\w*)\s*(?::\s*([^=]+?))?\s*=\s*(.+)$", cleaned,
+        )
+        if var_match:
+            var_name = var_match.group(1)
+            type_ann = var_match.group(2).strip() if var_match.group(2) else None
+            value_repr = var_match.group(3).strip()
+            is_upper = var_name == var_name.upper() and "_" in var_name
+            return {
+                "kind": "constant" if is_upper else "variable",
+                "name": var_name,
+                "type_annotation": type_ann,
+                "value_repr": value_repr,
+                "params": None,
+                "return_annotation": None,
+                "parent_class": None,
+                "is_async": False,
+                "bases": None,
+                "signature": None,
+            }
+
     normalized = _normalize_signature(sig)
 
     # --- Class pattern ---
@@ -248,10 +276,25 @@ def _build_forward_element_spec(parsed: dict) -> Optional[Any]:
         "async_function": ElementKind.ASYNC_FUNCTION,
         "method": ElementKind.METHOD,
         "async_method": ElementKind.ASYNC_METHOD,
+        "variable": ElementKind.VARIABLE,
+        "constant": ElementKind.CONSTANT,
     }
     kind = kind_map.get(kind_str)
     if kind is None:
         return None
+
+    # Variable/constant kinds — no signature, use type_annotation + value_repr
+    if kind in (ElementKind.VARIABLE, ElementKind.CONSTANT):
+        try:
+            return ForwardElementSpec(
+                kind=kind,
+                name=parsed["name"],
+                type_annotation=parsed.get("type_annotation"),
+                value_repr=parsed.get("value_repr"),
+            )
+        except (ValueError, TypeError) as exc:
+            logger.debug("micro_ingest: ForwardElementSpec validation failed: %s", exc)
+            return None
 
     # Build Signature for callables
     signature = None
