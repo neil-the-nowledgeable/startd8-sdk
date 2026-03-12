@@ -90,9 +90,6 @@ def _make_workflow(tmp_path: Path, **overrides: Any) -> PrimeContractorWorkflow:
     wf._domain_checklist = None
     wf._validation_override = None
     wf.strict_validation = False
-    wf.seed_onboarding = {}
-    wf.seed_architectural_context = {}
-    wf.seed_design_calibration = {}
     wf.seed_service_metadata = {}
     wf.seed_forward_manifest = None
     wf._forward_manifest = None  # REQ-MP-701: deserialized ForwardManifest
@@ -117,17 +114,14 @@ def _make_workflow(tmp_path: Path, **overrides: Any) -> PrimeContractorWorkflow:
     wf._strict_mode = False
 
     # Attributes added after original fixture was written
-    wf._kaizen_enabled = False
-    wf._kaizen_prompt_dir = None
-    wf._kaizen_config = None
+    from startd8.contractors.prime_contractor import KaizenConfig
+    wf._kaizen = KaizenConfig()
     wf._complexity_routing_enabled = False
     wf._complexity_config = None
     wf._complexity_router = None
     wf._micro_prime_enabled = False
     wf._original_code_generator = None
     wf._element_registry = None
-    wf._pre_escalation_generator = None
-    wf._escalation_threshold = 2
     wf._generation_cache = MagicMock()
     wf._repair_config = None
     wf._skeleton_sources = {}

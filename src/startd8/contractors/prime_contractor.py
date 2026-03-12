@@ -573,9 +573,9 @@ class PrimeContractorWorkflow:
         self._original_code_generator = None
         # Element registry (ER-012) — shared across features for cross-task reuse
         self._element_registry: Optional[Any] = None
-        # Tier escalation (REQ-RPL-500) — generator saved before escalation
-        self._pre_escalation_generator = None
-        self._escalation_threshold: int = 2  # attempts before escalation
+        # Tier escalation removed (AC-R3-R6): compensatory complexity that
+        # masked inadequate primary model selection.  Error-informed retry
+        # (with prior_error injection) is the single retry mechanism.
         # AC-R3: Content-addressable generation cache
         from .generation_cache import GenerationCache
         self._generation_cache = GenerationCache(
@@ -592,82 +592,6 @@ class PrimeContractorWorkflow:
             return str(path.relative_to(self.project_root))
         except ValueError:
             return str(path)
-
-    # -----------------------------------------------------------------------
-    # Tier Escalation (REQ-RPL-500)
-    # -----------------------------------------------------------------------
-
-    def _maybe_escalate_generator(self, feature: "FeatureSpec") -> bool:
-        """Escalate code generator to a higher-capability model if warranted.
-
-        Returns True if escalation was applied, False otherwise.
-        Escalation triggers when integration_attempts >= _escalation_threshold,
-        indicating error-informed regen already failed.
-        """
-        if feature.integration_attempts < self._escalation_threshold:
-            return False
-        if self._pre_escalation_generator is not None:
-            return False  # Already escalated
-
-        current_spec = getattr(self.code_generator, "lead_agent", None)
-        if not current_spec:
-            return False
-
-        try:
-            from ..model_catalog import get_escalation_target
-        except ImportError:
-            return False
-
-        escalated_spec = get_escalation_target(str(current_spec))
-        if not escalated_spec:
-            logger.info(
-                "No escalation target for '%s' (already flagship or unknown)",
-                current_spec,
-            )
-            return False
-
-        # Build an escalated generator with the same settings
-        try:
-            from .generators.lead_contractor import PrimaryContractorCodeGenerator
-
-            drafter_spec = getattr(self.code_generator, "drafter_agent", None)
-            self._pre_escalation_generator = self.code_generator
-            self.code_generator = PrimaryContractorCodeGenerator(
-                lead_agent=escalated_spec,
-                drafter_agent=str(drafter_spec) if drafter_spec else escalated_spec,
-                max_iterations=getattr(self.code_generator, "max_iterations", 3),
-                pass_threshold=getattr(self.code_generator, "pass_threshold", 80),
-                output_dir=getattr(self.code_generator, "output_dir", None),
-                max_tokens=getattr(self.code_generator, "max_tokens", None),
-            )
-            logger.info(
-                "Tier escalation for '%s': %s -> %s (attempt %d)",
-                feature.name, current_spec, escalated_spec,
-                feature.integration_attempts,
-                extra={
-                    "feature_name": feature.name,
-                    "original_model": str(current_spec),
-                    "escalated_model": escalated_spec,
-                    "attempt": feature.integration_attempts,
-                },
-            )
-            if feature.metadata is None:
-                feature.metadata = {}
-            feature.metadata["_tier_escalated"] = True
-            feature.metadata["_escalated_from"] = str(current_spec)
-            feature.metadata["_escalated_to"] = escalated_spec
-            return True
-        except Exception as exc:
-            logger.warning(
-                "Tier escalation failed for '%s': %s", feature.name, exc,
-            )
-            return False
-
-    def _restore_generator(self) -> None:
-        """Restore the original code generator after escalation."""
-        if self._pre_escalation_generator is not None:
-            self.code_generator = self._pre_escalation_generator
-            self._pre_escalation_generator = None
 
     # -----------------------------------------------------------------------
     # Complexity Routing (REQ-MP-807)
@@ -2138,15 +2062,8 @@ class PrimeContractorWorkflow:
                     )
                 feature.error_message = None
                 feature.status = FeatureStatus.PENDING
-                # REQ-RPL-500: Tier escalation — if error-informed regen already
-                # failed (attempts >= 2), escalate to a higher-capability model.
-                escalated = self._maybe_escalate_generator(feature)
                 if not self.develop_feature(feature, prior_error=prior_error):
-                    if escalated:
-                        self._restore_generator()
                     return False
-                if escalated:
-                    self._restore_generator()
             return self.integrate_feature(feature)
         logger.warning("Feature '%s' in unexpected state: %s", feature.name, feature.status, extra={'feature_name': feature.name, 'status': str(feature.status)})
         return False
