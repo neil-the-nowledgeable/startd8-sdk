@@ -643,17 +643,28 @@ class PrimeContractorWorkflow:
                 ),
             )
 
+        # When Micro Prime is enabled, self.code_generator is the MicroPrime
+        # wrapper.  Use the original (unwrapped) generator for MODERATE/COMPLEX
+        # tiers to avoid a redundant MicroPrime → fallback delegation hop.
+        unwrapped = (
+            self._original_code_generator
+            if self._micro_prime_enabled and self._original_code_generator is not None
+            else self.code_generator
+        )
+
         self._complexity_router = ComplexityRouter(
             trivial_generator=trivial_generator,
             simple_generator=simple_generator,
-            moderate_generator=self.code_generator,
-            complex_generator=complex_generator or self.code_generator,
+            moderate_generator=unwrapped,
+            complex_generator=complex_generator or unwrapped,
         )
         logger.info(
-            "Complexity routing enabled (tier3_agent=%s, trivial=%s, simple=%s)",
+            "Complexity routing enabled (tier3_agent=%s, trivial=%s, simple=%s, "
+            "moderate/complex=%s)",
             tier3_agent or "default",
             type(trivial_generator).__name__ if trivial_generator else "default",
             type(simple_generator).__name__ if simple_generator else "default",
+            type(unwrapped).__name__,
         )
 
     # -----------------------------------------------------------------------

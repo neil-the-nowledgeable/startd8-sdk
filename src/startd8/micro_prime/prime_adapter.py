@@ -428,7 +428,10 @@ class MicroPrimeCodeGenerator:
 
         if manifest is None:
             logger.warning(
-                "MicroPrimeCodeGenerator: no manifest, delegating to fallback",
+                "MicroPrimeCodeGenerator: no manifest in context — "
+                "delegating %d file(s) to fallback: %s",
+                len(target_files),
+                ", ".join(target_files) if target_files else "(none)",
             )
             return self._delegate_to_fallback(task, context, target_files)
 
@@ -605,6 +608,15 @@ class MicroPrimeCodeGenerator:
                 # type at all (no manifest entry or no skeleton).  Distinct
                 # from element-level escalation where MP tried but elements
                 # were too complex.
+                reason = (
+                    "no ForwardFileSpec in manifest"
+                    if file_spec is None
+                    else "no skeleton source available"
+                )
+                logger.info(
+                    "Micro Prime bypass: %s (%s) — delegating to fallback",
+                    file_path, reason,
+                )
                 st.bypass_files.append(file_path)
                 continue
 
@@ -976,11 +988,12 @@ class MicroPrimeCodeGenerator:
                     fallback_elements=st.escalated_element_count,
                     fallback_cost_usd=fallback_result.cost_usd,
                 ),
-                # Forward raw LLM responses from fallback for Kaizen capture
+                # Forward raw LLM responses and cost breakdown from fallback
                 **{k: v for k, v in (fallback_result.metadata or {}).items()
                    if k in ("spec_raw_response", "draft_raw_response",
                             "review_raw_response", "lead_agent_spec",
-                            "drafter_agent_spec")},
+                            "drafter_agent_spec", "lead_cost",
+                            "drafter_cost", "cost_efficiency_ratio")},
             },
         )
 

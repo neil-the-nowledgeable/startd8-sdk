@@ -163,6 +163,14 @@ def main():
         action="store_true",
         help="Skip batch post-mortem analysis.",
     )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Explicit run ID (preferred). If provided, skips auto-resolution "
+            "from run-metadata.json / env vars / directory names (F-AC-05)."
+        ),
+    )
     args = parser.parse_args()
 
     # Discover or use explicit paths
@@ -212,14 +220,17 @@ def main():
         output_dir=str(output_dir),
     )
 
+    # Resolve run ID once, pass through to all helpers (F-AC-05)
+    run_id = _resolve_run_id(output_dir, explicit_id=args.run_id)
+
     if args.emit_metrics:
-        _emit_kaizen_metrics(report, output_dir)
+        _emit_kaizen_metrics(report, output_dir, run_id=run_id)
 
     if args.emit_suggestions:
-        _emit_kaizen_suggestions(report, output_dir)
+        _emit_kaizen_suggestions(report, output_dir, run_id=run_id)
 
     if args.update_index:
-        _update_kaizen_index(output_dir, keep=args.kaizen_keep)
+        _update_kaizen_index(output_dir, keep=args.kaizen_keep, run_id=run_id)
 
     # -----------------------------------------------------------------------
     # Batch post-mortem analysis
@@ -233,6 +244,7 @@ def main():
                 seed_tasks=seed_tasks,
                 output_dir=output_dir,
                 batch_ledger_dir=args.batch_ledger_dir,
+                run_id=run_id,
             )
         except Exception as exc:
             print(f"  Batch post-mortem failed (non-fatal): {exc}", file=sys.stderr)
@@ -271,6 +283,7 @@ def _run_batch_postmortem(
     seed_tasks: list | None,
     output_dir: Path,
     batch_ledger_dir: Path | None,
+    run_id: str | None = None,
 ) -> None:
     """Run batch-aware cross-run post-mortem analysis."""
     # 1. Compute batch identity
@@ -309,8 +322,8 @@ def _run_batch_postmortem(
         print("  Batch post-mortem: no features to record — skipping.")
         return
 
-    # 6. Append current run
-    run_id = _resolve_run_id(output_dir)
+    # 6. Append current run (F-AC-05: use pre-resolved run_id)
+    run_id = run_id or _resolve_run_id(output_dir)
     import datetime
     timestamp = datetime.datetime.now().isoformat()
 
@@ -378,17 +391,19 @@ def _extract_top_root_causes(report: object) -> list:
     ]
 
 
-def _resolve_run_id(output_dir: Path) -> str:
-    """Derive the run ID from run-metadata.json, env var, or directory name.
+def _resolve_run_id(output_dir: Path, explicit_id: str | None = None) -> str:
+    """Derive the run ID, preferring an explicit value when provided.
 
-    Resolution order:
-    1. run-metadata.json in the run directory (authoritative)
-    2. KAIZEN_RUN_ID env var (set by cap-dev-pipe shell scripts)
-    3. Parent directory name (fallback)
-
-    Ensures kaizen works standalone without cap-dev-pipe env vars.
+    Resolution order (F-AC-05: single authoritative source preferred):
+    1. explicit_id (from --run-id CLI arg) — highest priority
+    2. run-metadata.json in the run directory
+    3. KAIZEN_RUN_ID env var (legacy fallback)
+    4. Parent directory name (last resort)
     """
-    # Walk up from output_dir (e.g. .../run-004/plan-ingestion) to find run-metadata.json
+    if explicit_id:
+        return explicit_id
+
+    # run-metadata.json (authoritative file-based source)
     for parent in [output_dir, output_dir.parent]:
         meta_path = parent / "run-metadata.json"
         if meta_path.is_file():
@@ -400,18 +415,18 @@ def _resolve_run_id(output_dir: Path) -> str:
             except (json.JSONDecodeError, OSError):
                 pass
 
-    # Env var fallback (cap-dev-pipe sets this)
+    # Legacy env var fallback (cap-dev-pipe sets this)
     env_id = os.environ.get("KAIZEN_RUN_ID", "")
     if env_id and env_id != "latest":
         return env_id
 
-    # Last resort: use parent directory name if it looks like a run dir
+    # Last resort: directory name
     for parent in [output_dir.parent, output_dir]:
         name = parent.name
         if name.startswith("run-"):
             return name
 
-    return getattr(os, "_kaizen_fallback_id", "") or "unknown"
+    return "unknown"
 
 
 def _resolve_pipeline_base(output_dir: Path) -> Path:
@@ -428,9 +443,9 @@ def _resolve_pipeline_base(output_dir: Path) -> Path:
     return output_dir.parent
 
 
-def _emit_kaizen_metrics(report: object, output_dir: Path) -> None:
+def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = None) -> None:
     """Extract standardized Kaizen metrics from post-mortem report (REQ-KZ-300)."""
-    run_id = _resolve_run_id(output_dir)
+    run_id = run_id or _resolve_run_id(output_dir)
     kaizen_enabled = os.environ.get("KAIZEN_ENABLED", "false").lower() == "true"
     kaizen_source_run = os.environ.get("KAIZEN_SOURCE_RUN", "")
 
@@ -501,13 +516,13 @@ def _emit_kaizen_metrics(report: object, output_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _emit_kaizen_suggestions(report: object, output_dir: Path) -> None:
+def _emit_kaizen_suggestions(report: object, output_dir: Path, run_id: str | None = None) -> None:
     """Generate structured improvement suggestions from cross-feature patterns (REQ-KZ-501)."""
     suggestions = generate_kaizen_suggestions(report)
 
     output = {
         "schema_version": "1.0",
-        "source_run": _resolve_run_id(output_dir),
+        "source_run": run_id or _resolve_run_id(output_dir),
         "suggestions": suggestions,
     }
     suggestions_path = output_dir / "kaizen-suggestions.json"
@@ -527,22 +542,20 @@ _MIN_KAIZEN_KEEP = 5
 _MAX_KAIZEN_KEEP = 200
 
 
-def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP) -> None:
+def _update_kaizen_index(output_dir: Path, keep: int = _DEFAULT_KAIZEN_KEEP, run_id: str | None = None) -> None:
     """Append current run to kaizen-index.json and prune old entries.
-
-    Derives run_id from run-metadata.json (not env vars), making this
-    independent of cap-dev-pipe shell wrappers.
 
     Args:
         output_dir: The phase output directory (e.g. .../run-004/plan-ingestion).
         keep: Maximum number of runs to retain in the index.
+        run_id: Pre-resolved run ID (F-AC-05). Falls back to auto-resolution.
     """
     import shutil
     from datetime import datetime
 
     keep = max(_MIN_KAIZEN_KEEP, min(keep, _MAX_KAIZEN_KEEP))
 
-    run_id = _resolve_run_id(output_dir)
+    run_id = run_id or _resolve_run_id(output_dir)
     pipeline_base = _resolve_pipeline_base(output_dir)
     index_path = pipeline_base / "kaizen-index.json"
     metrics_path = output_dir / "kaizen-metrics.json"
