@@ -854,6 +854,9 @@ class PrimeContractorWorkflow:
         """Populate gen_context with existing file contents for edit tasks (PC-O1).
 
         Reads target_files under project_root within _EXISTING_FILES_BUDGET_BYTES.
+        Also reads sibling Python files in the same directory to provide
+        project-specific import context (e.g., proto module names, logging
+        patterns) that grounds the LLM prompt.
         Paths outside project_root are skipped (path traversal safety).
         """
         if not feature.target_files:
@@ -861,6 +864,10 @@ class PrimeContractorWorkflow:
         root = self.project_root.resolve()
         budget = _EXISTING_FILES_BUDGET_BYTES
         existing: Dict[str, str] = {}
+
+        # Collect target directories for sibling discovery
+        target_dirs: set = set()
+
         for rel_path in feature.target_files:
             if budget <= 0:
                 logger.debug(
@@ -875,6 +882,7 @@ class PrimeContractorWorkflow:
                     rel_path,
                 )
                 continue
+            target_dirs.add(full.parent)
             if not full.is_file():
                 continue
             try:
@@ -886,6 +894,40 @@ class PrimeContractorWorkflow:
             content = raw[:take].decode("utf-8", errors="replace")
             existing[rel_path] = content
             budget -= take
+
+        # Read sibling .py files in the same directories for import context
+        # (Gap 2: sibling imports ground the LLM with project-specific patterns)
+        for target_dir in target_dirs:
+            if budget <= 0:
+                break
+            if not target_dir.is_dir():
+                continue
+            try:
+                siblings = sorted(target_dir.glob("*.py"))
+            except OSError:
+                continue
+            for sibling in siblings:
+                if budget <= 0:
+                    break
+                if not str(sibling).startswith(str(root)):
+                    continue
+                try:
+                    sib_rel = str(sibling.relative_to(root))
+                except ValueError:
+                    continue
+                if sib_rel in existing:
+                    continue  # already read as a target file
+                if not sibling.is_file():
+                    continue
+                try:
+                    raw = sibling.read_bytes()
+                except OSError:
+                    continue
+                take = min(len(raw), budget)
+                content = raw[:take].decode("utf-8", errors="replace")
+                existing[sib_rel] = content
+                budget -= take
+
         if existing:
             gen_context["existing_files"] = existing
 
@@ -1514,6 +1556,9 @@ class PrimeContractorWorkflow:
                 )
             except Exception as exc:
                 logger.warning("Fallback SOURCE_RECONCILE failed: %s", exc, exc_info=True)
+
+        # Wire forward manifest to integration engine for contract violation repair
+        self._engine._forward_manifest = self._forward_manifest
 
         # FR-MPA-007: Extract pre-rendered skeleton sources from seed artifacts
         # so MicroPrimeCodeGenerator can skip _generate_skeletons() fallback.
@@ -2284,9 +2329,11 @@ class PrimeContractorWorkflow:
                 template_key, feature.name, exc, exc_info=True,
             )
         existing_section = build_existing_files_section(existing_files=existing_files)
+        edit_min_pct = gen_context.get("edit_min_pct", 80)
         output_format = build_output_format(
             target_files=feature.target_files,
             existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
         )
         prompts["draft_user_prompt.md"] = (
             f"# Draft User Prompt\n\n"
@@ -2772,9 +2819,11 @@ class PrimeContractorWorkflow:
         existing_section = build_existing_files_section(
             existing_files=existing_files,
         )
+        edit_min_pct = gen_context.get("edit_min_pct", 80)
         output_format = build_output_format(
             target_files=feature.target_files,
             existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
         )
         draft_user = (
             f"# Draft User Prompt\n\n"
@@ -3253,6 +3302,7 @@ class PrimeContractorWorkflow:
 
             signals = extract_signals_from_feature(
                 feature, self.project_root,
+                manifest=gen_context.get("manifest"),
             )
             tier, reason = classify_tier(signals, self._complexity_config)
             generator = self._complexity_router.select(tier) or generator

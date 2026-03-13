@@ -693,7 +693,12 @@ class PrimePostMortemEvaluator:
         fid = feature_dict.get("id", fallback_id)
         name = feature_dict.get("name", fid)
         status = feature_dict.get("status", "")
-        success = status == "complete"
+        # Prefer history entry's authoritative success field when available;
+        # fall back to queue-state status for backward compatibility.
+        if history_entry is not None and "success" in history_entry:
+            success = bool(history_entry["success"])
+        else:
+            success = status == "complete"
 
         # Determine root cause for failures
         root_cause = RootCause.UNKNOWN
@@ -836,12 +841,23 @@ class PrimePostMortemEvaluator:
             return
 
         for fpm in features:
-            for target_file in fpm.target_files:
-                if not target_file.endswith(".py"):
+            # Prefer generated_files (absolute paths to actual output) over
+            # target_files (relative paths that may not exist at project root).
+            files_to_check = fpm.generated_files if fpm.generated_files else fpm.target_files
+            for file_path in files_to_check:
+                if not file_path.endswith(".py"):
                     continue
                 try:
+                    # For absolute generated paths, pass parent as project_root
+                    # so validate_disk_compliance resolves the file correctly.
+                    if Path(file_path).is_absolute():
+                        effective_root = str(Path(file_path).parent)
+                        effective_file = Path(file_path).name
+                    else:
+                        effective_root = project_root
+                        effective_file = file_path
                     compliance = validate_disk_compliance(
-                        target_file, project_root, forward_manifest,
+                        effective_file, effective_root, forward_manifest,
                     )
                     fpm.disk_compliance = compliance
 
@@ -1204,6 +1220,7 @@ def launch_prime_postmortem_async(
     queue: Any,  # FeatureQueue — Any to avoid circular import
     seed_path: Optional[str] = None,
     output_dir: str = ".",
+    project_root: Optional[str] = None,
 ) -> threading.Thread:
     """Launch post-mortem evaluation in a background thread.
 
@@ -1247,6 +1264,7 @@ def launch_prime_postmortem_async(
                 queue_state=queue_state,
                 seed_tasks=seed_tasks,
                 output_dir=output_dir,
+                project_root=project_root,
             )
             logger.info(
                 "Prime postmortem complete: score=%.2f verdict=%s",

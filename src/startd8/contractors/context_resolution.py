@@ -869,6 +869,10 @@ class StandaloneContextStrategy(ContextStrategy):
         service_meta = seed_data.get("service_metadata")
         if service_meta:
             gen_context["service_metadata"] = service_meta
+            # Lift runtime_dependencies to top level for spec_builder
+            rt_deps = service_meta.get("runtime_dependencies")
+            if rt_deps and isinstance(rt_deps, list):
+                gen_context["runtime_dependencies"] = rt_deps
 
         # Gap 9: per-task metadata from seed enrichment
         self._inject_enrichment(gen_context, metadata)
@@ -1093,6 +1097,11 @@ class PipelineContextStrategy(ContextStrategy):
                 )
             # Also pass raw for backward compat
             gen_context["service_metadata"] = service_meta
+            # Lift runtime_dependencies to top level for spec_builder
+            # (Gap 1: nested key was invisible to _build_available_imports_section)
+            rt_deps = service_meta.get("runtime_dependencies")
+            if rt_deps and isinstance(rt_deps, list):
+                gen_context["runtime_dependencies"] = rt_deps
 
         # IMP-P3: Per-task enrichment (critical parameters, domain constraints)
         StandaloneContextStrategy._inject_enrichment(gen_context, metadata)

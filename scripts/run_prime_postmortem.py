@@ -164,6 +164,12 @@ def main():
         help="Skip batch post-mortem analysis.",
     )
     parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=None,
+        help="Project root directory for disk quality validation (Phase B/E).",
+    )
+    parser.add_argument(
         "--run-id",
         default=None,
         help=(
@@ -213,11 +219,13 @@ def main():
 
     # Evaluate
     evaluator = PrimePostMortemEvaluator()
+    project_root = str(args.project_root) if args.project_root else None
     report = evaluator.evaluate(
         result_dict=result_dict,
         queue_state=queue_state,
         seed_tasks=seed_tasks,
         output_dir=str(output_dir),
+        project_root=project_root,
     )
 
     # Resolve run ID once, pass through to all helpers (F-AC-05)

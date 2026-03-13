@@ -156,6 +156,10 @@ _SPEC_EDIT_QUANTITATIVE_FALLBACK = (
     "Your spec must result in a draft that is AT LEAST "
     "{min_lines} lines ({edit_min_pct}% of existing).\n"
 )
+_SPEC_CREATE_PREAMBLE_FALLBACK = (
+    "## CREATE MODE — New Implementation\n"
+    "**Task type: Implement** this specification from scratch.\n\n"
+)
 
 
 def build_spec_plan_section(
@@ -254,6 +258,36 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
         )
 
 
+def _build_framework_imports_section(
+    context: Dict[str, Any],
+    task_description: str = "",
+) -> str:
+    """Build framework-specific import template section.
+
+    Uses ``framework_imports.detect_frameworks()`` to identify frameworks
+    from runtime_dependencies and task description, then renders canonical
+    import patterns via ``get_import_preamble()``.
+
+    Returns empty string when no frameworks are detected.
+    """
+    deps = context.get("runtime_dependencies", [])
+    target_files = context.get("target_files", [])
+
+    try:
+        from .framework_imports import detect_frameworks, get_import_preamble
+    except ImportError:
+        return ""
+
+    frameworks = detect_frameworks(
+        task_description=task_description,
+        target_files=target_files,
+        dependencies=deps,
+    )
+    if not frameworks:
+        return ""
+    return get_import_preamble(frameworks, dependencies=deps)
+
+
 def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
     """Extract imports from existing sibling files in the same directory.
 
@@ -264,7 +298,7 @@ def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
 
     Returns empty string if no Python siblings with imports are found.
     """
-    existing_files = context.get("existing_files_content", {})
+    existing_files = context.get("existing_files_content") or context.get("existing_files", {})
     if not existing_files:
         return ""
 
@@ -540,6 +574,13 @@ def build_spec_prompt(
             )
         edit_preamble += "\n"
         task_description = edit_preamble + task_description
+    else:
+        # PC-F3: Create mode — use "implement" task verb in preamble
+        create_preamble = _format_lead_prompt(
+            "spec_create_preamble",
+            _SPEC_CREATE_PREAMBLE_FALLBACK,
+        )
+        task_description = create_preamble + task_description
 
     # --- Constraint categorization ---
     raw_constraints = context.pop("domain_constraints", None)
@@ -634,6 +675,11 @@ def build_spec_prompt(
     available_imports_section = _build_available_imports_section(context)
     if available_imports_section:
         prioritized.append((1, "available_imports", available_imports_section))
+
+    # P1: Framework import templates (canonical import patterns for detected frameworks)
+    fw_section = _build_framework_imports_section(context, task_description)
+    if fw_section:
+        prioritized.append((1, "framework_imports", fw_section))
 
     # P1: Sibling-file imports (L5+ — project-specific, preferred)
     sibling_section = _build_sibling_imports_section(context)
