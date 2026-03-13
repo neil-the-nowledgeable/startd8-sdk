@@ -927,13 +927,15 @@ class TestSystemPromptSplit:
     and _FILE_WHOLE_SYSTEM_PROMPT remain.
     """
 
-    def test_dead_code_gen_prompt_removed(self):
-        """AC-R7/F7: _CODE_GEN_SYSTEM_PROMPT must not exist."""
-        import startd8.micro_prime.engine as engine_mod
-        assert not hasattr(engine_mod, "_CODE_GEN_SYSTEM_PROMPT"), (
-            "_CODE_GEN_SYSTEM_PROMPT was removed (AC-R7/F7) — "
-            "it contradicted the body-only user prompt"
-        )
+    def test_code_gen_prompt_is_generic(self):
+        """AC-R7/F7: _CODE_GEN_SYSTEM_PROMPT must NOT contain body-only instructions.
+
+        Retained as compat alias for prime_adapter cloud escalation (full-element
+        generation), but must not contradict itself with body-only language.
+        """
+        from startd8.micro_prime.engine import _CODE_GEN_SYSTEM_PROMPT
+        assert "body lines" not in _CODE_GEN_SYSTEM_PROMPT
+        assert "no def line" not in _CODE_GEN_SYSTEM_PROMPT
 
     def test_element_body_prompt_no_def_line_instruction(self):
         from startd8.micro_prime.engine import _ELEMENT_BODY_SYSTEM_PROMPT

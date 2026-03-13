@@ -599,3 +599,79 @@ class TestLaunchPrimePostmortemAsync:
         thread.join(timeout=10)
         assert not thread.is_alive()
         assert (tmp_path / "prime-postmortem-report.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# TestMissingFilesPathNormalization
+# ---------------------------------------------------------------------------
+
+
+class TestMissingFilesPathNormalization:
+    """Verify missing_files handles absolute-vs-relative path comparison."""
+
+    def _evaluate(self, queue_state, result_dict):
+        evaluator = PrimePostMortemEvaluator()
+        return evaluator.evaluate(result_dict, queue_state)
+
+    def test_absolute_generated_matches_relative_target(self):
+        """Generated file with absolute path should match relative target."""
+        queue_state = _make_queue_state({
+            "feat-1": {
+                "target_files": ["src/emailservice/email_server.py"],
+                "generated_files": [
+                    "/abs/path/to/generated/src/emailservice/email_server.py"
+                ],
+            },
+        })
+        result_dict = _make_result_dict(
+            history=[_make_history_entry("feat-1", success=True)]
+        )
+        report = self._evaluate(queue_state, result_dict)
+        feat = report.features[0]
+        assert feat.missing_files == [], (
+            f"Expected no missing files but got {feat.missing_files}"
+        )
+
+    def test_exact_match_still_works(self):
+        """Identical relative paths should still match."""
+        queue_state = _make_queue_state({
+            "feat-1": {
+                "target_files": ["src/app.py"],
+                "generated_files": ["src/app.py"],
+            },
+        })
+        result_dict = _make_result_dict(
+            history=[_make_history_entry("feat-1", success=True)]
+        )
+        report = self._evaluate(queue_state, result_dict)
+        assert report.features[0].missing_files == []
+
+    def test_genuinely_missing_file_still_detected(self):
+        """A file not present in generated_files should still be reported."""
+        queue_state = _make_queue_state({
+            "feat-1": {
+                "target_files": ["src/missing.py", "src/present.py"],
+                "generated_files": [
+                    "/abs/generated/src/present.py"
+                ],
+            },
+        })
+        result_dict = _make_result_dict(
+            history=[_make_history_entry("feat-1", success=True)]
+        )
+        report = self._evaluate(queue_state, result_dict)
+        assert report.features[0].missing_files == ["src/missing.py"]
+
+    def test_no_false_match_on_partial_suffix(self):
+        """'ice.py' should not match 'service.py'."""
+        queue_state = _make_queue_state({
+            "feat-1": {
+                "target_files": ["ice.py"],
+                "generated_files": ["/abs/path/service.py"],
+            },
+        })
+        result_dict = _make_result_dict(
+            history=[_make_history_entry("feat-1", success=True)]
+        )
+        report = self._evaluate(queue_state, result_dict)
+        assert report.features[0].missing_files == ["ice.py"]

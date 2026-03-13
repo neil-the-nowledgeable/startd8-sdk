@@ -794,6 +794,16 @@ class IntegrationEngine:
                 for fpath, content in outcome.repaired_files.items():
                     fpath.write_text(content, encoding="utf-8")
 
+                # Gap-A: Update element registry for repaired files
+                if self._element_registry is not None:
+                    for fpath in outcome.repaired_files:
+                        rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                        for entry in self._element_registry.elements_for_file(rel):
+                            self._element_registry.set_phase_status(
+                                entry.element_id, "integrate", "repaired",
+                                metadata={"repair_stage": "pre_merge"},
+                            )
+
                 # Re-run pre_validate to verify
                 new_result = self.checkpoint.pre_validate(gen_paths)
                 logger.info(
@@ -918,6 +928,16 @@ class IntegrationEngine:
                             results = recheckpoint_results
                             repair_success = True
 
+                            # Gap-A: Update element registry for post-merge repaired files
+                            if self._element_registry is not None:
+                                for fpath in outcome.repaired_files:
+                                    rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                                    for entry in self._element_registry.elements_for_file(rel):
+                                        self._element_registry.set_phase_status(
+                                            entry.element_id, "integrate", "repaired",
+                                            metadata={"repair_stage": "post_merge"},
+                                        )
+
                 # R3-S2: Cost measurement
                 repair_duration_ms = (
                     (time.monotonic() - repair_start) * 1000
@@ -1040,6 +1060,142 @@ class IntegrationEngine:
                 )
 
         return results, repair_success
+
+    # ------------------------------------------------------------------
+    # Fix-2 / Gap-C: Post-integrate contract violation repair
+    # ------------------------------------------------------------------
+
+    def _attempt_contract_violation_repair(
+        self,
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+        result_obj_metadata: Dict[str, Any],
+    ) -> bool:
+        """Validate integrated files against forward manifest and repair violations.
+
+        Builds a ManifestRegistry from the integrated Python files, runs
+        ``validate_forward_manifest()`` against the stored forward manifest,
+        and routes any ERROR-severity violations through the repair pipeline.
+
+        Returns:
+            True if any files were repaired, False otherwise.
+        """
+        if not _HAS_REPAIR or self._forward_manifest is None:
+            return False
+
+        try:
+            from ..forward_manifest_validator import validate_forward_manifest
+            from ..repair.models import ContractViolationDiagnostic, RepairContext
+            from ..utils.code_manifest import generate_file_manifest
+
+            # Build ManifestRegistry from integrated Python files
+            manifest_registry: dict = {}
+            for fpath in integrated_files:
+                if not fpath.suffix == ".py" or not fpath.exists():
+                    continue
+                try:
+                    fm = generate_file_manifest(fpath, self.project_root)
+                    rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                    manifest_registry[rel] = fm
+                except Exception:
+                    continue
+
+            if not manifest_registry:
+                return False
+
+            # Validate against forward manifest
+            violations = validate_forward_manifest(
+                self._forward_manifest, manifest_registry,
+            )
+
+            # Filter to ERROR severity only
+            error_violations = [
+                v for v in violations
+                if getattr(v, "severity", "error") == "error"
+            ]
+            if not error_violations:
+                return False
+
+            logger.info(
+                "Found %d contract violation(s) for %s, attempting repair",
+                len(error_violations), unit.name,
+                extra={"unit_id": unit.id},
+            )
+
+            # Convert ContractViolation → ContractViolationDiagnostic
+            diagnostics: list = []
+            for v in error_violations:
+                # Extract element name from contract_id pattern "file_element:path:name"
+                element_name = ""
+                if hasattr(v, "contract_id") and v.contract_id:
+                    parts = v.contract_id.split(":")
+                    if len(parts) >= 3:
+                        element_name = parts[-1]
+
+                diagnostics.append(ContractViolationDiagnostic(
+                    category="contract_violation",
+                    file=v.file_path if hasattr(v, "file_path") else "",
+                    message=f"{v.violation_type}: expected {v.expected}, got {v.actual}",
+                    violation_type=v.violation_type,
+                    expected=str(v.expected),
+                    actual=str(v.actual),
+                    element_name=element_name,
+                ))
+
+            # Collect file contents for repair
+            files_to_repair: dict = {}
+            for diag in diagnostics:
+                ifile = Path(diag.file)
+                if not ifile.is_absolute():
+                    ifile = self.project_root / ifile
+                if ifile.exists() and ifile not in files_to_repair:
+                    files_to_repair[ifile] = ifile.read_text(encoding="utf-8")
+
+            if not files_to_repair:
+                return False
+
+            outcome = run_file_repair(
+                files_to_repair,
+                diagnostics,
+                self._repair_config,
+                self.project_root,
+                forward_manifest=self._forward_manifest,
+            )
+
+            if outcome.any_modified:
+                for fpath, content in outcome.repaired_files.items():
+                    fpath.write_text(content, encoding="utf-8")
+
+                # Gap-C: Update element registry for contract-violation-repaired files
+                if self._element_registry is not None:
+                    for fpath in outcome.repaired_files:
+                        rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                        for entry in self._element_registry.elements_for_file(rel):
+                            self._element_registry.set_phase_status(
+                                entry.element_id, "integrate", "repaired",
+                                metadata={"repair_stage": "contract_violation"},
+                            )
+
+                result_obj_metadata["contract_repair_applied"] = True
+                result_obj_metadata["contract_violations_found"] = len(error_violations)
+                result_obj_metadata["contract_files_repaired"] = [
+                    str(p) for p in outcome.repaired_files
+                ]
+                logger.info(
+                    "Contract violation repair applied to %d file(s) for %s",
+                    len(outcome.repaired_files), unit.name,
+                    extra={"unit_id": unit.id},
+                )
+                return True
+
+        except Exception as exc:
+            logger.warning(
+                "Post-integrate contract validation failed for %s: %s",
+                unit.name, exc,
+                extra={"unit_id": unit.id},
+            )
+
+        return False
 
     # ------------------------------------------------------------------
     # REQ-RPL-301: Size Regression Merge Repair
@@ -1626,6 +1782,11 @@ class IntegrationEngine:
             # ── Repair pipeline hook (REQ-RPL-200, R6-S1, R6-S2) ──
             results, repair_success = self._attempt_repair(
                 results, integrated_files, unit, attempt, result_obj_metadata,
+            )
+
+            # ── Contract violation repair (Fix-2) ──
+            self._attempt_contract_violation_repair(
+                integrated_files, unit, result_obj_metadata,
             )
 
             # Advisory downgrade (only if repair not attempted or failed)

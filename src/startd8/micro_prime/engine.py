@@ -70,7 +70,7 @@ from startd8.micro_prime.repair import (
     run_repair_pipeline,
     to_escalation_repair_outcome,
 )
-from startd8.micro_prime.splicer import SpliceViolation, splice_body_into_skeleton
+from startd8.micro_prime.splicer import SpliceResult, SpliceViolation, splice_body_into_skeleton
 from startd8.repair.models import ContractViolationDiagnostic, RepairContext
 from startd8.repair.steps.contract_violation_fix import ContractViolationFixStep
 from startd8.micro_prime.templates import TemplateRegistry
@@ -600,10 +600,14 @@ def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional
     )
 
 
-# AC-R7/F7: Removed dead _CODE_GEN_SYSTEM_PROMPT.  It was the default
-# fallback in _generate_ollama() but contradicted the body-only user
-# prompt ("include the def line" vs "no def line"), causing model
-# confusion when any call site omitted the system_prompt kwarg.
+# AC-R7/F7: _CODE_GEN_SYSTEM_PROMPT was the old default that contradicted
+# body-only prompts.  Retained as alias for prime_adapter cloud escalation
+# (full-element generation, not body-only).
+_CODE_GEN_SYSTEM_PROMPT = (
+    "You are a Python code generator. "
+    "Output ONLY valid Python code — no markdown fences, no explanations. "
+    "Use 4-space indentation consistently."
+)
 
 _ELEMENT_BODY_SYSTEM_PROMPT = (
     "You are a Python code generator. "
@@ -1482,6 +1486,14 @@ class MicroPrimeEngine:
                         self._element_registry.put(new_entry)
                     self._element_registry.set_phase_status(
                         element_id, "implement", "generated",
+                        metadata={
+                            "generation_strategy": result.generation_strategy,
+                            "model": result.model,
+                            "generation_time_ms": result.generation_time_ms,
+                            "input_tokens": result.input_tokens,
+                            "output_tokens": result.output_tokens,
+                            "ast_valid_before_repair": result.ast_valid_before_repair,
+                        },
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(

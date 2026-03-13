@@ -11,6 +11,7 @@ Uses a zero-cost heuristic based on manifest signals only (no LLM calls).
 
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
@@ -38,11 +39,11 @@ class ClassificationDetails:
     file_import_bump: int = 0
     element_api_adjustment: int = 0
     classification_signals: frozenset[str] = frozenset()
-    complexity_score: int = 0  # Raw scoring-path score (Kaizen run-017)
-    external_dependency_count: int = 0  # Distinct non-stdlib external packages (Kaizen run-017)
+    complexity_score: int = 0
+    external_dependency_count: int = 0
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Classification constants (from experiment script)
+# Classification constants
 # ═══════════════════════════════════════════════════════════════════════════
 
 _SIMPLE_NAME_PREFIXES = ("get_", "is_", "has_", "to_", "from_", "as_")
@@ -89,6 +90,9 @@ _DEFAULT_EXTERNAL_API_PACKAGES = {
     "locust", "playwright",
 }
 
+# Docstring keywords that indicate complex API usage (hard gate to MODERATE)
+_COMPLEX_API_HINTS = ("database", "http", "websocket", "grpc", "graphql", "oauth")
+
 
 def classify_element(
     element: ForwardElementSpec,
@@ -98,13 +102,6 @@ def classify_element(
     config: Optional[MicroPrimeConfig] = None,
 ) -> tuple[TierClassification, str]:
     """Classify an element's complexity tier using manifest signals.
-
-    Args:
-        element: The element to classify.
-        file_spec: The file spec for import context.
-        contracts: Binding constraints for this element.
-        template_registry: Optional template registry for TRIVIAL detection.
-        config: Optional config for threshold overrides.
 
     Returns:
         Tuple of (tier, reasoning string).
@@ -122,7 +119,15 @@ def classify_element_with_details(
     template_registry: Optional[TemplateRegistry] = None,
     config: Optional[MicroPrimeConfig] = None,
 ) -> tuple[TierClassification, str, ClassificationDetails]:
-    """Classify an element and return API gate details (REQ-MP-511)."""
+    """Classify an element and return side-channel details (REQ-MP-511).
+
+    Flow:
+      1. Early exits: TRIVIAL (template), PROPERTY, CONSTANT, ORCHESTRATOR
+      2. Hard gates: binding-heavy external APIs, docstring API hints
+      3. Scoring: params, return type, name, bindings, imports, decorators,
+         async, class, docstring length, file size
+      4. Threshold: score <= -1 → SIMPLE, <= 2 → MODERATE, else → COMPLEX
+    """
     cfg = config or MicroPrimeConfig()
     signals: set[str] = set()
     details = ClassificationDetails()
@@ -173,6 +178,38 @@ def classify_element_with_details(
                 f"{orch_reason}; {len(real_params)} params (side-effect heavy)",
                 details,
             )
+
+    # ── Hard gates (checked before scoring to avoid wasted work) ──
+
+    external_pkgs = _get_external_api_packages(cfg)
+    import_index = _build_import_index(file_spec, external_pkgs)
+
+    # Binding constraints referencing external APIs → MODERATE
+    binding_hits = _binding_mentions_external(contracts, external_pkgs)
+    if binding_hits >= 3:
+        signals.add("external_api")
+        details = ClassificationDetails(
+            element_api_adjustment=binding_hits,
+            classification_signals=frozenset(signals),
+        )
+        return (
+            TierClassification.MODERATE,
+            f"binding references external APIs ({binding_hits})",
+            details,
+        )
+
+    # Docstring references complex API category → MODERATE
+    if element.docstring_hint:
+        doc_lower = element.docstring_hint.lower()
+        for hint in _COMPLEX_API_HINTS:
+            if hint in doc_lower:
+                signals.add("external_api")
+                details = ClassificationDetails(classification_signals=frozenset(signals))
+                return (
+                    TierClassification.MODERATE,
+                    f"docstring references complex API: {hint}",
+                    details,
+                )
 
     # ── Scoring system ──
     reasons: list[str] = []
@@ -230,40 +267,17 @@ def classify_element_with_details(
         complexity_score += 2
         reasons.append(f"{binding_count} binding constraints")
 
-    # Pass 1: File-level import bump (REQ-MP-501)
-    external_pkgs = _get_external_api_packages(cfg)
-    file_import_bump = _import_complexity_bump(file_spec, external_pkgs)
-    if file_import_bump > 0:
+    # Import analysis: scope to imports the element actually references
+    file_import_count = import_index.file_external_count
+    element_import_count, has_refs = _element_relevant_import_count(
+        element, import_index,
+    )
+    effective_import_count = element_import_count if has_refs else file_import_count
+    if effective_import_count > 0:
         signals.add("external_imports")
-        # Cap the score contribution so imports don't dominate all other
-        # signals.  Raw count is preserved in file_import_bump for the
-        # hard gate in _check_api_dependencies().
-        capped_bump = _cap_import_score(file_import_bump)
+        capped_bump = _cap_import_score(effective_import_count)
         complexity_score += capped_bump
-        reasons.append(f"external APIs: {file_import_bump} packages")
-
-    # Pass 2: Per-element refinement (REQ-MP-511)
-    elem_adjust, elem_reasons = _per_element_api_adjustment(
-        element, file_spec, contracts, external_pkgs,
-    )
-    if elem_adjust:
-        complexity_score += elem_adjust
-        reasons.extend(elem_reasons)
-
-    # ── Per-element API dependency analysis (REQ-MP-511) ──
-    api_tier = _check_api_dependencies(
-        element, file_spec, cfg, contracts,
-        file_import_bump, elem_adjust, elem_reasons,
-    )
-    if api_tier is not None:
-        signals.add("external_api")
-        details = ClassificationDetails(
-            file_import_bump=file_import_bump,
-            element_api_adjustment=elem_adjust,
-            classification_signals=frozenset(signals),
-            external_dependency_count=file_import_bump,
-        )
-        return api_tier[0], api_tier[1], details
+        reasons.append(f"external APIs: {effective_import_count} packages")
 
     # Complex decorators
     if set(element.decorators or []) & _COMPLEX_DECORATORS:
@@ -283,7 +297,6 @@ def classify_element_with_details(
         reasons.append("class definition")
 
     # Docstring hint intent length — strip Args/Returns/Raises boilerplate
-    # before measuring, since long parameter docs don't imply complex logic.
     if element.docstring_hint:
         intent_len = _docstring_intent_length(element.docstring_hint)
         if intent_len > 200:
@@ -301,11 +314,11 @@ def classify_element_with_details(
     reasoning = "; ".join(reasons) if reasons else "default"
 
     details = ClassificationDetails(
-        file_import_bump=file_import_bump,
-        element_api_adjustment=elem_adjust,
+        file_import_bump=file_import_count,
+        element_api_adjustment=binding_hits,
         classification_signals=frozenset(signals),
         complexity_score=complexity_score,
-        external_dependency_count=file_import_bump,
+        external_dependency_count=effective_import_count,
     )
 
     if complexity_score <= -1:
@@ -316,7 +329,9 @@ def classify_element_with_details(
         return TierClassification.COMPLEX, reasoning, details
 
 
-import re as _re
+# ═══════════════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════════════
 
 _DOCSTRING_SECTION_RE = _re.compile(
     r"^\s*(Args|Arguments|Parameters|Returns?|Raises?|Yields?|Examples?|Notes?|See Also|Attributes)\s*:",
@@ -343,80 +358,28 @@ def _get_real_params(element: ForwardElementSpec) -> list:
     return [p for p in element.signature.params if p.name not in ("self", "cls")]
 
 
-def _check_api_dependencies(
-    element: ForwardElementSpec,
-    file_spec: ForwardFileSpec,
-    config: MicroPrimeConfig,
-    contracts: list[InterfaceContract],
-    file_import_bump: int,
-    elem_adjust: int,
-    elem_reasons: list[str],
-) -> Optional[tuple[TierClassification, str]]:
-    """Two-pass API dependency analysis (REQ-MP-511).
+# ── Import analysis ──────────────────────────────────────────────────────
 
-    Pass 1: File-level import gate — coarse signal.
-    Pass 2: Per-element refinement — binding/docstring/name patterns.
+
+@dataclass
+class _ImportIndex:
+    """Pre-computed import analysis for a file spec.
+
+    Built once per classification call and shared across all import-related
+    checks, eliminating the duplicated import-matching loops.
     """
-    # Hard gate: extreme external import count
-    if file_import_bump > config.max_simple_imports:
-        return (
-            TierClassification.MODERATE,
-            f"file has {file_import_bump} external imports (>{config.max_simple_imports})",
-        )
-
-    if elem_adjust >= 3:
-        return (
-            TierClassification.MODERATE,
-            "; ".join(elem_reasons) or "external API usage",
-        )
-
-    # Docstring-based complex API hinting (lightweight)
-    if element.docstring_hint:
-        doc_lower = element.docstring_hint.lower()
-        complex_api_hints = ("database", "http", "websocket", "grpc", "graphql", "oauth")
-        for hint in complex_api_hints:
-            if hint in doc_lower:
-                return (
-                    TierClassification.MODERATE,
-                    f"docstring references complex API: {hint}",
-                )
-
-    return None
+    file_external_count: int
+    name_to_pkg: dict[str, str]
 
 
-def _get_external_api_packages(config: MicroPrimeConfig) -> set[str]:
-    """Return the external API package set from config or defaults."""
-    if config.external_api_packages:
-        return {p.strip() for p in config.external_api_packages if p and p.strip()}
-    return set(_DEFAULT_EXTERNAL_API_PACKAGES)
-
-
-def _cap_import_score(raw_count: int) -> int:
-    """Cap import-based score contribution to prevent domination.
-
-    Raw import count is useful for the hard gate in _check_api_dependencies()
-    but adding it directly to the scoring path lets a single signal overwhelm
-    all others (max ±2 each).  Tiered buckets keep imports influential without
-    making them decisive.
-
-    Returns:
-        1 for 1-3 imports, 2 for 4-6, 3 for 7+.
-    """
-    if raw_count <= 0:
-        return 0
-    if raw_count <= 3:
-        return 1
-    if raw_count <= 6:
-        return 2
-    return 3
-
-
-def _import_complexity_bump(
+def _build_import_index(
     file_spec: ForwardFileSpec,
     external_packages: set[str],
-) -> int:
-    """Count distinct external API packages in file imports (REQ-MP-501)."""
-    external = set()
+) -> _ImportIndex:
+    """Build an import index mapping imported names to external packages."""
+    external_pkgs_found: set[str] = set()
+    name_to_pkg: dict[str, str] = {}
+
     for imp in file_spec.imports:
         module = imp.module
         root = module.split(".")[0]
@@ -430,55 +393,108 @@ def _import_complexity_bump(
             if root == pkg:
                 matched_pkg = pkg
                 break
-        if matched_pkg:
-            external.add(matched_pkg)
-        else:
-            # Unknown non-stdlib import — treat as external.
-            external.add(root)
-    return len(external)
+        if matched_pkg is None:
+            matched_pkg = root
+        external_pkgs_found.add(matched_pkg)
+        name_to_pkg[module] = matched_pkg
+        name_to_pkg[root] = matched_pkg
+        for name in imp.names:
+            name_to_pkg[name] = matched_pkg
+
+    return _ImportIndex(
+        file_external_count=len(external_pkgs_found),
+        name_to_pkg=name_to_pkg,
+    )
 
 
-def _per_element_api_adjustment(
+def _element_relevant_import_count(
     element: ForwardElementSpec,
-    file_spec: ForwardFileSpec,
-    contracts: list[InterfaceContract],
-    external_packages: set[str],
-) -> tuple[int, list[str]]:
-    """Compute per-element API adjustments (REQ-MP-511)."""
-    adjustment = 0
-    reasons: list[str] = []
+    import_index: _ImportIndex,
+) -> tuple[int, bool]:
+    """Count external imports the element actually references.
 
-    # Binding constraints referencing external APIs
-    binding_hits = _binding_mentions_external(contracts, external_packages)
-    if binding_hits:
-        adjustment += 3
-        reasons.append(f"binding references external APIs ({binding_hits})")
+    Collects type names from the element's annotations (parameter types,
+    return type), base classes, and decorators, then counts how many of the
+    file's external imports provide those names.
 
-    # Docstring mentions external package names
-    if element.docstring_hint:
-        doc = element.docstring_hint.lower()
-        for pkg in external_packages:
-            if pkg.lower() in doc:
-                adjustment += 1
-                reasons.append(f"docstring mentions {pkg}")
-                break
+    Returns:
+        Tuple of (count, has_structural_refs).  ``has_structural_refs`` is True
+        when the element has any annotations, bases, or decorators that could
+        be checked — even if none matched external imports.  When False, callers
+        should fall back to file-level count.
+    """
+    referenced_names: set[str] = set()
+    has_structural_refs = False
 
-    # Simple pattern override in external-import files
-    if _import_complexity_bump(file_spec, external_packages) > 0:
-        real_params = _get_real_params(element)
-        simple_name = (
-            element.name.startswith(_SIMPLE_NAME_PREFIXES)
-            or element.name.lower() in _SIMPLE_NAME_EXACT
-        )
-        simple_return = (
-            element.signature
-            and element.signature.return_annotation in _SIMPLE_RETURN_TYPES
-        )
-        if simple_name and len(real_params) <= 1 and (simple_return or element.signature is None):
-            adjustment -= 2
-            reasons.append("simple pattern despite external imports")
+    if element.signature:
+        for p in element.signature.params:
+            if p.annotation:
+                has_structural_refs = True
+                referenced_names.update(_extract_type_tokens(p.annotation))
+        if element.signature.return_annotation:
+            has_structural_refs = True
+            referenced_names.update(
+                _extract_type_tokens(element.signature.return_annotation),
+            )
 
-    return adjustment, reasons
+    for base in element.bases or []:
+        has_structural_refs = True
+        referenced_names.update(_extract_type_tokens(base))
+
+    for dec in element.decorators or []:
+        has_structural_refs = True
+        referenced_names.update(_extract_type_tokens(dec))
+
+    if not referenced_names:
+        return 0, has_structural_refs
+
+    hit_pkgs: set[str] = set()
+    for name in referenced_names:
+        pkg = import_index.name_to_pkg.get(name)
+        if pkg:
+            hit_pkgs.add(pkg)
+
+    return len(hit_pkgs), has_structural_refs
+
+
+_TYPE_TOKEN_RE = _re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+
+
+def _extract_type_tokens(annotation: str) -> set[str]:
+    """Extract identifier tokens from a type annotation string.
+
+    For ``"Optional[grpc.Server]"`` returns ``{"Optional", "grpc", "Server", "grpc.Server"}``.
+    """
+    tokens: set[str] = set()
+    for match in _TYPE_TOKEN_RE.finditer(annotation):
+        full = match.group()
+        tokens.add(full)
+        parts = full.split(".")
+        for i in range(len(parts)):
+            tokens.add(".".join(parts[: i + 1]))
+    return tokens
+
+
+def _cap_import_score(raw_count: int) -> int:
+    """Cap import-based score contribution to prevent domination.
+
+    Returns:
+        1 for 1-3 imports, 2 for 4-6, 3 for 7+.
+    """
+    if raw_count <= 0:
+        return 0
+    if raw_count <= 3:
+        return 1
+    if raw_count <= 6:
+        return 2
+    return 3
+
+
+def _get_external_api_packages(config: MicroPrimeConfig) -> set[str]:
+    """Return the external API package set from config or defaults."""
+    if config.external_api_packages:
+        return {p.strip() for p in config.external_api_packages if p and p.strip()}
+    return set(_DEFAULT_EXTERNAL_API_PACKAGES)
 
 
 def _binding_mentions_external(
@@ -495,6 +511,20 @@ def _binding_mentions_external(
                 hits += 1
                 break
     return hits
+
+
+# ── Backward compatibility ───────────────────────────────────────────────
+# These functions were used by callers outside the classifier.  Preserved
+# as thin wrappers around the new _ImportIndex-based implementation.
+
+
+def _import_complexity_bump(
+    file_spec: ForwardFileSpec,
+    external_packages: set[str],
+) -> int:
+    """Count distinct external API packages in file imports (REQ-MP-501)."""
+    index = _build_import_index(file_spec, external_packages)
+    return index.file_external_count
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -530,12 +560,6 @@ def classify_element_shared(
 
     Wrapper around ``classify_element`` that maps the result to the
     unified ``ComplexityTier`` enum from ``startd8.complexity``.
-
-    Args:
-        Same as ``classify_element``.
-
-    Returns:
-        Tuple of (``ComplexityTier``, reasoning string).
     """
     tier, reason = classify_element(
         element, file_spec, contracts, template_registry, config,

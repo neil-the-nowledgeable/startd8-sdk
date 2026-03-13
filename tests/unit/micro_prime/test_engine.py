@@ -556,12 +556,16 @@ class AsyncService:
 
 
 class TestSemanticVerifyParseFailure:
-    """P3: Semantic verification should accept when JSON parse fails."""
+    """AC-R9: Semantic verification rejects on inconclusive JSON parse."""
 
-    def test_semantic_verify_parse_failure_accepts(
+    def test_semantic_verify_parse_failure_rejects(
         self, sample_file_spec, sample_skeleton,
     ):
-        """When semantic verification can't parse JSON, accept the code."""
+        """When semantic verification can't parse JSON, reject the code.
+
+        AC-R9: Accept-on-failure silently bypassed verification.  Rejecting
+        triggers the retry loop and eventual escalation — a safer failure mode.
+        """
         config = MicroPrimeConfig(
             templates_enabled=False,
             semantic_verification_agent_spec="ollama:test-model",
@@ -587,8 +591,8 @@ class TestSemanticVerifyParseFailure:
             [],
             sample_skeleton,
         )
-        # P3: should accept (True), not reject (False)
-        assert result[0] is True
+        # AC-R9: should reject (False) on inconclusive parse
+        assert result[0] is False
         assert "inconclusive" in result[1]
 
 

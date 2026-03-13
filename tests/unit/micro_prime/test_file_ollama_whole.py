@@ -246,9 +246,12 @@ class TestFileOllamaWholeEligibility:
         engine = self._make_engine(file_ollama_whole_enabled=False)
         assert not engine._is_file_ollama_whole_eligible(logger_file_spec, logger_skeleton)
 
-    def test_too_many_elements(self, logger_file_spec, logger_skeleton):
+    def test_element_count_gate_removed(self, logger_file_spec, logger_skeleton):
+        """AC-R1: Element count gate removed — only LOC threshold matters."""
         engine = self._make_engine(file_ollama_whole_max_elements=2)
-        assert not engine._is_file_ollama_whole_eligible(logger_file_spec, logger_skeleton)
+        # Still eligible despite max_elements=2 because element count gate
+        # was removed (AC-R1: file-whole is primary path).
+        assert engine._is_file_ollama_whole_eligible(logger_file_spec, logger_skeleton)
 
     def test_too_many_lines(self, logger_file_spec, logger_skeleton):
         engine = self._make_engine(file_ollama_whole_max_loc=5)
@@ -380,7 +383,7 @@ class TestProcessFileWithFileWhole:
         self, logger_file_spec, logger_skeleton, logger_filled, logger_manifest,
     ):
         """P0: File-whole with repairable output should succeed after repair."""
-        engine = self._make_engine()
+        engine = self._make_engine(local_max_attempts=1)
 
         # Return code with a minor fence issue that repair can fix
         fenced_with_issue = f"```python\n{logger_filled}\n```"
@@ -427,7 +430,7 @@ def getJSONLogger(name: str) -> logging.Logger:
             return ("    return None", 50, 10)
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
-             patch("startd8.micro_prime.engine.run_repair_pipeline", return_value=repair_result):
+             patch("startd8.micro_prime.engine.run_file_repair_pipeline", return_value=repair_result):
             result = engine.process_file(
                 logger_file_spec, logger_manifest, logger_skeleton,
             )
@@ -1150,8 +1153,8 @@ class TestHighCouplingOverride:
         config = MicroPrimeConfig(**config_overrides)
         return MicroPrimeEngine(config=config)
 
-    def test_coupling_override_bypasses_size_limits(self):
-        """High coupling overrides max_elements and max_loc limits."""
+    def test_coupling_override_bypasses_loc_limit(self):
+        """High coupling overrides max_loc limit (AC-R1, AC-R10)."""
         _sig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/data.py",
@@ -1160,9 +1163,10 @@ class TestHighCouplingOverride:
                 ForwardElementSpec(kind=ElementKind.FUNCTION, name="generate_data", signature=_sig),
                 ForwardElementSpec(kind=ElementKind.FUNCTION, name="validate_data", signature=_sig),
                 ForwardElementSpec(kind=ElementKind.FUNCTION, name="transform_data", signature=_sig),
+                ForwardElementSpec(kind=ElementKind.FUNCTION, name="finalize_data", signature=_sig),
             ],
         )
-        # Skeleton where functions call each other (cross-refs >= 2)
+        # Skeleton with cross_refs >= 4 to trigger coupling
         skeleton = '''\
 def generate_data():
     raise NotImplementedError
@@ -1175,16 +1179,18 @@ def transform_data():
     data = generate_data()
     validated = validate_data()
     raise NotImplementedError
+
+def finalize_data():
+    validated = validate_data()
+    transformed = transform_data()
+    raise NotImplementedError
 '''
-        # Set very low limits — would normally be ineligible
-        engine = self._make_engine(
-            file_ollama_whole_max_elements=1,
-            file_ollama_whole_max_loc=5,
-        )
+        # Set very low LOC limit — would normally be ineligible
+        engine = self._make_engine(file_ollama_whole_max_loc=5)
         assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is True
 
-    def test_no_coupling_respects_size_limits(self):
-        """Without coupling, size limits are enforced."""
+    def test_no_coupling_respects_loc_limit(self):
+        """Without coupling, LOC limit is enforced (AC-R1)."""
         _sig = Signature(params=[])
         file_spec = ForwardFileSpec(
             file="src/utils.py",
@@ -1202,7 +1208,8 @@ def foo():
 def bar():
     raise NotImplementedError
 '''
-        engine = self._make_engine(file_ollama_whole_max_elements=1)
+        # Low LOC limit (skeleton has 6 lines) — should be rejected
+        engine = self._make_engine(file_ollama_whole_max_loc=3)
         assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is False
 
 
@@ -1456,8 +1463,8 @@ class Product:
         engine = self._make_engine(file_ollama_whole_max_elements=5)
         assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is True
 
-    def test_multi_class_exceeds_threshold(self):
-        """File with too many elements across classes."""
+    def test_multi_class_exceeds_loc_threshold(self):
+        """File with too many LOC across classes (AC-R1: LOC gate only)."""
         _sig = Signature(params=[Param(name="self")])
         elements = [
             ForwardElementSpec(kind=ElementKind.CLASS, name="A"),
@@ -1474,5 +1481,6 @@ class Product:
             f"    def method_{i}(self):\n        raise NotImplementedError\n"
             for i in range(10)
         )
-        engine = self._make_engine(file_ollama_whole_max_elements=5)
+        # Skeleton has 21 lines — set max_loc=10 to trigger rejection
+        engine = self._make_engine(file_ollama_whole_max_loc=10)
         assert engine._is_file_ollama_whole_eligible(file_spec, skeleton) is False

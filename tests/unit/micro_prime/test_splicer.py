@@ -17,9 +17,14 @@ from startd8.micro_prime.splicer import (
     _get_implemented_methods,
     _inject_imports,
     _strip_duplicate_methods,
-    splice_body_into_skeleton,
+    splice_body_into_skeleton as _splice_body_into_skeleton_raw,
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+
+def splice_body_into_skeleton(body, element, skeleton):
+    """Unwrap SpliceResult.code for backward-compatible test assertions."""
+    return _splice_body_into_skeleton_raw(body, element, skeleton).code
 
 
 class TestSpliceBodyIntoSkeleton:

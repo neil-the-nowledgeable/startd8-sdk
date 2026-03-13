@@ -200,7 +200,12 @@ class TestScoringFactors:
 class TestAPIDependencyAnalysis:
     """Tests for two-pass API dependency analysis (REQ-MP-511)."""
 
-    def test_many_external_imports_escalates(self, simple_function_element, empty_contracts):
+    def test_many_external_imports_scoped_to_element(self, simple_function_element, empty_contracts):
+        """File with 12 external imports, but element doesn't reference any → SIMPLE.
+
+        Element-scoped import counting means a simple getter isn't escalated
+        just because the file imports many packages.
+        """
         file_spec = ForwardFileSpec(
             file="src/complex.py",
             imports=[
@@ -208,12 +213,46 @@ class TestAPIDependencyAnalysis:
                 for i in range(12)
             ],
         )
-        config = MicroPrimeConfig(max_simple_imports=8)
         tier, reason = classify_element(
-            simple_function_element, file_spec, empty_contracts, config=config,
+            simple_function_element, file_spec, empty_contracts,
         )
-        assert tier == TierClassification.MODERATE
-        assert "external imports" in reason
+        assert tier == TierClassification.SIMPLE
+        # Element doesn't reference the imports, so no import bump
+        assert "external APIs" not in reason
+
+    def test_element_referencing_imports_escalates(self, empty_contracts):
+        """Element whose annotations reference external imports → escalated."""
+        file_spec = ForwardFileSpec(
+            file="src/complex.py",
+            imports=[
+                ForwardImportSpec(kind="import", module="grpc"),
+                ForwardImportSpec(kind="from", module="jinja2", names=["Environment"]),
+                ForwardImportSpec(kind="from", module="opentelemetry", names=["trace"]),
+            ],
+            elements=[
+                ForwardElementSpec(
+                    kind=ElementKind.FUNCTION, name=f"fn_{i}",
+                    signature=Signature(params=[], return_annotation="None"),
+                )
+                for i in range(5)
+            ],
+        )
+        elem = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="handle_request",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="context", annotation="grpc.ServicerContext"),
+                    Param(name="env", annotation="Environment"),
+                    Param(name="tracer", annotation="trace.Tracer"),
+                ],
+                return_annotation="dict",
+            ),
+            parent_class="Server",
+        )
+        tier, reason = classify_element(elem, file_spec, empty_contracts)
+        assert "external APIs" in reason
 
     def test_docstring_api_hint_escalates(self, sample_file_spec, empty_contracts):
         elem = ForwardElementSpec(

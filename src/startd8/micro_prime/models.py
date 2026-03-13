@@ -14,6 +14,11 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 
 
+# Sentinel marker injected into skeleton files to signal incomplete
+# generation.  Used by file-whole validation (AC-R3) and repair pipeline.
+SKELETON_MARKER = "# [STARTD8-SKELETON]"
+
+
 class TierClassification(str, Enum):
     """Element complexity tier for routing decisions."""
 
@@ -236,6 +241,178 @@ class ElementResult:
     input_tokens: int = 0
     output_tokens: int = 0
     decomposition_metadata: Optional[dict] = None
+    generation_strategy: Optional[str] = None
+
+    # ── Factory methods (AC-R15/R22) ─────────────────────────────────────
+
+    @classmethod
+    def make_success(
+        cls,
+        element_name: str,
+        file_path: str,
+        tier: TierClassification,
+        classification_reason: str,
+        code: Optional[str],
+        *,
+        model: Optional[str] = None,
+        generation_time_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        repair_steps_applied: Optional[list[str]] = None,
+        repair_attribution: Optional[RepairAttribution] = None,
+        repair_recovered: bool = False,
+        ast_valid_before_repair: Optional[bool] = None,
+        ast_valid_after_repair: Optional[bool] = None,
+        verification_verdict: Optional[str] = None,
+        template_used: bool = False,
+        template_name: Optional[str] = None,
+        decomposition_metadata: Optional[dict] = None,
+        generation_strategy: Optional[str] = None,
+    ) -> "ElementResult":
+        return cls(
+            element_name=element_name,
+            file_path=file_path,
+            tier=tier,
+            success=True,
+            classification_reason=classification_reason,
+            code=code,
+            model=model,
+            generation_time_ms=generation_time_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            repair_steps_applied=repair_steps_applied or [],
+            repair_attribution=repair_attribution,
+            repair_recovered=repair_recovered,
+            ast_valid_before_repair=ast_valid_before_repair,
+            ast_valid_after_repair=ast_valid_after_repair,
+            verification_verdict=verification_verdict,
+            template_used=template_used,
+            template_name=template_name,
+            decomposition_metadata=decomposition_metadata,
+            generation_strategy=generation_strategy,
+        )
+
+    @classmethod
+    def make_escalation(
+        cls,
+        element_name: str,
+        file_path: str,
+        tier: TierClassification,
+        classification_reason: str,
+        escalation: Optional[EscalationResult] = None,
+        *,
+        code: Optional[str] = None,
+        model: Optional[str] = None,
+        generation_time_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        repair_steps_applied: Optional[list[str]] = None,
+        repair_attribution: Optional[RepairAttribution] = None,
+        repair_recovered: bool = False,
+        ast_valid_before_repair: Optional[bool] = None,
+        ast_valid_after_repair: Optional[bool] = None,
+        verification_verdict: Optional[str] = None,
+        decomposition_metadata: Optional[dict] = None,
+        generation_strategy: Optional[str] = None,
+    ) -> "ElementResult":
+        return cls(
+            element_name=element_name,
+            file_path=file_path,
+            tier=tier,
+            success=False,
+            classification_reason=classification_reason,
+            code=code,
+            escalation=escalation,
+            model=model,
+            generation_time_ms=generation_time_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            repair_steps_applied=repair_steps_applied or [],
+            repair_attribution=repair_attribution,
+            repair_recovered=repair_recovered,
+            ast_valid_before_repair=ast_valid_before_repair,
+            ast_valid_after_repair=ast_valid_after_repair,
+            verification_verdict=verification_verdict,
+            decomposition_metadata=decomposition_metadata,
+            generation_strategy=generation_strategy,
+        )
+
+    @classmethod
+    def make_cached(
+        cls,
+        element_name: str,
+        file_path: str,
+        tier: TierClassification,
+        classification_reason: str,
+        code: Optional[str],
+        *,
+        source: str = "in_memory",
+    ) -> "ElementResult":
+        return cls(
+            element_name=element_name,
+            file_path=file_path,
+            tier=tier,
+            success=True,
+            classification_reason=classification_reason,
+            code=code,
+            model=f"cache:{source}",
+            decomposition_metadata={"source": source},
+        )
+
+    @classmethod
+    def make_template_match(
+        cls,
+        element_name: str,
+        file_path: str,
+        tier: TierClassification,
+        classification_reason: str,
+        code: str,
+        template_name: str,
+        *,
+        generation_strategy: Optional[str] = None,
+    ) -> "ElementResult":
+        return cls(
+            element_name=element_name,
+            file_path=file_path,
+            tier=tier,
+            success=True,
+            classification_reason=classification_reason,
+            code=code,
+            template_used=True,
+            template_name=template_name,
+            model="template",
+            verification_verdict="pass",
+            generation_strategy=generation_strategy,
+        )
+
+    @classmethod
+    def make_decomposition_success(
+        cls,
+        element_name: str,
+        file_path: str,
+        tier: TierClassification,
+        classification_reason: str,
+        code: str,
+        *,
+        decomposition_metadata: Optional[dict] = None,
+        model: Optional[str] = None,
+        generation_time_ms: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> "ElementResult":
+        return cls(
+            element_name=element_name,
+            file_path=file_path,
+            tier=tier,
+            success=True,
+            classification_reason=classification_reason,
+            code=code,
+            decomposition_metadata=decomposition_metadata,
+            model=model,
+            generation_time_ms=generation_time_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
 
 @dataclass
@@ -569,3 +746,87 @@ class MicroPrimeCostReport(BaseModel):
     local_tokens_total: int = 0
     decomposed_count: int = 0
     decomposition_failure_count: int = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Canonical signature / def-line renderers (AC-R12)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def render_signature_str(sig: "Signature") -> str:
+    """Render a ``Signature`` to a parameter string, e.g. ``(self, name: str)``.
+
+    Single canonical implementation — all call-sites (decomposer,
+    prompt_builder, file_assembler, structural_verify) must delegate here.
+    """
+    from startd8.utils.code_manifest import ParamKind  # lazy to avoid cycles
+
+    parts: list[str] = []
+    saw_positional_only = False
+    saw_keyword_only = False
+
+    for param in sig.params:
+        rendered = param.name
+        if param.annotation:
+            rendered += f": {param.annotation}"
+        if param.default is not None:
+            rendered += f" = {param.default}"
+
+        if param.kind == ParamKind.POSITIONAL_ONLY:
+            saw_positional_only = True
+            parts.append(rendered)
+        elif param.kind == ParamKind.VAR_POSITIONAL:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(f"*{rendered}")
+            saw_keyword_only = True
+        elif param.kind == ParamKind.KEYWORD_ONLY:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            if not saw_keyword_only:
+                parts.append("*")
+                saw_keyword_only = True
+            parts.append(rendered)
+        elif param.kind == ParamKind.VAR_KEYWORD:
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(f"**{rendered}")
+        else:
+            # POSITIONAL or KEYWORD
+            if saw_positional_only:
+                parts.append("/")
+                saw_positional_only = False
+            parts.append(rendered)
+
+    if saw_positional_only:
+        parts.append("/")
+
+    return f"({', '.join(parts)})"
+
+
+def render_def_line(element: "ForwardElementSpec") -> Optional[str]:
+    """Build a canonical ``def`` / ``async def`` / ``class`` line.
+
+    Returns ``None`` for element kinds that don't have def lines
+    (CONSTANT, VARIABLE, TYPE_ALIAS).
+    """
+    from startd8.utils.code_manifest import ElementKind  # lazy to avoid cycles
+
+    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS):
+        return None
+    if element.kind == ElementKind.CLASS:
+        bases = f"({', '.join(element.bases)})" if element.bases else ""
+        return f"class {element.name}{bases}:"
+    prefix = "async def" if element.kind in (
+        ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+    ) else "def"
+    sig = "()"
+    if element.signature:
+        sig = render_signature_str(element.signature)
+    ret = ""
+    if element.signature and element.signature.return_annotation:
+        ret = f" -> {element.signature.return_annotation}"
+    return f"{prefix} {element.name}{sig}{ret}:"

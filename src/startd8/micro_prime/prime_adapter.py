@@ -1158,7 +1158,7 @@ class MicroPrimeCodeGenerator:
                 self._element_registry.set_phase_status(
                     element_id, "post_assembly", "validated",
                 )
-            except (OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Element registry write failed for %s in %s: %s",
                     er.element_name,
@@ -1257,7 +1257,7 @@ class MicroPrimeCodeGenerator:
                         element_id, "cloud_backfill", "validated",
                     )
                     backfilled += 1
-                except (OSError, KeyError, ValueError, TypeError, AttributeError) as exc:
+                except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "Registry backfill failed for %s in %s: %s",
                         node.name, rel_path, exc,
@@ -1972,11 +1972,11 @@ class MicroPrimeCodeGenerator:
                     extraction_failed = extracted is None
                     splice_source = extracted if extracted is not None else code
 
-                    spliced = splice_body_into_skeleton(
+                    splice_result = splice_body_into_skeleton(
                         splice_source, spec, updated_skeleton,
                     )
-                    if spliced is not None:
-                        updated_skeleton = spliced
+                    if splice_result.code is not None:
+                        updated_skeleton = splice_result.code
                         spliced_count += 1
                         success = True
                         total_input += inp_tokens

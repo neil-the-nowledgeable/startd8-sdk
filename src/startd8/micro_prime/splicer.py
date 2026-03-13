@@ -32,6 +32,18 @@ class SpliceViolation:
     actual: str = ""
 
 
+@dataclass
+class SpliceResult:
+    """Result from splice_body_into_skeleton (AC-R12).
+
+    Wraps the spliced code with any detected violations for structured
+    repair routing.  ``code`` is ``None`` when splicing failed entirely.
+    """
+
+    code: Optional[str] = None
+    violations: list[SpliceViolation] = field(default_factory=list)
+
+
 def _dedent_lines(lines: list[str]) -> list[str]:
     """Strip common leading whitespace from *lines*, preserving relative indentation.
 
@@ -142,7 +154,7 @@ def splice_body_into_skeleton(
     body: str,
     element: ForwardElementSpec,
     skeleton: str,
-) -> Optional[str]:
+) -> SpliceResult:
     """Replace the NotImplementedError stub for an element with its body.
 
     Finds the element's ``raise NotImplementedError`` stub in the skeleton,
@@ -154,18 +166,21 @@ def splice_body_into_skeleton(
         skeleton: The full skeleton file content.
 
     Returns:
-        The updated skeleton with the body spliced in, or None if splicing
-        fails validation.
+        SpliceResult with the updated skeleton (or None on failure)
+        and any detected violations.
     """
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-        return _splice_constant(body, element, skeleton)
+        code = _splice_constant(body, element, skeleton)
+        return SpliceResult(code=code)
 
     # Class elements may include class-level attributes or __init__ bodies
     # assembled by the decomposer. Splice those into the class body.
     if element.kind == ElementKind.CLASS:
-        return _splice_class_body(body, element, skeleton)
+        code = _splice_class_body(body, element, skeleton)
+        return SpliceResult(code=code)
 
-    return _splice_function_body(body, element, skeleton)
+    code = _splice_function_body(body, element, skeleton)
+    return SpliceResult(code=code)
 
 
 def _splice_function_body(

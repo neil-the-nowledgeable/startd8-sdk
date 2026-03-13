@@ -495,10 +495,18 @@ class PrimePostMortemEvaluator:
         if history_entry:
             cost_usd = history_entry.get("cost_usd", 0.0) or 0.0
 
-        # File coverage
+        # File coverage — generated_files are often absolute paths while
+        # target_files are relative, so check suffix match (endswith) to
+        # handle the path-prefix mismatch.
         target_files = feature_dict.get("target_files", [])
         generated_files = feature_dict.get("generated_files", [])
-        missing_files = [f for f in target_files if f not in generated_files]
+        missing_files = [
+            f for f in target_files
+            if not any(
+                g == f or g.endswith("/" + f)
+                for g in generated_files
+            )
+        ]
 
         # Element analysis from micro-prime metadata
         elements: List[ElementPostMortem] = []
