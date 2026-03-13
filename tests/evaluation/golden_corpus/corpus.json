@@ -1,0 +1,1246 @@
+{
+  "schema_version": "1.0.0",
+  "description": "Golden corpus for Micro Prime evaluation. Each entry defines a file with elements, skeletons, and reference implementations.",
+  "corpus": [
+    {
+      "id": "gc-001",
+      "description": "Simple getter function",
+      "archetype": "getter",
+      "file": {
+        "file": "src/services/config.py",
+        "imports": [
+          {"kind": "import", "module": "os"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "get_service_port",
+            "signature": {
+              "params": [],
+              "return_annotation": "int"
+            }
+          }
+        ]
+      },
+      "skeleton": "import os\n\n\ndef get_service_port() -> int:\n    raise NotImplementedError\n",
+      "reference": "import os\n\n\ndef get_service_port() -> int:\n    return int(os.environ.get(\"SERVICE_PORT\", \"8080\"))\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-002",
+      "description": "Simple boolean predicate",
+      "archetype": "predicate",
+      "file": {
+        "file": "src/utils/validation.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "is_valid_email",
+            "signature": {
+              "params": [{"name": "email", "annotation": "str"}],
+              "return_annotation": "bool"
+            }
+          }
+        ]
+      },
+      "skeleton": "def is_valid_email(email: str) -> bool:\n    raise NotImplementedError\n",
+      "reference": "def is_valid_email(email: str) -> bool:\n    return \"@\" in email and \".\" in email.split(\"@\")[-1]\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-003",
+      "description": "Trivial __repr__ dunder",
+      "archetype": "dunder",
+      "file": {
+        "file": "src/models/product.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "Product",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "Product",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "name", "annotation": "str"},
+                {"name": "price", "annotation": "float"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "__repr__",
+            "parent_class": "Product",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "str"
+            }
+          }
+        ]
+      },
+      "skeleton": "class Product:\n    def __init__(self, name: str, price: float) -> None:\n        raise NotImplementedError\n\n    def __repr__(self) -> str:\n        raise NotImplementedError\n",
+      "reference": "class Product:\n    def __init__(self, name: str, price: float) -> None:\n        self.name = name\n        self.price = price\n\n    def __repr__(self) -> str:\n        return f\"Product(name={self.name!r}, price={self.price})\"\n",
+      "expected_tier": "trivial"
+    },
+    {
+      "id": "gc-004",
+      "description": "Simple dict-to-object converter",
+      "archetype": "converter",
+      "file": {
+        "file": "src/models/user.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["Optional"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "from_dict",
+            "signature": {
+              "params": [{"name": "data", "annotation": "dict"}],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Optional\n\n\ndef from_dict(data: dict) -> dict:\n    raise NotImplementedError\n",
+      "reference": "from typing import Optional\n\n\ndef from_dict(data: dict) -> dict:\n    return {\n        \"id\": data.get(\"id\"),\n        \"name\": data.get(\"name\", \"\"),\n        \"email\": data.get(\"email\", \"\"),\n        \"active\": data.get(\"active\", True),\n    }\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-005",
+      "description": "Simple list filter",
+      "archetype": "filter",
+      "file": {
+        "file": "src/utils/filters.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["List"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "filter_active_items",
+            "signature": {
+              "params": [{"name": "items", "annotation": "List[dict]"}],
+              "return_annotation": "List[dict]"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import List\n\n\ndef filter_active_items(items: List[dict]) -> List[dict]:\n    raise NotImplementedError\n",
+      "reference": "from typing import List\n\n\ndef filter_active_items(items: List[dict]) -> List[dict]:\n    return [item for item in items if item.get(\"active\", False)]\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-006",
+      "description": "Trivial constant assignment",
+      "archetype": "constant",
+      "file": {
+        "file": "src/config/defaults.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "constant",
+            "name": "DEFAULT_TIMEOUT",
+            "type_annotation": "int",
+            "value_repr": "30"
+          },
+          {
+            "kind": "constant",
+            "name": "MAX_RETRIES",
+            "type_annotation": "int",
+            "value_repr": "3"
+          }
+        ]
+      },
+      "skeleton": "DEFAULT_TIMEOUT: int = 0  # TODO\nMAX_RETRIES: int = 0  # TODO\n",
+      "reference": "DEFAULT_TIMEOUT: int = 30\nMAX_RETRIES: int = 3\n",
+      "expected_tier": "trivial"
+    },
+    {
+      "id": "gc-007",
+      "description": "Simple JSON logger setup",
+      "archetype": "utility",
+      "file": {
+        "file": "src/logging/setup.py",
+        "imports": [
+          {"kind": "import", "module": "logging"},
+          {"kind": "import", "module": "sys"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "get_logger",
+            "signature": {
+              "params": [{"name": "name", "annotation": "str"}],
+              "return_annotation": "logging.Logger"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\nimport sys\n\n\ndef get_logger(name: str) -> logging.Logger:\n    raise NotImplementedError\n",
+      "reference": "import logging\nimport sys\n\n\ndef get_logger(name: str) -> logging.Logger:\n    logger = logging.getLogger(name)\n    if not logger.handlers:\n        handler = logging.StreamHandler(sys.stdout)\n        handler.setFormatter(logging.Formatter(\"%(asctime)s %(name)s %(levelname)s %(message)s\"))\n        logger.addHandler(handler)\n        logger.setLevel(logging.INFO)\n    return logger\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-008",
+      "description": "Simple __eq__ and __hash__ dunder pair",
+      "archetype": "dunder",
+      "file": {
+        "file": "src/models/currency.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "Money",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "Money",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "amount", "annotation": "int"},
+                {"name": "currency", "annotation": "str"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "__eq__",
+            "parent_class": "Money",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "other", "annotation": "object"}
+              ],
+              "return_annotation": "bool"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "__hash__",
+            "parent_class": "Money",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "int"
+            }
+          }
+        ]
+      },
+      "skeleton": "class Money:\n    def __init__(self, amount: int, currency: str) -> None:\n        raise NotImplementedError\n\n    def __eq__(self, other: object) -> bool:\n        raise NotImplementedError\n\n    def __hash__(self) -> int:\n        raise NotImplementedError\n",
+      "reference": "class Money:\n    def __init__(self, amount: int, currency: str) -> None:\n        self.amount = amount\n        self.currency = currency\n\n    def __eq__(self, other: object) -> bool:\n        if not isinstance(other, Money):\n            return NotImplemented\n        return self.amount == other.amount and self.currency == other.currency\n\n    def __hash__(self) -> int:\n        return hash((self.amount, self.currency))\n",
+      "expected_tier": "trivial"
+    },
+    {
+      "id": "gc-009",
+      "description": "Simple string formatter",
+      "archetype": "formatter",
+      "file": {
+        "file": "src/utils/formatting.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "format_currency",
+            "signature": {
+              "params": [
+                {"name": "amount", "annotation": "int"},
+                {"name": "currency_code", "annotation": "str"}
+              ],
+              "return_annotation": "str"
+            }
+          }
+        ]
+      },
+      "skeleton": "def format_currency(amount: int, currency_code: str) -> str:\n    raise NotImplementedError\n",
+      "reference": "def format_currency(amount: int, currency_code: str) -> str:\n    units = amount // 100\n    cents = amount % 100\n    return f\"{currency_code} {units}.{cents:02d}\"\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-010",
+      "description": "Simple environment variable reader with defaults",
+      "archetype": "config_reader",
+      "file": {
+        "file": "src/config/env.py",
+        "imports": [
+          {"kind": "import", "module": "os"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "get_config",
+            "signature": {
+              "params": [],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "import os\n\n\ndef get_config() -> dict:\n    raise NotImplementedError\n",
+      "reference": "import os\n\n\ndef get_config() -> dict:\n    return {\n        \"host\": os.environ.get(\"HOST\", \"0.0.0.0\"),\n        \"port\": int(os.environ.get(\"PORT\", \"8080\")),\n        \"debug\": os.environ.get(\"DEBUG\", \"false\").lower() == \"true\",\n    }\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-011",
+      "description": "Simple data validation function",
+      "archetype": "validator",
+      "file": {
+        "file": "src/utils/validators.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["Optional"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "validate_quantity",
+            "signature": {
+              "params": [{"name": "quantity", "annotation": "int"}],
+              "return_annotation": "Optional[str]"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Optional\n\n\ndef validate_quantity(quantity: int) -> Optional[str]:\n    raise NotImplementedError\n",
+      "reference": "from typing import Optional\n\n\ndef validate_quantity(quantity: int) -> Optional[str]:\n    if quantity < 0:\n        return \"quantity must be non-negative\"\n    if quantity > 10000:\n        return \"quantity exceeds maximum of 10000\"\n    return None\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-012",
+      "description": "Simple class with property",
+      "archetype": "class_with_property",
+      "file": {
+        "file": "src/models/cart_item.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "CartItem",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "CartItem",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "product_id", "annotation": "str"},
+                {"name": "quantity", "annotation": "int"},
+                {"name": "unit_price", "annotation": "int"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "property",
+            "name": "total_price",
+            "parent_class": "CartItem",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "int"
+            }
+          }
+        ]
+      },
+      "skeleton": "class CartItem:\n    def __init__(self, product_id: str, quantity: int, unit_price: int) -> None:\n        raise NotImplementedError\n\n    @property\n    def total_price(self) -> int:\n        raise NotImplementedError\n",
+      "reference": "class CartItem:\n    def __init__(self, product_id: str, quantity: int, unit_price: int) -> None:\n        self.product_id = product_id\n        self.quantity = quantity\n        self.unit_price = unit_price\n\n    @property\n    def total_price(self) -> int:\n        return self.quantity * self.unit_price\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-013",
+      "description": "Simple list-to-dict converter",
+      "archetype": "converter",
+      "file": {
+        "file": "src/utils/transforms.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["List", "Dict"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "index_by_id",
+            "signature": {
+              "params": [{"name": "items", "annotation": "List[dict]"}],
+              "return_annotation": "Dict[str, dict]"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import List, Dict\n\n\ndef index_by_id(items: List[dict]) -> Dict[str, dict]:\n    raise NotImplementedError\n",
+      "reference": "from typing import List, Dict\n\n\ndef index_by_id(items: List[dict]) -> Dict[str, dict]:\n    return {item[\"id\"]: item for item in items if \"id\" in item}\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-014",
+      "description": "Simple error class hierarchy",
+      "archetype": "exception",
+      "file": {
+        "file": "src/exceptions.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "ServiceError",
+            "bases": ["Exception"]
+          },
+          {
+            "kind": "class",
+            "name": "NotFoundError",
+            "bases": ["ServiceError"]
+          },
+          {
+            "kind": "class",
+            "name": "ValidationError",
+            "bases": ["ServiceError"]
+          }
+        ]
+      },
+      "skeleton": "class ServiceError(Exception):\n    raise NotImplementedError\n\n\nclass NotFoundError(ServiceError):\n    raise NotImplementedError\n\n\nclass ValidationError(ServiceError):\n    raise NotImplementedError\n",
+      "reference": "class ServiceError(Exception):\n    pass\n\n\nclass NotFoundError(ServiceError):\n    pass\n\n\nclass ValidationError(ServiceError):\n    pass\n",
+      "expected_tier": "trivial"
+    },
+    {
+      "id": "gc-015",
+      "description": "Simple health check endpoint handler",
+      "archetype": "handler",
+      "file": {
+        "file": "src/handlers/health.py",
+        "imports": [
+          {"kind": "import", "module": "json"},
+          {"kind": "import", "module": "time"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "health_check",
+            "signature": {
+              "params": [],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "import json\nimport time\n\n\ndef health_check() -> dict:\n    raise NotImplementedError\n",
+      "reference": "import json\nimport time\n\n\ndef health_check() -> dict:\n    return {\n        \"status\": \"ok\",\n        \"timestamp\": time.time(),\n    }\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-016",
+      "description": "File-whole: utility module with 3 functions",
+      "archetype": "utility_module",
+      "mode": "file_whole",
+      "file": {
+        "file": "src/utils/math_helpers.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["List"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "clamp",
+            "signature": {
+              "params": [
+                {"name": "value", "annotation": "float"},
+                {"name": "min_val", "annotation": "float"},
+                {"name": "max_val", "annotation": "float"}
+              ],
+              "return_annotation": "float"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "mean",
+            "signature": {
+              "params": [{"name": "values", "annotation": "List[float]"}],
+              "return_annotation": "float"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "percentage",
+            "signature": {
+              "params": [
+                {"name": "part", "annotation": "float"},
+                {"name": "whole", "annotation": "float"}
+              ],
+              "return_annotation": "float"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import List\n\n\ndef clamp(value: float, min_val: float, max_val: float) -> float:\n    raise NotImplementedError\n\n\ndef mean(values: List[float]) -> float:\n    raise NotImplementedError\n\n\ndef percentage(part: float, whole: float) -> float:\n    raise NotImplementedError\n",
+      "reference": "from typing import List\n\n\ndef clamp(value: float, min_val: float, max_val: float) -> float:\n    return max(min_val, min(value, max_val))\n\n\ndef mean(values: List[float]) -> float:\n    if not values:\n        return 0.0\n    return sum(values) / len(values)\n\n\ndef percentage(part: float, whole: float) -> float:\n    if whole == 0:\n        return 0.0\n    return (part / whole) * 100.0\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-017",
+      "description": "File-whole: class with __init__, method, and property",
+      "archetype": "class_hierarchy",
+      "mode": "file_whole",
+      "file": {
+        "file": "src/models/address.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["Optional"]}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "Address",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "Address",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "street", "annotation": "str"},
+                {"name": "city", "annotation": "str"},
+                {"name": "state", "annotation": "str"},
+                {"name": "zip_code", "annotation": "str"},
+                {"name": "country", "annotation": "str", "default": "\"US\""}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "to_dict",
+            "parent_class": "Address",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "dict"
+            }
+          },
+          {
+            "kind": "property",
+            "name": "one_line",
+            "parent_class": "Address",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "str"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Optional\n\n\nclass Address:\n    def __init__(self, street: str, city: str, state: str, zip_code: str, country: str = \"US\") -> None:\n        raise NotImplementedError\n\n    def to_dict(self) -> dict:\n        raise NotImplementedError\n\n    @property\n    def one_line(self) -> str:\n        raise NotImplementedError\n",
+      "reference": "from typing import Optional\n\n\nclass Address:\n    def __init__(self, street: str, city: str, state: str, zip_code: str, country: str = \"US\") -> None:\n        self.street = street\n        self.city = city\n        self.state = state\n        self.zip_code = zip_code\n        self.country = country\n\n    def to_dict(self) -> dict:\n        return {\n            \"street\": self.street,\n            \"city\": self.city,\n            \"state\": self.state,\n            \"zip_code\": self.zip_code,\n            \"country\": self.country,\n        }\n\n    @property\n    def one_line(self) -> str:\n        return f\"{self.street}, {self.city}, {self.state} {self.zip_code}\"\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-018",
+      "description": "File-whole: data class with serialization (5 elements)",
+      "archetype": "data_model",
+      "mode": "file_whole",
+      "file": {
+        "file": "src/models/order.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["List", "Optional"]},
+          {"kind": "import", "module": "json"},
+          {"kind": "import", "module": "time"}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "Order",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "Order",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "order_id", "annotation": "str"},
+                {"name": "items", "annotation": "List[dict]"},
+                {"name": "user_id", "annotation": "str"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "property",
+            "name": "total",
+            "parent_class": "Order",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "int"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "to_json",
+            "parent_class": "Order",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "is_empty",
+            "parent_class": "Order",
+            "signature": {
+              "params": [{"name": "self"}],
+              "return_annotation": "bool"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import List, Optional\nimport json\nimport time\n\n\nclass Order:\n    def __init__(self, order_id: str, items: List[dict], user_id: str) -> None:\n        raise NotImplementedError\n\n    @property\n    def total(self) -> int:\n        raise NotImplementedError\n\n    def to_json(self) -> str:\n        raise NotImplementedError\n\n    def is_empty(self) -> bool:\n        raise NotImplementedError\n",
+      "reference": "from typing import List, Optional\nimport json\nimport time\n\n\nclass Order:\n    def __init__(self, order_id: str, items: List[dict], user_id: str) -> None:\n        self.order_id = order_id\n        self.items = items\n        self.user_id = user_id\n        self.created_at = time.time()\n\n    @property\n    def total(self) -> int:\n        return sum(item.get(\"price\", 0) * item.get(\"quantity\", 1) for item in self.items)\n\n    def to_json(self) -> str:\n        return json.dumps({\n            \"order_id\": self.order_id,\n            \"items\": self.items,\n            \"user_id\": self.user_id,\n            \"total\": self.total,\n        })\n\n    def is_empty(self) -> bool:\n        return len(self.items) == 0\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-019",
+      "description": "File-whole: exception hierarchy + helper (moderate-sized)",
+      "archetype": "exception_module",
+      "mode": "file_whole",
+      "file": {
+        "file": "src/errors.py",
+        "imports": [
+          {"kind": "from", "module": "typing", "names": ["Optional"]}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "AppError",
+            "bases": ["Exception"]
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "AppError",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "message", "annotation": "str"},
+                {"name": "code", "annotation": "int", "default": "500"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "class",
+            "name": "NotFoundError",
+            "bases": ["AppError"]
+          },
+          {
+            "kind": "class",
+            "name": "BadRequestError",
+            "bases": ["AppError"]
+          },
+          {
+            "kind": "function",
+            "name": "error_to_dict",
+            "signature": {
+              "params": [{"name": "err", "annotation": "AppError"}],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Optional\n\n\nclass AppError(Exception):\n    def __init__(self, message: str, code: int = 500) -> None:\n        raise NotImplementedError\n\n\nclass NotFoundError(AppError):\n    raise NotImplementedError\n\n\nclass BadRequestError(AppError):\n    raise NotImplementedError\n\n\ndef error_to_dict(err: AppError) -> dict:\n    raise NotImplementedError\n",
+      "reference": "from typing import Optional\n\n\nclass AppError(Exception):\n    def __init__(self, message: str, code: int = 500) -> None:\n        super().__init__(message)\n        self.message = message\n        self.code = code\n\n\nclass NotFoundError(AppError):\n    def __init__(self, message: str = \"Not found\") -> None:\n        super().__init__(message, code=404)\n\n\nclass BadRequestError(AppError):\n    def __init__(self, message: str = \"Bad request\") -> None:\n        super().__init__(message, code=400)\n\n\ndef error_to_dict(err: AppError) -> dict:\n    return {\"error\": err.message, \"code\": err.code}\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-020",
+      "description": "File-whole: utility module with 6 small functions (quality cliff test)",
+      "archetype": "utility_module_large",
+      "mode": "file_whole",
+      "file": {
+        "file": "src/utils/string_helpers.py",
+        "imports": [
+          {"kind": "import", "module": "re"},
+          {"kind": "from", "module": "typing", "names": ["Optional", "List"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "snake_to_camel",
+            "signature": {
+              "params": [{"name": "name", "annotation": "str"}],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "camel_to_snake",
+            "signature": {
+              "params": [{"name": "name", "annotation": "str"}],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "truncate",
+            "signature": {
+              "params": [
+                {"name": "text", "annotation": "str"},
+                {"name": "max_length", "annotation": "int"},
+                {"name": "suffix", "annotation": "str", "default": "\"...\""}
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "slugify",
+            "signature": {
+              "params": [{"name": "text", "annotation": "str"}],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "extract_numbers",
+            "signature": {
+              "params": [{"name": "text", "annotation": "str"}],
+              "return_annotation": "List[int]"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "is_blank",
+            "signature": {
+              "params": [{"name": "text", "annotation": "Optional[str]"}],
+              "return_annotation": "bool"
+            }
+          }
+        ]
+      },
+      "skeleton": "import re\nfrom typing import Optional, List\n\n\ndef snake_to_camel(name: str) -> str:\n    raise NotImplementedError\n\n\ndef camel_to_snake(name: str) -> str:\n    raise NotImplementedError\n\n\ndef truncate(text: str, max_length: int, suffix: str = \"...\") -> str:\n    raise NotImplementedError\n\n\ndef slugify(text: str) -> str:\n    raise NotImplementedError\n\n\ndef extract_numbers(text: str) -> List[int]:\n    raise NotImplementedError\n\n\ndef is_blank(text: Optional[str]) -> bool:\n    raise NotImplementedError\n",
+      "reference": "import re\nfrom typing import Optional, List\n\n\ndef snake_to_camel(name: str) -> str:\n    parts = name.split(\"_\")\n    return parts[0] + \"\".join(p.capitalize() for p in parts[1:])\n\n\ndef camel_to_snake(name: str) -> str:\n    return re.sub(r\"(?<=[a-z0-9])([A-Z])\", r\"_\\1\", name).lower()\n\n\ndef truncate(text: str, max_length: int, suffix: str = \"...\") -> str:\n    if len(text) <= max_length:\n        return text\n    return text[: max_length - len(suffix)] + suffix\n\n\ndef slugify(text: str) -> str:\n    text = text.lower().strip()\n    text = re.sub(r\"[^\\w\\s-]\", \"\", text)\n    return re.sub(r\"[\\s_-]+\", \"-\", text)\n\n\ndef extract_numbers(text: str) -> List[int]:\n    return [int(m) for m in re.findall(r\"\\d+\", text)]\n\n\ndef is_blank(text: Optional[str]) -> bool:\n    return text is None or text.strip() == \"\"\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-021",
+      "description": "Custom JSON log formatter extending base class",
+      "archetype": "log_formatter",
+      "source_pattern": "[GENERAL] Custom formatter that normalizes severity/timestamp fields — universal pattern for structured logging in any service",
+      "file": {
+        "file": "src/logging/json_formatter.py",
+        "imports": [
+          {"kind": "import", "module": "logging"},
+          {"kind": "import", "module": "sys"},
+          {"kind": "from", "module": "pythonjsonlogger", "names": ["jsonlogger"]}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "CustomJsonFormatter",
+            "bases": ["jsonlogger.JsonFormatter"]
+          },
+          {
+            "kind": "method",
+            "name": "add_fields",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "log_record", "annotation": "dict"},
+                {"name": "record", "annotation": "logging.LogRecord"},
+                {"name": "message_dict", "annotation": "dict"}
+              ],
+              "return_annotation": "None"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\nimport sys\nfrom pythonjsonlogger import jsonlogger\n\n\nclass CustomJsonFormatter(jsonlogger.JsonFormatter):\n    def add_fields(self, log_record: dict, record: logging.LogRecord, message_dict: dict) -> None:\n        raise NotImplementedError\n",
+      "reference": "import logging\nimport sys\nfrom pythonjsonlogger import jsonlogger\n\n\nclass CustomJsonFormatter(jsonlogger.JsonFormatter):\n    def add_fields(self, log_record: dict, record: logging.LogRecord, message_dict: dict) -> None:\n        super().add_fields(log_record, record, message_dict)\n        if not log_record.get('timestamp'):\n            log_record['timestamp'] = record.created\n        if log_record.get('severity'):\n            log_record['severity'] = log_record['severity'].upper()\n        else:\n            log_record['severity'] = record.levelname\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-022",
+      "description": "Logger factory with JSON formatter and stream handler",
+      "archetype": "logger_factory",
+      "source_pattern": "[GENERAL] Logger factory that wires formatter + handler + level — universal in any service needing structured logging",
+      "file": {
+        "file": "src/logging/factory.py",
+        "imports": [
+          {"kind": "import", "module": "logging"},
+          {"kind": "import", "module": "sys"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "get_json_logger",
+            "signature": {
+              "params": [{"name": "name", "annotation": "str"}],
+              "return_annotation": "logging.Logger"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\nimport sys\n\n\ndef get_json_logger(name: str) -> logging.Logger:\n    raise NotImplementedError\n",
+      "reference": "import logging\nimport sys\n\n\ndef get_json_logger(name: str) -> logging.Logger:\n    logger = logging.getLogger(name)\n    handler = logging.StreamHandler(sys.stdout)\n    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')\n    handler.setFormatter(formatter)\n    logger.addHandler(handler)\n    logger.setLevel(logging.INFO)\n    logger.propagate = False\n    return logger\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-023",
+      "description": "gRPC health check methods (Check + Watch)",
+      "archetype": "grpc_health_check",
+      "source_pattern": "[GENERAL] Standard gRPC health check implementation — every gRPC service needs Check (SERVING) and Watch (UNIMPLEMENTED)",
+      "file": {
+        "file": "src/service/health.py",
+        "imports": [
+          {"kind": "from", "module": "grpc_health.v1", "names": ["health_pb2"]}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "HealthServicer",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "Check",
+            "parent_class": "HealthServicer",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "request"},
+                {"name": "context"}
+              ],
+              "return_annotation": "health_pb2.HealthCheckResponse"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "Watch",
+            "parent_class": "HealthServicer",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "request"},
+                {"name": "context"}
+              ],
+              "return_annotation": "health_pb2.HealthCheckResponse"
+            }
+          }
+        ]
+      },
+      "skeleton": "from grpc_health.v1 import health_pb2\n\n\nclass HealthServicer:\n    def Check(self, request, context) -> health_pb2.HealthCheckResponse:\n        raise NotImplementedError\n\n    def Watch(self, request, context) -> health_pb2.HealthCheckResponse:\n        raise NotImplementedError\n",
+      "reference": "from grpc_health.v1 import health_pb2\n\n\nclass HealthServicer:\n    def Check(self, request, context) -> health_pb2.HealthCheckResponse:\n        return health_pb2.HealthCheckResponse(\n            status=health_pb2.HealthCheckResponse.SERVING)\n\n    def Watch(self, request, context) -> health_pb2.HealthCheckResponse:\n        return health_pb2.HealthCheckResponse(\n            status=health_pb2.HealthCheckResponse.UNIMPLEMENTED)\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-024",
+      "description": "List-filter-sample recommendation pattern",
+      "archetype": "filter_sample",
+      "source_pattern": "[GENERAL] Fetch collection, exclude already-seen items, random sample N — universal recommendation/suggestion pattern",
+      "file": {
+        "file": "src/service/recommender.py",
+        "imports": [
+          {"kind": "import", "module": "random"},
+          {"kind": "from", "module": "typing", "names": ["List", "Set"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "get_recommendations",
+            "signature": {
+              "params": [
+                {"name": "all_ids", "annotation": "List[str]"},
+                {"name": "exclude_ids", "annotation": "Set[str]"},
+                {"name": "max_results", "annotation": "int", "default": "5"}
+              ],
+              "return_annotation": "List[str]"
+            }
+          }
+        ]
+      },
+      "skeleton": "import random\nfrom typing import List, Set\n\n\ndef get_recommendations(all_ids: List[str], exclude_ids: Set[str], max_results: int = 5) -> List[str]:\n    raise NotImplementedError\n",
+      "reference": "import random\nfrom typing import List, Set\n\n\ndef get_recommendations(all_ids: List[str], exclude_ids: Set[str], max_results: int = 5) -> List[str]:\n    filtered = [x for x in all_ids if x not in exclude_ids]\n    num_return = min(max_results, len(filtered))\n    indices = random.sample(range(len(filtered)), num_return)\n    return [filtered[i] for i in indices]\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-025",
+      "description": "gRPC client wrapper with error handling",
+      "archetype": "grpc_client",
+      "source_pattern": "[GENERAL] gRPC client function: create channel, make RPC call, handle RpcError — standard pattern for any service-to-service call",
+      "file": {
+        "file": "src/clients/email_client.py",
+        "imports": [
+          {"kind": "import", "module": "logging"},
+          {"kind": "import", "module": "grpc"}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "send_confirmation",
+            "signature": {
+              "params": [
+                {"name": "address", "annotation": "str"},
+                {"name": "port", "annotation": "int"},
+                {"name": "email", "annotation": "str"},
+                {"name": "order_id", "annotation": "str"}
+              ],
+              "return_annotation": "bool"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\nimport grpc\n\nlogger = logging.getLogger(__name__)\n\n\ndef send_confirmation(address: str, port: int, email: str, order_id: str) -> bool:\n    raise NotImplementedError\n",
+      "reference": "import logging\nimport grpc\n\nlogger = logging.getLogger(__name__)\n\n\ndef send_confirmation(address: str, port: int, email: str, order_id: str) -> bool:\n    channel = grpc.insecure_channel(f'{address}:{port}')\n    try:\n        logger.info('Sending confirmation to %s for order %s', email, order_id)\n        return True\n    except grpc.RpcError as err:\n        logger.error('RPC failed: %s %s', err.code().name, err.code().value)\n        return False\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-026",
+      "description": "gRPC server start with ThreadPoolExecutor and graceful shutdown",
+      "archetype": "server_lifecycle",
+      "source_pattern": "[GENERAL] Server start function: create ThreadPool server, bind port from env, register service, graceful shutdown loop — every gRPC service needs this",
+      "file": {
+        "file": "src/service/server.py",
+        "imports": [
+          {"kind": "import", "module": "os"},
+          {"kind": "import", "module": "time"},
+          {"kind": "import", "module": "grpc"},
+          {"kind": "from", "module": "concurrent", "names": ["futures"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "serve",
+            "signature": {
+              "params": [
+                {"name": "service"},
+                {"name": "add_servicer_fn"},
+                {"name": "max_workers", "annotation": "int", "default": "10"}
+              ],
+              "return_annotation": "None"
+            }
+          }
+        ]
+      },
+      "skeleton": "import os\nimport time\nimport grpc\nfrom concurrent import futures\n\n\ndef serve(service, add_servicer_fn, max_workers: int = 10) -> None:\n    raise NotImplementedError\n",
+      "reference": "import os\nimport time\nimport grpc\nfrom concurrent import futures\n\n\ndef serve(service, add_servicer_fn, max_workers: int = 10) -> None:\n    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))\n    add_servicer_fn(service, server)\n    port = os.environ.get('PORT', '8080')\n    server.add_insecure_port('[::]:' + port)\n    server.start()\n    try:\n        while True:\n            time.sleep(3600)\n    except KeyboardInterrupt:\n        server.stop(0)\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-027",
+      "description": "Dummy/mock service implementation that logs and returns empty",
+      "archetype": "dummy_service",
+      "source_pattern": "[GENERAL] Dummy service handler: log the request, return empty response — universal pattern for development/testing mode stubs",
+      "file": {
+        "file": "src/service/dummy.py",
+        "imports": [
+          {"kind": "import", "module": "logging"}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "DummyService",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "handle_request",
+            "parent_class": "DummyService",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "request"},
+                {"name": "context"}
+              ],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\n\nlogger = logging.getLogger(__name__)\n\n\nclass DummyService:\n    def handle_request(self, request, context) -> dict:\n        raise NotImplementedError\n",
+      "reference": "import logging\n\nlogger = logging.getLogger(__name__)\n\n\nclass DummyService:\n    def handle_request(self, request, context) -> dict:\n        logger.info('Received request: %s', request)\n        return {}\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-028",
+      "description": "Random selection from weighted product catalog",
+      "archetype": "random_selection",
+      "source_pattern": "[GENERAL] Random choice from a list, random int in range — universal pattern for load testing, simulation, demo data generation",
+      "file": {
+        "file": "src/testing/data_gen.py",
+        "imports": [
+          {"kind": "import", "module": "random"},
+          {"kind": "from", "module": "typing", "names": ["List"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "pick_product",
+            "signature": {
+              "params": [{"name": "catalog", "annotation": "List[str]"}],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "random_quantity",
+            "signature": {
+              "params": [
+                {"name": "min_qty", "annotation": "int", "default": "1"},
+                {"name": "max_qty", "annotation": "int", "default": "10"}
+              ],
+              "return_annotation": "int"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "pick_currency",
+            "signature": {
+              "params": [],
+              "return_annotation": "str"
+            }
+          }
+        ]
+      },
+      "skeleton": "import random\nfrom typing import List\n\n\ndef pick_product(catalog: List[str]) -> str:\n    raise NotImplementedError\n\n\ndef random_quantity(min_qty: int = 1, max_qty: int = 10) -> int:\n    raise NotImplementedError\n\n\ndef pick_currency() -> str:\n    raise NotImplementedError\n",
+      "reference": "import random\nfrom typing import List\n\n\ndef pick_product(catalog: List[str]) -> str:\n    return random.choice(catalog)\n\n\ndef random_quantity(min_qty: int = 1, max_qty: int = 10) -> int:\n    return random.randint(min_qty, max_qty)\n\n\ndef pick_currency() -> str:\n    currencies = ['EUR', 'USD', 'JPY', 'CAD', 'GBP', 'TRY']\n    return random.choice(currencies)\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-029",
+      "description": "Fake checkout data generator for load testing",
+      "archetype": "fake_data_generator",
+      "source_pattern": "[GENERAL] Compose fake user/payment/address data from randomized parts — universal pattern for load testing, seeding, demo environments",
+      "file": {
+        "file": "src/testing/checkout_data.py",
+        "imports": [
+          {"kind": "import", "module": "random"},
+          {"kind": "import", "module": "datetime"},
+          {"kind": "from", "module": "typing", "names": ["Dict"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "generate_checkout_data",
+            "signature": {
+              "params": [
+                {"name": "email", "annotation": "str"},
+                {"name": "street", "annotation": "str"},
+                {"name": "city", "annotation": "str"},
+                {"name": "state", "annotation": "str"},
+                {"name": "zip_code", "annotation": "str"}
+              ],
+              "return_annotation": "Dict[str, object]"
+            }
+          }
+        ]
+      },
+      "skeleton": "import random\nimport datetime\nfrom typing import Dict\n\n\ndef generate_checkout_data(email: str, street: str, city: str, state: str, zip_code: str) -> Dict[str, object]:\n    raise NotImplementedError\n",
+      "reference": "import random\nimport datetime\nfrom typing import Dict\n\n\ndef generate_checkout_data(email: str, street: str, city: str, state: str, zip_code: str) -> Dict[str, object]:\n    current_year = datetime.datetime.now().year + 1\n    return {\n        'email': email,\n        'street_address': street,\n        'city': city,\n        'state': state,\n        'zip_code': zip_code,\n        'credit_card_number': f'{random.randint(4000000000000000, 4999999999999999)}',\n        'credit_card_expiration_month': random.randint(1, 12),\n        'credit_card_expiration_year': random.randint(current_year, current_year + 10),\n        'credit_card_cvv': f'{random.randint(100, 999)}',\n    }\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-030",
+      "description": "File-whole: structured logging module (formatter class + factory function)",
+      "archetype": "logging_module",
+      "mode": "file_whole",
+      "source_pattern": "[GENERAL] Complete logging module: custom formatter extending a base + factory function — universal across any Python service needing structured logs",
+      "file": {
+        "file": "src/common/logger.py",
+        "imports": [
+          {"kind": "import", "module": "logging"},
+          {"kind": "import", "module": "sys"}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "StructuredFormatter",
+            "bases": ["logging.Formatter"]
+          },
+          {
+            "kind": "method",
+            "name": "format",
+            "parent_class": "StructuredFormatter",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "record", "annotation": "logging.LogRecord"}
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "get_logger",
+            "signature": {
+              "params": [
+                {"name": "name", "annotation": "str"},
+                {"name": "level", "annotation": "int", "default": "logging.INFO"}
+              ],
+              "return_annotation": "logging.Logger"
+            }
+          }
+        ]
+      },
+      "skeleton": "import logging\nimport sys\n\n\nclass StructuredFormatter(logging.Formatter):\n    def format(self, record: logging.LogRecord) -> str:\n        raise NotImplementedError\n\n\ndef get_logger(name: str, level: int = logging.INFO) -> logging.Logger:\n    raise NotImplementedError\n",
+      "reference": "import logging\nimport sys\n\n\nclass StructuredFormatter(logging.Formatter):\n    def format(self, record: logging.LogRecord) -> str:\n        record.severity = record.levelname.upper()\n        record.timestamp = self.formatTime(record)\n        return super().format(record)\n\n\ndef get_logger(name: str, level: int = logging.INFO) -> logging.Logger:\n    logger = logging.getLogger(name)\n    handler = logging.StreamHandler(sys.stdout)\n    formatter = StructuredFormatter('%(timestamp)s %(severity)s %(name)s %(message)s')\n    handler.setFormatter(formatter)\n    logger.addHandler(handler)\n    logger.setLevel(level)\n    logger.propagate = False\n    return logger\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-031",
+      "description": "File-whole: gRPC service with health checks and business logic (5 elements)",
+      "archetype": "grpc_service_module",
+      "mode": "file_whole",
+      "source_pattern": "[GENERAL] Complete gRPC service file: service class, Check/Watch health, business logic handler, and server start — the universal gRPC service template",
+      "file": {
+        "file": "src/service/catalog_service.py",
+        "imports": [
+          {"kind": "import", "module": "os"},
+          {"kind": "import", "module": "random"},
+          {"kind": "import", "module": "logging"},
+          {"kind": "from", "module": "typing", "names": ["List"]}
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "CatalogService",
+            "bases": []
+          },
+          {
+            "kind": "method",
+            "name": "Check",
+            "parent_class": "CatalogService",
+            "signature": {
+              "params": [{"name": "self"}, {"name": "request"}, {"name": "context"}],
+              "return_annotation": "dict"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "Watch",
+            "parent_class": "CatalogService",
+            "signature": {
+              "params": [{"name": "self"}, {"name": "request"}, {"name": "context"}],
+              "return_annotation": "dict"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "list_items",
+            "parent_class": "CatalogService",
+            "signature": {
+              "params": [
+                {"name": "self"},
+                {"name": "category", "annotation": "str"},
+                {"name": "max_results", "annotation": "int", "default": "10"}
+              ],
+              "return_annotation": "List[dict]"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "get_port",
+            "signature": {
+              "params": [],
+              "return_annotation": "str"
+            }
+          }
+        ]
+      },
+      "skeleton": "import os\nimport random\nimport logging\nfrom typing import List\n\nlogger = logging.getLogger(__name__)\n\n\nclass CatalogService:\n    def Check(self, request, context) -> dict:\n        raise NotImplementedError\n\n    def Watch(self, request, context) -> dict:\n        raise NotImplementedError\n\n    def list_items(self, category: str, max_results: int = 10) -> List[dict]:\n        raise NotImplementedError\n\n\ndef get_port() -> str:\n    raise NotImplementedError\n",
+      "reference": "import os\nimport random\nimport logging\nfrom typing import List\n\nlogger = logging.getLogger(__name__)\n\n\nclass CatalogService:\n    def Check(self, request, context) -> dict:\n        return {'status': 'SERVING'}\n\n    def Watch(self, request, context) -> dict:\n        return {'status': 'UNIMPLEMENTED'}\n\n    def list_items(self, category: str, max_results: int = 10) -> List[dict]:\n        logger.info('Listing items for category: %s', category)\n        return []\n\n\ndef get_port() -> str:\n    return os.environ.get('PORT', '8080')\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-032",
+      "description": "File-whole: load test task functions + user class (8 elements, quality cliff test)",
+      "archetype": "load_test_module",
+      "mode": "file_whole",
+      "source_pattern": "[GENERAL] Load test module: standalone task functions (GET/POST), TaskSet with weighted tasks, User class with wait_time — universal pattern for any HTTP load test",
+      "file": {
+        "file": "src/testing/load_test.py",
+        "imports": [
+          {"kind": "import", "module": "random"},
+          {"kind": "from", "module": "typing", "names": ["List"]}
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "browse_home",
+            "signature": {
+              "params": [{"name": "client"}],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "browse_product",
+            "signature": {
+              "params": [
+                {"name": "client"},
+                {"name": "product_ids", "annotation": "List[str]"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "add_to_cart",
+            "signature": {
+              "params": [
+                {"name": "client"},
+                {"name": "product_ids", "annotation": "List[str]"}
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "view_cart",
+            "signature": {
+              "params": [{"name": "client"}],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "empty_cart",
+            "signature": {
+              "params": [{"name": "client"}],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "set_currency",
+            "signature": {
+              "params": [{"name": "client"}],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "class",
+            "name": "TaskWeights",
+            "bases": []
+          },
+          {
+            "kind": "function",
+            "name": "get_task_distribution",
+            "signature": {
+              "params": [],
+              "return_annotation": "dict"
+            }
+          }
+        ]
+      },
+      "skeleton": "import random\nfrom typing import List\n\n\ndef browse_home(client) -> None:\n    raise NotImplementedError\n\n\ndef browse_product(client, product_ids: List[str]) -> None:\n    raise NotImplementedError\n\n\ndef add_to_cart(client, product_ids: List[str]) -> None:\n    raise NotImplementedError\n\n\ndef view_cart(client) -> None:\n    raise NotImplementedError\n\n\ndef empty_cart(client) -> None:\n    raise NotImplementedError\n\n\ndef set_currency(client) -> None:\n    raise NotImplementedError\n\n\nclass TaskWeights:\n    raise NotImplementedError\n\n\ndef get_task_distribution() -> dict:\n    raise NotImplementedError\n",
+      "reference": "import random\nfrom typing import List\n\n\ndef browse_home(client) -> None:\n    client.get('/')\n\n\ndef browse_product(client, product_ids: List[str]) -> None:\n    client.get('/product/' + random.choice(product_ids))\n\n\ndef add_to_cart(client, product_ids: List[str]) -> None:\n    product = random.choice(product_ids)\n    client.get('/product/' + product)\n    client.post('/cart', {'product_id': product, 'quantity': random.randint(1, 10)})\n\n\ndef view_cart(client) -> None:\n    client.get('/cart')\n\n\ndef empty_cart(client) -> None:\n    client.post('/cart/empty')\n\n\ndef set_currency(client) -> None:\n    currencies = ['EUR', 'USD', 'JPY', 'CAD', 'GBP', 'TRY']\n    client.post('/setCurrency', {'currency_code': random.choice(currencies)})\n\n\nclass TaskWeights:\n    BROWSE_HOME = 1\n    BROWSE_PRODUCT = 10\n    ADD_TO_CART = 2\n    VIEW_CART = 3\n    CHECKOUT = 1\n    SET_CURRENCY = 2\n\n\ndef get_task_distribution() -> dict:\n    return {\n        'browse_home': TaskWeights.BROWSE_HOME,\n        'browse_product': TaskWeights.BROWSE_PRODUCT,\n        'add_to_cart': TaskWeights.ADD_TO_CART,\n        'view_cart': TaskWeights.VIEW_CART,\n        'set_currency': TaskWeights.SET_CURRENCY,\n    }\n",
+      "expected_tier": "simple"
+    }
+  ]
+}
