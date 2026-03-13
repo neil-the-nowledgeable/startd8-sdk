@@ -34,6 +34,7 @@ _BLAST_RADIUS_EXCLUDED_DIRS: frozenset[str] = frozenset({
     "__pycache__",
     ".startd8",
     ".cap-dev-pipe",
+    ".claude",
     "archive",
     "generated",
     "dist",
@@ -142,10 +143,26 @@ def extract_signals_from_feature(
         except (TypeError, ValueError):
             pass
 
-    # edit_mode: "create" if no target files exist on disk, "edit" if any do
+    # edit_mode: "create" if no target files exist on disk, "edit" if any do.
+    #
+    # Pipeline-poisoning guard: when a ForwardManifest covers a target file
+    # the file will be (re)generated from a skeleton — the Micro Prime
+    # file-whole path starts from the skeleton every time, so prior run
+    # outputs on disk are irrelevant.  Treat manifest-covered files as
+    # "create" regardless of filesystem state.
     edit_mode = "create"
+    manifest_covered_files: set[str] = set()
+    if manifest is not None:
+        try:
+            file_specs = getattr(manifest, "file_specs", None) or {}
+            manifest_covered_files = set(file_specs.keys())
+        except (TypeError, AttributeError):
+            pass
+
     try:
         for tf in target_files:
+            if tf in manifest_covered_files:
+                continue  # Manifest-covered → always "create"
             candidate = project_root / tf
             if candidate.is_file():
                 edit_mode = "edit"
@@ -162,8 +179,13 @@ def extract_signals_from_feature(
     if estimated_loc <= 0:
         estimated_loc = max(len(description) // 3, 1)
 
-    # blast_radius: count .py files under project_root that import any target
-    blast_radius = _compute_blast_radius(target_files, project_root)
+    # blast_radius: count .py files under project_root that import any target.
+    # Exclude manifest-covered files — they are being regenerated in this
+    # run, so their imports are pipeline artifacts, not live coupling.
+    blast_radius = _compute_blast_radius(
+        target_files, project_root,
+        exclude_files=manifest_covered_files,
+    )
 
     # has_cross_file_edges: True if multi-file and any target imports another
     has_cross_file_edges = False
@@ -203,7 +225,9 @@ def extract_signals_from_feature(
 
 
 def _compute_blast_radius(
-    target_files: List[str], project_root: Path
+    target_files: List[str],
+    project_root: Path,
+    exclude_files: Optional[set] = None,
 ) -> int:
     """Count .py files under *project_root* that import any target file.
 
@@ -221,6 +245,10 @@ def _compute_blast_radius(
     Excludes non-source directories (archives, generated output, tool
     state) via ``_BLAST_RADIUS_EXCLUDED_DIRS`` — Run-027 Kaizen showed
     these inflating blast_radius from 0 to 35+ for ``logger.py``.
+
+    Pipeline-poisoning guard: files listed in ``exclude_files`` (typically
+    manifest-covered files being regenerated in the same run) are not
+    counted — their imports are pipeline artifacts, not live coupling.
     """
     if not target_files:
         return 0
@@ -281,6 +309,9 @@ def _compute_blast_radius(
                 except ValueError:
                     continue
                 if rel in target_files:
+                    continue
+                # Pipeline-poisoning guard: skip manifest-covered files
+                if exclude_files and rel in exclude_files:
                     continue
 
                 scanned += 1

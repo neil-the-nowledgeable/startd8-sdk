@@ -27,6 +27,11 @@ from ..utils.code_extraction import STUB_SENTINEL
 
 logger = get_logger(__name__)
 
+# Type alias for the AST cache: maps file path → (source_text, parsed_tree).
+# Populated once in run_all_checkpoints() and threaded through L2 checks
+# to avoid redundant ast.parse() calls (F-AC Validation Layer Accretion fix).
+AstCache = Dict[Path, tuple]  # tuple of (str, ast.Module)
+
 # ---------------------------------------------------------------------------
 # Timeout constants (seconds) for subprocess calls
 # ---------------------------------------------------------------------------
@@ -155,6 +160,26 @@ class IntegrationCheckpoint:
         self._test_baseline = collected_tests
         return collected_tests
 
+    @staticmethod
+    def _build_ast_cache(files: List[Path]) -> AstCache:
+        """Parse Python files once, caching source + AST for reuse.
+
+        Eliminates redundant ast.parse() calls across L2 semantic checks
+        (stubs, duplicates, import alignment) which previously parsed
+        each file independently.
+        """
+        cache: AstCache = {}
+        for file_path in files:
+            if file_path.suffix != ".py":
+                continue
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(file_path))
+                cache[file_path] = (source, tree)
+            except (SyntaxError, OSError):
+                pass  # Skip unparseable files — individual checks handle this
+        return cache
+
     def run_all_checkpoints(
         self,
         integrated_files: List[Path],
@@ -181,10 +206,14 @@ class IntegrationCheckpoint:
         # 3. Lint check (basic)
         results.append(self.check_lint(integrated_files))
 
-        # 4. Semantic checks (L2 — stub detection, duplicate detection, import alignment)
-        results.append(self.check_stubs(integrated_files))
-        results.append(self.check_duplicates(integrated_files))
-        results.append(self.check_import_dependency_alignment(integrated_files))
+        # 4. Semantic checks (L2) — share a single AST cache to avoid
+        #    re-parsing each file 3 times (Validation Layer Accretion fix).
+        ast_cache = self._build_ast_cache(integrated_files)
+        results.append(self.check_stubs(integrated_files, _ast_cache=ast_cache))
+        results.append(self.check_duplicates(integrated_files, _ast_cache=ast_cache))
+        results.append(self.check_import_dependency_alignment(
+            integrated_files, _ast_cache=ast_cache,
+        ))
 
         # 5. Test check (if enabled)
         if self.run_tests:
@@ -476,6 +505,7 @@ class IntegrationCheckpoint:
         files: List[Path],
         *,
         max_stub_ratio: float = 0.3,
+        _ast_cache: Optional[AstCache] = None,
     ) -> CheckpointResult:
         """Detect LLM-generated stubs (functions the LLM failed to implement).
 
@@ -495,11 +525,15 @@ class IntegrationCheckpoint:
             if file_path.suffix != ".py":
                 continue
             checked += 1
-            try:
-                source = file_path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(file_path))
-            except (SyntaxError, OSError):
-                continue
+            cached = (_ast_cache or {}).get(file_path)
+            if cached:
+                source, tree = cached
+            else:
+                try:
+                    source = file_path.read_text(encoding="utf-8")
+                    tree = ast.parse(source, filename=str(file_path))
+                except (SyntaxError, OSError):
+                    continue
 
             is_pipeline_stub = STUB_SENTINEL in source
 
@@ -554,7 +588,12 @@ class IntegrationCheckpoint:
         from startd8.utils.ast_checks import is_stub_body
         return is_stub_body(body)
 
-    def check_duplicates(self, files: List[Path]) -> CheckpointResult:
+    def check_duplicates(
+        self,
+        files: List[Path],
+        *,
+        _ast_cache: Optional[AstCache] = None,
+    ) -> CheckpointResult:
         """Detect duplicate class or function definitions at the same scope level.
 
         Two definitions are duplicates if they share the same name at the
@@ -567,11 +606,15 @@ class IntegrationCheckpoint:
             if file_path.suffix != ".py":
                 continue
             checked += 1
-            try:
-                source = file_path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(file_path))
-            except (SyntaxError, OSError):
-                continue
+            cached = (_ast_cache or {}).get(file_path)
+            if cached:
+                source, tree = cached
+            else:
+                try:
+                    source = file_path.read_text(encoding="utf-8")
+                    tree = ast.parse(source, filename=str(file_path))
+                except (SyntaxError, OSError):
+                    continue
 
             # Collect top-level definition names
             seen: Dict[str, str] = {}  # name → kind
@@ -644,6 +687,7 @@ class IntegrationCheckpoint:
         *,
         runtime_dependencies: Optional[List[str]] = None,
         extra_denylist: Optional[Dict[str, Optional[str]]] = None,
+        _ast_cache: Optional[AstCache] = None,
     ) -> CheckpointResult:
         """Validate imports against declared runtime_dependencies.
 
@@ -674,11 +718,15 @@ class IntegrationCheckpoint:
             if file_path.suffix != ".py":
                 continue
             checked += 1
-            try:
-                source = file_path.read_text(encoding="utf-8")
-                tree = ast.parse(source, filename=str(file_path))
-            except (SyntaxError, OSError):
-                continue
+            cached = (_ast_cache or {}).get(file_path)
+            if cached:
+                _source, tree = cached
+            else:
+                try:
+                    source = file_path.read_text(encoding="utf-8")
+                    tree = ast.parse(source, filename=str(file_path))
+                except (SyntaxError, OSError):
+                    continue
 
             for node in ast.walk(tree):
                 # Extract the top-level module name from the import

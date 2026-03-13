@@ -186,14 +186,19 @@ def _run_steps(
     element_context: Optional[ElementContext],
     config: RepairConfig,
     is_method: bool = False,
-) -> Tuple[str, List[RepairStepResult]]:
+) -> Tuple[str, List[RepairStepResult], bool, bool]:
     """Run a sequence of repair steps with non-destructive guard.
 
-    Returns (repaired_code, list_of_step_results).
+    Returns (repaired_code, list_of_step_results, before_valid, after_valid).
+    The validity flags are tracked during step execution to avoid redundant
+    ast.parse() calls downstream (Validation Layer Accretion fix).
     """
     results: list[RepairStepResult] = []
     current = code
     total_start = time.monotonic()
+    # Track validity across the step loop to avoid redundant re-parsing.
+    _initial_valid: Optional[bool] = None  # set on first step
+    _current_valid: Optional[bool] = None  # tracks latest validity
 
     # Single executor for all steps — avoids per-step thread pool overhead.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -208,7 +213,12 @@ def _run_steps(
             _emit_event("PIPELINE_STEP_START", "repair", {"step_name": step_name})
 
             step_start = time.monotonic()
-            was_valid_before = _validator.validate(current, is_method)
+            # Reuse cached validity from prior step when available.
+            if _current_valid is not None:
+                was_valid_before = _current_valid
+            else:
+                was_valid_before = _validator.validate(current, is_method)
+                _initial_valid = was_valid_before
 
             try:
                 # Per-step timeout enforcement (REQ-RPL-007 / acceptance 9.2.3)
@@ -268,8 +278,13 @@ def _run_steps(
                     result.code = current
                     result.metrics["reverted"] = True
                     reverted = True
+                    # Validity unchanged (reverted to prior valid code)
+                    _current_valid = was_valid_before
                 else:
                     current = result.code
+                    # Step succeeded: code is valid (passed the guard above
+                    # or was_valid_before was False meaning we accept any result)
+                    _current_valid = True if was_valid_before else None
 
             # Determine step outcome for OTel
             skipped_reason = result.metrics.get("skipped_reason")
@@ -313,7 +328,10 @@ def _run_steps(
                 },
             )
 
-    return current, results
+    # Resolve final validity: use tracked state, fall back to validator
+    before_valid = _initial_valid if _initial_valid is not None else _validator.validate(code, is_method)
+    after_valid = _current_valid if _current_valid is not None else _validator.validate(current, is_method)
+    return current, results, before_valid, after_valid
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -351,7 +369,8 @@ def run_element_repair(
     is_method = bool(element_context.parent_class)
     fp = file_path or Path("<element>")
 
-    return _run_steps(code, steps, ctx, fp, element_context, config, is_method)
+    repaired, results, _bv, _av = _run_steps(code, steps, ctx, fp, element_context, config, is_method)
+    return repaired, results
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -562,7 +581,7 @@ def run_file_repair(
                 project_root=project_root,
             )
 
-            repaired, step_results = _run_steps(
+            repaired, step_results, before_valid, after_valid = _run_steps(
                 code, steps, ctx, file_path, None, config,
             )
 
@@ -577,8 +596,8 @@ def run_file_repair(
 
             all_step_names.update(applied)
 
-            before_valid = _validator.validate(code)
-            after_valid = _validator.validate(repaired)
+            # before_valid and after_valid carried from _run_steps —
+            # no redundant ast.parse() (Validation Layer Accretion fix).
             file_results.append(FileRepairResult(
                 file_path=file_path,
                 success=modified and after_valid,
