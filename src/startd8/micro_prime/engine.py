@@ -26,6 +26,7 @@ from startd8.element_registry import (
     is_stale,
 )
 from startd8.forward_manifest import (
+    ContractConfidence,
     ForwardElementSpec,
     ForwardFileSpec,
     ForwardManifest,
@@ -47,6 +48,7 @@ from startd8.micro_prime.decomposition.core import (
 from startd8.micro_prime.context import MicroPrimeContext
 from startd8.complexity.models import RejectionReason, TaskComplexitySignals
 from startd8.micro_prime.models import (
+    SKELETON_MARKER,
     ElementResult,
     EscalationContext,
     EscalationHandoff,
@@ -62,11 +64,14 @@ from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_
 from startd8.micro_prime.repair import (
     RepairResult,
     build_repair_attribution,
+    run_file_repair_pipeline,
+    run_file_whole_contractor_repair,
     run_repair_pipeline,
     to_escalation_repair_outcome,
 )
 from startd8.micro_prime.splicer import splice_body_into_skeleton
 from startd8.micro_prime.templates import TemplateRegistry
+from startd8.utils.code_extraction import extract_code_from_response
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 logger = get_logger(__name__)
@@ -498,22 +503,11 @@ def _resolve_element_id(element: ForwardElementSpec, file_path: str) -> Optional
     )
 
 
-_CODE_GEN_SYSTEM_PROMPT = (
-    "You are a Python code generator for the startd8 pipeline. "
-    "Output the COMPLETE function definition including the `def` line, then STOP. "
-    "Do NOT include markdown fences, explanations, or any text outside the code. "
-    "Do NOT output additional functions, classes, or tests after the target function. "
-    "Use ONLY the imports shown in the prompt — do not invent APIs or import new modules. "
-    "Use 4-space indentation consistently."
-)
+# AC-R7/F7: Removed dead _CODE_GEN_SYSTEM_PROMPT.  It was the default
+# fallback in _generate_ollama() but contradicted the body-only user
+# prompt ("include the def line" vs "no def line"), causing model
+# confusion when any call site omitted the system_prompt kwarg.
 
-# Separate system prompt for element-level body generation (Fix 1).
-# The body prompt builder asks for indented body lines only (no def line),
-# which contradicts _CODE_GEN_SYSTEM_PROMPT's "include the def line".
-# Small local models cannot resolve conflicting system/user instructions
-# reliably — they fall back to default behaviour (markdown fences, import
-# blocks, wrong indentation).  Aligning the system prompt with the user
-# prompt eliminates this confusion.
 _ELEMENT_BODY_SYSTEM_PROMPT = (
     "You are a Python code generator. "
     "Output ONLY the indented body lines of the target function — no def line, "
@@ -643,6 +637,9 @@ def _build_file_whole_prompt(
     file_spec: ForwardFileSpec,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
+    design_doc_sections: Optional[list[str]] = None,
+    contracts: Optional[list[InterfaceContract]] = None,
+    completed_file_examples: Optional[list[str]] = None,
 ) -> str:
     """Build a prompt for file-level Ollama-whole generation.
 
@@ -651,11 +648,19 @@ def _build_file_whole_prompt(
     how the model naturally generates code (complete files) and avoids the
     body-only fragmentation that confuses small local models.
 
+    AC-R16: Enriched with design docs, binding constraints, and completed
+    file examples so the file-whole path has context parity with the
+    element-by-element path.
+
     Args:
         skeleton: Complete skeleton file with ``raise NotImplementedError`` stubs.
         file_spec: File spec for context (imports, element names).
         task_description: Optional feature-level description from seed.
         domain_constraints: Optional domain constraints from plan ingestion.
+        design_doc_sections: Optional design doc sections for implementation context.
+        contracts: Optional binding constraints for elements in this file.
+        completed_file_examples: Optional successfully-generated file snippets
+            from earlier files in the same seed (file-level few-shot).
 
     Returns:
         The constructed prompt string.
@@ -683,6 +688,29 @@ def _build_file_whole_prompt(
             sections.append(f"# - {dc}")
         sections.append("")
 
+    # AC-R16: Design documentation context — describes expected behavior,
+    # architectural patterns, and inter-component relationships.
+    if design_doc_sections:
+        sections.append("# Implementation context:")
+        for section in design_doc_sections:
+            for line in section.splitlines():
+                sections.append(f"# {line}" if line.strip() else "#")
+        sections.append("")
+
+    # AC-R16: Binding constraints — interface contracts specifying required
+    # parameter types, return types, and semantic constraints.
+    if contracts:
+        constraint_lines: list[str] = []
+        for c in contracts:
+            level = "BINDING" if c.confidence == ContractConfidence.EXPLICIT else "ADVISORY"
+            desc = c.binding_text or c.description or "unspecified"
+            cat = f" ({c.category.value})" if c.category else ""
+            constraint_lines.append(f"# - [{level}]{cat} {desc}")
+        if constraint_lines:
+            sections.append("# Constraints (MUST satisfy BINDING, SHOULD satisfy ADVISORY):")
+            sections.extend(constraint_lines)
+            sections.append("")
+
     # Element manifest — explicit listing of what to implement
     implementable = [e for e in file_spec.elements if e.kind != ElementKind.CLASS]
     if implementable:
@@ -696,6 +724,14 @@ def _build_file_whole_prompt(
                 hint = f" -> {el.signature.return_annotation}"
             sections.append(f"# {i}. {fqn}{hint}")
         sections.append("")
+
+    # AC-R16: Completed file examples from earlier files in the same seed.
+    # Provides the model with worked examples of successfully generated files.
+    if completed_file_examples:
+        for idx, example in enumerate(completed_file_examples[:2], 1):
+            sections.append(f"# --- Example of a completed file ({idx}) ---")
+            sections.append(example)
+            sections.append("")
 
     sections.append("# --- Skeleton file (fill in the stubs) ---")
     sections.append(skeleton)
@@ -739,7 +775,10 @@ def _skeleton_has_stubs(skeleton: str) -> bool:
     return False
 
 
-def _remove_toplevel_nested_duplicates(code: str) -> str:
+def _remove_toplevel_nested_duplicates(
+    code: str,
+    original_skeleton: Optional[str] = None,
+) -> str:
     """Remove top-level functions that duplicate nested functions.
 
     When the decomposer creates separate elements for inner functions
@@ -747,11 +786,28 @@ def _remove_toplevel_nested_duplicates(code: str) -> str:
     the splicer may insert the generated code as a top-level function,
     creating a duplicate.  This function detects and removes the
     top-level copy, keeping the nested definition intact.
+
+    If *original_skeleton* is provided, functions that were defined at top
+    level in the skeleton are preserved — they belong at top level and the
+    nested copy is the accidental duplicate (e.g. an LLM inlining a helper
+    inside a factory function).
     """
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return code
+
+    # Determine which function names were originally at top level in the
+    # skeleton.  These should never be removed from the top level.
+    skeleton_toplevel_names: set[str] = set()
+    if original_skeleton:
+        try:
+            skel_tree = ast.parse(original_skeleton)
+            for node in ast.iter_child_nodes(skel_tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    skeleton_toplevel_names.add(node.name)
+        except SyntaxError:
+            pass
 
     # Collect names of functions defined *inside* other top-level functions
     nested_names: set[str] = set()
@@ -773,6 +829,8 @@ def _remove_toplevel_nested_duplicates(code: str) -> str:
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name in nested_names
+            # Never remove a function that was top-level in the skeleton
+            and node.name not in skeleton_toplevel_names
             # Only remove if it's NOT the parent that contains the nested def
             and not any(
                 isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -782,6 +840,14 @@ def _remove_toplevel_nested_duplicates(code: str) -> str:
             )
         ):
             to_remove.append(node)
+
+    # Log functions preserved because they exist at top level in skeleton
+    preserved = nested_names & skeleton_toplevel_names
+    if preserved:
+        logger.info(
+            "Preserved top-level functions also in skeleton: %s",
+            ", ".join(sorted(preserved)),
+        )
 
     if not to_remove:
         return code
@@ -828,7 +894,7 @@ def _validate_file_whole_result(
         the missing list for partial acceptance.
     """
     # Strip markdown fences if present
-    code = _strip_fences(generated_code)
+    code = extract_code_from_response(generated_code)
 
     if not code:
         return False, "empty output", []
@@ -851,7 +917,7 @@ def _validate_file_whole_result(
                     return False, f"nested duplicate function: {node.name}", []
 
     # Check for skeleton markers — hard fail
-    if "# [STARTD8-SKELETON]" in code:
+    if SKELETON_MARKER in code:
         return False, "contains skeleton markers", []
 
     # ── Soft-fail collection ──
@@ -1145,17 +1211,11 @@ class MicroPrimeEngine:
                 "Cache hit for %s — returning cached success (code=%s)",
                 fingerprint, "present" if cached_code else "none",
             )
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=tier,
-                classification_reason=reasoning,
-                success=True,
-                code=cached_code,
-                verification_verdict="skipped",
-                api_file_import_bump=api_file_import_bump,
-                api_element_adjustment=api_element_adjustment,
+            result = ElementResult.make_cached(
+                element.name, file_path, tier, reasoning, cached_code,
             )
+            result.api_file_import_bump = api_file_import_bump
+            result.api_element_adjustment = api_element_adjustment
             self._metrics.record(result)
             return result
 
@@ -1182,18 +1242,12 @@ class MicroPrimeEngine:
                     else:
                         cached_code = cached.extra["code"]
                         logger.info("Element registry HIT: %s", element_id)
-                        result = ElementResult(
-                            element_name=element.name,
-                            file_path=file_path,
-                            tier=tier,
-                            classification_reason=reasoning,
-                            success=True,
-                            code=cached_code,
-                            verification_verdict="skipped",
-                            api_file_import_bump=api_file_import_bump,
-                            api_element_adjustment=api_element_adjustment,
-                            decomposition_metadata={"source": "element_registry"},
+                        result = ElementResult.make_cached(
+                            element.name, file_path, tier, reasoning, cached_code,
+                            source="element_registry",
                         )
+                        result.api_file_import_bump = api_file_import_bump
+                        result.api_element_adjustment = api_element_adjustment
                         self._metrics.record(result)
                         return result
                 else:
@@ -1217,26 +1271,17 @@ class MicroPrimeEngine:
                 "Circuit breaker open — escalating %s without local attempt",
                 element.name,
             )
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=tier,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                api_file_import_bump=api_file_import_bump,
-                api_element_adjustment=api_element_adjustment,
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=tier,
+            result = ElementResult.make_escalation(
+                element.name, file_path, tier, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path, tier=tier,
                     reason=EscalationReason.CIRCUIT_BREAKER,
-                    detail=(
-                        f"Circuit breaker tripped after "
-                        f"{self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures"
-                    ),
+                    detail=f"Circuit breaker tripped after {self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures",
                 ),
+                generation_strategy="circuit_breaker",
             )
+            result.api_file_import_bump = api_file_import_bump
+            result.api_element_adjustment = api_element_adjustment
             self._metrics.record(result)
             return result
 
@@ -1249,23 +1294,17 @@ class MicroPrimeEngine:
                 "Ollama unavailable — escalating %s (%s) without local attempt",
                 element.name, tier.value,
             )
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=tier,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                api_file_import_bump=api_file_import_bump,
-                api_element_adjustment=api_element_adjustment,
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=tier,
+            result = ElementResult.make_escalation(
+                element.name, file_path, tier, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path, tier=tier,
                     reason=EscalationReason.OLLAMA_UNAVAILABLE,
                     detail="Ollama unavailable — local generation skipped",
                 ),
+                generation_strategy="ollama_unavailable",
             )
+            result.api_file_import_bump = api_file_import_bump
+            result.api_element_adjustment = api_element_adjustment
             self._metrics.record(result)
             return result
 
@@ -1296,20 +1335,14 @@ class MicroPrimeEngine:
                 "(reason: %s)",
                 element.name, file_path, reasoning,
             )
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=tier,
-                classification_reason=reasoning,
-                success=False,
-                verification_verdict="skipped",
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=tier,
+            result = ElementResult.make_escalation(
+                element.name, file_path, tier, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path, tier=tier,
                     reason=EscalationReason.TIER_TOO_HIGH,
                     detail=f"Tier {tier.value}: {reasoning}",
                 ),
+                generation_strategy="complex_escalation",
             )
 
         # Stamp parent_class for downstream spec lookup (e.g. cloud escalation)
@@ -1431,6 +1464,22 @@ class MicroPrimeEngine:
                         element.name, file_spec.file,
                     )
 
+        # ── Pre-classify for file-whole tier threading (AC-R17) ──
+        # Classify before file-whole so pre_classified_tiers can be threaded
+        # through to element results.  Also collects all contracts for
+        # the file-whole prompt (AC-R16).
+        _pre_tiers: dict[str, TierClassification] = {}
+        _all_contracts: list[InterfaceContract] = []
+        for element in enriched_file_spec.elements:
+            elem_contracts = self._get_element_contracts(element, enriched_file_spec, manifest)
+            tier, reasoning, _details = classify_element_with_details(
+                element, enriched_file_spec, elem_contracts,
+                template_registry=self._templates,
+                config=self._config,
+            )
+            _pre_tiers[element.name] = tier
+            _all_contracts.extend(elem_contracts)
+
         # ── File-level Ollama-whole attempt ──
         # For small files, try generating the complete file in one Ollama
         # call before decomposing into individual elements.  This avoids
@@ -1442,6 +1491,9 @@ class MicroPrimeEngine:
                 enriched_file_spec, skeleton,
                 task_description=task_description,
                 domain_constraints=domain_constraints,
+                design_doc_sections=design_doc_sections,
+                contracts=_all_contracts or None,
+                pre_classified_tiers=_pre_tiers,
             )
             if file_whole_result is not None:
                 return file_whole_result
@@ -1546,6 +1598,9 @@ class MicroPrimeEngine:
                 enriched_file_spec, skeleton,
                 task_description=task_description,
                 domain_constraints=domain_constraints,
+                design_doc_sections=design_doc_sections,
+                contracts=_all_contracts or None,
+                pre_classified_tiers=_pre_tiers,
             )
             if retry_result is not None:
                 logger.info(
@@ -1565,7 +1620,7 @@ class MicroPrimeEngine:
         # instead of writing them to disk.  Uses AST-based stub detection
         # (AC-R3) to avoid false positives on branch/comment usage.
         _has_stubs = _skeleton_has_stubs(current_skeleton)
-        _has_marker = "# [STARTD8-SKELETON]" in current_skeleton
+        _has_marker = SKELETON_MARKER in current_skeleton
         if _has_stubs or _has_marker:
             for er in file_result.element_results:
                 if er.success and not er.code:
@@ -1587,7 +1642,9 @@ class MicroPrimeEngine:
         # nested functions inside another top-level function.  This happens
         # when the decomposer creates separate elements for a factory's inner
         # functions (e.g. Flask @app.route handlers inside create_app()).
-        current_skeleton = _remove_toplevel_nested_duplicates(current_skeleton)
+        current_skeleton = _remove_toplevel_nested_duplicates(
+            current_skeleton, original_skeleton=skeleton,
+        )
 
         file_result.filled_skeleton = current_skeleton
         return file_result
@@ -1611,6 +1668,15 @@ class MicroPrimeEngine:
             domain_constraints=context.binding_constraints or None,
         )
 
+    def reset_for_seed(self) -> None:
+        """Clear per-seed state to prevent cross-seed contamination (AC-R20).
+
+        Must be called at the start of each seed in a multi-seed batch
+        (e.g. PrimeContractor). Prevents few-shot examples from prior
+        seeds leaking into the current seed's prompts.
+        """
+        self._completed.clear()
+
     def process_seed(
         self,
         manifest: ForwardManifest,
@@ -1626,6 +1692,9 @@ class MicroPrimeEngine:
         Returns:
             SeedResult with all file results.
         """
+        # AC-R20: Clear cross-seed few-shot contamination
+        self.reset_for_seed()
+
         seed_result = SeedResult()
         start_time = time.monotonic()
 
@@ -1724,15 +1793,15 @@ class MicroPrimeEngine:
     ) -> bool:
         """Check if a file qualifies for single-shot Ollama generation.
 
+        AC-R1: File-whole is the PRIMARY generation path. Only files that
+        exceed the LOC threshold (context-window proxy) fall through to
+        element-by-element. The element count gate has been removed — it
+        was the main source of unnecessary element-by-element routing.
+
         Eligible when:
         - Feature is enabled in config
-        - Element count ≤ max_elements threshold
-        - Estimated LOC ≤ max_loc threshold
+        - Estimated LOC ≤ max_loc threshold (context-window proxy)
         - Skeleton has at least one ``raise NotImplementedError`` stub
-
-        Also eligible (overriding size limits) when elements have high
-        within-file coupling — shared globals, inter-function calls, or
-        class methods sharing instance state.
         """
         if not self._config.file_ollama_whole_enabled:
             return False
@@ -1753,14 +1822,9 @@ class MicroPrimeEngine:
             )
             return True
 
-        element_count = len(file_spec.elements)
-        if element_count > self._config.file_ollama_whole_max_elements:
-            logger.debug(
-                "File-whole skipped for %s: %d elements > %d max",
-                file_spec.file, element_count,
-                self._config.file_ollama_whole_max_elements,
-            )
-            return False
+        # AC-R1: Only LOC gate remains — context-window proxy.
+        # Element count gate removed (was the primary source of unnecessary
+        # element-by-element routing for small-to-medium files).
         skeleton_lines = len(skeleton.splitlines())
         if skeleton_lines > self._config.file_ollama_whole_max_loc:
             logger.debug(
@@ -1777,6 +1841,9 @@ class MicroPrimeEngine:
         skeleton: str,
         task_description: Optional[str] = None,
         domain_constraints: Optional[list[str]] = None,
+        design_doc_sections: Optional[list[str]] = None,
+        contracts: Optional[list[InterfaceContract]] = None,
+        pre_classified_tiers: Optional[dict[str, TierClassification]] = None,
     ) -> Optional[FileResult]:
         """Attempt to generate all elements in one Ollama call.
 
@@ -1788,6 +1855,8 @@ class MicroPrimeEngine:
         - Adaptive max_tokens based on skeleton size
         - Single retry with failure feedback
         - Partial acceptance: keep successfully filled elements, escalate the rest
+        - AC-R16: Enriched prompt with design docs, contracts, and file examples
+        - AC-R17: Pre-classified tiers threaded through to element results
 
         Returns:
             FileResult if successful (full or partial), None if the attempt
@@ -1800,10 +1869,29 @@ class MicroPrimeEngine:
             file_path, len(file_spec.elements), skeleton_lines,
         )
 
+        # AC-R16: Collect completed file examples from prior files in this seed
+        completed_file_examples: list[str] = []
+        for ce in self._completed:
+            if (
+                ce.get("file_path") != file_path
+                and ce.get("generation_strategy") == "file_ollama_whole"
+                and ce.get("code")
+            ):
+                # Use a truncated snippet (first 60 lines) to avoid prompt bloat
+                snippet_lines = ce["code"].splitlines()[:60]
+                if len(snippet_lines) == 60:
+                    snippet_lines.append("# ... (truncated)")
+                completed_file_examples.append("\n".join(snippet_lines))
+                if len(completed_file_examples) >= 2:
+                    break
+
         prompt = _build_file_whole_prompt(
             skeleton, file_spec,
             task_description=task_description,
             domain_constraints=domain_constraints,
+            design_doc_sections=design_doc_sections,
+            contracts=contracts,
+            completed_file_examples=completed_file_examples or None,
         )
 
         # Adaptive max_tokens: scale output budget with skeleton size
@@ -1860,14 +1948,17 @@ class MicroPrimeEngine:
             if valid:
                 break  # Full success
 
-            # Try repair
+            # Try repair — two-tier strategy:
+            # Tier 1 (AC-R18): fast 4-step pipeline (fence, octal, dedup, ast)
+            # Tier 2: full contractor pipeline (12 steps via bridge)
             logger.info(
-                "File-whole validation failed for %s (attempt %d): %s — attempting repair",
+                "File-whole validation failed for %s (attempt %d): %s — attempting file repair",
                 file_path, attempt + 1, reason,
             )
             if file_spec.elements:
-                repair_result = run_repair_pipeline(
-                    raw_code, file_spec.elements[0], file_spec, skeleton_source=skeleton,
+                # Tier 1: thin file-whole pipeline
+                repair_result = run_file_repair_pipeline(
+                    raw_code, file_spec,
                 )
                 if repair_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(
@@ -1875,7 +1966,7 @@ class MicroPrimeEngine:
                     )
                     if re_valid:
                         logger.info(
-                            "File-whole repair succeeded for %s (steps: %s)",
+                            "File-whole repair succeeded for %s (tier 1, steps: %s)",
                             file_path, repair_result.steps_applied,
                         )
                         raw_code = repair_result.code
@@ -1886,6 +1977,29 @@ class MicroPrimeEngine:
                     else:
                         reason = re_reason
                         missing = re_missing
+
+                # Tier 2: full contractor repair pipeline
+                if not valid:
+                    contractor_result = run_file_whole_contractor_repair(
+                        raw_code, reason, file_path,
+                    )
+                    if contractor_result.ast_valid:
+                        re_valid, re_reason, re_missing = _validate_file_whole_result(
+                            contractor_result.code, skeleton, file_spec,
+                        )
+                        if re_valid:
+                            logger.info(
+                                "File-whole repair succeeded for %s (tier 2, steps: %s)",
+                                file_path, contractor_result.steps_applied,
+                            )
+                            raw_code = contractor_result.code
+                            valid = True
+                            reason = re_reason
+                            missing = re_missing
+                            break
+                        else:
+                            reason = re_reason
+                            missing = re_missing
 
             last_reason = reason
             last_missing = missing
@@ -1901,7 +2015,7 @@ class MicroPrimeEngine:
             return None
 
         # Strip fences for the final code
-        code = _strip_fences(raw_code)
+        code = extract_code_from_response(raw_code)
 
         # ── Partial acceptance ──
         # If validation failed but we have parseable code with some elements
@@ -1937,61 +2051,64 @@ class MicroPrimeEngine:
                 file_path, len(file_spec.elements), total_llm_calls,
             )
 
-        # Build element results
+        # Build element results — AC-R15 factory methods, AC-R17 pre-classified tiers
         model_name = f"{self._config.provider}:{self._config.model}"
+        tiers = pre_classified_tiers or {}
         file_result = FileResult(file_path=file_path)
         per_element_tokens_in = total_input_tokens // max(len(file_spec.elements), 1)
         per_element_tokens_out = total_output_tokens // max(len(file_spec.elements), 1)
+        per_element_time = gen_time / max(len(file_spec.elements), 1)
+        meta_strategy = {"strategy": "file_ollama_whole", "llm_calls": total_llm_calls}
 
         for element in file_spec.elements:
+            # AC-R17: Use pre-classified tier, not hardcoded SIMPLE
+            elem_tier = tiers.get(element.name, TierClassification.SIMPLE)
             is_missing = element.name in missing_set
             if is_missing:
-                escalation = EscalationResult(
-                    reason=EscalationReason.OLLAMA_WHOLE_FAILED,
-                    detail=f"file-whole partial: element {element.name} not filled",
-                )
-                result = ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason="file_ollama_whole_partial",
-                    parent_class=element.parent_class,
-                    element_kind=element.kind.value if element.kind else None,
-                    success=False,
-                    escalation=escalation,
+                # AC-R14: Escalated elements get at least MODERATE for
+                # adequate cloud budget.
+                esc_tier = max(elem_tier, TierClassification.MODERATE, key=lambda t: t.value)
+                result = ElementResult.make_escalation(
+                    element.name, file_path, esc_tier,
+                    "file_ollama_whole_partial",
+                    EscalationResult(
+                        reason=EscalationReason.OLLAMA_WHOLE_FAILED,
+                        detail=f"file-whole partial: element {element.name} not filled",
+                    ),
                     model=model_name,
-                    generation_time_ms=gen_time / max(len(file_spec.elements), 1),
+                    generation_time_ms=per_element_time,
                     input_tokens=per_element_tokens_in,
                     output_tokens=per_element_tokens_out,
-                    decomposition_metadata={
-                        "strategy": "file_ollama_whole_partial",
-                        "llm_calls": total_llm_calls,
-                    },
+                    decomposition_metadata={**meta_strategy, "strategy": "file_ollama_whole_partial"},
+                    generation_strategy="file_ollama_whole",
                 )
             else:
-                result = ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason="file_ollama_whole",
-                    parent_class=element.parent_class,
-                    element_kind=element.kind.value if element.kind else None,
-                    success=True,
-                    code=code,
-                    repair_recovered=False,
-                    ast_valid_before_repair=True,
-                    ast_valid_after_repair=True,
-                    verification_verdict="pass",
+                result = ElementResult.make_success(
+                    element.name, file_path, elem_tier,
+                    "file_ollama_whole",
+                    code,
                     model=model_name,
-                    generation_time_ms=gen_time / max(len(file_spec.elements), 1),
+                    generation_time_ms=per_element_time,
                     input_tokens=per_element_tokens_in,
                     output_tokens=per_element_tokens_out,
-                    decomposition_metadata={
-                        "strategy": "file_ollama_whole",
-                        "llm_calls": total_llm_calls,
-                    },
+                    ast_valid_before_repair=True,
+                    ast_valid_after_repair=True,
+                    decomposition_metadata=meta_strategy,
+                    generation_strategy="file_ollama_whole",
                 )
+            result.parent_class = element.parent_class
+            result.element_kind = element.kind.value if element.kind else None
             file_result.element_results.append(result)
+
+        # AC-R16: Record file-whole success for few-shot in subsequent files
+        if valid:
+            self._completed.append({
+                "file_path": file_path,
+                "code": code,
+                "generation_strategy": "file_ollama_whole",
+                "syntax_valid": True,
+                "repair_recovered": False,
+            })
 
         file_result.filled_skeleton = code
         return file_result
@@ -2027,18 +2144,15 @@ class MicroPrimeEngine:
         if last_error is not None:
             esc_kwargs["last_error"] = last_error
 
-        return ElementResult(
-            element_name=element.name,
-            file_path=file_path,
-            tier=TierClassification.MODERATE,
-            classification_reason=reasoning,
-            success=False,
+        return ElementResult.make_escalation(
+            element.name, file_path, TierClassification.MODERATE, reasoning,
+            build_escalation_context(**esc_kwargs),
             verification_verdict=verification_verdict,
-            escalation=build_escalation_context(**esc_kwargs),
             decomposition_metadata=decomposition_metadata,
             generation_time_ms=generation_time_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            generation_strategy="moderate_escalation",
         )
 
     def _try_moderate_ollama_whole(
@@ -2180,7 +2294,11 @@ class MicroPrimeEngine:
             total_output += sub_result.output_tokens
 
             if not sub_result.success or not sub_result.code:
-                self._record_local_failure()
+                # AC-R13: Do NOT call _record_local_failure() for each
+                # sub-element — correlated sub-element failures within a
+                # single MODERATE decomposition should count as one parent
+                # failure, not N independent failures.  The parent-level
+                # failure is recorded by _process_element_with_tier (line 1362).
                 logger.warning(
                     "Sub-element %s failed — abandoning decomposition of %s",
                     sub.name, element.name,
@@ -2436,15 +2554,9 @@ class MicroPrimeEngine:
         )
         self._success_cache[moderate_fingerprint] = assembled
 
-        return ElementResult(
-            element_name=element.name,
-            file_path=file_path,
-            tier=TierClassification.MODERATE,
-            classification_reason=reasoning,
-            success=True,
-            code=assembled,
-            model=f"{self._config.provider}:{self._config.model}",
-            verification_verdict="pass",
+        return ElementResult.make_decomposition_success(
+            element.name, file_path, TierClassification.MODERATE, reasoning,
+            assembled,
             decomposition_metadata={
                 "strategy": plan.strategy,
                 "sub_elements": len(plan.sub_elements),
@@ -2459,9 +2571,11 @@ class MicroPrimeEngine:
                 "assembly_time_ms": assembly_time_ms,
                 "total_time_ms": gen_time,
             },
+            model=f"{self._config.provider}:{self._config.model}",
             generation_time_ms=gen_time,
             input_tokens=total_input,
             output_tokens=total_output,
+            generation_strategy="decomposition",
         )
 
     # ── Plan Graph Executor (REQ-MP-912) ─────────────────────────────
@@ -2817,17 +2931,12 @@ class MicroPrimeEngine:
             "repair_steps_count": 0,
         })
 
-        return ElementResult(
-            element_name=element.name,
-            file_path=file_path,
-            tier=TierClassification.TRIVIAL,
-            classification_reason=reasoning,
-            success=True,
-            code=body,
+        return ElementResult.make_success(
+            element.name, file_path, TierClassification.TRIVIAL, reasoning, body,
             template_used=True,
             template_name=match.name,
             model="template",
-            verification_verdict="pass",
+            generation_strategy="template",
         )
 
     def _handle_simple(
@@ -2911,17 +3020,9 @@ class MicroPrimeEngine:
                 "repair_recovered": False,
                 "repair_steps_count": 0,
             })
-            result = ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.SIMPLE,
-                classification_reason=reasoning,
-                success=True,
-                code=template_match.code,
-                template_used=True,
-                template_name=template_match.name,
-                model="template",
-                verification_verdict="pass",
+            result = ElementResult.make_template_match(
+                element.name, file_path, TierClassification.SIMPLE, reasoning,
+                template_match.code, template_match.name,
             )
             self._metrics.record(result)
             return result
@@ -2951,22 +3052,15 @@ class MicroPrimeEngine:
                     "repair_recovered": False,
                     "repair_steps_count": 0,
                 })
-                result = ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason=reasoning,
-                    success=True,
-                    code=decomposed_code,
-                    template_used=True,
-                    template_name="function_body_decompose",
-                    model="template",
-                    verification_verdict="skipped",
-                    decomposition_metadata={
-                        "strategy": "function_body_decompose",
-                        "llm_calls": 0,
-                    },
+                result = ElementResult.make_template_match(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    decomposed_code, "function_body_decompose",
+                    generation_strategy="function_body_decompose",
                 )
+                result.decomposition_metadata = {
+                    "strategy": "function_body_decompose",
+                    "llm_calls": 0,
+                }
                 self._metrics.record(result)
                 return result
             _record_simple_decompose_rejected(file_path)
@@ -3037,29 +3131,18 @@ class MicroPrimeEngine:
                     "Ollama generation failed for %s (attempt %d/%d): %s",
                     element.name, local_attempt, max_local_attempts, e,
                 )
-                last_escalation_result = ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason=reasoning,
-                    success=False,
-                    repair_recovered=False,
-                    ast_valid_before_repair=False,
-                    ast_valid_after_repair=False,
-                    verification_verdict="skipped",
-                    model=model_name,
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    escalation=build_escalation_context(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=TierClassification.SIMPLE,
-                        reason=esc_reason,
-                        detail=str(e),
-                        local_model=model_name,
+                last_escalation_result = ElementResult.make_escalation(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    build_escalation_context(
+                        element_name=element.name, file_path=file_path,
+                        tier=TierClassification.SIMPLE, reason=esc_reason,
+                        detail=str(e), local_model=model_name,
                         element_fqn=element_fqn,
                     ),
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    generation_strategy="element_body",
                 )
                 if is_last_attempt:
                     return _GenerationOutcome(
@@ -3074,29 +3157,19 @@ class MicroPrimeEngine:
                     "Empty Ollama response for %s (attempt %d/%d)",
                     element.name, local_attempt, max_local_attempts,
                 )
-                last_escalation_result = ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason=reasoning,
-                    success=False,
-                    repair_recovered=False,
-                    ast_valid_before_repair=False,
-                    ast_valid_after_repair=False,
-                    verification_verdict="skipped",
-                    model=model_name,
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    escalation=build_escalation_context(
-                        element_name=element.name,
-                        file_path=file_path,
+                last_escalation_result = ElementResult.make_escalation(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    build_escalation_context(
+                        element_name=element.name, file_path=file_path,
                         tier=TierClassification.SIMPLE,
                         reason=EscalationReason.EMPTY_RESPONSE,
                         detail="Empty response from Ollama",
-                        local_model=model_name,
-                        element_fqn=element_fqn,
+                        local_model=model_name, element_fqn=element_fqn,
                     ),
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    generation_strategy="element_body",
                 )
                 if is_last_attempt:
                     return _GenerationOutcome(
@@ -3143,38 +3216,30 @@ class MicroPrimeEngine:
                         raw_output=raw_output,
                         repair_outcome=esc_repair,
                     )
-                    last_escalation_result = ElementResult(
-                        element_name=element.name,
-                        file_path=file_path,
-                        tier=TierClassification.SIMPLE,
-                        classification_reason=reasoning,
-                        success=False,
+                    last_escalation_result = ElementResult.make_escalation(
+                        element.name, file_path, TierClassification.SIMPLE, reasoning,
+                        build_escalation_context(
+                            element_name=element.name, file_path=file_path,
+                            tier=TierClassification.SIMPLE,
+                            reason=EscalationReason.AST_FAILURE,
+                            detail="AST validation failed after repair",
+                            last_code=code,
+                            last_error=repair_result.last_error or "ast.parse() failed",
+                            raw_output=raw_output, repaired_code=repaired_code,
+                            repair_steps=repair_steps, local_model=model_name,
+                            element_fqn=element_fqn, escalation_handoff=handoff,
+                        ),
                         code=code,
+                        model=model_name,
+                        generation_time_ms=(time.monotonic() - start_time) * 1000,
+                        input_tokens=input_tokens, output_tokens=output_tokens,
                         repair_steps_applied=repair_steps,
                         repair_attribution=repair_attribution,
                         repair_recovered=repair_recovered,
                         ast_valid_before_repair=ast_valid_before,
                         ast_valid_after_repair=ast_valid_after,
                         verification_verdict="fail",
-                        model=model_name,
-                        generation_time_ms=(time.monotonic() - start_time) * 1000,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        escalation=build_escalation_context(
-                            element_name=element.name,
-                            file_path=file_path,
-                            tier=TierClassification.SIMPLE,
-                            reason=EscalationReason.AST_FAILURE,
-                            detail="AST validation failed after repair",
-                            last_code=code,
-                            last_error=repair_result.last_error or "ast.parse() failed",
-                            raw_output=raw_output,
-                            repaired_code=repaired_code,
-                            repair_steps=repair_steps,
-                            local_model=model_name,
-                            element_fqn=element_fqn,
-                            escalation_handoff=handoff,
-                        ),
+                        generation_strategy="element_body",
                     )
                     if is_last_attempt:
                         return _GenerationOutcome(
@@ -3241,26 +3306,10 @@ class MicroPrimeEngine:
                     raw_output=outcome.raw_output,
                     repair_outcome=struct_repair,
                 )
-            return ElementResult(
-                element_name=element.name,
-                file_path=file_path,
-                tier=TierClassification.SIMPLE,
-                classification_reason=reasoning,
-                success=False,
-                code=code,
-                repair_steps_applied=outcome.repair_steps,
-                repair_attribution=outcome.repair_attribution,
-                repair_recovered=outcome.repair_recovered,
-                ast_valid_before_repair=outcome.ast_valid_before,
-                ast_valid_after_repair=outcome.ast_valid_after,
-                verification_verdict="fail",
-                model=model_name,
-                generation_time_ms=(time.monotonic() - start_time) * 1000,
-                input_tokens=outcome.input_tokens,
-                output_tokens=outcome.output_tokens,
-                escalation=build_escalation_context(
-                    element_name=element.name,
-                    file_path=file_path,
+            return ElementResult.make_escalation(
+                element.name, file_path, TierClassification.SIMPLE, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path,
                     tier=TierClassification.SIMPLE,
                     reason=EscalationReason.STRUCTURAL_MISMATCH,
                     detail="Structural verification failed after repair",
@@ -3268,11 +3317,19 @@ class MicroPrimeEngine:
                     last_error=structural_reason or "structural_verification_failed",
                     raw_output=outcome.raw_output,
                     repaired_code=outcome.repaired_code or code,
-                    repair_steps=outcome.repair_steps,
-                    local_model=model_name,
-                    element_fqn=element_fqn,
-                    escalation_handoff=struct_handoff,
+                    repair_steps=outcome.repair_steps, local_model=model_name,
+                    element_fqn=element_fqn, escalation_handoff=struct_handoff,
                 ),
+                code=code, model=model_name,
+                generation_time_ms=(time.monotonic() - start_time) * 1000,
+                input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
+                repair_steps_applied=outcome.repair_steps,
+                repair_attribution=outcome.repair_attribution,
+                repair_recovered=outcome.repair_recovered,
+                ast_valid_before_repair=outcome.ast_valid_before,
+                ast_valid_after_repair=outcome.ast_valid_after,
+                verification_verdict="fail",
+                generation_strategy="element_body",
             )
 
         # Optional semantic verification (REQ-MP-512)
@@ -3293,26 +3350,10 @@ class MicroPrimeEngine:
                         raw_output=outcome.raw_output,
                         repair_outcome=sem_repair,
                     )
-                return ElementResult(
-                    element_name=element.name,
-                    file_path=file_path,
-                    tier=TierClassification.SIMPLE,
-                    classification_reason=reasoning,
-                    success=False,
-                    code=code,
-                    repair_steps_applied=outcome.repair_steps,
-                    repair_attribution=outcome.repair_attribution,
-                    repair_recovered=outcome.repair_recovered,
-                    ast_valid_before_repair=outcome.ast_valid_before,
-                    ast_valid_after_repair=outcome.ast_valid_after,
-                    verification_verdict="fail",
-                    model=model_name,
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=outcome.input_tokens,
-                    output_tokens=outcome.output_tokens,
-                    escalation=build_escalation_context(
-                        element_name=element.name,
-                        file_path=file_path,
+                return ElementResult.make_escalation(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    build_escalation_context(
+                        element_name=element.name, file_path=file_path,
                         tier=TierClassification.SIMPLE,
                         reason=EscalationReason.SEMANTIC_FAILURE,
                         detail="Semantic verification failed",
@@ -3320,11 +3361,19 @@ class MicroPrimeEngine:
                         last_error=semantic_reason or "semantic_verification_failed",
                         raw_output=outcome.raw_output,
                         repaired_code=outcome.repaired_code or code,
-                        repair_steps=outcome.repair_steps,
-                        local_model=model_name,
-                        element_fqn=element_fqn,
-                        escalation_handoff=sem_handoff,
+                        repair_steps=outcome.repair_steps, local_model=model_name,
+                        element_fqn=element_fqn, escalation_handoff=sem_handoff,
                     ),
+                    code=code, model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens,
+                    repair_steps_applied=outcome.repair_steps,
+                    repair_attribution=outcome.repair_attribution,
+                    repair_recovered=outcome.repair_recovered,
+                    ast_valid_before_repair=outcome.ast_valid_before,
+                    ast_valid_after_repair=outcome.ast_valid_after,
+                    verification_verdict="fail",
+                    generation_strategy="element_body",
                 )
 
         gen_time = (time.monotonic() - start_time) * 1000
@@ -3343,23 +3392,18 @@ class MicroPrimeEngine:
             "repair_steps_count": len(outcome.repair_steps),
         })
 
-        return ElementResult(
-            element_name=element.name,
-            file_path=file_path,
-            tier=TierClassification.SIMPLE,
-            classification_reason=reasoning,
-            success=True,
-            code=code,
+        return ElementResult.make_success(
+            element.name, file_path, TierClassification.SIMPLE, reasoning, code,
+            model=model_name,
+            generation_time_ms=gen_time,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
             repair_steps_applied=outcome.repair_steps,
             repair_attribution=outcome.repair_attribution,
             repair_recovered=outcome.repair_recovered,
             ast_valid_before_repair=outcome.ast_valid_before,
             ast_valid_after_repair=outcome.ast_valid_after,
-            verification_verdict="pass",
-            model=model_name,
-            generation_time_ms=gen_time,
-            input_tokens=outcome.input_tokens,
-            output_tokens=outcome.output_tokens,
+            generation_strategy="element_body",
         )
 
     # Stop sequences for complete-function output mode (REQ-MP-206).
@@ -3430,7 +3474,7 @@ class MicroPrimeEngine:
             else self._OLLAMA_STOP_SEQUENCES
         )
         gen_kwargs: dict[str, Any] = dict(
-            system_prompt=system_prompt or _CODE_GEN_SYSTEM_PROMPT,
+            system_prompt=system_prompt or _ELEMENT_BODY_SYSTEM_PROMPT,
             temperature=self._config.temperature,
             stop=effective_stops,
         )
@@ -3521,8 +3565,13 @@ class MicroPrimeEngine:
             reason = str(payload.get("reason", "")) or "semantic verification result"
             return passed, reason
         except Exception as exc:
-            logger.info("Semantic verification parse inconclusive: %s — accepting", exc)
-            return True, "semantic verification inconclusive — accepting"
+            # AC-R9: Default to rejection on inconclusive verification.
+            # The previous accept-on-failure policy meant any verifier
+            # timeout, refusal, or malformed JSON silently bypassed
+            # verification.  Rejecting triggers the retry loop and
+            # eventual escalation — a safer failure mode.
+            logger.warning("Semantic verification parse inconclusive: %s — rejecting", exc)
+            return False, f"semantic verification inconclusive: {exc}"
 
     def _get_element_contracts(
         self,
@@ -3565,16 +3614,34 @@ def _has_high_within_file_coupling(
     element_names = {e.name for e in file_spec.elements}
 
     # 1. Module-level global assignments (e.g., fake = Faker(), product_ids = [...])
+    # AC-R10: Exclude common infrastructure globals that don't indicate
+    # meaningful coupling (logger, log, app are universally referenced
+    # but don't require cross-element context for generation).
+    _INFRA_GLOBALS = {"logger", "log", "logging", "LOG", "LOGGER", "app", "db", "engine"}
     module_globals: set[str] = set()
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name):
+                if isinstance(target, ast.Name) and target.id not in _INFRA_GLOBALS:
                     module_globals.add(target.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(
             getattr(node, "target", None), ast.Name
         ):
-            module_globals.add(node.target.id)
+            if node.target.id not in _INFRA_GLOBALS:
+                module_globals.add(node.target.id)
+
+    # Also count CONSTANT/VARIABLE manifest elements that may not be in
+    # the skeleton yet.  When the manifest declares module-level variables
+    # (e.g. fake, product_ids), element-by-element generation may produce
+    # code referencing them without knowing they exist.  Including them
+    # here biases the routing toward file-whole, which sees the full
+    # skeleton and handles module-level state correctly.
+    for el in file_spec.elements:
+        if (
+            el.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE)
+            and el.name not in _INFRA_GLOBALS
+        ):
+            module_globals.add(el.name)
 
     # 2. Scan function/method bodies for references to sibling elements
     #    or module-level globals.
@@ -3614,22 +3681,33 @@ def _has_high_within_file_coupling(
 
     shared_attrs = init_writes & other_reads
 
-    # Heuristic: any of these signals suggest coupling.
-    # - Module globals referenced by functions → splicer will lose them
-    # - Functions calling sibling functions → body-only prompts miss context
-    # - Shared instance attributes → method isolation loses class context
+    # Coupling thresholds — tuned after PI-008/run-042 analysis.
+    # Previous thresholds (>=4) missed files where 2-3 functions each
+    # referenced module-level state (product_ids, fake, config dicts).
+    # Lowered global_refs threshold to 3 and added a density signal:
+    # when module-level variables outnumber function/class elements,
+    # element-by-element generation almost always loses state.
+    n_elements = len([e for e in file_spec.elements if e.kind not in (
+        ElementKind.CONSTANT, ElementKind.VARIABLE,
+    )])
+    module_var_ratio = len(module_globals) / max(n_elements, 1)
+
     has_coupling = (
-        (global_refs >= 2 and len(module_globals) >= 1)
-        or cross_refs >= 2
-        or len(shared_attrs) >= 2
+        (global_refs >= 3 and len(module_globals) >= 2)
+        or cross_refs >= 4
+        or len(shared_attrs) >= 3
+        # High module-variable density: more globals than functions/classes
+        # strongly indicates cross-element state sharing.
+        or (module_var_ratio >= 1.0 and len(module_globals) >= 2 and global_refs >= 1)
     )
 
     if has_coupling:
         logger.debug(
             "Coupling signals for %s: global_refs=%d, cross_refs=%d, "
-            "shared_attrs=%d (%s)",
+            "shared_attrs=%d (%s), module_var_ratio=%.1f",
             file_spec.file, global_refs, cross_refs,
             len(shared_attrs), ", ".join(sorted(shared_attrs)[:5]),
+            module_var_ratio,
         )
 
     return has_coupling

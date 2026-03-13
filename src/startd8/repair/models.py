@@ -189,6 +189,7 @@ class RepairContext:
     feature_name: str = ""  # REQ-RPL-004: feature being repaired
     attempt_number: int = 0  # REQ-RPL-004: for circuit breaker tracking
     test_regressions: List[str] = field(default_factory=list)  # REQ-RPL-004: test names for skip decision
+    skeleton_content: Optional[str] = None  # Skeleton/existing file for ground-truth variable recovery
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -13,6 +13,7 @@ from .steps import (
     AstValidateStep,
     BracketBalanceStep,
     ClassBodyDeduplicationStep,
+    DunderAllFixStep,
     DuplicateRemovalStep,
     ErrorDrivenImportCompletion,
     ExtendedLintFixStep,
@@ -20,6 +21,8 @@ from .steps import (
     FutureImportReorderStep,
     IndentNormalizeStep,
     SemanticMethodFixStep,
+    UnusedVariableRemovalStep,
+    VariableInitializationStep,
 )
 
 if TYPE_CHECKING:
@@ -35,8 +38,11 @@ _CANONICAL_ORDER = [
     "bracket_balance",
     "class_body_dedup",
     "import_completion",
+    "variable_initialization",
     "duplicate_removal",
     "extended_lint_fix",
+    "dunder_all_fix",
+    "unused_variable_removal",
     "semantic_method_fix",
     "ast_validate",
 ]
@@ -44,8 +50,8 @@ _CANONICAL_ORDER = [
 # Routing table: category → (matched_pattern, step_names, confidence)
 _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH"),
-    ("import", "missing_import", ["import_completion", "duplicate_removal", "ast_validate"], "HIGH"),
-    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "import_completion", "duplicate_removal", "extended_lint_fix", "ast_validate"], "MEDIUM"),
+    ("import", "missing_import", ["import_completion", "variable_initialization", "duplicate_removal", "ast_validate"], "HIGH"),
+    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM"),
     ("semantic", "semantic_error", ["semantic_method_fix", "ast_validate"], "HIGH"),
 ]
 
@@ -57,9 +63,12 @@ _STEP_FACTORIES: dict[str, type] = {
     "bracket_balance": BracketBalanceStep,
     "class_body_dedup": ClassBodyDeduplicationStep,
     "import_completion": ErrorDrivenImportCompletion,
+    "variable_initialization": VariableInitializationStep,
     "duplicate_removal": DuplicateRemovalStep,
     "extended_lint_fix": ExtendedLintFixStep,
+    "dunder_all_fix": DunderAllFixStep,
     "semantic_method_fix": SemanticMethodFixStep,
+    "unused_variable_removal": UnusedVariableRemovalStep,
     "ast_validate": AstValidateStep,
 }
 
