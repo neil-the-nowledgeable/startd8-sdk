@@ -1047,6 +1047,7 @@ class TestHandleModerateInEngine:
             decomposition_enabled=True,  # AC-R4-R5: opt in
             enable_simple_decomposer=False,
             moderate_ollama_whole_enabled=False,
+            file_ollama_whole_enabled=False,
         )
         engine = MicroPrimeEngine(config=config)
         file_result = engine.process_file(
