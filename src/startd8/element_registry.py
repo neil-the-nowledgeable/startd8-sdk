@@ -535,6 +535,18 @@ class ElementRegistry:
                     self._misses_counter.add(1)
             return entry
 
+    def get_by_contract_id(self, contract_id: str) -> list[ElementEntry]:
+        """Return all entries whose ``source_contract_id`` matches.
+
+        Thread-safe.  Returns an empty list when no entries match.
+        """
+        with self._lock:
+            self._ensure_loaded()
+            return [
+                e for e in self._index.values()
+                if e.source_contract_id == contract_id
+            ]
+
     def put(self, entry: ElementEntry) -> None:
         """
         Insert or replace an ``ElementEntry``.

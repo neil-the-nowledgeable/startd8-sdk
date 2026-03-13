@@ -105,6 +105,8 @@ class IntegrationEngine:
         self._repair_config = repair_config
         # Element registry (ER-008)
         self._element_registry = element_registry
+        # Forward manifest for contract violation repair
+        self._forward_manifest: Any = None
 
     # ------------------------------------------------------------------
     # Phase 4: Manifest diff (IN-1 through IN-3)
@@ -1577,8 +1579,21 @@ class IntegrationEngine:
                     })
                     continue
 
-            # PCA-604: Size regression guard — block overwrites that would lose significant code
-            if target_path.is_file() and source_path.exists():
+            # PCA-604: Size regression guard — block overwrites that would lose significant code.
+            # Pipeline-poisoning guard: skip when the target file is manifest-covered —
+            # the existing content is from a prior run (possibly a different generation
+            # strategy), not a meaningful regression baseline for skeleton-based generation.
+            _manifest_covers_target = False
+            if self._forward_manifest is not None:
+                try:
+                    _fm_specs = self._forward_manifest.file_specs or {}
+                    # Use relative path for manifest lookup — target_path is
+                    # absolute but manifest keys are relative (e.g. "src/foo.py").
+                    _rel = str(target_path.relative_to(self.project_root))
+                    _manifest_covers_target = _rel in _fm_specs
+                except (AttributeError, TypeError):
+                    pass
+            if target_path.is_file() and source_path.exists() and not _manifest_covers_target:
                 try:
                     target_content = target_path.read_text(encoding="utf-8")
                     target_lines = len(target_content.splitlines())

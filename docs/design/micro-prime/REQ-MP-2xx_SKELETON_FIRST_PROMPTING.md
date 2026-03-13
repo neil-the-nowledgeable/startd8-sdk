@@ -216,6 +216,100 @@ When other elements in the same file have been successfully generated (by templa
 
 ---
 
+## Prompt Format Guidelines
+
+### File-Whole vs Element-Body Prompt Structure
+
+The Micro Prime engine uses two generation paths with **different prompt format requirements**:
+
+| Path | Output expected | Instruction format | Rationale |
+|------|----------------|-------------------|-----------|
+| **File-whole** | Complete Python file | Plain text above a `---` delimiter | Model outputs a full file — `#` comment instructions would be echoed as file content |
+| **Element-body** | Indented body lines only | `# Comment` format (in-file context) | Model outputs indented code — `#` comments are structurally distinct and provide useful file context framing |
+
+**File-whole prompt structure** (REQ-MP-206):
+
+```
+Complete this Python file by replacing every `raise NotImplementedError`
+with a working implementation.
+Output ONLY the complete Python file. No markdown fences, no explanations.
+
+Task: {task_description}
+
+Elements to implement ({count}):
+1. {element_name}
+
+--- Skeleton file (fill in the stubs) ---
+{skeleton content WITHOUT skeleton markers}
+```
+
+**Element-body prompt structure** (REQ-MP-201, unchanged):
+
+```python
+# Task: Implement the body of function `{name}`.
+# Replace the `raise NotImplementedError` line with a working implementation.
+# Output ONLY the indented body lines that go INSIDE the function.
+...
+# Now implement this:
+def {name}({params}):
+    raise NotImplementedError
+```
+
+The comment format works for element-body because the expected output (indented body lines) is structurally different from top-level `#` comments — the model does not echo them. Verified empirically with `startd8-coder` (Ollama).
+
+### REQ-MP-206: File-Whole Prompt Hygiene
+
+**Status:** implemented
+**Priority:** P0
+
+When building file-whole prompts, the prompt builder SHALL:
+
+1. **Use plain text for instructions** — NOT Python comment format (`# ...`). Small local models echo comment-formatted instructions as part of the generated file, wasting output tokens and triggering stop sequences before reaching the actual implementation.
+
+2. **Strip skeleton markers** — The `# [STARTD8-SKELETON]` marker SHALL be removed from the skeleton content before it enters the prompt. If echoed by the model, the marker triggers the "contains skeleton markers" validation failure.
+
+3. **Separate instructions from code** — A clear delimiter (`--- Skeleton file (fill in the stubs) ---`) SHALL separate plain-text instructions from the skeleton code block.
+
+4. **Avoid aggressive stop sequences** — The triple-newline stop (`\n\n\n`) SHALL NOT be used in file-whole mode. PEP 8 mandates two blank lines between top-level definitions, which produces `\n\n\n` in normal Python files. Use quadruple newline (`\n\n\n\n`) as the exhaustion marker instead.
+
+**Root cause:** Run-045 PI-007 (`client.py`) failed 4 consecutive attempts because:
+- The model echoed the `# Fill in ALL...` comment block as file content
+- The `\n\n\n` stop sequence fired at the PEP 8 gap between imports and `def main()`
+- The skeleton marker `# [STARTD8-SKELETON]` was echoed, failing the marker validation
+
+**Acceptance criteria:**
+- File-whole prompts contain no `# ...` instruction lines
+- Skeleton markers are absent from the prompt content
+- PEP 8 double blank lines in generated files do not trigger stop sequences
+- Model output starts with the file's import block, not echoed instructions
+
+---
+
+### Pipeline Poisoning Guard (REQ-MP-207)
+
+**Status:** implemented
+**Priority:** P0
+
+When classifying tasks for complexity routing, the signal extractor SHALL distinguish between **live source code** (developer-written, represents real coupling) and **prior run artifacts** (pipeline outputs from previous runs that happen to exist on disk).
+
+**Contamination vectors:**
+
+| Signal | Contamination | Guard |
+|--------|--------------|-------|
+| `edit_mode` | Prior run output exists → classified as "edit" instead of "create" | Skip `is_file()` check for manifest-covered files |
+| `blast_radius` | Prior run outputs import the target → inflated importer count | Exclude manifest-covered files from blast radius scan |
+| Size regression (Micro Prime) | Prior cloud output larger than Ollama output → false regression | Skip comparison for manifest-covered files |
+| Size regression (Integration) | Same as above, at merge time | Skip comparison for manifest-covered files |
+| `.claude/worktrees` | Claude Code worktrees duplicate the entire repo | Added `.claude` to `_BLAST_RADIUS_EXCLUDED_DIRS` |
+
+**Principle:** When a `ForwardManifest` covers a target file, the file will be (re)generated from a skeleton. The prior file on disk — regardless of how it was generated — is not a meaningful baseline for the current run's classification, regression detection, or routing decisions.
+
+**Relationship to design principles:**
+- **Not an Ichigo Ichie violation** — the guards themselves are general-purpose (work for any project). The issue is that the *inputs* to the guards (filesystem state) are contaminated by prior run artifacts.
+- **Mottainai-compatible** — within a single run, artifact reuse is still honored. The guard only applies to cross-run contamination where the prior run's generation strategy (e.g., cloud) differs from the current run's strategy (e.g., Ollama).
+
+---
+
 ## Implementation Notes
 
 ### Prompt Builder Location

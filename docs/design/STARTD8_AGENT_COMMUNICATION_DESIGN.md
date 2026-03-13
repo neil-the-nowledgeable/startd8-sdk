@@ -69,6 +69,18 @@ BaseAgent
 - Agents never read or write shared state
 - Agent creation goes through `ProviderRegistry.discover()` → `provider.validate_config()` → `provider.create_agent(model)`
 
+**Prompt format by generation mode** (see [REQ-MP-206](micro-prime/REQ-MP-2xx_SKELETON_FIRST_PROMPTING.md)):
+
+Small local models (Ollama) are sensitive to prompt format — they echo content that looks like the expected output type. This creates a model-tier-dependent prompt format requirement:
+
+| Generation mode | Expected output | Instruction format |
+|----------------|----------------|-------------------|
+| File-whole (Micro Prime) | Complete Python file | Plain text + delimiter — `#` comments are echoed as file content |
+| Element-body (Micro Prime) | Indented body lines | `#` comment format — structurally distinct from indented output |
+| Spec/Draft/Review (LeadContractor) | Complete file or prose | Markdown sections — cloud models handle mixed formats reliably |
+
+This distinction does not apply to cloud models (Anthropic, OpenAI), which handle all formats without echo artifacts. The prompt format guidelines are specific to the Micro Prime local-model path.
+
 ### Agent Specification Format
 
 Agents are identified by `provider:model` strings:

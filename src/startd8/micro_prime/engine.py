@@ -169,6 +169,7 @@ class _EngineMetrics:
         "moderate_ollama_whole_succeeded": ("micro_prime.moderate_ollama_whole_succeeded", "MODERATE elements resolved by Ollama-whole (no decomposition needed)"),
         "generation_path": ("micro_prime.generation_path_total", "Generation path routing decisions"),
         "generation_path_outcome": ("micro_prime.generation_path_outcome_total", "Generation path outcomes (success/failure)"),
+        "ollama_finish_reason": ("micro_prime.ollama_finish_reason_total", "Ollama generation finish reasons (stop/length) for stop-sequence verification"),
     }
 
     _HISTOGRAMS = {
@@ -766,56 +767,52 @@ def _build_file_whole_prompt(
     Returns:
         The constructed prompt string.
     """
-    sections: list[str] = []
+    # Prompt structure: plain-text instructions ABOVE the skeleton, separated
+    # by a clear delimiter.  Prior format used Python comments for everything,
+    # which caused small models to echo the instruction block as part of the
+    # file — burning output tokens on prompt repetition and triggering stop
+    # sequences before the actual implementation.
+    instructions: list[str] = []
 
-    sections.append(
-        "# Fill in ALL `raise NotImplementedError` stubs in this file."
+    instructions.append(
+        "Complete this Python file by replacing every `raise NotImplementedError` "
+        "with a working implementation."
     )
-    sections.append(
-        "# Output the COMPLETE file with every stub replaced by a working implementation."
+    instructions.append(
+        "Output ONLY the complete Python file. No markdown fences, no explanations, "
+        "no comments that aren't in the original skeleton."
     )
-    sections.append(
-        "# Do NOT change imports, class names, function signatures, or file structure."
-    )
-    sections.append("")
 
     if task_description:
-        sections.append(f"# Task context: {task_description}")
-        sections.append("")
+        instructions.append(f"\nTask: {task_description}")
 
     if domain_constraints:
-        sections.append("# Domain constraints (MUST follow these):")
+        instructions.append("\nConstraints:")
         for dc in domain_constraints:
-            sections.append(f"# - {dc}")
-        sections.append("")
+            instructions.append(f"- {dc}")
 
-    # AC-R16: Design documentation context — describes expected behavior,
-    # architectural patterns, and inter-component relationships.
+    # AC-R16: Design documentation context
     if design_doc_sections:
-        sections.append("# Implementation context:")
+        instructions.append("\nImplementation context:")
         for section in design_doc_sections:
-            for line in section.splitlines():
-                sections.append(f"# {line}" if line.strip() else "#")
-        sections.append("")
+            instructions.append(section)
 
-    # AC-R16: Binding constraints — interface contracts specifying required
-    # parameter types, return types, and semantic constraints.
+    # AC-R16: Binding constraints
     if contracts:
         constraint_lines: list[str] = []
         for c in contracts:
             level = "BINDING" if c.confidence == ContractConfidence.EXPLICIT else "ADVISORY"
             desc = c.binding_text or c.description or "unspecified"
             cat = f" ({c.category.value})" if c.category else ""
-            constraint_lines.append(f"# - [{level}]{cat} {desc}")
+            constraint_lines.append(f"- [{level}]{cat} {desc}")
         if constraint_lines:
-            sections.append("# Constraints (MUST satisfy BINDING, SHOULD satisfy ADVISORY):")
-            sections.extend(constraint_lines)
-            sections.append("")
+            instructions.append("\nInterface constraints:")
+            instructions.extend(constraint_lines)
 
-    # Element manifest — explicit listing of what to implement
+    # Element manifest
     implementable = [e for e in file_spec.elements if e.kind != ElementKind.CLASS]
     if implementable:
-        sections.append(f"# Elements to implement ({len(implementable)} total):")
+        instructions.append(f"\nElements to implement ({len(implementable)}):")
         for i, el in enumerate(implementable, 1):
             fqn = f"{el.parent_class}.{el.name}" if el.parent_class else el.name
             hint = ""
@@ -823,21 +820,18 @@ def _build_file_whole_prompt(
                 hint = f' — "{el.docstring_hint}"'
             elif el.signature and el.signature.return_annotation:
                 hint = f" -> {el.signature.return_annotation}"
-            sections.append(f"# {i}. {fqn}{hint}")
-        sections.append("")
+            instructions.append(f"{i}. {fqn}{hint}")
 
     # AC-R16: Completed file examples from earlier files in the same seed.
-    # Provides the model with worked examples of successfully generated files.
     if completed_file_examples:
         for idx, example in enumerate(completed_file_examples[:2], 1):
-            sections.append(f"# --- Example of a completed file ({idx}) ---")
-            sections.append(example)
-            sections.append("")
+            instructions.append(f"\n--- Example of a completed file ({idx}) ---")
+            instructions.append(example)
 
-    sections.append("# --- Skeleton file (fill in the stubs) ---")
-    sections.append(skeleton)
+    # Clear delimiter between instructions and skeleton
+    instructions.append("\n--- Skeleton file (fill in the stubs) ---\n")
 
-    return "\n".join(sections)
+    return "\n".join(instructions) + skeleton
 
 
 def _strip_fences(code: str) -> str:
@@ -2049,8 +2043,14 @@ class MicroPrimeEngine:
                 if len(completed_file_examples) >= 2:
                     break
 
+        # Strip skeleton marker before prompting — if the model echoes it,
+        # validation fails with "contains skeleton markers."
+        _prompt_skeleton = skeleton.replace(
+            SKELETON_MARKER + "\n", ""
+        ).replace(SKELETON_MARKER, "")
+
         prompt = _build_file_whole_prompt(
-            skeleton, file_spec,
+            _prompt_skeleton, file_spec,
             task_description=task_description,
             domain_constraints=domain_constraints,
             design_doc_sections=design_doc_sections,
@@ -3234,12 +3234,35 @@ class MicroPrimeEngine:
                 )
 
             try:
-                raw_code, inp_tok, out_tok = self._generate_ollama(
+                raw_code, inp_tok, out_tok, finish_reason = self._generate_ollama(
                     current_prompt,
                     system_prompt=system_prompt,
                     max_tokens=max_tokens,
                     stop_sequences=stop_sequences,
                 )
+                # OLLAMA_QUALITY_RESEARCH_AGENDA Section 6: log finish_reason for
+                # stop sequence verification (frequency table over 100+ runs).
+                # OpenAI-compatible API returns "stop" (natural) or "length" (max_tokens).
+                if finish_reason is not None:
+                    logger.debug(
+                        "ollama.generation.finish reason=%s entity=%s output_tokens=%d",
+                        finish_reason,
+                        entity_name,
+                        out_tok,
+                        extra={
+                            "ollama": {
+                                "finish_reason": finish_reason,
+                                "entity_name": entity_name,
+                                "output_tokens": out_tok,
+                                "input_tokens": inp_tok,
+                            }
+                        },
+                    )
+                    _engine_metrics.record(
+                        "ollama_finish_reason",
+                        1,
+                        {"finish_reason": finish_reason},
+                    )
             except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
                 logger.warning(
                     "Ollama call failed for %s (attempt %d/%d): %s",
@@ -3650,7 +3673,10 @@ class MicroPrimeEngine:
         "\n# Implement",     # Model echoing prompt template
         "\n# Define",        # Model echoing constant prompt template
         "\n# Now implement",  # Model echoing "Now implement this:" marker
-        "\n\n\n",            # Triple newline — generation exhausted
+        "\n\n\n\n",          # Quadruple newline — generation exhausted
+        # NOTE: triple newline (\n\n\n) was too aggressive — PEP 8 uses
+        # two blank lines between top-level definitions, which produces
+        # \n\n\n in the output and prematurely truncates file-whole generation.
     ]
 
     def _generate_ollama(
@@ -3660,10 +3686,10 @@ class MicroPrimeEngine:
         max_tokens: int | None = None,
         *,
         stop_sequences: list[str] | None = None,
-    ) -> tuple[str, int, int]:
+    ) -> tuple[str, int, int, str | None]:
         """Generate code using the Ollama provider.
 
-        Returns (raw_text, input_tokens, output_tokens).
+        Returns (raw_text, input_tokens, output_tokens, finish_reason).
 
         Args:
             stop_sequences: Override stop sequences.  Pass an explicit list
@@ -3674,6 +3700,10 @@ class MicroPrimeEngine:
         The raw LLM text is returned without pre-extraction so that the
         repair pipeline's ``fence_strip`` step can handle fence removal
         in one place (Fix 3 — removes redundant extract_code_from_response).
+
+        finish_reason supports OLLAMA_QUALITY_RESEARCH_AGENDA Section 6
+        (stop sequence verification): "stop" = natural stop, "length" =
+        max_tokens exhausted.
         """
         if self._ollama_agent is None:
             from startd8.utils.agent_resolution import resolve_agent_spec
@@ -3706,11 +3736,17 @@ class MicroPrimeEngine:
 
         input_tokens = 0
         output_tokens = 0
+        finish_reason: str | None = None
         if token_usage:
             input_tokens = getattr(token_usage, "input", 0) or 0
             output_tokens = getattr(token_usage, "output", 0) or 0
+            finish_reason = getattr(token_usage, "finish_reason", None)
+            if finish_reason and isinstance(finish_reason, str):
+                pass
+            else:
+                finish_reason = None
 
-        return result_text, input_tokens, output_tokens
+        return result_text, input_tokens, output_tokens, finish_reason
 
     def _semantic_verify(
         self,

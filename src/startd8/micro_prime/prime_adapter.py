@@ -649,9 +649,17 @@ class MicroPrimeCodeGenerator:
             st.file_results_by_path[file_path] = file_result
 
             if file_result.filled_skeleton:
-                # Size-regression escalation guard
+                # Size-regression escalation guard.
+                # Pipeline-poisoning guard: skip comparison when the file is
+                # manifest-covered — the existing content is from a prior run
+                # (possibly a different generation strategy like cloud), not a
+                # meaningful baseline for the current skeleton-based generation.
                 existing_content = existing_files.get(file_path, "")
-                if existing_content:
+                manifest_covers_file = (
+                    file_path in (manifest.file_specs or {})
+                    if manifest is not None else False
+                )
+                if existing_content and not manifest_covers_file:
                     filled_sem = _semantic_line_count(file_result.filled_skeleton)
                     existing_sem = _semantic_line_count(existing_content)
                     existing_raw = existing_content.count("\n") + 1

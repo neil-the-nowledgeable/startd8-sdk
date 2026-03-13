@@ -587,6 +587,7 @@ def main() -> int:
     for fid, feature in workflow.queue.features.items():
         if feature.status in (
             FeatureStatus.FAILED, FeatureStatus.BLOCKED, FeatureStatus.DEVELOPING,
+            FeatureStatus.INTEGRATING,
         ):
             if feature.status == FeatureStatus.DEVELOPING or workflow.force_regenerate:
                 feature.status = FeatureStatus.PENDING
