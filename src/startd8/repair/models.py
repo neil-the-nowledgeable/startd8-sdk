@@ -100,6 +100,23 @@ class SemanticDiagnostic(Diagnostic):
         self.category = "semantic"
 
 
+@dataclass
+class ContractViolationDiagnostic(Diagnostic):
+    """Forward manifest contract violation diagnostic (AC-R12).
+
+    Used by splice violation repair routing to carry typed violation
+    data from the splicer through the repair pipeline.
+    """
+
+    violation_type: str = ""  # "missing_parameter", "wrong_return_type", "missing_base_class"
+    expected: str = ""
+    actual: str = ""
+    element_name: str = ""
+
+    def __post_init__(self) -> None:
+        self.category = "contract_violation"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step & pipeline results
 # ═══════════════════════════════════════════════════════════════════════════

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import textwrap
+from dataclasses import dataclass, field
 from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec
@@ -18,6 +19,17 @@ logger = get_logger(__name__)
 
 # Sentinel comment marking skeleton files (from file_assembler.py)
 _SKELETON_SENTINEL = "# [STARTD8-SKELETON]"
+
+
+@dataclass(frozen=True)
+class SpliceViolation:
+    """Typed splice violation for structured repair routing (AC-R12)."""
+
+    violation_type: str  # e.g. "signature_mismatch", "base_class_mismatch"
+    message: str
+    element_name: str = ""
+    expected: str = ""
+    actual: str = ""
 
 
 def _dedent_lines(lines: list[str]) -> list[str]:
