@@ -2973,11 +2973,13 @@ class PrimeContractorWorkflow:
             else:
                 error_msg = result.error or 'Code generation failed'
                 logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
+                self._clean_failed_feature(feature)
                 self.queue.fail_feature(feature.id, error_msg)
                 return False
         except Exception as e:
             error_msg = f'Exception during code generation: {e}'
             logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
+            self._clean_failed_feature(feature)
             self.queue.fail_feature(feature.id, error_msg)
             return False
 
@@ -3276,6 +3278,7 @@ class PrimeContractorWorkflow:
         )
         if quality_feedback:
             error_msg += f" Review feedback: {quality_feedback[:500]}"
+        self._clean_failed_feature(feature)
         self.queue.fail_feature(feature.id, error_msg)
         self.total_cost_usd += result.cost_usd
         self.total_input_tokens += result.input_tokens
@@ -3521,6 +3524,7 @@ class PrimeContractorWorkflow:
                 feature.error_message = (
                     (feature.error_message or "") + f" | {repair_detail}"
                 ).lstrip(" | ")
+            self._clean_failed_feature(feature)
             if result.checkpoint_results and self.on_checkpoint_failed:
                 self.on_checkpoint_failed(feature, result.checkpoint_results)
             return False
@@ -3585,6 +3589,7 @@ class PrimeContractorWorkflow:
                 break
             if feature.integration_attempts >= self.max_retries:
                 logger.error("Feature '%s' exceeded max integration attempts (%d)", feature.name, self.max_retries)
+                self._clean_failed_feature(feature)
                 self.queue.fail_feature(feature.id, f'Max integration attempts exceeded ({self.max_retries})')
                 self._save_queue_state_with_mode()
                 features_processed += 1
@@ -3707,6 +3712,73 @@ class PrimeContractorWorkflow:
                 reset_count += 1
         self.queue.save_state()
         logger.info('Reset %d failed/blocked feature(s)', reset_count)
+
+    def _clean_failed_feature(self, feature: FeatureSpec) -> int:
+        """Remove artifacts for a failed feature so the next run retries cleanly.
+
+        Deletes generated files, invalidates the generation cache entry,
+        and clears ``feature.generated_files`` so that Mottainai reuse does
+        not attempt to reuse broken artifacts.
+
+        Returns:
+            Count of items removed.
+        """
+        removed = 0
+        resolved_output_dir = self._resolve_output_dir()
+
+        # 1. Delete generated files from disk
+        for fpath_str in list(feature.generated_files or []):
+            fpath = Path(fpath_str)
+            if not fpath.is_absolute():
+                fpath = resolved_output_dir.parent / fpath
+            if fpath.exists():
+                try:
+                    fpath.unlink()
+                    logger.debug(
+                        "Cleaned failed artifact: %s (feature=%s)",
+                        fpath.name, feature.id,
+                    )
+                    removed += 1
+                except OSError as exc:
+                    logger.warning(
+                        "Could not remove %s: %s", fpath, exc,
+                    )
+
+        # 2. Remove per-feature staging directory if it exists
+        feature_staging_dir = resolved_output_dir / feature.id
+        if feature_staging_dir.exists() and feature_staging_dir.is_dir():
+            shutil.rmtree(feature_staging_dir, ignore_errors=True)
+            logger.debug(
+                "Removed staging dir: %s (feature=%s)",
+                feature_staging_dir.name, feature.id,
+            )
+            removed += 1
+
+        # 3. Invalidate generation cache entry
+        if hasattr(self, "_generation_cache") and self._generation_cache is not None:
+            try:
+                gen_context = self._build_generation_context(feature)
+                key = self._make_generation_cache_key(feature, gen_context)
+                if key and self._generation_cache.invalidate(key):
+                    logger.debug(
+                        "Invalidated cache for feature '%s'", feature.id,
+                    )
+                    removed += 1
+            except Exception:
+                logger.debug(
+                    "Cache invalidation skipped for '%s'", feature.id,
+                    exc_info=True,
+                )
+
+        # 4. Clear the file list so Mottainai doesn't try to reuse them
+        feature.generated_files = []
+
+        if removed:
+            logger.info(
+                "Cleaned %d artifact(s) for failed feature '%s'",
+                removed, feature.name,
+            )
+        return removed
 
     def full_reset(self, include_targets: bool=False) -> None:
         """
