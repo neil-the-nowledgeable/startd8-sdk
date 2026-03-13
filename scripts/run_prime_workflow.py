@@ -109,6 +109,15 @@ def main() -> int:
         help="Output directory for artifacts (default: same dir as seed)",
     )
     parser.add_argument(
+        "--config", default=None,
+        help=(
+            "Path to prime-contractor.json config file (F-AC-02). "
+            "Consolidates micro-prime, complexity-routing, repair, validation, "
+            "and agent settings. Auto-discovered from .startd8/prime-contractor.json "
+            "if not specified. CLI args override config file values."
+        ),
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Simulate execution without side effects",
     )
@@ -334,7 +343,21 @@ def main() -> int:
     project_root = Path(args.project_root).resolve()
 
     # ------------------------------------------------------------------
-    # Auto-enrich: prefer existing enriched seed, else run preflight
+    # Load consolidated config (F-AC-02), then apply CLI overrides
+    # ------------------------------------------------------------------
+    from startd8.contractors.prime_contractor_config import (
+        apply_cli_overrides,
+        load_prime_contractor_config,
+    )
+
+    pc_config = load_prime_contractor_config(
+        config_path=args.config,
+        project_root=project_root,
+    )
+    pc_config = apply_cli_overrides(pc_config, args)
+
+    # ------------------------------------------------------------------
+    # Prefer enriched seed if available (F-AC-06: enrichment now upstream)
     # ------------------------------------------------------------------
     base_stem = seed_path.stem.removesuffix("-enriched")
     all_suffixes = "".join(seed_path.suffixes)
@@ -345,53 +368,29 @@ def main() -> int:
         base_seed = seed_path.with_name(base_stem + all_suffixes)
         if base_seed.exists() and base_seed.stat().st_mtime > enriched_candidate.stat().st_mtime:
             logger.warning(
-                "Enriched seed is stale — will re-run DomainPreflightWorkflow. "
-                "base=%s enriched=%s", base_seed, enriched_candidate,
+                "Enriched seed is stale (base newer than enriched). "
+                "Re-run plan-ingestion to refresh enrichment. "
+                "Proceeding with base seed: %s", base_seed,
             )
         else:
             logger.info(
-                "Found enriched seed on disk — using %s (skip DomainPreflightWorkflow)",
+                "Using enriched seed: %s",
                 enriched_candidate,
             )
             seed_path = enriched_candidate
-
-    try:
-        seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
-        tasks = seed_data.get("tasks", [])
-        has_enrichment = any(t.get("_enrichment") for t in tasks)
-        if tasks and not has_enrichment:
-            logger.info(
-                "Seed lacks _enrichment data — running DomainPreflightWorkflow "
-                "to classify domains and add prompt constraints"
-            )
-            from startd8.workflows.builtin.domain_preflight_workflow import (
-                DomainPreflightWorkflow,
-            )
-            preflight = DomainPreflightWorkflow()
-            preflight_result = preflight.run({
-                "context_seed_path": str(seed_path),
-                "project_root": str(project_root),
-            })
-            if preflight_result.success:
-                enriched_path = Path(
-                    preflight_result.output["enriched_seed_path"]
-                )
-                logger.info(
-                    "Auto-enriched seed written: %s (domains: %s)",
-                    enriched_path,
-                    preflight_result.output.get("domain_summary", {}),
-                )
-                seed_path = enriched_path
-            else:
+    else:
+        # Check if enrichment is missing
+        try:
+            _check_data = json.loads(seed_path.read_text(encoding="utf-8"))
+            _tasks = _check_data.get("tasks", [])
+            if _tasks and not any(t.get("_enrichment") for t in _tasks):
                 logger.warning(
-                    "DomainPreflightWorkflow failed: %s — continuing with unenriched seed",
-                    preflight_result.error,
+                    "Seed lacks domain enrichment. For best results, "
+                    "re-run plan-ingestion (enrichment is now applied upstream). "
+                    "Proceeding without enrichment."
                 )
-    except Exception as exc:
-        logger.warning(
-            "Auto-enrichment check failed: %s — continuing with original seed",
-            exc,
-        )
+        except (json.JSONDecodeError, OSError):
+            pass  # Seed will be validated below
 
     # ------------------------------------------------------------------
     # Auto-discover incomplete tasks (--retry-incomplete)
@@ -461,28 +460,31 @@ def main() -> int:
             parser.error("--task-filter requires at least one non-empty task ID")
 
     # ------------------------------------------------------------------
-    # Build code generator
+    # Build code generator (uses pc_config.agents for agent specs)
     # ------------------------------------------------------------------
     gen_kwargs: dict[str, Any] = {
         "output_dir": output_dir / "generated",
     }
-    if args.lead_agent:
-        gen_kwargs["lead_agent"] = args.lead_agent
-    if args.drafter_agent:
-        gen_kwargs["drafter_agent"] = args.drafter_agent
+    if pc_config.agents.lead:
+        gen_kwargs["lead_agent"] = pc_config.agents.lead
+    if pc_config.agents.drafter:
+        gen_kwargs["drafter_agent"] = pc_config.agents.drafter
 
     code_generator = LeadContractorCodeGenerator(**gen_kwargs)
 
     # ------------------------------------------------------------------
-    # Build workflow
+    # Build workflow (uses pc_config for repair)
     # ------------------------------------------------------------------
     # Post-generation repair pipeline (REQ-RPL-200)
     repair_config = None
-    if not args.no_repair:
+    if pc_config.repair_enabled:
         from startd8.repair.config import RepairConfig
-        repair_config = RepairConfig()
+        repair_config = RepairConfig(**{
+            k: v for k, v in pc_config.repair.items()
+            if k in RepairConfig.__dataclass_fields__
+        }) if pc_config.repair else RepairConfig()
     else:
-        logger.info("Repair pipeline: disabled (--no-repair)")
+        logger.info("Repair pipeline: disabled")
 
     workflow = PrimeContractorWorkflow(
         project_root=project_root,
@@ -506,79 +508,53 @@ def main() -> int:
     # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
     workflow.load_seed_context(seed_data, cli_mode=args.mode, seed_path=str(seed_path))
-    workflow.force_regenerate = args.force_regenerate or args.micro_prime_dry_run
+    workflow.force_regenerate = args.force_regenerate or pc_config.micro_prime.get("dry_run", False)
 
-    # Wire Micro Prime via workflow API (REQ-MP-710)
-    # Must be called BEFORE enable_complexity_routing() so the router
-    # sees the wrapped generator.
-    # --no-micro-prime overrides the default; --micro-prime-dry-run implies --micro-prime
-    if args.no_micro_prime:
-        args.micro_prime = False
-    if args.micro_prime_dry_run:
-        args.micro_prime = True
-    if args.micro_prime:
+    # ------------------------------------------------------------------
+    # Wire subsystems from pc_config (F-AC-02: consolidated config)
+    # ------------------------------------------------------------------
+
+    # Micro Prime (REQ-MP-710) — must be called BEFORE complexity routing
+    if pc_config.micro_prime_enabled:
         from startd8.micro_prime.config_loader import load_micro_prime_settings
         from startd8.micro_prime.models import MicroPrimeConfig
 
-        # Load .startd8/micro_prime.json as base, then overlay CLI args.
-        # This ensures project-level settings (e.g. escalation_enabled=false)
-        # are respected even when CLI flags are passed.
+        # Load .startd8/micro_prime.json as base, then overlay config values
         base_config, _cloud_agent_spec = load_micro_prime_settings(
             workflow.project_root,
         )
         mp_config_kwargs: dict[str, Any] = base_config.model_dump()
-
-        # CLI args override file-based settings
-        if args.micro_prime_model is not None:
-            mp_config_kwargs["model"] = args.micro_prime_model
-        if args.micro_prime_max_tokens is not None:
-            mp_config_kwargs["max_tokens"] = args.micro_prime_max_tokens
-        if args.micro_prime_no_templates:
-            mp_config_kwargs["templates_enabled"] = False
-        if args.micro_prime_no_repair:
-            mp_config_kwargs["repair_enabled"] = False
-        if args.micro_prime_cloud_retry_attempts is not None:
-            mp_config_kwargs["cloud_escalation_max_attempts"] = (
-                args.micro_prime_cloud_retry_attempts
-            )
-        if args.micro_prime_cloud_retry_strategy is not None:
-            mp_config_kwargs["cloud_escalation_retry_strategy"] = (
-                args.micro_prime_cloud_retry_strategy
-            )
-        if args.micro_prime_cloud_retry_max_chars is not None:
-            mp_config_kwargs["cloud_escalation_retry_max_chars"] = (
-                args.micro_prime_cloud_retry_max_chars
-            )
-        if args.micro_prime_dry_run:
-            mp_config_kwargs["dry_run"] = True
-
+        # Config file and CLI overrides (already merged in pc_config.micro_prime)
+        mp_config_kwargs.update({
+            k: v for k, v in pc_config.micro_prime.items()
+            if k in MicroPrimeConfig.model_fields
+        })
         workflow.enable_micro_prime(config=MicroPrimeConfig(**mp_config_kwargs))
 
-    # Wire complexity routing from CLI flags (REQ-MP-807)
-    if args.complexity_routing:
-        cr_config = None
-        if args.complexity_loc_simple_max is not None:
-            from startd8.complexity import ComplexityRoutingConfig
-            cr_config = ComplexityRoutingConfig(
-                loc_simple_max=args.complexity_loc_simple_max,
-            )
-        # REQ-MP-700: When both --micro-prime and --complexity-routing are set,
-        # route TRIVIAL/SIMPLE tiers through the wrapped MicroPrimeCodeGenerator.
-        mp_generator = workflow.code_generator if args.micro_prime else None
+    # Complexity routing (REQ-MP-807)
+    if pc_config.complexity_routing_enabled:
+        from startd8.complexity import ComplexityRoutingConfig
+        cr_fields = {
+            k: v for k, v in pc_config.complexity_routing.items()
+            if k in ComplexityRoutingConfig.__dataclass_fields__
+        }
+        cr_config = ComplexityRoutingConfig(**cr_fields) if cr_fields else None
+        # REQ-MP-700: Route TRIVIAL/SIMPLE through MicroPrime when both enabled
+        mp_generator = workflow.code_generator if pc_config.micro_prime_enabled else None
         workflow.enable_complexity_routing(
             config=cr_config,
-            tier3_agent=args.tier3_agent,
+            tier3_agent=pc_config.agents.tier3,
             trivial_generator=mp_generator,
             simple_generator=mp_generator,
         )
 
-    # Wire validation overrides from CLI flags (Phase 5: REQ-PEM-014)
-    if args.strict_validation:
-        workflow._validation_override = True  # --strict-validation implies --validate
-        workflow.strict_validation = True
-    elif args.validate:
+    # Validation (Phase 5: REQ-PEM-014)
+    if pc_config.validation.strict:
         workflow._validation_override = True
-    elif args.no_validate:
+        workflow.strict_validation = True
+    elif pc_config.validation.enabled is True:
+        workflow._validation_override = True
+    elif pc_config.validation.enabled is False:
         workflow._validation_override = False
 
     # Wire Kaizen prompt capture (REQ-KZ-200, 201, 204)
@@ -601,26 +577,17 @@ def main() -> int:
     if args.kaizen_config:
         workflow._kaizen.config = workflow._load_kaizen_config(args.kaizen_config)
 
-    # Reset failed and blocked features so they are retried.
-    # The state file persists FAILED/BLOCKED from prior runs, but the
-    # underlying issues may have been fixed in the SDK since then.
-    #
-    # Mottainai: if a feature already has generated files on disk, reset
-    # to GENERATED (not PENDING) so process_feature() skips code generation
-    # and goes straight to integration.  This avoids re-spending LLM cost
-    # on code that was already produced successfully.
-    #
-    # Note: error_message is preserved (not cleared) so that process_feature()
-    # can inject it as prior_error feedback if the feature is re-generated.
+    # ------------------------------------------------------------------
+    # Reset failed/blocked features for retry (F-AC-03 simplified)
+    # ------------------------------------------------------------------
+    # Mottainai: reuse existing generated files when possible.
+    # error_message preserved for prior_error feedback on retry.
     reset_count = 0
     reuse_count = 0
     for fid, feature in workflow.queue.features.items():
         if feature.status in (
             FeatureStatus.FAILED, FeatureStatus.BLOCKED, FeatureStatus.DEVELOPING,
         ):
-            # DEVELOPING means generation was interrupted — files are stale,
-            # always regenerate.  --force-regenerate also overrides Mottainai
-            # reuse for FAILED/BLOCKED.
             if feature.status == FeatureStatus.DEVELOPING or workflow.force_regenerate:
                 feature.status = FeatureStatus.PENDING
             else:
@@ -635,13 +602,6 @@ def main() -> int:
                     feature.status = FeatureStatus.PENDING
             feature.integration_attempts = 0
             reset_count += 1
-    # Also un-mark features that a prior --task-filter run marked COMPLETE
-    # but that are NOT actually complete (no successful result file).  This
-    # prevents features from getting stuck in COMPLETE across filter changes.
-    for fid, feature in workflow.queue.features.items():
-        if feature.status == FeatureStatus.COMPLETE and not feature.completed_at:
-            feature.status = FeatureStatus.PENDING
-            reset_count += 1
     if reset_count:
         workflow.queue.save_state()
         logger.info(
@@ -649,12 +609,13 @@ def main() -> int:
             reset_count, reuse_count,
         )
 
-    # Apply task filter if specified
+    # ------------------------------------------------------------------
+    # Apply task filter via skip set (F-AC-03: no status mutation)
+    # ------------------------------------------------------------------
     if task_filter:
         filter_set = set(task_filter)
-        # When --force-regenerate + --task-filter, reset filtered COMPLETE
-        # features to PENDING so they are re-processed.  Without this,
-        # completed features are skipped by get_next_feature().
+        # --force-regenerate + --task-filter: reset filtered COMPLETE
+        # features to PENDING so they are re-processed.
         if workflow.force_regenerate:
             for fid in filter_set:
                 feature = workflow.queue.features.get(fid)
@@ -665,12 +626,14 @@ def main() -> int:
                         "Force-regenerate: reset COMPLETE feature %s to PENDING",
                         fid,
                     )
-        # Mark non-filtered features as complete to skip them
-        for fid, feature in workflow.queue.features.items():
-            if fid not in filter_set and feature.status in (
-                FeatureStatus.PENDING, FeatureStatus.GENERATED,
-            ):
-                feature.status = FeatureStatus.COMPLETE
+        # F-AC-03: Use skip set instead of mutating status to COMPLETE.
+        # Non-filtered features are skipped at runtime without persisting
+        # fake COMPLETE status that corrupts subsequent runs.
+        skip_ids = {
+            fid for fid in workflow.queue.features
+            if fid not in filter_set
+        }
+        workflow.queue.set_skip_ids(skip_ids)
         logger.info("Task filter applied: %s (%d task(s))", task_filter, len(task_filter))
 
     logger.info("Seed: %s", seed_path)
@@ -678,9 +641,9 @@ def main() -> int:
     logger.info("Output dir: %s", output_dir)
     logger.debug("Execution mode: %s (also logged by load_seed_context)", workflow.execution_mode)
     logger.info("Dry run: %s", args.dry_run)
-    if args.micro_prime:
-        logger.info("Micro Prime: enabled (model=%s)", args.micro_prime_model or "default")
-    if args.micro_prime_dry_run:
+    if pc_config.micro_prime_enabled:
+        logger.info("Micro Prime: enabled (model=%s)", pc_config.micro_prime.get("model", "default"))
+    if pc_config.micro_prime.get("dry_run"):
         logger.info("Micro Prime dry-run: classification only, no code generation")
     if repair_config is not None:
         logger.info("Repair pipeline: enabled (categories=%s)", sorted(repair_config.repairable_categories))

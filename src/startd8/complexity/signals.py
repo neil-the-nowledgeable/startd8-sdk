@@ -24,6 +24,8 @@ _BLAST_RADIUS_SCAN_LIMIT = 500
 # generated outputs, and tool state inflate the count without representing
 # live source.  Run-027 Kaizen: `logger` stem matched 35+ files across
 # archive/ and .cap-dev-pipe/pipeline-output/, triggering false COMPLEX.
+# Run-045 Kaizen: `prime-contractor-run-*` old output dirs inflated
+# blast_radius from 4 to 7 for PI-001 (logger.py), forcing false COMPLEX.
 _BLAST_RADIUS_EXCLUDED_DIRS: frozenset[str] = frozenset({
     ".git",
     ".venv",
@@ -40,6 +42,15 @@ _BLAST_RADIUS_EXCLUDED_DIRS: frozenset[str] = frozenset({
     ".mypy_cache",
     ".pytest_cache",
 })
+
+# Directory prefixes that indicate non-source artifacts.  Unlike the exact
+# set above, these are matched with str.startswith() to catch timestamped
+# output dirs like prime-contractor-run-2026-02-26-10-00/.
+_BLAST_RADIUS_EXCLUDED_PREFIXES: tuple[str, ...] = (
+    "prime-contractor-run-",
+    "artisan-run-",
+    "run-",
+)
 
 
 def detect_cross_file_edges(
@@ -257,6 +268,7 @@ def _compute_blast_radius(
             dirnames[:] = [
                 d for d in dirnames
                 if d not in _BLAST_RADIUS_EXCLUDED_DIRS
+                and not d.startswith(_BLAST_RADIUS_EXCLUDED_PREFIXES)
             ]
 
             for fname in filenames:

@@ -113,6 +113,9 @@ class FeatureQueue:
         self.features: Dict[str, FeatureSpec] = {}
         self.order: List[str] = []  # Processing order
         self.auto_save = auto_save
+        # F-AC-03: Runtime-only skip set — features in this set are skipped by
+        # get_next_feature() without mutating their persisted status.
+        self._skip_ids: set = set()
 
         # Determine state file location
         if state_file:
@@ -324,17 +327,40 @@ class FeatureQueue:
         """Look up a feature by ID."""
         return self.features.get(feature_id)
 
+    def set_skip_ids(self, skip_ids: set) -> None:
+        """Set feature IDs to skip during processing (F-AC-03).
+
+        Unlike the prior approach of mutating status to COMPLETE, this
+        sets a runtime-only skip set that is not persisted to the state
+        file, preventing state corruption across runs.
+
+        Args:
+            skip_ids: Set of feature IDs to skip in get_next_feature().
+        """
+        self._skip_ids = set(skip_ids)
+        if skip_ids:
+            logger.info(
+                "Skip set applied: %d feature(s) excluded from processing",
+                len(skip_ids),
+            )
+
     def get_next_feature(self) -> Optional[FeatureSpec]:
         """
         Get the next feature to process.
 
         Returns the first feature that:
         1. Is in PENDING or GENERATED status
-        2. Has all dependencies completed
+        2. Has all dependencies completed (or dependency is in _skip_ids
+           and considered satisfied for filter purposes)
+        3. Is not in the runtime _skip_ids set
         """
         for feature_id in self.order:
             feature = self.features.get(feature_id)
             if not feature:
+                continue
+
+            # F-AC-03: Skip filtered-out features without mutating status
+            if feature_id in self._skip_ids:
                 continue
 
             # Skip completed or failed features
@@ -345,9 +371,13 @@ class FeatureQueue:
             ):
                 continue
 
-            # Check dependencies
+            # Check dependencies — skipped dependencies are treated as
+            # satisfied so filtered features can still run if their deps
+            # are outside the filter set.
             deps_met = True
             for dep_id in feature.dependencies:
+                if dep_id in self._skip_ids:
+                    continue  # Skipped dep treated as satisfied
                 dep = self.features.get(dep_id)
                 if not dep or dep.status != FeatureStatus.COMPLETE:
                     deps_met = False
@@ -454,15 +484,32 @@ class FeatureQueue:
         return summary
 
     def get_progress(self) -> float:
-        """Get overall progress as a percentage."""
+        """Get overall progress as a percentage.
+
+        When a skip set is active (F-AC-03), only non-skipped features
+        count toward the denominator so progress reflects the filtered
+        subset, not the full queue.
+        """
         if not self.features:
             return 0.0
 
-        completed = sum(
-            1 for f in self.features.values() if f.status == FeatureStatus.COMPLETE
-        )
-
-        return (completed / len(self.features)) * 100
+        if self._skip_ids:
+            active = [
+                f for fid, f in self.features.items()
+                if fid not in self._skip_ids
+            ]
+            if not active:
+                return 100.0
+            completed = sum(
+                1 for f in active if f.status == FeatureStatus.COMPLETE
+            )
+            return (completed / len(active)) * 100
+        else:
+            completed = sum(
+                1 for f in self.features.values()
+                if f.status == FeatureStatus.COMPLETE
+            )
+            return (completed / len(self.features)) * 100
 
     def save_state(self):
         """Save queue state to file (atomic write to prevent corruption)."""

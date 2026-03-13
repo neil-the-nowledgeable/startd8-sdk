@@ -1,0 +1,34 @@
+{
+  "_comment": "Example .startd8/prime-contractor.json — place in your project's .startd8/ directory",
+
+  "micro_prime": {
+    "enabled": false,
+    "model": "startd8-coder",
+    "max_tokens": 2048,
+    "templates_enabled": true,
+    "repair_enabled": true,
+    "cloud_escalation_max_attempts": 1,
+    "cloud_escalation_retry_strategy": "same_prompt"
+  },
+
+  "complexity_routing": {
+    "enabled": false,
+    "loc_simple_max": 150,
+    "loc_complex_min": 500
+  },
+
+  "repair": {
+    "enabled": true
+  },
+
+  "validation": {
+    "enabled": null,
+    "strict": false
+  },
+
+  "agents": {
+    "lead": null,
+    "drafter": null,
+    "tier3": null
+  }
+}
