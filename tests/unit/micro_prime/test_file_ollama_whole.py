@@ -161,8 +161,8 @@ class TestBuildFileWholePrompt:
 
     def test_includes_fill_instructions(self, logger_skeleton, logger_file_spec):
         prompt = _build_file_whole_prompt(logger_skeleton, logger_file_spec)
-        assert "Fill in ALL" in prompt
-        assert "COMPLETE file" in prompt
+        assert "replacing every `raise NotImplementedError`" in prompt
+        assert "complete Python file" in prompt
 
 
 # ── Validation tests ────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ class TestProcessFileWithFileWhole:
         """When file-whole succeeds, all elements should be marked successful."""
         engine = self._make_engine()
 
-        with patch.object(engine, "_generate_ollama", return_value=(logger_filled, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(logger_filled, 100, 50, "stop")):
             result = engine.process_file(
                 logger_file_spec, logger_manifest, logger_skeleton,
             )
@@ -306,9 +306,9 @@ class TestProcessFileWithFileWhole:
             call_count += 1
             if call_count == 1:
                 # File-whole attempt returns only imports (simulates the real failure)
-                return ("import json\nimport logging\n", 100, 10)
+                return ("import json\nimport logging\n", 100, 10, "stop")
             # Element-by-element attempts
-            return ("    return None", 50, 10)
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             result = engine.process_file(
@@ -334,7 +334,7 @@ class TestProcessFileWithFileWhole:
             return original_attempt(*args, **kwargs)
 
         with patch.object(engine, "_attempt_file_ollama_whole", side_effect=track_attempt):
-            with patch.object(engine, "_generate_ollama", return_value=("    return None", 50, 10)):
+            with patch.object(engine, "_generate_ollama", return_value=("    return None", 50, 10, "stop")):
                 engine.process_file(
                     logger_file_spec, logger_manifest, logger_skeleton,
                 )
@@ -348,7 +348,7 @@ class TestProcessFileWithFileWhole:
         engine = self._make_engine()
         fenced = f"```python\n{logger_filled}\n```"
 
-        with patch.object(engine, "_generate_ollama", return_value=(fenced, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(fenced, 100, 50, "stop")):
             result = engine.process_file(
                 logger_file_spec, logger_manifest, logger_skeleton,
             )
@@ -369,7 +369,7 @@ class TestProcessFileWithFileWhole:
             call_count += 1
             if call_count == 1:
                 raise ConnectionError("Ollama unavailable")
-            return ("    return None", 50, 10)
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             result = engine.process_file(
@@ -426,8 +426,8 @@ def getJSONLogger(name: str) -> logging.Logger:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (broken_code, 100, 50)
-            return ("    return None", 50, 10)
+                return (broken_code, 100, 50, "stop")
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
              patch("startd8.micro_prime.engine.run_file_repair_pipeline", return_value=repair_result):
@@ -468,8 +468,8 @@ def getJSONLogger(name: str) -> logging.Logger:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (bad_code, 100, 50)
-            return ("    return None", 50, 10)
+                return (bad_code, 100, 50, "stop")
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
              patch("startd8.micro_prime.engine.run_repair_pipeline", return_value=repair_result):
@@ -793,8 +793,8 @@ def getJSONLogger(name: str) -> logging.Logger:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (bad_structure, 100, 50)
-            return ("    return None", 50, 10)
+                return (bad_structure, 100, 50, "stop")
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
              patch("startd8.micro_prime.engine.run_repair_pipeline", return_value=repair_result):
@@ -841,7 +841,7 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
 def getJSONLogger(name: str) -> logging.Logger:
     raise NotImplementedError
 '''
-        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(
                 logger_file_spec, logger_skeleton,
             )
@@ -878,7 +878,7 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
 def getJSONLogger(name: str) -> logging.Logger:
     raise NotImplementedError
 '''
-        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(
                 logger_file_spec, logger_skeleton,
             )
@@ -907,7 +907,7 @@ class CustomJsonFormatter(jsonlogger.JsonFormatter):
 def getJSONLogger(name: str) -> logging.Logger:
     raise NotImplementedError
 '''
-        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(partial_code, 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(
                 logger_file_spec, logger_skeleton,
             )
@@ -922,7 +922,7 @@ def getJSONLogger(name: str) -> logging.Logger:
         """Syntax error → no partial acceptance (hard fail returns None)."""
         engine = self._make_engine(min_element_fill_rate=0.1)
 
-        with patch.object(engine, "_generate_ollama", return_value=("def broken(:\n    pass", 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=("def broken(:\n    pass", 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(
                 logger_file_spec, logger_skeleton,
             )
@@ -954,10 +954,10 @@ class TestRetryWithFeedback:
             call_count += 1
             if call_count == 1:
                 # Return code with a stub still in it
-                return (logger_skeleton, 100, 50)
+                return (logger_skeleton, 100, 50, "stop")
             # Retry succeeds — check that feedback was injected
             assert "RETRY" in prompt
-            return (logger_filled, 100, 50)
+            return (logger_filled, 100, 50, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             result = engine._attempt_file_ollama_whole(
@@ -995,7 +995,7 @@ def getJSONLogger(name: str) -> logging.Logger:
         def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             nonlocal call_count
             call_count += 1
-            return (bad_code, 100, 50)
+            return (bad_code, 100, 50, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             result = engine._attempt_file_ollama_whole(
@@ -1059,7 +1059,7 @@ class TestAdaptiveMaxTokens:
 
         def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             captured_kwargs["max_tokens"] = max_tokens
-            return (logger_filled, 100, 50)
+            return (logger_filled, 100, 50, "stop")
 
         big_file_spec = logger_file_spec  # reuse, element count doesn't matter here
 
@@ -1255,7 +1255,7 @@ class MyClass:
 def helper():
     raise NotImplementedError
 '''
-        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(file_spec, skeleton)
 
         # 2/3 = 66.7% >= 66.6% -> accepted
@@ -1294,7 +1294,7 @@ class MyClass:
 def helper():
     raise NotImplementedError
 '''
-        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50)):
+        with patch.object(engine, "_generate_ollama", return_value=(partial, 100, 50, "stop")):
             result = engine._attempt_file_ollama_whole(file_spec, skeleton)
 
         # 2/3 = 66.7% < 67% -> rejected
@@ -1316,8 +1316,8 @@ class TestRetryFeedbackInjection:
         def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             prompts_seen.append(prompt)
             if len(prompts_seen) == 1:
-                return (logger_skeleton, 100, 50)  # Stubs remain
-            return (logger_filled, 100, 50)
+                return (logger_skeleton, 100, 50, "stop")  # Stubs remain
+            return (logger_filled, 100, 50, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             engine._attempt_file_ollama_whole(logger_file_spec, logger_skeleton)
@@ -1333,7 +1333,7 @@ class TestRetryFeedbackInjection:
 
         def mock_generate(prompt, system_prompt=None, max_tokens=None, **kwargs):
             prompts_seen.append(prompt)
-            return (logger_filled, 100, 50)
+            return (logger_filled, 100, 50, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             engine._attempt_file_ollama_whole(logger_file_spec, logger_skeleton)
@@ -1361,12 +1361,12 @@ class TestFileWholeRetryOnTotalEscalation:
             call_count += 1
             if call_count == 1:
                 # First file-whole attempt fails (incomplete)
-                return ("import logging\n", 100, 10)
+                return ("import logging\n", 100, 10, "stop")
             if call_count <= 4:
                 # Element-by-element attempts all fail
-                return ("", 50, 10)
+                return ("", 50, 10, None)
             # Retry file-whole succeeds
-            return (logger_filled, 100, 50)
+            return (logger_filled, 100, 50, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate):
             result = engine.process_file(
@@ -1412,8 +1412,8 @@ class TestValidationAfterRepairFails:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return (incomplete_code, 100, 50)
-            return ("    return None", 50, 10)
+                return (incomplete_code, 100, 50, "stop")
+            return ("    return None", 50, 10, "stop")
 
         with patch.object(engine, "_generate_ollama", side_effect=mock_generate), \
              patch("startd8.micro_prime.engine.run_repair_pipeline", return_value=repair_result):

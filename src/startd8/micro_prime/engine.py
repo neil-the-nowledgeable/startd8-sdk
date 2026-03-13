@@ -612,9 +612,17 @@ _CODE_GEN_SYSTEM_PROMPT = (
 
 _ELEMENT_BODY_SYSTEM_PROMPT = (
     "You are a Python code generator. "
-    "Output ONLY the indented body lines of the target function — no def line, "
-    "no class wrapper, no imports, no markdown fences, no explanations. "
-    "Use 4-space indentation consistently. Output code and NOTHING else."
+    "Output the indented body lines of the target function.\n"
+    "\n"
+    "FORMAT: Start every line with exactly 4 spaces. "
+    "Output raw Python code — no ```python fences, no prose, no def line.\n"
+    "\n"
+    "IMPORTS: Use ONLY imports shown in the prompt. "
+    "Do not add import statements to your output.\n"
+    "\n"
+    "SCOPE: Output ONLY the body of the single requested function. "
+    "Stop after the last line of the body. "
+    "Do not output additional functions, classes, or statements."
 )
 
 # System prompt for file-level Ollama-whole generation.
@@ -622,13 +630,17 @@ _ELEMENT_BODY_SYSTEM_PROMPT = (
 # the complete skeleton file and fills ALL stubs in one pass.
 _FILE_WHOLE_SYSTEM_PROMPT = (
     "You are a Python code generator. "
-    "You are given a skeleton Python file with `raise NotImplementedError` stubs. "
-    "Replace EVERY `raise NotImplementedError` with a working implementation. "
-    "Output the COMPLETE Python file with all stubs filled in. "
-    "Do NOT add markdown fences, explanations, or any text outside the code. "
-    "Do NOT remove or rewrite existing imports, class definitions, or signatures. "
-    "Do NOT define a function inside itself (no nested duplicates). "
-    "Preserve the file structure exactly — only replace stub bodies."
+    "You receive a skeleton Python file with `raise NotImplementedError` stubs.\n"
+    "\n"
+    "TASK: Replace every `raise NotImplementedError` with a working implementation. "
+    "Output the COMPLETE file with all stubs filled.\n"
+    "\n"
+    "PRESERVE: Keep all existing imports, class definitions, signatures, and decorators "
+    "exactly as given. Use 4-space indentation. "
+    "Each function body goes directly under its def line — never nest a function inside itself.\n"
+    "\n"
+    "FORMAT: Output raw Python code only. "
+    "No ```python fences, no explanations, no commentary."
 )
 
 
