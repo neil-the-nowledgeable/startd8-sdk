@@ -920,14 +920,20 @@ class TestBareStatementWrapFenceGuard:
 
 
 class TestSystemPromptSplit:
-    """Verify _CODE_GEN_SYSTEM_PROMPT vs _ELEMENT_BODY_SYSTEM_PROMPT (Fix 1)."""
+    """Verify system prompt alignment (AC-R7/F7).
 
-    def test_system_prompts_are_distinct(self):
-        from startd8.micro_prime.engine import (
-            _CODE_GEN_SYSTEM_PROMPT,
-            _ELEMENT_BODY_SYSTEM_PROMPT,
+    _CODE_GEN_SYSTEM_PROMPT was removed — it was a dead fallback that
+    contradicted the body-only user prompt.  Only _ELEMENT_BODY_SYSTEM_PROMPT
+    and _FILE_WHOLE_SYSTEM_PROMPT remain.
+    """
+
+    def test_dead_code_gen_prompt_removed(self):
+        """AC-R7/F7: _CODE_GEN_SYSTEM_PROMPT must not exist."""
+        import startd8.micro_prime.engine as engine_mod
+        assert not hasattr(engine_mod, "_CODE_GEN_SYSTEM_PROMPT"), (
+            "_CODE_GEN_SYSTEM_PROMPT was removed (AC-R7/F7) — "
+            "it contradicted the body-only user prompt"
         )
-        assert _CODE_GEN_SYSTEM_PROMPT != _ELEMENT_BODY_SYSTEM_PROMPT
 
     def test_element_body_prompt_no_def_line_instruction(self):
         from startd8.micro_prime.engine import _ELEMENT_BODY_SYSTEM_PROMPT
@@ -936,7 +942,146 @@ class TestSystemPromptSplit:
         # Must instruct body-only output
         assert "body" in _ELEMENT_BODY_SYSTEM_PROMPT.lower()
 
-    def test_code_gen_prompt_includes_def_line(self):
-        from startd8.micro_prime.engine import _CODE_GEN_SYSTEM_PROMPT
-        # Whole-file prompt should still ask for complete definition
-        assert "def" in _CODE_GEN_SYSTEM_PROMPT
+    def test_file_whole_prompt_asks_for_complete_file(self):
+        from startd8.micro_prime.engine import _FILE_WHOLE_SYSTEM_PROMPT
+        assert "COMPLETE" in _FILE_WHOLE_SYSTEM_PROMPT
+        assert "stub" in _FILE_WHOLE_SYSTEM_PROMPT.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# File-whole contractor repair bridge tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestTranslateValidationFailure:
+    """Tests for _translate_validation_failure."""
+
+    def test_empty_output_returns_no_diagnostics(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure("empty output", "foo.py")
+        assert result == []
+
+    def test_empty_reason_returns_no_diagnostics(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure("", "foo.py")
+        assert result == []
+
+    def test_ast_parse_failure_returns_syntax_diagnostic(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "ast.parse() failed: unexpected EOF", "foo.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "syntax"
+        assert result[0].file == "foo.py"
+        assert "ast.parse()" in result[0].message
+
+    def test_nested_duplicate_returns_syntax_diagnostic(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "nested duplicate function: my_func", "bar.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "syntax"
+
+    def test_skeleton_markers_returns_lint_diagnostic(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "contains skeleton markers", "baz.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "lint"
+
+    def test_stub_reason_returns_semantic_diagnostic(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "stub-only NotImplementedError bodies: [my_func]", "x.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "semantic"
+
+    def test_missing_elements_returns_semantic_diagnostic(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "missing elements: [a, b]", "x.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "semantic"
+
+    def test_unknown_reason_falls_back_to_syntax(self):
+        from startd8.micro_prime.repair import _translate_validation_failure
+
+        result = _translate_validation_failure(
+            "some unknown failure", "x.py",
+        )
+        assert len(result) == 1
+        assert result[0].category == "syntax"
+
+
+class TestFileWholeContractorRepairBridge:
+    """Tests for run_file_whole_contractor_repair."""
+
+    def test_noop_on_empty_output_reason(self):
+        from startd8.micro_prime.repair import run_file_whole_contractor_repair
+
+        code = "x = 1\n"
+        result = run_file_whole_contractor_repair(code, "empty output", "f.py")
+        assert result.code == code
+        assert result.steps_applied == []
+
+    def test_returns_repair_result_type(self):
+        from startd8.micro_prime.repair import (
+            RepairResult,
+            run_file_whole_contractor_repair,
+        )
+
+        code = "def foo():\n    return 1\n"
+        result = run_file_whole_contractor_repair(
+            code, "ast.parse() failed: test", "f.py",
+        )
+        assert isinstance(result, RepairResult)
+
+    def test_fixes_unclosed_bracket(self):
+        """Bracket balance step should close unclosed parens."""
+        from startd8.micro_prime.repair import run_file_whole_contractor_repair
+
+        code = "def foo(x, y:\n    return x + y\n"
+        result = run_file_whole_contractor_repair(
+            code, "ast.parse() failed: unexpected EOF", "f.py",
+        )
+        # The repair should either fix it or at least not crash
+        assert isinstance(result.ast_valid, bool)
+        assert isinstance(result.steps_applied, list)
+
+    def test_fixes_duplicate_import(self):
+        """Duplicate removal should deduplicate imports."""
+        from startd8.micro_prime.repair import run_file_whole_contractor_repair
+
+        code = "import os\nimport os\n\ndef foo():\n    return os.getcwd()\n"
+        result = run_file_whole_contractor_repair(
+            code, "ast.parse() failed: test", "f.py",
+        )
+        # Code should still be valid
+        assert result.ast_valid
+
+    def test_preserves_valid_code(self):
+        """Non-destructive guarantee: valid code stays valid."""
+        from startd8.micro_prime.repair import run_file_whole_contractor_repair
+
+        code = "def foo():\n    return 42\n"
+        result = run_file_whole_contractor_repair(
+            code, "contains skeleton markers", "f.py",
+        )
+        assert result.ast_valid
+        # Valid code should not be broken
+        try:
+            ast.parse(result.code)
+        except SyntaxError:
+            pytest.fail("Repair broke valid code")

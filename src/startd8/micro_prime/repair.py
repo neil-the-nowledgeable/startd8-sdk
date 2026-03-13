@@ -33,7 +33,7 @@ from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec, Interf
 from startd8.logging_config import get_logger
 from startd8.micro_prime._ast_utils import find_element_node
 from startd8.micro_prime.models import RepairAttribution, RepairStepResult
-from startd8.repair.models import ElementContext, RepairContext
+from startd8.repair.models import Diagnostic, ElementContext, RepairContext
 from startd8.repair.steps.duplicate_removal import DuplicateRemovalStep
 from startd8.repair.steps.fence_strip import FenceStripStep
 from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
@@ -588,19 +588,37 @@ def _step_ast_validate(
 # Pipeline orchestration
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Ordered list of repair steps
-_REPAIR_STEPS = [
-    _step_fence_strip,
-    _step_octal_literal_fix,
-    _step_over_generation_trim,
-    _step_bare_statement_wrap,
-    _step_future_import_reorder,
-    _step_indent_normalize,
-    _step_signature_reconcile,
-    _step_import_completion,
-    _step_duplicate_removal,
-    _step_ast_validate,
+# AC-R25: Step applicability metadata — single source of truth for which
+# repair steps apply to element-body vs file-whole modes.
+_STEP_APPLICABILITY: dict[str, frozenset[str]] = {
+    "fence_strip":          frozenset({"element", "file"}),
+    "octal_literal_fix":    frozenset({"element", "file"}),
+    "over_generation_trim": frozenset({"element"}),
+    "bare_statement_wrap":  frozenset({"element"}),
+    "future_import_reorder": frozenset({"element"}),
+    "indent_normalize":     frozenset({"element"}),
+    "signature_reconcile":  frozenset({"element"}),
+    "import_completion":    frozenset({"element"}),
+    "duplicate_removal":    frozenset({"element", "file"}),
+    "ast_validate":         frozenset({"element", "file"}),
+}
+
+# Ordered list of all repair steps (with step name for registry lookup)
+_ALL_STEPS = [
+    ("fence_strip", _step_fence_strip),
+    ("octal_literal_fix", _step_octal_literal_fix),
+    ("over_generation_trim", _step_over_generation_trim),
+    ("bare_statement_wrap", _step_bare_statement_wrap),
+    ("future_import_reorder", _step_future_import_reorder),
+    ("indent_normalize", _step_indent_normalize),
+    ("signature_reconcile", _step_signature_reconcile),
+    ("import_completion", _step_import_completion),
+    ("duplicate_removal", _step_duplicate_removal),
+    ("ast_validate", _step_ast_validate),
 ]
+
+# Ordered list of element-body repair steps
+_REPAIR_STEPS = [fn for _name, fn in _ALL_STEPS]
 
 
 def run_repair_pipeline(
@@ -650,6 +668,93 @@ def run_repair_pipeline(
                 current = result.code
 
     # Determine AST validity + last error from ast_validate step
+    ast_valid = _try_parse(current, is_method)
+    last_error = None
+    for r in results:
+        if r.step_name == "ast_validate":
+            ast_valid = bool(r.metrics.get("valid", ast_valid))
+            last_error = r.metrics.get("error")
+            break
+
+    steps_applied = [r.step_name for r in results if r.modified]
+    metrics = {r.step_name: r.metrics for r in results}
+    ast_valid_after = ast_valid
+    repair_recovered = (not ast_valid_before) and ast_valid_after
+
+    return RepairResult(
+        code=current,
+        steps_applied=steps_applied,
+        ast_valid=ast_valid,
+        ast_valid_before=ast_valid_before,
+        ast_valid_after=ast_valid_after,
+        repair_recovered=repair_recovered,
+        metrics=metrics,
+        step_results=results,
+        last_error=last_error,
+    )
+
+
+# ── AC-R18/R25: File-whole repair steps (derived from applicability registry) ──
+# File-whole output is a complete Python file, not a body-only fragment.
+# Body-only steps are excluded automatically via the "file" tag.
+_FILE_REPAIR_STEPS = [
+    fn for name, fn in _ALL_STEPS
+    if "file" in _STEP_APPLICABILITY.get(name, frozenset())
+]
+
+
+def run_file_repair_pipeline(
+    code: str,
+    file_spec: Optional[ForwardFileSpec] = None,
+) -> RepairResult:
+    """Run the file-whole repair pipeline (AC-R18).
+
+    Uses only the repair steps that are safe for complete-file output.
+    Body-only steps (over-generation trim, bare statement wrap, indent
+    normalize, signature reconcile) are skipped because they assume
+    single-element body fragments and can damage multi-element files.
+
+    Args:
+        code: Raw LLM-generated complete file.
+        file_spec: File spec for import context.
+
+    Returns:
+        RepairResult with repaired code and step metadata.
+    """
+    results: list[RepairStepResult] = []
+    current = code
+    # File-whole output is never a method body — always a complete file.
+    is_method = False
+    ast_valid_before = _try_parse(current, is_method)
+
+    # Use a synthetic element for the step API (steps require an element
+    # argument even though file-level steps don't use element-specific
+    # fields like parent_class or signature).
+    from startd8.utils.code_manifest import Signature
+    synthetic_element = ForwardElementSpec(
+        name="__file_whole__",
+        kind=ElementKind.FUNCTION,
+        signature=Signature(params=[], return_annotation=None),
+    )
+
+    for step_fn in _FILE_REPAIR_STEPS:
+        was_valid_before = _try_parse(current, is_method)
+        result = step_fn(current, synthetic_element, file_spec, None)
+        results.append(result)
+
+        if result.modified:
+            is_valid_after = _try_parse(result.code, is_method)
+            if was_valid_before and not is_valid_after:
+                logger.debug(
+                    "File repair step '%s' broke valid code, reverting",
+                    result.step_name,
+                )
+                result.modified = False
+                result.code = current
+                result.metrics["reverted"] = True
+            else:
+                current = result.code
+
     ast_valid = _try_parse(current, is_method)
     last_error = None
     for r in results:
@@ -827,36 +932,128 @@ def build_repair_attribution(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# File-whole contractor repair bridge (tier 2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _translate_validation_failure(
+    reason: str,
+    file_path: str,
+) -> list[Diagnostic]:
+    """Translate a ``_validate_file_whole_result`` reason into diagnostics.
+
+    Maps the failure reason string to ``Diagnostic`` objects with the
+    appropriate category so the contractor routing table selects the
+    right repair steps.
+    """
+    if not reason or reason == "empty output":
+        return []
+
+    if reason.startswith("ast.parse() failed"):
+        return [Diagnostic(category="syntax", file=file_path, message=reason)]
+
+    if reason.startswith("nested duplicate function"):
+        return [Diagnostic(category="syntax", file=file_path, message=reason)]
+
+    if reason == "contains skeleton markers":
+        return [Diagnostic(category="lint", file=file_path, message=reason)]
+
+    # Stub-only or missing elements — semantic category
+    if "stub" in reason.lower() or "missing" in reason.lower():
+        return [Diagnostic(category="semantic", file=file_path, message=reason)]
+
+    # Fallback: treat as syntax (most broadly routed category)
+    return [Diagnostic(category="syntax", file=file_path, message=reason)]
+
+
+def run_file_whole_contractor_repair(
+    code: str,
+    reason: str,
+    file_path: str,
+) -> RepairResult:
+    """Escalate file-whole repair to the full contractor pipeline.
+
+    Bridges micro prime's file-whole path to the contractor repair
+    orchestrator (12 steps with routing, circuit breaker, OTel).
+    Called as tier 2 when ``run_file_repair_pipeline`` (4 steps) fails.
+
+    Args:
+        code: Raw LLM-generated complete file.
+        reason: Failure reason from ``_validate_file_whole_result``.
+        file_path: Relative file path for diagnostics.
+
+    Returns:
+        RepairResult translated from the contractor's RepairOutcome.
+    """
+    diagnostics = _translate_validation_failure(reason, file_path)
+    if not diagnostics:
+        return RepairResult(
+            code=code,
+            steps_applied=[],
+            ast_valid=_try_parse(code),
+            ast_valid_before=_try_parse(code),
+            ast_valid_after=_try_parse(code),
+            repair_recovered=False,
+            metrics={},
+            step_results=[],
+        )
+
+    # Lazy import to avoid circular dependency
+    from startd8.repair.config import RepairConfig as ContractorRepairConfig
+    from startd8.repair.orchestrator import run_file_repair
+
+    path_key = Path(file_path)
+    config = ContractorRepairConfig()
+    outcome = run_file_repair(
+        files={path_key: code},
+        diagnostics=diagnostics,
+        config=config,
+        project_root=Path("."),
+    )
+
+    # Extract single-file result
+    repaired_code = outcome.repaired_files.get(path_key, code)
+    ast_valid_before = _try_parse(code)
+    ast_valid_after = _try_parse(repaired_code)
+
+    # Collect step results from the file result (if present)
+    step_results: list[RepairStepResult] = []
+    if outcome.file_results:
+        fr = outcome.file_results[0]
+        step_results = [
+            RepairStepResult(
+                step_name=sr.step_name,
+                modified=sr.modified,
+                code=sr.code,
+                metrics=sr.metrics,
+            )
+            for sr in fr.step_results
+        ]
+
+    return RepairResult(
+        code=repaired_code,
+        steps_applied=outcome.steps_applied,
+        ast_valid=ast_valid_after,
+        ast_valid_before=ast_valid_before,
+        ast_valid_after=ast_valid_after,
+        repair_recovered=(not ast_valid_before) and ast_valid_after,
+        metrics={r.step_name: r.metrics for r in step_results},
+        step_results=step_results,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def _build_def_line(element: ForwardElementSpec) -> Optional[str]:
-    """Build a canonical def/async def line from the manifest element."""
-    if element.kind == ElementKind.CLASS:
-        bases = f"({', '.join(element.bases)})" if element.bases else ""
-        return f"class {element.name}{bases}:"
+    """Build a canonical def/async def line from the manifest element.
 
-    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS):
-        return None
-
-    # Build parameter list using DeterministicFileAssembler signature renderer
-    sig = "()"
-    if element.signature:
-        from startd8.utils.file_assembler import DeterministicFileAssembler
-
-        assembler = DeterministicFileAssembler(element_registry=None)
-        sig = assembler._render_signature(element.signature)
-
-    ret = ""
-    if element.signature and element.signature.return_annotation:
-        ret = f" -> {element.signature.return_annotation}"
-
-    prefix = "async def" if element.kind in (
-        ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-    ) else "def"
-
-    return f"{prefix} {element.name}{sig}{ret}:"
+    AC-R12: Delegates to the single canonical renderer in models.py.
+    """
+    from startd8.micro_prime.models import render_def_line
+    return render_def_line(element)
 
 
 def _node_start_line(node: ast.AST) -> int:
@@ -950,7 +1147,7 @@ def _is_allowed_import(
     node: ast.Import | ast.ImportFrom,
     file_spec: Optional[ForwardFileSpec],
 ) -> bool:
-    """Check if an import node is allowed by the manifest whitelist.
+    """Check if an import node is allowed by the manifest allow list.
 
     Rejects:
     - ``from __future__`` imports (skeleton already has them).

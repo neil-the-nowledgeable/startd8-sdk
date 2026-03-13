@@ -14,8 +14,9 @@ import hashlib
 import json
 import time
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field as dc_field
+from pathlib import Path
 from typing import Any, Optional
 
 from startd8.element_id import make_element_id
@@ -69,12 +70,79 @@ from startd8.micro_prime.repair import (
     run_repair_pipeline,
     to_escalation_repair_outcome,
 )
-from startd8.micro_prime.splicer import splice_body_into_skeleton
+from startd8.micro_prime.splicer import SpliceViolation, splice_body_into_skeleton
+from startd8.repair.models import ContractViolationDiagnostic, RepairContext
+from startd8.repair.steps.contract_violation_fix import ContractViolationFixStep
 from startd8.micro_prime.templates import TemplateRegistry
 from startd8.utils.code_extraction import extract_code_from_response
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
 
 logger = get_logger(__name__)
+
+# Singleton repair step for contract violation repair after splice
+_contract_violation_fix_step = ContractViolationFixStep()
+
+
+_SPLICE_VIOLATION_TYPE_MAP = {
+    "parameter_count_mismatch": "missing_parameter",
+    "parameter_name_mismatch": "missing_parameter",
+    "return_type_mismatch": "wrong_return_type",
+    "base_class_mismatch": "missing_base_class",
+}
+
+
+def _attempt_splice_violation_repair(
+    spliced_code: str,
+    violations: list[SpliceViolation],
+    file_path: str,
+) -> tuple[str, list[str]]:
+    """Convert structured splicer violations to diagnostics and attempt repair.
+
+    Consumes ``SpliceViolation`` dataclass objects (not strings) so that
+    downstream repair gets typed fields without fragile string parsing.
+
+    Returns (possibly-repaired code, list of fix descriptions).
+    Non-fatal: returns original code if repair fails.
+    """
+    diagnostics: list[ContractViolationDiagnostic] = []
+    for v in violations:
+        repair_type = _SPLICE_VIOLATION_TYPE_MAP.get(v.violation_type)
+        if not repair_type:
+            continue
+        diagnostics.append(ContractViolationDiagnostic(
+            category="contract_violation",
+            file=file_path,
+            message=v.message,
+            violation_type=repair_type,
+            expected=v.expected,
+            actual=v.actual,
+            element_name=v.element_name,
+        ))
+
+    if not diagnostics:
+        return spliced_code, []
+
+    ctx = RepairContext(diagnostics=diagnostics)
+    result = _contract_violation_fix_step(
+        spliced_code, ctx, Path(file_path),
+    )
+    if result.modified:
+        # Validate repaired code still parses
+        try:
+            ast.parse(result.code)
+            fixes = result.metrics.get("fixes", [])
+            logger.info(
+                "Splice violation repair applied %d fix(es) to %s: %s",
+                len(fixes), file_path, "; ".join(fixes),
+            )
+            return result.code, fixes
+        except SyntaxError:
+            logger.warning(
+                "Splice violation repair produced invalid syntax for %s — reverting",
+                file_path,
+            )
+    return spliced_code, []
+
 
 # ── OTel decomposition metrics (REQ-MP-906, AC-R5) ──────────────────
 #
@@ -99,6 +167,8 @@ class _EngineMetrics:
         "recursion_rejected": ("micro_prime.recursion_rejected", "Recursive decomposition rejections"),
         "moderate_ollama_whole_attempted": ("micro_prime.moderate_ollama_whole_attempted", "MODERATE elements where Ollama-whole was tried before decomposition"),
         "moderate_ollama_whole_succeeded": ("micro_prime.moderate_ollama_whole_succeeded", "MODERATE elements resolved by Ollama-whole (no decomposition needed)"),
+        "generation_path": ("micro_prime.generation_path_total", "Generation path routing decisions"),
+        "generation_path_outcome": ("micro_prime.generation_path_outcome_total", "Generation path outcomes (success/failure)"),
     }
 
     _HISTOGRAMS = {
@@ -190,6 +260,16 @@ def _record_moderate_ollama_whole_attempted(file_path: str) -> None:
 
 def _record_moderate_ollama_whole_succeeded(file_path: str) -> None:
     _engine_metrics.record("moderate_ollama_whole_succeeded", 1, {"file_path": file_path})
+
+
+def _record_generation_path(path: str, file_path: str) -> None:
+    """Record a generation path routing decision (R2-S3)."""
+    _engine_metrics.record("generation_path", 1, {"path": path, "file_path": file_path})
+
+
+def _record_generation_path_outcome(path: str, outcome: str, file_path: str) -> None:
+    """Record the outcome of a generation path attempt (R2-S3)."""
+    _engine_metrics.record("generation_path_outcome", 1, {"path": path, "outcome": outcome, "file_path": file_path})
 
 
 # Depth label cardinality cap (REQ-MP-914, R2-F3): depths beyond this
@@ -310,6 +390,23 @@ class _GenerationOutcome:
     repair_result: Optional[RepairResult] = None
     # If the loop exhausted all attempts, this holds the failure result.
     failure: Optional[ElementResult] = None
+
+
+@dataclass
+class _OllamaRetryOutcome:
+    """Result from the unified Ollama retry loop (R2).
+
+    Used by both file-whole and element-body paths.  The ``code`` field
+    is ``None`` when all attempts failed.
+    """
+
+    code: str | None  # None = all attempts failed
+    raw_output: str  # last raw LLM output
+    input_tokens: int = 0
+    output_tokens: int = 0
+    llm_calls: int = 0
+    elapsed_ms: float = 0.0
+    last_failure_reason: str = ""  # empty on success
 
 
 def _signature_from_ast_args(
@@ -1464,21 +1561,35 @@ class MicroPrimeEngine:
                         element.name, file_spec.file,
                     )
 
-        # ── Pre-classify for file-whole tier threading (AC-R17) ──
-        # Classify before file-whole so pre_classified_tiers can be threaded
-        # through to element results.  Also collects all contracts for
-        # the file-whole prompt (AC-R16).
+        # ── Pre-classify all elements once (AC-R17, R1-S1) ──
+        # Build full _ClassifiedElement objects upfront.  The tiers dict
+        # feeds file-whole prompt construction; the full objects are reused
+        # by the element-by-element fallback path (no re-classification).
         _pre_tiers: dict[str, TierClassification] = {}
         _all_contracts: list[InterfaceContract] = []
+        _pre_classified: list[_ClassifiedElement] = []
         for element in enriched_file_spec.elements:
             elem_contracts = self._get_element_contracts(element, enriched_file_spec, manifest)
-            tier, reasoning, _details = classify_element_with_details(
+            tier, reasoning, details = classify_element_with_details(
                 element, enriched_file_spec, elem_contracts,
                 template_registry=self._templates,
                 config=self._config,
             )
             _pre_tiers[element.name] = tier
             _all_contracts.extend(elem_contracts)
+            priority = self._TIER_PRIORITY.get(tier, 2)
+            _pre_classified.append(
+                _ClassifiedElement(
+                    priority=priority,
+                    element=element,
+                    contracts=elem_contracts,
+                    tier=tier,
+                    reasoning=reasoning,
+                    file_import_bump=details.file_import_bump,
+                    element_api_adjustment=details.element_api_adjustment,
+                    classification_signals=details.classification_signals,
+                )
+            )
 
         # ── File-level Ollama-whole attempt ──
         # For small files, try generating the complete file in one Ollama
@@ -1487,6 +1598,7 @@ class MicroPrimeEngine:
         if ollama_available and self._is_file_ollama_whole_eligible(
             enriched_file_spec, skeleton,
         ):
+            _record_generation_path("file_whole_primary", file_spec.file)
             file_whole_result = self._attempt_file_ollama_whole(
                 enriched_file_spec, skeleton,
                 task_description=task_description,
@@ -1496,42 +1608,20 @@ class MicroPrimeEngine:
                 pre_classified_tiers=_pre_tiers,
             )
             if file_whole_result is not None:
+                _record_generation_path_outcome("file_whole_primary", "success", file_spec.file)
                 return file_whole_result
+            _record_generation_path_outcome("file_whole_primary", "failure", file_spec.file)
 
         # File-whole was either ineligible or failed — fall through to
         # element-by-element generation (AC-R1 fallback path).
+        _record_generation_path("element_by_element_fallback", file_spec.file)
         logger.info(
             "File-whole ineligible or failed for %s — falling through to element-by-element (fallback path)",
             file_spec.file,
         )
 
-        # Pre-classify to determine processing order (REQ-MP-704).
-        # Classification results are cached to avoid redundant work in
-        # process_element() — each element is classified exactly once.
-        classified: list[_ClassifiedElement] = []
-
-        for element in enriched_file_spec.elements:
-            contracts = self._get_element_contracts(element, enriched_file_spec, manifest)
-            tier, reasoning, details = classify_element_with_details(
-                element, enriched_file_spec, contracts,
-                template_registry=self._templates,
-                config=self._config,
-            )
-            priority = self._TIER_PRIORITY.get(tier, 2)
-            classified.append(
-                _ClassifiedElement(
-                    priority=priority,
-                    element=element,
-                    contracts=contracts,
-                    tier=tier,
-                    reasoning=reasoning,
-                    file_import_bump=details.file_import_bump,
-                    element_api_adjustment=details.element_api_adjustment,
-                    classification_signals=details.classification_signals,
-                )
-            )
-
-        classified.sort(key=lambda c: c.sort_key)
+        # Reuse pre-classified elements (R1-S1) — no redundant classification.
+        classified = sorted(_pre_classified, key=lambda c: c.sort_key)
 
         if classified:
             _summary = ", ".join(
@@ -1559,11 +1649,36 @@ class MicroPrimeEngine:
 
             # If successful, splice into skeleton
             if result.success and result.code:
-                spliced = splice_body_into_skeleton(
+                splice_result = splice_body_into_skeleton(
                     result.code, element, current_skeleton,
                 )
-                if spliced is not None:
-                    current_skeleton = spliced
+                if splice_result.code is not None:
+                    current_skeleton = splice_result.code
+                    # Fix 1: Attempt repair if splicer detected contract violations
+                    if splice_result.violations:
+                        repaired_code, fixes = _attempt_splice_violation_repair(
+                            current_skeleton, splice_result.violations, file_spec.file,
+                        )
+                        if fixes:
+                            current_skeleton = repaired_code
+                            # Fix 4: Update registry with repaired code
+                            eid = _resolve_element_id(element, file_spec.file)
+                            if self._element_registry is not None and eid:
+                                try:
+                                    entry = self._element_registry.get(eid)
+                                    if entry is not None:
+                                        entry.extra["code"] = result.code
+                                        entry.extra["contract_repairs"] = fixes
+                                        self._element_registry.put(entry)
+                                        self._element_registry.set_phase_status(
+                                            eid, "implement", "repaired",
+                                            metadata={"repairs": fixes},
+                                        )
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.debug(
+                                        "Registry update after repair failed for %s: %s",
+                                        eid, exc,
+                                    )
                 else:
                     # Splice failed — mark as escalated
                     result.success = False
@@ -1590,6 +1705,7 @@ class MicroPrimeEngine:
             and ollama_available
             and self._is_file_ollama_whole_eligible(enriched_file_spec, skeleton)
         ):
+            _record_generation_path("file_whole_escalation_retry", file_spec.file)
             logger.info(
                 "All %d elements escalated for %s — retrying file-whole generation",
                 escalated_count, file_spec.file,
@@ -1603,11 +1719,13 @@ class MicroPrimeEngine:
                 pre_classified_tiers=_pre_tiers,
             )
             if retry_result is not None:
+                _record_generation_path_outcome("file_whole_escalation_retry", "success", file_spec.file)
                 logger.info(
                     "File-whole retry succeeded for %s (%d elements)",
                     file_spec.file, escalated_count,
                 )
                 return retry_result
+            _record_generation_path_outcome("file_whole_escalation_retry", "failure", file_spec.file)
             logger.info(
                 "File-whole retry also failed for %s — proceeding with escalation",
                 file_spec.file,
@@ -1647,7 +1765,46 @@ class MicroPrimeEngine:
         )
 
         file_result.filled_skeleton = current_skeleton
+
+        # Within-run contract completeness check (Ichigo Ichie compliant):
+        # Verify every contract-bound element in this file has a registry
+        # entry with a successful generation status.
+        self._check_contract_completeness(file_spec, file_result)
+
         return file_result
+
+    def _check_contract_completeness(
+        self,
+        file_spec: ForwardFileSpec,
+        file_result: "FileResult",
+    ) -> None:
+        """Log warnings for contract-bound elements that weren't generated.
+
+        Within-run check: for each element in the file_spec that has a
+        source_contract_id, verify the registry has a corresponding entry
+        with a successful generation phase.  Gaps indicate the contract
+        was defined but generation failed or was skipped.
+        """
+        if self._element_registry is None:
+            return
+
+        successful_names = {
+            er.element_name for er in file_result.element_results if er.success
+        }
+
+        for element in file_spec.elements:
+            if not element.source_contract_id:
+                continue
+            # Check if any registry entry for this contract was generated
+            entries = self._element_registry.get_by_contract_id(element.source_contract_id)
+            if not entries:
+                # No registry entry at all — element may have been skipped
+                if element.name not in successful_names:
+                    logger.warning(
+                        "Contract %s for element %s in %s has no registry entry "
+                        "and generation did not succeed",
+                        element.source_contract_id, element.name, file_spec.file,
+                    )
 
     def process_file_with_context(
         self,
@@ -1851,12 +2008,8 @@ class MicroPrimeEngine:
         ALL ``raise NotImplementedError`` stubs in a single pass.  This avoids
         the body-only fragmentation that confuses small local models.
 
-        Supports:
-        - Adaptive max_tokens based on skeleton size
-        - Single retry with failure feedback
-        - Partial acceptance: keep successfully filled elements, escalate the rest
-        - AC-R16: Enriched prompt with design docs, contracts, and file examples
-        - AC-R17: Pre-classified tiers threaded through to element results
+        Uses the unified ``_generate_with_ollama_retry`` loop (R2) with a
+        file-whole-specific ``validate_and_repair`` closure.
 
         Returns:
             FileResult if successful (full or partial), None if the attempt
@@ -1877,7 +2030,6 @@ class MicroPrimeEngine:
                 and ce.get("generation_strategy") == "file_ollama_whole"
                 and ce.get("code")
             ):
-                # Use a truncated snippet (first 60 lines) to avoid prompt bloat
                 snippet_lines = ce["code"].splitlines()[:60]
                 if len(snippet_lines) == 60:
                     snippet_lines.append("# ... (truncated)")
@@ -1900,66 +2052,24 @@ class MicroPrimeEngine:
             skeleton_lines * 4,  # ~4 tokens per output line
         )
 
-        total_input_tokens = 0
-        total_output_tokens = 0
-        total_llm_calls = 0
-        start_time = time.monotonic()
-        raw_code: Optional[str] = None
-        last_reason = ""
-        last_missing: list[str] = []
+        # ── Validate-and-repair closure for file-whole path ──
+        # Mutable state shared between closure and post-loop code.
+        _fw_state: dict[str, Any] = {"valid": False, "missing": []}
 
-        for attempt in range(self._config.local_max_attempts):
-            current_prompt = prompt
-            if attempt > 0 and last_reason:
-                current_prompt = (
-                    f"# RETRY: Previous attempt issues: {last_reason}\n"
-                    f"# Fix ONLY the issues above. Keep everything else.\n\n"
-                    + prompt
-                )
-
-            try:
-                attempt_code, inp_tok, out_tok = self._generate_ollama(
-                    current_prompt,
-                    system_prompt=_FILE_WHOLE_SYSTEM_PROMPT,
-                    max_tokens=file_whole_max_tokens,
-                    stop_sequences=self._FILE_WHOLE_STOP_SEQUENCES,
-                )
-            except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
-                logger.warning(
-                    "File-whole Ollama call failed for %s (attempt %d): %s",
-                    file_path, attempt + 1, e,
-                )
-                self._record_local_failure()
-                return None
-
-            total_input_tokens += inp_tok
-            total_output_tokens += out_tok
-            total_llm_calls += 1
-
-            if not attempt_code or not attempt_code.strip():
-                logger.warning("File-whole returned empty output for %s (attempt %d)", file_path, attempt + 1)
-                last_reason = "empty output"
-                continue
-
-            raw_code = attempt_code
-
-            # Validate
+        def _validate_file_whole(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
             valid, reason, missing = _validate_file_whole_result(raw_code, skeleton, file_spec)
             if valid:
-                break  # Full success
+                _fw_state.update(valid=True, missing=[])
+                return raw_code, None
 
-            # Try repair — two-tier strategy:
-            # Tier 1 (AC-R18): fast 4-step pipeline (fence, octal, dedup, ast)
-            # Tier 2: full contractor pipeline (12 steps via bridge)
+            # Try repair — two-tier strategy
             logger.info(
                 "File-whole validation failed for %s (attempt %d): %s — attempting file repair",
                 file_path, attempt + 1, reason,
             )
             if file_spec.elements:
                 # Tier 1: thin file-whole pipeline
-                repair_result = run_file_repair_pipeline(
-                    raw_code, file_spec,
-                )
+                repair_result = run_file_repair_pipeline(raw_code, file_spec)
                 if repair_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(
                         repair_result.code, skeleton, file_spec,
@@ -1969,57 +2079,53 @@ class MicroPrimeEngine:
                             "File-whole repair succeeded for %s (tier 1, steps: %s)",
                             file_path, repair_result.steps_applied,
                         )
-                        raw_code = repair_result.code
-                        valid = True
-                        reason = re_reason
-                        missing = re_missing
-                        break
-                    else:
-                        reason = re_reason
-                        missing = re_missing
+                        _fw_state.update(valid=True, missing=[])
+                        return repair_result.code, None
+                    reason = re_reason
+                    missing = re_missing
 
                 # Tier 2: full contractor repair pipeline
-                if not valid:
-                    contractor_result = run_file_whole_contractor_repair(
-                        raw_code, reason, file_path,
+                contractor_result = run_file_whole_contractor_repair(
+                    raw_code, reason, file_path,
+                )
+                if contractor_result.ast_valid:
+                    re_valid, re_reason, re_missing = _validate_file_whole_result(
+                        contractor_result.code, skeleton, file_spec,
                     )
-                    if contractor_result.ast_valid:
-                        re_valid, re_reason, re_missing = _validate_file_whole_result(
-                            contractor_result.code, skeleton, file_spec,
+                    if re_valid:
+                        logger.info(
+                            "File-whole repair succeeded for %s (tier 2, steps: %s)",
+                            file_path, contractor_result.steps_applied,
                         )
-                        if re_valid:
-                            logger.info(
-                                "File-whole repair succeeded for %s (tier 2, steps: %s)",
-                                file_path, contractor_result.steps_applied,
-                            )
-                            raw_code = contractor_result.code
-                            valid = True
-                            reason = re_reason
-                            missing = re_missing
-                            break
-                        else:
-                            reason = re_reason
-                            missing = re_missing
+                        _fw_state.update(valid=True, missing=[])
+                        return contractor_result.code, None
+                    reason = re_reason
+                    missing = re_missing
 
-            last_reason = reason
-            last_missing = missing
-        else:
-            # All attempts exhausted — try partial acceptance
-            valid = False
-            reason = last_reason
-            missing = last_missing
+            _fw_state.update(valid=False, missing=missing)
+            return None, reason
 
-        gen_time = (time.monotonic() - start_time) * 1000
+        retry_outcome = self._generate_with_ollama_retry(
+            prompt, _FILE_WHOLE_SYSTEM_PROMPT, file_path,
+            max_tokens=file_whole_max_tokens,
+            stop_sequences=self._FILE_WHOLE_STOP_SEQUENCES,
+            validate_and_repair=_validate_file_whole,
+        )
 
-        if raw_code is None:
+        # ── Interpret outcome ──
+        valid = _fw_state["valid"]
+        missing: list[str] = _fw_state["missing"]
+        total_llm_calls = retry_outcome.llm_calls
+        gen_time = retry_outcome.elapsed_ms
+
+        # Use validated code on success, last raw output for partial acceptance
+        final_raw = retry_outcome.code if retry_outcome.code is not None else retry_outcome.raw_output
+        if not final_raw:
             return None
 
-        # Strip fences for the final code
-        code = extract_code_from_response(raw_code)
+        code = extract_code_from_response(final_raw)
 
         # ── Partial acceptance ──
-        # If validation failed but we have parseable code with some elements
-        # filled, accept the successes and escalate the rest.
         missing_set: set[str] = set()
         if not valid and missing:
             total_elements = len(file_spec.elements)
@@ -2042,7 +2148,6 @@ class MicroPrimeEngine:
                 )
                 return None
         elif not valid:
-            # Hard failure (no missing list) — cannot partially accept
             return None
 
         if valid:
@@ -2055,18 +2160,17 @@ class MicroPrimeEngine:
         model_name = f"{self._config.provider}:{self._config.model}"
         tiers = pre_classified_tiers or {}
         file_result = FileResult(file_path=file_path)
+        total_input_tokens = retry_outcome.input_tokens
+        total_output_tokens = retry_outcome.output_tokens
         per_element_tokens_in = total_input_tokens // max(len(file_spec.elements), 1)
         per_element_tokens_out = total_output_tokens // max(len(file_spec.elements), 1)
         per_element_time = gen_time / max(len(file_spec.elements), 1)
         meta_strategy = {"strategy": "file_ollama_whole", "llm_calls": total_llm_calls}
 
         for element in file_spec.elements:
-            # AC-R17: Use pre-classified tier, not hardcoded SIMPLE
             elem_tier = tiers.get(element.name, TierClassification.SIMPLE)
             is_missing = element.name in missing_set
             if is_missing:
-                # AC-R14: Escalated elements get at least MODERATE for
-                # adequate cloud budget.
                 esc_tier = max(elem_tier, TierClassification.MODERATE, key=lambda t: t.value)
                 result = ElementResult.make_escalation(
                     element.name, file_path, esc_tier,
@@ -2456,17 +2560,22 @@ class MicroPrimeEngine:
         )
         if plan is None:
             _record_decomp_rejected(file_path, "no_strategy")
-            # Run-038 fix: standalone functions (e.g. main()) classified as
-            # MODERATE via orchestrator heuristic may not be decomposable.
-            # Fall back to direct Ollama generation before escalating —
-            # many "orchestrator" functions are simple enough for Ollama.
-            if element.parent_class is None and element.kind in (
+            # Run-038 fix (extended): MODERATE elements rejected by the
+            # decomposer get a direct Ollama attempt before escalating.
+            # Originally limited to standalone functions, but methods
+            # classified as MODERATE (e.g. via file-level import bump)
+            # also benefit — they're already leaf-level elements that
+            # can't be decomposed further.
+            _fallback_kinds = (
                 ElementKind.FUNCTION, ElementKind.ASYNC_FUNCTION,
-            ):
+                ElementKind.METHOD, ElementKind.ASYNC_METHOD,
+            )
+            if element.kind in _fallback_kinds:
+                _ctx = "method" if element.parent_class else "standalone function"
                 logger.info(
-                    "Decomposition rejected for standalone function %s — "
+                    "Decomposition rejected for %s %s — "
                     "trying direct Ollama generation as fallback",
-                    element.name,
+                    _ctx, element.name,
                 )
                 ollama_fallback = self._handle_simple(
                     element, file_spec, skeleton, contracts, file_path,
@@ -3067,6 +3176,106 @@ class MicroPrimeEngine:
 
         return None
 
+    def _generate_with_ollama_retry(
+        self,
+        prompt: str,
+        system_prompt: str,
+        entity_name: str,
+        *,
+        max_tokens: int | None = None,
+        stop_sequences: list[str] | None = None,
+        validate_and_repair: Callable[[str, int], tuple[str | None, str | None]],
+    ) -> _OllamaRetryOutcome:
+        """Unified Ollama retry loop for both file-whole and element-body (R2).
+
+        Args:
+            prompt: The generation prompt.
+            system_prompt: System prompt for the LLM.
+            entity_name: Human-readable name for logging (element or file).
+            max_tokens: Override max output tokens.
+            stop_sequences: Override stop sequences.
+            validate_and_repair: Callback ``(raw_code, attempt) -> (code, feedback)``.
+                Returns ``(code, None)`` on success (break loop).
+                Returns ``(None, "reason")`` on retriable failure (prepend feedback).
+                Returns ``(None, None)`` on terminal failure (break loop).
+
+        Returns:
+            ``_OllamaRetryOutcome`` with ``code=None`` when all attempts failed.
+        """
+        max_attempts = max(1, self._config.local_max_attempts)
+        input_tokens = 0
+        output_tokens = 0
+        llm_calls = 0
+        last_failure_reason = ""
+        last_raw = ""
+        start = time.monotonic()
+
+        for attempt in range(max_attempts):
+            current_prompt = prompt
+            if attempt > 0 and last_failure_reason:
+                current_prompt = (
+                    f"# RETRY: Previous attempt issues: {last_failure_reason}\n"
+                    f"# Fix ONLY the issues above. Keep everything else.\n\n"
+                    + prompt
+                )
+
+            try:
+                raw_code, inp_tok, out_tok = self._generate_ollama(
+                    current_prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=max_tokens,
+                    stop_sequences=stop_sequences,
+                )
+            except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
+                logger.warning(
+                    "Ollama call failed for %s (attempt %d/%d): %s",
+                    entity_name, attempt + 1, max_attempts, e,
+                )
+                self._record_local_failure()
+                return _OllamaRetryOutcome(
+                    code=None, raw_output=last_raw,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    llm_calls=llm_calls,
+                    elapsed_ms=(time.monotonic() - start) * 1000,
+                    last_failure_reason=str(e),
+                )
+
+            input_tokens += inp_tok
+            output_tokens += out_tok
+            llm_calls += 1
+
+            if not raw_code or not raw_code.strip():
+                logger.warning(
+                    "Empty Ollama response for %s (attempt %d/%d)",
+                    entity_name, attempt + 1, max_attempts,
+                )
+                last_failure_reason = "empty output"
+                continue
+
+            last_raw = raw_code
+
+            repaired_code, feedback = validate_and_repair(raw_code, attempt)
+            if repaired_code is not None:
+                # Success
+                return _OllamaRetryOutcome(
+                    code=repaired_code, raw_output=raw_code,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    llm_calls=llm_calls,
+                    elapsed_ms=(time.monotonic() - start) * 1000,
+                )
+            if feedback is None:
+                # Terminal failure — no retry
+                break
+            last_failure_reason = feedback
+
+        return _OllamaRetryOutcome(
+            code=None, raw_output=last_raw,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            llm_calls=llm_calls,
+            elapsed_ms=(time.monotonic() - start) * 1000,
+            last_failure_reason=last_failure_reason,
+        )
+
     def _generate_with_retry(
         self,
         element: ForwardElementSpec,
@@ -3105,90 +3314,20 @@ class MicroPrimeEngine:
             domain_constraints=self._current_domain_constraints,
         )
 
-        max_local_attempts = max(1, self._config.local_max_attempts)
-        last_escalation_result = None
-        input_tokens = 0
-        output_tokens = 0
+        # ── Validate-and-repair closure for element-body path ──
+        # Captures element, file_spec, skeleton from enclosing scope.
+        # Each call runs the repair pipeline and returns (code, None) on
+        # success or (None, feedback) on retriable AST failure.
+        _last_repair_state: dict[str, Any] = {}
 
-        for local_attempt in range(1, max_local_attempts + 1):
-            is_last_attempt = local_attempt == max_local_attempts
-
-            try:
-                code, attempt_in_tokens, attempt_out_tokens = self._generate_ollama(
-                    prompt, system_prompt=_ELEMENT_BODY_SYSTEM_PROMPT,
-                )
-                input_tokens += attempt_in_tokens
-                output_tokens += attempt_out_tokens
-            except (ConnectionError, TimeoutError, OSError, RuntimeError, ValueError) as e:
-                # T1-1: Use correct escalation reason — connection/timeout
-                # errors are infrastructure issues, not empty responses.
-                esc_reason = (
-                    EscalationReason.TIMEOUT
-                    if isinstance(e, TimeoutError)
-                    else EscalationReason.OLLAMA_UNAVAILABLE
-                )
-                logger.warning(
-                    "Ollama generation failed for %s (attempt %d/%d): %s",
-                    element.name, local_attempt, max_local_attempts, e,
-                )
-                last_escalation_result = ElementResult.make_escalation(
-                    element.name, file_path, TierClassification.SIMPLE, reasoning,
-                    build_escalation_context(
-                        element_name=element.name, file_path=file_path,
-                        tier=TierClassification.SIMPLE, reason=esc_reason,
-                        detail=str(e), local_model=model_name,
-                        element_fqn=element_fqn,
-                    ),
-                    model=model_name,
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=input_tokens, output_tokens=output_tokens,
-                    generation_strategy="element_body",
-                )
-                if is_last_attempt:
-                    return _GenerationOutcome(
-                        code="", raw_output="",
-                        input_tokens=input_tokens, output_tokens=output_tokens,
-                        failure=last_escalation_result,
-                    )
-                continue
-
-            if not code or not code.strip():
-                logger.warning(
-                    "Empty Ollama response for %s (attempt %d/%d)",
-                    element.name, local_attempt, max_local_attempts,
-                )
-                last_escalation_result = ElementResult.make_escalation(
-                    element.name, file_path, TierClassification.SIMPLE, reasoning,
-                    build_escalation_context(
-                        element_name=element.name, file_path=file_path,
-                        tier=TierClassification.SIMPLE,
-                        reason=EscalationReason.EMPTY_RESPONSE,
-                        detail="Empty response from Ollama",
-                        local_model=model_name, element_fqn=element_fqn,
-                    ),
-                    model=model_name,
-                    generation_time_ms=(time.monotonic() - start_time) * 1000,
-                    input_tokens=input_tokens, output_tokens=output_tokens,
-                    generation_strategy="element_body",
-                )
-                if is_last_attempt:
-                    return _GenerationOutcome(
-                        code="", raw_output="",
-                        input_tokens=input_tokens, output_tokens=output_tokens,
-                        failure=last_escalation_result,
-                    )
-                continue
-
-            raw_output = code
-            ast_valid_before = _ast_parse_valid(code, element)
-            ast_valid_after = ast_valid_before
-            repair_recovered = False
-            repaired_code = None
-
-            # Run repair pipeline
+        def _validate_element(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
+            ast_valid_before = _ast_parse_valid(raw_code, element)
+            code = raw_code
             repair_steps: list[str] = []
             repair_attribution = None
             repair_result = None
+            repair_recovered = False
+
             if self._config.repair_enabled:
                 repair_result = run_repair_pipeline(
                     code, element, file_spec, skeleton_source=skeleton,
@@ -3198,81 +3337,147 @@ class MicroPrimeEngine:
                 repair_attribution = build_repair_attribution(
                     repair_result.step_results,
                 )
-                ast_valid_after = repair_result.ast_valid_after
                 repair_recovered = repair_result.repair_recovered
-                repaired_code = code
+
                 if not repair_result.ast_valid:
                     logger.warning(
-                        "AST invalid after repair for %s (attempt %d/%d)",
-                        element.name, local_attempt, max_local_attempts,
+                        "AST invalid after repair for %s (attempt %d)",
+                        element.name, attempt + 1,
                     )
-                    esc_repair = to_escalation_repair_outcome(
-                        element_fqn, raw_output, repair_result,
-                    )
-                    handoff = _build_escalation_handoff(
-                        element, TierClassification.SIMPLE, model_name,
-                        local_attempt, EscalationReason.AST_FAILURE,
-                        repair_result.last_error or "ast.parse() failed",
-                        raw_output=raw_output,
-                        repair_outcome=esc_repair,
-                    )
-                    last_escalation_result = ElementResult.make_escalation(
-                        element.name, file_path, TierClassification.SIMPLE, reasoning,
-                        build_escalation_context(
-                            element_name=element.name, file_path=file_path,
-                            tier=TierClassification.SIMPLE,
-                            reason=EscalationReason.AST_FAILURE,
-                            detail="AST validation failed after repair",
-                            last_code=code,
-                            last_error=repair_result.last_error or "ast.parse() failed",
-                            raw_output=raw_output, repaired_code=repaired_code,
-                            repair_steps=repair_steps, local_model=model_name,
-                            element_fqn=element_fqn, escalation_handoff=handoff,
-                        ),
-                        code=code,
-                        model=model_name,
-                        generation_time_ms=(time.monotonic() - start_time) * 1000,
-                        input_tokens=input_tokens, output_tokens=output_tokens,
-                        repair_steps_applied=repair_steps,
-                        repair_attribution=repair_attribution,
+                    _last_repair_state.update(
+                        ast_valid_before=ast_valid_before,
+                        ast_valid_after=repair_result.ast_valid_after,
                         repair_recovered=repair_recovered,
-                        ast_valid_before_repair=ast_valid_before,
-                        ast_valid_after_repair=ast_valid_after,
-                        verification_verdict="fail",
-                        generation_strategy="element_body",
+                        repaired_code=code,
+                        repair_steps=repair_steps,
+                        repair_attribution=repair_attribution,
+                        repair_result=repair_result,
+                        raw_output=raw_code,
                     )
-                    if is_last_attempt:
-                        return _GenerationOutcome(
-                            code=code, raw_output=raw_output,
-                            input_tokens=input_tokens, output_tokens=output_tokens,
-                            failure=last_escalation_result,
-                        )
-                    continue
+                    return None, repair_result.last_error or "ast.parse() failed"
 
-            # Generation + repair succeeded
-            if local_attempt > 1:
-                logger.info(
-                    "Ollama succeeded for %s on attempt %d/%d",
-                    element.name, local_attempt, max_local_attempts,
-                )
-            return _GenerationOutcome(
-                code=code,
-                raw_output=raw_output,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                local_attempt=local_attempt,
+            _last_repair_state.update(
                 ast_valid_before=ast_valid_before,
-                ast_valid_after=ast_valid_after,
+                ast_valid_after=repair_result.ast_valid_after if repair_result else ast_valid_before,
                 repair_recovered=repair_recovered,
-                repaired_code=repaired_code,
+                repaired_code=code,
                 repair_steps=repair_steps,
                 repair_attribution=repair_attribution,
                 repair_result=repair_result,
+                raw_output=raw_code,
+            )
+            return code, None
+
+        retry_outcome = self._generate_with_ollama_retry(
+            prompt, _ELEMENT_BODY_SYSTEM_PROMPT, element.name,
+            validate_and_repair=_validate_element,
+        )
+
+        # Convert _OllamaRetryOutcome → _GenerationOutcome
+        if retry_outcome.code is None:
+            # All attempts failed — build escalation result
+            esc_reason = EscalationReason.EMPTY_RESPONSE
+            esc_detail = retry_outcome.last_failure_reason or "All attempts failed"
+            esc_code: str | None = None
+
+            repair_state = _last_repair_state
+            repair_steps_out = repair_state.get("repair_steps", [])
+            repair_attr_out = repair_state.get("repair_attribution")
+            ast_before = repair_state.get("ast_valid_before", False)
+            ast_after = repair_state.get("ast_valid_after", False)
+            repair_recovered_out = repair_state.get("repair_recovered", False)
+            repaired_code_out = repair_state.get("repaired_code")
+            raw_out = repair_state.get("raw_output", retry_outcome.raw_output)
+            repair_result_out = repair_state.get("repair_result")
+
+            if repair_result_out is not None and not repair_result_out.ast_valid:
+                esc_reason = EscalationReason.AST_FAILURE
+                esc_detail = "AST validation failed after repair"
+                esc_code = repaired_code_out
+                esc_repair = to_escalation_repair_outcome(
+                    element_fqn, raw_out, repair_result_out,
+                )
+                handoff = _build_escalation_handoff(
+                    element, TierClassification.SIMPLE, model_name,
+                    retry_outcome.llm_calls, esc_reason,
+                    repair_result_out.last_error or "ast.parse() failed",
+                    raw_output=raw_out,
+                    repair_outcome=esc_repair,
+                )
+                failure = ElementResult.make_escalation(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    build_escalation_context(
+                        element_name=element.name, file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        reason=esc_reason, detail=esc_detail,
+                        last_code=esc_code,
+                        last_error=repair_result_out.last_error or "ast.parse() failed",
+                        raw_output=raw_out, repaired_code=repaired_code_out,
+                        repair_steps=repair_steps_out, local_model=model_name,
+                        element_fqn=element_fqn, escalation_handoff=handoff,
+                    ),
+                    code=esc_code,
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=retry_outcome.input_tokens,
+                    output_tokens=retry_outcome.output_tokens,
+                    repair_steps_applied=repair_steps_out,
+                    repair_attribution=repair_attr_out,
+                    repair_recovered=repair_recovered_out,
+                    ast_valid_before_repair=ast_before,
+                    ast_valid_after_repair=ast_after,
+                    verification_verdict="fail",
+                    generation_strategy="element_body",
+                )
+            else:
+                # Connection/timeout or empty-response failure
+                if "Timeout" in esc_detail or "timeout" in esc_detail:
+                    esc_reason = EscalationReason.TIMEOUT
+                elif any(kw in esc_detail for kw in ("Connection", "connect", "Ollama", "Failed to create")):
+                    esc_reason = EscalationReason.OLLAMA_UNAVAILABLE
+
+                failure = ElementResult.make_escalation(
+                    element.name, file_path, TierClassification.SIMPLE, reasoning,
+                    build_escalation_context(
+                        element_name=element.name, file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        reason=esc_reason, detail=esc_detail,
+                        local_model=model_name, element_fqn=element_fqn,
+                    ),
+                    model=model_name,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=retry_outcome.input_tokens,
+                    output_tokens=retry_outcome.output_tokens,
+                    generation_strategy="element_body",
+                )
+
+            return _GenerationOutcome(
+                code=esc_code or "", raw_output=retry_outcome.raw_output,
+                input_tokens=retry_outcome.input_tokens,
+                output_tokens=retry_outcome.output_tokens,
+                failure=failure,
             )
 
-        # Should not reach here — loop always returns — but satisfy type checker
-        return _GenerationOutcome(  # pragma: no cover
-            code="", raw_output="", failure=last_escalation_result,
+        # Success — extract repair state
+        rs = _last_repair_state
+        if retry_outcome.llm_calls > 1:
+            logger.info(
+                "Ollama succeeded for %s on attempt %d",
+                element.name, retry_outcome.llm_calls,
+            )
+        return _GenerationOutcome(
+            code=retry_outcome.code,
+            raw_output=rs.get("raw_output", retry_outcome.raw_output),
+            input_tokens=retry_outcome.input_tokens,
+            output_tokens=retry_outcome.output_tokens,
+            local_attempt=retry_outcome.llm_calls,
+            ast_valid_before=rs.get("ast_valid_before", False),
+            ast_valid_after=rs.get("ast_valid_after", False),
+            repair_recovered=rs.get("repair_recovered", False),
+            repaired_code=rs.get("repaired_code"),
+            repair_steps=rs.get("repair_steps", []),
+            repair_attribution=rs.get("repair_attribution"),
+            repair_result=rs.get("repair_result"),
         )
 
     def _verify_and_build_result(
