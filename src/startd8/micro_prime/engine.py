@@ -3057,6 +3057,7 @@ class MicroPrimeEngine:
             template_used=True,
             template_name=match.name,
             model="template",
+            verification_verdict="pass",
             generation_strategy="template",
         )
 
@@ -3144,6 +3145,7 @@ class MicroPrimeEngine:
             result = ElementResult.make_template_match(
                 element.name, file_path, TierClassification.SIMPLE, reasoning,
                 template_match.code, template_match.name,
+                generation_strategy="template",
             )
             self._metrics.record(result)
             return result
