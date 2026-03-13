@@ -1654,16 +1654,21 @@ class PrimeContractorWorkflow:
                     missing_elements.append(eid)
                     continue
 
-                # Checksum validation: compare registry checksum against
-                # the manifest's source_contract_id (interface contract
-                # identity).  If the entry's context_checksum differs from
-                # the manifest's source_checksum, the contract has changed
-                # and the cached code is stale.
-                if (
-                    fm.source_checksum
-                    and entry.context_checksum
-                    and entry.context_checksum != fm.source_checksum
-                ):
+                # Gap-D: Per-element staleness check using element-level
+                # context checksum instead of manifest-wide source_checksum.
+                from startd8.element_registry import (
+                    compute_element_context_checksum,
+                    is_stale,
+                )
+                current_checksum = compute_element_context_checksum(
+                    element_name=elem_spec.name,
+                    element_kind=elem_spec.kind.value if hasattr(elem_spec.kind, "value") else str(elem_spec.kind),
+                    signature=str(elem_spec.signature) if elem_spec.signature else "",
+                    parent_class=elem_spec.parent_class or "",
+                    bases=list(elem_spec.bases) if getattr(elem_spec, "bases", None) else None,
+                    decorators=list(elem_spec.decorators) if getattr(elem_spec, "decorators", None) else None,
+                )
+                if is_stale(entry, current_checksum):
                     stale_elements.append(eid)
                     continue
 
@@ -1794,9 +1799,9 @@ class PrimeContractorWorkflow:
                         )
                         splice_failures += 1
                         continue
-                    spliced = splice_body_into_skeleton(code, elem_spec, assembled)
-                    if spliced is not None:
-                        assembled = spliced
+                    splice_result = splice_body_into_skeleton(code, elem_spec, assembled)
+                    if splice_result.code is not None:
+                        assembled = splice_result.code
                     else:
                         logger.debug(
                             "Splice failed for %s in %s — element skipped",
@@ -2920,6 +2925,9 @@ class PrimeContractorWorkflow:
             # Phase 4: Content-addressable cache lookup (AC-R3)
             cache_hit = self._try_generation_cache(feature, gen_context)
             if cache_hit is not None:
+                self.total_cost_usd += cache_hit.cost_usd
+                self.total_input_tokens += cache_hit.input_tokens
+                self.total_output_tokens += cache_hit.output_tokens
                 self._accept_generation_result(feature, cache_hit)
                 return True
 
@@ -2930,6 +2938,9 @@ class PrimeContractorWorkflow:
             cache_result = self._try_element_cache_assembly(feature)
             if cache_result is not None:
                 result = cache_result
+                self.total_cost_usd += result.cost_usd
+                self.total_input_tokens += result.input_tokens
+                self.total_output_tokens += result.output_tokens
                 self._persist_kaizen_prompts(feature, gen_context, result=result)
                 self._accept_generation_result(feature, result)
                 return True
@@ -2957,6 +2968,14 @@ class PrimeContractorWorkflow:
             # Kaizen: persist prompts + responses (REQ-KZ-200, 201) — non-fatal
             self._persist_kaizen_prompts(feature, gen_context, result=result)
 
+            # Accumulate tokens/cost regardless of success so postmortem
+            # cost reporting is accurate.  _accept_generation_result still
+            # runs on success (sets feature status, etc.), but tokens must
+            # be counted even for failed generations.
+            self.total_cost_usd += result.cost_usd
+            self.total_input_tokens += result.input_tokens
+            self.total_output_tokens += result.output_tokens
+
             # Phase 8: Quality gate
             if not self._check_quality_gate(feature, result):
                 return False
@@ -2973,6 +2992,10 @@ class PrimeContractorWorkflow:
             else:
                 error_msg = result.error or 'Code generation failed'
                 logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
+                # Populate generated_files from the result so
+                # _clean_failed_feature can find and delete them.
+                if result.generated_files:
+                    feature.generated_files = [str(f) for f in result.generated_files]
                 self._clean_failed_feature(feature)
                 self.queue.fail_feature(feature.id, error_msg)
                 return False
@@ -3382,13 +3405,16 @@ class PrimeContractorWorkflow:
     def _accept_generation_result(
         self, feature: FeatureSpec, result: GenerationResult,
     ) -> None:
-        """Phase 9: Persist a successful generation result."""
+        """Phase 9: Persist a successful generation result.
+
+        Note: token/cost accumulation now happens unconditionally in
+        develop_feature() (before the success check) so that failed
+        features still contribute to postmortem cost reporting.  This
+        method only sets feature status and metadata.
+        """
         feature.generated_files = [str(f) for f in result.generated_files]
         feature.status = FeatureStatus.GENERATED
         self._save_queue_state_with_mode()
-        self.total_cost_usd += result.cost_usd
-        self.total_input_tokens += result.input_tokens
-        self.total_output_tokens += result.output_tokens
         feature._cost_usd = result.cost_usd  # stash for history
         if result.metadata:
             if feature.metadata is None:
