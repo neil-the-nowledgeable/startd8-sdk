@@ -399,6 +399,7 @@ class ElementResult:
         generation_time_ms: float = 0.0,
         input_tokens: int = 0,
         output_tokens: int = 0,
+        generation_strategy: Optional[str] = None,
     ) -> "ElementResult":
         return cls(
             element_name=element_name,
@@ -412,6 +413,7 @@ class ElementResult:
             generation_time_ms=generation_time_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            generation_strategy=generation_strategy,
         )
 
 

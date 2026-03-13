@@ -453,6 +453,9 @@ def build_spec_prompt(
     selected_key = _select_template_key(context, template_key)
     logger.info("Spec builder: using template '%s'", selected_key)
 
+    # --- Kaizen quality hints (Phase C — Kaizen feedback loop) ---
+    kaizen_hints = context.pop("kaizen_hints", None)
+
     # --- Design document forwarding (Mottainai Rule 2) ---
     design_document = context.pop("design_document", None) or ""
 
@@ -618,6 +621,14 @@ def build_spec_prompt(
     # P0: Core context (always kept)
     ctx_section = build_spec_context_section(context, output_format, target_files)
     prioritized: List[tuple] = [(0, "context", ctx_section)]
+
+    # P1: Kaizen quality hints from prior run analysis
+    if kaizen_hints and isinstance(kaizen_hints, str) and kaizen_hints.strip():
+        kaizen_section = (
+            "## Quality Hints (from prior run analysis)\n\n"
+            f"{kaizen_hints.strip()}"
+        )
+        prioritized.append((1, "kaizen_hints", kaizen_section))
 
     # P1: Available imports (L1 — reduces import repair rate)
     available_imports_section = _build_available_imports_section(context)

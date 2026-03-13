@@ -565,6 +565,13 @@ def build_supplementary_sections(
     p2_sections: List[str] = []
     p3_sections: List[str] = []
 
+    # P1: Kaizen quality hints from prior run analysis
+    kh = context.get("kaizen_hints")
+    if kh and isinstance(kh, str) and kh.strip():
+        p1_sections.append(
+            f"## Quality Hints (from prior run analysis)\n{kh.strip()}"
+        )
+
     # P1: Critical parameters
     cp = context.get("critical_parameters")
     if cp:

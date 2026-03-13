@@ -1062,6 +1062,45 @@ class IntegrationEngine:
         return results, repair_success
 
     # ------------------------------------------------------------------
+    # Phase D: Semantic validation (Kaizen Quality)
+    # ------------------------------------------------------------------
+
+    def _run_semantic_checks(
+        self,
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+    ) -> None:
+        """Run deterministic semantic checks on integrated Python files.
+
+        Issues are logged as warnings (non-blocking). This runs after
+        repair but before final commit.
+        """
+        try:
+            from startd8.validators.semantic_checks import run_semantic_checks
+        except ImportError:
+            return
+
+        for fpath in integrated_files:
+            if fpath.suffix != ".py" or not fpath.is_file():
+                continue
+            try:
+                source = fpath.read_text(encoding="utf-8")
+                issues = run_semantic_checks(source, file_path=str(fpath))
+                for issue in issues:
+                    logger.warning(
+                        "Semantic check [%s] %s (line %s): %s",
+                        issue.check,
+                        fpath.name,
+                        issue.line or "?",
+                        issue.message,
+                        extra={"unit_id": unit.id},
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Semantic check failed for %s: %s", fpath, exc,
+                )
+
+    # ------------------------------------------------------------------
     # Fix-2 / Gap-C: Post-integrate contract violation repair
     # ------------------------------------------------------------------
 
@@ -1788,6 +1827,9 @@ class IntegrationEngine:
             self._attempt_contract_violation_repair(
                 integrated_files, unit, result_obj_metadata,
             )
+
+            # ── Semantic checks (Phase D — Kaizen Quality) ──
+            self._run_semantic_checks(integrated_files, unit)
 
             # Advisory downgrade (only if repair not attempted or failed)
             # R6-S1: When repair succeeds, skip downgrade — results are

@@ -7,10 +7,12 @@ breaches and errors for mandatory omissions (e.g. missing API endpoints or
 function signatures).
 """
 
+import ast
 import logging
 import re
-from dataclasses import dataclass
-from typing import Optional, List
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional, List
 
 from startd8.forward_manifest import ForwardManifest, InterfaceContract, ForwardFileSpec
 from startd8.utils.manifest_registry import ManifestRegistry, _flatten_elements
@@ -293,3 +295,204 @@ def _validate_advisory(
              actual="Manual verification required",
          )
     ]
+
+
+# ---------------------------------------------------------------------------
+# Disk compliance validation (Phase B — Kaizen Quality)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DiskComplianceResult:
+    """Post-assembly disk validation result for a single file."""
+
+    file_path: str
+    ast_valid: bool = True
+    stubs_remaining: int = 0
+    duplicate_definitions: int = 0
+    import_completeness: float = 1.0
+    contract_compliance: float = 1.0
+    contract_violations: List[ContractViolation] = field(default_factory=list)
+    semantic_issues: List[Any] = field(default_factory=list)
+    error: Optional[str] = None
+
+
+def validate_disk_compliance(
+    file_path: str,
+    project_root: str,
+    manifest: Optional[ForwardManifest] = None,
+) -> DiskComplianceResult:
+    """Validate the file on disk against forward manifest after assembly.
+
+    Produces a structured compliance result that feeds post-mortem scoring.
+    Only processes Python files.
+
+    Args:
+        file_path: Relative or absolute path to the file.
+        project_root: Project root directory.
+        manifest: Optional forward manifest for contract compliance.
+
+    Returns:
+        DiskComplianceResult with stubs, duplicates, import completeness, etc.
+    """
+    result = DiskComplianceResult(file_path=file_path)
+
+    abs_path = Path(project_root) / file_path
+    if not abs_path.is_file():
+        result.ast_valid = False
+        result.error = "file_not_found"
+        return result
+
+    if abs_path.suffix != ".py":
+        return result
+
+    try:
+        source = abs_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        result.ast_valid = False
+        result.error = f"read_error: {exc}"
+        return result
+
+    # AST validity
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        result.ast_valid = False
+        result.error = f"syntax_error: {exc}"
+        return result
+
+    # Count stubs: raise NotImplementedError / bare pass in function/method bodies
+    result.stubs_remaining = _count_stubs(tree)
+
+    # Count duplicate definitions at module level
+    result.duplicate_definitions = _count_duplicate_definitions(tree)
+
+    # Contract compliance via manifest
+    if manifest and file_path in manifest.file_specs:
+        spec = manifest.file_specs[file_path]
+        violations = _validate_disk_file_against_spec(tree, spec, file_path)
+        result.contract_violations = violations
+
+        total_checks = len(spec.elements or []) + len(spec.imports or [])
+        if total_checks > 0:
+            error_violations = sum(1 for v in violations if v.severity == "error")
+            result.contract_compliance = max(
+                0.0, 1.0 - (error_violations / total_checks)
+            )
+
+        # Import completeness
+        if spec.imports:
+            actual_imports = _extract_import_modules(tree)
+            matched = sum(
+                1 for req_imp in spec.imports
+                if any(
+                    ai == req_imp.module or ai.startswith(req_imp.module + ".")
+                    for ai in actual_imports
+                )
+            )
+            result.import_completeness = matched / len(spec.imports)
+
+    return result
+
+
+def _count_stubs(tree: ast.AST) -> int:
+    """Count stub bodies (raise NotImplementedError or bare pass) in functions."""
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            # Strip leading docstring
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, (ast.Constant, ast.Str))
+            ):
+                body = body[1:]
+            if len(body) == 1:
+                stmt = body[0]
+                # bare pass
+                if isinstance(stmt, ast.Pass):
+                    count += 1
+                # raise NotImplementedError
+                elif isinstance(stmt, ast.Raise) and stmt.exc is not None:
+                    if isinstance(stmt.exc, ast.Call):
+                        func = stmt.exc.func
+                        if isinstance(func, ast.Name) and func.id == "NotImplementedError":
+                            count += 1
+                    elif isinstance(stmt.exc, ast.Name) and stmt.exc.id == "NotImplementedError":
+                        count += 1
+    return count
+
+
+def _count_duplicate_definitions(tree: ast.AST) -> int:
+    """Count duplicate function/class names at module level only."""
+    names: List[str] = []
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+    seen: set = set()
+    dupes = 0
+    for name in names:
+        if name in seen:
+            dupes += 1
+        seen.add(name)
+    return dupes
+
+
+def _extract_import_modules(tree: ast.AST) -> List[str]:
+    """Extract all imported module names from an AST."""
+    modules: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.append(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                modules.append(node.module)
+    return modules
+
+
+def _validate_disk_file_against_spec(
+    tree: ast.AST,
+    spec: ForwardFileSpec,
+    file_path: str,
+) -> List[ContractViolation]:
+    """Check disk AST against forward manifest spec (simplified, no registry)."""
+    violations: List[ContractViolation] = []
+
+    # Check elements exist
+    if spec.elements:
+        actual_names: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                actual_names.add(node.name)
+        for expected_el in spec.elements:
+            if expected_el.name not in actual_names:
+                violations.append(ContractViolation(
+                    contract_id=f"disk:{file_path}:{expected_el.name}",
+                    violation_type=f"missing_{expected_el.kind.value}",
+                    expected=f"Element `{expected_el.name}`",
+                    actual="Not found on disk",
+                    file_path=file_path,
+                    severity="error",
+                ))
+
+    # Check imports
+    if spec.imports:
+        actual_imports = _extract_import_modules(tree)
+        for req_imp in spec.imports:
+            found = any(
+                ai == req_imp.module or ai.startswith(req_imp.module + ".")
+                for ai in actual_imports
+            )
+            if not found:
+                violations.append(ContractViolation(
+                    contract_id=f"disk_import:{file_path}:{req_imp.module}",
+                    violation_type="missing_import",
+                    expected=f"Import `{req_imp.module}`",
+                    actual="Not found on disk",
+                    file_path=file_path,
+                    severity="error",
+                ))
+
+    return violations

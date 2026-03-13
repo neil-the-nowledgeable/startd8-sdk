@@ -30,7 +30,11 @@ _SDK_SRC = _SCRIPT_DIR.parent / "src"
 if _SDK_SRC.is_dir():
     sys.path.insert(0, str(_SDK_SRC))
 
-from startd8.contractors.prime_postmortem import PrimePostMortemEvaluator
+from startd8.contractors.prime_postmortem import (
+    CAUSE_TO_SUGGESTION,
+    PrimePostMortemEvaluator,
+    generate_kaizen_suggestions,
+)
 from startd8.contractors.batch_postmortem import (
     BatchPostMortemEvaluator,
     append_run_to_ledger,
@@ -355,90 +359,9 @@ def _run_batch_postmortem(
 # Kaizen: Metrics emission (REQ-KZ-300)
 # ---------------------------------------------------------------------------
 
-# All 16 RootCause values mapped to prompt hints (REQ-KZ-501 / R2-S6).
-_CAUSE_TO_SUGGESTION: dict[str, dict] = {
-    "duplicate_import": {
-        "phase": "draft",
-        "hint": "Check for existing imports before adding new ones. Deduplicate at file top.",
-    },
-    "unfilled_stub": {
-        "phase": "draft",
-        "hint": "Replace every stub/placeholder with real implementation before returning.",
-    },
-    "scope_corruption": {
-        "phase": "draft",
-        "hint": "Preserve the existing function and class structure. Do not reorganize scopes.",
-    },
-    "phantom_import": {
-        "phase": "draft",
-        "hint": "Validate all imports exist in the target project before referencing them.",
-    },
-    "indentation_error": {
-        "phase": "draft",
-        "hint": "Match the indentation style of the surrounding file exactly.",
-    },
-    "splicer_mismatch": {
-        "phase": "draft",
-        "hint": "Ensure generated code anchors (function/class names) match the target file exactly.",
-    },
-    "tier_escalation": {
-        "phase": "spec",
-        "hint": "Decompose complex features into smaller, independently implementable units.",
-    },
-    "ast_failure": {
-        "phase": "draft",
-        "hint": "Emit syntactically valid Python at all times; run a mental parse check before returning.",
-    },
-    "size_regression": {
-        "phase": "draft",
-        "hint": "Do not generate significantly more lines than the original file; prefer surgical edits.",
-    },
-    "generation_error": {
-        "phase": "draft",
-        "hint": "If generation fails, emit a minimal valid stub rather than an error string.",
-    },
-    "dependency_blocked": {
-        "phase": "spec",
-        "hint": "Declare dependencies explicitly in the spec so blocked features are skipped early.",
-    },
-    "unknown": {
-        "phase": "draft",
-        "hint": "Inspect the failure message and add a targeted fix rather than regenerating the whole file.",
-    },
-    # Escalation reason subtypes (REQ-KZ-401a)
-    "repeated_escalation:ast_failure": {
-        "phase": "draft",
-        "hint": "Emit syntactically valid Python; run a mental parse check. If generating function bodies, always include the def line.",
-    },
-    "repeated_escalation:tier_too_high": {
-        "phase": "spec",
-        "hint": "Decompose into simpler sub-elements; complex features need finer granularity in the spec.",
-    },
-    "repeated_escalation:not_decomposable": {
-        "phase": "spec",
-        "hint": "Elements that resist decomposition may need manual splitting or should be routed to cloud-tier generation.",
-    },
-    "repeated_escalation:structural_mismatch": {
-        "phase": "draft",
-        "hint": "Match the exact class/function structure of the target file. Do not reorganize or rename anchors.",
-    },
-    "repeated_escalation:empty_response": {
-        "phase": "draft",
-        "hint": "Always return code content. If unsure, emit a minimal valid stub rather than nothing.",
-    },
-    "repeated_escalation:timeout": {
-        "phase": "spec",
-        "hint": "Reduce element scope to fit within generation time budgets. Split large elements.",
-    },
-    "repeated_escalation:repair_exhausted": {
-        "phase": "draft",
-        "hint": "Generate cleaner code that requires fewer repair steps. Match target file conventions exactly.",
-    },
-    "repeated_escalation:circuit_breaker": {
-        "phase": "spec",
-        "hint": "Reduce batch size or complexity to stay within circuit breaker thresholds.",
-    },
-}
+# _CAUSE_TO_SUGGESTION is now imported from startd8.contractors.prime_postmortem
+# as CAUSE_TO_SUGGESTION.  Local alias for backward compatibility.
+_CAUSE_TO_SUGGESTION = CAUSE_TO_SUGGESTION
 
 
 def _extract_top_root_causes(report: object) -> list:
@@ -560,6 +483,11 @@ def _emit_kaizen_metrics(report: object, output_dir: Path) -> None:
         if micro.total_elements > 0:
             metrics["escalation_rate"] = micro.escalated_elements / micro.total_elements
 
+    # Disk quality (Phase E)
+    avg_delta = getattr(report, "avg_assembly_delta", None)
+    if avg_delta is not None:
+        metrics["avg_assembly_delta"] = avg_delta
+
     metrics_path = output_dir / "kaizen-metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, default=str),
@@ -575,29 +503,7 @@ def _emit_kaizen_metrics(report: object, output_dir: Path) -> None:
 
 def _emit_kaizen_suggestions(report: object, output_dir: Path) -> None:
     """Generate structured improvement suggestions from cross-feature patterns (REQ-KZ-501)."""
-    suggestions = []
-    for pattern in getattr(report, "cross_feature_patterns", []) or []:
-        if getattr(pattern, "frequency", 0) < 2:
-            continue
-        # Match on pattern_type (structured field), not description (free text) — avoids false positives.
-        pattern_type = getattr(pattern, "pattern_type", None)
-        template = _CAUSE_TO_SUGGESTION.get(pattern_type)
-        if not template:
-            print(
-                f"  [kaizen] No suggestion template for pattern type '{pattern_type}' — skipping.",
-                file=sys.stderr,
-            )
-            continue
-        suggestions.append({
-            "pattern": getattr(pattern, "description", ""),
-            "pattern_type": pattern_type,
-            "frequency": pattern.frequency,
-            "suggested_action": template["hint"],
-            "config_key": "prompt_hints",
-            "phase": template["phase"],
-            "confidence": "high" if pattern.frequency >= 3 else "medium",
-            "auto_applicable": False,
-        })
+    suggestions = generate_kaizen_suggestions(report)
 
     output = {
         "schema_version": "1.0",

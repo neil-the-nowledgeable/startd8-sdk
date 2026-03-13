@@ -262,6 +262,9 @@ class FeaturePostMortem:
     requirement_score: float = 0.0
     verdict: str = ""
     force_regenerated: bool = False
+    disk_compliance: Optional[Any] = None  # DiskComplianceResult when available
+    disk_quality_score: Optional[float] = None
+    assembly_delta: Optional[float] = None
 
 
 @dataclasses.dataclass
@@ -333,11 +336,192 @@ class PrimePostMortemReport:
     )
     lessons: List[Lesson] = dataclasses.field(default_factory=list)
     cost_summary: Optional[CostSummary] = None
+    avg_assembly_delta: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
 # Evaluator
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Disk quality scoring (Phase E — Kaizen Quality)
+# ---------------------------------------------------------------------------
+
+
+def compute_disk_quality_score(compliance: Any) -> float:
+    """Compute a composite disk quality score from DiskComplianceResult.
+
+    Formula:
+        composite = (contract_compliance × 0.4) + (import_completeness × 0.2)
+                  + (stub_penalty × 0.2) + (semantic_penalty × 0.2)
+
+    Args:
+        compliance: DiskComplianceResult instance.
+
+    Returns:
+        Float score in [0.0, 1.0].
+    """
+    if compliance is None:
+        return 0.0
+    if not getattr(compliance, "ast_valid", True):
+        return 0.0
+
+    contract_compliance = getattr(compliance, "contract_compliance", 1.0)
+    import_completeness = getattr(compliance, "import_completeness", 1.0)
+    stubs = getattr(compliance, "stubs_remaining", 0)
+    semantic_issues = getattr(compliance, "semantic_issues", [])
+    semantic_count = len(semantic_issues) if semantic_issues else 0
+
+    stub_penalty = max(0.0, 1.0 - stubs * 0.1)
+    semantic_penalty = max(0.0, 1.0 - semantic_count * 0.15)
+
+    composite = (
+        contract_compliance * 0.4
+        + import_completeness * 0.2
+        + stub_penalty * 0.2
+        + semantic_penalty * 0.2
+    )
+    return max(0.0, min(1.0, composite))
+
+
+# ---------------------------------------------------------------------------
+# Kaizen suggestion generation (Phase C — moved from scripts/)
+# ---------------------------------------------------------------------------
+
+# All 16 RootCause values mapped to prompt hints.
+CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
+    "duplicate_import": {
+        "phase": "draft",
+        "hint": "Check for existing imports before adding new ones. Deduplicate at file top.",
+    },
+    "unfilled_stub": {
+        "phase": "draft",
+        "hint": "Replace every stub/placeholder with real implementation before returning.",
+    },
+    "scope_corruption": {
+        "phase": "draft",
+        "hint": "Preserve the existing function and class structure. Do not reorganize scopes.",
+    },
+    "phantom_import": {
+        "phase": "draft",
+        "hint": "Validate all imports exist in the target project before referencing them.",
+    },
+    "indentation_error": {
+        "phase": "draft",
+        "hint": "Match the indentation style of the surrounding file exactly.",
+    },
+    "splicer_mismatch": {
+        "phase": "draft",
+        "hint": "Ensure generated code anchors (function/class names) match the target file exactly.",
+    },
+    "tier_escalation": {
+        "phase": "spec",
+        "hint": "Decompose complex features into smaller, independently implementable units.",
+    },
+    "ast_failure": {
+        "phase": "draft",
+        "hint": "Emit syntactically valid Python at all times; run a mental parse check before returning.",
+    },
+    "size_regression": {
+        "phase": "draft",
+        "hint": "Do not generate significantly more lines than the original file; prefer surgical edits.",
+    },
+    "generation_error": {
+        "phase": "draft",
+        "hint": "If generation fails, emit a minimal valid stub rather than an error string.",
+    },
+    "skeleton_missing": {
+        "phase": "spec",
+        "hint": "Ensure skeleton files are generated before code generation begins.",
+    },
+    "ollama_timeout": {
+        "phase": "spec",
+        "hint": "Reduce element scope to fit within generation time budgets. Split large elements.",
+    },
+    "ollama_empty_response": {
+        "phase": "draft",
+        "hint": "Always return code content. If unsure, emit a minimal valid stub rather than nothing.",
+    },
+    "ollama_circuit_breaker": {
+        "phase": "spec",
+        "hint": "Reduce batch size or complexity to stay within circuit breaker thresholds.",
+    },
+    "repair_exhausted": {
+        "phase": "draft",
+        "hint": "Generate cleaner code that requires fewer repair steps. Match target file conventions exactly.",
+    },
+    "dependency_blocked": {
+        "phase": "spec",
+        "hint": "Declare dependencies explicitly in the spec so blocked features are skipped early.",
+    },
+    "unknown": {
+        "phase": "draft",
+        "hint": "Inspect the failure message and add a targeted fix rather than regenerating the whole file.",
+    },
+    "repeated_escalation:ast_failure": {
+        "phase": "draft",
+        "hint": "Emit syntactically valid Python; run a mental parse check. If generating function bodies, always include the def line.",
+    },
+    "repeated_escalation:tier_too_high": {
+        "phase": "spec",
+        "hint": "Decompose into simpler sub-elements; complex features need finer granularity in the spec.",
+    },
+    "repeated_escalation:not_decomposable": {
+        "phase": "spec",
+        "hint": "Elements that resist decomposition may need manual splitting or should be routed to cloud-tier generation.",
+    },
+    "repeated_escalation:structural_mismatch": {
+        "phase": "draft",
+        "hint": "Match the exact class/function structure of the target file. Do not reorganize or rename anchors.",
+    },
+    "repeated_escalation:empty_response": {
+        "phase": "draft",
+        "hint": "Always return code content. If unsure, emit a minimal valid stub rather than nothing.",
+    },
+    "repeated_escalation:timeout": {
+        "phase": "spec",
+        "hint": "Reduce element scope to fit within generation time budgets. Split large elements.",
+    },
+    "repeated_escalation:repair_exhausted": {
+        "phase": "draft",
+        "hint": "Generate cleaner code that requires fewer repair steps. Match target file conventions exactly.",
+    },
+    "repeated_escalation:circuit_breaker": {
+        "phase": "spec",
+        "hint": "Reduce batch size or complexity to stay within circuit breaker thresholds.",
+    },
+}
+
+
+def generate_kaizen_suggestions(report: Any) -> List[Dict[str, Any]]:
+    """Generate structured improvement suggestions from a post-mortem report.
+
+    Args:
+        report: PrimePostMortemReport instance.
+
+    Returns:
+        List of suggestion dicts with pattern, hint, phase, confidence.
+    """
+    suggestions: List[Dict[str, Any]] = []
+    for pattern in getattr(report, "cross_feature_patterns", []) or []:
+        if getattr(pattern, "frequency", 0) < 2:
+            continue
+        pattern_type = getattr(pattern, "pattern_type", None)
+        template = CAUSE_TO_SUGGESTION.get(pattern_type)
+        if not template:
+            continue
+        suggestions.append({
+            "pattern": getattr(pattern, "description", ""),
+            "pattern_type": pattern_type,
+            "frequency": pattern.frequency,
+            "suggested_action": template["hint"],
+            "config_key": "prompt_hints",
+            "phase": template["phase"],
+            "confidence": "high" if pattern.frequency >= 3 else "medium",
+            "auto_applicable": False,
+        })
+    return suggestions
 
 
 class PrimePostMortemEvaluator:
@@ -355,6 +539,8 @@ class PrimePostMortemEvaluator:
         seed_tasks: Optional[List[Dict]] = None,
         output_dir: str = ".",
         force_regenerated_ids: Optional[Set[str]] = None,
+        project_root: Optional[str] = None,
+        forward_manifest: Optional[Any] = None,
     ) -> PrimePostMortemReport:
         """Evaluate a PrimeContractor run and produce a post-mortem report.
 
@@ -454,6 +640,33 @@ class PrimePostMortemEvaluator:
 
         # Build cost summary
         report.cost_summary = self._build_cost_summary(report.features)
+
+        # Disk quality evaluation (opt-in when project_root provided)
+        if project_root:
+            self._evaluate_disk_quality(report.features, project_root, forward_manifest)
+            # Compute avg_assembly_delta across features that have disk scores
+            deltas = [
+                f.assembly_delta for f in report.features
+                if f.assembly_delta is not None
+            ]
+            if deltas:
+                report.avg_assembly_delta = sum(deltas) / len(deltas)
+                # Cross-feature pattern: large assembly quality gap
+                large_gaps = [
+                    f.feature_id for f in report.features
+                    if f.assembly_delta is not None and f.assembly_delta > 0.2
+                ]
+                if len(large_gaps) >= 2:
+                    report.cross_feature_patterns.append(CrossFeaturePattern(
+                        pattern_type="assembly_quality_gap",
+                        description=(
+                            f"Assembly degrades quality by >0.2 in "
+                            f"{len(large_gaps)} features"
+                        ),
+                        affected_features=large_gaps,
+                        frequency=len(large_gaps),
+                        severity="high" if len(large_gaps) >= 3 else "medium",
+                    ))
 
         # Extract lessons
         report.lessons = self._extract_lessons(report)
@@ -604,6 +817,45 @@ class PrimePostMortemEvaluator:
 
         matched = sum(1 for kw in keywords if kw in combined)
         return matched / len(keywords) if keywords else 0.0
+
+    def _evaluate_disk_quality(
+        self,
+        features: List[FeaturePostMortem],
+        project_root: str,
+        forward_manifest: Optional[Any] = None,
+    ) -> None:
+        """Evaluate disk compliance and compute quality scores for each feature.
+
+        Mutates feature objects in-place to add disk_compliance,
+        disk_quality_score, and assembly_delta fields.
+        """
+        try:
+            from startd8.forward_manifest_validator import validate_disk_compliance
+        except ImportError:
+            logger.debug("Disk validation unavailable — skipping")
+            return
+
+        for fpm in features:
+            for target_file in fpm.target_files:
+                if not target_file.endswith(".py"):
+                    continue
+                try:
+                    compliance = validate_disk_compliance(
+                        target_file, project_root, forward_manifest,
+                    )
+                    fpm.disk_compliance = compliance
+
+                    # Compute disk quality score
+                    fpm.disk_quality_score = compute_disk_quality_score(compliance)
+
+                    # Assembly delta: quality_score (from elements) - disk_quality_score
+                    if fpm.disk_quality_score is not None:
+                        fpm.assembly_delta = fpm.requirement_score - fpm.disk_quality_score
+                except Exception as exc:
+                    logger.debug(
+                        "Disk validation failed for %s in %s: %s",
+                        target_file, fpm.feature_id, exc,
+                    )
 
     def _build_pipeline_attribution(
         self, features: List[FeaturePostMortem]
