@@ -207,7 +207,7 @@ class PrimaryContractorCodeGenerator:
 
             # Build config — include target_files in context so spec mentions them
             enriched_context = dict(context)
-            if len(target_files) > 1:
+            if target_files:
                 enriched_context["target_files"] = target_files
 
             config = {
