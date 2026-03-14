@@ -110,33 +110,70 @@ def _build_function_prompt(
     domain_constraints: Optional[list[str]] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
+    return _build_element_prompt_core(
+        element, file_spec, contracts, skeleton, few_shot_examples,
+        design_doc_sections=design_doc_sections,
+        task_description=task_description,
+        domain_constraints=domain_constraints,
+        full_function=False,
+    )
+
+
+def _build_full_function_prompt_inner(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+    skeleton: Optional[str],
+    few_shot_examples: Optional[list[str]],
+    design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
+) -> str:
+    """Build prompt asking the model to output a complete function (def + body)."""
+    return _build_element_prompt_core(
+        element, file_spec, contracts, skeleton, few_shot_examples,
+        design_doc_sections=design_doc_sections,
+        task_description=task_description,
+        domain_constraints=domain_constraints,
+        full_function=True,
+    )
+
+
+def _build_element_prompt_core(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+    skeleton: Optional[str],
+    few_shot_examples: Optional[list[str]],
+    design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
+    *,
+    full_function: bool = False,
+) -> str:
+    """Shared prompt builder for body-only and full-function modes.
+
+    The only differences between modes are:
+    - Instructions (body-only vs complete function)
+    - Few-shot formatting (indented body vs complete def+body)
+    - Target label ("implement this" vs "implement this function")
+    """
     stub = _build_element_stub(element)
     skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
         skeleton or "", element,
     )
     if not indent_str:
         indent_str = _fallback_indent(element)
-    indent_spaces = len(indent_str or "")
     if skeleton_context:
         stub = skeleton_context
-    est_lines = _estimate_body_lines(element)
 
-    # Render imports for context (REQ-MP-201)
     import_lines = _render_imports(file_spec)
-
-    # Render sibling stubs for class context (REQ-MP-201)
     sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec)
-
-    # Render binding constraints
     constraint_lines = _render_constraints(contracts)
-
-    # ── Build prompt sections ──
 
     sections: list[str] = []
 
-    # Method context header (REQ-MP-201) — include base classes for semantic
-    # context (e.g. gRPC servicer, ABC subclass) so the LLM understands the
-    # protocol/contract this method must satisfy.
+    # Class context (REQ-MP-201)
     if element.parent_class:
         bases_str = _lookup_parent_bases(element.parent_class, file_spec)
         if bases_str:
@@ -147,52 +184,62 @@ def _build_function_prompt(
             sections.append(
                 f"# This is a method of class `{element.parent_class}`."
             )
-        # Include __init__ signature/body hint so the LLM knows what instance
-        # attributes are available (e.g. self._catalog_stub instead of globals).
-        # Run-014 showed all 3 gRPC methods used global `product_catalog_stub`
-        # instead of `self._catalog_stub` because __init__ context was missing.
         init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "")
         if init_hint:
-            sections.append(f"# Constructor context (use `self.*` for instance state):")
+            sections.append("# Constructor context (use `self.*` for instance state):")
             sections.append(init_hint)
 
-    # Core instructions (REQ-MP-202)
-    def_line = None
-    for line in _build_element_stub(element).splitlines():
-        if line.strip().startswith("@"):
-            continue
-        def_line = line.strip()
-        break
-
-    # Build method-specific framing so the LLM understands it's generating
-    # a function body (not standalone statements).  Run-014 showed 3/3 method
-    # elements needed bare_statement_wrap repair because Ollama returned bare
-    # statements instead of indented function body lines.
-    if element.parent_class:
-        body_framing = (
-            f"# Task: Implement the body of method `{element.name}` "
-            f"inside class `{element.parent_class}`."
-        )
+    # Mode-specific instructions
+    if full_function:
+        if element.parent_class:
+            task_line = (
+                f"# Task: Write the complete implementation of method `{element.name}` "
+                f"for class `{element.parent_class}`."
+            )
+        else:
+            task_line = f"# Task: Write the complete implementation of function `{element.name}`."
+        sections.extend([
+            task_line,
+            "# Output the full function: the `def` line and the function body.",
+            "# Do NOT output import statements, class wrappers, or other functions.",
+            "# Output ONLY the single function definition and NOTHING else.",
+            "# Do NOT add comments, explanations, or markdown fences.",
+            "",
+        ])
     else:
-        body_framing = (
-            f"# Task: Implement the body of function `{element.name}`."
-        )
+        indent_spaces = len(indent_str or "")
+        est_lines = _estimate_body_lines(element)
+        def_line = None
+        for line in _build_element_stub(element).splitlines():
+            if line.strip().startswith("@"):
+                continue
+            def_line = line.strip()
+            break
 
-    sections.extend([
-        body_framing,
-        "# Replace the `raise NotImplementedError` line with a working implementation.",
-        f"# The body MUST be {est_lines} lines. Do NOT exceed this.",
-        "# Output ONLY the indented body lines that go INSIDE the function.",
-        "# Do NOT output a `def` line, `class` wrapper, docstring, or imports.",
-        f"# Indent every line with exactly {indent_spaces} spaces.",
-        "# Do NOT write standalone statements, helper functions, extra classes, main blocks, or tests.",
-        "# Do NOT add comments, explanations, or markdown fences.",
-        "# Output ONLY the function body and NOTHING else.",
-        "",
-    ])
-    if def_line:
-        sections.append(f"# Target signature: `{def_line}`")
-        sections.append("")
+        if element.parent_class:
+            body_framing = (
+                f"# Task: Implement the body of method `{element.name}` "
+                f"inside class `{element.parent_class}`."
+            )
+        else:
+            body_framing = (
+                f"# Task: Implement the body of function `{element.name}`."
+            )
+        sections.extend([
+            body_framing,
+            "# Replace the `raise NotImplementedError` line with a working implementation.",
+            f"# The body MUST be {est_lines} lines. Do NOT exceed this.",
+            "# Output ONLY the indented body lines that go INSIDE the function.",
+            "# Do NOT output a `def` line, `class` wrapper, docstring, or imports.",
+            f"# Indent every line with exactly {indent_spaces} spaces.",
+            "# Do NOT write standalone statements, helper functions, extra classes, main blocks, or tests.",
+            "# Do NOT add comments, explanations, or markdown fences.",
+            "# Output ONLY the function body and NOTHING else.",
+            "",
+        ])
+        if def_line:
+            sections.append(f"# Target signature: `{def_line}`")
+            sections.append("")
 
     # Available imports (REQ-MP-201)
     if import_lines:
@@ -200,22 +247,19 @@ def _build_function_prompt(
         sections.extend(import_lines)
         sections.append("")
 
-    # Task context from seed (Mottainai Rule 2: forward, don't regenerate)
+    # Task context (Mottainai Rule 2)
     if task_description:
         sections.append(f"# Task context: {task_description}")
         sections.append("")
 
-    # Domain constraints from plan ingestion (D2: wire binding_constraints)
+    # Domain constraints
     if domain_constraints:
         sections.append("# Domain constraints (MUST follow these):")
         for dc in domain_constraints:
             sections.append(f"# - {dc}")
         sections.append("")
 
-    # Implementation context from design doc sections (REQ-DDS-001)
-    # Split into element-relevant (mentioning this element's name) vs general.
-    # Element-relevant sections appear first as primary guidance so the LLM
-    # knows what THIS specific method should do vs. general feature context.
+    # Design doc context (REQ-DDS-001)
     if design_doc_sections:
         relevant, general = _partition_design_sections(
             design_doc_sections, element.name,
@@ -246,136 +290,21 @@ def _build_function_prompt(
     # Few-shot examples (REQ-MP-203)
     if few_shot_examples:
         for i, ex in enumerate(few_shot_examples[:2]):
-            label = "Example (completed)" if i == 0 else "Another example"
-            sections.append(f"# {label}:")
-            sections.append(_format_example_body(ex, indent_str))
+            if full_function:
+                label = "Example (completed function)" if i == 0 else "Another example"
+                sections.append(f"# {label}:")
+                sections.append(ex)
+            else:
+                label = "Example (completed)" if i == 0 else "Another example"
+                sections.append(f"# {label}:")
+                sections.append(_format_example_body(ex, indent_str))
             sections.append("")
 
     # Target element
-    sections.append("# Now implement this:")
-    sections.append(stub)
-
-    return "\n".join(sections)
-
-
-def _build_full_function_prompt_inner(
-    element: ForwardElementSpec,
-    file_spec: ForwardFileSpec,
-    contracts: list[InterfaceContract],
-    skeleton: Optional[str],
-    few_shot_examples: Optional[list[str]],
-    design_doc_sections: Optional[list[str]] = None,
-    task_description: Optional[str] = None,
-    domain_constraints: Optional[list[str]] = None,
-) -> str:
-    """Build prompt asking the model to output a complete function (def + body).
-
-    Reuses context extraction from the body-only path but changes instructions
-    to request the full function definition instead of body-only lines.
-    """
-    stub = _build_element_stub(element)
-    skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
-        skeleton or "", element,
-    )
-    if skeleton_context:
-        stub = skeleton_context
-
-    import_lines = _render_imports(file_spec)
-    sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec)
-    constraint_lines = _render_constraints(contracts)
-
-    sections: list[str] = []
-
-    # Class context
-    if element.parent_class:
-        bases_str = _lookup_parent_bases(element.parent_class, file_spec)
-        if bases_str:
-            sections.append(
-                f"# This is a method of class `{element.parent_class}({bases_str})`."
-            )
-        else:
-            sections.append(
-                f"# This is a method of class `{element.parent_class}`."
-            )
-        init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "")
-        if init_hint:
-            sections.append("# Constructor context (use `self.*` for instance state):")
-            sections.append(init_hint)
-
-    # Instructions — ask for the complete function, not just body
-    if element.parent_class:
-        task_line = (
-            f"# Task: Write the complete implementation of method `{element.name}` "
-            f"for class `{element.parent_class}`."
-        )
+    if full_function:
+        sections.append("# Now implement this function:")
     else:
-        task_line = f"# Task: Write the complete implementation of function `{element.name}`."
-
-    sections.extend([
-        task_line,
-        "# Output the full function: the `def` line and the function body.",
-        "# Do NOT output import statements, class wrappers, or other functions.",
-        "# Output ONLY the single function definition and NOTHING else.",
-        "# Do NOT add comments, explanations, or markdown fences.",
-        "",
-    ])
-
-    # Available imports
-    if import_lines:
-        sections.append("# Available imports (use these — do NOT invent other APIs):")
-        sections.extend(import_lines)
-        sections.append("")
-
-    # Task context
-    if task_description:
-        sections.append(f"# Task context: {task_description}")
-        sections.append("")
-
-    # Domain constraints
-    if domain_constraints:
-        sections.append("# Domain constraints (MUST follow these):")
-        for dc in domain_constraints:
-            sections.append(f"# - {dc}")
-        sections.append("")
-
-    # Design doc context
-    if design_doc_sections:
-        relevant, general = _partition_design_sections(
-            design_doc_sections, element.name,
-        )
-        if relevant:
-            sections.append(f"# What `{element.name}` must do:")
-            for ds in relevant:
-                sections.append(f"# - {ds}")
-            sections.append("")
-        if general:
-            sections.append("# Implementation context:")
-            for ds in general:
-                sections.append(f"# - {ds}")
-            sections.append("")
-
-    # Sibling context
-    if sibling_stubs:
-        sections.append("# Other methods in this class (for context, do not redefine):")
-        sections.extend(sibling_stubs)
-        sections.append("")
-
-    # Constraints
-    if constraint_lines:
-        sections.append("# Constraints:")
-        sections.extend(constraint_lines)
-        sections.append("")
-
-    # Few-shot examples — show complete functions in this mode
-    if few_shot_examples:
-        for i, ex in enumerate(few_shot_examples[:2]):
-            label = "Example (completed function)" if i == 0 else "Another example"
-            sections.append(f"# {label}:")
-            sections.append(ex)
-            sections.append("")
-
-    # Target element
-    sections.append("# Now implement this function:")
+        sections.append("# Now implement this:")
     sections.append(stub)
 
     return "\n".join(sections)
