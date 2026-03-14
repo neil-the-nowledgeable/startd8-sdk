@@ -6,6 +6,7 @@ Each step implements the ``RepairStep`` protocol from ``repair.protocol``.
 from .ast_validate import AstValidateStep
 from .bracket_balance import BracketBalanceStep
 from .class_body_dedup import ClassBodyDeduplicationStep
+from .definition_order_fix import DefinitionOrderFixStep
 from .dunder_all_fix import DunderAllFixStep
 from .duplicate_removal import DuplicateRemovalStep
 from .extended_lint_fix import ExtendedLintFixStep
@@ -21,6 +22,7 @@ __all__ = [
     "AstValidateStep",
     "BracketBalanceStep",
     "ClassBodyDeduplicationStep",
+    "DefinitionOrderFixStep",
     "DunderAllFixStep",
     "DuplicateRemovalStep",
     "ExtendedLintFixStep",
