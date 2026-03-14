@@ -617,6 +617,12 @@ def detect_size_regression(
     # a non-Python target like requirements.in.
     if _all_files_non_python(target_files=target_files, existing_files=existing_files):
         return False
+    # TODO: existing_total includes sibling .py files added for import context,
+    # inflating the baseline. A 50-line target with a 200-line sibling produces
+    # a 250-line baseline, making a correct 50-line output look like 20% ratio.
+    # Scope to target_files only when available. Not yet observed as a false
+    # positive on Python targets — the regression threshold is low enough that
+    # sibling inflation doesn't cross it in practice.
     existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
         return False
