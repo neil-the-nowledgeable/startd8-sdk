@@ -497,6 +497,31 @@ class MicroPrimeCodeGenerator:
             st.reg_hits, st.reg_misses,
         )
 
+        # Phase 5a-pre: Deterministic generation for requirements.in files.
+        # Extract third-party imports from already-generated Python files in
+        # the same service directory and write requirements.in directly —
+        # zero LLM cost, zero hallucination risk.
+        remaining_bypass: list[str] = []
+        for bp_file in st.bypass_files:
+            if bp_file.endswith(".in") and "requirements" in bp_file.rsplit("/", 1)[-1]:
+                generated_content = self._generate_requirements_in(
+                    bp_file, st, target_files,
+                )
+                if generated_content is not None:
+                    output_path = self._output_dir / bp_file
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(generated_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(bp_file)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Deterministic requirements.in: %s (%d packages)",
+                        bp_file, len(generated_content.strip().splitlines()),
+                    )
+                    continue
+            remaining_bypass.append(bp_file)
+        st.bypass_files = remaining_bypass
+
         # Phase 5a: FR-DFA-001 — Bypass files always delegate to fallback
         # (regardless of escalation_enabled).  These are files MP fundamentally
         # cannot process (no ForwardFileSpec / no skeleton), NOT files where
@@ -1650,6 +1675,70 @@ class MicroPrimeCodeGenerator:
             logger.warning("Ollama not reachable at %s: %s", base_url, exc)
             self._ollama_available = False
             return False
+
+    def _generate_requirements_in(
+        self,
+        requirements_file: str,
+        st: _GenerationState,
+        all_target_files: List[str],
+    ) -> Optional[str]:
+        """Generate requirements.in deterministically from sibling Python imports.
+
+        Scans already-generated Python files in the same directory as the
+        requirements.in target, extracts third-party imports, and maps them
+        to PyPI package names.  Returns None if no Python files found.
+        """
+        from startd8.utils.requirements_generator import generate_requirements_in
+
+        # Find sibling Python files — both already-written outputs and
+        # existing source files in the same service directory.
+        req_dir = requirements_file.rsplit("/", 1)[0] if "/" in requirements_file else ""
+
+        python_files: Dict[str, str] = {}
+
+        # 1. Already-generated files from this run
+        for gen_path in st.generated_files:
+            rel = str(gen_path.relative_to(self._output_dir)) if hasattr(gen_path, 'relative_to') else str(gen_path)
+            if rel.endswith(".py") and rel.startswith(req_dir):
+                try:
+                    python_files[rel] = gen_path.read_text(encoding="utf-8")
+                except OSError:
+                    pass
+
+        # 2. Existing source files from the project (for deps that aren't
+        #    being regenerated in this run)
+        if self._manifest:
+            for file_path, file_spec in self._manifest.file_specs.items():
+                if file_path.endswith(".py") and file_path.startswith(req_dir):
+                    if file_path not in python_files:
+                        # Try reading from project root
+                        full = Path(".") / file_path
+                        if full.is_file():
+                            try:
+                                python_files[file_path] = full.read_text(encoding="utf-8")
+                            except OSError:
+                                pass
+
+        if not python_files:
+            logger.info(
+                "No sibling Python files found for %s — cannot generate deterministically",
+                requirements_file,
+            )
+            return None
+
+        # Extract manifest-declared external deps as extras (catches deps
+        # that aren't visible through import analysis alone)
+        extra_packages: list[str] = []
+        if self._manifest:
+            for fp, fs in self._manifest.file_specs.items():
+                if fp.startswith(req_dir) and fs.dependencies:
+                    extra_packages.extend(fs.dependencies.external)
+
+        content = generate_requirements_in(
+            python_files,
+            extra_packages=extra_packages or None,
+        )
+        return content if content else None
 
     def _delegate_to_fallback(
         self,
