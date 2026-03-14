@@ -258,3 +258,51 @@ class TestBuildSpec:
         call_args = agent.generate.call_args
         prompt = call_args[0][0]
         assert "Design content here" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Spec edit mode — non-Python targets and target-only line count
+# ---------------------------------------------------------------------------
+
+class TestSpecEditModeNonPython:
+    """Spec builder must skip quantitative constraints for non-Python targets."""
+
+    def test_non_python_target_no_min_lines(self):
+        """requirements.in target: no 'AT LEAST N lines' in spec preamble."""
+        ctx = {
+            "existing_files": {
+                "src/server.py": "line\n" * 150,
+                "src/requirements.in": "dep1==1.0\ndep2==2.0\n",
+            },
+            "target_files": ["src/requirements.in"],
+        }
+        result = build_spec_prompt("Update deps", ctx, None)
+        assert "EDIT MODE" in result
+        # Must NOT include quantitative line constraint
+        assert "AT LEAST" not in result
+        assert "220 lines" not in result
+
+    def test_python_target_uses_target_line_count(self):
+        """Python target: line count reflects target file only, not siblings."""
+        ctx = {
+            "existing_files": {
+                "src/foo.py": "line\n" * 10,
+                "src/bar.py": "line\n" * 200,
+            },
+            "target_files": ["src/foo.py"],
+        }
+        result = build_spec_prompt("Edit foo", ctx, None)
+        assert "EDIT MODE" in result
+        # Should reference 10 lines (target), not 210 (total)
+        assert "10 lines" in result
+        assert "210" not in result
+
+    def test_python_target_still_gets_constraint(self):
+        """Python target must still get the quantitative line constraint."""
+        ctx = {
+            "existing_files": {"src/main.py": "line\n" * 50},
+            "target_files": ["src/main.py"],
+        }
+        result = build_spec_prompt("Refactor main", ctx, None)
+        assert "50 lines" in result
+        assert "AT LEAST" in result or "40 lines" in result

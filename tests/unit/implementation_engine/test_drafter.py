@@ -9,6 +9,7 @@ from startd8.implementation_engine.budget import (
     SUPPLEMENTARY_BUDGET_CHARS,
 )
 from startd8.implementation_engine.drafter import (
+    _target_file_lines,
     build_existing_files_section,
     build_output_format,
     build_supplementary_sections,
@@ -200,6 +201,15 @@ class TestBuildOutputFormat:
         result = build_output_format(target_files=["only.py"])
         # Single file → simple format
         assert isinstance(result, str)
+
+    def test_empty_existing_files_skips_min_lines_constraint(self):
+        """Empty existing files: skip useless 'AT LEAST 0 lines' constraint."""
+        result = build_output_format(
+            existing_files={"f.py": ""},
+            edit_min_pct=80,
+        )
+        assert "0 lines" not in result
+        assert "COMPLETE" in result
 
 
 # ---------------------------------------------------------------------------
@@ -509,3 +519,117 @@ class TestCreateDraft:
         call_args = agent.generate.call_args
         prompt = call_args[0][0]
         assert "IService" in prompt or "Interface Contract" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _target_file_lines — Option B: target-only line count
+# ---------------------------------------------------------------------------
+
+class TestTargetFileLines:
+    """Line count must come from TARGET files only, not all existing context."""
+
+    def test_target_overlap_uses_target_only(self):
+        """When target_files overlaps existing_files, count only target."""
+        existing = {
+            "src/server.py": "line1\nline2\nline3\n" * 50,  # 150 lines
+            "src/logger.py": "line1\nline2\n" * 30,           # 60 lines
+            "src/requirements.in": "dep1==1.0\ndep2==2.0\n",  # 2 lines
+        }
+        result = _target_file_lines(["src/requirements.in"], existing)
+        assert result == 2
+
+    def test_no_overlap_falls_back_to_all(self):
+        """When no target files match existing, fall back to sum of all."""
+        existing = {"src/foo.py": "a\nb\nc\n"}
+        result = _target_file_lines(["src/bar.py"], existing)
+        assert result == 3
+
+    def test_no_target_files_falls_back(self):
+        """When target_files is None, fall back to sum of all."""
+        existing = {"src/foo.py": "a\nb\nc\n"}
+        result = _target_file_lines(None, existing)
+        assert result == 3
+
+    def test_multi_target_sums_targets_only(self):
+        """Multi-target: sum only target files, not context siblings."""
+        existing = {
+            "src/a.py": "x\n" * 10,         # 10 lines
+            "src/b.py": "x\n" * 20,         # 20 lines
+            "src/context.py": "x\n" * 100,  # 100 lines (context only)
+        }
+        result = _target_file_lines(["src/a.py", "src/b.py"], existing)
+        assert result == 30
+
+
+# ---------------------------------------------------------------------------
+# build_output_format — non-Python min-lines skip (Option A + B)
+# ---------------------------------------------------------------------------
+
+class TestBuildOutputFormatNonPython:
+    """Non-Python targets must NOT get Python min-lines constraints."""
+
+    def test_requirements_in_no_min_lines(self):
+        """requirements.in target should not get 'AT LEAST N lines' constraint."""
+        existing = {
+            "src/server.py": "line\n" * 150,
+            "src/requirements.in": "dep1==1.0\ndep2==2.0\n",
+        }
+        result = build_output_format(
+            target_files=["src/requirements.in"],
+            existing_files=existing,
+            edit_min_pct=80,
+        )
+        assert "AT LEAST" not in result
+        assert "COMPLETE" in result
+
+    def test_dockerfile_no_min_lines(self):
+        """Dockerfile target should not get min-lines constraint."""
+        existing = {
+            "src/app.py": "line\n" * 200,
+            "Dockerfile": "FROM python:3.12\nRUN pip install\n",
+        }
+        result = build_output_format(
+            target_files=["Dockerfile"],
+            existing_files=existing,
+            edit_min_pct=80,
+        )
+        assert "AT LEAST" not in result
+
+    def test_python_target_still_gets_min_lines(self):
+        """Python targets must still get the min-lines constraint."""
+        content = "line\n" * 100
+        existing = {"src/foo.py": content}
+        result = build_output_format(
+            target_files=["src/foo.py"],
+            existing_files=existing,
+            edit_min_pct=80,
+        )
+        assert "AT LEAST" in result or "80" in result
+
+    def test_python_target_uses_target_line_count(self):
+        """Python target line count should reflect target only, not siblings."""
+        existing = {
+            "src/foo.py": "line\n" * 10,       # target: 10 lines
+            "src/bar.py": "line\n" * 200,      # sibling: 200 lines
+        }
+        result = build_output_format(
+            target_files=["src/foo.py"],
+            existing_files=existing,
+            edit_min_pct=80,
+        )
+        # Should reference 10 lines (target), not 210 (total)
+        assert "10 lines" in result
+        assert "210" not in result
+
+    def test_multi_file_non_python_no_min_lines(self):
+        """Multi-file non-Python targets skip min-lines in summary."""
+        existing = {
+            "src/requirements.in": "dep1==1.0\n",
+            "Dockerfile": "FROM python:3.12\n",
+        }
+        result = build_output_format(
+            target_files=["src/requirements.in", "Dockerfile"],
+            existing_files=existing,
+            edit_min_pct=80,
+        )
+        assert "must be >=" not in result

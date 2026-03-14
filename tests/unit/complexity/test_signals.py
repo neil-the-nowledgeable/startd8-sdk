@@ -150,8 +150,9 @@ class TestExtractSignalsFromFeature:
         assert signals.has_cross_file_edges is True
 
     def test_manifest_coverage_full(self, tmp_path):
+        """ForwardManifest with file_specs covering all targets → 'full'."""
         manifest = MagicMock()
-        manifest.get.return_value = MagicMock()  # always found
+        manifest.file_specs = {"a.py": MagicMock()}
 
         feature = MagicMock()
         feature.target_files = ["a.py"]
@@ -162,8 +163,9 @@ class TestExtractSignalsFromFeature:
         assert signals.manifest_coverage == "full"
 
     def test_manifest_coverage_none_when_missing(self, tmp_path):
+        """ForwardManifest without target in file_specs → 'none'."""
         manifest = MagicMock()
-        manifest.get.return_value = None  # not found
+        manifest.file_specs = {}  # empty — target not covered
 
         feature = MagicMock()
         feature.target_files = ["a.py"]
@@ -172,6 +174,19 @@ class TestExtractSignalsFromFeature:
 
         signals = extract_signals_from_feature(feature, tmp_path, manifest=manifest)
         assert signals.manifest_coverage == "none"
+
+    def test_manifest_coverage_dict_like_fallback(self, tmp_path):
+        """Dict-like manifest (ManifestRegistry) with .get() → 'full'."""
+        manifest = MagicMock(spec=[])  # no file_specs attribute
+        manifest.get = MagicMock(return_value=MagicMock())  # always found
+
+        feature = MagicMock()
+        feature.target_files = ["a.py"]
+        feature.description = "test"
+        feature.metadata = {}
+
+        signals = extract_signals_from_feature(feature, tmp_path, manifest=manifest)
+        assert signals.manifest_coverage == "full"
 
 
 # ── extract_signals_from_chunk (REQ-MP-800) ──────────────────────────

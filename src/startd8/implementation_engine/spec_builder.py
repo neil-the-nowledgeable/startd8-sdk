@@ -464,7 +464,7 @@ def build_spec_prompt(
     context: Dict[str, Any],
     output_format: Optional[str],
     template_key: Optional[str] = None,
-    edit_min_pct: Optional[int] = 80,
+    edit_min_pct: int = 80,
 ) -> str:
     """Build the full spec prompt from context.
 
@@ -560,18 +560,25 @@ def build_spec_prompt(
             task_verb=task_verb.capitalize(),
         )
         if existing_files:
-            total_lines = sum(
-                len((c or "").splitlines()) for c in existing_files.values()
-            )
+            # Option B: compute line count from target files only (not all
+            # sibling context files) to avoid inflated constraints on small
+            # config files.
+            from .drafter import _target_file_lines, _all_files_non_python
+            target_files_list = context.get("target_files") or []
+            total_lines = _target_file_lines(target_files_list, existing_files)
             min_pct = edit_min_pct or 80
             min_lines = int(total_lines * min_pct / 100)
-            edit_preamble += _format_lead_prompt(
-                "spec_edit_quantitative_constraint",
-                _SPEC_EDIT_QUANTITATIVE_FALLBACK,
-                total_lines=total_lines,
-                min_lines=min_lines,
-                edit_min_pct=min_pct,
-            )
+            # Option A: skip quantitative constraint for non-Python targets
+            # where Python line-count heuristics are meaningless.
+            skip_constraint = _all_files_non_python(target_files_list)
+            if not skip_constraint and total_lines > 0:
+                edit_preamble += _format_lead_prompt(
+                    "spec_edit_quantitative_constraint",
+                    _SPEC_EDIT_QUANTITATIVE_FALLBACK,
+                    total_lines=total_lines,
+                    min_lines=min_lines,
+                    edit_min_pct=min_pct,
+                )
         edit_preamble += "\n"
         task_description = edit_preamble + task_description
     else:

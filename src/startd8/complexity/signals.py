@@ -367,11 +367,26 @@ def _check_cross_imports(
 def _compute_manifest_coverage(
     target_files: List[str], manifest: Any
 ) -> str:
-    """Return 'full' if all target files are in the manifest, else 'none'."""
+    """Return 'full' if all target files are in the manifest, else 'none'.
+
+    Supports both dict-like manifests (ManifestRegistry) and Pydantic
+    ForwardManifest objects (lookup via ``file_specs`` attribute).
+    """
     if not target_files:
         return "none"
+    # ForwardManifest (Pydantic) has .file_specs dict; ManifestRegistry has .get()
+    file_specs = getattr(manifest, "file_specs", None)
+    if file_specs is not None:
+        for tf in target_files:
+            if tf not in file_specs:
+                return "none"
+        return "full"
+    # Fallback: dict-like .get() (ManifestRegistry, raw dict)
     for tf in target_files:
-        if not manifest.get(tf):
+        try:
+            if not manifest.get(tf):
+                return "none"
+        except AttributeError:
             return "none"
     return "full"
 

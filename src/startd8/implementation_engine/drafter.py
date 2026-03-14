@@ -422,6 +422,35 @@ def build_existing_files_section(
 # Output format builder
 # ---------------------------------------------------------------------------
 
+def _target_file_lines(
+    target_files: Optional[List[str]],
+    existing_files: Dict[str, str],
+) -> int:
+    """Return line count for TARGET files only (not all existing context files).
+
+    When existing_files contains sibling context files (e.g., 4 files in a
+    service directory) but only 1 is the actual target, summing ALL files
+    inflates the line count and produces impossible min-lines constraints
+    for small targets like requirements.in (8 lines) amid large Python
+    siblings (275 lines total).
+
+    Falls back to summing all existing_files when no target overlap is found
+    (backward compatibility for callers that don't pass target_files).
+    """
+    if target_files:
+        target_set = set(target_files)
+        matched = {
+            k: v for k, v in existing_files.items()
+            if k in target_set
+        }
+        if matched:
+            return sum(
+                len((c or "").splitlines()) for c in matched.values()
+            )
+    # Fallback: no target_files or no overlap — sum everything
+    return sum(len((c or "").splitlines()) for c in existing_files.values())
+
+
 def build_output_format(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
@@ -434,18 +463,24 @@ def build_output_format(
 
     PC-Q2: For edit mode, passes min_output_lines and existing_line_summary
     to enforce quantitative constraints (Mottainai Principle).
+
+    Line counts are computed from TARGET files only (not all existing context
+    files) to avoid inflated constraints on small config files.  Min-lines
+    constraints are skipped entirely for non-Python targets where Python
+    line-count heuristics are meaningless.
     """
     is_edit = bool(existing_files)
     min_pct = edit_min_pct if edit_min_pct is not None else 80
+    # Option A: skip min-lines for non-Python targets (same guard used by
+    # detect_size_regression and create_draft truncation detection).
+    skip_min_lines = _all_files_non_python(target_files)
 
     if not target_files or len(target_files) <= 1:
         if is_edit:
-            total_lines = sum(
-                len((content or "").splitlines())
-                for content in existing_files.values()
-            )
-            # Skip min-lines constraint when empty — "AT LEAST 0 lines" is useless
-            if total_lines == 0:
+            # Option B: compute from target files only, not all context files
+            total_lines = _target_file_lines(target_files, existing_files)
+            # Skip min-lines constraint when empty or non-Python
+            if total_lines == 0 or skip_min_lines:
                 return (
                     "Output the COMPLETE modified file. "
                     "Do NOT omit or abbreviate existing code."
@@ -468,17 +503,15 @@ def build_output_format(
     )
 
     if is_edit:
-        total_lines = sum(
-            len((content or "").splitlines())
-            for content in existing_files.values()
-        )
+        # Option B: compute from target files only
+        total_lines = _target_file_lines(target_files, existing_files)
         existing_line_summary_parts = []
         for fpath in ordered:
             content = existing_files.get(fpath, "")
             lines = len((content or "").splitlines())
             existing_line_summary_parts.append(f"- `{fpath}`: {lines} lines")
-        # Skip min-lines constraint when empty — "AT LEAST 0 lines" is useless
-        if total_lines == 0:
+        # Skip min-lines constraint when empty or non-Python
+        if total_lines == 0 or skip_min_lines:
             existing_line_summary = (
                 "Output COMPLETE modified files — every line of original plus changes.\n"
                 + "\n".join(existing_line_summary_parts)
