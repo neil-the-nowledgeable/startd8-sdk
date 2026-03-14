@@ -17,14 +17,16 @@
     "max_sub_elements": 5,
     "max_helpers_per_function": 4,
     "decomposition_confidence_threshold": 0.6,
+    "escalation_enabled": true,
     "cloud_escalation_max_attempts": 3,
     "cloud_escalation_retry_strategy": "same_prompt",
     "cloud_escalation_retry_max_chars": 512,
-    "semantic_verification_enabled": false,
+    "semantic_verification_enabled": true,
     "semantic_verification_agent_spec": null,
     "semantic_verification_max_tokens": 256,
     "semantic_verification_temperature": 0.0,
     "semantic_verification_prompt_max_chars": 4000,
-    "dry_run": false
+    "dry_run": false,
+    "element_prompt_mode": "full_function"
   }
 }
