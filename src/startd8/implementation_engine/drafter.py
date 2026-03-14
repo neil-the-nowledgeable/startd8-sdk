@@ -572,15 +572,19 @@ def _all_files_non_python(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
 ) -> bool:
-    """Return True if ALL target/existing files are non-Python."""
-    paths: list[str] = []
+    """Return True if ALL target/existing files are non-Python.
+
+    When target_files is provided, only those are checked — sibling .py
+    files in existing_files (added for import context) should not mask
+    a non-Python target like requirements.in.
+    """
+    # Prefer target_files when available — they represent the actual
+    # files being generated, not import context siblings.
     if target_files:
-        paths.extend(target_files)
+        return all(_is_non_python_file(p) for p in target_files)
     if existing_files:
-        paths.extend(existing_files.keys())
-    if not paths:
-        return False
-    return all(_is_non_python_file(p) for p in paths)
+        return all(_is_non_python_file(p) for p in existing_files)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +594,7 @@ def _all_files_non_python(
 def detect_size_regression(
     existing_files: Optional[Dict[str, str]],
     implementation_code: str,
+    target_files: Optional[list[str]] = None,
 ) -> bool:
     """Check if draft output is catastrophically smaller OR larger than existing files.
 
@@ -607,7 +612,10 @@ def detect_size_regression(
         return False
     # Non-Python files: skip size regression — Python line-count heuristics
     # don't apply to requirements files, configs, Dockerfiles, etc.
-    if _all_files_non_python(existing_files=existing_files):
+    # Check target_files first (more specific), fall back to existing_files keys.
+    # existing_files may include sibling .py files for import context, masking
+    # a non-Python target like requirements.in.
+    if _all_files_non_python(target_files=target_files, existing_files=existing_files):
         return False
     existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
@@ -1050,7 +1058,7 @@ def create_draft(
 
         # Size regression gate
         size_regression_detected = detect_size_regression(
-            existing_files, implementation_code
+            existing_files, implementation_code, target_files=target_files,
         )
         was_truncated = was_truncated or size_regression_detected
         if size_regression_detected and not truncation_source:
