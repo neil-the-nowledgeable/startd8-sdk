@@ -52,6 +52,7 @@ from startd8.micro_prime.eval_scoring import (
     CorpusReport,
     ElementScore,
     FileScore,
+    extract_element_reference,
     score_element,
     score_fill_rate,
 )
@@ -187,11 +188,16 @@ def evaluate_element_entry(
     )
 
     for element in file_spec.elements:
+        # Extract per-element reference to avoid whole-file feature inflation
+        elem_ref = extract_element_reference(
+            reference, element.name, parent_class=element.parent_class,
+        )
+
         if dry_run:
             # Score reference against itself (harness validation)
             score = score_element(
-                generated_code=reference,
-                reference_code=reference,
+                generated_code=elem_ref,
+                reference_code=elem_ref,
                 element_name=element.name,
                 file_path=file_spec.file,
                 tier=entry.get("expected_tier", "simple"),
@@ -213,7 +219,7 @@ def evaluate_element_entry(
 
             score = score_element(
                 generated_code=generated,
-                reference_code=reference,
+                reference_code=elem_ref,
                 element_name=element.name,
                 file_path=file_spec.file,
                 tier=result.tier.value if result.tier else entry.get("expected_tier", "simple"),
@@ -255,9 +261,12 @@ def evaluate_file_whole_entry(
         generated = reference
         element_scores = []
         for element in file_spec.elements:
+            elem_ref = extract_element_reference(
+                reference, element.name, parent_class=element.parent_class,
+            )
             s = score_element(
-                generated_code=reference,
-                reference_code=reference,
+                generated_code=elem_ref,
+                reference_code=elem_ref,
                 element_name=element.name,
                 file_path=file_spec.file,
                 tier=entry.get("expected_tier", "simple"),
@@ -289,8 +298,11 @@ def evaluate_file_whole_entry(
 
         element_scores = []
         for er in result.element_results:
+            # For file-whole, compare full generated file vs full reference
+            # (both contain all elements in context). Per-element extraction
+            # breaks methods out of class context, causing false AST failures.
             s = score_element(
-                generated_code=er.code or "",
+                generated_code=generated,
                 reference_code=reference,
                 element_name=er.element_name,
                 file_path=er.file_path,
@@ -303,7 +315,7 @@ def evaluate_file_whole_entry(
             element_scores.append(s)
 
         # If file-whole succeeded but we don't have per-element results,
-        # score the whole file as a single unit
+        # score the whole generated file against the whole reference
         if not element_scores and generated:
             for element in file_spec.elements:
                 s = score_element(

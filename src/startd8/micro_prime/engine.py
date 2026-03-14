@@ -61,7 +61,7 @@ from startd8.micro_prime.models import (
     SeedResult,
     TierClassification,
 )
-from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_examples
+from startd8.micro_prime.prompt_builder import build_body_prompt, build_full_function_prompt, find_few_shot_examples
 from startd8.micro_prime.repair import (
     RepairResult,
     build_repair_attribution,
@@ -624,6 +624,85 @@ _ELEMENT_BODY_SYSTEM_PROMPT = (
     "Stop after the last line of the body. "
     "Do not output additional functions, classes, or statements."
 )
+
+# Full-function mode: let the model output the complete def + body, then we
+# deterministically extract the body via AST.  Eliminates bare_statement_wrap
+# and import_completion repairs (~45% of element-level repair steps).
+_ELEMENT_FULL_FUNCTION_SYSTEM_PROMPT = (
+    "You are a Python code generator. "
+    "Output the complete function implementation.\n"
+    "\n"
+    "FORMAT: Output a single Python function with its def line and body. "
+    "Use 4-space indentation. Output raw Python code — no ```python fences, "
+    "no prose, no explanations.\n"
+    "\n"
+    "IMPORTS: Do NOT output import statements. "
+    "The imports are already provided in the file.\n"
+    "\n"
+    "SCOPE: Output ONLY the single requested function definition (def + body). "
+    "Stop after the last line of the function body. "
+    "Do not output additional functions, classes, or standalone statements."
+)
+
+
+def extract_function_body(
+    raw_code: str,
+    element: ForwardElementSpec,
+) -> str | None:
+    """Extract the function body from a full-function model output via AST.
+
+    The model outputs ``def foo(...):\\n    body``.  This function parses it,
+    finds the target function/method, and returns only the indented body lines
+    (the same format the body-only prompt would have produced).
+
+    Returns None if extraction fails (syntax error, no matching function found).
+    """
+    code = raw_code.strip()
+    if not code:
+        return None
+
+    # Strip markdown fences before AST parsing — the model frequently wraps
+    # full-function output in ```python ... ``` even when told not to.
+    if code.startswith("```"):
+        lines_raw = code.splitlines()
+        # Remove opening fence line
+        if lines_raw and lines_raw[0].startswith("```"):
+            lines_raw = lines_raw[1:]
+        # Remove closing fence line
+        if lines_raw and lines_raw[-1].strip() == "```":
+            lines_raw = lines_raw[:-1]
+        code = "\n".join(lines_raw).strip()
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    # Find the target function node
+    target_name = element.name
+    lines = code.splitlines()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != target_name:
+            continue
+
+        # Extract body lines (everything after the def line)
+        if not node.body:
+            return None
+
+        body_start = node.body[0].lineno - 1  # 0-indexed
+        body_end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else len(lines)
+        body_lines = lines[body_start:body_end]
+
+        if not body_lines:
+            return None
+
+        return "\n".join(body_lines)
+
+    # No matching function found — return None so caller falls back
+    return None
 
 # System prompt for file-level Ollama-whole generation.
 # Instead of decomposing into individual element bodies, the model receives
@@ -3353,15 +3432,29 @@ class MicroPrimeEngine:
                 max_examples=self._config.max_few_shot_examples,
             )
 
-        prompt = build_body_prompt(
-            element, file_spec, contracts,
-            skeleton=skeleton,
-            few_shot_examples=few_shot or None,
-            token_budget=self._config.input_token_budget,
-            design_doc_sections=design_doc_sections,
-            task_description=task_description,
-            domain_constraints=self._current_domain_constraints,
-        )
+        # Select prompt mode: full_function (default) or body_only (legacy)
+        use_full_function = self._config.element_prompt_mode == "full_function"
+
+        if use_full_function:
+            prompt = build_full_function_prompt(
+                element, file_spec, contracts,
+                skeleton=skeleton,
+                few_shot_examples=few_shot or None,
+                token_budget=self._config.input_token_budget,
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+                domain_constraints=self._current_domain_constraints,
+            )
+        else:
+            prompt = build_body_prompt(
+                element, file_spec, contracts,
+                skeleton=skeleton,
+                few_shot_examples=few_shot or None,
+                token_budget=self._config.input_token_budget,
+                design_doc_sections=design_doc_sections,
+                task_description=task_description,
+                domain_constraints=self._current_domain_constraints,
+            )
 
         # ── Validate-and-repair closure for element-body path ──
         # Captures element, file_spec, skeleton from enclosing scope.
@@ -3370,8 +3463,20 @@ class MicroPrimeEngine:
         _last_repair_state: dict[str, Any] = {}
 
         def _validate_element(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
-            ast_valid_before = _ast_parse_valid(raw_code, element)
             code = raw_code
+
+            # Full-function mode: extract body from the model's def+body output
+            # via AST before feeding to the repair pipeline.  This deterministic
+            # extraction replaces the LLM-dependent bare_statement_wrap step.
+            if use_full_function:
+                extracted = extract_function_body(code, element)
+                if extracted is not None:
+                    code = extracted
+                # If extraction fails, fall through with raw code —
+                # the repair pipeline's bare_statement_wrap handles it as before.
+
+            ast_valid_before = _ast_parse_valid(code, element)
+            code = code
             repair_steps: list[str] = []
             repair_attribution = None
             repair_result = None
@@ -3417,8 +3522,12 @@ class MicroPrimeEngine:
             )
             return code, None
 
+        system_prompt = (
+            _ELEMENT_FULL_FUNCTION_SYSTEM_PROMPT if use_full_function
+            else _ELEMENT_BODY_SYSTEM_PROMPT
+        )
         retry_outcome = self._generate_with_ollama_retry(
-            prompt, _ELEMENT_BODY_SYSTEM_PROMPT, element.name,
+            prompt, system_prompt, element.name,
             validate_and_repair=_validate_element,
         )
 

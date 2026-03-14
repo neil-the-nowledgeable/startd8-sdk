@@ -9,7 +9,10 @@
       "file": {
         "file": "src/services/config.py",
         "imports": [
-          {"kind": "import", "module": "os"}
+          {
+            "kind": "import",
+            "module": "os"
+          }
         ],
         "elements": [
           {
@@ -38,7 +41,12 @@
             "kind": "function",
             "name": "is_valid_email",
             "signature": {
-              "params": [{"name": "email", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "email",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "bool"
             }
           }
@@ -67,9 +75,17 @@
             "parent_class": "Product",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "name", "annotation": "str"},
-                {"name": "price", "annotation": "float"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "name",
+                  "annotation": "str"
+                },
+                {
+                  "name": "price",
+                  "annotation": "float"
+                }
               ],
               "return_annotation": "None"
             }
@@ -79,7 +95,11 @@
             "name": "__repr__",
             "parent_class": "Product",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "str"
             }
           }
@@ -96,14 +116,25 @@
       "file": {
         "file": "src/models/user.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["Optional"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Optional"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "from_dict",
             "signature": {
-              "params": [{"name": "data", "annotation": "dict"}],
+              "params": [
+                {
+                  "name": "data",
+                  "annotation": "dict"
+                }
+              ],
               "return_annotation": "dict"
             }
           }
@@ -120,14 +151,25 @@
       "file": {
         "file": "src/utils/filters.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["List"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "filter_active_items",
             "signature": {
-              "params": [{"name": "items", "annotation": "List[dict]"}],
+              "params": [
+                {
+                  "name": "items",
+                  "annotation": "List[dict]"
+                }
+              ],
               "return_annotation": "List[dict]"
             }
           }
@@ -170,15 +212,26 @@
       "file": {
         "file": "src/logging/setup.py",
         "imports": [
-          {"kind": "import", "module": "logging"},
-          {"kind": "import", "module": "sys"}
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "get_logger",
             "signature": {
-              "params": [{"name": "name", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "logging.Logger"
             }
           }
@@ -207,9 +260,17 @@
             "parent_class": "Money",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "amount", "annotation": "int"},
-                {"name": "currency", "annotation": "str"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "amount",
+                  "annotation": "int"
+                },
+                {
+                  "name": "currency",
+                  "annotation": "str"
+                }
               ],
               "return_annotation": "None"
             }
@@ -220,8 +281,13 @@
             "parent_class": "Money",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "other", "annotation": "object"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "other",
+                  "annotation": "object"
+                }
               ],
               "return_annotation": "bool"
             }
@@ -231,7 +297,11 @@
             "name": "__hash__",
             "parent_class": "Money",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "int"
             }
           }
@@ -254,8 +324,14 @@
             "name": "format_currency",
             "signature": {
               "params": [
-                {"name": "amount", "annotation": "int"},
-                {"name": "currency_code", "annotation": "str"}
+                {
+                  "name": "amount",
+                  "annotation": "int"
+                },
+                {
+                  "name": "currency_code",
+                  "annotation": "str"
+                }
               ],
               "return_annotation": "str"
             }
@@ -273,7 +349,10 @@
       "file": {
         "file": "src/config/env.py",
         "imports": [
-          {"kind": "import", "module": "os"}
+          {
+            "kind": "import",
+            "module": "os"
+          }
         ],
         "elements": [
           {
@@ -297,14 +376,25 @@
       "file": {
         "file": "src/utils/validators.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["Optional"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Optional"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "validate_quantity",
             "signature": {
-              "params": [{"name": "quantity", "annotation": "int"}],
+              "params": [
+                {
+                  "name": "quantity",
+                  "annotation": "int"
+                }
+              ],
               "return_annotation": "Optional[str]"
             }
           }
@@ -333,10 +423,21 @@
             "parent_class": "CartItem",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "product_id", "annotation": "str"},
-                {"name": "quantity", "annotation": "int"},
-                {"name": "unit_price", "annotation": "int"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "product_id",
+                  "annotation": "str"
+                },
+                {
+                  "name": "quantity",
+                  "annotation": "int"
+                },
+                {
+                  "name": "unit_price",
+                  "annotation": "int"
+                }
               ],
               "return_annotation": "None"
             }
@@ -346,7 +447,11 @@
             "name": "total_price",
             "parent_class": "CartItem",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "int"
             }
           }
@@ -363,14 +468,26 @@
       "file": {
         "file": "src/utils/transforms.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["List", "Dict"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List",
+              "Dict"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "index_by_id",
             "signature": {
-              "params": [{"name": "items", "annotation": "List[dict]"}],
+              "params": [
+                {
+                  "name": "items",
+                  "annotation": "List[dict]"
+                }
+              ],
               "return_annotation": "Dict[str, dict]"
             }
           }
@@ -391,17 +508,23 @@
           {
             "kind": "class",
             "name": "ServiceError",
-            "bases": ["Exception"]
+            "bases": [
+              "Exception"
+            ]
           },
           {
             "kind": "class",
             "name": "NotFoundError",
-            "bases": ["ServiceError"]
+            "bases": [
+              "ServiceError"
+            ]
           },
           {
             "kind": "class",
             "name": "ValidationError",
-            "bases": ["ServiceError"]
+            "bases": [
+              "ServiceError"
+            ]
           }
         ]
       },
@@ -416,8 +539,14 @@
       "file": {
         "file": "src/handlers/health.py",
         "imports": [
-          {"kind": "import", "module": "json"},
-          {"kind": "import", "module": "time"}
+          {
+            "kind": "import",
+            "module": "json"
+          },
+          {
+            "kind": "import",
+            "module": "time"
+          }
         ],
         "elements": [
           {
@@ -442,7 +571,13 @@
       "file": {
         "file": "src/utils/math_helpers.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["List"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
@@ -450,9 +585,18 @@
             "name": "clamp",
             "signature": {
               "params": [
-                {"name": "value", "annotation": "float"},
-                {"name": "min_val", "annotation": "float"},
-                {"name": "max_val", "annotation": "float"}
+                {
+                  "name": "value",
+                  "annotation": "float"
+                },
+                {
+                  "name": "min_val",
+                  "annotation": "float"
+                },
+                {
+                  "name": "max_val",
+                  "annotation": "float"
+                }
               ],
               "return_annotation": "float"
             }
@@ -461,7 +605,12 @@
             "kind": "function",
             "name": "mean",
             "signature": {
-              "params": [{"name": "values", "annotation": "List[float]"}],
+              "params": [
+                {
+                  "name": "values",
+                  "annotation": "List[float]"
+                }
+              ],
               "return_annotation": "float"
             }
           },
@@ -470,8 +619,14 @@
             "name": "percentage",
             "signature": {
               "params": [
-                {"name": "part", "annotation": "float"},
-                {"name": "whole", "annotation": "float"}
+                {
+                  "name": "part",
+                  "annotation": "float"
+                },
+                {
+                  "name": "whole",
+                  "annotation": "float"
+                }
               ],
               "return_annotation": "float"
             }
@@ -490,7 +645,13 @@
       "file": {
         "file": "src/models/address.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["Optional"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Optional"
+            ]
+          }
         ],
         "elements": [
           {
@@ -504,12 +665,30 @@
             "parent_class": "Address",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "street", "annotation": "str"},
-                {"name": "city", "annotation": "str"},
-                {"name": "state", "annotation": "str"},
-                {"name": "zip_code", "annotation": "str"},
-                {"name": "country", "annotation": "str", "default": "\"US\""}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "street",
+                  "annotation": "str"
+                },
+                {
+                  "name": "city",
+                  "annotation": "str"
+                },
+                {
+                  "name": "state",
+                  "annotation": "str"
+                },
+                {
+                  "name": "zip_code",
+                  "annotation": "str"
+                },
+                {
+                  "name": "country",
+                  "annotation": "str",
+                  "default": "\"US\""
+                }
               ],
               "return_annotation": "None"
             }
@@ -519,7 +698,11 @@
             "name": "to_dict",
             "parent_class": "Address",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "dict"
             }
           },
@@ -528,7 +711,11 @@
             "name": "one_line",
             "parent_class": "Address",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "str"
             }
           }
@@ -546,9 +733,22 @@
       "file": {
         "file": "src/models/order.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["List", "Optional"]},
-          {"kind": "import", "module": "json"},
-          {"kind": "import", "module": "time"}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List",
+              "Optional"
+            ]
+          },
+          {
+            "kind": "import",
+            "module": "json"
+          },
+          {
+            "kind": "import",
+            "module": "time"
+          }
         ],
         "elements": [
           {
@@ -562,10 +762,21 @@
             "parent_class": "Order",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "order_id", "annotation": "str"},
-                {"name": "items", "annotation": "List[dict]"},
-                {"name": "user_id", "annotation": "str"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "order_id",
+                  "annotation": "str"
+                },
+                {
+                  "name": "items",
+                  "annotation": "List[dict]"
+                },
+                {
+                  "name": "user_id",
+                  "annotation": "str"
+                }
               ],
               "return_annotation": "None"
             }
@@ -575,7 +786,11 @@
             "name": "total",
             "parent_class": "Order",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "int"
             }
           },
@@ -584,7 +799,11 @@
             "name": "to_json",
             "parent_class": "Order",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "str"
             }
           },
@@ -593,7 +812,11 @@
             "name": "is_empty",
             "parent_class": "Order",
             "signature": {
-              "params": [{"name": "self"}],
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
               "return_annotation": "bool"
             }
           }
@@ -611,13 +834,21 @@
       "file": {
         "file": "src/errors.py",
         "imports": [
-          {"kind": "from", "module": "typing", "names": ["Optional"]}
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Optional"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "class",
             "name": "AppError",
-            "bases": ["Exception"]
+            "bases": [
+              "Exception"
+            ]
           },
           {
             "kind": "method",
@@ -625,9 +856,18 @@
             "parent_class": "AppError",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "message", "annotation": "str"},
-                {"name": "code", "annotation": "int", "default": "500"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "message",
+                  "annotation": "str"
+                },
+                {
+                  "name": "code",
+                  "annotation": "int",
+                  "default": "500"
+                }
               ],
               "return_annotation": "None"
             }
@@ -635,18 +875,27 @@
           {
             "kind": "class",
             "name": "NotFoundError",
-            "bases": ["AppError"]
+            "bases": [
+              "AppError"
+            ]
           },
           {
             "kind": "class",
             "name": "BadRequestError",
-            "bases": ["AppError"]
+            "bases": [
+              "AppError"
+            ]
           },
           {
             "kind": "function",
             "name": "error_to_dict",
             "signature": {
-              "params": [{"name": "err", "annotation": "AppError"}],
+              "params": [
+                {
+                  "name": "err",
+                  "annotation": "AppError"
+                }
+              ],
               "return_annotation": "dict"
             }
           }
@@ -664,15 +913,30 @@
       "file": {
         "file": "src/utils/string_helpers.py",
         "imports": [
-          {"kind": "import", "module": "re"},
-          {"kind": "from", "module": "typing", "names": ["Optional", "List"]}
+          {
+            "kind": "import",
+            "module": "re"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Optional",
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "snake_to_camel",
             "signature": {
-              "params": [{"name": "name", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "str"
             }
           },
@@ -680,7 +944,12 @@
             "kind": "function",
             "name": "camel_to_snake",
             "signature": {
-              "params": [{"name": "name", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "str"
             }
           },
@@ -689,9 +958,19 @@
             "name": "truncate",
             "signature": {
               "params": [
-                {"name": "text", "annotation": "str"},
-                {"name": "max_length", "annotation": "int"},
-                {"name": "suffix", "annotation": "str", "default": "\"...\""}
+                {
+                  "name": "text",
+                  "annotation": "str"
+                },
+                {
+                  "name": "max_length",
+                  "annotation": "int"
+                },
+                {
+                  "name": "suffix",
+                  "annotation": "str",
+                  "default": "\"...\""
+                }
               ],
               "return_annotation": "str"
             }
@@ -700,7 +979,12 @@
             "kind": "function",
             "name": "slugify",
             "signature": {
-              "params": [{"name": "text", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "text",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "str"
             }
           },
@@ -708,7 +992,12 @@
             "kind": "function",
             "name": "extract_numbers",
             "signature": {
-              "params": [{"name": "text", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "text",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "List[int]"
             }
           },
@@ -716,7 +1005,12 @@
             "kind": "function",
             "name": "is_blank",
             "signature": {
-              "params": [{"name": "text", "annotation": "Optional[str]"}],
+              "params": [
+                {
+                  "name": "text",
+                  "annotation": "Optional[str]"
+                }
+              ],
               "return_annotation": "bool"
             }
           }
@@ -730,19 +1024,33 @@
       "id": "gc-021",
       "description": "Custom JSON log formatter extending base class",
       "archetype": "log_formatter",
-      "source_pattern": "[GENERAL] Custom formatter that normalizes severity/timestamp fields — universal pattern for structured logging in any service",
+      "source_pattern": "[GENERAL] Custom formatter that normalizes severity/timestamp fields \u2014 universal pattern for structured logging in any service",
       "file": {
         "file": "src/logging/json_formatter.py",
         "imports": [
-          {"kind": "import", "module": "logging"},
-          {"kind": "import", "module": "sys"},
-          {"kind": "from", "module": "pythonjsonlogger", "names": ["jsonlogger"]}
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          },
+          {
+            "kind": "from",
+            "module": "pythonjsonlogger",
+            "names": [
+              "jsonlogger"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "class",
             "name": "CustomJsonFormatter",
-            "bases": ["jsonlogger.JsonFormatter"]
+            "bases": [
+              "jsonlogger.JsonFormatter"
+            ]
           },
           {
             "kind": "method",
@@ -750,10 +1058,21 @@
             "parent_class": "CustomJsonFormatter",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "log_record", "annotation": "dict"},
-                {"name": "record", "annotation": "logging.LogRecord"},
-                {"name": "message_dict", "annotation": "dict"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "log_record",
+                  "annotation": "dict"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                },
+                {
+                  "name": "message_dict",
+                  "annotation": "dict"
+                }
               ],
               "return_annotation": "None"
             }
@@ -768,19 +1087,30 @@
       "id": "gc-022",
       "description": "Logger factory with JSON formatter and stream handler",
       "archetype": "logger_factory",
-      "source_pattern": "[GENERAL] Logger factory that wires formatter + handler + level — universal in any service needing structured logging",
+      "source_pattern": "[GENERAL] Logger factory that wires formatter + handler + level \u2014 universal in any service needing structured logging",
       "file": {
         "file": "src/logging/factory.py",
         "imports": [
-          {"kind": "import", "module": "logging"},
-          {"kind": "import", "module": "sys"}
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "get_json_logger",
             "signature": {
-              "params": [{"name": "name", "annotation": "str"}],
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str"
+                }
+              ],
               "return_annotation": "logging.Logger"
             }
           }
@@ -794,11 +1124,17 @@
       "id": "gc-023",
       "description": "gRPC health check methods (Check + Watch)",
       "archetype": "grpc_health_check",
-      "source_pattern": "[GENERAL] Standard gRPC health check implementation — every gRPC service needs Check (SERVING) and Watch (UNIMPLEMENTED)",
+      "source_pattern": "[GENERAL] Standard gRPC health check implementation \u2014 every gRPC service needs Check (SERVING) and Watch (UNIMPLEMENTED)",
       "file": {
         "file": "src/service/health.py",
         "imports": [
-          {"kind": "from", "module": "grpc_health.v1", "names": ["health_pb2"]}
+          {
+            "kind": "from",
+            "module": "grpc_health.v1",
+            "names": [
+              "health_pb2"
+            ]
+          }
         ],
         "elements": [
           {
@@ -812,9 +1148,15 @@
             "parent_class": "HealthServicer",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "request"},
-                {"name": "context"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
               ],
               "return_annotation": "health_pb2.HealthCheckResponse"
             }
@@ -825,9 +1167,15 @@
             "parent_class": "HealthServicer",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "request"},
-                {"name": "context"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
               ],
               "return_annotation": "health_pb2.HealthCheckResponse"
             }
@@ -842,12 +1190,22 @@
       "id": "gc-024",
       "description": "List-filter-sample recommendation pattern",
       "archetype": "filter_sample",
-      "source_pattern": "[GENERAL] Fetch collection, exclude already-seen items, random sample N — universal recommendation/suggestion pattern",
+      "source_pattern": "[GENERAL] Fetch collection, exclude already-seen items, random sample N \u2014 universal recommendation/suggestion pattern",
       "file": {
         "file": "src/service/recommender.py",
         "imports": [
-          {"kind": "import", "module": "random"},
-          {"kind": "from", "module": "typing", "names": ["List", "Set"]}
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List",
+              "Set"
+            ]
+          }
         ],
         "elements": [
           {
@@ -855,9 +1213,19 @@
             "name": "get_recommendations",
             "signature": {
               "params": [
-                {"name": "all_ids", "annotation": "List[str]"},
-                {"name": "exclude_ids", "annotation": "Set[str]"},
-                {"name": "max_results", "annotation": "int", "default": "5"}
+                {
+                  "name": "all_ids",
+                  "annotation": "List[str]"
+                },
+                {
+                  "name": "exclude_ids",
+                  "annotation": "Set[str]"
+                },
+                {
+                  "name": "max_results",
+                  "annotation": "int",
+                  "default": "5"
+                }
               ],
               "return_annotation": "List[str]"
             }
@@ -872,12 +1240,18 @@
       "id": "gc-025",
       "description": "gRPC client wrapper with error handling",
       "archetype": "grpc_client",
-      "source_pattern": "[GENERAL] gRPC client function: create channel, make RPC call, handle RpcError — standard pattern for any service-to-service call",
+      "source_pattern": "[GENERAL] gRPC client function: create channel, make RPC call, handle RpcError \u2014 standard pattern for any service-to-service call",
       "file": {
         "file": "src/clients/email_client.py",
         "imports": [
-          {"kind": "import", "module": "logging"},
-          {"kind": "import", "module": "grpc"}
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          }
         ],
         "elements": [
           {
@@ -885,10 +1259,22 @@
             "name": "send_confirmation",
             "signature": {
               "params": [
-                {"name": "address", "annotation": "str"},
-                {"name": "port", "annotation": "int"},
-                {"name": "email", "annotation": "str"},
-                {"name": "order_id", "annotation": "str"}
+                {
+                  "name": "address",
+                  "annotation": "str"
+                },
+                {
+                  "name": "port",
+                  "annotation": "int"
+                },
+                {
+                  "name": "email",
+                  "annotation": "str"
+                },
+                {
+                  "name": "order_id",
+                  "annotation": "str"
+                }
               ],
               "return_annotation": "bool"
             }
@@ -903,14 +1289,29 @@
       "id": "gc-026",
       "description": "gRPC server start with ThreadPoolExecutor and graceful shutdown",
       "archetype": "server_lifecycle",
-      "source_pattern": "[GENERAL] Server start function: create ThreadPool server, bind port from env, register service, graceful shutdown loop — every gRPC service needs this",
+      "source_pattern": "[GENERAL] Server start function: create ThreadPool server, bind port from env, register service, graceful shutdown loop \u2014 every gRPC service needs this",
       "file": {
         "file": "src/service/server.py",
         "imports": [
-          {"kind": "import", "module": "os"},
-          {"kind": "import", "module": "time"},
-          {"kind": "import", "module": "grpc"},
-          {"kind": "from", "module": "concurrent", "names": ["futures"]}
+          {
+            "kind": "import",
+            "module": "os"
+          },
+          {
+            "kind": "import",
+            "module": "time"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          },
+          {
+            "kind": "from",
+            "module": "concurrent",
+            "names": [
+              "futures"
+            ]
+          }
         ],
         "elements": [
           {
@@ -918,9 +1319,17 @@
             "name": "serve",
             "signature": {
               "params": [
-                {"name": "service"},
-                {"name": "add_servicer_fn"},
-                {"name": "max_workers", "annotation": "int", "default": "10"}
+                {
+                  "name": "service"
+                },
+                {
+                  "name": "add_servicer_fn"
+                },
+                {
+                  "name": "max_workers",
+                  "annotation": "int",
+                  "default": "10"
+                }
               ],
               "return_annotation": "None"
             }
@@ -935,11 +1344,14 @@
       "id": "gc-027",
       "description": "Dummy/mock service implementation that logs and returns empty",
       "archetype": "dummy_service",
-      "source_pattern": "[GENERAL] Dummy service handler: log the request, return empty response — universal pattern for development/testing mode stubs",
+      "source_pattern": "[GENERAL] Dummy service handler: log the request, return empty response \u2014 universal pattern for development/testing mode stubs",
       "file": {
         "file": "src/service/dummy.py",
         "imports": [
-          {"kind": "import", "module": "logging"}
+          {
+            "kind": "import",
+            "module": "logging"
+          }
         ],
         "elements": [
           {
@@ -953,9 +1365,15 @@
             "parent_class": "DummyService",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "request"},
-                {"name": "context"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
               ],
               "return_annotation": "dict"
             }
@@ -970,19 +1388,33 @@
       "id": "gc-028",
       "description": "Random selection from weighted product catalog",
       "archetype": "random_selection",
-      "source_pattern": "[GENERAL] Random choice from a list, random int in range — universal pattern for load testing, simulation, demo data generation",
+      "source_pattern": "[GENERAL] Random choice from a list, random int in range \u2014 universal pattern for load testing, simulation, demo data generation",
       "file": {
         "file": "src/testing/data_gen.py",
         "imports": [
-          {"kind": "import", "module": "random"},
-          {"kind": "from", "module": "typing", "names": ["List"]}
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "pick_product",
             "signature": {
-              "params": [{"name": "catalog", "annotation": "List[str]"}],
+              "params": [
+                {
+                  "name": "catalog",
+                  "annotation": "List[str]"
+                }
+              ],
               "return_annotation": "str"
             }
           },
@@ -991,8 +1423,16 @@
             "name": "random_quantity",
             "signature": {
               "params": [
-                {"name": "min_qty", "annotation": "int", "default": "1"},
-                {"name": "max_qty", "annotation": "int", "default": "10"}
+                {
+                  "name": "min_qty",
+                  "annotation": "int",
+                  "default": "1"
+                },
+                {
+                  "name": "max_qty",
+                  "annotation": "int",
+                  "default": "10"
+                }
               ],
               "return_annotation": "int"
             }
@@ -1015,13 +1455,25 @@
       "id": "gc-029",
       "description": "Fake checkout data generator for load testing",
       "archetype": "fake_data_generator",
-      "source_pattern": "[GENERAL] Compose fake user/payment/address data from randomized parts — universal pattern for load testing, seeding, demo environments",
+      "source_pattern": "[GENERAL] Compose fake user/payment/address data from randomized parts \u2014 universal pattern for load testing, seeding, demo environments",
       "file": {
         "file": "src/testing/checkout_data.py",
         "imports": [
-          {"kind": "import", "module": "random"},
-          {"kind": "import", "module": "datetime"},
-          {"kind": "from", "module": "typing", "names": ["Dict"]}
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "import",
+            "module": "datetime"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Dict"
+            ]
+          }
         ],
         "elements": [
           {
@@ -1029,11 +1481,26 @@
             "name": "generate_checkout_data",
             "signature": {
               "params": [
-                {"name": "email", "annotation": "str"},
-                {"name": "street", "annotation": "str"},
-                {"name": "city", "annotation": "str"},
-                {"name": "state", "annotation": "str"},
-                {"name": "zip_code", "annotation": "str"}
+                {
+                  "name": "email",
+                  "annotation": "str"
+                },
+                {
+                  "name": "street",
+                  "annotation": "str"
+                },
+                {
+                  "name": "city",
+                  "annotation": "str"
+                },
+                {
+                  "name": "state",
+                  "annotation": "str"
+                },
+                {
+                  "name": "zip_code",
+                  "annotation": "str"
+                }
               ],
               "return_annotation": "Dict[str, object]"
             }
@@ -1049,18 +1516,26 @@
       "description": "File-whole: structured logging module (formatter class + factory function)",
       "archetype": "logging_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Complete logging module: custom formatter extending a base + factory function — universal across any Python service needing structured logs",
+      "source_pattern": "[GENERAL] Complete logging module: custom formatter extending a base + factory function \u2014 universal across any Python service needing structured logs",
       "file": {
         "file": "src/common/logger.py",
         "imports": [
-          {"kind": "import", "module": "logging"},
-          {"kind": "import", "module": "sys"}
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          }
         ],
         "elements": [
           {
             "kind": "class",
             "name": "StructuredFormatter",
-            "bases": ["logging.Formatter"]
+            "bases": [
+              "logging.Formatter"
+            ]
           },
           {
             "kind": "method",
@@ -1068,8 +1543,13 @@
             "parent_class": "StructuredFormatter",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "record", "annotation": "logging.LogRecord"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                }
               ],
               "return_annotation": "str"
             }
@@ -1079,8 +1559,15 @@
             "name": "get_logger",
             "signature": {
               "params": [
-                {"name": "name", "annotation": "str"},
-                {"name": "level", "annotation": "int", "default": "logging.INFO"}
+                {
+                  "name": "name",
+                  "annotation": "str"
+                },
+                {
+                  "name": "level",
+                  "annotation": "int",
+                  "default": "logging.INFO"
+                }
               ],
               "return_annotation": "logging.Logger"
             }
@@ -1096,14 +1583,29 @@
       "description": "File-whole: gRPC service with health checks and business logic (5 elements)",
       "archetype": "grpc_service_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Complete gRPC service file: service class, Check/Watch health, business logic handler, and server start — the universal gRPC service template",
+      "source_pattern": "[GENERAL] Complete gRPC service file: service class, Check/Watch health, business logic handler, and server start \u2014 the universal gRPC service template",
       "file": {
         "file": "src/service/catalog_service.py",
         "imports": [
-          {"kind": "import", "module": "os"},
-          {"kind": "import", "module": "random"},
-          {"kind": "import", "module": "logging"},
-          {"kind": "from", "module": "typing", "names": ["List"]}
+          {
+            "kind": "import",
+            "module": "os"
+          },
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
@@ -1116,7 +1618,17 @@
             "name": "Check",
             "parent_class": "CatalogService",
             "signature": {
-              "params": [{"name": "self"}, {"name": "request"}, {"name": "context"}],
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ],
               "return_annotation": "dict"
             }
           },
@@ -1125,7 +1637,17 @@
             "name": "Watch",
             "parent_class": "CatalogService",
             "signature": {
-              "params": [{"name": "self"}, {"name": "request"}, {"name": "context"}],
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ],
               "return_annotation": "dict"
             }
           },
@@ -1135,9 +1657,18 @@
             "parent_class": "CatalogService",
             "signature": {
               "params": [
-                {"name": "self"},
-                {"name": "category", "annotation": "str"},
-                {"name": "max_results", "annotation": "int", "default": "10"}
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "category",
+                  "annotation": "str"
+                },
+                {
+                  "name": "max_results",
+                  "annotation": "int",
+                  "default": "10"
+                }
               ],
               "return_annotation": "List[dict]"
             }
@@ -1161,19 +1692,32 @@
       "description": "File-whole: load test task functions + user class (8 elements, quality cliff test)",
       "archetype": "load_test_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Load test module: standalone task functions (GET/POST), TaskSet with weighted tasks, User class with wait_time — universal pattern for any HTTP load test",
+      "source_pattern": "[GENERAL] Load test module: standalone task functions (GET/POST), TaskSet with weighted tasks, User class with wait_time \u2014 universal pattern for any HTTP load test",
       "file": {
         "file": "src/testing/load_test.py",
         "imports": [
-          {"kind": "import", "module": "random"},
-          {"kind": "from", "module": "typing", "names": ["List"]}
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "List"
+            ]
+          }
         ],
         "elements": [
           {
             "kind": "function",
             "name": "browse_home",
             "signature": {
-              "params": [{"name": "client"}],
+              "params": [
+                {
+                  "name": "client"
+                }
+              ],
               "return_annotation": "None"
             }
           },
@@ -1182,8 +1726,13 @@
             "name": "browse_product",
             "signature": {
               "params": [
-                {"name": "client"},
-                {"name": "product_ids", "annotation": "List[str]"}
+                {
+                  "name": "client"
+                },
+                {
+                  "name": "product_ids",
+                  "annotation": "List[str]"
+                }
               ],
               "return_annotation": "None"
             }
@@ -1193,8 +1742,13 @@
             "name": "add_to_cart",
             "signature": {
               "params": [
-                {"name": "client"},
-                {"name": "product_ids", "annotation": "List[str]"}
+                {
+                  "name": "client"
+                },
+                {
+                  "name": "product_ids",
+                  "annotation": "List[str]"
+                }
               ],
               "return_annotation": "None"
             }
@@ -1203,7 +1757,11 @@
             "kind": "function",
             "name": "view_cart",
             "signature": {
-              "params": [{"name": "client"}],
+              "params": [
+                {
+                  "name": "client"
+                }
+              ],
               "return_annotation": "None"
             }
           },
@@ -1211,7 +1769,11 @@
             "kind": "function",
             "name": "empty_cart",
             "signature": {
-              "params": [{"name": "client"}],
+              "params": [
+                {
+                  "name": "client"
+                }
+              ],
               "return_annotation": "None"
             }
           },
@@ -1219,7 +1781,11 @@
             "kind": "function",
             "name": "set_currency",
             "signature": {
-              "params": [{"name": "client"}],
+              "params": [
+                {
+                  "name": "client"
+                }
+              ],
               "return_annotation": "None"
             }
           },
@@ -1240,6 +1806,459 @@
       },
       "skeleton": "import random\nfrom typing import List\n\n\ndef browse_home(client) -> None:\n    raise NotImplementedError\n\n\ndef browse_product(client, product_ids: List[str]) -> None:\n    raise NotImplementedError\n\n\ndef add_to_cart(client, product_ids: List[str]) -> None:\n    raise NotImplementedError\n\n\ndef view_cart(client) -> None:\n    raise NotImplementedError\n\n\ndef empty_cart(client) -> None:\n    raise NotImplementedError\n\n\ndef set_currency(client) -> None:\n    raise NotImplementedError\n\n\nclass TaskWeights:\n    raise NotImplementedError\n\n\ndef get_task_distribution() -> dict:\n    raise NotImplementedError\n",
       "reference": "import random\nfrom typing import List\n\n\ndef browse_home(client) -> None:\n    client.get('/')\n\n\ndef browse_product(client, product_ids: List[str]) -> None:\n    client.get('/product/' + random.choice(product_ids))\n\n\ndef add_to_cart(client, product_ids: List[str]) -> None:\n    product = random.choice(product_ids)\n    client.get('/product/' + product)\n    client.post('/cart', {'product_id': product, 'quantity': random.randint(1, 10)})\n\n\ndef view_cart(client) -> None:\n    client.get('/cart')\n\n\ndef empty_cart(client) -> None:\n    client.post('/cart/empty')\n\n\ndef set_currency(client) -> None:\n    currencies = ['EUR', 'USD', 'JPY', 'CAD', 'GBP', 'TRY']\n    client.post('/setCurrency', {'currency_code': random.choice(currencies)})\n\n\nclass TaskWeights:\n    BROWSE_HOME = 1\n    BROWSE_PRODUCT = 10\n    ADD_TO_CART = 2\n    VIEW_CART = 3\n    CHECKOUT = 1\n    SET_CURRENCY = 2\n\n\ndef get_task_distribution() -> dict:\n    return {\n        'browse_home': TaskWeights.BROWSE_HOME,\n        'browse_product': TaskWeights.BROWSE_PRODUCT,\n        'add_to_cart': TaskWeights.ADD_TO_CART,\n        'view_cart': TaskWeights.VIEW_CART,\n        'set_currency': TaskWeights.SET_CURRENCY,\n    }\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-033",
+      "description": "Singleton metaclass",
+      "archetype": "metaclass",
+      "file": {
+        "file": "src/patterns/singleton.py",
+        "imports": [],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "SingletonMeta",
+            "bases": [
+              "type"
+            ]
+          },
+          {
+            "kind": "method",
+            "name": "__call__",
+            "parent_class": "SingletonMeta",
+            "signature": {
+              "params": [
+                {
+                  "name": "cls"
+                },
+                {
+                  "name": "*args"
+                },
+                {
+                  "name": "**kwargs"
+                }
+              ],
+              "return_annotation": null
+            }
+          }
+        ]
+      },
+      "skeleton": "class SingletonMeta(type):\n    _instances = {}\n\n    def __call__(cls, *args, **kwargs):\n        raise NotImplementedError\n",
+      "reference": "class SingletonMeta(type):\n    _instances = {}\n\n    def __call__(cls, *args, **kwargs):\n        if cls not in cls._instances:\n            cls._instances[cls] = super().__call__(*args, **kwargs)\n        return cls._instances[cls]\n",
+      "expected_tier": "moderate"
+    },
+    {
+      "id": "gc-034",
+      "description": "LRU cache with TTL expiration",
+      "archetype": "cache",
+      "file": {
+        "file": "src/utils/cache.py",
+        "imports": [
+          {
+            "kind": "import",
+            "module": "time"
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Any",
+              "Optional"
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "TTLCache"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "TTLCache",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "ttl_seconds",
+                  "annotation": "float",
+                  "default": "300.0"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "get",
+            "parent_class": "TTLCache",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "key",
+                  "annotation": "str"
+                }
+              ],
+              "return_annotation": "Optional[Any]"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "set",
+            "parent_class": "TTLCache",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "key",
+                  "annotation": "str"
+                },
+                {
+                  "name": "value",
+                  "annotation": "Any"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          }
+        ]
+      },
+      "skeleton": "import time\nfrom typing import Any, Optional\n\n\nclass TTLCache:\n    def __init__(self, ttl_seconds: float = 300.0) -> None:\n        raise NotImplementedError\n\n    def get(self, key: str) -> Optional[Any]:\n        raise NotImplementedError\n\n    def set(self, key: str, value: Any) -> None:\n        raise NotImplementedError\n",
+      "reference": "import time\nfrom typing import Any, Optional\n\n\nclass TTLCache:\n    def __init__(self, ttl_seconds: float = 300.0) -> None:\n        self._ttl = ttl_seconds\n        self._cache: dict[str, tuple[Any, float]] = {}\n\n    def get(self, key: str) -> Optional[Any]:\n        if key not in self._cache:\n            return None\n        value, timestamp = self._cache[key]\n        if time.time() - timestamp > self._ttl:\n            del self._cache[key]\n            return None\n        return value\n\n    def set(self, key: str, value: Any) -> None:\n        self._cache[key] = (value, time.time())\n",
+      "expected_tier": "moderate",
+      "mode": "file_whole"
+    },
+    {
+      "id": "gc-035",
+      "description": "Simple rate limiter with token bucket",
+      "archetype": "rate_limiter",
+      "file": {
+        "file": "src/utils/rate_limit.py",
+        "imports": [
+          {
+            "kind": "import",
+            "module": "time"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "RateLimiter"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "RateLimiter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "max_calls",
+                  "annotation": "int"
+                },
+                {
+                  "name": "period",
+                  "annotation": "float"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "allow",
+            "parent_class": "RateLimiter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
+              "return_annotation": "bool"
+            }
+          }
+        ]
+      },
+      "skeleton": "import time\n\n\nclass RateLimiter:\n    def __init__(self, max_calls: int, period: float) -> None:\n        raise NotImplementedError\n\n    def allow(self) -> bool:\n        raise NotImplementedError\n",
+      "reference": "import time\n\n\nclass RateLimiter:\n    def __init__(self, max_calls: int, period: float) -> None:\n        self.max_calls = max_calls\n        self.period = period\n        self._calls: list[float] = []\n\n    def allow(self) -> bool:\n        now = time.time()\n        self._calls = [t for t in self._calls if now - t < self.period]\n        if len(self._calls) >= self.max_calls:\n            return False\n        self._calls.append(now)\n        return True\n",
+      "expected_tier": "moderate"
+    },
+    {
+      "id": "gc-036",
+      "description": "Context manager for temporary directory",
+      "archetype": "context_manager",
+      "file": {
+        "file": "src/utils/tempdir.py",
+        "imports": [
+          {
+            "kind": "import",
+            "module": "tempfile"
+          },
+          {
+            "kind": "import",
+            "module": "shutil"
+          },
+          {
+            "kind": "from",
+            "module": "pathlib",
+            "names": [
+              "Path"
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "TempDir"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "TempDir",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "__enter__",
+            "parent_class": "TempDir",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
+              "return_annotation": "Path"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "__exit__",
+            "parent_class": "TempDir",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "exc_type"
+                },
+                {
+                  "name": "exc_val"
+                },
+                {
+                  "name": "exc_tb"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          }
+        ]
+      },
+      "skeleton": "import tempfile\nimport shutil\nfrom pathlib import Path\n\n\nclass TempDir:\n    def __init__(self) -> None:\n        raise NotImplementedError\n\n    def __enter__(self) -> Path:\n        raise NotImplementedError\n\n    def __exit__(self, exc_type, exc_val, exc_tb) -> None:\n        raise NotImplementedError\n",
+      "reference": "import tempfile\nimport shutil\nfrom pathlib import Path\n\n\nclass TempDir:\n    def __init__(self) -> None:\n        self._path: Optional[Path] = None\n\n    def __enter__(self) -> Path:\n        self._path = Path(tempfile.mkdtemp())\n        return self._path\n\n    def __exit__(self, exc_type, exc_val, exc_tb) -> None:\n        if self._path and self._path.exists():\n            shutil.rmtree(self._path)\n",
+      "expected_tier": "simple",
+      "mode": "file_whole"
+    },
+    {
+      "id": "gc-037",
+      "description": "Event emitter with subscribe/emit pattern",
+      "archetype": "event_emitter",
+      "file": {
+        "file": "src/events/emitter.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Any",
+              "Callable"
+            ]
+          },
+          {
+            "kind": "from",
+            "module": "collections",
+            "names": [
+              "defaultdict"
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "EventEmitter"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "EventEmitter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "on",
+            "parent_class": "EventEmitter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "event",
+                  "annotation": "str"
+                },
+                {
+                  "name": "callback",
+                  "annotation": "Callable"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "emit",
+            "parent_class": "EventEmitter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "event",
+                  "annotation": "str"
+                },
+                {
+                  "name": "**kwargs"
+                }
+              ],
+              "return_annotation": "None"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Any, Callable\nfrom collections import defaultdict\n\n\nclass EventEmitter:\n    def __init__(self) -> None:\n        raise NotImplementedError\n\n    def on(self, event: str, callback: Callable) -> None:\n        raise NotImplementedError\n\n    def emit(self, event: str, **kwargs) -> None:\n        raise NotImplementedError\n",
+      "reference": "from typing import Any, Callable\nfrom collections import defaultdict\n\n\nclass EventEmitter:\n    def __init__(self) -> None:\n        self._listeners: dict[str, list[Callable]] = defaultdict(list)\n\n    def on(self, event: str, callback: Callable) -> None:\n        self._listeners[event].append(callback)\n\n    def emit(self, event: str, **kwargs) -> None:\n        for callback in self._listeners.get(event, []):\n            callback(**kwargs)\n",
+      "expected_tier": "moderate",
+      "mode": "file_whole"
+    },
+    {
+      "id": "gc-038",
+      "description": "Simple JSON config loader with defaults",
+      "archetype": "config_loader",
+      "file": {
+        "file": "src/config/loader.py",
+        "imports": [
+          {
+            "kind": "import",
+            "module": "json"
+          },
+          {
+            "kind": "from",
+            "module": "pathlib",
+            "names": [
+              "Path"
+            ]
+          },
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Any"
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "load_config",
+            "signature": {
+              "params": [
+                {
+                  "name": "path",
+                  "annotation": "Path"
+                },
+                {
+                  "name": "defaults",
+                  "annotation": "dict[str, Any]",
+                  "default": "None"
+                }
+              ],
+              "return_annotation": "dict[str, Any]"
+            }
+          }
+        ]
+      },
+      "skeleton": "import json\nfrom pathlib import Path\nfrom typing import Any\n\n\ndef load_config(path: Path, defaults: dict[str, Any] = None) -> dict[str, Any]:\n    raise NotImplementedError\n",
+      "reference": "import json\nfrom pathlib import Path\nfrom typing import Any\n\n\ndef load_config(path: Path, defaults: dict[str, Any] = None) -> dict[str, Any]:\n    config = dict(defaults or {})\n    if path.exists():\n        with open(path) as f:\n            config.update(json.load(f))\n    return config\n",
+      "expected_tier": "simple"
+    },
+    {
+      "id": "gc-039",
+      "description": "Flatten nested dict with dot-separated keys",
+      "archetype": "transformer",
+      "file": {
+        "file": "src/utils/flatten.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "typing",
+            "names": [
+              "Any"
+            ]
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "flatten_dict",
+            "signature": {
+              "params": [
+                {
+                  "name": "d",
+                  "annotation": "dict[str, Any]"
+                },
+                {
+                  "name": "prefix",
+                  "annotation": "str",
+                  "default": "\"\""
+                },
+                {
+                  "name": "sep",
+                  "annotation": "str",
+                  "default": "\".\""
+                }
+              ],
+              "return_annotation": "dict[str, Any]"
+            }
+          }
+        ]
+      },
+      "skeleton": "from typing import Any\n\n\ndef flatten_dict(d: dict[str, Any], prefix: str = \"\", sep: str = \".\") -> dict[str, Any]:\n    raise NotImplementedError\n",
+      "reference": "from typing import Any\n\n\ndef flatten_dict(d: dict[str, Any], prefix: str = \"\", sep: str = \".\") -> dict[str, Any]:\n    result: dict[str, Any] = {}\n    for key, value in d.items():\n        full_key = f\"{prefix}{sep}{key}\" if prefix else key\n        if isinstance(value, dict):\n            result.update(flatten_dict(value, full_key, sep))\n        else:\n            result[full_key] = value\n    return result\n",
       "expected_tier": "simple"
     }
   ]

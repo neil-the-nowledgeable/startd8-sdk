@@ -547,6 +547,11 @@ class MicroPrimeConfig(BaseModel):
     file_ollama_whole_max_loc: int = 600
     # Post-generation success criteria (REQ-MP-504)
     min_element_fill_rate: float = 0.5
+    # Element prompt mode: "full_function" asks the model to output the complete
+    # function (def line + body), then deterministically extracts the body via AST.
+    # "body_only" is the legacy mode that asks for indented body lines only.
+    # full_function eliminates bare_statement_wrap + import_completion repairs.
+    element_prompt_mode: str = "full_function"
 
 
 @dataclass(frozen=True)

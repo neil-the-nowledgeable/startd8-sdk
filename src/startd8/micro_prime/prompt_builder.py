@@ -23,6 +23,36 @@ from startd8.utils.code_manifest import ElementKind
 logger = get_logger(__name__)
 
 
+def build_full_function_prompt(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+    skeleton: Optional[str] = None,
+    few_shot_examples: Optional[list[str]] = None,
+    token_budget: int = 1024,
+    design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
+) -> str:
+    """Build a prompt for a local model to generate a complete function.
+
+    Unlike ``build_body_prompt`` which asks for body-only output, this asks
+    the model to output the full ``def`` + body.  The caller then extracts
+    the body deterministically via AST, eliminating bare_statement_wrap and
+    import_completion repairs.
+    """
+    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+        return _build_constant_prompt(element, file_spec, few_shot_examples)
+
+    prompt = _build_full_function_prompt_inner(
+        element, file_spec, contracts, skeleton, few_shot_examples,
+        design_doc_sections=design_doc_sections,
+        task_description=task_description,
+        domain_constraints=domain_constraints,
+    )
+    return _truncate_to_budget(prompt, token_budget)
+
+
 def build_body_prompt(
     element: ForwardElementSpec,
     file_spec: ForwardFileSpec,
@@ -223,6 +253,129 @@ def _build_function_prompt(
 
     # Target element
     sections.append("# Now implement this:")
+    sections.append(stub)
+
+    return "\n".join(sections)
+
+
+def _build_full_function_prompt_inner(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+    skeleton: Optional[str],
+    few_shot_examples: Optional[list[str]],
+    design_doc_sections: Optional[list[str]] = None,
+    task_description: Optional[str] = None,
+    domain_constraints: Optional[list[str]] = None,
+) -> str:
+    """Build prompt asking the model to output a complete function (def + body).
+
+    Reuses context extraction from the body-only path but changes instructions
+    to request the full function definition instead of body-only lines.
+    """
+    stub = _build_element_stub(element)
+    skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
+        skeleton or "", element,
+    )
+    if skeleton_context:
+        stub = skeleton_context
+
+    import_lines = _render_imports(file_spec)
+    sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec)
+    constraint_lines = _render_constraints(contracts)
+
+    sections: list[str] = []
+
+    # Class context
+    if element.parent_class:
+        bases_str = _lookup_parent_bases(element.parent_class, file_spec)
+        if bases_str:
+            sections.append(
+                f"# This is a method of class `{element.parent_class}({bases_str})`."
+            )
+        else:
+            sections.append(
+                f"# This is a method of class `{element.parent_class}`."
+            )
+        init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "")
+        if init_hint:
+            sections.append("# Constructor context (use `self.*` for instance state):")
+            sections.append(init_hint)
+
+    # Instructions — ask for the complete function, not just body
+    if element.parent_class:
+        task_line = (
+            f"# Task: Write the complete implementation of method `{element.name}` "
+            f"for class `{element.parent_class}`."
+        )
+    else:
+        task_line = f"# Task: Write the complete implementation of function `{element.name}`."
+
+    sections.extend([
+        task_line,
+        "# Output the full function: the `def` line and the function body.",
+        "# Do NOT output import statements, class wrappers, or other functions.",
+        "# Output ONLY the single function definition and NOTHING else.",
+        "# Do NOT add comments, explanations, or markdown fences.",
+        "",
+    ])
+
+    # Available imports
+    if import_lines:
+        sections.append("# Available imports (use these — do NOT invent other APIs):")
+        sections.extend(import_lines)
+        sections.append("")
+
+    # Task context
+    if task_description:
+        sections.append(f"# Task context: {task_description}")
+        sections.append("")
+
+    # Domain constraints
+    if domain_constraints:
+        sections.append("# Domain constraints (MUST follow these):")
+        for dc in domain_constraints:
+            sections.append(f"# - {dc}")
+        sections.append("")
+
+    # Design doc context
+    if design_doc_sections:
+        relevant, general = _partition_design_sections(
+            design_doc_sections, element.name,
+        )
+        if relevant:
+            sections.append(f"# What `{element.name}` must do:")
+            for ds in relevant:
+                sections.append(f"# - {ds}")
+            sections.append("")
+        if general:
+            sections.append("# Implementation context:")
+            for ds in general:
+                sections.append(f"# - {ds}")
+            sections.append("")
+
+    # Sibling context
+    if sibling_stubs:
+        sections.append("# Other methods in this class (for context, do not redefine):")
+        sections.extend(sibling_stubs)
+        sections.append("")
+
+    # Constraints
+    if constraint_lines:
+        sections.append("# Constraints:")
+        sections.extend(constraint_lines)
+        sections.append("")
+
+    # Few-shot examples — show complete functions in this mode
+    if few_shot_examples:
+        for i, ex in enumerate(few_shot_examples[:2]):
+            label = "Example (completed function)" if i == 0 else "Another example"
+            sections.append(f"# {label}:")
+            sections.append(ex)
+            sections.append("")
+
+    # Target element
+    sections.append("# Now implement this function:")
     sections.append(stub)
 
     return "\n".join(sections)

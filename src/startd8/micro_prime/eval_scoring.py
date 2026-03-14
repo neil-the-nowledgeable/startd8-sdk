@@ -235,6 +235,60 @@ def score_lint(code: str) -> int:
         return 1
 
 
+def extract_element_reference(
+    full_reference: str,
+    element_name: str,
+    parent_class: Optional[str] = None,
+) -> str:
+    """Extract a single element's code from a full reference file.
+
+    When scoring element-level generation, the reference must be narrowed
+    to the specific element — otherwise a single method gets compared
+    against the entire file's features, producing artificially low overlap.
+    """
+    try:
+        tree = ast.parse(full_reference)
+    except SyntaxError:
+        return full_reference
+
+    lines = full_reference.splitlines()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if node.name != element_name:
+            continue
+        # If parent_class specified, verify nesting
+        if parent_class:
+            for cls_node in ast.walk(tree):
+                if isinstance(cls_node, ast.ClassDef) and cls_node.name == parent_class:
+                    if node in ast.walk(cls_node):
+                        start = node.lineno - 1
+                        end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else len(lines)
+                        return textwrap.dedent("\n".join(lines[start:end]))
+        else:
+            start = node.lineno - 1
+            end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else len(lines)
+            return textwrap.dedent("\n".join(lines[start:end]))
+
+    # For constants/variables, try assignment extraction
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == element_name:
+                    start = node.lineno - 1
+                    end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else node.lineno
+                    return "\n".join(lines[start:end])
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == element_name:
+                start = node.lineno - 1
+                end = node.end_lineno if hasattr(node, "end_lineno") and node.end_lineno else node.lineno
+                return "\n".join(lines[start:end])
+
+    # Fallback: return full reference
+    return full_reference
+
+
 def score_semantic(generated: str, reference: str) -> int:
     """Score 0-3 based on structural similarity to reference implementation.
 
@@ -242,6 +296,11 @@ def score_semantic(generated: str, reference: str) -> int:
     1 = Has code but wrong structure (missing key constructs)
     2 = Correct structure, minor differences (variable names, style)
     3 = Functionally equivalent to reference
+
+    Note: For element-level scoring, pass element-specific reference via
+    extract_element_reference() — NOT the full file. Comparing a single
+    method against a full file inflates the reference feature set and
+    produces artificially low overlap scores.
     """
     if not generated or not generated.strip():
         return 0
@@ -332,6 +391,12 @@ def score_element(
             error="empty_output",
         )
 
+    # Normalize for semantic scoring: if generated code is body-only (no def)
+    # but reference has a def line, wrap the body in a stub def so AST features
+    # match.  This prevents body-only template output from scoring artificially
+    # low against def+body references.
+    gen_for_semantic = _normalize_body_for_scoring(generated_code, reference_code)
+
     return ElementScore(
         element_name=element_name,
         file_path=file_path,
@@ -339,7 +404,7 @@ def score_element(
         syntax=score_syntax(generated_code),
         imports=score_imports(generated_code, expected_imports),
         lint=score_lint(generated_code),
-        semantic=score_semantic(generated_code, reference_code),
+        semantic=score_semantic(gen_for_semantic, reference_code),
         repair_steps_applied=repair_steps or [],
         repair_recovered=repair_recovered,
         generation_time_ms=generation_time_ms,
@@ -347,6 +412,38 @@ def score_element(
 
 
 # ── Internal Helpers ───────────────────────────────────────────────────
+
+
+def _normalize_body_for_scoring(generated: str, reference: str) -> str:
+    """Wrap body-only generated code in the reference's def line for scoring.
+
+    When the engine produces body-only output (e.g. template ``__init__``) but
+    the reference is ``def __init__(...): body``, the raw body has no
+    ``FunctionDef`` AST node, causing feature overlap to plummet.  This wraps
+    the body in the reference's ``def`` line so both sides have matching AST
+    structure for semantic comparison.
+    """
+    gen_stripped = generated.strip()
+    ref_stripped = reference.strip()
+
+    # Only normalize if reference starts with def/async def and generated doesn't
+    ref_has_def = ref_stripped.startswith(("def ", "async def "))
+    gen_has_def = gen_stripped.startswith(("def ", "async def "))
+
+    if not ref_has_def or gen_has_def:
+        return generated  # no normalization needed
+
+    # Extract the def line from the reference
+    ref_lines = ref_stripped.splitlines()
+    def_line = ref_lines[0]
+
+    # Ensure body is indented at exactly 4 spaces relative to the def line.
+    # Use the original (not stripped) to preserve consistent leading whitespace
+    # for textwrap.dedent, then re-indent uniformly.
+    body = textwrap.dedent(generated)
+    indented_body = textwrap.indent(body.strip(), "    ")
+
+    return f"{def_line}\n{indented_body}"
 
 
 def _extract_meaningful_nodes(tree: ast.AST) -> list[ast.AST]:
