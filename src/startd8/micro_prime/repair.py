@@ -18,12 +18,16 @@ Steps:
 
 Shared steps (1, 5, 6, 8, 9, 10) delegate to ``startd8.repair.steps``.
 Micro-prime-specific steps (2, 3, 4, 7) remain local.
+
+Structured logging and OTel metrics are emitted per run for repair
+analysis (OLLAMA_QUALITY_RESEARCH_AGENDA Section 7).
 """
 
 from __future__ import annotations
 
 import ast
 import re
+import time
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +38,7 @@ from startd8.logging_config import get_logger
 from startd8.micro_prime._ast_utils import find_element_node
 from startd8.micro_prime.models import RepairAttribution, RepairStepResult
 from startd8.repair.models import Diagnostic, ElementContext, RepairContext
+from startd8.repair.steps.definition_order_fix import DefinitionOrderFixStep
 from startd8.repair.steps.duplicate_removal import DuplicateRemovalStep
 from startd8.repair.steps.fence_strip import FenceStripStep
 from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
@@ -44,12 +49,38 @@ from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
 
+# OTel instrumentation (graceful degradation when unavailable)
+try:
+    from opentelemetry import metrics as _otel_metrics
+    _MP_REPAIR_METER = _otel_metrics.get_meter("startd8.micro_prime.repair")
+    _mp_repair_attempts = _MP_REPAIR_METER.create_counter(
+        "micro_prime.repair.attempts_total",
+        description="Total micro-prime repair pipeline runs",
+    )
+    _mp_repair_recovered = _MP_REPAIR_METER.create_counter(
+        "micro_prime.repair.recovered_total",
+        description="Repairs that recovered invalid code to valid AST",
+    )
+    _mp_repair_step_applied = _MP_REPAIR_METER.create_counter(
+        "micro_prime.repair.step_applied",
+        description="Per-step application count",
+    )
+    _mp_repair_wall_clock = _MP_REPAIR_METER.create_histogram(
+        "micro_prime.repair.wall_clock_ms",
+        description="Wall-clock time per repair pipeline run",
+    )
+    _HAS_OTEL = True
+except Exception:
+    _mp_repair_attempts = _mp_repair_recovered = _mp_repair_step_applied = _mp_repair_wall_clock = None
+    _HAS_OTEL = False
+
 # Shared step instances
 _shared_fence_strip = FenceStripStep()
 _shared_future_import_reorder = FutureImportReorderStep()
 _shared_indent_normalize = IndentNormalizeStep()
 _shared_import_completion = ManifestImportCompletion()
 _shared_duplicate_removal = DuplicateRemovalStep()
+_shared_definition_order_fix = DefinitionOrderFixStep()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -561,13 +592,29 @@ def _step_duplicate_removal(
     return _shared_duplicate_removal(code, ctx, Path("<element>"))
 
 
+def _step_definition_order_fix(
+    code: str,
+    element: ForwardElementSpec,
+    file_spec: Optional[ForwardFileSpec] = None,
+    skeleton_source: Optional[str] = None,
+) -> RepairStepResult:
+    """Step 9: Reorder top-level definitions to resolve forward references.
+
+    Fixes F821 errors from model emitting classes that reference functions
+    defined later in the file.  File-whole only — element bodies have a
+    single definition so ordering is irrelevant.
+    """
+    ctx = RepairContext()
+    return _shared_definition_order_fix(code, ctx, Path("<file>"))
+
+
 def _step_ast_validate(
     code: str,
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
     skeleton_source: Optional[str] = None,
 ) -> RepairStepResult:
-    """Step 9: Final AST validation gate (REQ-MP-405).
+    """Step 10: Final AST validation gate (REQ-MP-405).
 
     Delegates to shared ``AstValidateStep``.
     """
@@ -599,8 +646,9 @@ _STEP_APPLICABILITY: dict[str, frozenset[str]] = {
     "indent_normalize":     frozenset({"element"}),
     "signature_reconcile":  frozenset({"element"}),
     "import_completion":    frozenset({"element"}),
-    "duplicate_removal":    frozenset({"element", "file"}),
-    "ast_validate":         frozenset({"element", "file"}),
+    "duplicate_removal":       frozenset({"element", "file"}),
+    "definition_order_fix":    frozenset({"file"}),
+    "ast_validate":            frozenset({"element", "file"}),
 }
 
 # Ordered list of all repair steps (with step name for registry lookup)
@@ -614,11 +662,59 @@ _ALL_STEPS = [
     ("signature_reconcile", _step_signature_reconcile),
     ("import_completion", _step_import_completion),
     ("duplicate_removal", _step_duplicate_removal),
+    ("definition_order_fix", _step_definition_order_fix),
     ("ast_validate", _step_ast_validate),
 ]
 
 # Ordered list of element-body repair steps
 _REPAIR_STEPS = [fn for _name, fn in _ALL_STEPS]
+
+
+def _emit_repair_telemetry(
+    result: "RepairResult",
+    pipeline_mode: str,
+    element_name: Optional[str] = None,
+    file_path: Optional[str] = None,
+    wall_clock_ms: float = 0,
+) -> None:
+    """Emit structured logging and OTel metrics for repair pipeline runs.
+
+    Supports OLLAMA_QUALITY_RESEARCH_AGENDA Section 7 (repair pipeline analysis).
+    """
+    steps_applied = result.steps_applied
+    log_extra = {
+        "repair": {
+            "pipeline_mode": pipeline_mode,
+            "ast_valid_before": result.ast_valid_before,
+            "ast_valid_after": result.ast_valid_after,
+            "repair_recovered": result.repair_recovered,
+            "steps_applied": steps_applied,
+            "steps_count": len(steps_applied),
+            "wall_clock_ms": round(wall_clock_ms, 1),
+        }
+    }
+    if element_name:
+        log_extra["repair"]["element_name"] = element_name
+    if file_path:
+        log_extra["repair"]["file_path"] = file_path
+    logger.info(
+        "micro_prime.repair.complete %s recovered=%s steps=%s",
+        pipeline_mode,
+        result.repair_recovered,
+        steps_applied,
+        extra=log_extra,
+    )
+    if _HAS_OTEL and _mp_repair_attempts is not None:
+        try:
+            _mp_repair_attempts.add(1, {"pipeline_mode": pipeline_mode})
+            if result.repair_recovered:
+                _mp_repair_recovered.add(1, {"pipeline_mode": pipeline_mode})
+            for step in steps_applied:
+                _mp_repair_step_applied.add(1, {"step": step, "pipeline_mode": pipeline_mode})
+            if wall_clock_ms > 0 and _mp_repair_wall_clock is not None:
+                _mp_repair_wall_clock.record(wall_clock_ms, {"pipeline_mode": pipeline_mode})
+        except Exception:
+            pass
 
 
 def run_repair_pipeline(
@@ -641,6 +737,7 @@ def run_repair_pipeline(
     Returns:
         RepairResult with repaired code and step metadata.
     """
+    start = time.monotonic()
     results: list[RepairStepResult] = []
     current = code
     is_method = bool(element.parent_class)
@@ -681,7 +778,7 @@ def run_repair_pipeline(
     ast_valid_after = ast_valid
     repair_recovered = (not ast_valid_before) and ast_valid_after
 
-    return RepairResult(
+    result = RepairResult(
         code=current,
         steps_applied=steps_applied,
         ast_valid=ast_valid,
@@ -692,6 +789,15 @@ def run_repair_pipeline(
         step_results=results,
         last_error=last_error,
     )
+    wall_clock_ms = (time.monotonic() - start) * 1000
+    _emit_repair_telemetry(
+        result,
+        pipeline_mode="element",
+        element_name=element.name,
+        file_path=file_spec.file if file_spec else None,
+        wall_clock_ms=wall_clock_ms,
+    )
+    return result
 
 
 # ── AC-R18/R25: File-whole repair steps (derived from applicability registry) ──
@@ -721,6 +827,7 @@ def run_file_repair_pipeline(
     Returns:
         RepairResult with repaired code and step metadata.
     """
+    start = time.monotonic()
     results: list[RepairStepResult] = []
     current = code
     # File-whole output is never a method body — always a complete file.
@@ -768,7 +875,7 @@ def run_file_repair_pipeline(
     ast_valid_after = ast_valid
     repair_recovered = (not ast_valid_before) and ast_valid_after
 
-    return RepairResult(
+    result = RepairResult(
         code=current,
         steps_applied=steps_applied,
         ast_valid=ast_valid,
@@ -779,6 +886,14 @@ def run_file_repair_pipeline(
         step_results=results,
         last_error=last_error,
     )
+    wall_clock_ms = (time.monotonic() - start) * 1000
+    _emit_repair_telemetry(
+        result,
+        pipeline_mode="file",
+        file_path=file_spec.file if file_spec else None,
+        wall_clock_ms=wall_clock_ms,
+    )
+    return result
 
 
 def to_escalation_repair_outcome(
