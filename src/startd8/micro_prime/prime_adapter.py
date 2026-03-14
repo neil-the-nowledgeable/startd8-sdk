@@ -1690,34 +1690,54 @@ class MicroPrimeCodeGenerator:
         """
         from startd8.utils.requirements_generator import generate_requirements_in
 
-        # Find sibling Python files — both already-written outputs and
-        # existing source files in the same service directory.
+        # Find sibling Python files from three sources:
+        # 1. Files generated in this run (st.generated_files)
+        # 2. Files generated in prior runs (on disk under output_dir)
+        # 3. Existing source files from the project root
         req_dir = requirements_file.rsplit("/", 1)[0] if "/" in requirements_file else ""
 
         python_files: Dict[str, str] = {}
 
         # 1. Already-generated files from this run
         for gen_path in st.generated_files:
-            rel = str(gen_path.relative_to(self._output_dir)) if hasattr(gen_path, 'relative_to') else str(gen_path)
+            try:
+                rel = str(gen_path.relative_to(self._output_dir))
+            except (ValueError, TypeError):
+                rel = str(gen_path)
             if rel.endswith(".py") and rel.startswith(req_dir):
                 try:
                     python_files[rel] = gen_path.read_text(encoding="utf-8")
                 except OSError:
                     pass
 
-        # 2. Existing source files from the project (for deps that aren't
-        #    being regenerated in this run)
+        # 2. Files generated in prior runs (on disk under output_dir)
+        sibling_dir = self._output_dir / req_dir
+        if sibling_dir.is_dir():
+            try:
+                for py_file in sorted(sibling_dir.glob("*.py")):
+                    rel = str(py_file.relative_to(self._output_dir))
+                    if rel not in python_files:
+                        try:
+                            python_files[rel] = py_file.read_text(encoding="utf-8")
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+
+        # 3. Existing source files from the project root
         if self._manifest:
             for file_path, file_spec in self._manifest.file_specs.items():
                 if file_path.endswith(".py") and file_path.startswith(req_dir):
                     if file_path not in python_files:
-                        # Try reading from project root
-                        full = Path(".") / file_path
-                        if full.is_file():
-                            try:
-                                python_files[file_path] = full.read_text(encoding="utf-8")
-                            except OSError:
-                                pass
+                        # Try output_dir first (generated), then project root
+                        for base in (self._output_dir, Path(".")):
+                            full = base / file_path
+                            if full.is_file():
+                                try:
+                                    python_files[file_path] = full.read_text(encoding="utf-8")
+                                except OSError:
+                                    pass
+                                break
 
         if not python_files:
             logger.info(
