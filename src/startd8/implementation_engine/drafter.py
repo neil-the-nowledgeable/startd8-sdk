@@ -94,6 +94,7 @@ def _get_output_template(name: str) -> str:
             "multi_file_output": "Produce a SEPARATE fenced code block for each file.\n\nREQUIRED files:\n{file_list}\n\n{file_checklist}",
             "single_file_edit_output": (
                 "Output the COMPLETE modified file ({existing_line_count} lines original).\n"
+                "Your draft must be AT LEAST {min_output_lines} lines ({min_pct}% of existing).\n"
                 "Do NOT omit or abbreviate existing code."
             ),
             "multi_file_edit_output": (
@@ -424,13 +425,18 @@ def build_existing_files_section(
 def build_output_format(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
+    edit_min_pct: Optional[int] = 80,
 ) -> str:
     """Build the output format section for the draft prompt.
 
     Single-file tasks get a simple format; multi-file tasks get per-file
     fencing instructions with a verification checklist.
+
+    PC-Q2: For edit mode, passes min_output_lines and existing_line_summary
+    to enforce quantitative constraints (Mottainai Principle).
     """
     is_edit = bool(existing_files)
+    min_pct = edit_min_pct if edit_min_pct is not None else 80
 
     if not target_files or len(target_files) <= 1:
         if is_edit:
@@ -438,10 +444,17 @@ def build_output_format(
                 len((content or "").splitlines())
                 for content in existing_files.values()
             )
+            # Skip min-lines constraint when empty — "AT LEAST 0 lines" is useless
+            if total_lines == 0:
+                return (
+                    "Output the COMPLETE modified file. "
+                    "Do NOT omit or abbreviate existing code."
+                )
+            min_output_lines = int(total_lines * min_pct / 100)
             return _get_output_template("single_file_edit_output").format(
                 existing_line_count=total_lines,
-                min_output_lines=0,
-                min_pct=0,
+                min_output_lines=min_output_lines,
+                min_pct=min_pct,
             )
         return _get_output_template("single_file_output")
 
@@ -455,15 +468,86 @@ def build_output_format(
     )
 
     if is_edit:
+        total_lines = sum(
+            len((content or "").splitlines())
+            for content in existing_files.values()
+        )
+        existing_line_summary_parts = []
+        for fpath in ordered:
+            content = existing_files.get(fpath, "")
+            lines = len((content or "").splitlines())
+            existing_line_summary_parts.append(f"- `{fpath}`: {lines} lines")
+        # Skip min-lines constraint when empty — "AT LEAST 0 lines" is useless
+        if total_lines == 0:
+            existing_line_summary = (
+                "Output COMPLETE modified files — every line of original plus changes.\n"
+                + "\n".join(existing_line_summary_parts)
+            )
+        else:
+            min_output_lines = int(total_lines * min_pct / 100)
+            existing_line_summary = (
+                f"Existing files total {total_lines} lines. "
+                f"Draft must be >= {min_output_lines} lines ({min_pct}%).\n"
+                + "\n".join(existing_line_summary_parts)
+            )
         return _get_output_template("multi_file_edit_output").format(
             file_list=file_list,
             file_checklist=file_checklist,
-            existing_line_summary="",
+            existing_line_summary=existing_line_summary,
         )
     return _get_output_template("multi_file_output").format(
         file_list=file_list,
         file_checklist=file_checklist,
     )
+
+
+# ---------------------------------------------------------------------------
+# Non-Python file detection
+# ---------------------------------------------------------------------------
+
+# Extensions for files where Python-centric heuristics (size regression,
+# code structure detection, search_replace mode) produce false positives.
+_NON_PYTHON_EXTENSIONS = frozenset({
+    ".in", ".txt", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json",
+    ".md", ".rst", ".html", ".css", ".js", ".ts", ".sh", ".bash",
+    ".dockerfile", ".env", ".conf", ".xml", ".csv", ".sql", ".proto",
+    ".graphql", ".tf", ".hcl",
+})
+
+# Filenames (no extension) that are non-Python
+_NON_PYTHON_FILENAMES = frozenset({
+    "Dockerfile", "Makefile", "Procfile", "Jenkinsfile",
+    "docker-compose", ".gitignore", ".dockerignore",
+})
+
+
+def _is_non_python_file(path: str) -> bool:
+    """Return True if *path* is a non-Python file based on extension or name."""
+    from pathlib import PurePosixPath
+    p = PurePosixPath(path)
+    if p.suffix.lower() in _NON_PYTHON_EXTENSIONS:
+        return True
+    if p.name in _NON_PYTHON_FILENAMES:
+        return True
+    # Dockerfile variants: Dockerfile.prod, Dockerfile.dev, etc.
+    if p.name.startswith("Dockerfile"):
+        return True
+    return False
+
+
+def _all_files_non_python(
+    target_files: Optional[List[str]] = None,
+    existing_files: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Return True if ALL target/existing files are non-Python."""
+    paths: list[str] = []
+    if target_files:
+        paths.extend(target_files)
+    if existing_files:
+        paths.extend(existing_files.keys())
+    if not paths:
+        return False
+    return all(_is_non_python_file(p) for p in paths)
 
 
 # ---------------------------------------------------------------------------
@@ -483,8 +567,14 @@ def detect_size_regression(
       (hallucination/duplication — CR-H3).
 
     Only applies when existing files exceed DRAFT_SIZE_REGRESSION_MIN_LINES.
+    Skipped entirely for non-Python files (requirements.in, Dockerfile, etc.)
+    where Python size heuristics produce false positives.
     """
     if not existing_files or not implementation_code:
+        return False
+    # Non-Python files: skip size regression — Python line-count heuristics
+    # don't apply to requirements files, configs, Dockerfiles, etc.
+    if _all_files_non_python(existing_files=existing_files):
         return False
     existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
@@ -760,7 +850,12 @@ def create_draft(
             span.set_attribute("drafter.target_file_count", len(target_files))
 
     try:
-        output_format = build_output_format(target_files, existing_files=existing_files)
+        edit_min_pct = (context or {}).get("edit_min_pct", 80) if context else 80
+        output_format = build_output_format(
+            target_files,
+            existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
+        )
 
         # Select template — duck-typed spec may be a SpecResult, ImplementationSpec, or str
         if hasattr(spec, "raw_spec"):
@@ -890,9 +985,12 @@ def create_draft(
         api_truncated = token_usage.was_truncated if token_usage else False
         truncation_source = "api" if api_truncated else None
 
-        # Heuristic truncation detection
+        # Heuristic truncation detection — skip for non-Python files where
+        # code-structure heuristics (unclosed brackets, missing returns) are
+        # meaningless and produce false positives (e.g. requirements.in).
         heuristic_truncated = False
-        if check_truncation and not api_truncated and implementation_code:
+        skip_heuristics = _all_files_non_python(target_files, existing_files)
+        if check_truncation and not api_truncated and implementation_code and not skip_heuristics:
             confidence_threshold = (
                 CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
             )
