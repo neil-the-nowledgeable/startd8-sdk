@@ -56,12 +56,12 @@ def _build_local_module_names(python_files: dict[str, str]) -> frozenset[str]:
     """Derive local module names from the file paths in the project.
 
     A file ``emailservice/logger.py`` produces the local module name
-    ``logger``.  A file ``emailservice/email_server.py`` produces
-    ``email_server``.  These are NOT pip-installable packages.
+    ``logger``.  A file ``src/emailservice/email_server.py`` produces
+    ``email_server``, ``src``, and ``emailservice``.
 
-    Also includes directory names (packages) derived from paths with
-    multiple segments — e.g., ``recommendationservice/foo/bar.py``
-    adds ``recommendationservice`` as a local package.
+    All intermediate directory names are included because they represent
+    local Python packages that aren't pip-installable (e.g.,
+    ``from emailservice.email_server_pb2_grpc import ...``).
     """
     local: set[str] = set()
     for file_path in python_files:
@@ -70,11 +70,10 @@ def _build_local_module_names(python_files: dict[str, str]) -> frozenset[str]:
         p = PurePosixPath(file_path)
         # The stem of the .py file is a local module (e.g., logger.py → logger)
         local.add(p.stem)
-        # If the file is nested (e.g., recommendationservice/server.py),
-        # the top-level directory is also a local package
-        parts = p.parts
-        if len(parts) >= 2:
-            local.add(parts[0])
+        # All parent directories are local packages
+        # (e.g., src/emailservice/server.py → src, emailservice)
+        for part in p.parts[:-1]:  # exclude the filename itself
+            local.add(part)
     return frozenset(local)
 
 
