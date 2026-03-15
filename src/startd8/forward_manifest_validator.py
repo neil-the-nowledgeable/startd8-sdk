@@ -323,7 +323,9 @@ def validate_disk_compliance(
     manifest: Optional[ForwardManifest] = None,
     *,
     sibling_files: Optional[List[str]] = None,
+    sibling_imports: Optional[Dict[str, Set[str]]] = None,
     import_map: Optional[Dict[str, str]] = None,
+    factory_patterns: Optional[List[str]] = None,
 ) -> DiskComplianceResult:
     """Validate the file on disk against forward manifest after assembly.
 
@@ -337,9 +339,15 @@ def validate_disk_compliance(
         sibling_files: Optional list of sibling file paths for import
             resolution.  When absent the validator scans the parent
             directory on disk.
+        sibling_imports: Optional mapping of sibling file path to import
+            sets.  Used by L5 requirements cross-check to verify that
+            every package in ``requirements.in`` is actually imported.
         import_map: Optional golden-seed import map (REQ-GS-302).
             When provided, import resolution operates in closed-world
             mode — any import not in the map is an error.
+        factory_patterns: Optional list of regex patterns for factory
+            function names (L4).  Defaults to ``create_*``, ``make_*``,
+            ``build_*``, ``*_factory``.
 
     Returns:
         DiskComplianceResult with stubs, duplicates, import completeness, etc.
@@ -354,7 +362,9 @@ def validate_disk_compliance(
 
     # Non-Python file validators (KZ-Q4)
     if abs_path.suffix != ".py":
-        return _validate_non_python_file(abs_path, result)
+        return _validate_non_python_file(
+            abs_path, result, sibling_imports=sibling_imports,
+        )
 
     try:
         source = abs_path.read_text(encoding="utf-8")
@@ -392,6 +402,10 @@ def validate_disk_compliance(
     scope_dupe_issues = _detect_cross_scope_duplicates(tree)
     result.semantic_issues.extend(scope_dupe_issues)
 
+    # L4: Factory return value check (REQ-SV-501)
+    factory_issues = _validate_factory_returns(tree, patterns=factory_patterns)
+    result.semantic_issues.extend(factory_issues)
+
     # Contract compliance via manifest
     if manifest and file_path in manifest.file_specs:
         spec = manifest.file_specs[file_path]
@@ -423,6 +437,8 @@ def validate_disk_compliance(
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
+    *,
+    sibling_imports: Optional[Dict[str, Set[str]]] = None,
 ) -> DiskComplianceResult:
     """Lightweight validators for non-Python files (KZ-Q4).
 
@@ -442,6 +458,9 @@ def _validate_non_python_file(
 
     if suffix == ".in" or name == "requirements.txt":
         result = _validate_requirements_file(content, result)
+        # L5: Requirements-to-import cross-check (REQ-SV-601)
+        if sibling_imports:
+            _validate_requirements_coverage(content, sibling_imports, result)
     elif name == "dockerfile" or name.startswith("dockerfile."):
         result = _validate_dockerfile(content, result)
     elif suffix in (".yaml", ".yml"):
@@ -668,6 +687,116 @@ def _detect_cross_scope_duplicates(tree: ast.AST) -> List[Dict[str, object]]:
             "symbol": name,
         })
     return issues
+
+
+_DEFAULT_FACTORY_PATTERNS = [
+    re.compile(r"^create_"),
+    re.compile(r"^make_"),
+    re.compile(r"^build_"),
+    re.compile(r"_factory$"),
+]
+
+
+def _validate_factory_returns(
+    tree: ast.AST,
+    *,
+    patterns: Optional[List[str]] = None,
+) -> List[Dict[str, object]]:
+    """Check that factory functions return a value (REQ-SV-501).
+
+    Flags ``create_*``, ``make_*``, ``build_*``, and ``*_factory``
+    functions that have no ``return <expr>`` statement.
+    """
+    compiled = (
+        [re.compile(p) for p in patterns]
+        if patterns
+        else _DEFAULT_FACTORY_PATTERNS
+    )
+    issues: List[Dict[str, object]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(p.search(node.name) for p in compiled):
+            continue
+
+        # Walk body for Return nodes with a non-None value
+        has_value_return = False
+        for child in ast.walk(node):
+            if isinstance(child, ast.Return) and child.value is not None:
+                has_value_return = True
+                break
+
+        if not has_value_return:
+            issues.append({
+                "category": "factory_return",
+                "severity": "error",
+                "message": (
+                    f"Factory function '{node.name}' has no return "
+                    f"statement with a value"
+                ),
+                "line": node.lineno,
+                "symbol": node.name,
+            })
+
+    return issues
+
+
+_KNOWN_NON_IMPORT_PACKAGES = frozenset({
+    "setuptools", "wheel", "pip", "gunicorn", "uvicorn", "gevent",
+    "pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy",
+})
+
+
+def _validate_requirements_coverage(
+    requirements_content: str,
+    sibling_imports: Dict[str, Set[str]],
+    result: DiskComplianceResult,
+) -> None:
+    """Check that every package in requirements.in is imported (REQ-SV-601).
+
+    Appends ``orphan_dependency`` warnings to *result.semantic_issues*
+    for packages that no sibling Python file imports.
+    """
+    from startd8.implementation_engine.package_aliases import pypi_to_import
+
+    all_imports: Set[str] = set()
+    for imports in sibling_imports.values():
+        all_imports |= imports
+
+    for lineno, line in enumerate(requirements_content.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+            continue
+
+        # Extract package name (before version specifier)
+        spec = stripped.split("#")[0].strip()
+        package = re.split(r"[~=!<>\[;]", spec)[0].strip().lower()
+        if not package or package in _KNOWN_NON_IMPORT_PACKAGES:
+            continue
+
+        # Map package to expected import name
+        expected_import = pypi_to_import(package)
+
+        # Check if any sibling imports this package
+        found = any(
+            imp == expected_import
+            or imp.startswith(expected_import + ".")
+            or imp == package  # simple case: flask → flask
+            or imp.startswith(package + ".")
+            for imp in all_imports
+        )
+        if not found:
+            result.semantic_issues.append({
+                "category": "orphan_dependency",
+                "severity": "warning",
+                "message": (
+                    f"Package '{package}' in requirements.in is not "
+                    f"imported by any sibling Python file"
+                ),
+                "line": lineno,
+                "symbol": package,
+            })
 
 
 def _validate_import_resolution(
