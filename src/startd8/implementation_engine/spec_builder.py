@@ -342,6 +342,36 @@ def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_dependency_imports_section(context: Dict[str, Any]) -> str:
+    """Build a section listing importable modules from dependency tasks.
+
+    Reads ``dependency_imports`` from *context* (populated by
+    ``PrimeContractorWorkflow._collect_dependency_imports``) and renders
+    a Markdown section so the LLM knows which modules to import from
+    its upstream dependencies.
+
+    Returns empty string when no dependency imports are present.
+    """
+    dep_imports = context.pop("dependency_imports", None)
+    if not dep_imports:
+        return ""
+
+    lines = [
+        "## Dependency Task Imports",
+        "",
+        "Your dependency tasks produce these modules — import them as needed:",
+        "",
+    ]
+    for dep_id, info in dep_imports.items():
+        target_desc = ", ".join(info.get("target_files", [])) or "unknown"
+        lines.append(f"From {dep_id} ({target_desc}):")
+        for mod in info.get("modules", []):
+            lines.append(f"  - `{mod}`")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def extract_spec_constraints(spec_text: str) -> List[Dict[str, str]]:
     """Extract MUST and MUST NOT assertions from a spec document.
 
@@ -692,6 +722,11 @@ def build_spec_prompt(
     sibling_section = _build_sibling_imports_section(context)
     if sibling_section:
         prioritized.append((1, "sibling_imports", sibling_section))
+
+    # P1: Dependency task imports (upstream modules for correct proto/gRPC imports)
+    dep_imports_section = _build_dependency_imports_section(context)
+    if dep_imports_section:
+        prioritized.append((1, "dependency_imports", dep_imports_section))
 
     # P1: Requirements and protocol guidance
     if requirements_context:

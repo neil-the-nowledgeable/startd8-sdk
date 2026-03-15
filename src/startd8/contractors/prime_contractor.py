@@ -3306,6 +3306,79 @@ class PrimeContractorWorkflow:
         if self._kaizen.config:
             self._apply_kaizen_hints(gen_context)
 
+        # Dependency import threading — surface dep tasks' modules in spec prompt
+        dep_imports = self._collect_dependency_imports(feature)
+        if dep_imports:
+            gen_context["dependency_imports"] = dep_imports
+
+    def _collect_dependency_imports(
+        self, feature: FeatureSpec,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Extract importable module names from dependency tasks.
+
+        For each dependency in ``feature.dependencies``, inspects the dep's
+        description for ``Imports: `mod1`, `mod2``` lines and falls back to
+        extracting base-class module prefixes from the forward manifest's
+        ``file_specs[].elements[].bases``.
+
+        Returns a dict keyed by dep task ID::
+
+            {"PI-003": {"modules": ["demo_pb2", "demo_pb2_grpc"],
+                        "target_files": ["src/emailservice/email_server.py"]}}
+        """
+        if not feature.dependencies:
+            return {}
+
+        result: Dict[str, Dict[str, Any]] = {}
+        import re
+        _import_re = re.compile(r"-\s*Imports:\s*(.+)", re.IGNORECASE)
+
+        for dep_id in feature.dependencies:
+            dep = self.queue.get_feature(dep_id) if self.queue else None
+            if dep is None:
+                continue
+
+            modules: set[str] = set()
+
+            # Strategy 1: Parse "- Imports: `mod1`, `mod2`" from description
+            if dep.description:
+                m = _import_re.search(dep.description)
+                if m:
+                    raw = m.group(1)
+                    # Extract backtick-quoted or bare comma-separated names
+                    modules.update(
+                        tok.strip().strip("`")
+                        for tok in raw.split(",")
+                        if tok.strip().strip("`")
+                    )
+
+            # Strategy 2: Forward manifest base-class module prefixes
+            if self._forward_manifest and dep.target_files:
+                for tf in dep.target_files:
+                    fspec = self._forward_manifest.file_specs.get(tf)
+                    if not fspec:
+                        continue
+                    for elem in fspec.elements:
+                        for base in elem.bases:
+                            if "." in base:
+                                modules.add(base.split(".")[0])
+                    # Also include explicit import modules from the manifest
+                    for imp in fspec.imports:
+                        if imp.module:
+                            modules.add(imp.module)
+
+            if modules:
+                result[dep_id] = {
+                    "modules": sorted(modules),
+                    "target_files": dep.target_files or [],
+                }
+                logger.info(
+                    "Dependency imports for '%s' from %s: %s",
+                    feature.id, dep_id, sorted(modules),
+                )
+
+        return result
+
     def _route_complexity(
         self, feature: FeatureSpec, gen_context: Dict[str, Any],
     ) -> "CodeGenerator":
