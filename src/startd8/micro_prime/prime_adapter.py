@@ -381,6 +381,9 @@ class MicroPrimeCodeGenerator:
         self._manifest = manifest
         self._skeletons = skeletons or {}
         self._output_dir = output_dir or Path(".")
+        # Public alias — PrimeContractor._resolve_output_dir() reads
+        # self.code_generator.output_dir to determine where files land.
+        self.output_dir = self._output_dir
         self._project_root = project_root
         self._element_registry = element_registry
         self._registry_hits = 0
