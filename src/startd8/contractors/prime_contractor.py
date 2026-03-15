@@ -745,6 +745,7 @@ class PrimeContractorWorkflow:
             output_dir=output_dir,
             cloud_agent_spec=cloud_agent_spec,
             element_registry=getattr(self, "_element_registry", None),
+            project_root=getattr(self, "project_root", None),
         )
         self._micro_prime_enabled = True
         logger.info(
@@ -1148,9 +1149,21 @@ class PrimeContractorWorkflow:
                     f"has {len(predecessor.generated_files)} generated files"
                 )
 
-        # Validate path
-        workspace = str(self.project_root)
-        source_path = validate_copy_path(source_file, workspace)
+        # Resolve output_dir (consistent with element cache assembly and LLM generation)
+        output_dir = self._resolve_output_dir()
+
+        # Validate path — try output_dir first (where predecessor likely wrote),
+        # then fall back to project_root for backward compatibility.
+        source_path: Optional[Path] = None
+        if not Path(source_file).is_absolute():
+            candidate = output_dir / source_file
+            if candidate.exists():
+                source_path = validate_copy_path(
+                    str(candidate), str(output_dir),
+                )
+        if source_path is None:
+            workspace = str(self.project_root)
+            source_path = validate_copy_path(source_file, workspace)
 
         # Read with timeout
         def _read_file():
@@ -1166,12 +1179,12 @@ class PrimeContractorWorkflow:
                     f"{self._FILE_COPY_READ_TIMEOUT_S}s"
                 )
 
-        # Write target
+        # Write target into output_dir (consistent with normal generation paths)
         if not feature.target_files:
             raise ValueError(
                 f"Feature '{feature.id}' ('{feature.name}') has no target_files for copy"
             )
-        target_path = Path(self.project_root) / feature.target_files[0]
+        target_path = output_dir / feature.target_files[0]
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
         copy_overwrite = (

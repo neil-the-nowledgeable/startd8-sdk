@@ -374,12 +374,14 @@ class MicroPrimeCodeGenerator:
         output_dir: Optional[Path] = None,
         cloud_agent_spec: Optional[str] = None,
         element_registry: Optional[ElementRegistry] = None,
+        project_root: Optional[Path] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
         self._manifest = manifest
         self._skeletons = skeletons or {}
         self._output_dir = output_dir or Path(".")
+        self._project_root = project_root
         self._element_registry = element_registry
         self._registry_hits = 0
         self._registry_misses = 0
@@ -1724,6 +1726,31 @@ class MicroPrimeCodeGenerator:
             except OSError:
                 pass
 
+        # 2b. Sibling files at project root (catches files deployed by
+        #     earlier tasks, e.g., logger.py for recommendationservice)
+        pre_2b_count = len(python_files)
+        if self._project_root:
+            proj_sibling_dir = self._project_root / req_dir
+            if proj_sibling_dir.is_dir():
+                try:
+                    for py_file in sorted(proj_sibling_dir.glob("*.py")):
+                        rel = str(py_file.relative_to(self._project_root))
+                        if rel not in python_files:
+                            try:
+                                python_files[rel] = py_file.read_text(
+                                    encoding="utf-8"
+                                )
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+        added_2b = len(python_files) - pre_2b_count
+        if added_2b:
+            logger.debug(
+                "requirements.in scan 2b: %d sibling .py files from project_root/%s",
+                added_2b, req_dir,
+            )
+
         # 3. Existing source files from the project root
         if self._manifest:
             for file_path, file_spec in self._manifest.file_specs.items():
@@ -1745,6 +1772,13 @@ class MicroPrimeCodeGenerator:
                 requirements_file,
             )
             return None
+
+        logger.info(
+            "requirements.in scan for %s: %d Python files: %s",
+            requirements_file,
+            len(python_files),
+            ", ".join(sorted(python_files.keys())),
+        )
 
         # Extract manifest-declared external deps as extras (catches deps
         # that aren't visible through import analysis alone)
