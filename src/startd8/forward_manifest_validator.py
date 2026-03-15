@@ -379,12 +379,18 @@ def validate_disk_compliance(
 
     # --- Semantic validation (REQ-SV-200) ---
     # Only runs when the AST parsed successfully.
+
+    # L1: Import resolution (REQ-SV-201)
     import_issues = _validate_import_resolution(
         tree, file_path, project_root,
         sibling_files=sibling_files,
         import_map=import_map,
     )
     result.semantic_issues.extend(import_issues)
+
+    # L2: Cross-scope duplicate detection (REQ-SV-301)
+    scope_dupe_issues = _detect_cross_scope_duplicates(tree)
+    result.semantic_issues.extend(scope_dupe_issues)
 
     # Contract compliance via manifest
     if manifest and file_path in manifest.file_specs:
@@ -499,17 +505,36 @@ def _validate_dockerfile(
     content: str,
     result: DiskComplianceResult,
 ) -> DiskComplianceResult:
-    """Validate that a Dockerfile has required directives."""
+    """Validate that a Dockerfile has required directives and valid digests."""
     import re
 
     lines = content.splitlines()
     directives_found: set[str] = set()
-    for line in lines:
+    for lineno, line in enumerate(lines, 1):
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             match = re.match(r"^([A-Z]+)\s", stripped)
             if match:
                 directives_found.add(match.group(1))
+
+        # L3: SHA256 digest validation (REQ-SV-401)
+        if stripped.upper().startswith("FROM"):
+            for digest_match in re.findall(r"@sha256:([0-9a-fA-F]*)", stripped):
+                if len(digest_match) != 64:
+                    result.semantic_issues.append({
+                        "category": "dockerfile_digest",
+                        "severity": "error",
+                        "message": (
+                            f"Truncated SHA256 digest: {len(digest_match)} chars "
+                            f"(expected 64)"
+                        ),
+                        "line": lineno,
+                        "symbol": (
+                            f"sha256:{digest_match[:16]}..."
+                            if digest_match
+                            else "sha256:<empty>"
+                        ),
+                    })
 
     required = {"FROM"}
     # A valid Dockerfile needs at least FROM
@@ -520,7 +545,7 @@ def _validate_dockerfile(
         result.contract_compliance = 0.0
     elif not (directives_found & {"CMD", "ENTRYPOINT"}):
         # Warning: no entrypoint defined
-        result.semantic_issues = ["no CMD or ENTRYPOINT directive"]
+        result.semantic_issues.append("no CMD or ENTRYPOINT directive")
         result.contract_compliance = 0.8
 
     return result
@@ -600,6 +625,49 @@ def _count_duplicate_definitions(tree: ast.AST) -> int:
             dupes += 1
         seen.add(name)
     return dupes
+
+
+def _detect_cross_scope_duplicates(tree: ast.AST) -> List[Dict[str, object]]:
+    """Detect function/class names duplicated across scopes (REQ-SV-301).
+
+    Returns semantic-issue dicts for names that appear at both module level
+    and inside a nested scope (function body, class body).  This catches
+    accidental copy-paste where a helper is defined inside a function AND
+    duplicated at module level (e.g. ``talkToGemini`` in run-050).
+    """
+    # Module-level definitions: name → line
+    module_names: Dict[str, int] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            module_names[node.name] = node.lineno
+
+    # Walk nested scopes inside each top-level definition
+    nested_hits: List[tuple] = []  # (name, nested_line, parent_name)
+    for top_node in ast.iter_child_nodes(tree):
+        if not isinstance(top_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in ast.walk(top_node):
+            if node is top_node:
+                continue
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in module_names:
+                    nested_hits.append(
+                        (node.name, node.lineno, top_node.name)
+                    )
+
+    issues: List[Dict[str, object]] = []
+    for name, nested_line, parent_name in nested_hits:
+        issues.append({
+            "category": "cross_scope_duplicate",
+            "severity": "warning",
+            "message": (
+                f"'{name}' defined at module level (line {module_names[name]}) "
+                f"and inside '{parent_name}' (line {nested_line})"
+            ),
+            "line": nested_line,
+            "symbol": name,
+        })
+    return issues
 
 
 def _validate_import_resolution(
