@@ -12,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, List
+from typing import Any, Dict, Optional, List, Set
 
 from startd8.forward_manifest import ForwardManifest, InterfaceContract, ForwardFileSpec
 from startd8.utils.manifest_registry import ManifestRegistry, _flatten_elements
@@ -321,6 +321,9 @@ def validate_disk_compliance(
     file_path: str,
     project_root: str,
     manifest: Optional[ForwardManifest] = None,
+    *,
+    sibling_files: Optional[List[str]] = None,
+    import_map: Optional[Dict[str, str]] = None,
 ) -> DiskComplianceResult:
     """Validate the file on disk against forward manifest after assembly.
 
@@ -331,6 +334,12 @@ def validate_disk_compliance(
         file_path: Relative or absolute path to the file.
         project_root: Project root directory.
         manifest: Optional forward manifest for contract compliance.
+        sibling_files: Optional list of sibling file paths for import
+            resolution.  When absent the validator scans the parent
+            directory on disk.
+        import_map: Optional golden-seed import map (REQ-GS-302).
+            When provided, import resolution operates in closed-world
+            mode — any import not in the map is an error.
 
     Returns:
         DiskComplianceResult with stubs, duplicates, import completeness, etc.
@@ -367,6 +376,15 @@ def validate_disk_compliance(
 
     # Count duplicate definitions at module level
     result.duplicate_definitions = _count_duplicate_definitions(tree)
+
+    # --- Semantic validation (REQ-SV-200) ---
+    # Only runs when the AST parsed successfully.
+    import_issues = _validate_import_resolution(
+        tree, file_path, project_root,
+        sibling_files=sibling_files,
+        import_map=import_map,
+    )
+    result.semantic_issues.extend(import_issues)
 
     # Contract compliance via manifest
     if manifest and file_path in manifest.file_specs:
@@ -582,6 +600,93 @@ def _count_duplicate_definitions(tree: ast.AST) -> int:
             dupes += 1
         seen.add(name)
     return dupes
+
+
+def _validate_import_resolution(
+    tree: ast.AST,
+    file_path: str,
+    project_root: str,
+    *,
+    sibling_files: Optional[List[str]] = None,
+    import_map: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, object]]:
+    """Validate that all imports resolve to known sources (REQ-SV-201).
+
+    Returns a list of structured semantic-issue dicts for unresolvable
+    imports.  Each dict has ``category``, ``severity``, ``message``,
+    ``line``, and ``symbol`` keys.
+    """
+    from startd8.utils.import_resolution import (
+        extract_import_modules,
+        discover_sibling_modules,
+        resolve_import,
+        parse_requirements_packages,
+    )
+
+    issues: List[Dict[str, object]] = []
+
+    # Build sibling module set
+    if sibling_files is not None:
+        sibling_modules: Set[str] = set()
+        for f in sibling_files:
+            p = Path(f)
+            sibling_modules.add(p.stem)
+            if p.parent.name:
+                sibling_modules.add(p.parent.name)
+    else:
+        sibling_modules = discover_sibling_modules(file_path, project_root)
+
+    # Build requirements package set from sibling requirements.in
+    requirements_packages = _discover_requirements_packages(
+        file_path, project_root,
+    )
+
+    # Resolve each import
+    for imp in extract_import_modules(tree):
+        module_name = str(imp["module"])
+        full_path = str(imp["full_path"])
+        line = imp["line"]
+
+        resolution = resolve_import(
+            module_name,
+            sibling_modules=sibling_modules,
+            requirements_packages=requirements_packages,
+            import_map=import_map,
+        )
+        if resolution is None:
+            issues.append({
+                "category": "import_resolution",
+                "severity": "error",
+                "message": (
+                    f"Unresolvable import: '{full_path}' is not stdlib, "
+                    f"not in requirements.in, not a local module, "
+                    f"and not a protobuf stub"
+                ),
+                "line": line,
+                "symbol": full_path,
+            })
+
+    return issues
+
+
+def _discover_requirements_packages(
+    file_path: str, project_root: str,
+) -> Set[str]:
+    """Find ``requirements.in`` in the same directory and extract package names."""
+    from startd8.utils.import_resolution import parse_requirements_packages
+
+    abs_path = Path(project_root) / file_path
+    parent = abs_path.parent
+
+    for name in ("requirements.in", "requirements.txt"):
+        req_file = parent / name
+        if req_file.is_file():
+            try:
+                content = req_file.read_text(encoding="utf-8", errors="replace")
+                return parse_requirements_packages(content)
+            except OSError:
+                pass
+    return set()
 
 
 def _extract_import_modules(tree: ast.AST) -> List[str]:

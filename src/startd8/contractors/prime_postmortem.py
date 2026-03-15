@@ -643,7 +643,10 @@ class PrimePostMortemEvaluator:
 
         # Disk quality evaluation (opt-in when project_root provided)
         if project_root:
-            self._evaluate_disk_quality(report.features, project_root, forward_manifest)
+            self._evaluate_disk_quality(
+                report.features, project_root, forward_manifest,
+                seed_by_id=seed_by_id,
+            )
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
                 f.assembly_delta for f in report.features
@@ -828,17 +831,31 @@ class PrimePostMortemEvaluator:
         features: List[FeaturePostMortem],
         project_root: str,
         forward_manifest: Optional[Any] = None,
+        *,
+        seed_by_id: Optional[Dict[str, Dict]] = None,
     ) -> None:
         """Evaluate disk compliance and compute quality scores for each feature.
 
         Mutates feature objects in-place to add disk_compliance,
         disk_quality_score, and assembly_delta fields.
+
+        Args:
+            seed_by_id: Optional mapping of task_id → seed task dict.
+                When provided, ``import_map`` and sibling file context
+                are extracted and passed to semantic validation.
         """
         try:
             from startd8.forward_manifest_validator import validate_disk_compliance
         except ImportError:
             logger.debug("Disk validation unavailable — skipping")
             return
+
+        # Pre-compute the set of all generated files for sibling resolution.
+        all_generated: List[str] = []
+        for fpm in features:
+            all_generated.extend(
+                fpm.generated_files if fpm.generated_files else fpm.target_files
+            )
 
         for fpm in features:
             # Prefer generated_files (absolute paths to actual output) over
@@ -863,8 +880,25 @@ class PrimePostMortemEvaluator:
                     else:
                         effective_root = project_root
                         effective_file = file_path
+
+                    # Build sibling files for import resolution (same directory)
+                    effective_parent = str(Path(effective_file).parent)
+                    sibling_files = [
+                        f for f in all_generated
+                        if str(Path(f).parent) == effective_parent
+                        and f != effective_file
+                    ]
+
+                    # Extract import_map from seed task if available
+                    import_map = None
+                    if seed_by_id:
+                        seed_task = seed_by_id.get(fpm.feature_id, {})
+                        import_map = seed_task.get("import_map")
+
                     compliance = validate_disk_compliance(
                         effective_file, effective_root, forward_manifest,
+                        sibling_files=sibling_files if sibling_files else None,
+                        import_map=import_map,
                     )
                     fpm.disk_compliance = compliance
 
