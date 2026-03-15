@@ -8,17 +8,17 @@ function signatures).
 """
 
 import ast
-import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Set
 
 from startd8.forward_manifest import ForwardManifest, InterfaceContract, ForwardFileSpec
+from startd8.logging_config import get_logger
 from startd8.utils.manifest_registry import ManifestRegistry, _flatten_elements
 from startd8.utils.code_manifest import ElementKind
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -405,6 +405,13 @@ def validate_disk_compliance(
     # L4: Factory return value check (REQ-SV-501)
     factory_issues = _validate_factory_returns(tree, patterns=factory_patterns)
     result.semantic_issues.extend(factory_issues)
+
+    # L6: Discarded return value detection (REQ-SV-701)
+    discarded_issues = _validate_discarded_returns(tree)
+    result.semantic_issues.extend(discarded_issues)
+
+    # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
+    _emit_semantic_observability(result, file_path, import_map)
 
     # Contract compliance via manifest
     if manifest and file_path in manifest.file_specs:
@@ -797,6 +804,123 @@ def _validate_requirements_coverage(
                 "line": lineno,
                 "symbol": package,
             })
+
+
+# Pure functions whose return value should not be discarded.
+# Only includes functions detectable via AST callee extraction —
+# i.e. the module/object name appears literally in the source code.
+# Instance method calls like d.get() or s.replace() use the variable
+# name, not the type name, so dict.get / str.replace are NOT included.
+_PURE_FUNCTIONS = frozenset({
+    "os.getenv",
+    "os.environ.get",
+    "os.path.join",
+    "os.path.exists",
+    "os.path.dirname",
+    "os.path.basename",
+    "os.path.abspath",
+    "os.path.expanduser",
+})
+
+
+def _validate_discarded_returns(tree: ast.AST) -> List[Dict[str, object]]:
+    """Flag expression statements that discard return values (REQ-SV-701).
+
+    Only flags calls to functions in ``_PURE_FUNCTIONS`` — these are
+    functions whose sole purpose is to return a value.  Side-effect
+    calls like ``print()``, ``list.append()``, and ``logging.*`` are
+    never flagged.
+    """
+    issues: List[Dict[str, object]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Expr):
+            continue
+        if not isinstance(node.value, ast.Call):
+            continue
+
+        callee = _extract_callee_name(node.value)
+        if callee and callee in _PURE_FUNCTIONS:
+            issues.append({
+                "category": "discarded_return",
+                "severity": "warning",
+                "message": f"Return value of '{callee}' is discarded",
+                "line": node.lineno,
+                "symbol": callee,
+            })
+    return issues
+
+
+def _extract_callee_name(call_node: ast.Call) -> Optional[str]:
+    """Extract dotted name from a Call node (e.g. ``os.getenv``)."""
+    func = call_node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        parts: List[str] = []
+        node: Any = func
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+            return ".".join(reversed(parts))
+    return None
+
+
+def _emit_semantic_observability(
+    result: "DiskComplianceResult",
+    file_path: str,
+    import_map: Optional[Dict[str, str]],
+) -> None:
+    """Log semantic issues and set OTel span attributes (REQ-SV-901/902)."""
+    # Loki logging (REQ-SV-902)
+    for issue in result.semantic_issues:
+        if isinstance(issue, dict):
+            logger.warning(
+                "Semantic issue: %s",
+                issue.get("message", str(issue)),
+                extra={
+                    "category": issue.get("category", "unknown"),
+                    "severity": issue.get("severity", "unknown"),
+                    "file_path": file_path,
+                    "line": issue.get("line"),
+                },
+            )
+
+    # OTel span attributes (REQ-SV-901)
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span.is_recording():
+            error_count = sum(
+                1 for i in result.semantic_issues
+                if isinstance(i, dict) and i.get("severity") == "error"
+            )
+            warning_count = sum(
+                1 for i in result.semantic_issues
+                if isinstance(i, dict) and i.get("severity") == "warning"
+            )
+            categories = sorted({
+                i["category"] for i in result.semantic_issues
+                if isinstance(i, dict) and "category" in i
+            })
+            span.set_attribute(
+                "semantic_validation.issues_count",
+                len(result.semantic_issues),
+            )
+            span.set_attribute("semantic_validation.error_count", error_count)
+            span.set_attribute("semantic_validation.warning_count", warning_count)
+            if categories:
+                span.set_attribute(
+                    "semantic_validation.categories", categories,
+                )
+            span.set_attribute(
+                "semantic_validation.import_map_mode",
+                import_map is not None,
+            )
+    except Exception:
+        pass  # OTel is optional — never fail validation for telemetry
 
 
 def _validate_import_resolution(

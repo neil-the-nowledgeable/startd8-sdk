@@ -266,6 +266,18 @@ class FeaturePostMortem:
     disk_quality_score: Optional[float] = None
     assembly_delta: Optional[float] = None
 
+    @property
+    def semantic_issue_summary(self) -> Dict[str, int]:
+        """Category → count mapping for Kaizen trend analysis (REQ-SV-903)."""
+        if not self.disk_compliance:
+            return {}
+        summary: Dict[str, int] = {}
+        for issue in getattr(self.disk_compliance, "semantic_issues", []):
+            if isinstance(issue, dict):
+                cat = issue.get("category", "unknown")
+                summary[cat] = summary.get(cat, 0) + 1
+        return summary
+
 
 @dataclasses.dataclass
 class CrossFeaturePattern:
