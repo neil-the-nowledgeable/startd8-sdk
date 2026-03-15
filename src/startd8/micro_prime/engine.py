@@ -1059,6 +1059,113 @@ def _remove_toplevel_nested_duplicates(
     return "\n".join(lines)
 
 
+def _reorder_forward_references(code: str) -> str:
+    """Reorder top-level statements to resolve forward references in class bodies.
+
+    Python evaluates class bodies at definition time.  If a class body contains
+    bare name references (e.g. ``tasks = {index: 1, setCurrency: 2}``) to
+    module-level functions defined *below* the class, flake8 reports F821 and
+    the code fails at import time in some runtimes.
+
+    This function detects such forward references and moves the referenced
+    functions above the class that uses them, preserving relative order among
+    the moved functions and among the non-moved statements.
+
+    Returns the reordered source code, or the original code unchanged if no
+    reordering was needed or the AST could not be parsed.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code
+
+    lines = code.splitlines(keepends=True)
+
+    # Collect top-level definitions and their line spans
+    top_level: list[tuple[str, str, int, int, ast.AST]] = []  # (kind, name, start, end, node)
+    stmts = list(ast.iter_child_nodes(tree))
+    for i, node in enumerate(stmts):
+        start = node.lineno - 1  # 0-indexed
+        if i + 1 < len(stmts):
+            end = stmts[i + 1].lineno - 1
+        else:
+            end = len(lines)
+        if isinstance(node, ast.ClassDef):
+            top_level.append(("class", node.name, start, end, node))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            top_level.append(("func", node.name, start, end, node))
+        else:
+            top_level.append(("other", "", start, end, node))
+
+    if not top_level:
+        return code
+
+    # For each class, collect bare Name references in the class body
+    # (excluding method bodies — only direct class-level statements)
+    func_names = {name for kind, name, *_ in top_level if kind == "func"}
+    needs_reorder = False
+
+    # Build complete function index first (two-pass: functions may appear
+    # after the class that references them)
+    func_indices: dict[str, int] = {}
+    for idx, (kind, name, *_rest) in enumerate(top_level):
+        if kind == "func":
+            func_indices[name] = idx
+
+    # Map: class index → set of function names it references
+    class_refs: dict[int, set[str]] = {}
+
+    for idx, (kind, name, _start, _end, node) in enumerate(top_level):
+        if kind != "class":
+            continue
+        refs: set[str] = set()
+        for class_stmt in node.body:
+            # Only check direct class-level statements (not inside methods)
+            if isinstance(class_stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for child in ast.walk(class_stmt):
+                if isinstance(child, ast.Name) and child.id in func_names:
+                    refs.add(child.id)
+        if refs:
+            # Check if any referenced function is defined AFTER this class
+            for ref_name in refs:
+                if ref_name in func_indices and func_indices[ref_name] > idx:
+                    needs_reorder = True
+                    break
+            class_refs[idx] = refs
+
+    if not needs_reorder:
+        return code
+
+    # Build reordered statement list: for each class with forward refs,
+    # move the referenced functions to just before that class
+    moved: set[int] = set()
+    result_segments: list[str] = []
+
+    for idx, (kind, name, start, end, node) in enumerate(top_level):
+        if idx in moved:
+            continue
+        if kind == "class" and idx in class_refs:
+            # Insert referenced functions that appear later
+            for ref_name in class_refs[idx]:
+                ref_idx = func_indices.get(ref_name)
+                if ref_idx is not None and ref_idx > idx and ref_idx not in moved:
+                    ref_entry = top_level[ref_idx]
+                    result_segments.append("".join(lines[ref_entry[2]:ref_entry[3]]))
+                    moved.add(ref_idx)
+        result_segments.append("".join(lines[start:end]))
+
+    reordered = "".join(result_segments)
+    # Verify the reordered code still parses
+    try:
+        ast.parse(reordered)
+    except SyntaxError:
+        return code  # reordering broke something — keep original
+
+    logger.info("Reordered %d forward-referenced function(s) above class definition(s)", len(moved))
+    return reordered
+
+
 def _validate_file_whole_result(
     generated_code: str,
     skeleton: str,
@@ -2160,10 +2267,14 @@ class MicroPrimeEngine:
         _fw_state: dict[str, Any] = {"valid": False, "missing": []}
 
         def _validate_file_whole(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
-            valid, reason, missing = _validate_file_whole_result(raw_code, skeleton, file_spec)
+            # Strip markdown fences first, then reorder forward references —
+            # raw LLM output often has ```python fences that prevent ast.parse.
+            cleaned_code = extract_code_from_response(raw_code) or raw_code
+            reordered_code = _reorder_forward_references(cleaned_code)
+            valid, reason, missing = _validate_file_whole_result(reordered_code, skeleton, file_spec)
             if valid:
                 _fw_state.update(valid=True, missing=[])
-                return raw_code, None
+                return reordered_code, None
 
             # Try repair — two-tier strategy
             logger.info(

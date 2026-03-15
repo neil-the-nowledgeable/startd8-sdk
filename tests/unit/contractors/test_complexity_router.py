@@ -7,6 +7,12 @@ Tests cover:
 - _extract_complexity_signals with/without registry
 - Graceful degradation (all 6 scenarios)
 - Backward compatibility (pre-CMR cache, missing metadata)
+
+NOTE: The shared classifier (startd8.complexity.classifier) defaults to
+COMPLEX (not MODERATE) per AC-R3-R7.  The Artisan 3-tier mapping is:
+  TRIVIAL/SIMPLE → TIER_1, MODERATE → TIER_2, COMPLEX → TIER_3.
+Additionally, relaxed SIMPLE (simple_relaxed_enabled=True by default)
+promotes create-mode tasks with blast_radius <= 2 to TIER_1.
 """
 
 from __future__ import annotations
@@ -98,19 +104,19 @@ class TestTaskComplexitySignals:
         d = signals.to_dict()
         assert d["blast_radius"] == 3
         assert d["edit_mode"] == "create"
-        assert len(d) == 11  # All 11 fields
+        assert len(d) == 12  # All 12 fields (includes file_extension)
 
     def test_frozen(self) -> None:
         signals = TaskComplexitySignals()
         with pytest.raises(AttributeError):
             signals.blast_radius = 5  # type: ignore[misc]
 
-    def test_defaults_classify_as_tier2(self) -> None:
-        """Default signals should classify as Tier 2 (current behavior)."""
+    def test_defaults_classify_as_tier3(self) -> None:
+        """Default signals classify as Tier 3 (COMPLEX) per AC-R3-R7."""
         signals = TaskComplexitySignals()
         config = _make_config()
         tier = _classify_complexity_tier(signals, config)
-        assert tier == TaskComplexityTier.TIER_2
+        assert tier == TaskComplexityTier.TIER_3
 
 
 # ============================================================================
@@ -126,9 +132,11 @@ class TestClassifyTier3:
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_blast_radius_at_threshold(self) -> None:
-        """blast_radius == 5 is NOT Tier 3 (must exceed threshold)."""
+        """blast_radius == 5 does NOT fire the blast_radius COMPLEX trigger,
+        but still classifies as TIER_3 via the default (AC-R3-R7)."""
         signals = TaskComplexitySignals(blast_radius=5)
-        assert _classify_complexity_tier(signals, _make_config()) != TaskComplexityTier.TIER_3
+        # No COMPLEX trigger fires, but the default is COMPLEX
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_dynamic_dispatch(self) -> None:
         signals = TaskComplexitySignals(has_dynamic_dispatch=True)
@@ -138,19 +146,24 @@ class TestClassifyTier3:
         signals = TaskComplexitySignals(caller_count=4, edit_mode="edit")
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_high_caller_count_create_mode_not_tier3(self) -> None:
-        """caller_count > 3 in create mode does NOT trigger Tier 3."""
+    def test_high_caller_count_create_mode_not_trigger(self) -> None:
+        """caller_count > 3 in create mode does NOT fire the caller COMPLEX
+        trigger, but falls through to default COMPLEX (TIER_3).
+        Relaxed SIMPLE doesn't apply: caller_count > 0."""
         signals = TaskComplexitySignals(caller_count=4, edit_mode="create")
         tier = _classify_complexity_tier(signals, _make_config())
-        assert tier != TaskComplexityTier.TIER_3
+        # Still TIER_3 via default — caller_count blocks SIMPLE
+        assert tier == TaskComplexityTier.TIER_3
 
     def test_deep_mro(self) -> None:
         signals = TaskComplexitySignals(mro_depth=4)
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_mro_at_threshold_not_tier3(self) -> None:
+    def test_mro_at_threshold_not_trigger(self) -> None:
+        """mro_depth == 3 does NOT fire the MRO COMPLEX trigger,
+        but still classifies as TIER_3 via the default."""
         signals = TaskComplexitySignals(mro_depth=3)
-        assert _classify_complexity_tier(signals, _make_config()) != TaskComplexityTier.TIER_3
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_unresolved_calls(self) -> None:
         signals = TaskComplexitySignals(unresolved_call_count=3)
@@ -160,18 +173,22 @@ class TestClassifyTier3:
         signals = TaskComplexitySignals(estimated_loc=501)
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_loc_at_threshold_not_tier3(self) -> None:
+    def test_loc_at_threshold_not_trigger(self) -> None:
+        """estimated_loc == 500 does NOT fire the LOC COMPLEX trigger,
+        but still classifies as TIER_3 via the default."""
         signals = TaskComplexitySignals(estimated_loc=500)
-        assert _classify_complexity_tier(signals, _make_config()) != TaskComplexityTier.TIER_3
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_multi_file_with_cross_edges(self) -> None:
         signals = TaskComplexitySignals(target_file_count=2, has_cross_file_edges=True)
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_multi_file_without_cross_edges_not_tier3(self) -> None:
+    def test_multi_file_without_cross_edges_not_trigger(self) -> None:
+        """Multi-file without cross edges does NOT fire the cross-file COMPLEX
+        trigger, but target_file_count > 1 blocks SIMPLE → default COMPLEX."""
         signals = TaskComplexitySignals(target_file_count=2, has_cross_file_edges=False)
         tier = _classify_complexity_tier(signals, _make_config())
-        assert tier != TaskComplexityTier.TIER_3
+        assert tier == TaskComplexityTier.TIER_3
 
 
 # ============================================================================
@@ -194,7 +211,21 @@ class TestClassifyTier1:
         )
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_1
 
+    def test_relaxed_simple_greenfield(self) -> None:
+        """Relaxed SIMPLE: create-mode, small blast_radius, no manifest
+        coverage — still qualifies as TIER_1 per Kaizen run-017."""
+        signals = TaskComplexitySignals(
+            blast_radius=1,
+            edit_mode="create",
+            caller_count=0,
+            estimated_loc=100,
+            target_file_count=1,
+            manifest_coverage="none",
+        )
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_1
+
     def test_edit_mode_blocks_tier1(self) -> None:
+        """edit mode blocks both strict and relaxed SIMPLE → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="edit",
@@ -202,10 +233,10 @@ class TestClassifyTier1:
             estimated_loc=100,
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_unknown_edit_mode_blocks_tier1(self) -> None:
-        """REQ-CMR-014: unknown edit mode disqualifies from Tier 1."""
+        """REQ-CMR-014: unknown edit mode disqualifies from Tier 1 → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="unknown",
@@ -213,9 +244,11 @@ class TestClassifyTier1:
             estimated_loc=100,
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_nonzero_blast_radius_blocks_tier1(self) -> None:
+    def test_nonzero_blast_radius_relaxed_simple(self) -> None:
+        """blast_radius=1 in create mode qualifies for relaxed SIMPLE (TIER_1)
+        when blast_radius <= simple_relaxed_blast_radius_max (default: 2)."""
         signals = TaskComplexitySignals(
             blast_radius=1,
             edit_mode="create",
@@ -223,9 +256,21 @@ class TestClassifyTier1:
             estimated_loc=100,
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_1
+
+    def test_high_blast_radius_blocks_relaxed_simple(self) -> None:
+        """blast_radius=3 exceeds relaxed threshold (2) → default COMPLEX."""
+        signals = TaskComplexitySignals(
+            blast_radius=3,
+            edit_mode="create",
+            caller_count=0,
+            estimated_loc=100,
+            target_file_count=1,
+        )
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_callers_block_tier1(self) -> None:
+        """caller_count > 0 blocks both strict and relaxed SIMPLE → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="create",
@@ -233,10 +278,10 @@ class TestClassifyTier1:
             estimated_loc=100,
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_loc_at_threshold_blocks_tier1(self) -> None:
-        """estimated_loc >= 150 blocks Tier 1 (must be strictly less)."""
+        """estimated_loc >= 150 blocks Tier 1 (must be strictly less) → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="create",
@@ -244,9 +289,10 @@ class TestClassifyTier1:
             estimated_loc=150,
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_multi_file_blocks_tier1(self) -> None:
+        """target_file_count > 1 blocks SIMPLE → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="create",
@@ -254,7 +300,7 @@ class TestClassifyTier1:
             estimated_loc=50,
             target_file_count=2,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_dynamic_dispatch_blocks_tier1(self) -> None:
         """has_dynamic_dispatch fires Tier 3 before Tier 1 check."""
@@ -279,8 +325,11 @@ class TestClassifyThresholdOverrides:
 
     def test_custom_blast_radius_threshold(self) -> None:
         config = _make_config(complexity_blast_radius_tier3=10)
+        # blast_radius=8 is below custom threshold (10), doesn't trigger COMPLEX
+        # but still defaults to COMPLEX (TIER_3)
         signals = TaskComplexitySignals(blast_radius=8)
-        assert _classify_complexity_tier(signals, config) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, config) == TaskComplexityTier.TIER_3
+        # blast_radius=11 exceeds threshold — explicitly TIER_3
         signals2 = TaskComplexitySignals(blast_radius=11)
         assert _classify_complexity_tier(signals2, config) == TaskComplexityTier.TIER_3
 
@@ -303,8 +352,11 @@ class TestClassifyThresholdOverrides:
 
     def test_custom_caller_tier3(self) -> None:
         config = _make_config(complexity_caller_tier3=5)
+        # caller_count=4 is below custom threshold (5) in edit mode —
+        # doesn't fire caller COMPLEX trigger, defaults to COMPLEX (TIER_3)
         signals = TaskComplexitySignals(caller_count=4, edit_mode="edit")
-        assert _classify_complexity_tier(signals, config) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, config) == TaskComplexityTier.TIER_3
+        # caller_count=6 exceeds threshold — explicitly TIER_3
         signals2 = TaskComplexitySignals(caller_count=6, edit_mode="edit")
         assert _classify_complexity_tier(signals2, config) == TaskComplexityTier.TIER_3
 
@@ -414,12 +466,20 @@ class TestExtractComplexitySignals:
 class TestGracefulDegradation:
     """All 6 degradation scenarios from the requirements."""
 
-    def test_registry_none_defaults_tier2(self) -> None:
-        """ManifestRegistry is None → all defaults → Tier 2."""
+    def test_registry_none_create_mode_relaxed_simple(self) -> None:
+        """ManifestRegistry is None, create mode → relaxed SIMPLE (TIER_1).
+        blast_radius=0 + create + no callers qualifies for relaxed SIMPLE."""
         chunk = FakeChunk(metadata={"_edit_mode": {"mode": "create"}})
         signals = _extract_complexity_signals(chunk, None)
         tier = _classify_complexity_tier(signals, _make_config())
-        assert tier == TaskComplexityTier.TIER_2
+        assert tier == TaskComplexityTier.TIER_1
+
+    def test_registry_none_unknown_mode_defaults_complex(self) -> None:
+        """ManifestRegistry is None, unknown edit_mode → default COMPLEX."""
+        chunk = FakeChunk()
+        signals = _extract_complexity_signals(chunk, None)
+        tier = _classify_complexity_tier(signals, _make_config())
+        assert tier == TaskComplexityTier.TIER_3
 
     def test_routing_disabled_via_config(self) -> None:
         """complexity_routing_enabled=False → classification not called."""
@@ -429,7 +489,7 @@ class TestGracefulDegradation:
         assert config.complexity_routing_enabled is False
 
     def test_missing_edit_mode_blocks_tier1(self) -> None:
-        """edit_mode missing → treated as 'unknown' → blocks Tier 1."""
+        """edit_mode missing → treated as 'unknown' → blocks Tier 1 → default COMPLEX."""
         signals = TaskComplexitySignals(
             blast_radius=0,
             edit_mode="unknown",
@@ -438,7 +498,7 @@ class TestGracefulDegradation:
             target_file_count=1,
         )
         tier = _classify_complexity_tier(signals, _make_config())
-        assert tier == TaskComplexityTier.TIER_2
+        assert tier == TaskComplexityTier.TIER_3
 
     def test_default_metadata_absent(self) -> None:
         """Pre-CMR chunks have no _complexity_tier → default 'tier_2'."""
@@ -495,8 +555,9 @@ class TestCombinedSignals:
         )
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
-    def test_borderline_tier2(self) -> None:
-        """Signals that don't qualify for Tier 1 or Tier 3 → Tier 2."""
+    def test_borderline_defaults_to_complex(self) -> None:
+        """Signals that don't qualify for SIMPLE or fire a COMPLEX trigger
+        default to COMPLEX (TIER_3) per AC-R3-R7."""
         signals = TaskComplexitySignals(
             blast_radius=2,  # nonzero but <= 5
             edit_mode="edit",
@@ -504,14 +565,16 @@ class TestCombinedSignals:
             estimated_loc=200,  # > 150 but <= 500
             target_file_count=1,
         )
-        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_2
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
 
     def test_unknown_edit_mode_not_tier3_caller_rule(self) -> None:
-        """REQ-CMR-014: unknown edit mode does NOT trigger Tier 3 caller rule."""
+        """REQ-CMR-014: unknown edit mode does NOT fire Tier 3 caller rule,
+        but falls through to default COMPLEX (TIER_3)."""
         signals = TaskComplexitySignals(
             caller_count=10,
             edit_mode="unknown",
         )
         tier = _classify_complexity_tier(signals, _make_config())
-        # caller_count > 3 requires edit_mode == "edit" for Tier 3
-        assert tier != TaskComplexityTier.TIER_3
+        # caller_count > 3 requires edit_mode == "edit" for the trigger,
+        # but the default is COMPLEX regardless
+        assert tier == TaskComplexityTier.TIER_3

@@ -254,6 +254,7 @@ class TestE2EWithMockOllama:
             'def get_greeting(name: str) -> str:\n    return f"Hello, {name}!"',
             80,
             40,
+            "stop",
         )
 
         config = MicroPrimeConfig(templates_enabled=True)

@@ -451,7 +451,7 @@ class TestEngineIntegration:
         # Mock Ollama to return code
         with patch.object(
             engine, "_generate_ollama", autospec=True,
-            return_value=("return True", 10, 5),
+            return_value=("return True", 10, 5, "stop"),
         ) as mock_ollama:
             result = engine._handle_simple(
                 element, file_spec,

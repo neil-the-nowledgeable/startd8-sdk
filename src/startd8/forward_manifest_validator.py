@@ -343,8 +343,9 @@ def validate_disk_compliance(
         result.error = "file_not_found"
         return result
 
+    # Non-Python file validators (KZ-Q4)
     if abs_path.suffix != ".py":
-        return result
+        return _validate_non_python_file(abs_path, result)
 
     try:
         source = abs_path.read_text(encoding="utf-8")
@@ -392,6 +393,150 @@ def validate_disk_compliance(
             )
             result.import_completeness = matched / len(spec.imports)
 
+    return result
+
+
+def _validate_non_python_file(
+    abs_path: Path,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Lightweight validators for non-Python files (KZ-Q4).
+
+    Prevents false-positive 1.0 scores on files like ``requirements.in``
+    that contain function names instead of packages, or malformed
+    Dockerfiles/YAML/JSON.
+    """
+    try:
+        content = abs_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        result.ast_valid = False
+        result.error = f"read_error: {exc}"
+        return result
+
+    suffix = abs_path.suffix.lower()
+    name = abs_path.name.lower()
+
+    if suffix == ".in" or name == "requirements.txt":
+        result = _validate_requirements_file(content, result)
+    elif name == "dockerfile" or name.startswith("dockerfile."):
+        result = _validate_dockerfile(content, result)
+    elif suffix in (".yaml", ".yml"):
+        result = _validate_yaml_file(content, result)
+    elif suffix == ".json":
+        result = _validate_json_file(content, result)
+    # HTML, Markdown, etc. — no validator, keep defaults (1.0)
+
+    return result
+
+
+def _validate_requirements_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate pip requirements format.
+
+    Each non-empty, non-comment line must look like a valid package
+    specifier: alphanumeric with hyphens/underscores/dots, optionally
+    followed by extras or version constraints.  Lines like ``setCurrency``
+    or ``browseProduct`` that are Python identifiers but not on PyPI are
+    caught by checking for CamelCase or known non-package patterns.
+    """
+    import re
+
+    # PEP 508 package name: letter/digit, hyphens, underscores, dots
+    _PKG_RE = re.compile(
+        r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(\[.*\])?\s*(~=|==|!=|>=|<=|>|<|===)?",
+    )
+    # Bare camelCase identifier with no version specifier — likely a function name
+    _CAMEL_BARE_RE = re.compile(r"^[a-z]+[A-Z][a-zA-Z]*$")
+
+    issues: list = []
+    lines = [
+        line.strip() for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+        and not line.strip().startswith("-")  # pip flags like -e, --index-url
+    ]
+
+    for line in lines:
+        # Strip inline comments
+        spec = line.split("#")[0].strip()
+        if not spec:
+            continue
+        if _CAMEL_BARE_RE.match(spec):
+            issues.append(f"camelCase identifier (not a package): {spec}")
+        elif not _PKG_RE.match(spec):
+            issues.append(f"invalid package specifier: {spec}")
+
+    if issues:
+        # Scale contract_compliance by fraction of valid lines
+        valid_count = len(lines) - len(issues)
+        result.contract_compliance = max(0.0, valid_count / len(lines)) if lines else 0.0
+        result.semantic_issues = issues
+        result.error = f"{len(issues)} invalid package specifier(s)"
+
+    return result
+
+
+def _validate_dockerfile(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate that a Dockerfile has required directives."""
+    import re
+
+    lines = content.splitlines()
+    directives_found: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            match = re.match(r"^([A-Z]+)\s", stripped)
+            if match:
+                directives_found.add(match.group(1))
+
+    required = {"FROM"}
+    # A valid Dockerfile needs at least FROM
+    missing = required - directives_found
+    if missing:
+        result.ast_valid = False
+        result.error = f"missing Dockerfile directive(s): {', '.join(sorted(missing))}"
+        result.contract_compliance = 0.0
+    elif not (directives_found & {"CMD", "ENTRYPOINT"}):
+        # Warning: no entrypoint defined
+        result.semantic_issues = ["no CMD or ENTRYPOINT directive"]
+        result.contract_compliance = 0.8
+
+    return result
+
+
+def _validate_yaml_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate YAML syntax."""
+    try:
+        import yaml
+        yaml.safe_load(content)
+    except ImportError:
+        pass  # PyYAML not installed — skip
+    except yaml.YAMLError as exc:
+        result.ast_valid = False
+        result.error = f"yaml_error: {exc}"
+        result.contract_compliance = 0.0
+    return result
+
+
+def _validate_json_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate JSON syntax."""
+    import json as _json
+    try:
+        _json.loads(content)
+    except _json.JSONDecodeError as exc:
+        result.ast_valid = False
+        result.error = f"json_error: {exc}"
+        result.contract_compliance = 0.0
     return result
 
 

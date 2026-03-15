@@ -320,6 +320,14 @@ prompts:
       - min_lines
       - edit_min_pct
 
+  spec_create_preamble:
+    description: "Create-mode spec preamble (PC-F3)"
+    template: |
+      ## CREATE MODE — New Implementation
+      **Task type: Implement** this specification from scratch.
+
+    placeholders: []
+
   available_imports:
     description: "Available imports section for spec — reduces post-generation import repair"
     template: |
@@ -375,9 +383,10 @@ prompts:
       - file_checklist
 
   single_file_edit_output:
-    description: "Output format for single-file edit tasks"
+    description: "Output format for single-file edit tasks (PC-Q2)"
     template: |
       Output the COMPLETE modified file ({existing_line_count} lines original).
+      Your draft must be AT LEAST {min_output_lines} lines ({min_pct}% of existing).
       Do NOT omit or abbreviate existing code.
     placeholders:
       - existing_line_count

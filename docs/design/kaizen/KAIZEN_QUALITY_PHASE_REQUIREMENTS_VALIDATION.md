@@ -178,3 +178,43 @@ The implementation satisfies the plan's stated goals. Gaps are low-severity and 
 - New capabilities need formal REQ-KZ IDs
 
 The broader REQ-KZ requirements (Layers 1-6) are partially addressed — Phases A-E cover the SDK-side quality measurement shift. Pipeline orchestration requirements (REQ-KZ-100–102, 400–402, 500, 502–504) remain in cap-dev-pipe scope and were not part of this implementation.
+
+---
+
+## 8. Post-Validation Findings (2026-03-14)
+
+Run-046 post-mortem analysis uncovered two bugs and identified follow-on quality work items.
+
+### 8.1 Bugs Found and Fixed
+
+| Bug | Severity | Root Cause | Fix | Commit |
+|-----|----------|-----------|-----|--------|
+| **ForwardManifest type mismatch** | Critical | `_compute_manifest_coverage()` called `.get()` on a Pydantic `ForwardManifest` (no `.get()` method). `AttributeError` silently caught → `manifest_coverage` always `"none"` → all Python tasks classified COMPLEX → MicroPrime bypassed entirely. | Check `file_specs` attribute first (Pydantic path), fall back to `.get()` (dict path). | `1056e1a` |
+| **Non-Python edit-mode line inflation** | High | `build_output_format()` and `build_spec_prompt()` computed `total_lines` from ALL existing context files, not just target files. PI-015 (requirements.in, 8 lines) got "AT LEAST 220 lines" (from 275-line Python siblings). LLM padded with reasoning prose. Postmortem scored 1.00 (false positive — non-Python files skip validation). | Option A: skip min-lines for non-Python targets. Option B: `_target_file_lines()` computes from targets only. | `1056e1a` |
+
+### 8.2 Tracked Quality Work Items
+
+These items depend on production data from MicroPrime runs with the routing fix active. Priority ordering assumes the first real MicroPrime run has completed.
+
+| ID | Item | Prereq | Priority | Status |
+|----|------|--------|----------|--------|
+| **KZ-Q1** | **bare_statement_wrap reduction** — 69% repair rate unchanged by prompt rewrite. Test (a) BEGIN CODE delimiter for structured output anchoring, (b) remove `# Available imports` section from element prompts to eliminate echo source. A/B test via eval harness. | Expanded corpus (47+ entries) | P1 | NOT STARTED |
+| **KZ-Q2** | **Two-pass file-whole generation** — current path: file-whole → element-by-element decomposition on failure. Missing middle ground: re-prompt file-whole with "fix these specific stubs" for unfilled elements. Architecturally straightforward per Agent Communication Design Pattern 1 (sequential pipeline with transform). | First production MicroPrime run data | P2 | NOT STARTED |
+| **KZ-Q3** | **Fill rate threshold tuning** — `min_element_fill_rate=0.5` (50%) is generous. Track actual production fill rates; if most files are 80%+, tighten to 0.7 to catch degenerate outputs earlier. | First production MicroPrime run data | P2 | NOT STARTED |
+| **KZ-Q4** | **Non-Python file format validation** — postmortem scores non-Python files 1.00 by default (`.py` suffix guard skips all validation). Add lightweight validators: pip format check for `.in`, YAML parse for `.yaml`, JSON parse for `.json`, Dockerfile syntax for `Dockerfile`. | None | P2 | NOT STARTED |
+| **KZ-Q5** | **Corpus expansion to 100+** — current: 47 entries (39 synthetic + 8 mined from online-boutique). Target: 100+ with 5+ samples per archetype. Sources: (a) `grow_eval_corpus.py --generate` for synthetic candidates, (b) `mine_corpus_from_manifest.py` for additional projects with seeds, (c) `grow_eval_corpus.py --ingest` for production run outputs. | Additional project seeds or production runs | P1 | IN PROGRESS (47/100) |
+| **KZ-Q6** | **Kaizen correlation data density** — 71% of data points unlabeled (113/159 `not_executed`). Only 46 labeled points with weak signals (ρ=0.22 max). Routing fix will increase labeled data volume as MicroPrime handles SIMPLE tasks. Monitor after 3+ runs. | Routing fix deployed + 3 runs | P2 | BLOCKED (awaiting data) |
+
+### 8.3 Eval Harness Baseline (2026-03-13)
+
+7 configurations tested on 39-entry corpus (79 elements × 2-3 runs each):
+
+| Config | Syntax | Semantic | Composite | Pass Rate | Notes |
+|--------|--------|----------|-----------|-----------|-------|
+| baseline (v1, pre-rewrite) | 97.5% | 1.94/3 | 0.730 | 57.0% | Old `#`-comment prompts |
+| **baseline-v4 (post-rewrite)** | **97.5%** | **2.08/3** | **0.756** | **67.1%** | Structured FORMAT/IMPORTS/SCOPE headers — **shipped** |
+| qwen2.5-coder:14b | 97.5% | 1.87/3 | 0.723 | 55.1% | Larger model, not better than tuned 7b |
+| temp=0.0 | 97.5% | 1.95/3 | 0.734 | 57.0% | Greedy ≈ temp 0.1 |
+| temp=0.2 | 98.1% | 1.94/3 | 0.734 | 56.3% | Higher temp ≈ same |
+
+Key findings: prompt engineering (+10pp pass rate) > model size (14b worse than tuned 7b) > temperature (irrelevant). Repair rate (37%) was constant across all configs — repairs catch structural issues (fences, indentation) that are model-level, not prompt-level.

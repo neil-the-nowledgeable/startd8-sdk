@@ -46,10 +46,11 @@
 ### Research Tasks
 - [x] A/B test positive-only vs negative-heavy instructions on 30 elements — measure repair rate *(initial rewrite shipped 2026-03-13: `_ELEMENT_BODY_SYSTEM_PROMPT` and `_FILE_WHOLE_SYSTEM_PROMPT` rewritten with structured FORMAT/IMPORTS/SCOPE headers and positive framing. A/B validation pending via eval harness.)*
 - [ ] A/B test instructions-first vs instructions-last prompt ordering
-- [ ] Measure import echoing rate with and without the `# Available imports` section
+- [ ] Measure import echoing rate with and without the `# Available imports` section *(KZ-Q1: this is the primary suspect for the 69% bare_statement_wrap repair rate — removing available imports may reduce echoing more than it increases hallucinated imports)*
 - [ ] Test line count hint removal — does output length variance increase? Does correctness change?
 - [ ] Prototype JSON-mode generation (`{"code": "..."}`) and measure fence contamination rate vs current approach
 - [ ] Test whether 4 vs 8 instruction lines changes compliance rate
+- [ ] Test structured output delimiter: `"Start your output with: # --- BEGIN CODE ---"` + post-strip — gives model a concrete anchor point to separate reasoning from code output *(KZ-Q1: alternative approach to reducing bare_statement_wrap)*
 
 ---
 
@@ -67,7 +68,8 @@
 - [ ] Compare skeleton-based vs spec-based file-whole on 20 files
 - [ ] Track nested duplicate rate before and after the system prompt fix
 - [ ] Categorize file-whole failures by archetype to identify weak spots
-- [ ] Prototype two-pass generation: full file → targeted re-generation of unfilled stubs
+- [ ] Prototype two-pass generation: full file → targeted re-generation of unfilled stubs *(KZ-Q2: current fallback jumps file-whole → element-by-element decomposition, skipping the middle ground. Two-pass: generate → AST-check for remaining stubs → re-prompt with "fix these N stubs" instruction. Architecturally straightforward per Agent Communication Design Pattern 1.)*
+- [ ] Tune `min_element_fill_rate` threshold — current 0.5 (50%) is generous. After first production MicroPrime runs, analyze actual fill rate distribution and tighten to 0.7 if median is 80%+ *(KZ-Q3)*
 
 ---
 
@@ -158,6 +160,9 @@
 - [x] Prototype an automated evaluation harness: run generation → score → report *(done 2026-03-13: `scripts/run_eval_ollama.py` — --model, --mode, --repeat N, --dry-run, --output, --temperature, per-tier breakdown, multi-run statistics)*
 - [ ] Determine minimum corpus size for 95% confidence in A/B comparisons (likely 30-50 elements per arm)
 - [ ] Evaluate LLM-as-judge (Haiku scoring Ollama output) vs rule-based scoring cost/accuracy tradeoff
+- [x] Expand corpus with production archetypes *(done 2026-03-14: `scripts/mine_corpus_from_manifest.py` mines entries from ForwardManifest + on-disk source. 8 online-boutique entries added — gRPC services, logging modules, load test, Flask routes. Corpus: 39→47. Target: 100+. See KZ-Q5.)*
+- [ ] Mine additional project seeds (contextcore-demo-retail, wayfinder) once plan ingestion produces manifests for them
+- [ ] Use `grow_eval_corpus.py --ingest` on production MicroPrime outputs after routing fix deploys
 
 ---
 
@@ -171,7 +176,7 @@
 - Does Ollama's `keep_alive` parameter (model caching) affect quality, or only cold-start latency?
 
 ### Research Tasks
-- [x] Add `num_ctx: 8192` to Modelfile and verify file-whole prompts fit within context *(done in Modelfile.startd8-coder)*
+- [x] Add `num_ctx: 8192` to Modelfile and verify file-whole prompts fit within context *(done in Modelfile.startd8-coder; confirmed active 2026-03-14 via `ollama show startd8-coder --modelfile`. Note: num_ctx is NOT sent per-call — the OpenAI-compatible `/v1/chat/completions` endpoint doesn't support it. It's baked into the model via the Modelfile and applies as a server-side default.)*
 - [ ] Test with `OLLAMA_DEBUG=1` on 10 generations — extract token-level log probabilities for quality analysis
 - [ ] Measure cold-start vs warm-model quality (is there a JIT/compilation effect on first run?)
 
@@ -217,10 +222,14 @@
 3. ~~Build the evaluation framework (P0)~~ — *done 2026-03-13: eval_scoring.py + corpus.json + run_eval_ollama.py*
 4. ~~Rewrite system prompts (P1)~~ — *done 2026-03-13: positive framing, structured headers, repair-informed import/fence guidance*
 5. ~~Strip dead Modelfile config~~ — *done 2026-03-13: SYSTEM, temperature, top_p, top_k, num_predict, stops removed (all overridden by API)*
-6. **Rebuild Ollama model** — `ollama create startd8-coder -f Modelfile.startd8-coder` to apply repeat_penalty/repeat_last_n changes
-7. **Run baseline evaluation** — `python3 scripts/run_eval_ollama.py --repeat 3 --output results/baseline.json` to establish pre-improvement baseline
-8. **A/B validate prompt rewrite** — compare old vs new system prompt on the golden corpus
-9. Run model comparison benchmarks (P1) — determine if a model upgrade is the fastest path
+6. ~~Verify num_ctx=8192 applied~~ — *confirmed 2026-03-14: `ollama show startd8-coder --modelfile` shows `PARAMETER num_ctx 8192`. Not sent per-call (OpenAI-compatible API doesn't support it) but baked into model via Modelfile.*
+7. ~~Fix ForwardManifest routing~~ — *done 2026-03-14: `_compute_manifest_coverage()` type mismatch — `.get()` on Pydantic model → silent `AttributeError` → 100% of Python tasks misrouted to cloud. Commit `1056e1a`.*
+8. ~~Expand corpus with production archetypes~~ — *done 2026-03-14: 8 online-boutique entries (gRPC, Flask, locust, logging). 39→47 entries.*
+9. **Run first production MicroPrime batch** — with routing fix active, run online-boutique `--fresh --all` to get baseline data on real MicroPrime utilization, fill rates, and escalation patterns
+10. **A/B test bare_statement_wrap reduction (KZ-Q1)** — test (a) BEGIN CODE delimiter, (b) remove Available imports section on expanded corpus
+11. **Prototype two-pass file-whole (KZ-Q2)** — generate → AST-check stubs → re-prompt targeted
+12. **Tune fill rate threshold (KZ-Q3)** — analyze production fill rates, tighten from 0.5 → 0.7 if justified
+13. Run model comparison benchmarks (P1) — determine if a model upgrade is the fastest path
 
 ---
 

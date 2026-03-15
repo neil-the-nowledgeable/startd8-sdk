@@ -104,7 +104,9 @@ def _reconstruct_queue_state(result_dict: dict) -> dict:
             "status": "complete" if entry.get("success") else "failed",
             "error_message": entry.get("error", ""),
             "target_files": entry.get("target_files", []),
-            "generated_files": entry.get("generated_files", []),
+            # History entries use "files" for generated output paths;
+            # prefer explicit "generated_files" but fall back to "files".
+            "generated_files": entry.get("generated_files") or entry.get("files", []),
         }
     return queue_state
 

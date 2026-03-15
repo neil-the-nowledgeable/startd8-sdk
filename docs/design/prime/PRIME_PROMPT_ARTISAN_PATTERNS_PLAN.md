@@ -133,6 +133,10 @@ Adopt seven proven patterns from the Artisan IMPLEMENT phase to improve Prime Co
 ### 4.4 Deliverables
 
 - [x] `lead_contractor_workflow.py` — framing logic in `_build_spec_plan_section()`, `_build_spec_arch_section()`, edit preamble
+- [x] `implementation_engine/spec_builder.py` — create-mode preamble (`spec_create_preamble`), plan/arch framing via `build_spec_plan_section`, `build_spec_arch_section` with `is_edit`
+- [x] `implementation_engine/drafter.py` — `build_output_format()` with `edit_min_pct`, min lines for edit mode (single- and multi-file)
+- [x] `contractors/prime_contractor.py` — `edit_min_pct` from `gen_context` passed to `build_output_format()` in `_build_prompts_for_feature()` and `_write_walkthrough_prompts()`
+- [x] `implementation_engine/prompts/contractor_prompts.yaml` — `spec_create_preamble`, `single_file_edit_output` with min lines
 - [x] Unit tests for framing and quantitative constraints
 
 ### 4.5 Exit Criteria

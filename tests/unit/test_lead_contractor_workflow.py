@@ -671,6 +671,31 @@ class TestSpecPromptPhase2:
         assert "90 lines" in prompt
         assert "90%" in prompt
 
+    def test_create_mode_has_implement_preamble(self):
+        """PC-F3: Create mode has 'Implement' task verb in preamble."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {"plan_context": "Implement feature X from scratch."}
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "Implement" in prompt
+        assert "CREATE MODE" in prompt or "Task type: Implement" in prompt
+
+    def test_build_output_format_edit_includes_min_lines(self):
+        """PC-Q2: build_output_format passes min_output_lines for edit mode."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
+
+        content_100 = "\n".join([f"line {i}" for i in range(100)])
+        result = _build_output_format(
+            ["src/foo.py"],
+            existing_files={"src/foo.py": content_100},
+            edit_min_pct=80,
+        )
+        assert "100 lines" in result or "100" in result
+        assert "80 lines" in result or "80" in result
+        assert "80%" in result
+
 
 class TestPhase4YAMLExternalization:
     """Phase 4 tests: YAML externalization, fallback (PC-Y1..Y4, AC-5)."""
@@ -721,6 +746,7 @@ class TestPhase4YAMLExternalization:
             "arch_context_edit_framing",
             "spec_edit_preamble_base",
             "spec_edit_quantitative_constraint",
+            "spec_create_preamble",
             "spec_completeness_warning",
         ]
         for name in templates:

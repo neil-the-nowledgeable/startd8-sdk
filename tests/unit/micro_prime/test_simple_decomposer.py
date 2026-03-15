@@ -269,7 +269,7 @@ class TestTemplateShortCircuit:
         # Mock _generate_ollama to avoid actual Ollama calls
         with mock.patch.object(
             engine, "_generate_ollama", autospec=True,
-            return_value=("return x * 2", 10, 5),
+            return_value=("return x * 2", 10, 5, "stop"),
         ):
             result = engine._handle_simple(
                 element=element,

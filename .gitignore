@@ -129,6 +129,18 @@ startd8-mixin/generated/
 startd8-mixin/jsonnetfile.lock.json
 
 # ---------------------------------------------------------------------------
+# Claude Code session data
+# ---------------------------------------------------------------------------
+.claude/
+
+# ---------------------------------------------------------------------------
+# Runtime artifacts (postmortem reports, scratch notes)
+# ---------------------------------------------------------------------------
+prime-postmortem-report.json
+prime-postmortem-summary.md
+notes/
+
+# ---------------------------------------------------------------------------
 # Capability delivery pipeline (symlinked from ~/Documents/dev/cap-dev-pipe)
 # ---------------------------------------------------------------------------
 .cap-dev-pipe/

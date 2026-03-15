@@ -90,12 +90,6 @@ class PricingService:
             input_cost_per_million=1.0,
             output_cost_per_million=5.0
         ),
-        "claude-haiku-4-5-20251001": ModelPricing(
-            model="claude-haiku-4-5-20251001",
-            provider="anthropic",
-            input_cost_per_million=1.0,
-            output_cost_per_million=5.0
-        ),
         # Anthropic Claude 4.x family
         "claude-opus-4-1-20250805": ModelPricing(
             model="claude-opus-4-1-20250805",

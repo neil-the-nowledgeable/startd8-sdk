@@ -16,7 +16,9 @@ Usage:
 from __future__ import annotations
 
 import ast
+import re
 import sys
+from pathlib import PurePosixPath
 from typing import Optional
 
 from startd8.implementation_engine.package_aliases import import_to_pypi
@@ -44,6 +46,59 @@ _LOCAL_IMPORT_PATTERNS = frozenset({
     ".", "..",
 })
 
+# Regex for protobuf/gRPC generated stubs (e.g., demo_pb2, demo_pb2_grpc).
+# These are generated at build time by grpc_tools.protoc and are never
+# installable pip packages.
+_PROTOBUF_STUB_RE = re.compile(r"^[a-zA-Z_]\w*_pb2(_grpc)?$")
+
+
+def _build_local_module_names(python_files: dict[str, str]) -> frozenset[str]:
+    """Derive local module names from the file paths in the project.
+
+    A file ``emailservice/logger.py`` produces the local module name
+    ``logger``.  A file ``emailservice/email_server.py`` produces
+    ``email_server``.  These are NOT pip-installable packages.
+
+    Also includes directory names (packages) derived from paths with
+    multiple segments — e.g., ``recommendationservice/foo/bar.py``
+    adds ``recommendationservice`` as a local package.
+    """
+    local: set[str] = set()
+    for file_path in python_files:
+        if not file_path.endswith(".py"):
+            continue
+        p = PurePosixPath(file_path)
+        # The stem of the .py file is a local module (e.g., logger.py → logger)
+        local.add(p.stem)
+        # If the file is nested (e.g., recommendationservice/server.py),
+        # the top-level directory is also a local package
+        parts = p.parts
+        if len(parts) >= 2:
+            local.add(parts[0])
+    return frozenset(local)
+
+
+def _is_local_or_generated(
+    module_name: str, local_modules: frozenset[str]
+) -> bool:
+    """Return True if *module_name* is a local/generated module, not a pip package.
+
+    Catches:
+    - Protobuf stubs (``*_pb2``, ``*_pb2_grpc``)
+    - Sibling Python modules (files in the same service directory)
+    """
+    top_level = module_name.split(".")[0]
+
+    # Protobuf / gRPC generated stubs
+    if _PROTOBUF_STUB_RE.match(top_level):
+        return True
+
+    # Local project module (sibling .py file or subdirectory)
+    if top_level in local_modules:
+        return True
+
+    return False
+
 
 def generate_requirements_in(
     python_files: dict[str, str],
@@ -62,6 +117,7 @@ def generate_requirements_in(
         Contents for a requirements.in file (one package per line,
         sorted, no version pins).
     """
+    local_modules = _build_local_module_names(python_files)
     all_imports = set()
 
     for file_path, source in python_files.items():
@@ -69,6 +125,12 @@ def generate_requirements_in(
             continue
         imports = extract_third_party_imports(source)
         all_imports.update(imports)
+
+    # Filter out local/generated modules before mapping to PyPI names
+    all_imports = {
+        imp for imp in all_imports
+        if not _is_local_or_generated(imp, local_modules)
+    }
 
     # Map import names to PyPI package names.
     # import_to_pypi handles alias lookup with prefix matching.

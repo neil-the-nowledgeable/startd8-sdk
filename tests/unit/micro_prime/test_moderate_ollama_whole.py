@@ -112,7 +112,9 @@ class TestModerateOllamaWholeSuccess:
             "    for item in items:\n"
             "        results.append(item.upper())\n"
             "    return results",
-            100, 50,
+            100,
+            50,
+            "stop",
         )
         config = MicroPrimeConfig(
             moderate_ollama_whole_enabled=True,
@@ -136,6 +138,7 @@ class TestModerateOllamaWholeSuccess:
             "def process_batch(items, config, output_dir, dry_run, verbose):\n"
             "    return [i.upper() for i in items]",
             80, 30,
+            "stop",
         )
         config = MicroPrimeConfig(
             moderate_ollama_whole_enabled=True,
@@ -161,7 +164,7 @@ class TestModerateOllamaWholeFallthrough:
         self, mock_generate, simple_moderate_element, sample_file_spec, sample_skeleton,
     ):
         """Empty Ollama response falls through to decomposition (then escalation)."""
-        mock_generate.return_value = ("", 50, 0)
+        mock_generate.return_value = ("", 50, 0, None)
         config = MicroPrimeConfig(
             moderate_ollama_whole_enabled=True,
             semantic_verification_enabled=False,

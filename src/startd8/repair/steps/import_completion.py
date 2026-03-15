@@ -147,6 +147,30 @@ def _collect_existing_imports(tree: ast.Module) -> set[str]:
     return names
 
 
+def _collect_local_definitions(tree: ast.Module) -> set[str]:
+    """Collect names defined at module level (functions, classes, assignments).
+
+    Used to prevent the import_completion step from adding ``import foo``
+    when ``foo`` is actually a function/class/variable defined in the same
+    file — a common hallucination from LLM-generated code that the repair
+    pipeline previously amplified (e.g. ``import setCurrency`` when
+    ``setCurrency`` is a function in the same locustfile).
+    """
+    names: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
 class ManifestImportCompletion:
     """Add missing imports using manifest ForwardImportSpec list.
 
@@ -176,6 +200,7 @@ class ManifestImportCompletion:
             )
 
         existing_imports = _collect_existing_imports(tree)
+        local_defs = _collect_local_definitions(tree)
 
         # Collect all Name references in code
         used_names: set[str] = set()
@@ -192,6 +217,11 @@ class ManifestImportCompletion:
             if hasattr(imp, "kind") and imp.kind == "from":
                 for name in imp.names:
                     if name in used_names and name not in existing_imports:
+                        # Skip if the module path is actually a locally-defined
+                        # name (e.g. ``import setCurrency`` where setCurrency is
+                        # a function in this file).
+                        if imp.module in local_defs:
+                            continue
                         # Correct well-known wrong module paths from LLM skeletons
                         module = _KNOWN_IMPORT_CORRECTIONS.get(
                             imp.module.lower(), imp.module,
@@ -207,6 +237,11 @@ class ManifestImportCompletion:
                 mod_base = imp.module.split(".")[0]
                 effective_name = getattr(imp, "alias", None) or mod_base
                 if effective_name in used_names and effective_name not in existing_imports:
+                    # Skip if the module name matches a local definition —
+                    # prevents ``import foo`` when ``def foo():`` exists in
+                    # the same file.
+                    if imp.module in local_defs or mod_base in local_defs:
+                        continue
                     # Correct well-known wrong module paths from LLM skeletons
                     module = _KNOWN_IMPORT_CORRECTIONS.get(
                         imp.module.lower(), imp.module,
@@ -273,11 +308,14 @@ class ErrorDrivenImportCompletion:
 
         # Collect existing imports to avoid duplicates (R1-S3)
         existing: set[str] = set()
+        local_defs: set[str] = set()
         if context.existing_imports and file_path in context.existing_imports:
             existing = context.existing_imports[file_path]
         else:
             try:
-                existing = _collect_existing_imports(ast.parse(code))
+                tree = ast.parse(code)
+                existing = _collect_existing_imports(tree)
+                local_defs = _collect_local_definitions(tree)
             except SyntaxError:
                 pass
 
@@ -286,6 +324,9 @@ class ErrorDrivenImportCompletion:
         for diag in import_diagnostics:
             module = diag.module
             if not module or module in existing:
+                continue
+            # Skip if the "missing" module is a locally-defined name
+            if module in local_defs or module.split(".")[0] in local_defs:
                 continue
 
             # R3-S8: Consult ManifestRegistry for correct import path

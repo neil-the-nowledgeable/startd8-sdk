@@ -30,6 +30,7 @@ from .protocols import (
 )
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
+from ..repair.orchestrator import reset_circuit_breaker
 
 logger = get_logger(__name__)
 
@@ -461,7 +462,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80):
         """
         Initialize the Prime Contractor workflow.
 
@@ -488,8 +489,10 @@ class PrimeContractorWorkflow:
             context_strategy: Custom context resolution strategy (default: StandaloneContextStrategy)
             strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
             walkthrough: If True, persist all LLM prompts without making API calls
+            edit_min_pct: Min % of existing lines in edit output (PC-Q3, default: 80)
         """
         self.project_root = project_root or Path.cwd()
+        self.edit_min_pct = edit_min_pct
         self.dry_run = dry_run
         self.auto_commit = auto_commit
         self.strict_checkpoints = strict_checkpoints
@@ -3268,6 +3271,9 @@ class PrimeContractorWorkflow:
         if _design_sections:
             gen_context["design_doc_sections"] = _design_sections
 
+        # PC-Q3: Propagate edit_min_pct from Prime config into gen_context
+        gen_context["edit_min_pct"] = self.edit_min_pct
+
         return gen_context
 
     def _thread_supplemental_context(
@@ -3686,6 +3692,10 @@ class PrimeContractorWorkflow:
                     break
                 continue
             features_processed += 1
+            # Reset repair circuit breaker per feature — each feature is an
+            # independent unit.  Import failures in emailservice should not
+            # prevent lint repair in loadgenerator.  (REQ-RPL-502 scope fix)
+            reset_circuit_breaker()
             success = self.process_feature(feature)
             if success:
                 features_succeeded += 1
@@ -3767,6 +3777,7 @@ class PrimeContractorWorkflow:
                 queue=self.queue,
                 seed_path=getattr(self, '_seed_path', None),
                 output_dir=str(self._manifest_path().parent),
+                project_root=str(self.project_root),
             )
         except Exception:
             logger.warning("Prime postmortem launch failed", exc_info=True)

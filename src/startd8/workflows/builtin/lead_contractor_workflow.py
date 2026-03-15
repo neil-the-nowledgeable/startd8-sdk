@@ -506,6 +506,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
+                    context=context,
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -725,7 +726,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
     ) -> str:
         """Build the spec prompt. Delegates to implementation_engine.spec_builder."""
-        edit_min_pct = context.pop("edit_min_pct", 80)
+        edit_min_pct = context.get("edit_min_pct", 80)
         return _ie_spec_builder.build_spec_prompt(
             task_description, context, output_format,
             edit_min_pct=edit_min_pct,
@@ -762,6 +763,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> DraftResult:
         """Phase 2/4: Drafter creates implementation from spec.
 
@@ -778,6 +780,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
             target_files=target_files,
             existing_files=existing_files,
             edit_mode=edit_mode,
+            context=context,
         )
         return DraftResult(
             draft_id=ie_draft.draft_id,
@@ -1072,6 +1075,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
+                    context=context,
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -1330,6 +1334,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> DraftResult:
         """Phase 2/4 (async): Drafter creates implementation from spec.
 
@@ -1338,12 +1343,22 @@ class PrimaryContractorWorkflow(WorkflowBase):
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
+        edit_min_pct = (context or {}).get("edit_min_pct", 80) if context else 80
         output_format = _ie_drafter.build_output_format(
-            target_files, existing_files=existing_files,
+            target_files,
+            existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
         )
         existing_files_section = _ie_drafter.build_existing_files_section(
             existing_files, edit_mode,
         )
+
+        supplementary = ""
+        if context:
+            task_id = (context or {}).get("task_id", "")
+            supplementary = _ie_drafter.build_supplementary_sections(
+                context, task_id=task_id,
+            )
 
         from ...implementation_engine.prompts import get_template as _ie_get_template
         if existing_files:
@@ -1355,9 +1370,13 @@ class PrimaryContractorWorkflow(WorkflowBase):
             feedback=feedback if feedback else "This is the initial implementation attempt.",
             output_format=output_format,
             existing_files_section=existing_files_section,
+            supplementary_sections=supplementary,
         )
 
-        sys_prompt, draft_mode = _ie_drafter.get_drafter_system_prompt(existing_files)
+        sys_prompt, draft_mode = _ie_drafter.get_drafter_system_prompt(
+            existing_files=existing_files,
+            edit_mode=edit_mode,
+        )
         logger.info("Async drafter system prompt mode: %s", draft_mode)
         response_text, response_time_ms, token_usage = await drafter_agent.agenerate(
             prompt, system_prompt=sys_prompt

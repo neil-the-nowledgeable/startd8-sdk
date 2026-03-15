@@ -529,3 +529,146 @@ class TestContractViolations:
         result = validate_disk_compliance(rel, str(tmp_path), manifest=manifest)
         assert result.contract_violations == []
         assert result.contract_compliance == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# 9. Non-Python file validators (KZ-Q4)
+# ---------------------------------------------------------------------------
+
+
+def _write_file(tmp_path, rel_path, content):
+    """Write a file under tmp_path and return the relative path string."""
+    full = tmp_path / rel_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content, encoding="utf-8")
+    return rel_path
+
+
+class TestRequirementsFileValidation:
+    def test_valid_requirements(self, tmp_path):
+        rel = _write_file(tmp_path, "requirements.in", "flask>=2.0\nrequests\npydantic~=2.0\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.contract_compliance == pytest.approx(1.0)
+        assert result.semantic_issues == []
+
+    def test_camelcase_function_names_flagged(self, tmp_path):
+        """The PI-017 bug: requirements.in with function names instead of packages."""
+        rel = _write_file(
+            tmp_path,
+            "requirements.in",
+            "addToCart\nbrowseProduct\ncheckout\nfaker\nindex\nlocust\nsetCurrency\nviewCart\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        # 5 camelCase entries flagged: addToCart, browseProduct, setCurrency, viewCart
+        # (checkout, faker, index, locust are valid lowercase names)
+        assert result.contract_compliance < 1.0
+        assert len(result.semantic_issues) >= 3  # at least addToCart, browseProduct, setCurrency, viewCart
+        assert result.error is not None
+
+    def test_comments_and_blanks_skipped(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "requirements.in",
+            "# A comment\n\nflask\n  # another\nrequests\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.contract_compliance == pytest.approx(1.0)
+
+    def test_pip_flags_skipped(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "requirements.in",
+            "-e .\n--index-url https://pypi.org/simple\nflask\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.contract_compliance == pytest.approx(1.0)
+
+    def test_requirements_txt_also_validated(self, tmp_path):
+        rel = _write_file(tmp_path, "requirements.txt", "flask\nrequests\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.contract_compliance == pytest.approx(1.0)
+
+
+class TestDockerfileValidation:
+    def test_valid_dockerfile(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "Dockerfile",
+            "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\nCMD [\"python\", \"app.py\"]\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+        assert result.contract_compliance == pytest.approx(1.0)
+
+    def test_missing_from_directive(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "Dockerfile",
+            "WORKDIR /app\nCOPY . .\nCMD [\"python\"]\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is False
+        assert result.contract_compliance == pytest.approx(0.0)
+        assert "FROM" in result.error
+
+    def test_no_entrypoint_warning(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "Dockerfile",
+            "FROM python:3.11\nWORKDIR /app\nCOPY . .\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+        assert result.contract_compliance == pytest.approx(0.8)
+        assert len(result.semantic_issues) == 1
+
+    def test_multistage_dockerfile(self, tmp_path):
+        rel = _write_file(
+            tmp_path,
+            "Dockerfile",
+            (
+                "FROM python:3.11 AS builder\n"
+                "WORKDIR /build\n"
+                "COPY . .\n"
+                "FROM python:3.11-slim\n"
+                "COPY --from=builder /build /app\n"
+                "ENTRYPOINT [\"python\", \"app.py\"]\n"
+            ),
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.contract_compliance == pytest.approx(1.0)
+
+
+class TestYamlValidation:
+    def test_valid_yaml(self, tmp_path):
+        rel = _write_file(tmp_path, "config.yaml", "key: value\nlist:\n  - a\n  - b\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+
+    def test_invalid_yaml(self, tmp_path):
+        rel = _write_file(tmp_path, "config.yml", "key: [\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is False
+        assert "yaml_error" in result.error
+
+
+class TestJsonValidation:
+    def test_valid_json(self, tmp_path):
+        rel = _write_file(tmp_path, "data.json", '{"key": "value"}\n')
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+
+    def test_invalid_json(self, tmp_path):
+        rel = _write_file(tmp_path, "data.json", '{"key": }\n')
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is False
+        assert "json_error" in result.error
+
+
+class TestHtmlPassthrough:
+    def test_html_keeps_defaults(self, tmp_path):
+        """HTML files should keep default scores (no validator)."""
+        rel = _write_file(tmp_path, "template.html", "<html><body>Hello</body></html>\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+        assert result.contract_compliance == pytest.approx(1.0)

@@ -845,14 +845,21 @@ class PrimePostMortemEvaluator:
             # target_files (relative paths that may not exist at project root).
             files_to_check = fpm.generated_files if fpm.generated_files else fpm.target_files
             for file_path in files_to_check:
-                if not file_path.endswith(".py"):
-                    continue
                 try:
-                    # For absolute generated paths, pass parent as project_root
-                    # so validate_disk_compliance resolves the file correctly.
-                    if Path(file_path).is_absolute():
-                        effective_root = str(Path(file_path).parent)
-                        effective_file = Path(file_path).name
+                    abs_file = Path(file_path)
+                    root_path = Path(project_root)
+                    if abs_file.is_absolute():
+                        # If the path is under project_root, make it relative
+                        # so validate_disk_compliance resolves correctly.
+                        try:
+                            relative = abs_file.relative_to(root_path)
+                            effective_root = project_root
+                            effective_file = str(relative)
+                        except ValueError:
+                            # Path outside project_root (e.g. in generated/ dir)
+                            # — use parent as root, filename as file.
+                            effective_root = str(abs_file.parent)
+                            effective_file = abs_file.name
                     else:
                         effective_root = project_root
                         effective_file = file_path
@@ -870,7 +877,7 @@ class PrimePostMortemEvaluator:
                 except Exception as exc:
                     logger.debug(
                         "Disk validation failed for %s in %s: %s",
-                        target_file, fpm.feature_id, exc,
+                        file_path, fpm.feature_id, exc,
                     )
 
     def _build_pipeline_attribution(

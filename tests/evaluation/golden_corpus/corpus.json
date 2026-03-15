@@ -1024,7 +1024,7 @@
       "id": "gc-021",
       "description": "Custom JSON log formatter extending base class",
       "archetype": "log_formatter",
-      "source_pattern": "[GENERAL] Custom formatter that normalizes severity/timestamp fields \u2014 universal pattern for structured logging in any service",
+      "source_pattern": "[GENERAL] Custom formatter that normalizes severity/timestamp fields — universal pattern for structured logging in any service",
       "file": {
         "file": "src/logging/json_formatter.py",
         "imports": [
@@ -1087,7 +1087,7 @@
       "id": "gc-022",
       "description": "Logger factory with JSON formatter and stream handler",
       "archetype": "logger_factory",
-      "source_pattern": "[GENERAL] Logger factory that wires formatter + handler + level \u2014 universal in any service needing structured logging",
+      "source_pattern": "[GENERAL] Logger factory that wires formatter + handler + level — universal in any service needing structured logging",
       "file": {
         "file": "src/logging/factory.py",
         "imports": [
@@ -1124,7 +1124,7 @@
       "id": "gc-023",
       "description": "gRPC health check methods (Check + Watch)",
       "archetype": "grpc_health_check",
-      "source_pattern": "[GENERAL] Standard gRPC health check implementation \u2014 every gRPC service needs Check (SERVING) and Watch (UNIMPLEMENTED)",
+      "source_pattern": "[GENERAL] Standard gRPC health check implementation — every gRPC service needs Check (SERVING) and Watch (UNIMPLEMENTED)",
       "file": {
         "file": "src/service/health.py",
         "imports": [
@@ -1190,7 +1190,7 @@
       "id": "gc-024",
       "description": "List-filter-sample recommendation pattern",
       "archetype": "filter_sample",
-      "source_pattern": "[GENERAL] Fetch collection, exclude already-seen items, random sample N \u2014 universal recommendation/suggestion pattern",
+      "source_pattern": "[GENERAL] Fetch collection, exclude already-seen items, random sample N — universal recommendation/suggestion pattern",
       "file": {
         "file": "src/service/recommender.py",
         "imports": [
@@ -1240,7 +1240,7 @@
       "id": "gc-025",
       "description": "gRPC client wrapper with error handling",
       "archetype": "grpc_client",
-      "source_pattern": "[GENERAL] gRPC client function: create channel, make RPC call, handle RpcError \u2014 standard pattern for any service-to-service call",
+      "source_pattern": "[GENERAL] gRPC client function: create channel, make RPC call, handle RpcError — standard pattern for any service-to-service call",
       "file": {
         "file": "src/clients/email_client.py",
         "imports": [
@@ -1289,7 +1289,7 @@
       "id": "gc-026",
       "description": "gRPC server start with ThreadPoolExecutor and graceful shutdown",
       "archetype": "server_lifecycle",
-      "source_pattern": "[GENERAL] Server start function: create ThreadPool server, bind port from env, register service, graceful shutdown loop \u2014 every gRPC service needs this",
+      "source_pattern": "[GENERAL] Server start function: create ThreadPool server, bind port from env, register service, graceful shutdown loop — every gRPC service needs this",
       "file": {
         "file": "src/service/server.py",
         "imports": [
@@ -1344,7 +1344,7 @@
       "id": "gc-027",
       "description": "Dummy/mock service implementation that logs and returns empty",
       "archetype": "dummy_service",
-      "source_pattern": "[GENERAL] Dummy service handler: log the request, return empty response \u2014 universal pattern for development/testing mode stubs",
+      "source_pattern": "[GENERAL] Dummy service handler: log the request, return empty response — universal pattern for development/testing mode stubs",
       "file": {
         "file": "src/service/dummy.py",
         "imports": [
@@ -1388,7 +1388,7 @@
       "id": "gc-028",
       "description": "Random selection from weighted product catalog",
       "archetype": "random_selection",
-      "source_pattern": "[GENERAL] Random choice from a list, random int in range \u2014 universal pattern for load testing, simulation, demo data generation",
+      "source_pattern": "[GENERAL] Random choice from a list, random int in range — universal pattern for load testing, simulation, demo data generation",
       "file": {
         "file": "src/testing/data_gen.py",
         "imports": [
@@ -1455,7 +1455,7 @@
       "id": "gc-029",
       "description": "Fake checkout data generator for load testing",
       "archetype": "fake_data_generator",
-      "source_pattern": "[GENERAL] Compose fake user/payment/address data from randomized parts \u2014 universal pattern for load testing, seeding, demo environments",
+      "source_pattern": "[GENERAL] Compose fake user/payment/address data from randomized parts — universal pattern for load testing, seeding, demo environments",
       "file": {
         "file": "src/testing/checkout_data.py",
         "imports": [
@@ -1516,7 +1516,7 @@
       "description": "File-whole: structured logging module (formatter class + factory function)",
       "archetype": "logging_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Complete logging module: custom formatter extending a base + factory function \u2014 universal across any Python service needing structured logs",
+      "source_pattern": "[GENERAL] Complete logging module: custom formatter extending a base + factory function — universal across any Python service needing structured logs",
       "file": {
         "file": "src/common/logger.py",
         "imports": [
@@ -1583,7 +1583,7 @@
       "description": "File-whole: gRPC service with health checks and business logic (5 elements)",
       "archetype": "grpc_service_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Complete gRPC service file: service class, Check/Watch health, business logic handler, and server start \u2014 the universal gRPC service template",
+      "source_pattern": "[GENERAL] Complete gRPC service file: service class, Check/Watch health, business logic handler, and server start — the universal gRPC service template",
       "file": {
         "file": "src/service/catalog_service.py",
         "imports": [
@@ -1692,7 +1692,7 @@
       "description": "File-whole: load test task functions + user class (8 elements, quality cliff test)",
       "archetype": "load_test_module",
       "mode": "file_whole",
-      "source_pattern": "[GENERAL] Load test module: standalone task functions (GET/POST), TaskSet with weighted tasks, User class with wait_time \u2014 universal pattern for any HTTP load test",
+      "source_pattern": "[GENERAL] Load test module: standalone task functions (GET/POST), TaskSet with weighted tasks, User class with wait_time — universal pattern for any HTTP load test",
       "file": {
         "file": "src/testing/load_test.py",
         "imports": [
@@ -2260,6 +2260,1037 @@
       "skeleton": "from typing import Any\n\n\ndef flatten_dict(d: dict[str, Any], prefix: str = \"\", sep: str = \".\") -> dict[str, Any]:\n    raise NotImplementedError\n",
       "reference": "from typing import Any\n\n\ndef flatten_dict(d: dict[str, Any], prefix: str = \"\", sep: str = \".\") -> dict[str, Any]:\n    result: dict[str, Any] = {}\n    for key, value in d.items():\n        full_key = f\"{prefix}{sep}{key}\" if prefix else key\n        if isinstance(value, dict):\n            result.update(flatten_dict(value, full_key, sep))\n        else:\n            result[full_key] = value\n    return result\n",
       "expected_tier": "simple"
+    },
+    {
+      "id": "gc-040",
+      "description": "logging_module (9 elements, 88 LOC)",
+      "archetype": "logging_module",
+      "file": {
+        "file": "src/emailservice/logger.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "import",
+            "module": "datetime"
+          },
+          {
+            "kind": "import",
+            "module": "json"
+          },
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "JsonFormatter"
+          },
+          {
+            "kind": "method",
+            "name": "format",
+            "parent_class": "JsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "class",
+            "name": "CustomJsonFormatter"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "component",
+                  "annotation": "str",
+                  "default": "'emailservice'"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "format",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "_format_timestamp",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "created",
+                  "annotation": "float"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "_extract_context",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                }
+              ],
+              "return_annotation": "Dict[str, Any]"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "get_logger",
+            "signature": {
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str",
+                  "default": "'emailservice'"
+                }
+              ],
+              "return_annotation": "logging.Logger"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "getJSONLogger",
+            "signature": {
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "Optional[str]",
+                  "default": "None"
+                },
+                {
+                  "name": "level",
+                  "annotation": "int",
+                  "default": "logging.INFO"
+                }
+              ],
+              "return_annotation": "logging.Logger"
+            }
+          }
+        ]
+      },
+      "skeleton": "from __future__ import annotations\n\nfrom typing import Any\nfrom typing import Dict\nfrom typing import Optional\nimport datetime\nimport json\nimport logging\nimport sys\n\n\nclass CustomJsonFormatter(logging.Formatter):\n    RESERVED_ATTRS = frozenset({\n        'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename',\n        'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs',\n        'message', 'msg', 'name', 'pathname', 'process', 'processName',\n        'relativeCreated', 'stack_info', 'thread', 'threadName'\n    })\n\n    def __init__(self, component: str = 'emailservice'):\n        raise NotImplementedError\n\n    def format(self, record: logging.LogRecord) -> str:\n        raise NotImplementedError\n\n    def _format_timestamp(self, created: float) -> str:\n        raise NotImplementedError\n\n    def _extract_context(self, record: logging.LogRecord) -> Dict[str, Any]:\n        raise NotImplementedError\n\n\nclass JsonFormatter(logging.Formatter):\n    def format(self, record) -> str:\n        raise NotImplementedError\n\n\ndef getJSONLogger(name: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:\n    raise NotImplementedError\n\n\ndef get_logger(name: str = 'emailservice') -> logging.Logger:\n    raise NotImplementedError\n\n\n__all__ = [\"CustomJsonFormatter\", \"JsonFormatter\", \"getJSONLogger\", \"get_logger\"]",
+      "reference": "from __future__ import annotations\n\nfrom typing import Any\nfrom typing import Dict\nfrom typing import Optional\nimport datetime\nimport json\nimport logging\nimport sys\n\n\nclass CustomJsonFormatter(logging.Formatter):\n    RESERVED_ATTRS = frozenset({\n        'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename',\n        'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs',\n        'message', 'msg', 'name', 'pathname', 'process', 'processName',\n        'relativeCreated', 'stack_info', 'thread', 'threadName'\n    })\n\n    def __init__(self, component: str = 'emailservice'):\n        super().__init__()\n        self.component = component\n\n    def format(self, record: logging.LogRecord) -> str:\n        try:\n            log_data = {\n                'timestamp': self._format_timestamp(record.created),\n                'severity': record.levelname,\n                'message': record.getMessage(),\n                'component': self.component\n            }\n            context = self._extract_context(record)\n            if context:\n                log_data.update(context)\n            if record.exc_info:\n                log_data['exception'] = self.formatException(record.exc_info)\n            return json.dumps(log_data, default=str)\n        except (TypeError, ValueError):\n            return json.dumps({'error': 'Failed to format log record'}, default=str)\n\n    def _format_timestamp(self, created: float) -> str:\n        return datetime.datetime.utcfromtimestamp(created).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'\n\n    def _extract_context(self, record: logging.LogRecord) -> Dict[str, Any]:\n        context = {}\n        for key, value in record.__dict__.items():\n            if key not in self.RESERVED_ATTRS and not key.startswith('_'):\n                context[key] = value\n        return context\n\n\nclass JsonFormatter(logging.Formatter):\n    def format(self, record) -> str:\n        try:\n            log_entry = {\n                'timestamp': datetime.datetime.utcfromtimestamp(record.created).isoformat() + 'Z',\n                'severity': record.levelname,\n                'name': record.name,\n                'message': record.getMessage()\n            }\n            return json.dumps(log_entry)\n        except Exception:\n            return json.dumps({'error': 'Failed to format log record'}, default=str)\n\n\ndef getJSONLogger(name: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:\n    logger = logging.getLogger(name or 'emailservice')\n    if not logger.handlers:\n        handler = logging.StreamHandler(sys.stdout)\n        handler.setFormatter(CustomJsonFormatter())\n        logger.addHandler(handler)\n        logger.setLevel(level)\n        logger.propagate = False\n    return logger\n\n\ndef get_logger(name: str = 'emailservice') -> logging.Logger:\n    logger = logging.getLogger(name)\n    if not logger.handlers:\n        handler = logging.StreamHandler(sys.stdout)\n        handler.setFormatter(JsonFormatter())\n        logger.addHandler(handler)\n        logger.setLevel(logging.INFO)\n        logger.propagate = False\n    return logger\n\n\n__all__ = [\"CustomJsonFormatter\", \"JsonFormatter\", \"getJSONLogger\", \"get_logger\"]",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-041",
+      "description": "logging_module (9 elements, 88 LOC)",
+      "archetype": "logging_module",
+      "file": {
+        "file": "src/recommendationservice/logger.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "from",
+            "module": "typing"
+          },
+          {
+            "kind": "import",
+            "module": "datetime"
+          },
+          {
+            "kind": "import",
+            "module": "json"
+          },
+          {
+            "kind": "import",
+            "module": "logging"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "JsonFormatter"
+          },
+          {
+            "kind": "method",
+            "name": "format",
+            "parent_class": "JsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "class",
+            "name": "CustomJsonFormatter"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "component",
+                  "annotation": "str",
+                  "default": "'emailservice'"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "format",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "_format_timestamp",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "created",
+                  "annotation": "float"
+                }
+              ],
+              "return_annotation": "str"
+            }
+          },
+          {
+            "kind": "method",
+            "name": "_extract_context",
+            "parent_class": "CustomJsonFormatter",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "record",
+                  "annotation": "logging.LogRecord"
+                }
+              ],
+              "return_annotation": "Dict[str, Any]"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "get_logger",
+            "signature": {
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "str",
+                  "default": "'emailservice'"
+                }
+              ],
+              "return_annotation": "logging.Logger"
+            }
+          },
+          {
+            "kind": "function",
+            "name": "getJSONLogger",
+            "signature": {
+              "params": [
+                {
+                  "name": "name",
+                  "annotation": "Optional[str]",
+                  "default": "None"
+                },
+                {
+                  "name": "level",
+                  "annotation": "int",
+                  "default": "logging.INFO"
+                }
+              ],
+              "return_annotation": "logging.Logger"
+            }
+          }
+        ]
+      },
+      "skeleton": "from __future__ import annotations\n\nfrom typing import Any\nfrom typing import Dict\nfrom typing import Optional\nimport datetime\nimport json\nimport logging\nimport sys\n\n\nclass CustomJsonFormatter(logging.Formatter):\n    RESERVED_ATTRS = frozenset({\n        'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename',\n        'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs',\n        'message', 'msg', 'name', 'pathname', 'process', 'processName',\n        'relativeCreated', 'stack_info', 'thread', 'threadName'\n    })\n\n    def __init__(self, component: str = 'emailservice'):\n        raise NotImplementedError\n\n    def format(self, record: logging.LogRecord) -> str:\n        raise NotImplementedError\n\n    def _format_timestamp(self, created: float) -> str:\n        raise NotImplementedError\n\n    def _extract_context(self, record: logging.LogRecord) -> Dict[str, Any]:\n        raise NotImplementedError\n\n\nclass JsonFormatter(logging.Formatter):\n    def format(self, record) -> str:\n        raise NotImplementedError\n\n\ndef getJSONLogger(name: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:\n    raise NotImplementedError\n\n\ndef get_logger(name: str = 'emailservice') -> logging.Logger:\n    raise NotImplementedError\n\n\n__all__ = [\"CustomJsonFormatter\", \"JsonFormatter\", \"getJSONLogger\", \"get_logger\"]",
+      "reference": "from __future__ import annotations\n\nfrom typing import Any\nfrom typing import Dict\nfrom typing import Optional\nimport datetime\nimport json\nimport logging\nimport sys\n\n\nclass CustomJsonFormatter(logging.Formatter):\n    RESERVED_ATTRS = frozenset({\n        'args', 'asctime', 'created', 'exc_info', 'exc_text', 'filename',\n        'funcName', 'levelname', 'levelno', 'lineno', 'module', 'msecs',\n        'message', 'msg', 'name', 'pathname', 'process', 'processName',\n        'relativeCreated', 'stack_info', 'thread', 'threadName'\n    })\n\n    def __init__(self, component: str = 'emailservice'):\n        super().__init__()\n        self.component = component\n\n    def format(self, record: logging.LogRecord) -> str:\n        try:\n            log_data = {\n                'timestamp': self._format_timestamp(record.created),\n                'severity': record.levelname,\n                'message': record.getMessage(),\n                'component': self.component\n            }\n            context = self._extract_context(record)\n            if context:\n                log_data.update(context)\n            if record.exc_info:\n                log_data['exception'] = self.formatException(record.exc_info)\n            return json.dumps(log_data, default=str)\n        except (TypeError, ValueError):\n            return json.dumps({'error': 'Failed to format log record'}, default=str)\n\n    def _format_timestamp(self, created: float) -> str:\n        return datetime.datetime.utcfromtimestamp(created).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'\n\n    def _extract_context(self, record: logging.LogRecord) -> Dict[str, Any]:\n        context = {}\n        for key, value in record.__dict__.items():\n            if key not in self.RESERVED_ATTRS and not key.startswith('_'):\n                context[key] = value\n        return context\n\n\nclass JsonFormatter(logging.Formatter):\n    def format(self, record) -> str:\n        try:\n            log_entry = {\n                'timestamp': datetime.datetime.utcfromtimestamp(record.created).isoformat() + 'Z',\n                'severity': record.levelname,\n                'name': record.name,\n                'message': record.getMessage()\n            }\n            return json.dumps(log_entry)\n        except Exception:\n            return json.dumps({'error': 'Failed to format log record'}, default=str)\n\n\ndef getJSONLogger(name: Optional[str] = None, level: int = logging.INFO) -> logging.Logger:\n    logger = logging.getLogger(name or 'emailservice')\n    if not logger.handlers:\n        handler = logging.StreamHandler(sys.stdout)\n        handler.setFormatter(CustomJsonFormatter())\n        logger.addHandler(handler)\n        logger.setLevel(level)\n        logger.propagate = False\n    return logger\n\n\ndef get_logger(name: str = 'emailservice') -> logging.Logger:\n    logger = logging.getLogger(name)\n    if not logger.handlers:\n        handler = logging.StreamHandler(sys.stdout)\n        handler.setFormatter(JsonFormatter())\n        logger.addHandler(handler)\n        logger.setLevel(logging.INFO)\n        logger.propagate = False\n    return logger\n\n\n__all__ = [\"CustomJsonFormatter\", \"JsonFormatter\", \"getJSONLogger\", \"get_logger\"]",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-042",
+      "description": "grpc_service_module (13 elements, 187 LOC)",
+      "archetype": "grpc_service_module",
+      "file": {
+        "file": "src/emailservice/email_server.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "import",
+            "module": "concurrent.futures"
+          },
+          {
+            "kind": "import",
+            "module": "os"
+          },
+          {
+            "kind": "import",
+            "module": "time"
+          },
+          {
+            "kind": "import",
+            "module": "traceback"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          },
+          {
+            "kind": "from",
+            "module": "jinja2"
+          },
+          {
+            "kind": "from",
+            "module": "google.api_core.exceptions"
+          },
+          {
+            "kind": "import",
+            "module": "demo_pb2"
+          },
+          {
+            "kind": "import",
+            "module": "demo_pb2_grpc"
+          },
+          {
+            "kind": "from",
+            "module": "grpc_health.v1"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.instrumentation.grpc"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.sdk.trace"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.sdk.trace.export"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+          },
+          {
+            "kind": "from",
+            "module": "logger"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "BaseEmailService"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "BaseEmailService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "class",
+            "name": "EmailService"
+          },
+          {
+            "kind": "method",
+            "name": "__init__",
+            "parent_class": "EmailService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "send_email",
+            "parent_class": "EmailService",
+            "signature": {
+              "params": [
+                {
+                  "name": "client"
+                },
+                {
+                  "name": "email_address"
+                },
+                {
+                  "name": "content"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "SendOrderConfirmation",
+            "parent_class": "EmailService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "class",
+            "name": "DummyEmailService"
+          },
+          {
+            "kind": "method",
+            "name": "SendOrderConfirmation",
+            "parent_class": "DummyEmailService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "class",
+            "name": "HealthCheck"
+          },
+          {
+            "kind": "method",
+            "name": "Check",
+            "parent_class": "HealthCheck",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "Watch",
+            "parent_class": "HealthCheck",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "start",
+            "signature": {
+              "params": [
+                {
+                  "name": "dummy_mode"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "initStackdriverProfiling"
+          }
+        ]
+      },
+      "skeleton": "# Copyright 2020 Google LLC\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#      http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nfrom __future__ import annotations\n\nimport concurrent.futures\nimport os\nimport time\nimport traceback\n\nimport grpc\nfrom google.api_core.exceptions import GoogleAPICallError\nfrom jinja2 import Environment, PackageLoader, select_autoescape, TemplateError\nfrom grpc_health.v1 import health_pb2, health_pb2_grpc\n\nfrom opentelemetry import trace\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorServer\nfrom opentelemetry.sdk.trace import TracerProvider\nfrom opentelemetry.sdk.trace.export import BatchSpanProcessor\nfrom opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter\n\nimport demo_pb2\nimport demo_pb2_grpc\n\nfrom logger import getJSONLogger\n\n# TODO: (PR #3196) Uncomment once google-cloud-profiler is restored as a dependency\n# import googlecloudprofiler\n\nlogger = getJSONLogger('emailservice-server')\n\n\nclass BaseEmailService(demo_pb2_grpc.EmailServiceServicer):\n    def __init__(self):\n        raise NotImplementedError\n\n\nclass EmailService(BaseEmailService):\n    def __init__(self):\n        raise NotImplementedError\n\n    @staticmethod\n    def send_email(client, email_address, content):\n        raise NotImplementedError\n\n    def SendOrderConfirmation(self, request, context):\n        raise NotImplementedError\n\n\nclass DummyEmailService(BaseEmailService):\n    def SendOrderConfirmation(self, request, context):\n        raise NotImplementedError\n\n\nclass HealthCheck():\n    def Check(self, request, context):\n        raise NotImplementedError\n\n    def Watch(self, request, context):\n        raise NotImplementedError\n\n\ndef initStackdriverProfiling():\n    raise NotImplementedError\n\n\ndef start(dummy_mode):\n    raise NotImplementedError\n\n\n__all__ = [\n    'BaseEmailService',\n    'DummyEmailService',\n    'EmailService',\n    'HealthCheck',\n    'initStackdriverProfiling',\n    'start',\n]\n\n\nif __name__ == '__main__':\n    logger.info('starting the email service in dummy mode.')\n\n    # Cloud Profiler — skipped when DISABLE_PROFILER is set\n    if 'DISABLE_PROFILER' not in os.environ:\n        try:\n            initStackdriverProfiling()\n        except Exception:\n            logger.warning(\n                'Failed to initialize Stackdriver Profiler:\\n%s',\n                traceback.format_exc(),\n            )\n\n    # OpenTelemetry — instrument gRPC server unconditionally, BEFORE tracing provider setup\n    GrpcInstrumentorServer().instrument()\n\n    # Tracing — activate OTLP exporter only when explicitly requested\n    enable_tracing = os.environ.get('ENABLE_TRACING', '0')\n    if enable_tracing == '1':\n        logger.info('Tracing enabled, connecting to OTLP collector.')\n        collector_endpoint = os.environ.get('COLLECTOR_SERVICE_ADDR', 'localhost:4317')\n        tracer_provider = TracerProvider()\n        tracer_provider.add_span_processor(\n            BatchSpanProcessor(OTLPSpanExporter(endpoint=collector_endpoint))\n        )\n        trace.set_tracer_provider(tracer_provider)\n\n    start(dummy_mode=True)",
+      "reference": "# Copyright 2020 Google LLC\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#      http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nfrom __future__ import annotations\n\nimport concurrent.futures\nimport os\nimport time\nimport traceback\n\nimport grpc\nfrom google.api_core.exceptions import GoogleAPICallError\nfrom jinja2 import Environment, PackageLoader, select_autoescape, TemplateError\nfrom grpc_health.v1 import health_pb2, health_pb2_grpc\n\nfrom opentelemetry import trace\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorServer\nfrom opentelemetry.sdk.trace import TracerProvider\nfrom opentelemetry.sdk.trace.export import BatchSpanProcessor\nfrom opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter\n\nimport demo_pb2\nimport demo_pb2_grpc\n\nfrom logger import getJSONLogger\n\n# TODO: (PR #3196) Uncomment once google-cloud-profiler is restored as a dependency\n# import googlecloudprofiler\n\nlogger = getJSONLogger('emailservice-server')\n\n\nclass BaseEmailService(demo_pb2_grpc.EmailServiceServicer):\n    def __init__(self):\n        self.env = Environment(\n            loader=PackageLoader('emailservice', 'templates'),\n            autoescape=select_autoescape(['html', 'xml']),\n        )\n        self.template = self.env.get_template('confirmation.html')\n\n\nclass EmailService(BaseEmailService):\n    def __init__(self):\n        raise Exception('cloud mail client not implemented')\n\n    @staticmethod\n    def send_email(client, email_address, content):\n        response = client.send_message(\n            sender=email_address,\n            destination=email_address,\n            message={\n                'raw': content,\n            },\n        )\n        logger.info('Message sent: %s', response['MessageId'])\n\n    def SendOrderConfirmation(self, request, context):\n        try:\n            confirmation = self.template.render(\n                order_id=request.order.order_id,\n                shipping_tracking_id=request.order.shipping_tracking_id,\n                shipping_cost_units=request.order.shipping_cost.units,\n                shipping_cost_nanos=request.order.shipping_cost.nanos,\n                shipping_cost_currency=request.order.shipping_cost.currency_code,\n                shipping_address=request.order.shipping_address,\n                items=request.order.items,\n            )\n            EmailService.send_email(None, request.email, confirmation)\n        except TemplateError as e:\n            logger.error('Failed to render template: %s', str(e))\n            context.set_details(str(e))\n            context.set_code(grpc.StatusCode.INTERNAL)\n            return demo_pb2.Empty()\n        except GoogleAPICallError as e:\n            logger.error('Failed to send email: %s', str(e))\n            context.set_details(str(e))\n            context.set_code(grpc.StatusCode.INTERNAL)\n            return demo_pb2.Empty()\n        return demo_pb2.Empty()\n\n\nclass DummyEmailService(BaseEmailService):\n    def SendOrderConfirmation(self, request, context):\n        logger.info(\n            'A request to send order confirmation email to %s has been received.',\n            request.email,\n        )\n        return demo_pb2.Empty()\n\n\nclass HealthCheck():\n    def Check(self, request, context):\n        return health_pb2.HealthCheckResponse(\n            status=health_pb2.HealthCheckResponse.SERVING,\n        )\n\n    def Watch(self, request, context):\n        context.set_code(grpc.StatusCode.UNIMPLEMENTED)\n        return health_pb2.HealthCheckResponse(\n            status=health_pb2.HealthCheckResponse.SERVICE_UNKNOWN,\n        )\n\n\ndef initStackdriverProfiling():\n    project_id = os.environ.get('GCP_PROJECT_ID')  # noqa: F841 — reserved for profiler\n    # TODO: (PR #3196) Re-enable Cloud Profiler when google-cloud-profiler dependency is restored\n    # if project_id:\n    #     googlecloudprofiler.start(service='email-server', verbose=0, project_id=project_id)\n    # else:\n    #     googlecloudprofiler.start(service='email-server', verbose=0)\n    return\n\n\ndef start(dummy_mode):\n    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=10))\n\n    if dummy_mode:\n        service = DummyEmailService()\n    else:\n        service = EmailService()\n\n    demo_pb2_grpc.add_EmailServiceServicer_to_server(service, server)\n\n    health_check = HealthCheck()\n    health_pb2_grpc.add_HealthServicer_to_server(health_check, server)\n\n    port = os.environ.get('PORT', '8080')\n    server.add_insecure_port('[::]:' + port)\n    server.start()\n    logger.info('EmailService listening on port %s', port)\n\n    try:\n        while True:\n            time.sleep(3600)\n    except KeyboardInterrupt:\n        server.stop(0)\n\n\n__all__ = [\n    'BaseEmailService',\n    'DummyEmailService',\n    'EmailService',\n    'HealthCheck',\n    'initStackdriverProfiling',\n    'start',\n]\n\n\nif __name__ == '__main__':\n    logger.info('starting the email service in dummy mode.')\n\n    # Cloud Profiler — skipped when DISABLE_PROFILER is set\n    if 'DISABLE_PROFILER' not in os.environ:\n        try:\n            initStackdriverProfiling()\n        except Exception:\n            logger.warning(\n                'Failed to initialize Stackdriver Profiler:\\n%s',\n                traceback.format_exc(),\n            )\n\n    # OpenTelemetry — instrument gRPC server unconditionally, BEFORE tracing provider setup\n    GrpcInstrumentorServer().instrument()\n\n    # Tracing — activate OTLP exporter only when explicitly requested\n    enable_tracing = os.environ.get('ENABLE_TRACING', '0')\n    if enable_tracing == '1':\n        logger.info('Tracing enabled, connecting to OTLP collector.')\n        collector_endpoint = os.environ.get('COLLECTOR_SERVICE_ADDR', 'localhost:4317')\n        tracer_provider = TracerProvider()\n        tracer_provider.add_span_processor(\n            BatchSpanProcessor(OTLPSpanExporter(endpoint=collector_endpoint))\n        )\n        trace.set_tracer_provider(tracer_provider)\n\n    start(dummy_mode=True)",
+      "expected_tier": "moderate",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-043",
+      "description": "grpc_client (1 elements, 19 LOC)",
+      "archetype": "grpc_client",
+      "file": {
+        "file": "src/emailservice/email_client.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "from",
+            "module": "email_server_pb2_grpc"
+          },
+          {
+            "kind": "from",
+            "module": "logger"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "send_confirmation_email",
+            "signature": {
+              "params": [
+                {
+                  "name": "email"
+                },
+                {
+                  "name": "order"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "skeleton": "from __future__ import annotations\n\nfrom email_server_pb2_grpc import EmailServiceStub\nfrom logger import logger\nimport grpc\n\n\ndef send_confirmation_email(email, order):\n    raise NotImplementedError\n\n\n__all__ = [\"send_confirmation_email\"]",
+      "reference": "from __future__ import annotations\n\nfrom email_server_pb2_grpc import EmailServiceStub\nfrom logger import logger\nimport grpc\n\n\ndef send_confirmation_email(email, order):\n    channel = grpc.insecure_channel('[::]:8080')\n    stub = EmailServiceStub(channel)\n    try:\n        stub.SendOrderConfirmation(email, order)\n        logger.info(f\"Email confirmation sent to {email}\")\n    except grpc.RpcError as e:\n        logger.error(f\"Failed to send email confirmation to {email}: {e}\")\n        raise\n\n\n__all__ = [\"send_confirmation_email\"]",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-044",
+      "description": "grpc_service_module (5 elements, 156 LOC)",
+      "archetype": "grpc_service_module",
+      "file": {
+        "file": "src/recommendationservice/recommendation_server.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "import",
+            "module": "os"
+          },
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "import",
+            "module": "time"
+          },
+          {
+            "kind": "from",
+            "module": "concurrent"
+          },
+          {
+            "kind": "from",
+            "module": "google.auth.exceptions"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          },
+          {
+            "kind": "from",
+            "module": "grpc_health.v1"
+          },
+          {
+            "kind": "from",
+            "module": "grpc_health.v1"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.exporter.otlp.proto.grpc.trace_exporter"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.instrumentation.grpc"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.instrumentation.grpc"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.sdk.trace"
+          },
+          {
+            "kind": "from",
+            "module": "opentelemetry.sdk.trace.export"
+          },
+          {
+            "kind": "import",
+            "module": "demo_pb2"
+          },
+          {
+            "kind": "import",
+            "module": "demo_pb2_grpc"
+          },
+          {
+            "kind": "from",
+            "module": "logger"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "class",
+            "name": "RecommendationService"
+          },
+          {
+            "kind": "method",
+            "name": "ListRecommendations",
+            "parent_class": "RecommendationService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "Check",
+            "parent_class": "RecommendationService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "method",
+            "name": "Watch",
+            "parent_class": "RecommendationService",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                },
+                {
+                  "name": "request"
+                },
+                {
+                  "name": "context"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "initStackdriverProfiling"
+          }
+        ]
+      },
+      "skeleton": "#!/usr/bin/env python\n# Copyright 2020 Google LLC\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#      http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nfrom __future__ import annotations\n\nimport os\nimport random\nimport time\nfrom concurrent import futures\n\nfrom google.auth.exceptions import DefaultCredentialsError\nimport grpc\nfrom grpc_health.v1 import health_pb2\nfrom grpc_health.v1 import health_pb2_grpc\nfrom opentelemetry import trace\nfrom opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorClient\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorServer\nfrom opentelemetry.sdk.trace import TracerProvider\nfrom opentelemetry.sdk.trace.export import BatchSpanProcessor\n\nimport demo_pb2\nimport demo_pb2_grpc\nfrom logger import getJSONLogger\n\n# TODO: unblock this once https://github.com/GoogleCloudPlatform/microservices-demo/pull/3196 is resolved\n# import googlecloudprofiler\n\nlogger = getJSONLogger('recommendation_server')\n\n\ndef initStackdriverProfiling():\n    # TODO: unblock this once https://github.com/GoogleCloudPlatform/microservices-demo/pull/3196 is resolved\n    # project_id = None\n    # try:\n    #     googlecloudprofiler.start(\n    #         service='recommendation_server',\n    #         service_version='1.0.0',\n    #         verbose=3,\n    #     )\n    # except (ValueError, NotImplementedError) as exc:\n    #     logger.error('Failed to start cloud profiler: ' + str(exc))\n    raise NotImplementedError\n\n\nclass RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):\n    \"\"\"gRPC servicer implementing RecommendationService and gRPC Health protocols.\"\"\"\n\n    def ListRecommendations(self, request, context):\n        \"\"\"Return up to 5 product IDs not already present in the user's cart.\n\n        REQ-PMS-002: fetches full catalog from ProductCatalogService.\n        REQ-PMS-005: excludes products already in the user's cart.\n        REQ-PMS-006: returns a random sample capped at max_responses.\n        \"\"\"\n        raise NotImplementedError\n\n    def Check(self, request, context):\n        \"\"\"Health check — always reports SERVING (REQ-PMS-007).\"\"\"\n        raise NotImplementedError\n\n    def Watch(self, request, context):\n        \"\"\"Streaming health watch — not implemented.\"\"\"\n        raise NotImplementedError\n\n\n__all__ = [\"RecommendationService\", \"initStackdriverProfiling\"]\n\n\nif __name__ == \"__main__\":\n    # Profiler setup — commented out pending PR #3196\n    if os.environ.get(\"ENABLE_PROFILER\", \"\") == \"1\":\n        try:\n            initStackdriverProfiling()\n        except (DefaultCredentialsError, Exception) as err:\n            logger.warning(\"Failed to start Stackdriver Profiler: \" + str(err))\n\n    # Instrument gRPC client and server channels unconditionally before any\n    # channel or server is created so all subsequent gRPC calls are traced.\n    GrpcInstrumentorClient().instrument()\n    GrpcInstrumentorServer().instrument()\n\n    # Conditionally configure OpenTelemetry TracerProvider\n    if os.environ.get(\"ENABLE_TRACING\") == \"1\":\n        logger.info(\"Tracing enabled.\")\n        tracer_provider = TracerProvider()\n        tracer_provider.add_span_processor(\n            BatchSpanProcessor(OTLPSpanExporter())\n        )\n        trace.set_tracer_provider(tracer_provider)\n    else:\n        logger.info(\"Tracing disabled.\")\n\n    # Resolve ProductCatalogService address (REQ-PMS-002)\n    catalog_addr = os.environ.get('PRODUCT_CATALOG_SERVICE_ADDR', '')\n    if not catalog_addr:\n        raise Exception(\n            \"PRODUCT_CATALOG_SERVICE_ADDR environment variable not set\"\n        )\n    logger.info(\"Product catalog address: \" + catalog_addr)\n\n    # Build gRPC stub over insecure channel to ProductCatalogService\n    channel = grpc.insecure_channel(catalog_addr)\n    product_catalog_stub = demo_pb2_grpc.ProductCatalogServiceStub(channel)\n\n    # Build and start gRPC server\n    port = os.environ.get('PORT', '8080')\n    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))\n\n    # Single service instance serves both business and health protocols\n    service = RecommendationService()\n\n    # Register business servicer (REQ-PMS-002, REQ-PMS-005, REQ-PMS-006)\n    demo_pb2_grpc.add_RecommendationServiceServicer_to_server(service, server)\n    # Register health servicer on the same instance (REQ-PMS-007)\n    health_pb2_grpc.add_HealthServicer_to_server(service, server)\n\n    server.add_insecure_port(f\"[::]:{port}\")\n    server.start()\n    logger.info(f\"RecommendationService listening on port {port}\")\n\n    # Block main thread; gRPC server runs on background threads\n    while True:\n        time.sleep(10000)",
+      "reference": "#!/usr/bin/env python\n# Copyright 2020 Google LLC\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#      http://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n\nfrom __future__ import annotations\n\nimport os\nimport random\nimport time\nfrom concurrent import futures\n\nfrom google.auth.exceptions import DefaultCredentialsError\nimport grpc\nfrom grpc_health.v1 import health_pb2\nfrom grpc_health.v1 import health_pb2_grpc\nfrom opentelemetry import trace\nfrom opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorClient\nfrom opentelemetry.instrumentation.grpc import GrpcInstrumentorServer\nfrom opentelemetry.sdk.trace import TracerProvider\nfrom opentelemetry.sdk.trace.export import BatchSpanProcessor\n\nimport demo_pb2\nimport demo_pb2_grpc\nfrom logger import getJSONLogger\n\n# TODO: unblock this once https://github.com/GoogleCloudPlatform/microservices-demo/pull/3196 is resolved\n# import googlecloudprofiler\n\nlogger = getJSONLogger('recommendation_server')\n\n\ndef initStackdriverProfiling():\n    # TODO: unblock this once https://github.com/GoogleCloudPlatform/microservices-demo/pull/3196 is resolved\n    # project_id = None\n    # try:\n    #     googlecloudprofiler.start(\n    #         service='recommendation_server',\n    #         service_version='1.0.0',\n    #         verbose=3,\n    #     )\n    # except (ValueError, NotImplementedError) as exc:\n    #     logger.error('Failed to start cloud profiler: ' + str(exc))\n    pass\n\n\nclass RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):\n    \"\"\"gRPC servicer implementing RecommendationService and gRPC Health protocols.\"\"\"\n\n    def ListRecommendations(self, request, context):\n        \"\"\"Return up to 5 product IDs not already present in the user's cart.\n\n        REQ-PMS-002: fetches full catalog from ProductCatalogService.\n        REQ-PMS-005: excludes products already in the user's cart.\n        REQ-PMS-006: returns a random sample capped at max_responses.\n        \"\"\"\n        max_responses = 5\n\n        # Fetch full catalog from ProductCatalogService (REQ-PMS-002)\n        cat_response = product_catalog_stub.ListProducts(demo_pb2.Empty())\n        product_ids = [x.id for x in cat_response.products]\n\n        # Filter out products already in the user's cart (REQ-PMS-005)\n        filtered_products = list(set(product_ids) - set(request.product_ids))\n        num_products = len(filtered_products)\n\n        # Sample up to max_responses product IDs (REQ-PMS-006)\n        num_return = min(max_responses, num_products)\n        indices_list = random.sample(range(num_products), num_return)\n\n        response = demo_pb2.ListRecommendationsResponse()\n        response.product_ids.extend([filtered_products[i] for i in indices_list])\n        return response\n\n    def Check(self, request, context):\n        \"\"\"Health check — always reports SERVING (REQ-PMS-007).\"\"\"\n        return health_pb2.HealthCheckResponse(\n            status=health_pb2.HealthCheckResponse.SERVING\n        )\n\n    def Watch(self, request, context):\n        \"\"\"Streaming health watch — not implemented.\"\"\"\n        context.set_code(grpc.StatusCode.UNIMPLEMENTED)\n        context.set_details('Watch is not implemented.')\n        raise NotImplementedError('Watch is not implemented')\n\n\n__all__ = [\"RecommendationService\", \"initStackdriverProfiling\"]\n\n\nif __name__ == \"__main__\":\n    # Profiler setup — commented out pending PR #3196\n    if os.environ.get(\"ENABLE_PROFILER\", \"\") == \"1\":\n        try:\n            initStackdriverProfiling()\n        except (DefaultCredentialsError, Exception) as err:\n            logger.warning(\"Failed to start Stackdriver Profiler: \" + str(err))\n\n    # Instrument gRPC client and server channels unconditionally before any\n    # channel or server is created so all subsequent gRPC calls are traced.\n    GrpcInstrumentorClient().instrument()\n    GrpcInstrumentorServer().instrument()\n\n    # Conditionally configure OpenTelemetry TracerProvider\n    if os.environ.get(\"ENABLE_TRACING\") == \"1\":\n        logger.info(\"Tracing enabled.\")\n        tracer_provider = TracerProvider()\n        tracer_provider.add_span_processor(\n            BatchSpanProcessor(OTLPSpanExporter())\n        )\n        trace.set_tracer_provider(tracer_provider)\n    else:\n        logger.info(\"Tracing disabled.\")\n\n    # Resolve ProductCatalogService address (REQ-PMS-002)\n    catalog_addr = os.environ.get('PRODUCT_CATALOG_SERVICE_ADDR', '')\n    if not catalog_addr:\n        raise Exception(\n            \"PRODUCT_CATALOG_SERVICE_ADDR environment variable not set\"\n        )\n    logger.info(\"Product catalog address: \" + catalog_addr)\n\n    # Build gRPC stub over insecure channel to ProductCatalogService\n    channel = grpc.insecure_channel(catalog_addr)\n    product_catalog_stub = demo_pb2_grpc.ProductCatalogServiceStub(channel)\n\n    # Build and start gRPC server\n    port = os.environ.get('PORT', '8080')\n    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))\n\n    # Single service instance serves both business and health protocols\n    service = RecommendationService()\n\n    # Register business servicer (REQ-PMS-002, REQ-PMS-005, REQ-PMS-006)\n    demo_pb2_grpc.add_RecommendationServiceServicer_to_server(service, server)\n    # Register health servicer on the same instance (REQ-PMS-007)\n    health_pb2_grpc.add_HealthServicer_to_server(service, server)\n\n    server.add_insecure_port(f\"[::]:{port}\")\n    server.start()\n    logger.info(f\"RecommendationService listening on port {port}\")\n\n    # Block main thread; gRPC server runs on background threads\n    while True:\n        time.sleep(10000)",
+      "expected_tier": "moderate",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-045",
+      "description": "grpc_client (1 elements, 23 LOC)",
+      "archetype": "grpc_client",
+      "file": {
+        "file": "src/recommendationservice/client.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "import",
+            "module": "sys"
+          },
+          {
+            "kind": "from",
+            "module": "recommendationservice.logger"
+          },
+          {
+            "kind": "from",
+            "module": "recommendationservice.recommendation_server_pb2"
+          },
+          {
+            "kind": "from",
+            "module": "recommendationservice.recommendation_server_pb2_grpc"
+          },
+          {
+            "kind": "import",
+            "module": "grpc"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "main"
+          }
+        ]
+      },
+      "skeleton": "from __future__ import annotations\n\nimport sys\n\nfrom recommendationservice.logger import logger\nfrom recommendationservice.recommendation_server_pb2 import ListRecommendationsRequest\nfrom recommendationservice.recommendation_server_pb2_grpc import RecommendationServiceStub\nimport grpc\n\n\ndef main():\n    raise NotImplementedError\n\n\n__all__ = [\"main\"]",
+      "reference": "from __future__ import annotations\n\nimport sys\n\nfrom recommendationservice.logger import logger\nfrom recommendationservice.recommendation_server_pb2 import ListRecommendationsRequest\nfrom recommendationservice.recommendation_server_pb2_grpc import RecommendationServiceStub\nimport grpc\n\n\ndef main():\n    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080\n    channel = grpc.insecure_channel(f'localhost:{port}')\n    stub = RecommendationServiceStub(channel)\n    request = ListRecommendationsRequest(user_id=\"test\", product_ids=[\"test\"])\n    try:\n        response = stub.ListRecommendations(request)\n        logger.info(f\"Received recommendations: {response}\")\n    except grpc.RpcError as e:\n        logger.error(f\"Failed to get recommendations: {e}\")\n\n\n__all__ = [\"main\"]",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-046",
+      "description": "server_lifecycle (2 elements, 73 LOC)",
+      "archetype": "server_lifecycle",
+      "file": {
+        "file": "src/shoppingassistantservice/shoppingassistantservice.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "import",
+            "module": "os"
+          },
+          {
+            "kind": "from",
+            "module": "urllib.parse"
+          },
+          {
+            "kind": "from",
+            "module": "flask"
+          },
+          {
+            "kind": "from",
+            "module": "google.cloud"
+          },
+          {
+            "kind": "from",
+            "module": "langchain.schema"
+          },
+          {
+            "kind": "from",
+            "module": "langchain_google_alloydb_pg"
+          },
+          {
+            "kind": "from",
+            "module": "langchain_google_genai"
+          },
+          {
+            "kind": "import",
+            "module": "vectorstore"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "create_app"
+          },
+          {
+            "kind": "function",
+            "name": "talkToGemini"
+          }
+        ]
+      },
+      "skeleton": "# [REPAIRED BY STARTD8: extended_lint_fix]\nfrom __future__ import annotations\n\nfrom urllib.parse import unquote\nimport os\nfrom flask import Flask, jsonify, request\nfrom google.cloud import secretmanager\nfrom langchain.schema import HumanMessage\nfrom langchain_google_alloydb_pg import AlloyDBEngine, AlloyDBVectorStore\nfrom langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings\n\ndef create_app():\n    raise NotImplementedError\n",
+      "reference": "# [REPAIRED BY STARTD8: extended_lint_fix]\nfrom __future__ import annotations\n\nfrom urllib.parse import unquote\nimport os\nfrom flask import Flask, jsonify, request\nfrom google.cloud import secretmanager\nfrom langchain.schema import HumanMessage\nfrom langchain_google_alloydb_pg import AlloyDBEngine, AlloyDBVectorStore\nfrom langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings\n\ndef create_app():\n    app = Flask(__name__)\n\n    PROJECT_ID = os.getenv('PROJECT_ID')\n    REGION = os.getenv('REGION')\n    ALLOYDB_DATABASE_NAME = os.getenv('ALLOYDB_DATABASE_NAME')\n    ALLOYDB_TABLE_NAME = os.getenv('ALLOYDB_TABLE_NAME')\n    ALLOYDB_CLUSTER_NAME = os.getenv('ALLOYDB_CLUSTER_NAME')\n    ALLOYDB_INSTANCE_NAME = os.getenv('ALLOYDB_INSTANCE_NAME')\n    ALLOYDB_SECRET_NAME = os.getenv('ALLOYDB_SECRET_NAME')\n\n    if not all([PROJECT_ID, REGION, ALLOYDB_DATABASE_NAME, ALLOYDB_TABLE_NAME, ALLOYDB_CLUSTER_NAME, ALLOYDB_INSTANCE_NAME, ALLOYDB_SECRET_NAME]):\n        raise ValueError(\"Missing environment variables\")\n\n    client = secretmanager.SecretManagerServiceClient()\n    secret_version_path = client.secret_version_path(PROJECT_ID, ALLOYDB_SECRET_NAME, \"latest\")\n    password = client.access_secret_version(secret_version_path).payload.data.decode('utf-8')\n\n    engine = AlloyDBEngine.from_instance(\n        project_id=PROJECT_ID,\n        region=REGION,\n        cluster_name=ALLOYDB_CLUSTER_NAME,\n        instance_name=ALLOYDB_INSTANCE_NAME,\n        database_name=ALLOYDB_DATABASE_NAME,\n        user=\"postgres\",\n        password=password\n    )\n\n    vectorstore = AlloyDBVectorStore.create_sync(\n        engine=engine,\n        embeddings=GoogleGenerativeAIEmbeddings(model=\"models/embedding-001\"),\n        id_column=\"id\",\n        content_column=\"description\",\n        embedding_column=\"product_embedding\",\n        metadata_columns=[\"id\", \"name\", \"categories\"]\n    )\n\n    @app.route('/', methods=['POST'])\n    def talkToGemini():\n        try:\n            message = unquote(request.json['message'])\n            image = request.json['image']\n\n            # Stage 1\n            chat1 = ChatGoogleGenerativeAI(model=\"gemini-1.5-flash\")\n            response1 = chat1([HumanMessage(content=f\"Text: {message}\\nImage URL: {image}\")])\n\n            # Stage 2\n            combined_prompt = f\"{response1.content}\\n{message}\\n{image}\"\n            docs = vectorstore.similarity_search(combined_prompt)\n            [doc.to_json() for doc in docs]\n\n            # Stage 3\n            chat2 = ChatGoogleGenerativeAI(model=\"gemini-1.5-flash\")\n            design_response = chat2([HumanMessage(content=f\"Augmented Design Prompt: {combined_prompt}\")])\n\n            return jsonify({'content': design_response.content})\n        except Exception as e:\n            app.logger.error(f\"Error in RAG pipeline: {e}\")\n            return jsonify({'error': str(e)}), 500\n\n    return app",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
+    },
+    {
+      "id": "gc-047",
+      "description": "load_test_module (11 elements, 83 LOC)",
+      "archetype": "load_test_module",
+      "file": {
+        "file": "src/loadgenerator/locustfile.py",
+        "imports": [
+          {
+            "kind": "from",
+            "module": "__future__"
+          },
+          {
+            "kind": "import",
+            "module": "self"
+          },
+          {
+            "kind": "from",
+            "module": "datetime"
+          },
+          {
+            "kind": "import",
+            "module": "random"
+          },
+          {
+            "kind": "from",
+            "module": "faker"
+          },
+          {
+            "kind": "from",
+            "module": "locust"
+          }
+        ],
+        "elements": [
+          {
+            "kind": "function",
+            "name": "index",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "setCurrency",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "browseProduct",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "viewCart",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "addToCart",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "empty_cart",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "checkout",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "function",
+            "name": "logout",
+            "signature": {
+              "params": [
+                {
+                  "name": "l"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "class",
+            "name": "UserBehavior"
+          },
+          {
+            "kind": "method",
+            "name": "on_start",
+            "parent_class": "UserBehavior",
+            "signature": {
+              "params": [
+                {
+                  "name": "self"
+                }
+              ]
+            }
+          },
+          {
+            "kind": "class",
+            "name": "WebsiteUser"
+          }
+        ]
+      },
+      "skeleton": "from __future__ import annotations\n\nfrom datetime import datetime\nimport random\n\nfrom faker import Faker\nfrom locust import FastHttpUser, TaskSet, between\n\nfake = Faker()\n\nproduct_ids = [\n    \"0PUK6V6EV0\",\n    \"1YMWWN1N4O\",\n    \"2ZYFJ3GM2N\",\n    \"66VCHSJNUP\",\n    \"6E92ZMYYFZ\",\n    \"9SIQT8TOJO\",\n    \"L9ECAV7KIM\",\n    \"LS4PSXUNUM\",\n    \"OLJCESPC7Z\"\n]\n\ncurrencies = [\"EUR\", \"USD\", \"JPY\", \"CAD\", \"GBP\", \"TRY\"]\n\ncurrent_year = datetime.now().year\n\ndef index(l):\n    raise NotImplementedError\n\ndef setCurrency(l):\n    raise NotImplementedError\n\ndef browseProduct(l):\n    raise NotImplementedError\n\ndef viewCart(l):\n    raise NotImplementedError\n\ndef addToCart(l):\n    raise NotImplementedError\n\ndef empty_cart(l):\n    raise NotImplementedError\n\ndef checkout(l):\n    raise NotImplementedError\n\ndef logout(l):\n    raise NotImplementedError\n\nclass UserBehavior(TaskSet):\n    def on_start(self):\n        raise NotImplementedError\n\n    tasks = {\n        index: 1,\n        setCurrency: 2,\n        browseProduct: 10,\n        addToCart: 2,\n        viewCart: 3,\n        checkout: 1\n    }\n\nclass WebsiteUser(FastHttpUser):\n    tasks = [UserBehavior]\n    wait_time = between(1, 10)",
+      "reference": "from __future__ import annotations\n\nfrom datetime import datetime\nimport random\n\nfrom faker import Faker\nfrom locust import FastHttpUser, TaskSet, between\n\nfake = Faker()\n\nproduct_ids = [\n    \"0PUK6V6EV0\",\n    \"1YMWWN1N4O\",\n    \"2ZYFJ3GM2N\",\n    \"66VCHSJNUP\",\n    \"6E92ZMYYFZ\",\n    \"9SIQT8TOJO\",\n    \"L9ECAV7KIM\",\n    \"LS4PSXUNUM\",\n    \"OLJCESPC7Z\"\n]\n\ncurrencies = [\"EUR\", \"USD\", \"JPY\", \"CAD\", \"GBP\", \"TRY\"]\n\ncurrent_year = datetime.now().year\n\ndef index(l):\n    l.client.get(\"/\")\n\ndef setCurrency(l):\n    currency = random.choice(currencies)\n    l.client.post(\"/setCurrency\", json={\"currency\": currency})\n\ndef browseProduct(l):\n    product_id = random.choice(product_ids)\n    l.client.get(f\"/product/{product_id}\")\n\ndef viewCart(l):\n    l.client.get(\"/cart\")\n\ndef addToCart(l):\n    product_id = random.choice(product_ids)\n    quantity = random.randint(1, 10)\n    l.client.get(f\"/product/{product_id}\")\n    l.client.post(\"/cart\", json={\"product_id\": product_id, \"quantity\": quantity})\n\ndef empty_cart(l):\n    l.client.post(\"/cart/empty\")\n\ndef checkout(l):\n    addToCart(l)\n    email = fake.email()\n    address = fake.address()\n    card_number = fake.credit_card_number(card_type=\"visa\")\n    expiration_year = random.randint(current_year + 1, current_year + 70)\n    cvv = f\"{random.randint(100, 999):03d}\"\n    l.client.post(\"/cart/checkout\", json={\n        \"email\": email,\n        \"address\": address,\n        \"card_number\": card_number,\n        \"expiration_year\": expiration_year,\n        \"cvv\": cvv\n    })\n\ndef logout(l):\n    l.client.get(\"/logout\")\n\nclass UserBehavior(TaskSet):\n    def on_start(self):\n        index(self)\n\n    tasks = {\n        index: 1,\n        setCurrency: 2,\n        browseProduct: 10,\n        addToCart: 2,\n        viewCart: 3,\n        checkout: 1\n    }\n\nclass WebsiteUser(FastHttpUser):\n    tasks = [UserBehavior]\n    wait_time = between(1, 10)",
+      "expected_tier": "simple",
+      "mode": "file_whole",
+      "source_project": "online-boutique"
     }
   ]
 }
