@@ -8,6 +8,7 @@ enrichment pipeline is consolidated here (AC-R5).
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -52,7 +53,26 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-__all__ = ["PhaseEmitter"]
+__all__ = ["DerivedContext", "PhaseEmitter"]
+
+
+# ---------------------------------------------------------------------------
+# Intermediate data structures
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class DerivedContext:
+    """Shared derived data used by both artisan and prime seed construction.
+
+    Replaces the 5-tuple returned by ``_derive_shared_context()``.
+    """
+
+    costs: Dict[str, float]
+    total_cost: float
+    architectural_context: Dict[str, Any]
+    design_calibration: Dict[str, Dict[str, Any]]
+    refine_suggestions: List[Dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -178,19 +198,17 @@ class PhaseEmitter:
                 manifest_context["service_communication_graph"] = _scg
 
         # 7. Shared derived data
-        costs, total_cost, architectural_context, design_calibration, refine_suggestions = (
-            self._derive_shared_context(
-                step_costs=step_costs,
-                manifest_context=manifest_context,
-                review_output=review_output,
-                tasks=tasks,
-            )
+        derived = self._derive_shared_context(
+            step_costs=step_costs,
+            manifest_context=manifest_context,
+            review_output=review_output,
+            tasks=tasks,
         )
 
         # 8. Enrichment pipeline (R5)
         _enrichment_diag = self._run_enrichment_pipeline(
             tasks=tasks,
-            refine_suggestions=refine_suggestions,
+            refine_suggestions=derived.refine_suggestions,
             forward_manifest=forward_manifest,
         )
 
@@ -198,7 +216,7 @@ class PhaseEmitter:
         artifacts, onboarding_var, source_checksum_val = self._build_seed_artifacts(
             config_path=config_path,
             onboarding_resolved=onboarding_resolved,
-            refine_suggestions=refine_suggestions,
+            refine_suggestions=derived.refine_suggestions,
             review_output=review_output,
             stub_manifest=stub_manifest,
             skeleton_sources=skeleton_sources,
@@ -224,49 +242,28 @@ class PhaseEmitter:
             parsed_plan.features if parsed_plan else [], onboarding_resolved,
         )
         ingestion_metrics = {
-            **{f"{k}_cost": v for k, v in costs.items()},
-            "total_cost": total_cost,
+            **{f"{k}_cost": v for k, v in derived.costs.items()},
+            "total_cost": derived.total_cost,
         }
 
-        # 11/12. Route-specific seed construction
+        # 11. Seed construction (unified for both routes)
         context_seed_path: Optional[Path] = None
-        if route == ContractorRoute.ARTISAN and parsed_plan is not None:
-            context_seed_path = self._emit_artisan_seed(
+        if parsed_plan is not None:
+            context_seed_path = self._emit_seed(
+                route=route,
                 tasks=tasks,
                 artifacts=artifacts,
                 ingestion_metrics=ingestion_metrics,
-                architectural_context=architectural_context,
-                design_calibration=design_calibration,
+                derived=derived,
                 onboarding_var=onboarding_var,
                 context_files_list=context_files_list,
                 service_metadata=service_metadata,
                 project_metadata=project_metadata,
                 forward_manifest_dict=forward_manifest_dict,
                 source_checksum_val=source_checksum_val,
-                refine_suggestions=refine_suggestions,
                 review_output=review_output,
                 context_files=context_files,
             )
-
-        if route == ContractorRoute.PRIME and parsed_plan is not None:
-            prime_seed_path = self._emit_prime_seed(
-                tasks=tasks,
-                artifacts=artifacts,
-                ingestion_metrics=ingestion_metrics,
-                architectural_context=architectural_context,
-                design_calibration=design_calibration,
-                onboarding_var=onboarding_var,
-                context_files_list=context_files_list,
-                service_metadata=service_metadata,
-                project_metadata=project_metadata,
-                forward_manifest_dict=forward_manifest_dict,
-                source_checksum_val=source_checksum_val,
-                refine_suggestions=refine_suggestions,
-                review_output=review_output,
-                context_files=context_files,
-            )
-            if context_seed_path is None:
-                context_seed_path = prime_seed_path
 
         # 13. Task tracking
         tracking_result = self._emit_task_tracking(
@@ -625,20 +622,10 @@ class PhaseEmitter:
         manifest_context: Optional[Dict[str, Any]],
         review_output: Optional[Dict[str, Any]],
         tasks: List[Dict[str, Any]],
-    ) -> Tuple[
-        Dict[str, float],
-        float,
-        Dict[str, Any],
-        Dict[str, Dict[str, Any]],
-        List[Dict[str, Any]],
-    ]:
-        """Derive shared context data used by both routes.
-
-        Returns ``(costs, total_cost, architectural_context, design_calibration, refine_suggestions)``.
-        """
+    ) -> DerivedContext:
+        """Derive shared context data used by both routes."""
         parsed_plan = self._parsed_plan
         costs = step_costs or {}
-        total_cost = sum(costs.values())
         m_ctx = manifest_context or {}
 
         architectural_context = (
@@ -647,14 +634,19 @@ class PhaseEmitter:
             else {}
         )
         design_calibration = self._workflow._derive_design_calibration(tasks) if tasks else {}
-
         refine_suggestions = (
             self._workflow._extract_refine_suggestions_for_seed(review_output)
             if review_output
             else []
         )
 
-        return costs, total_cost, architectural_context, design_calibration, refine_suggestions
+        return DerivedContext(
+            costs=costs,
+            total_cost=sum(costs.values()),
+            architectural_context=architectural_context,
+            design_calibration=design_calibration,
+            refine_suggestions=refine_suggestions,
+        )
 
     # ------------------------------------------------------------------ #
     # 8. Enrichment pipeline (R5)
@@ -847,38 +839,42 @@ class PhaseEmitter:
         return artifacts_out, ob_var, sc_val
 
     # ------------------------------------------------------------------ #
-    # 11. Artisan seed construction + quality
+    # 11. Unified seed construction + quality
     # ------------------------------------------------------------------ #
 
-    def _emit_artisan_seed(
+    def _emit_seed(
         self,
         *,
+        route: ContractorRoute,
         tasks: List[Dict[str, Any]],
         artifacts: Dict[str, Any],
         ingestion_metrics: Dict[str, Any],
-        architectural_context: Dict[str, Any],
-        design_calibration: Dict[str, Dict[str, Any]],
+        derived: DerivedContext,
         onboarding_var: Optional[Dict[str, Any]],
         context_files_list: Optional[List[Dict[str, Any]]],
         service_metadata: Optional[Dict[str, Any]],
         project_metadata: Optional[Dict[str, Any]],
         forward_manifest_dict: Optional[Dict[str, Any]],
         source_checksum_val: Optional[str],
-        refine_suggestions: List[Dict[str, Any]],
         review_output: Optional[Dict[str, Any]],
         context_files: Optional[List[str]],
     ) -> Path:
-        """Emit artisan-context-seed.json with quality metadata."""
+        """Emit context-seed.json for the given route.
+
+        Consolidates the former ``_emit_artisan_seed`` and ``_emit_prime_seed``
+        into a single method. Artisan route includes ingestion quality metadata
+        (REQ-KPI-600); prime route omits it.
+        """
         from .plan_ingestion_workflow import _validate_context_seed, _log_seed_coverage
 
         parsed_plan = self._parsed_plan
         complexity = self._complexity
-        route = self._route
         output_dir = self._output_dir
         doc_path = self._doc_path
+        route_label = route.value
 
         # REQ-SIG-200: extract graph for top-level seed field
-        _scg_for_seed = (
+        _scg = (
             artifacts.get("service_communication_graph")
             if isinstance(artifacts, dict) else None
         )
@@ -891,12 +887,12 @@ class PhaseEmitter:
             tasks=tasks,
             artifacts=artifacts,
             ingestion_metrics=ingestion_metrics,
-            architectural_context=architectural_context,
-            design_calibration=design_calibration,
+            architectural_context=derived.architectural_context,
+            design_calibration=derived.design_calibration,
             onboarding=onboarding_var,
             context_files=context_files_list,
             service_metadata=service_metadata or None,
-            service_communication_graph=_scg_for_seed,
+            service_communication_graph=_scg,
             wave_metadata=None,
             lane_assignments=None,
             project_metadata=project_metadata or None,
@@ -906,186 +902,93 @@ class PhaseEmitter:
         seed_dict = seed.to_dict()
 
         # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)
-        _task_density = compute_task_density(seed_dict.get("tasks", []))
-        _sq_score, _sq_warnings = compute_seed_quality(
-            seed_dict, task_density=_task_density,
-        )
-        _parse_q = {}
-        if parsed_plan is not None:
-            _parse_q = compute_parse_quality(
-                parsed_plan.features,
-                parsed_plan.dependency_graph,
-                parsed_plan.mentioned_files,
+        # Only for artisan route — prime route omits this block.
+        if route == ContractorRoute.ARTISAN:
+            _task_density = compute_task_density(seed_dict.get("tasks", []))
+            _sq_score, _sq_warnings = compute_seed_quality(
+                seed_dict, task_density=_task_density,
             )
-        _assess_q = {}
-        if complexity is not None:
-            _dims = [
-                complexity.feature_count, complexity.cross_file_deps,
-                complexity.api_surface, complexity.test_complexity,
-                complexity.integration_depth, complexity.domain_novelty,
-                complexity.ambiguity,
-            ]
-            _assess_q = compute_assess_quality(
-                complexity.composite,
-                route.value,
-                getattr(self._workflow, "_complexity_threshold", 40),
-                _dims,
-            )
-            _margin = _assess_q.get("route_margin", 999)
-            if _margin < 10:
-                logger.warning(
-                    "ASSESS: route_margin=%d (composite=%d, threshold=%d) — "
-                    "borderline routing; minor plan changes may flip the route",
-                    _margin, complexity.composite,
-                    getattr(self._workflow, "_complexity_threshold", 40),
+            _parse_q = {}
+            if parsed_plan is not None:
+                _parse_q = compute_parse_quality(
+                    parsed_plan.features,
+                    parsed_plan.dependency_graph,
+                    parsed_plan.mentioned_files,
                 )
-        _density_warnings = compute_density_warnings(_task_density)
-        seed_dict["_ingestion_quality"] = {
-            "seed_quality_score": _sq_score,
-            "features_extracted": _parse_q.get("features_extracted", 0),
-            "multi_file_features": _parse_q.get("multi_file_features", 0),
-            "route_margin": _assess_q.get("route_margin", 0),
-            "field_coverage_warnings": _sq_warnings,
-            "density_warnings": _density_warnings,
-            "diagnostic_report_path": "plan-ingestion-diagnostic.json",
-        }
+            _assess_q = {}
+            if complexity is not None:
+                _dims = [
+                    complexity.feature_count, complexity.cross_file_deps,
+                    complexity.api_surface, complexity.test_complexity,
+                    complexity.integration_depth, complexity.domain_novelty,
+                    complexity.ambiguity,
+                ]
+                _assess_q = compute_assess_quality(
+                    complexity.composite,
+                    route_label,
+                    getattr(self._workflow, "_complexity_threshold", 40),
+                    _dims,
+                )
+                _margin = _assess_q.get("route_margin", 999)
+                if _margin < 10:
+                    logger.warning(
+                        "ASSESS: route_margin=%d (composite=%d, threshold=%d) — "
+                        "borderline routing; minor plan changes may flip the route",
+                        _margin, complexity.composite,
+                        getattr(self._workflow, "_complexity_threshold", 40),
+                    )
+            _density_warnings = compute_density_warnings(_task_density)
+            seed_dict["_ingestion_quality"] = {
+                "seed_quality_score": _sq_score,
+                "features_extracted": _parse_q.get("features_extracted", 0),
+                "multi_file_features": _parse_q.get("multi_file_features", 0),
+                "route_margin": _assess_q.get("route_margin", 0),
+                "field_coverage_warnings": _sq_warnings,
+                "density_warnings": _density_warnings,
+                "diagnostic_report_path": "plan-ingestion-diagnostic.json",
+            }
 
         if not _validate_context_seed(seed_dict):
             seed_dict["_schema_valid"] = False
-        _log_seed_coverage(seed_dict)
-        context_seed_path = output_dir / "artisan-context-seed.json"
+        _log_seed_coverage(seed_dict, label=route_label)
+
+        seed_filename = f"{route_label}-context-seed.json"
+        context_seed_path = output_dir / seed_filename
         with _tracer.start_as_current_span("io.context_seed.write") as _io_span:
             atomic_write_json(context_seed_path, seed_dict, indent=2)
             if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
                 _io_span.set_attribute("io.path", str(context_seed_path))
-                _io_span.set_attribute("io.route", route.value)
+                _io_span.set_attribute("io.route", route_label)
                 _io_span.set_attribute("io.task_count", len(tasks))
 
         # Mottainai Rule 6: log propagation chain status
         _triage = review_output.get("triage", {}) if review_output else {}
-        if refine_suggestions:
+        if derived.refine_suggestions:
             logger.info(
-                "REFINE→seed chain INTACT: %d accepted suggestions forwarded",
-                len(refine_suggestions),
+                "REFINE→%s seed chain INTACT: %d accepted suggestions forwarded",
+                route_label, len(derived.refine_suggestions),
             )
         elif _triage.get("accepted", 0) > 0:
             logger.warning(
-                "REFINE→seed chain DEGRADED: %d accepted suggestions "
+                "REFINE→%s seed chain DEGRADED: %d accepted suggestions "
                 "available but not forwarded",
-                _triage["accepted"],
+                route_label, _triage["accepted"],
             )
         else:
-            logger.debug("REFINE→seed chain N/A: no accepted suggestions to forward")
+            logger.debug("REFINE→%s seed chain N/A: no accepted suggestions to forward", route_label)
 
         # Mottainai: extend artifact inventory
         self._workflow._extend_inventory_with_ingestion(
             output_dir=output_dir,
             doc_path=doc_path,
             context_seed_path=context_seed_path,
-            design_calibration=design_calibration,
+            design_calibration=derived.design_calibration,
             context_files=context_files,
             source_checksum_val=source_checksum_val,
             review_output=review_output,
         )
 
         return context_seed_path
-
-    # ------------------------------------------------------------------ #
-    # 12. Prime seed construction + quality
-    # ------------------------------------------------------------------ #
-
-    def _emit_prime_seed(
-        self,
-        *,
-        tasks: List[Dict[str, Any]],
-        artifacts: Dict[str, Any],
-        ingestion_metrics: Dict[str, Any],
-        architectural_context: Dict[str, Any],
-        design_calibration: Dict[str, Dict[str, Any]],
-        onboarding_var: Optional[Dict[str, Any]],
-        context_files_list: Optional[List[Dict[str, Any]]],
-        service_metadata: Optional[Dict[str, Any]],
-        project_metadata: Optional[Dict[str, Any]],
-        forward_manifest_dict: Optional[Dict[str, Any]],
-        source_checksum_val: Optional[str],
-        refine_suggestions: List[Dict[str, Any]],
-        review_output: Optional[Dict[str, Any]],
-        context_files: Optional[List[str]],
-    ) -> Path:
-        """Emit prime-context-seed.json."""
-        from .plan_ingestion_workflow import _validate_context_seed, _log_seed_coverage
-
-        parsed_plan = self._parsed_plan
-        complexity = self._complexity
-        route = self._route
-        output_dir = self._output_dir
-        doc_path = self._doc_path
-
-        _scg_for_prime = (
-            artifacts.get("service_communication_graph")
-            if isinstance(artifacts, dict) else None
-        )
-
-        seed_prime = ContextSeed(
-            generated_at=datetime.now(timezone.utc).isoformat(),
-            source_checksum=source_checksum_val,
-            plan=parsed_plan.to_seed_dict(),
-            complexity=complexity.to_seed_dict(),
-            tasks=tasks,
-            artifacts=artifacts,
-            ingestion_metrics=ingestion_metrics,
-            architectural_context=architectural_context,
-            design_calibration=design_calibration,
-            onboarding=onboarding_var,
-            context_files=context_files_list,
-            service_metadata=service_metadata or None,
-            service_communication_graph=_scg_for_prime,
-            wave_metadata=None,
-            lane_assignments=None,
-            forward_manifest=forward_manifest_dict,
-            project_metadata=project_metadata or None,
-        )
-
-        seed_prime_dict = seed_prime.to_dict()
-        if not _validate_context_seed(seed_prime_dict):
-            seed_prime_dict["_schema_valid"] = False
-        _log_seed_coverage(seed_prime_dict, label="prime")
-        prime_seed_path = output_dir / "prime-context-seed.json"
-        with _tracer.start_as_current_span("io.context_seed.write") as _io_span:
-            atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
-            if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
-                _io_span.set_attribute("io.path", str(prime_seed_path))
-                _io_span.set_attribute("io.route", route.value)
-                _io_span.set_attribute("io.task_count", len(tasks))
-
-        # Mottainai Rule 6: log propagation chain status (prime)
-        _triage_p = review_output.get("triage", {}) if review_output else {}
-        if refine_suggestions:
-            logger.info(
-                "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
-                len(refine_suggestions),
-            )
-        elif _triage_p.get("accepted", 0) > 0:
-            logger.warning(
-                "REFINE→prime seed chain DEGRADED: %d accepted suggestions "
-                "available but not forwarded",
-                _triage_p["accepted"],
-            )
-        else:
-            logger.debug("REFINE→prime seed chain N/A: no accepted suggestions to forward")
-
-        # Mottainai: extend artifact inventory
-        self._workflow._extend_inventory_with_ingestion(
-            output_dir=output_dir,
-            doc_path=doc_path,
-            context_seed_path=prime_seed_path,
-            design_calibration=design_calibration,
-            context_files=context_files,
-            source_checksum_val=source_checksum_val,
-            review_output=review_output,
-        )
-
-        return prime_seed_path
 
     # ------------------------------------------------------------------ #
     # 13. Task tracking
