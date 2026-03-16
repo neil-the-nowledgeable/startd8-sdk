@@ -491,8 +491,6 @@ def _validate_requirements_file(
     or ``browseProduct`` that are Python identifiers but not on PyPI are
     caught by checking for CamelCase or known non-package patterns.
     """
-    import re
-
     # PEP 508 package name: letter/digit, hyphens, underscores, dots
     _PKG_RE = re.compile(
         r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?(\[.*\])?\s*(~=|==|!=|>=|<=|>|<|===)?",
@@ -521,7 +519,7 @@ def _validate_requirements_file(
         # Scale contract_compliance by fraction of valid lines
         valid_count = len(lines) - len(issues)
         result.contract_compliance = max(0.0, valid_count / len(lines)) if lines else 0.0
-        result.semantic_issues = issues
+        result.semantic_issues.extend(issues)
         result.error = f"{len(issues)} invalid package specifier(s)"
 
     return result
@@ -532,8 +530,6 @@ def _validate_dockerfile(
     result: DiskComplianceResult,
 ) -> DiskComplianceResult:
     """Validate that a Dockerfile has required directives and valid digests."""
-    import re
-
     lines = content.splitlines()
     directives_found: set[str] = set()
     for lineno, line in enumerate(lines, 1):
@@ -893,18 +889,19 @@ def _emit_semantic_observability(
 
         span = trace.get_current_span()
         if span.is_recording():
-            error_count = sum(
-                1 for i in result.semantic_issues
-                if isinstance(i, dict) and i.get("severity") == "error"
-            )
-            warning_count = sum(
-                1 for i in result.semantic_issues
-                if isinstance(i, dict) and i.get("severity") == "warning"
-            )
-            categories = sorted({
-                i["category"] for i in result.semantic_issues
-                if isinstance(i, dict) and "category" in i
-            })
+            error_count = 0
+            warning_count = 0
+            categories: Set[str] = set()
+            for i in result.semantic_issues:
+                if isinstance(i, dict):
+                    sev = i.get("severity")
+                    if sev == "error":
+                        error_count += 1
+                    elif sev == "warning":
+                        warning_count += 1
+                    cat = i.get("category")
+                    if cat:
+                        categories.add(cat)
             span.set_attribute(
                 "semantic_validation.issues_count",
                 len(result.semantic_issues),
@@ -913,14 +910,14 @@ def _emit_semantic_observability(
             span.set_attribute("semantic_validation.warning_count", warning_count)
             if categories:
                 span.set_attribute(
-                    "semantic_validation.categories", categories,
+                    "semantic_validation.categories", sorted(categories),
                 )
             span.set_attribute(
                 "semantic_validation.import_map_mode",
                 import_map is not None,
             )
-    except Exception:
-        pass  # OTel is optional — never fail validation for telemetry
+    except Exception as exc:
+        logger.debug("OTel span attributes skipped: %s", exc)
 
 
 def _validate_import_resolution(

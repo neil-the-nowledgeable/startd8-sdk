@@ -13,6 +13,7 @@ Reuses ``_STDLIB_MODULES`` and ``_PROTOBUF_STUB_RE`` from
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -20,7 +21,7 @@ from startd8.utils.requirements_generator import (
     _STDLIB_MODULES,
     _PROTOBUF_STUB_RE,
 )
-from startd8.implementation_engine.package_aliases import import_to_pypi
+from startd8.implementation_engine.package_aliases import import_to_pypi, pypi_to_import
 
 
 def extract_import_modules(tree: ast.AST) -> List[Dict[str, object]]:
@@ -100,7 +101,9 @@ def resolve_import(
 
     # Golden-seed import map — authoritative closed-world check
     if import_map is not None:
-        classification = import_map.get(module_name) or import_map.get(top_level)
+        classification = import_map.get(module_name)
+        if classification is None:
+            classification = import_map.get(top_level)
         if classification is not None:
             return f"import_map:{classification}"
         # Closed-world: not in the map → unresolvable
@@ -132,7 +135,6 @@ def resolve_import(
 
     # Check if any requirements package maps to this import via alias
     for req_pkg in requirements_packages:
-        from startd8.implementation_engine.package_aliases import pypi_to_import
         expected_import = pypi_to_import(req_pkg)
         if top_level == expected_import or module_name.startswith(expected_import + "."):
             return f"pip:{req_pkg}"
@@ -146,8 +148,6 @@ def parse_requirements_packages(content: str) -> Set[str]:
     Strips version specifiers, comments, pip flags, and blank lines.
     Returns lowercase package names.
     """
-    import re
-
     packages: Set[str] = set()
     for line in content.splitlines():
         stripped = line.strip()
