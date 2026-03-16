@@ -166,13 +166,20 @@ The forward manifest carries 1,236 contracts. 752 are `function_name`, 207 are `
 
 ---
 
-## 8. Immediate Action Items (startd8-sdk, no ContextCore changes needed)
+## 8. Immediate Action Items
 
-1. **Context resolution** (`context_resolution.py`): Extract import modules from dependency tasks' `file_specs.elements[].bases` (~15 lines)
-2. **Token budget floor**: `max(implement_max_output_tokens, 32768)` (1 line)
-3. **Plan document**: Add proto imports to PI-004/PI-007 descriptions (text edit)
+### 8.1 ContextCore Upstream (COMPLETED 2026-03-16)
 
-These three changes use existing data, require no new abstractions, and fix the quality issue for this project. The ContextCore investigation can proceed independently on questions 1-4 above.
+ContextCore `da85e34` implemented the service communication graph extraction from plan text (REQ-SIG-100–104, REQ-CCL-100–500). The `onboarding-metadata.json` now contains a `service_communication_graph` with per-service imports, RPC dependencies, shared modules, and transport protocols. See [SERVICE_INTERCONNECTEDNESS_REQUIREMENTS.md](~/Documents/dev/ContextCore/docs/design/SERVICE_INTERCONNECTEDNESS_REQUIREMENTS.md).
+
+### 8.2 startd8-sdk Downstream (TODO)
+
+1. **Plan ingestion** (`plan_ingestion_emitter.py`): Read `service_communication_graph` from onboarding, populate `architectural_context.shared_modules`, thread per-task imports (REQ-SIG-200)
+2. **Context resolution** (`context_strategy.py`): Inject inherited imports from dependency tasks' services into gen_context (REQ-SIG-201)
+3. **Token budget floor**: `max(implement_max_output_tokens, 32768)` (1 line)
+4. **Plan document**: Add proto imports to PI-004/PI-007 descriptions (text edit)
+
+Items 1-2 are specified in [SERVICE_COMMUNICATION_GRAPH_CONSUMPTION_REQUIREMENTS.md](SERVICE_COMMUNICATION_GRAPH_CONSUMPTION_REQUIREMENTS.md). Items 3-4 use existing data and require no new abstractions.
 
 ---
 
