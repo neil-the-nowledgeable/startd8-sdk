@@ -537,6 +537,9 @@ def _track_onboarding_consumption(
 ) -> None:
     """PCA-402: Record that a phase consumed an onboarding field."""
     audit = context.setdefault("_onboarding_consumption", {})
+    # REQ-GPC-700: record generation profile in consumption audit
+    if "_generation_profile" not in audit:
+        audit["_generation_profile"] = context.get("generation_profile", "full")
     audit.setdefault(field_name, [])
     if phase_name not in audit[field_name]:
         audit[field_name].append(phase_name)

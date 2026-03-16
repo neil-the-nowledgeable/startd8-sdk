@@ -1044,9 +1044,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             ("inv_calibration_hints", "onboarding_calibration_hints"),
         ]
         _fb_count = 0
+        _profile = context.get("generation_profile", "full")
         for local_var, ctx_key in _fallback_map:
             if locals()[local_var] is None:
                 fb_val = context.get(ctx_key)
+                # REQ-GPC-500: log when profile omission causes fallback skip
+                if fb_val is None and _profile != "full":
+                    logger.debug(
+                        "DESIGN: %s skipped (omitted by %s profile)",
+                        ctx_key, _profile,
+                    )
+                    continue
                 if fb_val and isinstance(fb_val, dict):
                     if local_var == "inv_derivation_rules":
                         inv_derivation_rules = fb_val

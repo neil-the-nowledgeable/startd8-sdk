@@ -153,7 +153,12 @@ class EnrichmentModule:
     def render(self, data: dict[str, Any]) -> PromptFragment:
         parts: list[str] = []
 
+        from startd8.seeds.utils import is_omitted
+
         param_sources = data.get("parameter_sources", {})
+        # REQ-GPC-502: defense-in-depth against marker dicts in prompt data
+        if is_omitted(param_sources):
+            param_sources = {}
         if param_sources:
             parts.append("**Parameter Sources (use these names exactly):**")
             ps_items = list(param_sources.items())
@@ -174,6 +179,8 @@ class EnrichmentModule:
                 parts.append(f"- ... and {ps_omitted} more parameter sources (truncated)")
 
         conventions = data.get("semantic_conventions", {})
+        if is_omitted(conventions):
+            conventions = {}
         if conventions:
             parts.append("**Semantic Conventions (naming rules):**")
             conv_items = list(conventions.items())
