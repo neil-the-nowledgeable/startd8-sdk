@@ -410,6 +410,18 @@ def validate_disk_compliance(
     discarded_issues = _validate_discarded_returns(tree)
     result.semantic_issues.extend(discarded_issues)
 
+    # L8: Service identity mismatch (REQ-SV2-400)
+    identity_issues = _validate_service_identity(tree, file_path, sibling_files)
+    result.semantic_issues.extend(identity_issues)
+
+    # L9: Method resolution — self.x() where x is module-level, not a method (REQ-SV2-500)
+    method_issues = _validate_method_resolution(tree)
+    result.semantic_issues.extend(method_issues)
+
+    # L10: Dead code — module-level functions never called within the file (REQ-SV2-600)
+    reachability_issues = _validate_reachability(tree)
+    result.semantic_issues.extend(reachability_issues)
+
     # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
     _emit_semantic_observability(result, file_path, import_map)
 
@@ -922,6 +934,206 @@ def _extract_callee_name(call_node: ast.Call) -> Optional[str]:
             parts.append(node.id)
             return ".".join(reversed(parts))
     return None
+
+
+def _validate_service_identity(
+    tree: ast.AST,
+    file_path: str,
+    sibling_files: Optional[List[str]] = None,
+) -> List[Dict[str, object]]:
+    """Flag logger calls with a different service's name (REQ-SV2-400).
+
+    Detects copy-paste bugs where ``logger.py`` is duplicated across
+    services but the component/service name string is not updated.
+    """
+    issues: List[Dict[str, object]] = []
+    parts = Path(file_path).parts
+    if len(parts) < 2:
+        return issues
+    expected_service = parts[-2].lower()
+
+    # Build set of other service directory names from siblings
+    other_services: set[str] = set()
+    for sib in sibling_files or []:
+        sib_parts = Path(sib).parts
+        if len(sib_parts) >= 2:
+            other_services.add(sib_parts[-2].lower())
+    other_services.discard(expected_service)
+    if not other_services:
+        return issues
+
+    _LOGGER_CALLEES = {"getlogger", "getjsonlogger", "get_logger", "basicconfig"}
+    _IDENTITY_KWARGS = {"component", "service", "name"}
+    _IDENTITY_PARAMS = {"component", "service", "name"}
+
+    def _check_string(value: str, lineno: int, context: str) -> None:
+        found = value.lower()
+        for other in other_services:
+            if other in found and expected_service not in found:
+                issues.append({
+                    "category": "service_identity_mismatch",
+                    "severity": "error",
+                    "message": (
+                        f"{context} contains '{other}' "
+                        f"but file is in '{expected_service}/' directory"
+                    ),
+                    "line": lineno,
+                    "symbol": value,
+                })
+                break
+
+    for node in ast.walk(tree):
+        # Check function/method default parameter values:
+        # def getJSONLogger(name='emailservice') or
+        # def __init__(self, component='emailservice')
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            func_lower = node.name.lower()
+            # Only check logger-related functions or identity params
+            for arg, default in zip(
+                reversed(node.args.args), reversed(node.args.defaults)
+            ):
+                param_name = arg.arg.lower()
+                if (
+                    isinstance(default, ast.Constant)
+                    and isinstance(default.value, str)
+                    and (param_name in _IDENTITY_PARAMS or func_lower in _LOGGER_CALLEES)
+                ):
+                    _check_string(
+                        default.value, node.lineno,
+                        f"Default for '{arg.arg}' in '{node.name}()'",
+                    )
+            continue
+
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _extract_callee_name(node)
+        callee_tail = (callee or "").lower().split(".")[-1] if callee else ""
+
+        # Check positional arg on logger factory calls
+        if callee_tail in _LOGGER_CALLEES and node.args:
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                _check_string(
+                    arg.value, node.lineno,
+                    f"Logger initialized with '{arg.value}'",
+                )
+
+        # Check identity keyword args on any call
+        for kw in node.keywords:
+            if kw.arg not in _IDENTITY_KWARGS:
+                continue
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                _check_string(
+                    kw.value.value, node.lineno,
+                    f"Keyword '{kw.arg}'",
+                )
+
+    return issues
+
+
+def _validate_method_resolution(tree: ast.AST) -> List[Dict[str, object]]:
+    """Flag self.x() where x is a module-level function, not a method (REQ-SV2-500).
+
+    Catches the recurring ``self.index()`` vs ``index(self)`` pattern
+    in Locust TaskSets and similar frameworks.
+    """
+    issues: List[Dict[str, object]] = []
+
+    # Pass 1: module-level function names
+    module_funcs: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            module_funcs.add(node.name)
+
+    if not module_funcs:
+        return issues
+
+    # Pass 2: per-class check
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        class_methods: set[str] = set()
+        for item in ast.iter_child_nodes(node):
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                class_methods.add(item.name)
+
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Attribute)
+                and isinstance(child.value, ast.Name)
+                and child.value.id == "self"
+                and child.attr in module_funcs
+                and child.attr not in class_methods
+            ):
+                issues.append({
+                    "category": "method_resolution",
+                    "severity": "warning",
+                    "message": (
+                        f"'self.{child.attr}()' called but '{child.attr}' "
+                        f"is a module-level function, not a method of "
+                        f"'{node.name}'"
+                    ),
+                    "line": child.lineno,
+                    "symbol": child.attr,
+                })
+
+    return issues
+
+
+def _validate_reachability(tree: ast.AST) -> List[Dict[str, object]]:
+    """Flag module-level functions never referenced within the file (REQ-SV2-600).
+
+    Only flags public (non-underscore) functions that are not ``main``,
+    not in ``__all__``, and not referenced by any ``ast.Name`` load or
+    dict/list/set literal in the same module.
+    """
+    issues: List[Dict[str, object]] = []
+
+    # Collect module-level function defs (skip private, main, class methods)
+    func_defs: dict[str, int] = {}
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("_") or node.name == "main":
+                continue
+            func_defs[node.name] = node.lineno
+
+    if not func_defs:
+        return issues
+
+    # Collect all Name-load references (function calls, dict values, etc.)
+    referenced: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            referenced.add(node.id)
+
+    # Check __all__ exports
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                referenced.add(elt.value)
+
+    # A function defined at module level is "referenced" if its name
+    # appears as a Name(Load) ANYWHERE in the file (including as a dict
+    # key, decorator argument, list element, or function call).  The
+    # definition itself uses Name(Store), so it won't false-match.
+    for name, lineno in func_defs.items():
+        if name not in referenced:
+            issues.append({
+                "category": "unreachable_function",
+                "severity": "warning",
+                "message": (
+                    f"Module-level function '{name}' is defined "
+                    f"but never called within the file"
+                ),
+                "line": lineno,
+                "symbol": name,
+            })
+
+    return issues
 
 
 def _emit_semantic_observability(
