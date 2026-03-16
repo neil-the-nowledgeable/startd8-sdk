@@ -798,21 +798,19 @@ class StandaloneContextStrategy(ContextStrategy):
         """
         gen_context: Dict[str, Any] = {"feature_name": feature_data.get("name", "")}
         
-        # Phase 4 Threading: Inject forward manifest contracts verbatim (REQ-PC-FM-004)
+        # Phase 4 Threading: Forward manifest element specs (REQ-PC-FM-004)
+        # NOTE: binding_constraints_for_task() removed — contracts lack file_path
+        # and always return empty on the prime route. Import context is now
+        # provided by _collect_dependency_imports() via the service communication
+        # graph (REQ-SIG-200/201). See GAP-SDK-003 in REQ_CONTRACTS_CONSUMER_GAPS.md.
         fm = seed_data.get("forward_manifest")
-        if fm:
-            # Hydrate dict from JSON to ForwardManifest model when needed
-            if isinstance(fm, dict):
-                try:
-                    from ..forward_manifest import ForwardManifest
-                    fm = ForwardManifest.model_validate(fm)
-                except Exception as exc:
-                    logger.debug("Forward manifest hydration failed: %s", exc)
-                    fm = None
-            if fm and hasattr(fm, "binding_constraints_for_task"):
-                bindings = fm.binding_constraints_for_task(feature_data.get("id", ""))
-                if bindings:
-                    gen_context.setdefault("domain_constraints", []).extend(bindings)
+        if fm and isinstance(fm, dict):
+            try:
+                from ..forward_manifest import ForwardManifest
+                fm = ForwardManifest.model_validate(fm)
+            except Exception as exc:
+                logger.debug("Forward manifest hydration failed: %s", exc)
+                fm = None
 
         # Target file + domain constraints
         target_files = feature_data.get("target_files") or []
@@ -982,23 +980,16 @@ class PipelineContextStrategy(ContextStrategy):
             "feature_name": feature_data.get("name", ""),
         }
 
-        # Phase 4 Threading: Inject forward manifest contracts verbatim (REQ-PC-FM-004)
+        # Phase 4 Threading: Forward manifest element specs (REQ-PC-FM-004)
+        # NOTE: binding_constraints_for_task() removed — see standalone strategy comment.
         fm = seed_data.get("forward_manifest")
-        if fm:
-            # Hydrate dict from JSON to ForwardManifest model when needed
-            if isinstance(fm, dict):
-                try:
-                    from ..forward_manifest import ForwardManifest
-                    fm = ForwardManifest.model_validate(fm)
-                except Exception as exc:
-                    logger.debug("Forward manifest hydration failed: %s", exc)
-                    fm = None
-            if fm and hasattr(fm, "binding_constraints_for_task"):
-                bindings = fm.binding_constraints_for_task(feature_data.get("id", ""))
-                if bindings:
-                    gen_context["forward_contracts"] = "\n".join(
-                        f"- {b}" for b in bindings
-                    )
+        if fm and isinstance(fm, dict):
+            try:
+                from ..forward_manifest import ForwardManifest
+                fm = ForwardManifest.model_validate(fm)
+            except Exception as exc:
+                logger.debug("Forward manifest hydration failed: %s", exc)
+                fm = None
 
         # Target file (same as standalone)
         target_files = feature_data.get("target_files") or []

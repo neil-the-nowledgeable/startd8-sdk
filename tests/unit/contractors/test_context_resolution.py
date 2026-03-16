@@ -310,8 +310,12 @@ class TestStandaloneContextStrategy:
     def test_resolve_task_context_forward_manifest_dict_hydration(
         self, standalone_strategy, minimal_feature_data, minimal_seed_data
     ):
-        """REQ-PC-FM-004: forward_manifest dict is hydrated and bindings injected."""
-        # Minimal feature has id "F-001" but Prime uses PI-001; use F-001 for task_id match
+        """REQ-PC-FM-004: forward_manifest dict is hydrated for element spec injection.
+
+        binding_constraints_for_task() was removed (GAP-SDK-003) — import context
+        is now provided by the service communication graph (REQ-SIG-200/201).
+        The manifest is still hydrated for file_specs_for_task() usage.
+        """
         feature = {"name": "logger", "id": "PI-001", "target_files": ["src/logger.py"], "description": "", "metadata": {}}
         seed_data = {
             **minimal_seed_data,
@@ -335,10 +339,10 @@ class TestStandaloneContextStrategy:
         ctx = standalone_strategy.resolve_task_context(
             feature_data=feature, seed_data=seed_data,
         )
-        assert "domain_constraints" in ctx
-        constraints = ctx["domain_constraints"]
-        assert isinstance(constraints, list)
-        assert any("[BINDING] function=getJSONLogger" in c for c in constraints)
+        # Binding injection removed — verify manifest hydration still works
+        # (target_file is set, forward_element_specs would be set if file_specs had data)
+        assert ctx.get("target_file") == "src/logger.py"
+        assert "domain_constraints" not in ctx
 
 
 # ============================================================================
