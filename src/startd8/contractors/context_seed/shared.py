@@ -15,7 +15,7 @@ from startd8.implementation_engine.package_aliases import (
     pypi_to_import,
 )
 from startd8.logging_config import get_logger
-from startd8.seeds.utils import safe_onboarding
+from startd8.seeds.utils import KNOWN_GENERATION_PROFILES, safe_onboarding
 
 logger = get_logger("startd8.contractors.context_seed_handlers")
 
@@ -386,7 +386,14 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
 
     # REQ-GPC-202: restore generation profile on resume
     if "generation_profile" not in context:
-        context["generation_profile"] = _onboarding.get("generation_profile", "full")
+        _resumed_profile = _onboarding.get("generation_profile", "full")
+        if _resumed_profile not in KNOWN_GENERATION_PROFILES:
+            logger.warning(
+                "Resume: unknown generation_profile %r in seed — "
+                "defaulting to 'full' behavior",
+                _resumed_profile,
+            )
+        context["generation_profile"] = _resumed_profile
 
     # REQ-GPC-201: skip ContextCore profile-omitted markers on resume path
     _pca_fields = {

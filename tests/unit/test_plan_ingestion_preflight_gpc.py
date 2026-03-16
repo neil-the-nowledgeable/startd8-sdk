@@ -131,6 +131,40 @@ class TestPreflightProfileAwareness:
         ]
         assert len(resolvability_errors) == 1
 
+    def test_marker_dict_rejected_as_resolvability(self, tmp_path):
+        """Defense-in-depth: marker dict in resolved_artifact_parameters
+        does not satisfy the resolvability check for full profile."""
+        export_dir = tmp_path / "export"
+        export_dir.mkdir()
+        # Create onboarding with marker dict instead of real resolvability
+        manifest_path = export_dir / "artifact-manifest.yaml"
+        project_context_path = export_dir / "project-context.yaml"
+        manifest_path.write_text("apiVersion: v1\n")
+        project_context_path.write_text("apiVersion: v1\n")
+
+        onboarding = {
+            "generation_profile": "full",
+            "artifact_manifest_path": str(manifest_path),
+            "project_context_path": str(project_context_path),
+            "artifact_manifest_checksum": sha256(manifest_path.read_bytes()).hexdigest(),
+            "project_context_checksum": sha256(project_context_path.read_bytes()).hexdigest(),
+            "coverage": {"overallCoverage": 100, "gaps": []},
+            "resolved_artifact_parameters": {"_omitted": "profile=source"},
+        }
+        (export_dir / "onboarding-metadata.json").write_text(json.dumps(onboarding))
+
+        _, _, _, errors = self.wf._preflight_export_contract(
+            contextcore_export_dir=str(export_dir),
+            context_files=None,
+            output_dir=tmp_path,
+            min_export_coverage=0,
+        )
+        resolvability_errors = [
+            e for e in errors if "parameter resolvability" in e
+        ]
+        # Marker dict should NOT satisfy the check
+        assert len(resolvability_errors) == 1
+
     def test_default_profile_is_full(self, tmp_path):
         """Missing generation_profile defaults to full behavior."""
         export_dir = tmp_path / "export"

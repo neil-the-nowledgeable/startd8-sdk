@@ -103,6 +103,44 @@ class TestResumeRestoresProfile:
         assert context["generation_profile"] == "operator"
 
 
+class TestResumeUnknownProfile:
+    """Unknown generation_profile on resume should warn."""
+
+    def test_unknown_profile_warns_on_resume(self, tmp_path, caplog):
+        import logging
+        from startd8.contractors.context_seed.shared import _ensure_context_loaded
+
+        seed_data = _make_seed_data(
+            onboarding={"generation_profile": "future_profile"}
+        )
+        seed_file = _write_seed(tmp_path, seed_data)
+
+        context = {"enriched_seed_path": str(seed_file)}
+        with caplog.at_level(logging.WARNING):
+            _ensure_context_loaded(context)
+
+        # Value propagates (forward-compatible)
+        assert context["generation_profile"] == "future_profile"
+        # Warning emitted
+        assert any("unknown generation_profile" in r.message for r in caplog.records)
+
+    def test_known_profile_no_warning_on_resume(self, tmp_path, caplog):
+        import logging
+        from startd8.contractors.context_seed.shared import _ensure_context_loaded
+
+        seed_data = _make_seed_data(
+            onboarding={"generation_profile": "monitoring"}
+        )
+        seed_file = _write_seed(tmp_path, seed_data)
+
+        context = {"enriched_seed_path": str(seed_file)}
+        with caplog.at_level(logging.WARNING):
+            _ensure_context_loaded(context)
+
+        assert context["generation_profile"] == "monitoring"
+        assert not any("unknown generation_profile" in r.message for r in caplog.records)
+
+
 class TestResumeOmittedMarkers:
     """REQ-GPC-201 on resume path: omitted markers → None."""
 
