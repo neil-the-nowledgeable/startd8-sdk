@@ -146,6 +146,7 @@ class SeedContext:
     architectural_context: Optional[Dict[str, Any]] = None
     design_calibration: Optional[Dict[str, Any]] = None
     generation_provenance: Optional[Dict[str, Any]] = None
+    service_communication_graph: Optional[Dict[str, Any]] = None  # REQ-SIG-201
 
     # Lifecycle control — init=False prevents callers from constructing
     # pre-frozen instances via SeedContext(_frozen=True).
@@ -1466,6 +1467,7 @@ class PrimeContractorWorkflow:
         architectural_context = seed_data.get("architectural_context") or {}
         design_calibration = seed_data.get("design_calibration") or {}
         service_metadata = seed_data.get("service_metadata") or {}
+        comm_graph = seed_data.get("service_communication_graph")  # REQ-SIG-201
         forward_manifest = seed_data.get("forward_manifest")  # REQ-PC-FM-002
 
         # Determine execution mode
@@ -1494,6 +1496,7 @@ class PrimeContractorWorkflow:
             onboarding_metadata=onboarding or None,
             architectural_context=architectural_context or None,
             design_calibration=design_calibration or None,
+            service_communication_graph=comm_graph if isinstance(comm_graph, dict) else None,
         )
 
         self.seed_service_metadata = service_metadata
@@ -3366,6 +3369,28 @@ class PrimeContractorWorkflow:
                     for imp in fspec.imports:
                         if imp.module:
                             modules.add(imp.module)
+
+            # Strategy 3: Service communication graph (REQ-SIG-201)
+            comm_graph = (
+                self._seed_context.service_communication_graph
+                if self._seed_context else None
+            )
+            if comm_graph and dep.target_files:
+                graph_services = comm_graph.get("services", {})
+                for tf in dep.target_files:
+                    # Match target file path components against graph service keys
+                    parts = Path(tf).parts
+                    for part in parts:
+                        part_lower = part.lower()
+                        if part_lower in graph_services:
+                            svc = graph_services[part_lower]
+                            modules.update(svc.get("imports", []))
+                            break
+                        # Try case-insensitive match against all keys
+                        for svc_key in graph_services:
+                            if svc_key.lower() == part_lower:
+                                modules.update(graph_services[svc_key].get("imports", []))
+                                break
 
             if modules:
                 result[dep_id] = {

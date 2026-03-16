@@ -76,6 +76,7 @@ class SeedBuilder:
         self._design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
         self._context_files: Optional[List[Dict[str, Any]]] = None
         self._service_metadata: Optional[Dict[str, Any]] = None
+        self._service_communication_graph: Optional[Dict[str, Any]] = None
         self._wave_metadata: Optional[Dict[str, Any]] = None
         self._lane_assignments: Optional[Dict[str, int]] = None
         self._project_metadata: Optional[Dict[str, Any]] = None
@@ -292,6 +293,13 @@ class SeedBuilder:
         self._service_metadata = infer_service_metadata(features, onboarding)
         return self
 
+    def set_service_communication_graph(
+        self, graph: Optional[Dict[str, Any]]
+    ) -> "SeedBuilder":
+        """Set the service communication graph from ContextCore onboarding."""
+        self._service_communication_graph = graph
+        return self
+
     def set_project_metadata(
         self, metadata: Optional[Dict[str, Any]]
     ) -> "SeedBuilder":
@@ -404,6 +412,7 @@ class SeedBuilder:
             design_calibration=self._design_calibration,
             context_files=self._context_files,
             service_metadata=self._service_metadata,
+            service_communication_graph=self._service_communication_graph,
             wave_metadata=self._wave_metadata,
             lane_assignments=self._lane_assignments,
             project_metadata=self._project_metadata,

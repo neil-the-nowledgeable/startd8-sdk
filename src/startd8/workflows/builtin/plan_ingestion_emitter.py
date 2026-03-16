@@ -169,6 +169,14 @@ class PhaseEmitter:
                 tasks=tasks,
             )
 
+        # 6b. REQ-SIG-200: thread communication graph into manifest_context
+        #     so _derive_architectural_context can merge shared modules.
+        if onboarding_resolved:
+            _scg = onboarding_resolved.get("service_communication_graph")
+            if _scg and isinstance(_scg, dict):
+                manifest_context = dict(manifest_context) if manifest_context else {}
+                manifest_context["service_communication_graph"] = _scg
+
         # 7. Shared derived data
         costs, total_cost, architectural_context, design_calibration, refine_suggestions = (
             self._derive_shared_context(
@@ -790,6 +798,11 @@ class PhaseEmitter:
             ex = onboarding_resolved.get("example_artifacts")
             if ex and isinstance(ex, dict) and not is_omitted(ex):
                 artifacts_out["example_artifacts"] = dict(ex)
+            # REQ-SIG-200: forward service communication graph to seed
+            scg = onboarding_resolved.get("service_communication_graph")
+            if scg and isinstance(scg, dict) and not is_omitted(scg):
+                artifacts_out["service_communication_graph"] = scg
+
             cg = onboarding_resolved.get("coverage_gaps")
             if cg and isinstance(cg, list):
                 artifacts_out["coverage_gaps"] = list(cg)
@@ -864,6 +877,12 @@ class PhaseEmitter:
         output_dir = self._output_dir
         doc_path = self._doc_path
 
+        # REQ-SIG-200: extract graph for top-level seed field
+        _scg_for_seed = (
+            artifacts.get("service_communication_graph")
+            if isinstance(artifacts, dict) else None
+        )
+
         seed = ContextSeed(
             generated_at=datetime.now(timezone.utc).isoformat(),
             source_checksum=source_checksum_val,
@@ -877,6 +896,7 @@ class PhaseEmitter:
             onboarding=onboarding_var,
             context_files=context_files_list,
             service_metadata=service_metadata or None,
+            service_communication_graph=_scg_for_seed,
             wave_metadata=None,
             lane_assignments=None,
             project_metadata=project_metadata or None,
@@ -1001,6 +1021,11 @@ class PhaseEmitter:
         output_dir = self._output_dir
         doc_path = self._doc_path
 
+        _scg_for_prime = (
+            artifacts.get("service_communication_graph")
+            if isinstance(artifacts, dict) else None
+        )
+
         seed_prime = ContextSeed(
             generated_at=datetime.now(timezone.utc).isoformat(),
             source_checksum=source_checksum_val,
@@ -1014,6 +1039,7 @@ class PhaseEmitter:
             onboarding=onboarding_var,
             context_files=context_files_list,
             service_metadata=service_metadata or None,
+            service_communication_graph=_scg_for_prime,
             wave_metadata=None,
             lane_assignments=None,
             forward_manifest=forward_manifest_dict,

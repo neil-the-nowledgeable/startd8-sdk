@@ -50,6 +50,7 @@ class ContextSeed:
     design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
     context_files: Optional[List[Dict[str, Any]]] = None
     service_metadata: Optional[Dict[str, Any]] = None
+    service_communication_graph: Optional[Dict[str, Any]] = None  # REQ-SIG-200
     wave_metadata: Optional[Dict[str, Any]] = None
     lane_assignments: Optional[Dict[str, int]] = None
     project_metadata: Optional[Dict[str, Any]] = None
@@ -80,6 +81,8 @@ class ContextSeed:
             d["context_files"] = self.context_files
         if self.service_metadata is not None:
             d["service_metadata"] = self.service_metadata
+        if self.service_communication_graph is not None:
+            d["service_communication_graph"] = self.service_communication_graph
         if self.wave_metadata is not None:
             d["wave_metadata"] = self.wave_metadata
         if self.lane_assignments is not None:

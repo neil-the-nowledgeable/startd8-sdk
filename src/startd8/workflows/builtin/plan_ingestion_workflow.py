@@ -3009,6 +3009,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             if count >= 2
         ]
 
+        # REQ-SIG-200: merge service communication graph shared modules
+        _graph = manifest_context.get("service_communication_graph", {})
+        _graph_shared = _graph.get("shared_modules", {})
+        if _graph_shared and isinstance(_graph_shared, dict):
+            for mod_name, mod_info in _graph_shared.items():
+                if isinstance(mod_info, dict):
+                    ctx["shared_modules"].append({
+                        "name": mod_name,
+                        "type": mod_info.get("type", "unknown"),
+                        "used_by": mod_info.get("used_by", []),
+                    })
+            logger.info(
+                "Architectural context: merged %d shared modules from communication graph",
+                len(_graph_shared),
+            )
+
         # import_conventions: most common parent directories
         dir_counter: Counter[str] = Counter()
         for feat in parsed_plan.features:

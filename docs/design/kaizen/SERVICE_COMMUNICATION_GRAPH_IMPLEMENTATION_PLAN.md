@@ -1,9 +1,10 @@
 # Implementation Plan: Service Communication Graph Consumption (REQ-SIG-200/201)
 
-**Status:** Draft
+**Status:** Implemented (Phases 1-3)
 **Date:** 2026-03-16
 **Requirements:** [SERVICE_COMMUNICATION_GRAPH_CONSUMPTION_REQUIREMENTS.md](SERVICE_COMMUNICATION_GRAPH_CONSUMPTION_REQUIREMENTS.md)
-**Estimated Scope:** ~85 lines across 5 files, 3 phases
+**Estimated Scope:** ~80 lines across 5 files, 3 phases
+**Prerequisite Refactor:** ArtisanContextSeed → ContextSeed unification (commit `5a79095`)
 
 ---
 
@@ -171,84 +172,53 @@ Extract the graph from onboarding, merge with architectural context, and thread 
 
 ---
 
-## Phase 3: Context Resolution + Prompt Injection (~20 lines)
+## Phase 3: Context Resolution — Strategy 3 (~20 lines)
 
-### Step 3.1: Add graph to enrichment fields (REQ-SIG-201 §4.2)
+### Key Design Decision: Enhance Existing Mechanism
 
-**File:** `src/startd8/contractors/context_strategy.py`
+The gap analysis revealed that `PrimeContractorWorkflow._collect_dependency_imports()` already implements a 2-strategy dependency import extraction pipeline (Strategy 1: description parsing, Strategy 2: forward manifest). Rather than creating a parallel `inherited_imports` path through `PipelineContextStrategy.ENRICHMENT_FIELDS` → `context_resolution.py` → `spec_builder.py`, the graph is injected as **Strategy 3** into the existing mechanism.
 
-**In `PipelineContextStrategy.ENRICHMENT_FIELDS` (line 144):**
+This means:
+- **No changes to `context_strategy.py`** — enrichment fields are the wrong mechanism
+- **No changes to `context_resolution.py`** — the graph doesn't need a new IMP-P6 block
+- **No changes to `spec_builder.py`** — `_build_dependency_imports_section()` already renders the output
+- **No new helper function** — the matching logic is inline in `_collect_dependency_imports`
 
-```python
-    ENRICHMENT_FIELDS: typing.Tuple[str, ...] = (
-        "onboarding_metadata",
-        "architectural_context",
-        "design_calibration",
-        "service_communication_graph",  # REQ-SIG-201
-    )
-```
+### Step 3.1: Add graph to `SeedContext` (REQ-SIG-201)
 
-### Step 3.2: Extract and render `inherited_imports` in spec builder (REQ-SIG-201 §4.3)
+**File:** `src/startd8/contractors/prime_contractor.py`
 
-**File:** `src/startd8/implementation_engine/spec_builder.py`
+Add `service_communication_graph` field to the `SeedContext` dataclass and populate it in `_init_seed_context()` from `seed_data.get("service_communication_graph")`.
 
-**In `build_spec_prompt()` (~line 631),** after the requirements section, add:
+### Step 3.2: Strategy 3 in `_collect_dependency_imports` (REQ-SIG-201)
 
-```python
-    # --- REQ-SIG-201: inherited imports from dependency services ---
-    inherited_imports = context.pop("inherited_imports", None) or context.pop(
-        "service_imports", None
-    )
-    inherited_imports_section = ""
-    if inherited_imports and isinstance(inherited_imports, list):
-        import_items = "\n".join(f"- `{m}`" for m in inherited_imports)
-        inherited_imports_section = (
-            "\n## Available Imports (from dependency services)\n"
-            "The following modules are used by services this task depends on — "
-            "import them directly instead of inventing alternative paths:\n"
-            f"{import_items}\n"
-        )
-```
+**File:** `src/startd8/contractors/prime_contractor.py`
 
-Then include `inherited_imports_section` in the final prompt assembly.
-
-### Step 3.3: Dependency import extraction helper (REQ-SIG-201 §4.1)
-
-**File:** `src/startd8/contractors/context_seed/shared.py` or a new `sig_utils.py`
+After Strategy 2 (forward manifest), add:
 
 ```python
-def extract_inherited_imports(
-    task_id: str,
-    task_index: Dict[str, Any],
-    comm_graph: Dict[str, Any],
-) -> List[str]:
-    """Extract imports from dependency tasks' services in the communication graph."""
-    task = task_index.get(task_id)
-    if not task:
-        return []
-    services = comm_graph.get("services", {})
-    inherited: set[str] = set()
-    for dep_id in getattr(task, "depends_on", []):
-        dep = task_index.get(dep_id)
-        if not dep:
-            continue
-        for tf in getattr(dep, "target_files", []):
-            svc_dir = Path(tf).parts[1] if len(Path(tf).parts) > 1 else ""
-            if svc_dir in services:
-                inherited.update(services[svc_dir].get("imports", []))
-    return sorted(inherited)
+# Strategy 3: Service communication graph (REQ-SIG-201)
+comm_graph = self._seed_context.service_communication_graph if self._seed_context else None
+if comm_graph and dep.target_files:
+    graph_services = comm_graph.get("services", {})
+    for tf in dep.target_files:
+        # Match target file path components against graph service keys (case-insensitive)
+        for part in Path(tf).parts:
+            part_lower = part.lower()
+            for svc_key in graph_services:
+                if svc_key.lower() == part_lower:
+                    modules.update(graph_services[svc_key].get("imports", []))
+                    break
 ```
 
-### Step 3.4: Tests
+The matching uses case-insensitive comparison of each path component against all graph service keys, solving Gap 4 (fragile heuristic).
 
-**File:** `tests/unit/contractors/test_sig_resolution.py`
-- `test_inherited_imports_from_dependency` — Dep has imports → inherited
-- `test_no_deps_empty_imports` — No depends_on → empty list
-- `test_dep_not_in_graph` — Dep target not in graph → empty
+### Step 3.3: Tests
 
-**File:** `tests/unit/test_spec_builder_sig.py`
-- `test_inherited_imports_rendered_in_prompt` — Imports appear in spec
-- `test_no_imports_no_section` — Empty imports → no section in prompt
+**File:** `tests/unit/test_sig_consumption.py`
+- `test_graph_provides_imports` — Strategy 3 finds imports from graph
+- `test_no_graph_no_crash` — Without graph, Strategy 3 is silently skipped
+- `test_case_insensitive_match` — Graph key "EmailService" matches path "emailservice/"
 
 ---
 
@@ -282,11 +252,30 @@ Phase 3 (context resolution) ← depends on Phase 2
 |------|-------|---------|
 | `src/startd8/seeds/models.py` | 1 | Add `service_communication_graph` field + serialization |
 | `src/startd8/seeds/builder.py` | 1 | Add `_service_communication_graph` + setter + build wiring |
-| `src/startd8/workflows/builtin/plan_ingestion_emitter.py` | 2 | Extract graph from onboarding, thread to manifest_context, per-task imports |
+| `src/startd8/workflows/builtin/plan_ingestion_emitter.py` | 2 | Extract graph from onboarding, thread to manifest_context, pass to ContextSeed |
 | `src/startd8/workflows/builtin/plan_ingestion_workflow.py` | 2 | Merge graph modules into architectural context |
-| `src/startd8/contractors/context_strategy.py` | 3 | Add enrichment field |
-| `src/startd8/implementation_engine/spec_builder.py` | 3 | Render inherited imports section |
-| `src/startd8/contractors/context_seed/shared.py` | 3 | `extract_inherited_imports()` helper |
+| `src/startd8/contractors/prime_contractor.py` | 3 | `SeedContext.service_communication_graph` field + Strategy 3 in `_collect_dependency_imports` |
+
+**Not modified (gap analysis corrections):**
+- `context_strategy.py` — enrichment fields are the wrong mechanism for this data flow
+- `context_resolution.py` — graph reaches prompts via existing `_collect_dependency_imports` → `_build_dependency_imports_section`
+- `spec_builder.py` — `_build_dependency_imports_section()` already renders dependency imports
+
+---
+
+## Gap Analysis Findings (2026-03-16)
+
+| Gap | Severity | Finding | Resolution |
+|-----|----------|---------|-----------|
+| 1 | Critical | Two parallel seed models (`ArtisanContextSeed` vs `ContextSeed`) — emitter used the wrong one | Unified in commit `5a79095`; `ArtisanContextSeed` is now an alias |
+| 2 | Medium | Plan targeted `ENRICHMENT_FIELDS` but actual LLM context flows through `_collect_dependency_imports` | Strategy 3 added to existing mechanism; no new parallel path |
+| 3 | Low | `PIPELINE_SIGNAL_KEYS` not updated | Intentionally deferred — graph is optional, absent in existing seeds |
+| 4 | Low | `Path(tf).parts[1]` heuristic is project-specific | Case-insensitive full-component matching against graph keys |
+| 5 | Low | Helper location (shared.py vs seeds/utils.py) | No separate helper needed — logic is inline in Strategy 3 |
+| 6 | Detail | Missing prompt insertion point | N/A — existing `_build_dependency_imports_section` handles rendering |
+| AC-1 | Tech debt | `_derive_shared_context` 5-tuple | Documented; `manifest_context` piggybacking works for now |
+| AC-2 | Tech debt | Duplicate emit methods (15 params each) | Easier to consolidate now that both construct `ContextSeed` |
+| AC-3 | Resolved | Duplicate `to_dict()` in two models | Eliminated by ArtisanContextSeed → ContextSeed unification |
 
 ---
 
@@ -294,7 +283,7 @@ Phase 3 (context resolution) ← depends on Phase 2
 
 | Risk | Mitigation |
 |------|-----------|
-| Service directory heuristic (`parts[1]`) is project-specific | Graph keys match plan headings; fallback to no-op if no match |
+| Service key matching is case-insensitive only | Covers the common case (plan headings vs path components); false matches unlikely since service names are distinctive |
 | Large graphs inflate seed size | Graph is typically <5KB; negligible vs existing 50KB+ seeds |
 | Backward compat for seeds without graph | All fields are `Optional`, default `None`; existing seeds unaffected |
 | `_derive_architectural_context` signature change | No signature change — graph flows through existing `manifest_context` dict |
