@@ -19,6 +19,7 @@ from typing import Any
 
 from startd8.contractors.prompt_utils import format_constraints
 from startd8.logging_config import get_logger
+from startd8.seeds.utils import is_omitted
 
 _logger = get_logger(__name__)
 
@@ -152,8 +153,6 @@ class EnrichmentModule:
 
     def render(self, data: dict[str, Any]) -> PromptFragment:
         parts: list[str] = []
-
-        from startd8.seeds.utils import is_omitted
 
         param_sources = data.get("parameter_sources", {})
         # REQ-GPC-502: defense-in-depth against marker dicts in prompt data

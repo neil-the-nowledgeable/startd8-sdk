@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ...logging_config import get_logger
+from ...seeds.utils import is_omitted
 from ...utils.file_operations import atomic_write_json
 from .plan_ingestion_diagnostics import (
     EnrichmentDiagnostic,
@@ -786,8 +787,6 @@ class PhaseEmitter:
                 artifacts_out["artifact_manifest_path"] = str(amp)
             if pcp:
                 artifacts_out["project_context_path"] = str(pcp)
-            from startd8.seeds.utils import is_omitted
-
             ex = onboarding_resolved.get("example_artifacts")
             if ex and isinstance(ex, dict) and not is_omitted(ex):
                 artifacts_out["example_artifacts"] = dict(ex)

@@ -85,6 +85,9 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+# REQ-GPC-300: profiles that require parameter resolvability in preflight
+_RESOLVABILITY_PROFILES = frozenset({"full", "observability", "monitoring", "operator"})
+
 # File-extension → language mapping for service metadata inference
 _EXT_TO_LANGUAGE: Dict[str, str] = {
     "py": "python", "go": "go", "js": "javascript",
@@ -1580,6 +1583,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         # REQ-GPC-300/301: detect and log generation profile
         generation_profile = onboarding.get("generation_profile", "full")
         logger.info("Preflight: detected generation_profile=%s", generation_profile)
+        evidence["generation_profile"] = generation_profile
 
         amp = onboarding.get("artifact_manifest_path")
         pcp = onboarding.get("project_context_path")
@@ -1625,7 +1629,6 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # Parameter source resolvability summary guardrail.
         # REQ-GPC-300: skip for profiles that intentionally omit these fields
-        _RESOLVABILITY_PROFILES = {"full", "observability", "monitoring", "operator"}
         if generation_profile in _RESOLVABILITY_PROFILES:
             has_resolvability_summary = (
                 isinstance(onboarding.get("resolved_artifact_parameters"), dict)
