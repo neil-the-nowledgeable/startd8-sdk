@@ -703,6 +703,35 @@ class PrimePostMortemEvaluator:
                         severity="high" if len(large_gaps) >= 3 else "medium",
                     ))
 
+            # Recompute aggregate score using disk quality scores so that
+            # semantic validation findings influence the PASS/FAIL verdict.
+            # Features without a disk score keep their binary 1.0/0.0.
+            disk_scores = []
+            for f in report.features:
+                if f.disk_quality_score is not None:
+                    disk_scores.append(f.disk_quality_score)
+                else:
+                    disk_scores.append(1.0 if f.success else 0.0)
+            if disk_scores:
+                report.aggregate_score = sum(disk_scores) / len(disk_scores)
+
+            # Recount successes — disk evaluation may have flipped
+            # feature verdicts via the semantic verdict gate.
+            report.successful_features = sum(
+                1 for f in report.features if f.success
+            )
+            report.failed_features = (
+                report.total_features - report.successful_features
+            )
+
+            # Re-evaluate verdict with updated score.
+            if report.aggregate_score >= _PASS_THRESHOLD:
+                report.aggregate_verdict = "PASS"
+            elif report.aggregate_score >= _PARTIAL_THRESHOLD:
+                report.aggregate_verdict = "PARTIAL"
+            else:
+                report.aggregate_verdict = "FAIL"
+
         # Extract lessons
         report.lessons = self._extract_lessons(report)
 
