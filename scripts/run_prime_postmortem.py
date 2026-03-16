@@ -513,6 +513,26 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
     if avg_delta is not None:
         metrics["avg_assembly_delta"] = avg_delta
 
+    # REQ-SV2-700: Per-category semantic issue breakdown
+    category_breakdown: dict[str, dict[str, int]] = {}
+    verdict_downgrades = 0
+    features_with_errors: list[str] = []
+    for fpm in getattr(report, "features", []):
+        if getattr(fpm, "semantic_error_count", 0) > 0:
+            features_with_errors.append(fpm.feature_id)
+        if "semantic" in (getattr(fpm, "verdict", "") or ""):
+            verdict_downgrades += 1
+        for issue in getattr(getattr(fpm, "disk_compliance", None), "semantic_issues", []) or []:
+            if isinstance(issue, dict):
+                cat = issue.get("category", "unknown")
+                sev = issue.get("severity", "warning")
+                entry = category_breakdown.setdefault(cat, {"error": 0, "warning": 0})
+                entry[sev] = entry.get(sev, 0) + 1
+    if category_breakdown:
+        metrics["semantic_issue_breakdown"] = category_breakdown
+        metrics["semantic_verdict_downgrades"] = verdict_downgrades
+        metrics["features_with_semantic_errors"] = features_with_errors
+
     metrics_path = output_dir / "kaizen-metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, default=str),

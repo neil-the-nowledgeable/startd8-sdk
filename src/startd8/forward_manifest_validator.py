@@ -525,6 +525,52 @@ def _validate_requirements_file(
     return result
 
 
+def _digest_looks_fabricated(digest: str) -> bool:
+    """Heuristic: detect fabricated SHA256 digests (REQ-SV2-100).
+
+    Real SHA256 digests have high Shannon entropy (~3.9 bits/char).
+    LLM-fabricated digests often contain sequential hex nybble patterns
+    or low-entropy repeated characters.
+    """
+    from math import log2
+
+    d = digest.lower()
+    length = len(d)
+    if length == 0:
+        return True
+
+    # 1. Shannon entropy — real digests average ~3.9 bits/char
+    freq: dict[str, int] = {}
+    for c in d:
+        freq[c] = freq.get(c, 0) + 1
+    entropy = -sum((n / length) * log2(n / length) for n in freq.values())
+    if entropy < 3.0:
+        return True
+
+    # 2. Nybble-level sequential detection — LLMs produce digests like
+    #    "0d1e2f3a4b5c6d7e" where even-position hex chars count 0,1,2,...
+    #    Check both even and odd nybble positions for runs of 8+ with
+    #    constant diff (mod 16).
+    nybbles = [int(c, 16) for c in d]
+    for offset in (0, 1):
+        stripe = nybbles[offset::2]
+        if len(stripe) < 3:
+            continue
+        prev_diff = (stripe[1] - stripe[0]) % 16
+        run = 2
+        for i in range(2, len(stripe)):
+            cur_diff = (stripe[i] - stripe[i - 1]) % 16
+            if cur_diff == prev_diff:
+                run += 1
+                if run >= 8:
+                    return True
+            else:
+                prev_diff = cur_diff
+                run = 2
+
+    return False
+
+
 def _validate_dockerfile(
     content: str,
     result: DiskComplianceResult,
@@ -540,6 +586,7 @@ def _validate_dockerfile(
                 directives_found.add(match.group(1))
 
         # L3: SHA256 digest validation (REQ-SV-401)
+        # L3+: Digest plausibility (REQ-SV2-100)
         if stripped.upper().startswith("FROM"):
             for digest_match in re.findall(r"@sha256:([0-9a-fA-F]*)", stripped):
                 if len(digest_match) != 64:
@@ -556,6 +603,17 @@ def _validate_dockerfile(
                             if digest_match
                             else "sha256:<empty>"
                         ),
+                    })
+                elif _digest_looks_fabricated(digest_match):
+                    result.semantic_issues.append({
+                        "category": "dockerfile_digest_fabricated",
+                        "severity": "error",
+                        "message": (
+                            "SHA256 digest appears fabricated "
+                            "(low entropy or sequential pattern)"
+                        ),
+                        "line": lineno,
+                        "symbol": f"sha256:{digest_match[:16]}...",
                     })
 
     required = {"FROM"}
@@ -787,6 +845,9 @@ def _validate_requirements_coverage(
             or imp.startswith(expected_import + ".")
             or imp == package  # simple case: flask → flask
             or imp.startswith(package + ".")
+            # REQ-SV2-300: reverse prefix — `from google.cloud import secretmanager`
+            # produces imp="google.cloud", expected="google.cloud.secretmanager"
+            or expected_import.startswith(imp + ".")
             for imp in all_imports
         )
         if not found:
@@ -959,18 +1020,26 @@ def _validate_import_resolution(
         file_path, project_root,
     )
 
-    # Resolve each import
+    # Resolve each import — try full dotted path first (catches google.api_core
+    # via alias prefix matching), then fall back to top-level module name.
     for imp in extract_import_modules(tree):
         module_name = str(imp["module"])
         full_path = str(imp["full_path"])
         line = imp["line"]
 
         resolution = resolve_import(
-            module_name,
+            full_path,
             sibling_modules=sibling_modules,
             requirements_packages=requirements_packages,
             import_map=import_map,
         )
+        if resolution is None and full_path != module_name:
+            resolution = resolve_import(
+                module_name,
+                sibling_modules=sibling_modules,
+                requirements_packages=requirements_packages,
+                import_map=import_map,
+            )
         if resolution is None:
             issues.append({
                 "category": "import_resolution",
