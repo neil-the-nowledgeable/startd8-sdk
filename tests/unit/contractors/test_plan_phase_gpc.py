@@ -87,6 +87,44 @@ class TestPlanPhaseExtractsProfile:
         assert context["generation_profile"] == "full"
 
 
+class TestPlanPhaseUnknownProfile:
+    """Unknown generation_profile values should warn but propagate."""
+
+    @patch("startd8.contractors.context_seed.phases.plan._load_enriched_seed")
+    def test_unknown_profile_warns(self, mock_load, caplog):
+        import logging
+        from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler
+
+        mock_load.return_value = _make_seed_data(
+            onboarding={"generation_profile": "future_profile"}
+        )
+        handler = PlanPhaseHandler("/fake/seed.json")
+        context: dict = {}
+        with caplog.at_level(logging.WARNING):
+            handler.execute(None, context, dry_run=True)
+
+        # Value propagates (don't silently replace)
+        assert context["generation_profile"] == "future_profile"
+        # Warning emitted
+        assert any("unknown generation_profile" in r.message for r in caplog.records)
+
+    @patch("startd8.contractors.context_seed.phases.plan._load_enriched_seed")
+    def test_known_profile_no_warning(self, mock_load, caplog):
+        import logging
+        from startd8.contractors.context_seed.phases.plan import PlanPhaseHandler
+
+        mock_load.return_value = _make_seed_data(
+            onboarding={"generation_profile": "operator"}
+        )
+        handler = PlanPhaseHandler("/fake/seed.json")
+        context: dict = {}
+        with caplog.at_level(logging.WARNING):
+            handler.execute(None, context, dry_run=True)
+
+        assert context["generation_profile"] == "operator"
+        assert not any("unknown generation_profile" in r.message for r in caplog.records)
+
+
 class TestPlanPhaseOmittedMarkers:
     """REQ-GPC-201: omitted markers converted to None."""
 

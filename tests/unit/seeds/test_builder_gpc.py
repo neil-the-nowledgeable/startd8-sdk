@@ -30,3 +30,21 @@ class TestSeedBuilderGenerationProfile:
         builder.set_artifacts(onboarding={"generation_profile": "full"})
         seed = builder.build()
         assert seed["generation_profile"] == "full"
+
+    def test_omitted_example_artifacts_excluded(self):
+        """Defense-in-depth: marker dicts in artifacts are not embedded."""
+        builder = SeedBuilder()
+        builder.set_artifacts(onboarding={
+            "generation_profile": "source",
+            "example_artifacts": {"_omitted": "profile=source"},
+        })
+        seed = builder.build()
+        assert "_omitted" not in str(seed.get("artifacts", {}))
+
+    def test_real_example_artifacts_included(self):
+        builder = SeedBuilder()
+        builder.set_artifacts(onboarding={
+            "example_artifacts": {"dashboard": {"path": "/a/b"}},
+        })
+        seed = builder.build()
+        assert seed["artifacts"]["example_artifacts"] == {"dashboard": {"path": "/a/b"}}

@@ -43,6 +43,7 @@ from .helpers import (
     ensure_onboarding_in_context_files,
 )
 from .models import ContextSeed
+from .utils import is_omitted
 from .validation import (
     log_seed_coverage,
     validate_context_seed,
@@ -250,7 +251,7 @@ class SeedBuilder:
                 "coverage_gaps",
             ):
                 val = onboarding.get(key)
-                if val:
+                if val and not is_omitted(val):
                     artifacts[key] = val
             self._source_checksum = onboarding.get("source_checksum")
 

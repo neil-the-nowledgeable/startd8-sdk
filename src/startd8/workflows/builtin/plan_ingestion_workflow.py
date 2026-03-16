@@ -71,6 +71,7 @@ from .plan_ingestion_models import (
 )
 from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
 from ...logging_config import get_logger
+from ...seeds.utils import is_omitted
 
 # OTel graceful degradation (follows artisan_contractor.py pattern)
 try:
@@ -1630,9 +1631,11 @@ class PlanIngestionWorkflow(WorkflowBase):
         # Parameter source resolvability summary guardrail.
         # REQ-GPC-300: skip for profiles that intentionally omit these fields
         if generation_profile in _RESOLVABILITY_PROFILES:
+            _rap = onboarding.get("resolved_artifact_parameters")
+            _pr = onboarding.get("parameter_resolvability")
             has_resolvability_summary = (
-                isinstance(onboarding.get("resolved_artifact_parameters"), dict)
-                or isinstance(onboarding.get("parameter_resolvability"), dict)
+                (isinstance(_rap, dict) and not is_omitted(_rap))
+                or (isinstance(_pr, dict) and not is_omitted(_pr))
             )
             if not has_resolvability_summary:
                 errors.append(

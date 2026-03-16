@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["is_omitted", "safe_onboarding"]
+__all__ = ["KNOWN_GENERATION_PROFILES", "is_omitted", "safe_onboarding"]
+
+# REQ-GPC-200: canonical set of generation profile values from ContextCore.
+# Used for validation — unknown profiles default to "full" behavior with a warning.
+KNOWN_GENERATION_PROFILES = frozenset({
+    "source", "monitoring", "operator", "sponsor",
+    "practitioner", "observability", "full",
+})
 
 
 def is_omitted(value: Any) -> bool:

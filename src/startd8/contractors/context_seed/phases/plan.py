@@ -15,7 +15,7 @@ from startd8.contractors.context_seed.shared import (
     _topological_sort,
 )
 from startd8.logging_config import get_logger
-from startd8.seeds.utils import safe_onboarding
+from startd8.seeds.utils import KNOWN_GENERATION_PROFILES, safe_onboarding
 
 logger = get_logger("startd8.contractors.context_seed_handlers")
 
@@ -136,7 +136,14 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         _onboarding = seed_data.get("onboarding") or {}
 
         # REQ-GPC-200: extract generation profile for downstream awareness
-        context["generation_profile"] = _onboarding.get("generation_profile", "full")
+        _raw_profile = _onboarding.get("generation_profile", "full")
+        if _raw_profile not in KNOWN_GENERATION_PROFILES:
+            logger.warning(
+                "PLAN phase: unknown generation_profile %r — defaulting to 'full' behavior. "
+                "Known profiles: %s",
+                _raw_profile, ", ".join(sorted(KNOWN_GENERATION_PROFILES)),
+            )
+        context["generation_profile"] = _raw_profile
 
         # REQ-GPC-201: skip ContextCore profile-omitted markers → None
         # activates existing fallback heuristics (LOC-based, complexity defaults)
