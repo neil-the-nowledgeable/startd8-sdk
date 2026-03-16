@@ -227,7 +227,7 @@ class TestImportMapMode:
 
 class TestScoringIntegration:
     def test_phantom_imports_degrade_score(self, tmp_path):
-        """4 phantom imports → semantic_penalty = max(0, 1.0 - 4 * 0.15) = 0.4."""
+        """4 phantom imports (error severity, 0.3 each) → semantic_penalty = 0."""
         from startd8.contractors.prime_postmortem import compute_disk_quality_score
 
         rel = _write_py(
@@ -238,9 +238,9 @@ class TestScoringIntegration:
         assert len(_import_issues(result)) == 4
 
         score = compute_disk_quality_score(result)
-        # semantic_penalty = 0.4, other components = 1.0
-        # composite = 1.0*0.4 + 1.0*0.2 + 1.0*0.2 + 0.4*0.2 = 0.88
-        assert score == pytest.approx(0.88)
+        # 4 errors × 0.3 = 1.2 → semantic_penalty = max(0, 1.0 - 1.2) = 0.0
+        # composite = 1.0*0.4 + 1.0*0.2 + 1.0*0.2 + 0.0*0.2 = 0.80
+        assert score == pytest.approx(0.80)
 
     def test_clean_file_score_unchanged(self, tmp_path):
         """File with only stdlib imports should score 1.0."""

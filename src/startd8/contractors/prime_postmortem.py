@@ -240,6 +240,9 @@ class ElementPostMortem:
     template_used: bool = False
     repair_steps: List[str] = dataclasses.field(default_factory=list)
     generation_time_ms: float = 0.0
+    # Repair signal enrichment — thread "what broke" through to Kaizen.
+    ast_valid_before_repair: Optional[bool] = None
+    repair_attribution: Optional[Dict[str, Any]] = None
 
 
 @dataclasses.dataclass
@@ -265,6 +268,7 @@ class FeaturePostMortem:
     disk_compliance: Optional[Any] = None  # DiskComplianceResult when available
     disk_quality_score: Optional[float] = None
     assembly_delta: Optional[float] = None
+    semantic_error_count: int = 0  # Count of error-severity semantic issues
 
     @property
     def semantic_issue_summary(self) -> Dict[str, int]:
@@ -314,6 +318,12 @@ class MicroPrimeAnalysis:
     escalation_reasons: Dict[str, int] = dataclasses.field(default_factory=dict)
     repair_step_distribution: Dict[str, int] = dataclasses.field(default_factory=dict)
     avg_generation_time_ms: float = 0.0
+    # Repair signal: how many elements needed repair and what broke.
+    elements_repaired: int = 0
+    repair_before_invalid: int = 0  # AST invalid before repair
+    repair_attribution_summary: Dict[str, int] = dataclasses.field(
+        default_factory=dict
+    )  # e.g. {"fence_stripped": 3, "imports_added": 5}
 
 
 @dataclasses.dataclass
@@ -383,10 +393,19 @@ def compute_disk_quality_score(compliance: Any) -> float:
     import_completeness = getattr(compliance, "import_completeness", 1.0)
     stubs = getattr(compliance, "stubs_remaining", 0)
     semantic_issues = getattr(compliance, "semantic_issues", [])
-    semantic_count = len(semantic_issues) if semantic_issues else 0
 
     stub_penalty = max(0.0, 1.0 - stubs * 0.1)
-    semantic_penalty = max(0.0, 1.0 - semantic_count * 0.15)
+
+    # Severity-weighted semantic penalty: errors hit 3x harder than warnings.
+    error_count = 0
+    warning_count = 0
+    for issue in (semantic_issues or []):
+        sev = issue.get("severity", "warning") if isinstance(issue, dict) else "warning"
+        if sev == "error":
+            error_count += 1
+        else:
+            warning_count += 1
+    semantic_penalty = max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
 
     composite = (
         contract_compliance * 0.4
@@ -758,6 +777,16 @@ class PrimePostMortemEvaluator:
                     if esc:
                         escalation_reason = esc.get("reason", "")
 
+                # Thread repair attribution — the data exists in element
+                # results, we just need to read it so Kaizen can correlate
+                # "what broke" with prompt characteristics.
+                raw_attr = er.get("repair_attribution")
+                repair_attr = None
+                if isinstance(raw_attr, dict):
+                    repair_attr = raw_attr
+                elif raw_attr is not None and hasattr(raw_attr, "model_dump"):
+                    repair_attr = raw_attr.model_dump()
+
                 elements.append(ElementPostMortem(
                     element_name=er.get("element_name", ""),
                     file_path=er.get("file_path", fr.get("file_path", "")),
@@ -769,6 +798,8 @@ class PrimePostMortemEvaluator:
                     template_used=er.get("template_used", False),
                     repair_steps=er.get("repair_steps_applied", []),
                     generation_time_ms=er.get("generation_time_ms", 0.0),
+                    ast_valid_before_repair=er.get("ast_valid_before_repair"),
+                    repair_attribution=repair_attr,
                 ))
 
         # Requirement matching — incorporate element-level success rate
@@ -917,6 +948,23 @@ class PrimePostMortemEvaluator:
                     # Compute disk quality score
                     fpm.disk_quality_score = compute_disk_quality_score(compliance)
 
+                    # Count error-severity semantic issues for Kaizen label.
+                    sem_issues = getattr(compliance, "semantic_issues", []) or []
+                    err_count = sum(
+                        1 for i in sem_issues
+                        if isinstance(i, dict) and i.get("severity") == "error"
+                    )
+                    fpm.semantic_error_count = err_count
+
+                    # Semantic verdict gate: error-severity issues downgrade
+                    # the verdict so Kaizen correlations learn from semantic
+                    # failures, not just syntactic ones.
+                    if err_count >= 2 and fpm.verdict == "PASS":
+                        fpm.verdict = "PARTIAL:semantic"
+                    elif err_count >= 4 and fpm.verdict in ("PASS", "PARTIAL", "PARTIAL:semantic"):
+                        fpm.verdict = "FAIL:semantic"
+                        fpm.success = False
+
                     # Assembly delta: quality_score (from elements) - disk_quality_score
                     if fpm.disk_quality_score is not None:
                         fpm.assembly_delta = fpm.requirement_score - fpm.disk_quality_score
@@ -971,6 +1019,8 @@ class PrimePostMortemEvaluator:
         repair_counter: Counter = Counter()
         total_time = 0.0
 
+        attr_counter: Counter = Counter()
+
         for elem in elements:
             tier_counter[elem.tier] += 1
             if elem.escalation_reason:
@@ -979,9 +1029,22 @@ class PrimePostMortemEvaluator:
                 repair_counter[step] += 1
             total_time += elem.generation_time_ms
 
+            # Aggregate repair signal: what broke and how often.
+            if elem.repair_steps:
+                analysis.elements_repaired += 1
+            if elem.ast_valid_before_repair is False:
+                analysis.repair_before_invalid += 1
+            if elem.repair_attribution:
+                for key, val in elem.repair_attribution.items():
+                    if isinstance(val, bool) and val:
+                        attr_counter[key] += 1
+                    elif isinstance(val, int) and val > 0:
+                        attr_counter[key] += val
+
         analysis.tier_distribution = dict(tier_counter)
         analysis.escalation_reasons = dict(esc_counter)
         analysis.repair_step_distribution = dict(repair_counter)
+        analysis.repair_attribution_summary = dict(attr_counter)
         if elements:
             analysis.avg_generation_time_ms = total_time / len(elements)
 

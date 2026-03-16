@@ -321,14 +321,18 @@ class TestDualQualityScoring:
         assert len(gap_patterns) == 0
 
     def test_scoring_formula_weights(self):
-        """Verify the scoring formula weights sum correctly."""
+        """Verify the scoring formula with severity-weighted semantic penalty."""
         compliance = MagicMock()
         compliance.ast_valid = True
         compliance.contract_compliance = 0.5
         compliance.import_completeness = 0.5
         compliance.stubs_remaining = 5  # penalty = max(0, 1 - 0.5) = 0.5
-        compliance.semantic_issues = [1, 2]  # penalty = max(0, 1 - 0.3) = 0.7
+        # 1 error (0.3) + 1 warning (0.1) → penalty = max(0, 1 - 0.4) = 0.6
+        compliance.semantic_issues = [
+            {"severity": "error", "category": "import_resolution"},
+            {"severity": "warning", "category": "orphan_dependency"},
+        ]
 
         score = compute_disk_quality_score(compliance)
-        expected = 0.5 * 0.4 + 0.5 * 0.2 + 0.5 * 0.2 + 0.7 * 0.2
+        expected = 0.5 * 0.4 + 0.5 * 0.2 + 0.5 * 0.2 + 0.6 * 0.2
         assert score == pytest.approx(expected)
