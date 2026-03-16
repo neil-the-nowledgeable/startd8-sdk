@@ -101,6 +101,24 @@ def detect_copy(
     if not has_duplication:
         return None
 
+    # Guard: never copy across file types.  A Dockerfile is never a copy
+    # of a .py file, even if the description mentions "identical copy" in
+    # review commentary about a different aspect (e.g., logger duplication).
+    target_files = getattr(feature, "target_files", [])
+    if target_files and predecessor is not None:
+        pred_targets = getattr(predecessor, "target_files", [])
+        if pred_targets:
+            target_ext = Path(target_files[0]).suffix
+            source_ext = Path(pred_targets[0]).suffix
+            if target_ext != source_ext:
+                feature_name = getattr(feature, "name", getattr(feature, "id", "?"))
+                logger.debug(
+                    "Copy detection: '%s' target type (%s) differs from "
+                    "predecessor type (%s) — skipping cross-type copy",
+                    feature_name, target_ext or "(none)", source_ext or "(none)",
+                )
+                return None
+
     # Require exactly one dependency.
     dependencies = getattr(feature, "dependencies", [])
     if len(dependencies) != 1:

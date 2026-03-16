@@ -353,3 +353,90 @@ class TestCompressReference:
         result = compress_reference(code, token_budget=10)
         # Should not raise — returns something truncated
         assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# Cross-type copy guard (run-054 fix)
+# ---------------------------------------------------------------------------
+
+class TestCrossTypeCopyGuard:
+    """Dockerfile and requirements.in must never be detected as copies of .py files."""
+
+    def test_dockerfile_not_copy_of_python(self):
+        """Dockerfile targeting non-.py should not copy a .py predecessor."""
+        feat = _FakeFeature(
+            description="This logger is an identical copy across services.",
+            dependencies=["feat-1"],
+            target_files=["src/myservice/Dockerfile"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/myservice/app.py"],
+        )
+        result = detect_copy_task(feat, predecessor=predecessor)
+        assert result is None
+
+    def test_requirements_not_copy_of_python(self):
+        """requirements.in should not copy a .py predecessor."""
+        feat = _FakeFeature(
+            description="Pinned dependency list — identical copy of emailservice.",
+            dependencies=["feat-1"],
+            target_files=["src/myservice/requirements.in"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/emailservice/logger.py"],
+        )
+        result = detect_copy_task(feat, predecessor=predecessor)
+        assert result is None
+
+    def test_same_type_copy_still_works(self):
+        """Same-type copy (.py → .py) should still be detected."""
+        feat = _FakeFeature(
+            description="This is an identical copy of the logger.",
+            dependencies=["feat-1"],
+            target_files=["src/recservice/logger.py"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/emailservice/logger.py"],
+        )
+        result = detect_copy_task(feat, predecessor=predecessor)
+        assert result is not None
+        assert isinstance(result, CopySource)
+
+    def test_no_target_files_no_crash(self):
+        """Missing target_files doesn't crash the guard."""
+        feat = _FakeFeature(
+            description="This is an identical copy.",
+            dependencies=["feat-1"],
+            target_files=[],
+        )
+        predecessor = _FakePredecessor(target_files=["src/app.py"])
+        # No target_files → guard is skipped, falls through to normal detection
+        result = detect_copy_task(feat, predecessor=predecessor)
+        assert result is not None  # still detected (no guard to block)
+
+    def test_extensionless_dockerfile_blocked(self):
+        """Dockerfile (no extension) vs .py (with extension) → blocked."""
+        feat = _FakeFeature(
+            description="Identical copy of the build config.",
+            dependencies=["feat-1"],
+            target_files=["src/myservice/Dockerfile"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/myservice/server.py"],
+        )
+        result = detect_copy_task(feat, predecessor=predecessor)
+        assert result is None
+
+    def test_copy_modify_also_blocked_cross_type(self):
+        """Copy-and-modify across types is also blocked."""
+        from startd8.contractors.copy_detection import detect_copy, CopyModifySource
+        feat = _FakeFeature(
+            description="Identical copy adapted for the new service.",
+            dependencies=["feat-1"],
+            target_files=["src/myservice/Dockerfile"],
+        )
+        predecessor = _FakePredecessor(
+            target_files=["src/myservice/app.py"],
+        )
+        result = detect_copy(feat, predecessor=predecessor)
+        assert result is None
