@@ -672,3 +672,86 @@ class TestHtmlPassthrough:
         result = validate_disk_compliance(rel, str(tmp_path))
         assert result.ast_valid is True
         assert result.contract_compliance == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Proto stub verification (Run-055 F-2)
+# ---------------------------------------------------------------------------
+
+
+class TestProtoStubVerification:
+    """Proto imports must match actual sibling _pb2.py files when siblings are known."""
+
+    def test_valid_proto_with_sibling(self, tmp_path):
+        """import demo_pb2 passes when demo_pb2.py exists as sibling."""
+        rel = _write_py(tmp_path, "svc/server.py", "import demo_pb2\n")
+        _write_py(tmp_path, "svc/demo_pb2.py", "# generated\n")
+        result = validate_disk_compliance(
+            rel, str(tmp_path),
+            sibling_files=["svc/demo_pb2.py", "svc/server.py"],
+        )
+        proto_issues = [i for i in result.semantic_issues if "proto stub" in str(i.get("message", "")).lower()]
+        assert len(proto_issues) == 0
+
+    def test_hallucinated_proto_flagged(self, tmp_path):
+        """import email_service_pb2 flagged when only demo_pb2.py exists."""
+        rel = _write_py(
+            tmp_path, "svc/client.py",
+            "from email_service_pb2 import SendOrderConfirmationRequest\n",
+        )
+        _write_py(tmp_path, "svc/demo_pb2.py", "# generated\n")
+        result = validate_disk_compliance(
+            rel, str(tmp_path),
+            sibling_files=["svc/demo_pb2.py", "svc/client.py"],
+        )
+        proto_issues = [
+            i for i in result.semantic_issues
+            if i.get("category") == "import_resolution"
+            and "email_service_pb2" in str(i.get("message", ""))
+        ]
+        assert len(proto_issues) == 1
+        assert proto_issues[0]["severity"] == "error"
+
+    def test_proto_without_siblings_passes(self, tmp_path):
+        """When sibling_files is None, proto regex alone is sufficient (backward compat)."""
+        rel = _write_py(
+            tmp_path, "svc/client.py",
+            "from email_service_pb2 import X\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        # No proto verification without sibling context
+        proto_issues = [i for i in result.semantic_issues if "proto stub" in str(i.get("message", "")).lower()]
+        assert len(proto_issues) == 0
+
+
+# ---------------------------------------------------------------------------
+# Reverse prefix resolution (Run-055 F-3)
+# ---------------------------------------------------------------------------
+
+
+class TestReversePrefixResolution:
+    """Import paths that are parent namespaces of requirements packages resolve."""
+
+    def test_google_cloud_resolves(self, tmp_path):
+        """from google.cloud import secretmanager resolves via google-cloud-secret-manager."""
+        rel = _write_py(tmp_path, "svc/app.py", "from google.cloud import secretmanager\n")
+        # Write requirements.in with google-cloud-secret-manager
+        req = tmp_path / "svc" / "requirements.in"
+        req.write_text("google-cloud-secret-manager\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        import_issues = [
+            i for i in result.semantic_issues
+            if i.get("category") == "import_resolution"
+        ]
+        assert len(import_issues) == 0
+
+    def test_langchain_schema_resolves_via_alias(self, tmp_path):
+        """from langchain.schema import HumanMessage resolves via package alias."""
+        rel = _write_py(tmp_path, "svc/app.py", "from langchain.schema import HumanMessage\n")
+        result = validate_disk_compliance(rel, str(tmp_path))
+        import_issues = [
+            i for i in result.semantic_issues
+            if i.get("category") == "import_resolution"
+            and "langchain" in str(i.get("symbol", ""))
+        ]
+        assert len(import_issues) == 0

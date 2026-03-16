@@ -1232,6 +1232,19 @@ def _validate_import_resolution(
         file_path, project_root,
     )
 
+    # Build set of proto stubs that actually exist as sibling files.
+    # When sibling_files is available, _pb2 imports are verified against it.
+    # This catches hallucinated proto names like email_service_pb2 when the
+    # actual proto stub is demo_pb2.  (Run-055 F-2)
+    known_proto_stems: Optional[Set[str]] = None
+    if sibling_files is not None:
+        known_proto_stems = set()
+        from startd8.utils.requirements_generator import _PROTOBUF_STUB_RE
+        for f in sibling_files:
+            stem = Path(f).stem
+            if _PROTOBUF_STUB_RE.match(stem):
+                known_proto_stems.add(stem)
+
     # Resolve each import — try full dotted path first (catches google.api_core
     # via alias prefix matching), then fall back to top-level module name.
     for imp in extract_import_modules(tree):
@@ -1252,6 +1265,29 @@ def _validate_import_resolution(
                 requirements_packages=requirements_packages,
                 import_map=import_map,
             )
+
+        # Proto stub verification: if the import resolved as "proto" but
+        # we have a sibling file inventory and no matching _pb2.py exists,
+        # downgrade to error.  (Run-055 F-2: email_service_pb2 accepted
+        # by regex but actual proto is demo_pb2.)
+        if (
+            resolution is not None
+            and resolution == "proto"
+            and known_proto_stems is not None
+            and module_name not in known_proto_stems
+        ):
+            issues.append({
+                "category": "import_resolution",
+                "severity": "error",
+                "message": (
+                    f"Proto stub '{module_name}' not found among sibling files. "
+                    f"Known proto stubs: {sorted(known_proto_stems) or '(none)'}"
+                ),
+                "line": line,
+                "symbol": full_path,
+            })
+            continue
+
         if resolution is None:
             issues.append({
                 "category": "import_resolution",

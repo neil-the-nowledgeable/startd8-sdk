@@ -138,6 +138,12 @@ def resolve_import(
         expected_import = pypi_to_import(req_pkg)
         if top_level == expected_import or module_name.startswith(expected_import + "."):
             return f"pip:{req_pkg}"
+        # Reverse prefix: import is a prefix of the expected import.
+        # e.g. `from google.cloud import secretmanager` → full_path="google.cloud",
+        # expected_import="google.cloud.secretmanager" (from google-cloud-secret-manager).
+        # The import path is a parent namespace of the package's import path.
+        if expected_import.startswith(module_name + "."):
+            return f"pip:{req_pkg}"
 
     return None
 

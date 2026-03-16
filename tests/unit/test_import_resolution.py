@@ -137,6 +137,34 @@ class TestResolveImport:
         r = resolve_import("yaml", sibling_modules=set(), requirements_packages={"pyyaml"})
         assert r == "pip:pyyaml"
 
+    def test_pip_via_reverse_prefix(self):
+        """from google.cloud import secretmanager resolves via reverse prefix.
+
+        requirements.in has google-cloud-secret-manager which maps to
+        google.cloud.secretmanager. The import google.cloud is a parent
+        namespace prefix of google.cloud.secretmanager.
+        """
+        r = resolve_import(
+            "google.cloud",
+            sibling_modules=set(),
+            requirements_packages={"google-cloud-secret-manager"},
+        )
+        assert r == "pip:google-cloud-secret-manager"
+
+    def test_pip_via_alias_prefix_langchain(self):
+        """from langchain.schema import HumanMessage resolves via langchain alias.
+
+        langchain is in _PYPI_TO_IMPORT, so import_to_pypi("langchain.schema")
+        finds the prefix "langchain" and returns "langchain", triggering the
+        alias-mapped path (pypi_name != module_name).
+        """
+        r = resolve_import(
+            "langchain.schema",
+            sibling_modules=set(),
+            requirements_packages=set(),
+        )
+        assert r == "pip:langchain"
+
     def test_unresolvable(self):
         r = resolve_import(
             "alloydbengine", sibling_modules=set(), requirements_packages=set()
