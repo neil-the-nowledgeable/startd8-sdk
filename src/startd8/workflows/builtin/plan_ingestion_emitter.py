@@ -786,8 +786,10 @@ class PhaseEmitter:
                 artifacts_out["artifact_manifest_path"] = str(amp)
             if pcp:
                 artifacts_out["project_context_path"] = str(pcp)
+            from startd8.seeds.utils import is_omitted
+
             ex = onboarding_resolved.get("example_artifacts")
-            if ex and isinstance(ex, dict):
+            if ex and isinstance(ex, dict) and not is_omitted(ex):
                 artifacts_out["example_artifacts"] = dict(ex)
             cg = onboarding_resolved.get("coverage_gaps")
             if cg and isinstance(cg, list):

@@ -55,6 +55,7 @@ class ContextSeed:
     project_metadata: Optional[Dict[str, Any]] = None
     forward_manifest: Optional[Dict[str, Any]] = None
     route: Optional[str] = None
+    generation_profile: Optional[str] = None  # REQ-GPC-400
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -89,6 +90,8 @@ class ContextSeed:
             d["forward_manifest"] = self.forward_manifest
         if self.route is not None:
             d["route"] = self.route
+        if self.generation_profile is not None:
+            d["generation_profile"] = self.generation_profile
         return d
 
 

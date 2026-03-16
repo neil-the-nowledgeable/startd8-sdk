@@ -80,6 +80,7 @@ class SeedBuilder:
         self._project_metadata: Optional[Dict[str, Any]] = None
         self._forward_manifest: Optional[Dict[str, Any]] = None
         self._source_checksum: Optional[str] = None
+        self._generation_profile: Optional[str] = None  # REQ-GPC-401
         self._refine_suggestions: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
@@ -253,6 +254,9 @@ class SeedBuilder:
                     artifacts[key] = val
             self._source_checksum = onboarding.get("source_checksum")
 
+            # REQ-GPC-401: extract generation profile from onboarding
+            self._generation_profile = onboarding.get("generation_profile")
+
             onboarding_var = dict(onboarding)
             if self._refine_suggestions:
                 onboarding_var["refine_suggestions"] = self._refine_suggestions
@@ -404,5 +408,6 @@ class SeedBuilder:
             project_metadata=self._project_metadata,
             forward_manifest=self._forward_manifest,
             route=self._route,
+            generation_profile=self._generation_profile,
         )
         return seed.to_dict()

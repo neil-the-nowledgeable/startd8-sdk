@@ -693,7 +693,9 @@ def _infer_service_metadata(
     if protocols:
         transport = Counter(protocols).most_common(1)[0][0]
     elif onboarding:
-        transport = onboarding.get("transport_protocol", "") or ""
+        # REQ-GPC-600: guard against marker dicts in raw onboarding
+        _raw_tp = onboarding.get("transport_protocol", "")
+        transport = _raw_tp if isinstance(_raw_tp, str) else ""
 
     # Deduplicate
     runtime_deps = sorted(set(all_runtime_deps))
@@ -1575,6 +1577,10 @@ class PlanIngestionWorkflow(WorkflowBase):
         evidence["paths"]["onboarding_metadata"] = str(onboarding_path)
         base_dir = onboarding_path.parent
 
+        # REQ-GPC-300/301: detect and log generation profile
+        generation_profile = onboarding.get("generation_profile", "full")
+        logger.info("Preflight: detected generation_profile=%s", generation_profile)
+
         amp = onboarding.get("artifact_manifest_path")
         pcp = onboarding.get("project_context_path")
         if not isinstance(amp, str):
@@ -1618,15 +1624,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 )
 
         # Parameter source resolvability summary guardrail.
-        has_resolvability_summary = (
-            isinstance(onboarding.get("resolved_artifact_parameters"), dict)
-            or isinstance(onboarding.get("parameter_resolvability"), dict)
-        )
-        if not has_resolvability_summary:
-            errors.append(
-                "Preflight: onboarding lacks parameter resolvability summary "
-                "(expected resolved_artifact_parameters or parameter_resolvability)"
+        # REQ-GPC-300: skip for profiles that intentionally omit these fields
+        _RESOLVABILITY_PROFILES = {"full", "observability", "monitoring", "operator"}
+        if generation_profile in _RESOLVABILITY_PROFILES:
+            has_resolvability_summary = (
+                isinstance(onboarding.get("resolved_artifact_parameters"), dict)
+                or isinstance(onboarding.get("parameter_resolvability"), dict)
             )
+            if not has_resolvability_summary:
+                errors.append(
+                    "Preflight: onboarding lacks parameter resolvability summary "
+                    "(expected resolved_artifact_parameters or parameter_resolvability)"
+                )
 
         coverage = onboarding.get("coverage")
         if not isinstance(coverage, dict):
