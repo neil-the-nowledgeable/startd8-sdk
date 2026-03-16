@@ -372,6 +372,113 @@ def _build_dependency_imports_section(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_import_conventions_section(context: Dict[str, Any]) -> str:
+    """REQ-SV2-1300: Import conventions for flat module layouts.
+
+    When the target directory has sibling ``.py`` files but no ``__init__.py``,
+    the project uses flat imports (``import demo_pb2``) not package-style
+    imports (``from emailservice import demo_pb2``). Injecting this guidance
+    eliminates the L1.2 namespace-as-package defect (60% of runs).
+
+    Returns empty string when the layout is package-style or unknown.
+    """
+    existing_files = context.get("existing_files_content") or context.get("existing_files", {})
+    target_files = context.get("target_files", [])
+    if not existing_files or not target_files:
+        return ""
+
+    target_dir = os.path.dirname(target_files[0]) if target_files else ""
+
+    # Check for sibling .py files and __init__.py presence
+    has_sibling_py = False
+    has_init = False
+    for path in existing_files:
+        if os.path.dirname(path) != target_dir:
+            continue
+        basename = os.path.basename(path)
+        if basename == "__init__.py":
+            has_init = True
+            break
+        if basename.endswith(".py"):
+            has_sibling_py = True
+
+    if has_init or not has_sibling_py:
+        return ""
+
+    # Collect sibling module names for the example
+    sibling_names = sorted({
+        os.path.splitext(os.path.basename(p))[0]
+        for p in existing_files
+        if os.path.dirname(p) == target_dir
+        and p.endswith(".py")
+        and os.path.basename(p) != "__init__.py"
+    })
+    dir_name = os.path.basename(target_dir) if target_dir else "this directory"
+
+    examples = "\n".join(f"  import {name}" for name in sibling_names[:4])
+    bad_examples = "\n".join(
+        f"  from {dir_name} import {name}" for name in sibling_names[:2]
+    )
+
+    return (
+        "## Import Conventions (flat module layout)\n\n"
+        f"This project uses flat module layout — `{dir_name}/` has NO `__init__.py`.\n"
+        "Import sibling files directly:\n\n"
+        "```python\n"
+        "# Correct:\n"
+        f"{examples}\n"
+        "# WRONG — will fail at runtime:\n"
+        f"{bad_examples}\n"
+        "```\n"
+    )
+
+
+def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:
+    """REQ-SV2-1400: Anti-pattern guidance for environment variable handling.
+
+    When a task involves environment configuration, inject guidance to prevent
+    the L6 discarded-return pattern (``os.getenv("KEY")`` as a bare expression
+    statement). This defect appears in 50% of runs and never self-corrects.
+
+    Returns empty string when the task doesn't involve env vars.
+    """
+    # Detect env-var relevance from task description and dependencies
+    desc_lower = task_description.lower()
+    env_signals = (
+        "environment variable", "env var", "os.getenv", "os.environ",
+        ".env", "config", "configuration", "GCP_PROJECT",
+        "ALLOYDB", "SECRET_MANAGER",
+    )
+    deps = context.get("runtime_dependencies", [])
+    deps_str = " ".join(deps).lower() if deps else ""
+
+    has_env_signal = any(sig.lower() in desc_lower or sig.lower() in deps_str for sig in env_signals)
+    if not has_env_signal:
+        # Also check existing files for os.getenv/os.environ usage
+        existing_files = context.get("existing_files_content") or context.get("existing_files", {})
+        for content in existing_files.values():
+            if isinstance(content, str) and ("os.getenv" in content or "os.environ" in content):
+                has_env_signal = True
+                break
+
+    if not has_env_signal:
+        return ""
+
+    return (
+        "## Anti-Patterns to Avoid\n\n"
+        "- Do NOT write `os.getenv(\"KEY\")` as a bare expression statement. "
+        "Always assign the result:\n"
+        "  ```python\n"
+        "  # Correct:\n"
+        "  project_id = os.getenv(\"GCP_PROJECT_ID\", \"\")\n"
+        "  # WRONG — computes a value and silently discards it:\n"
+        "  os.getenv(\"GCP_PROJECT_ID\")\n"
+        "  ```\n"
+        "- Do NOT write `os.environ.get(\"KEY\")` as a bare statement.\n"
+        "- Do NOT write `os.path.join(...)` or `os.path.exists(...)` without using the return value.\n"
+    )
+
+
 def extract_spec_constraints(spec_text: str) -> List[Dict[str, str]]:
     """Extract MUST and MUST NOT assertions from a spec document.
 
@@ -728,11 +835,21 @@ def build_spec_prompt(
     if dep_imports_section:
         prioritized.append((1, "dependency_imports", dep_imports_section))
 
+    # P1: Import conventions for flat module layouts (REQ-SV2-1300)
+    import_conv_section = _build_import_conventions_section(context)
+    if import_conv_section:
+        prioritized.append((1, "import_conventions", import_conv_section))
+
     # P1: Requirements and protocol guidance
     if requirements_context:
         prioritized.append((1, "requirements_ctx", f"## Requirements Context\n{requirements_context}"))
     if protocol_guidance:
         prioritized.append((1, "protocol", f"## Protocol Guidance\n{protocol_guidance}"))
+
+    # P2: Anti-pattern guidance for env var handling (REQ-SV2-1400)
+    anti_pattern_section = _build_anti_pattern_section(context, task_description)
+    if anti_pattern_section:
+        prioritized.append((2, "anti_patterns", anti_pattern_section))
 
     # P2: Architecture and plan context
     obj_section = build_spec_objectives_section(project_obj)

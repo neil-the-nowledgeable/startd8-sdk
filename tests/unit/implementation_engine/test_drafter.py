@@ -286,40 +286,30 @@ class TestBuildSupplementarySections:
         assert "## Interface Contract Bindings" in result
         assert "IService" in result
 
-    def test_flcm_preferred_over_raw_contracts(self):
-        """ForwardManifest.binding_constraints_for_task() preferred over raw text."""
-        fm = Mock()
-        fm.binding_constraints_for_task.return_value = "FLCM constraint text"
+    def test_forward_contracts_injected_when_present(self):
+        """forward_contracts string is injected as P1 section (GAP-SDK-003 simplification)."""
         ctx = {
-            "forward_manifest": fm,
-            "forward_contracts": "raw contract text",
-        }
-        result = build_supplementary_sections(ctx, task_id="T1")
-        assert "FLCM constraint text" in result
-        # Raw contract text should NOT appear (FLCM takes precedence)
-        assert "raw contract text" not in result
-        fm.binding_constraints_for_task.assert_called_once_with("T1")
-
-    def test_flcm_fallback_to_raw_on_error(self):
-        """Falls back to forward_contracts if FLCM raises."""
-        fm = Mock()
-        fm.binding_constraints_for_task.side_effect = RuntimeError("boom")
-        ctx = {
-            "forward_manifest": fm,
             "forward_contracts": "raw contract text",
         }
         result = build_supplementary_sections(ctx, task_id="T1")
         assert "raw contract text" in result
+        assert "## Interface Contract Bindings" in result
 
-    def test_flcm_fallback_when_no_task_id(self):
-        """Falls back to forward_contracts when no task_id."""
+    def test_forward_manifest_in_context_ignored(self):
+        """forward_manifest object no longer consumed for binding injection.
+
+        Import context is now provided by service communication graph
+        (REQ-SIG-200/201), not binding_constraints_for_task().
+        """
         fm = Mock()
+        fm.binding_constraints_for_task.return_value = "should not appear"
         ctx = {
             "forward_manifest": fm,
-            "forward_contracts": "raw contract text",
         }
-        result = build_supplementary_sections(ctx)
-        assert "raw contract text" in result
+        result = build_supplementary_sections(ctx, task_id="T1")
+        # binding_constraints_for_task should NOT be called
+        fm.binding_constraints_for_task.assert_not_called()
+        assert "should not appear" not in result
 
     def test_manifest_context_rendered(self):
         ctx = {"manifest_context": "### app.py\nclass App: ..."}

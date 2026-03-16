@@ -683,13 +683,13 @@ def build_supplementary_sections(
     """Build optional supplementary prompt sections within a budget.
 
     Uses 3-priority progressive truncation:
-    P1 (kept first): critical_parameters, forward_contracts/FLCM
+    P1 (kept first): critical_parameters, forward_contracts
     P2 (kept second): manifest_context, call_graph_callers
     P3 (dropped first): call_graph_context, introspect_context, parameter_sources
 
     Args:
         context: EngineRequest.context dict.
-        task_id: Current task ID for FLCM binding_constraints_for_task().
+        task_id: Current task ID (reserved for future use).
         budget_chars: Maximum character budget for all sections combined.
 
     Returns:
@@ -718,26 +718,12 @@ def build_supplementary_sections(
             cp_text = str(cp)
         p1_sections.append(f"## Critical Parameters\n{cp_text}")
 
-    # P1: FLCM task-specific constraints (preferred) or raw forward_contracts
-    flcm_added = False
-    fm = context.get("forward_manifest")
-    if fm and hasattr(fm, "binding_constraints_for_task") and task_id:
-        try:
-            constraints = fm.binding_constraints_for_task(task_id)
-            if constraints:
-                p1_sections.append(
-                    f"## Interface Contract Bindings\n{constraints}",
-                )
-                flcm_added = True
-        except Exception:
-            logger.debug(
-                "FLCM binding_constraints_for_task() failed for task_id=%s",
-                task_id, exc_info=True,
-            )
-    if not flcm_added:
-        fc = context.get("forward_contracts")
-        if fc:
-            p1_sections.append(f"## Interface Contract Bindings\n{fc}")
+    # P1: Forward contracts (artisan route populates this via design prompts;
+    # prime route import context is provided by service communication graph
+    # through _collect_dependency_imports / REQ-SIG-200/201).
+    fc = context.get("forward_contracts")
+    if fc:
+        p1_sections.append(f"## Interface Contract Bindings\n{fc}")
 
     # P2: Manifest structural context
     mc = context.get("manifest_context")

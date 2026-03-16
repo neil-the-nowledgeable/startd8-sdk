@@ -387,6 +387,83 @@ The suggestion targets a specific `config_key` in the pipeline configuration, no
 
 REQ-SV2-1000, 1100, 1200 are design constraints, not implementations. They activate when Stage 2 data meets the gate criteria.
 
+REQ-SV2-1300 and REQ-SV2-1400 below are **concrete Stage 3 repairs** with sufficient retroactive evidence to specify now. They target the two highest-frequency remaining defect classes (60% and 50% of runs) and follow the REQ-SV2-1100 principle: fix inputs, not outputs.
+
+---
+
+### REQ-SV2-1300: L1.2 Local Namespace-as-Package — `__init__.py` Generation or Bare Import Instruction (P1)
+
+**Problem:** 60% of runs (12/20) contain `from emailservice import demo_pb2` or `from recommendationservice.logger import logger` — treating sibling files as importable packages. Generated code assumes `__init__.py` exists and parent directories are Python packages. The pipeline generates no `__init__.py` files.
+
+**Root Cause (per retroactive analysis §7.2):** The LLM generates imports by convention (package-style `from X import Y`) without knowing the project's module layout or whether `__init__.py` files exist. The spec prompt provides no directory layout or import style guidance.
+
+**Evidence:** 12/20 runs across all 4 epochs. Never self-corrected. Not addressed by REQ-SIG-200/201 (which provides proto module names but not import style guidance).
+
+**Requirement:** Address via one or both upstream repairs (per REQ-SV2-1100, fix inputs not outputs):
+
+**Option A: Spec prompt import style instruction**
+
+Add a `## Import Conventions` section to the spec builder when the target project does NOT use package-style imports (no `__init__.py` in service directories). Content:
+
+```
+## Import Conventions
+This project uses flat module layout (no __init__.py). Import sibling files with:
+  import demo_pb2          # NOT: from emailservice import demo_pb2
+  from logger import get_logger  # NOT: from emailservice.logger import get_logger
+```
+
+Inject this section when the forward manifest's `file_specs` shows sibling `.py` files in the same directory with no `__init__.py` present.
+
+- **Where:** `implementation_engine/spec_builder.py` — new P1 section derived from `file_specs` directory analysis
+- **Effort:** ~20 LOC (directory scan + conditional section injection)
+- **Activation gate:** L1 `local_namespace_as_package` FP rate < 5% across 10+ runs (per REQ-SV2-1000)
+
+**Option B: Generate `__init__.py` files during SCAFFOLD phase**
+
+Add empty `__init__.py` generation for each service directory during plan ingestion or scaffold:
+
+- **Where:** `plan_ingestion_emitter.py` or `artisan_phases/preflight.py`
+- **Effort:** ~15 LOC
+- **Risk:** Changes project structure; may conflict with projects that intentionally use flat layout
+
+**Recommendation:** Option A (prompt instruction) is lower risk and follows the repair-inputs principle. Option B is a valid complement if the project structure demands packages.
+
+**Verification:** Re-run online-boutique. L1 `local_namespace_as_package` errors drop to 0 in runs where the import conventions section is present.
+
+---
+
+### REQ-SV2-1400: L6 Discarded Returns — Spec Prompt Anti-Pattern Instruction (P2)
+
+**Problem:** 50% of runs (10/20) contain discarded `os.getenv()`, `os.environ.get()`, or `os.path.*()` calls as expression statements. The return value is computed and thrown away:
+
+```python
+os.getenv("GCP_PROJECT_ID")           # discarded — should be: project_id = os.getenv(...)
+os.environ.get("ALLOYDB_TABLE_NAME")  # discarded — 5 consecutive calls in run-003
+```
+
+**Root Cause:** The LLM generates environment variable lookups as "configuration statements" rather than assignments. This pattern appears when the LLM is adapting a reference implementation that uses environment variables but doesn't show the assignment target (e.g., Dockerfile `ENV` statements or `.env` file entries rewritten as Python).
+
+**Evidence:** 10/20 runs. Stable pattern that never self-corrects. Concentrated in `email_server.py` and `shoppingassistantservice.py`. Severity is WARNING (the code runs but silently discards configuration).
+
+**Requirement:** Add an anti-pattern instruction to the spec prompt when the task involves environment variable configuration:
+
+```
+## Anti-Patterns to Avoid
+- Do NOT write `os.getenv("KEY")` as a bare expression statement. Always assign the result:
+    project_id = os.getenv("GCP_PROJECT_ID", "")
+- Do NOT write `os.environ.get("KEY")` as a bare statement. This computes a value and discards it.
+```
+
+Inject this section when:
+1. The task description or dependencies mention environment variables, `.env`, or configuration
+2. OR the `forward_element_specs` for the task include functions that reference `os.getenv` in their signatures
+
+- **Where:** `implementation_engine/spec_builder.py` — conditional P2 section
+- **Effort:** ~15 LOC (keyword detection + section injection)
+- **Activation gate:** L6 `discarded_return` FP rate < 5% across 10+ runs (per REQ-SV2-1000). Current FP rate is ~0% — every detection has been a true positive.
+
+**Verification:** Re-run online-boutique. L6 `discarded_return` warnings drop to 0 for `email_server.py` and `shoppingassistantservice.py`.
+
 ---
 
 ## 7. Success Criteria
@@ -402,6 +479,8 @@ REQ-SV2-1000, 1100, 1200 are design constraints, not implementations. They activ
 | Kaizen category breakdown | Per-category metrics in kaizen-metrics.json | Present |
 | FP tracking operational | FP rates per category computed | Present |
 | No premature repair | Stage 3 not activated without gate criteria | Enforced |
+| L1.2 namespace-as-package eliminated | `local_namespace_as_package` errors per run | 0 (from ~2) |
+| L6 discarded returns eliminated | `discarded_return` warnings per run | 0 (from ~1.5) |
 
 ---
 
@@ -417,3 +496,6 @@ REQ-SV2-1000, 1100, 1200 are design constraints, not implementations. They activ
 | `package_aliases.py` | Implementation target for L1 GCP alias expansion |
 | `prime_postmortem.py` | Implementation target for category aggregation, FP tracking |
 | `kaizen_correlation.py` | Implementation target for per-category correlation |
+| [SEMANTIC_VALIDATION_RETROACTIVE_ANALYSIS.md](SEMANTIC_VALIDATION_RETROACTIVE_ANALYSIS.md) | §7.2 (L1.2 root cause), §4.1 (L6 frequency) — evidence for REQ-SV2-1300/1400 |
+| [REQ_CONTRACTS_CONSUMER_GAPS.md](REQ_CONTRACTS_CONSUMER_GAPS.md) | GAP-SDK-003 — binding injection removed; import context via REQ-SIG-200/201 |
+| `implementation_engine/spec_builder.py` | Implementation target for REQ-SV2-1300 (import conventions) and REQ-SV2-1400 (anti-patterns) |
