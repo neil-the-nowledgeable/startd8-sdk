@@ -73,6 +73,12 @@ def _make_workflow(
     wf.seed_service_metadata = {}
     wf.plan_document_text = None
 
+    # _engine and _forward_manifest are set in __init__ and used by
+    # load_seed_context(); provide lightweight stubs so __new__-based
+    # fixtures don't crash (Leg 9 #26).
+    wf._forward_manifest = None
+    wf._engine = type("_StubEngine", (), {"_forward_manifest": None})()
+
     return wf
 
 

@@ -1599,6 +1599,8 @@ class TestResumeCachePartialCoverage:
         (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
 
         handler = ImplementPhaseHandler()
+        # Disable inner loop so execution reaches _run_development_phase
+        handler.config.enable_inner_loop = False
         tasks = [
             _make_seed_task(task_id="T1"),
             _make_seed_task(task_id="T2"),
