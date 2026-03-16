@@ -14,6 +14,7 @@ Two entry points:
 
 from __future__ import annotations
 
+import ast
 import copy
 import dataclasses
 import datetime
@@ -900,6 +901,32 @@ class PrimePostMortemEvaluator:
                 fpm.generated_files if fpm.generated_files else fpm.target_files
             )
 
+        # L5: Build sibling_imports per directory for requirements cross-check.
+        # Maps directory → {file_path: {import_module_names}}.
+        _dir_imports: Dict[str, Dict[str, Set[str]]] = {}
+        for gen_file in all_generated:
+            gen_path = Path(gen_file)
+            if gen_path.suffix != ".py":
+                continue
+            try:
+                if not gen_path.is_file():
+                    continue
+                tree = ast.parse(gen_path.read_text(encoding="utf-8", errors="replace"))
+                imports: Set[str] = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            imports.add(alias.name.split(".")[0])
+                            imports.add(alias.name)
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        if not node.level:  # skip relative imports
+                            imports.add(node.module.split(".")[0])
+                            imports.add(node.module)
+                parent_dir = str(gen_path.parent)
+                _dir_imports.setdefault(parent_dir, {})[gen_file] = imports
+            except (OSError, SyntaxError):
+                pass
+
         for fpm in features:
             # Prefer generated_files (absolute paths to actual output) over
             # target_files (relative paths that may not exist at project root).
@@ -938,9 +965,14 @@ class PrimePostMortemEvaluator:
                         seed_task = seed_by_id.get(fpm.feature_id, {})
                         import_map = seed_task.get("import_map")
 
+                    # L5: Resolve sibling_imports for this file's directory.
+                    abs_parent = str(Path(effective_root) / effective_parent)
+                    sib_imports = _dir_imports.get(abs_parent)
+
                     compliance = validate_disk_compliance(
                         effective_file, effective_root, forward_manifest,
                         sibling_files=sibling_files if sibling_files else None,
+                        sibling_imports=sib_imports,
                         import_map=import_map,
                     )
                     fpm.disk_compliance = compliance
