@@ -133,28 +133,46 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         # Mottainai: forward inventory-equivalent fields from onboarding so
         # DESIGN phase can fall back to them when artifact inventory is absent.
         _onboarding = seed_data.get("onboarding") or {}
-        context["onboarding_derivation_rules"] = _onboarding.get("derivation_rules")
-        context["onboarding_resolved_parameters"] = _onboarding.get(
-            "resolved_artifact_parameters"
+
+        # REQ-GPC-200: extract generation profile for downstream awareness
+        context["generation_profile"] = _onboarding.get("generation_profile", "full")
+
+        # REQ-GPC-201: skip ContextCore profile-omitted markers → None
+        # activates existing fallback heuristics (LOC-based, complexity defaults)
+        from startd8.seeds.utils import is_omitted
+
+        def _safe_onboarding(val: Any) -> Any:
+            return None if is_omitted(val) else val
+
+        context["onboarding_derivation_rules"] = _safe_onboarding(
+            _onboarding.get("derivation_rules")
         )
-        context["onboarding_output_contracts"] = _onboarding.get(
-            "expected_output_contracts"
+        context["onboarding_resolved_parameters"] = _safe_onboarding(
+            _onboarding.get("resolved_artifact_parameters")
         )
-        context["onboarding_calibration_hints"] = _onboarding.get(
-            "design_calibration_hints"
+        context["onboarding_output_contracts"] = _safe_onboarding(
+            _onboarding.get("expected_output_contracts")
         )
-        context["onboarding_open_questions"] = _onboarding.get("open_questions")
+        context["onboarding_calibration_hints"] = _safe_onboarding(
+            _onboarding.get("design_calibration_hints")
+        )
+        context["onboarding_open_questions"] = _safe_onboarding(
+            _onboarding.get("open_questions")
+        )
         # B4: artifact dependency graph from ContextCore export
-        context["onboarding_dependency_graph"] = _onboarding.get(
-            "artifact_dependency_graph"
+        context["onboarding_dependency_graph"] = _safe_onboarding(
+            _onboarding.get("artifact_dependency_graph")
         )
         # AR-144/AR-147: service metadata for protocol fidelity validators
-        context["service_metadata"] = _onboarding.get("service_metadata")
+        context["service_metadata"] = _safe_onboarding(
+            _onboarding.get("service_metadata")
+        )
         # REQ-EFE-021: schema_features for edit-first enforcement gate
-        context["onboarding_schema_features"] = (
+        _raw_sf = (
             _onboarding.get("capabilities", {}).get("schema_features")
             or _onboarding.get("schema_features")
         )
+        context["onboarding_schema_features"] = _safe_onboarding(_raw_sf)
         _fwd_count = sum(
             1 for k in [
                 "onboarding_derivation_rules", "onboarding_resolved_parameters",

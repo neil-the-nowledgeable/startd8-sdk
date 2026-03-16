@@ -382,15 +382,26 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
 
     # PCA-201: re-extract onboarding fields as defense-in-depth.
     _onboarding = seed_data.get("onboarding") or {}
+
+    # REQ-GPC-202: restore generation profile on resume
+    if "generation_profile" not in context:
+        context["generation_profile"] = _onboarding.get("generation_profile", "full")
+
+    # REQ-GPC-201: skip ContextCore profile-omitted markers on resume path
+    from startd8.seeds.utils import is_omitted
+
+    def _safe(val: Any) -> Any:
+        return None if is_omitted(val) else val
+
     _pca_fields = {
-        "onboarding_derivation_rules": _onboarding.get("derivation_rules"),
-        "onboarding_resolved_parameters": _onboarding.get("resolved_artifact_parameters"),
-        "onboarding_output_contracts": _onboarding.get("expected_output_contracts"),
-        "onboarding_calibration_hints": _onboarding.get("design_calibration_hints"),
-        "onboarding_open_questions": _onboarding.get("open_questions"),
-        "onboarding_dependency_graph": _onboarding.get("artifact_dependency_graph"),
-        "service_metadata": _onboarding.get("service_metadata"),
-        "onboarding_schema_features": (
+        "onboarding_derivation_rules": _safe(_onboarding.get("derivation_rules")),
+        "onboarding_resolved_parameters": _safe(_onboarding.get("resolved_artifact_parameters")),
+        "onboarding_output_contracts": _safe(_onboarding.get("expected_output_contracts")),
+        "onboarding_calibration_hints": _safe(_onboarding.get("design_calibration_hints")),
+        "onboarding_open_questions": _safe(_onboarding.get("open_questions")),
+        "onboarding_dependency_graph": _safe(_onboarding.get("artifact_dependency_graph")),
+        "service_metadata": _safe(_onboarding.get("service_metadata")),
+        "onboarding_schema_features": _safe(
             _onboarding.get("capabilities", {}).get("schema_features")
             or _onboarding.get("schema_features")
         ),
