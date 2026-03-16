@@ -60,7 +60,6 @@ from .plan_ingestion_diagnostics import (
 )
 from .plan_ingestion_enrichment import enrich_tasks_deterministic
 from .plan_ingestion_models import (
-    ArtisanContextSeed,
     ComplexityScore,
     ContractorRoute,
     IngestionPhase,
@@ -110,8 +109,8 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "refinement_suggestions",
 })
 
-# JSON Schema for ArtisanContextSeed (Item 6 — validation before write)
-_ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
+# JSON Schema for ContextSeed (Item 6 — validation before write)
+_CONTEXT_SEED_SCHEMA: Dict[str, Any] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "required": ["version", "tasks", "artifacts", "ingestion_metrics"],
@@ -168,7 +167,7 @@ def _validate_context_seed(data: Dict[str, Any]) -> bool:
     try:
         import jsonschema
 
-        jsonschema.validate(data, _ARTISAN_SEED_SCHEMA)
+        jsonschema.validate(data, _CONTEXT_SEED_SCHEMA)
         logger.debug("Context seed validated against schema")
         return True
     except ImportError:

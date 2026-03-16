@@ -24,8 +24,8 @@ from .plan_ingestion_diagnostics import (
     compute_seed_quality,
     compute_task_density,
 )
+from startd8.seeds.models import ContextSeed
 from .plan_ingestion_models import (
-    ArtisanContextSeed,
     ComplexityScore,
     ContractorRoute,
     ParsedFeature,
@@ -864,7 +864,7 @@ class PhaseEmitter:
         output_dir = self._output_dir
         doc_path = self._doc_path
 
-        seed = ArtisanContextSeed(
+        seed = ContextSeed(
             generated_at=datetime.now(timezone.utc).isoformat(),
             source_checksum=source_checksum_val,
             plan=parsed_plan.to_seed_dict(),
@@ -1001,7 +1001,7 @@ class PhaseEmitter:
         output_dir = self._output_dir
         doc_path = self._doc_path
 
-        seed_prime = ArtisanContextSeed(
+        seed_prime = ContextSeed(
             generated_at=datetime.now(timezone.utc).isoformat(),
             source_checksum=source_checksum_val,
             plan=parsed_plan.to_seed_dict(),

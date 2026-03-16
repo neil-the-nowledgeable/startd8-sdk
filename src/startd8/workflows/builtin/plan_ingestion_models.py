@@ -10,7 +10,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from .schema_versions import ARTISAN_SCHEMA_VERSION
+from startd8.seeds.models import ContextSeed
+
+# Deprecated alias — use ContextSeed from startd8.seeds.models directly.
+ArtisanContextSeed = ContextSeed
 
 
 __all__ = [
@@ -21,6 +24,7 @@ __all__ = [
     "ParsedPlan",
     "ComplexityScore",
     "ArtisanContextSeed",
+    "ContextSeed",
     "IngestionState",
     "PlanIngestionResult",
     "TaskTrackingConfig",
@@ -325,71 +329,11 @@ class ComplexityScore:
         }
 
 
-@dataclass
-class ArtisanContextSeed:
-    """Structured context seed for the ArtisanContractor pipeline."""
-    version: str = "1.0.0"  # Legacy; prefer schema_version (Item 15)
-    schema_version: str = ARTISAN_SCHEMA_VERSION  # Canonical schema version
-    generated_at: str = ""
-    # Item 16: provenance chain — checksum from export/onboarding for traceability
-    source_checksum: Optional[str] = None
-    generator: str = "plan-ingestion"
-    plan: Optional[Dict[str, Any]] = None
-    complexity: Optional[Dict[str, Any]] = None
-    tasks: List[Dict[str, Any]] = field(default_factory=list)
-    artifacts: Dict[str, Any] = field(default_factory=dict)
-    ingestion_metrics: Dict[str, Any] = field(default_factory=dict)
-    # Optional onboarding metadata (artifact_manifest_path, project_context_path, etc.)
-    onboarding: Optional[Dict[str, Any]] = None
-    # Shared architectural context from manifest + cross-feature analysis
-    architectural_context: Optional[Dict[str, Any]] = None
-    # Per-task design calibration (sections, max_tokens) from SizeEstimator
-    design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
-    # Context files used for plan ingestion (path + optional checksum)
-    context_files: Optional[List[Dict[str, Any]]] = None
-    # Inferred service metadata (transport protocol, runtime deps, etc.)
-    service_metadata: Optional[Dict[str, Any]] = None
-    # Wave computation metadata (wave_count, wave_summary, critical_path_length)
-    wave_metadata: Optional[Dict[str, Any]] = None
-    # CCD-402: Lane computation metadata (task_id → lane_index). Advisory only.
-    lane_assignments: Optional[Dict[str, int]] = None
-    # Operational project metadata (criticality, risks, SLOs, observability)
-    project_metadata: Optional[Dict[str, Any]] = None
-    # Phase 4: Forward-looking code manifest contracts
-    forward_manifest: Optional[Dict[str, Any]] = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        d: Dict[str, Any] = {
-            "version": self.version,
-            "schema_version": self.schema_version,
-            "generated_at": self.generated_at,
-            "source_checksum": self.source_checksum,
-            "generator": self.generator,
-            "plan": self.plan,
-            "complexity": self.complexity,
-            "tasks": list(self.tasks),
-            "artifacts": dict(self.artifacts),
-            "ingestion_metrics": dict(self.ingestion_metrics),
-        }
-        if self.architectural_context is not None:
-            d["architectural_context"] = self.architectural_context
-        if self.design_calibration is not None:
-            d["design_calibration"] = self.design_calibration
-        if self.onboarding is not None:
-            d["onboarding"] = self.onboarding
-        if self.context_files is not None:
-            d["context_files"] = self.context_files
-        if self.service_metadata is not None:
-            d["service_metadata"] = self.service_metadata
-        if self.wave_metadata is not None:
-            d["wave_metadata"] = self.wave_metadata
-        if self.lane_assignments is not None:
-            d["lane_assignments"] = self.lane_assignments
-        if self.project_metadata is not None:
-            d["project_metadata"] = self.project_metadata
-        if self.forward_manifest is not None:
-            d["forward_manifest"] = self.forward_manifest
-        return d
+# NOTE: ArtisanContextSeed class was here (lines 328-392) until 2026-03-16.
+# It was a duplicate of ContextSeed in startd8.seeds.models with identical
+# fields and to_dict() logic. Unified to ContextSeed; the ArtisanContextSeed
+# alias above provides backward compatibility.
 
 
 @dataclass

@@ -1,23 +1,19 @@
 """
-Shared schema version for the Artisan/Plan-Ingestion pipeline (Item 15).
+Schema version constants for the plan-ingestion pipeline.
 
-Use a single version string across artifact manifest, onboarding metadata,
-context seed, and design handoff so consumers can branch on version for
-compatibility or migration logic.
-
-Where to include schema_version (or schema_version_str):
-- Context seed: top-level "schema_version" key
-- Design handoff: "schema_version_str" key
-- Artifact manifest (ContextCore/Wayfinder): include "schema_version": "1.0"
-- Onboarding metadata (onboarding-metadata.json): include "schema_version": "1.0"
+Canonical definitions live in ``startd8.seeds.schema_versions``.
+This module re-exports them for backward compatibility with code that
+imports from ``startd8.workflows.builtin.schema_versions``.
 """
 
-__all__ = ["ARTISAN_SCHEMA_VERSION", "SUPPORTED_SEED_SCHEMA_VERSIONS"]
+from startd8.seeds.schema_versions import (  # noqa: F401
+    ARTISAN_SCHEMA_VERSION,
+    SEED_SCHEMA_VERSION,
+    SUPPORTED_SEED_SCHEMA_VERSIONS,
+)
 
-# Shared schema version for artifact manifest, onboarding metadata, seed, handoff.
-# Bump on breaking changes to any of these schemas.
-ARTISAN_SCHEMA_VERSION = "1.0"
-
-# Seed versions accepted by DomainPreflightWorkflow (avoids hardcoding in workflow).
-# Includes "1.0.0" for backward compat with seeds written before Item 15.
-SUPPORTED_SEED_SCHEMA_VERSIONS = frozenset({ARTISAN_SCHEMA_VERSION, "1.0.0"})
+__all__ = [
+    "ARTISAN_SCHEMA_VERSION",
+    "SEED_SCHEMA_VERSION",
+    "SUPPORTED_SEED_SCHEMA_VERSIONS",
+]
