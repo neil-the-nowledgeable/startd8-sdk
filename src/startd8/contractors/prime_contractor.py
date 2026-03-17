@@ -3349,7 +3349,9 @@ class PrimeContractorWorkflow:
             )
 
         # Generate dependency file if the language profile provides one
-        # and it doesn't already exist on disk (e.g. go.mod, package.json)
+        # and it doesn't already exist on disk (e.g. go.mod, package.json).
+        # For multi-service repos, derive the service directory from
+        # target_files so go.mod lands next to the source (not project root).
         self._ensure_dependency_file(profile)
 
     def _ensure_dependency_file(self, profile: Any) -> None:
@@ -3358,6 +3360,10 @@ class PrimeContractorWorkflow:
         Writes go.mod, package.json, or build.gradle based on the language
         profile and seed service metadata. Skips if the file already exists
         or if the profile doesn't support generation.
+
+        For multi-service repos (e.g. online-boutique), the dependency file
+        is placed in the service subdirectory derived from target_files
+        (e.g. ``src/shippingservice/go.mod``), not at project root.
         """
         if not hasattr(profile, "generate_dependency_file"):
             return
@@ -3366,9 +3372,43 @@ class PrimeContractorWorkflow:
         if not build_patterns:
             return
 
-        # Check if any build file already exists
+        # Derive service directory from target_files.
+        # In multi-service repos, source files live in subdirectories
+        # (e.g. src/shippingservice/main.go), and the dependency file
+        # (go.mod) must be co-located with the source, not at project root.
+        service_dir = self.project_root
+        if self._language_profile is not None:
+            src_exts = set(profile.source_extensions)
+            # Find common parent directory of all target source files
+            target_dirs: set[Path] = set()
+            for queue_feat in self.queue._features:
+                for tf in (queue_feat.target_files or []):
+                    p = Path(tf)
+                    if p.suffix in src_exts:
+                        abs_p = p if p.is_absolute() else (self.project_root / p)
+                        target_dirs.add(abs_p.parent)
+            if target_dirs:
+                # Use the common parent of all target directories
+                dirs_list = sorted(target_dirs)
+                common = dirs_list[0]
+                for d in dirs_list[1:]:
+                    # Find longest common path prefix
+                    try:
+                        d.relative_to(common)
+                    except ValueError:
+                        # Not a child of common — walk up common
+                        while common != self.project_root:
+                            common = common.parent
+                            try:
+                                d.relative_to(common)
+                                break
+                            except ValueError:
+                                continue
+                service_dir = common
+
+        # Check if any build file already exists in the service directory
         for pattern in build_patterns:
-            if (self.project_root / pattern).exists():
+            if (service_dir / pattern).exists():
                 return
 
         # Extract metadata for generation
@@ -3381,7 +3421,11 @@ class PrimeContractorWorkflow:
             dependencies = self.seed_service_metadata.get("runtime_dependencies", [])
 
         if not service_name and not module_path:
-            return  # Not enough metadata to generate
+            # Derive service_name from the service directory name
+            if service_dir != self.project_root:
+                service_name = service_dir.name
+            else:
+                return  # Not enough metadata to generate
 
         try:
             content = profile.generate_dependency_file(
@@ -3401,14 +3445,15 @@ class PrimeContractorWorkflow:
         if not content:
             return
 
-        # Write to the first build file pattern (e.g. go.mod, package.json)
-        target = self.project_root / build_patterns[0]
+        # Write to the service directory (e.g. src/shippingservice/go.mod)
+        target = service_dir / build_patterns[0]
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             logger.info(
-                "Generated %s for language=%s (%d bytes)",
-                target.name, profile.language_id, len(content),
+                "Generated %s for language=%s at %s (%d bytes)",
+                target.name, profile.language_id,
+                target.relative_to(self.project_root), len(content),
             )
         except OSError as exc:
             logger.warning("Failed to write %s: %s", target, exc)

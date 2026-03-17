@@ -239,12 +239,17 @@ def infer_service_metadata(
     features: list,
     onboarding: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Infer service-level metadata from features and onboarding data."""
+    """Infer service-level metadata from features and onboarding data.
+
+    For Go projects, also derives module_path, service_name, and go_version.
+    """
     protocols: list[str] = []
     all_runtime_deps: list[str] = []
     all_api_sigs: list[str] = []
     all_negative_scope: list[str] = []
     languages: list[str] = []
+    module_paths: list[str] = []
+    service_names: list[str] = []
 
     for f in features:
         if not hasattr(f, "protocol"):
@@ -258,6 +263,12 @@ def infer_service_metadata(
         all_runtime_deps.extend(getattr(f, "runtime_dependencies", []))
         all_api_sigs.extend(getattr(f, "api_signatures", []))
         all_negative_scope.extend(getattr(f, "negative_scope", []))
+        _mp = getattr(f, "module_path", "")
+        if _mp:
+            module_paths.append(_mp)
+        _sn = getattr(f, "service_name", "")
+        if _sn:
+            service_names.append(_sn)
         for tf in getattr(f, "target_files", []):
             ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
             lang = _EXT_TO_LANGUAGE.get(ext)
@@ -287,6 +298,38 @@ def infer_service_metadata(
         metadata["api_signatures"] = api_sigs
     if negative_scope:
         metadata["negative_scope"] = negative_scope
+
+    # Go-specific: derive module_path, service_name, go_version
+    primary_lang = metadata.get("primary_language", "")
+    is_go = primary_lang == "go" or (
+        isinstance(primary_lang, list) and "go" in primary_lang
+    )
+    if is_go:
+        if module_paths:
+            metadata["module_path"] = module_paths[0]
+        else:
+            for sig in api_sigs:
+                if sig.startswith("module "):
+                    metadata["module_path"] = sig.split(None, 1)[1].strip()
+                    break
+
+        if service_names:
+            metadata["service_name"] = service_names[0]
+        else:
+            go_dirs: set[str] = set()
+            for feat in features:
+                for tf in getattr(feat, "target_files", []):
+                    if tf.endswith(".go"):
+                        parts = tf.replace("\\", "/").rsplit("/", 1)
+                        if len(parts) == 2:
+                            go_dirs.add(parts[0].rsplit("/", 1)[-1])
+            if len(go_dirs) == 1:
+                metadata["service_name"] = go_dirs.pop()
+
+        go_version = "1.23"
+        if onboarding:
+            go_version = str(onboarding.get("go_version", go_version))
+        metadata["go_version"] = go_version
 
     return metadata
 

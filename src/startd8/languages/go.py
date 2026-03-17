@@ -38,16 +38,23 @@ class GoLanguageProfile:
 
     @property
     def syntax_check_command(self) -> Optional[List[str]]:
-        return ["go", "vet", "./..."]
+        # Per-file syntax check: gofmt -e parses Go source without needing
+        # go.mod — works in multi-module repos where go.mod lives in a
+        # subdirectory, not project_root.  go vet ./... requires go.mod at cwd.
+        return ["gofmt", "-e", "{file}"]
 
     @property
     def lint_command(self) -> Optional[List[str]]:
-        # go vet covers most correctness issues; golangci-lint is optional
-        return ["go", "vet", "./..."]
+        # go vet requires go.mod — skip lint at the per-file level.
+        # Post-generation cleanup (goimports) handles import correctness.
+        return None
 
     @property
     def test_command(self) -> Optional[List[str]]:
-        return ["go", "test", "./..."]
+        # go test ./... requires go.mod at cwd — same issue as go vet ./...
+        # In multi-service repos, cwd is project_root, not the service
+        # subdirectory.  Disable until checkpoint supports per-service cwd.
+        return None
 
     @property
     def framework_imports(self) -> Dict[str, dict]:

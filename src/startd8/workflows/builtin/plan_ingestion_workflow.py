@@ -107,6 +107,8 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "artifact_types_addressed",
     "requirements_refs",
     "refinement_suggestions",
+    "module_path",
+    "service_name",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -321,7 +323,9 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
-      "negative_scope": ["things explicitly excluded from this feature"]
+      "negative_scope": ["things explicitly excluded from this feature"],
+      "module_path": "optional Go module path e.g. github.com/org/repo/src/svc",
+      "service_name": "optional service directory name e.g. shippingservice"
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
@@ -346,6 +350,8 @@ api_signatures: list of class, function, and method signatures defined or implem
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
+module_path: (Go projects only) the Go module path for this service, typically found in go.mod or the plan's module structure section (e.g. "github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice"). Omit or empty for non-Go projects.
+service_name: (Go projects only) the service directory name (e.g. "shippingservice", "frontend"). For Go, this determines the directory where go.mod and source files live. Infer from the target_files path (e.g. "src/shippingservice/main.go" → "shippingservice"). Omit or empty for non-Go projects.
 
 Be thorough. Extract every feature, file reference, and dependency.
 """
@@ -667,15 +673,21 @@ def _infer_service_metadata(
     Extracts transport protocol, runtime dependencies, and API surface
     from ParsedFeature fields. Falls back to onboarding metadata if present.
 
+    For Go projects, also extracts module_path, service_name, and
+    go_version from feature-level fields and api_signatures.
+
     Returns:
         Dict with keys: transport_protocol, runtime_dependencies,
-        primary_language, api_signatures, negative_scope.
+        primary_language, api_signatures, negative_scope, and
+        (Go only) module_path, service_name, go_version.
     """
     protocols: list[str] = []
     all_runtime_deps: list[str] = []
     all_api_sigs: list[str] = []
     all_negative_scope: list[str] = []
     languages: list[str] = []
+    module_paths: list[str] = []
+    service_names: list[str] = []
 
     for f in features:
         if f.protocol:
@@ -683,6 +695,10 @@ def _infer_service_metadata(
         all_runtime_deps.extend(f.runtime_dependencies)
         all_api_sigs.extend(f.api_signatures)
         all_negative_scope.extend(f.negative_scope)
+        if f.module_path:
+            module_paths.append(f.module_path)
+        if f.service_name:
+            service_names.append(f.service_name)
         # Infer language from target files
         for tf in f.target_files:
             # Extract extension after last dot, or empty string if no dot
@@ -716,6 +732,43 @@ def _infer_service_metadata(
         metadata["api_signatures"] = api_sigs
     if negative_scope:
         metadata["negative_scope"] = negative_scope
+
+    # Go-specific: derive module_path, service_name, go_version
+    primary_lang = metadata.get("primary_language", "")
+    is_go = primary_lang == "go" or (
+        isinstance(primary_lang, list) and "go" in primary_lang
+    )
+    if is_go:
+        # module_path: prefer explicit from features, else scan api_signatures
+        # for "module ..." declarations (common in go.mod task signatures)
+        if module_paths:
+            metadata["module_path"] = module_paths[0]
+        else:
+            for sig in api_sigs:
+                if sig.startswith("module "):
+                    metadata["module_path"] = sig.split(None, 1)[1].strip()
+                    break
+
+        # service_name: prefer explicit from features, else derive from
+        # the common parent directory of Go target files
+        if service_names:
+            metadata["service_name"] = service_names[0]
+        else:
+            go_dirs: set[str] = set()
+            for f in features:
+                for tf in f.target_files:
+                    if tf.endswith(".go"):
+                        parts = tf.replace("\\", "/").rsplit("/", 1)
+                        if len(parts) == 2:
+                            go_dirs.add(parts[0].rsplit("/", 1)[-1])
+            if len(go_dirs) == 1:
+                metadata["service_name"] = go_dirs.pop()
+
+        # go_version: extract from onboarding or default
+        go_version = "1.23"
+        if onboarding:
+            go_version = str(onboarding.get("go_version", go_version))
+        metadata["go_version"] = go_version
 
     return metadata
 
@@ -1208,6 +1261,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 protocol=f.get("protocol", ""),
                 runtime_dependencies=f.get("runtime_dependencies", []),
                 negative_scope=f.get("negative_scope", []),
+                module_path=f.get("module_path", ""),
+                service_name=f.get("service_name", ""),
             ))
 
         parsed = ParsedPlan(

@@ -127,11 +127,17 @@ class TestPythonProfile:
 @pytest.mark.unit
 class TestGoProfile:
 
-    def test_syntax_uses_go_vet(self):
+    def test_syntax_uses_gofmt(self):
         p = GoLanguageProfile()
         cmd = p.syntax_check_command
         assert cmd is not None
-        assert "go" in cmd[0]
+        assert "gofmt" in cmd[0]
+        assert "{file}" in cmd
+
+    def test_lint_is_none(self):
+        """go vet requires go.mod — lint is disabled at per-file level."""
+        p = GoLanguageProfile()
+        assert p.lint_command is None
 
     def test_repair_disabled(self):
         assert GoLanguageProfile().repair_enabled is False

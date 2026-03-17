@@ -871,6 +871,17 @@ class StandaloneContextStrategy(ContextStrategy):
             rt_deps = service_meta.get("runtime_dependencies")
             if rt_deps and isinstance(rt_deps, list):
                 gen_context["runtime_dependencies"] = rt_deps
+            # Lift Go-specific fields for spec_builder Go module section
+            for _go_field in ("module_path", "service_name", "go_version"):
+                _val = service_meta.get(_go_field)
+                if _val and _go_field not in gen_context:
+                    gen_context[_go_field] = _val
+
+        # Per-task module_path/service_name override (from QP-1 threading)
+        for _task_field in ("module_path", "service_name"):
+            _task_val = metadata.get(_task_field)
+            if _task_val:
+                gen_context[_task_field] = _task_val  # task-level overrides service-level
 
         # Gap 9: per-task metadata from seed enrichment
         self._inject_enrichment(gen_context, metadata)

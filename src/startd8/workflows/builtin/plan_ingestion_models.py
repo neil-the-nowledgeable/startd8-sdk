@@ -233,6 +233,10 @@ class ParsedFeature:
     runtime_dependencies: List[str] = field(default_factory=list)
     # IMP-4: Things this feature explicitly does NOT do
     negative_scope: List[str] = field(default_factory=list)
+    # Go-specific: module path for go.mod (e.g. "github.com/org/repo/src/svc")
+    module_path: str = ""
+    # Go-specific: service name for package declaration and directory naming
+    service_name: str = ""
     # Phase 6: CG-PI-2 — union of callers across all target FQNs
     affected_callers: List[str] = field(default_factory=list)
     # Phase 6: CG-PI-3 — True when max blast radius exceeds threshold

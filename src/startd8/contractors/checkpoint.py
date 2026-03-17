@@ -141,7 +141,22 @@ class IntegrationCheckpoint:
 
         Note: collected ≠ passing.  A test that was collected but would fail is
         still included in the baseline.
+
+        For non-Python languages whose test_command is None, skips baseline
+        capture and returns an empty set.
         """
+        # Skip baseline capture for languages without a test runner
+        if (
+            self._language_profile is not None
+            and self._language_profile.test_command is None
+        ):
+            logger.info(
+                "Test baseline skipped: no test runner for language=%s",
+                self._language_profile.language_id,
+            )
+            self._test_baseline = None
+            return set()
+
         try:
             result = subprocess.run(
                 ["python3", "-m", "pytest", "--collect-only", "-q"],
@@ -974,11 +989,27 @@ class IntegrationCheckpoint:
 
         A regression is when a test that was passing before integration
         now fails after integration.
+
+        Uses the language profile's ``test_command`` when available,
+        falling back to ``python3 -m pytest`` for Python / unspecified.
         """
-        # Run pytest
+        # Determine test command from language profile
+        test_cmd: list[str] = ["python3", "-m", "pytest", "-v", "--tb=short", "-q"]
+        if self._language_profile is not None:
+            profile_cmd = self._language_profile.test_command
+            if profile_cmd is None:
+                # Language has no test runner configured — skip
+                return CheckpointResult(
+                    status=CheckpointStatus.PASSED,
+                    name="Test Check",
+                    message="Test check skipped (no test runner for language)",
+                    details={"skipped": True},
+                )
+            test_cmd = profile_cmd
+
         try:
             result = subprocess.run(
-                ["python3", "-m", "pytest", "-v", "--tb=short", "-q"],
+                test_cmd,
                 capture_output=True,
                 text=True,
                 cwd=self.project_root,

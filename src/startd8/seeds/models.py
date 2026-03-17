@@ -130,6 +130,8 @@ class SeedTask:
     protocol: str = ""
     runtime_dependencies: list[str] = field(default_factory=list)
     negative_scope: list[str] = field(default_factory=list)
+    module_path: str = ""  # Go: module path for go.mod
+    service_name: str = ""  # Go: service directory name
     wave_index: Optional[int] = None
     complexity_tier_override: Optional[str] = None
 
@@ -260,6 +262,8 @@ class SeedTask:
             protocol=context.get("protocol", ""),
             runtime_dependencies=context.get("runtime_dependencies", []),
             negative_scope=context.get("negative_scope", []),
+            module_path=context.get("module_path", ""),
+            service_name=context.get("service_name", ""),
             wave_index=wave_index,
             complexity_tier_override=complexity_tier_override,
         )
