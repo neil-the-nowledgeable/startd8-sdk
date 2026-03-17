@@ -3381,7 +3381,7 @@ class PrimeContractorWorkflow:
             src_exts = set(profile.source_extensions)
             # Find common parent directory of all target source files
             target_dirs: set[Path] = set()
-            for queue_feat in self.queue._features:
+            for queue_feat in self.queue.features.values():
                 for tf in (queue_feat.target_files or []):
                     p = Path(tf)
                     if p.suffix in src_exts:
