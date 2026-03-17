@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from startd8.forward_manifest import ForwardManifest
 
@@ -18,6 +18,9 @@ class MicroPrimeContext:
     existing_file_contents: dict[str, str] = field(default_factory=dict)
     ollama_available: bool = True
     ollama_model: str = "startd8-coder"
+    # REQ-SIG-201: Dependency task imports from service communication graph.
+    # Keyed by dep task ID → {"modules": [...], "target_files": [...]}.
+    dependency_imports: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_artisan(
@@ -55,6 +58,7 @@ class MicroPrimeContext:
         """Build context from Prime Contractor generation context."""
         binding_constraints = list(gen_context.get("domain_constraints", []) or [])
         existing_files = dict(gen_context.get("existing_files", {}) or {})
+        dep_imports = dict(gen_context.get("dependency_imports", {}) or {})
         ollama_model = "startd8-coder"
         if gen_context.get("ollama_model"):
             try:
@@ -68,4 +72,5 @@ class MicroPrimeContext:
             existing_file_contents=existing_files,
             ollama_available=ollama_available,
             ollama_model=ollama_model,
+            dependency_imports=dep_imports,
         )

@@ -317,6 +317,41 @@ def _check_structural_integrity(
     return None
 
 
+def _enrich_file_spec_imports(
+    file_spec: "ForwardFileSpec",
+    dependency_imports: Dict[str, Dict[str, Any]],
+) -> "ForwardFileSpec":
+    """Enrich file_spec.imports with modules from dependency tasks.
+
+    When the forward manifest has empty imports for a file (common for test
+    clients), this injects proto module names from the service communication
+    graph via dependency_imports.  Prevents the LLM from hallucinating proto
+    module names (run-055 F-1/F-2: email_service_pb2, recommendationservicestub).
+    """
+    from startd8.forward_manifest import ForwardImportSpec
+
+    existing_modules = {imp.module for imp in file_spec.imports}
+    new_imports = list(file_spec.imports)
+    added = False
+
+    for dep_id, info in dependency_imports.items():
+        for mod in info.get("modules", []):
+            if mod not in existing_modules and not mod.startswith("_"):
+                new_imports.append(ForwardImportSpec(kind="import", module=mod))
+                existing_modules.add(mod)
+                added = True
+
+    if not added:
+        return file_spec
+
+    logger.info(
+        "Enriched file_spec imports with %d dependency modules: %s",
+        len(new_imports) - len(file_spec.imports),
+        sorted(existing_modules - {imp.module for imp in file_spec.imports}),
+    )
+    return file_spec.model_copy(update={"imports": new_imports})
+
+
 @dataclasses.dataclass
 class _FileProcessingState:
     """Mutable state carrier for generate() sub-steps."""
@@ -665,6 +700,15 @@ class MicroPrimeCodeGenerator:
                     skeleton.count("\n") + 1,
                 )
                 continue
+
+            # REQ-SIG-201: Enrich file_spec imports with dependency modules
+            # from service communication graph. This ensures MicroPrime element
+            # prompts include correct proto module names (e.g., demo_pb2) even
+            # when the forward manifest has no prescribed imports for this file.
+            if mp_context.dependency_imports and file_spec is not None:
+                file_spec = _enrich_file_spec_imports(
+                    file_spec, mp_context.dependency_imports,
+                )
 
             # REQ-DDS-002: Thread design_doc_sections to engine
             _dds = context.get("design_doc_sections") or []
