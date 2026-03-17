@@ -116,9 +116,7 @@ class TestStepFactoryCompleteness:
 
     # Steps in _CANONICAL_ORDER that are reserved but not yet implemented.
     # Remove entries from this set as each step ships (Commits 2–5).
-    _PENDING_STEPS = {
-        "semantic_duplicate_main_fix",
-    }
+    _PENDING_STEPS: set[str] = set()  # All semantic steps now have factories
 
     def test_all_routed_steps_have_factories_or_pending(self):
         """Every step in _ROUTING_TABLE has a factory or is in the pending set."""

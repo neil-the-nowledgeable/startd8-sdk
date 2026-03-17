@@ -22,6 +22,7 @@ from .steps import (
     FutureImportReorderStep,
     IndentNormalizeStep,
     SemanticDiscardedReturnFixStep,
+    SemanticDuplicateMainFixStep,
     SemanticImportFixStep,
     SemanticMethodFixStep,
     SemanticMethodResolutionFixStep,
@@ -88,7 +89,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "semantic_import_fix": SemanticImportFixStep,
     "semantic_method_resolution_fix": SemanticMethodResolutionFixStep,
     "semantic_discarded_return_fix": SemanticDiscardedReturnFixStep,
-    # Remaining: semantic_duplicate_main_fix (Commit 5).
+    "semantic_duplicate_main_fix": SemanticDuplicateMainFixStep,
     "ast_validate": AstValidateStep,
 }
 
