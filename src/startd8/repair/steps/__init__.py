@@ -16,6 +16,7 @@ from .import_completion import ErrorDrivenImportCompletion, ManifestImportComple
 from .indent_normalize import IndentNormalizeStep
 from .semantic_import_fix import SemanticImportFixStep
 from .semantic_method_fix import SemanticMethodFixStep
+from .semantic_method_resolution_fix import SemanticMethodResolutionFixStep
 from .unused_variable_removal import UnusedVariableRemovalStep
 from .variable_initialization import VariableInitializationStep
 
@@ -34,6 +35,7 @@ __all__ = [
     "ManifestImportCompletion",
     "SemanticImportFixStep",
     "SemanticMethodFixStep",
+    "SemanticMethodResolutionFixStep",
     "UnusedVariableRemovalStep",
     "VariableInitializationStep",
 ]

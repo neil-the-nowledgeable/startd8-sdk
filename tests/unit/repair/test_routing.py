@@ -117,7 +117,6 @@ class TestStepFactoryCompleteness:
     # Steps in _CANONICAL_ORDER that are reserved but not yet implemented.
     # Remove entries from this set as each step ships (Commits 2–5).
     _PENDING_STEPS = {
-        "semantic_method_resolution_fix",
         "semantic_discarded_return_fix",
         "semantic_duplicate_main_fix",
     }

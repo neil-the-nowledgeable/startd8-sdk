@@ -23,6 +23,7 @@ from .steps import (
     IndentNormalizeStep,
     SemanticImportFixStep,
     SemanticMethodFixStep,
+    SemanticMethodResolutionFixStep,
     UnusedVariableRemovalStep,
     VariableInitializationStep,
 )
@@ -84,7 +85,8 @@ _STEP_FACTORIES: dict[str, type] = {
     "unused_variable_removal": UnusedVariableRemovalStep,
     # Semantic repair steps (REQ-SR-100–400)
     "semantic_import_fix": SemanticImportFixStep,
-    # Remaining semantic steps registered when implementations ship (Commits 3–5).
+    "semantic_method_resolution_fix": SemanticMethodResolutionFixStep,
+    # Remaining semantic steps registered when implementations ship (Commits 4–5).
     "ast_validate": AstValidateStep,
 }
 
