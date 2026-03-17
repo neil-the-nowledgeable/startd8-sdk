@@ -7,7 +7,8 @@ validation but Python prompts." If it grows too large later, extract then.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Protocol, Sequence, runtime_checkable
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Protocol, Sequence, runtime_checkable
 
 
 @runtime_checkable
@@ -175,5 +176,43 @@ class LanguageProfile(Protocol):
         """Return standard library top-level module names.
 
         Used to exclude stdlib imports from dependency alignment checks.
+        """
+        ...
+
+    def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
+        """Run language-specific cleanup on generated files before validation.
+
+        Called after code generation, before checkpoint validation. Use for
+        tools like ``goimports`` (Go) or ``prettier`` (Node.js) that
+        authoritatively fix formatting and imports.
+
+        Args:
+            files: Generated source files to clean up.
+            project_root: Project root for running tools.
+
+        Returns:
+            List of warning/info messages (empty if all succeeded).
+        """
+        ...
+
+    def generate_dependency_file(
+        self,
+        project_root: Path,
+        service_name: str,
+        module_path: str,
+        dependencies: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Generate language-specific dependency manifest content.
+
+        Args:
+            project_root: Project root directory.
+            service_name: Name of the service being generated.
+            module_path: Module/package path (e.g. Go module path).
+            dependencies: List of dependency strings.
+            metadata: Optional service metadata (language version, etc.).
+
+        Returns:
+            File content string, or None if not applicable.
         """
         ...

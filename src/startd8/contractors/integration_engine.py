@@ -1392,14 +1392,37 @@ class IntegrationEngine:
                         attempt, self._rel_display(tp),
                     )
 
-        # 3. Pre-validate generated .py files
-        if not self.dry_run and self.checkpoint is not None:
-            gen_paths = []
+        # 2.5. Post-generation cleanup (P2: goimports for Go, etc.)
+        if not self.dry_run and self._language_profile is not None:
+            all_gen_paths = []
             for f in unit.generated_files:
                 p = Path(f)
                 if not p.is_absolute():
                     p = p.resolve()
-                if p.exists() and p.suffix == ".py":
+                if p.exists():
+                    all_gen_paths.append(p)
+            if all_gen_paths:
+                try:
+                    cleanup_warnings = self._language_profile.post_generation_cleanup(
+                        all_gen_paths, self.project_root,
+                    )
+                    for w in cleanup_warnings:
+                        logger.warning("Post-gen cleanup: %s", w)
+                        warnings.append(w)
+                except Exception as exc:
+                    logger.warning("Post-gen cleanup failed: %s", exc)
+
+        # 3. Pre-validate generated source files
+        if not self.dry_run and self.checkpoint is not None:
+            gen_paths = []
+            source_exts = {".py"}
+            if self._language_profile is not None:
+                source_exts = set(self._language_profile.source_extensions)
+            for f in unit.generated_files:
+                p = Path(f)
+                if not p.is_absolute():
+                    p = p.resolve()
+                if p.exists() and p.suffix in source_exts:
                     gen_paths.append(p)
             if gen_paths:
                 pre_result = self.checkpoint.pre_validate(gen_paths)
@@ -1833,22 +1856,39 @@ class IntegrationEngine:
                 status=status,
             )
 
-        # 6. Post-merge: auto-fix lint + run checkpoints
+        # 6. Post-merge: language-aware cleanup + auto-fix lint + run checkpoints
         if not self.dry_run and self.checkpoint is not None:
+            # P2: Run language-specific post-merge cleanup (goimports, etc.)
+            if self._language_profile is not None:
+                try:
+                    post_merge_warnings = self._language_profile.post_generation_cleanup(
+                        integrated_files, self.project_root,
+                    )
+                    for w in post_merge_warnings:
+                        warnings.append(w)
+                except Exception as exc:
+                    logger.warning("Post-merge cleanup failed: %s", exc)
+
             # Auto-fix trivially-fixable lint issues before running checkpoints
-            for ifile in integrated_files:
-                if ifile.suffix == ".py":
-                    try:
-                        subprocess.run(
-                            [
-                                "python3", "-m", "ruff", "check", "--fix",
-                                "--unsafe-fixes", "--select=E7,E9,F", str(ifile),
-                            ],
-                            capture_output=True, text=True,
-                            cwd=self.project_root, timeout=30,
-                        )
-                    except Exception:
-                        pass  # best-effort
+            # (Python-specific: ruff auto-fix)
+            _is_python = (
+                self._language_profile is None
+                or self._language_profile.language_id == "python"
+            )
+            if _is_python:
+                for ifile in integrated_files:
+                    if ifile.suffix == ".py":
+                        try:
+                            subprocess.run(
+                                [
+                                    "python3", "-m", "ruff", "check", "--fix",
+                                    "--unsafe-fixes", "--select=E7,E9,F", str(ifile),
+                                ],
+                                capture_output=True, text=True,
+                                cwd=self.project_root, timeout=30,
+                            )
+                        except Exception:
+                            pass  # best-effort
 
             logger.info(
                 "Running integration checkpoints for '%s'...", unit.name,

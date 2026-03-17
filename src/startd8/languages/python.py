@@ -5,7 +5,8 @@ Registered as the default language profile.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 
 class PythonLanguageProfile:
@@ -105,6 +106,23 @@ class PythonLanguageProfile:
     def get_stdlib_prefixes(self) -> Sequence[str]:
         # Canonical Python stdlib set (from checkpoint.py)
         return _PYTHON_STDLIB_PREFIXES
+
+    def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
+        # Python cleanup is handled inline by ruff auto-fix in checkpoint/engine.
+        # No separate post-generation step needed.
+        return []
+
+    def generate_dependency_file(
+        self,
+        project_root: Path,
+        service_name: str,
+        module_path: str,
+        dependencies: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        # Python uses requirements_generator.py for requirements.txt.
+        # Not implemented here — existing pipeline handles it.
+        return None
 
 
 # Extracted from IntegrationCheckpoint._STDLIB_PREFIXES

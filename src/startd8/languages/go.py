@@ -5,7 +5,16 @@ Go profile values derived from the online-boutique-demo Go services.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+import logging
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
+
+# Timeout for goimports/gofmt subprocess calls (seconds)
+_GO_TOOL_TIMEOUT = 30
 
 
 class GoLanguageProfile:
@@ -127,6 +136,134 @@ class GoLanguageProfile:
 
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _GO_STDLIB_PREFIXES
+
+    def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
+        """Run goimports and gofmt on generated Go files.
+
+        goimports is authoritative for Go — it:
+        - Adds missing imports (resolves the entire import audit problem)
+        - Removes unused imports (Go compiler requires this)
+        - Formats the import block (groups stdlib vs third-party)
+
+        Falls back to gofmt if goimports is not installed.
+        """
+        warnings: List[str] = []
+        go_files = [f for f in files if f.suffix == ".go" and f.exists()]
+        if not go_files:
+            return warnings
+
+        # Prefer goimports (fixes imports + formats), fall back to gofmt (formats only)
+        goimports_bin = shutil.which("goimports")
+        gofmt_bin = shutil.which("gofmt")
+
+        for go_file in go_files:
+            tool_name = None
+            cmd: List[str] = []
+
+            if goimports_bin:
+                tool_name = "goimports"
+                cmd = [goimports_bin, "-w", str(go_file)]
+            elif gofmt_bin:
+                tool_name = "gofmt"
+                cmd = [gofmt_bin, "-w", str(go_file)]
+            else:
+                warnings.append(
+                    f"{go_file.name}: neither goimports nor gofmt found on PATH"
+                )
+                continue
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=project_root,
+                    timeout=_GO_TOOL_TIMEOUT,
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr.strip()
+                    warnings.append(f"{go_file.name}: {tool_name} failed: {stderr}")
+                    logger.warning(
+                        "%s failed for %s: %s", tool_name, go_file.name, stderr,
+                    )
+                else:
+                    logger.debug(
+                        "%s succeeded for %s", tool_name, go_file.name,
+                    )
+            except subprocess.TimeoutExpired:
+                warnings.append(
+                    f"{go_file.name}: {tool_name} timed out after {_GO_TOOL_TIMEOUT}s"
+                )
+            except OSError as exc:
+                warnings.append(f"{go_file.name}: {tool_name} failed: {exc}")
+
+        if not goimports_bin and gofmt_bin:
+            warnings.append(
+                "goimports not found — install with: go install golang.org/x/tools/cmd/goimports@latest"
+            )
+
+        return warnings
+
+    def generate_dependency_file(
+        self,
+        project_root: Path,
+        service_name: str,
+        module_path: str,
+        dependencies: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Generate go.mod content from service metadata.
+
+        Args:
+            project_root: Project root directory.
+            service_name: Service name (used as fallback module path).
+            module_path: Go module path (e.g. 'github.com/user/repo/src/frontend').
+            dependencies: List of Go module dependency strings.
+                Format: 'module@version' or 'module version' or just 'module'.
+            metadata: Optional dict with 'go_version' key (default '1.23').
+
+        Returns:
+            go.mod file content string.
+        """
+        go_version = "1.23"
+        if metadata:
+            go_version = str(metadata.get("go_version", go_version))
+
+        if not module_path:
+            module_path = service_name
+
+        lines: List[str] = [
+            f"module {module_path}",
+            "",
+            f"go {go_version}",
+        ]
+
+        # Parse dependencies into require block
+        require_entries: List[str] = []
+        for dep in dependencies:
+            dep = dep.strip()
+            if not dep:
+                continue
+            # Handle 'module@version' format
+            if "@" in dep:
+                parts = dep.split("@", 1)
+                require_entries.append(f"\t{parts[0]} {parts[1]}")
+            # Handle 'module version' format
+            elif " " in dep:
+                parts = dep.split(None, 1)
+                require_entries.append(f"\t{parts[0]} {parts[1]}")
+            else:
+                # Module without version — use latest placeholder
+                require_entries.append(f"\t{dep} v0.0.0")
+
+        if require_entries:
+            lines.append("")
+            lines.append("require (")
+            lines.extend(require_entries)
+            lines.append(")")
+
+        lines.append("")  # trailing newline
+        return "\n".join(lines)
 
 
 _GO_STDLIB_PREFIXES: tuple[str, ...] = (

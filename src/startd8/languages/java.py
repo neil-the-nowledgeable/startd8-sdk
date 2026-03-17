@@ -5,7 +5,8 @@ Most complex dependency file generation (Gradle), lowest payoff (1 service).
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 
 class JavaLanguageProfile:
@@ -118,6 +119,60 @@ class JavaLanguageProfile:
 
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _JAVA_STDLIB_PREFIXES
+
+    def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
+        # Java has no authoritative import fixer callable from CLI.
+        # google-java-format could format but requires java runtime.
+        return []
+
+    def generate_dependency_file(
+        self,
+        project_root: Path,
+        service_name: str,
+        module_path: str,
+        dependencies: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Generate build.gradle content from service metadata."""
+        java_version = "21"
+        if metadata:
+            java_version = str(metadata.get("java_version", java_version))
+
+        lines = [
+            "plugins {",
+            "    id 'java'",
+            "    id 'application'",
+            "}",
+            "",
+            "java {",
+            f"    sourceCompatibility = JavaVersion.VERSION_{java_version}",
+            f"    targetCompatibility = JavaVersion.VERSION_{java_version}",
+            "}",
+            "",
+            "repositories {",
+            "    mavenCentral()",
+            "}",
+            "",
+        ]
+
+        if dependencies:
+            lines.append("dependencies {")
+            for dep in dependencies:
+                dep = dep.strip()
+                if not dep:
+                    continue
+                # Assume Gradle coordinate format: group:artifact:version
+                lines.append(f"    implementation '{dep}'")
+            lines.append("}")
+            lines.append("")
+
+        if module_path:
+            lines.append(f"application {{")
+            lines.append(f"    mainClass = '{module_path}'")
+            lines.append("}")
+            lines.append("")
+
+        return "\n".join(lines)
 
 
 _JAVA_STDLIB_PREFIXES: tuple[str, ...] = (

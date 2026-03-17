@@ -5,7 +5,8 @@ Handles both CommonJS (require) and ESM (import from) patterns.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 
 class NodeLanguageProfile:
@@ -129,6 +130,51 @@ class NodeLanguageProfile:
 
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _NODE_STDLIB_PREFIXES
+
+    def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
+        # Node.js has no authoritative import fixer like goimports.
+        # prettier could format, but doesn't fix imports.
+        return []
+
+    def generate_dependency_file(
+        self,
+        project_root: Path,
+        service_name: str,
+        module_path: str,
+        dependencies: List[str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Generate package.json content from service metadata."""
+        import json
+
+        pkg: Dict[str, Any] = {
+            "name": service_name,
+            "version": "1.0.0",
+            "private": True,
+        }
+
+        if dependencies:
+            deps: Dict[str, str] = {}
+            for dep in dependencies:
+                dep = dep.strip()
+                if not dep:
+                    continue
+                # Handle name@version format.
+                # Scoped packages start with @ (e.g. @grpc/grpc-js@^1.10.0)
+                # so we count @ occurrences: scoped+versioned has 2+, plain has 1.
+                at_count = dep.count("@")
+                if at_count >= 2 or (at_count == 1 and not dep.startswith("@")):
+                    parts = dep.rsplit("@", 1)
+                    deps[parts[0]] = parts[1]
+                elif " " in dep:
+                    parts = dep.split(None, 1)
+                    deps[parts[0]] = parts[1]
+                else:
+                    deps[dep] = "*"
+            if deps:
+                pkg["dependencies"] = deps
+
+        return json.dumps(pkg, indent=2) + "\n"
 
 
 _NODE_STDLIB_PREFIXES: tuple[str, ...] = (
