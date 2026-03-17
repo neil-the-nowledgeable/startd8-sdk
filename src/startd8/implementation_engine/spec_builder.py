@@ -278,14 +278,16 @@ def _build_framework_imports_section(
     except ImportError:
         return ""
 
+    lang_profile = context.get("language_profile")
     frameworks = detect_frameworks(
         task_description=task_description,
         target_files=target_files,
         dependencies=deps,
+        language_profile=lang_profile,
     )
     if not frameworks:
         return ""
-    return get_import_preamble(frameworks, dependencies=deps)
+    return get_import_preamble(frameworks, dependencies=deps, language_profile=lang_profile)
 
 
 def _build_sibling_imports_section(context: Dict[str, Any]) -> str:

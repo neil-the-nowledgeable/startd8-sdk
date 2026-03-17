@@ -107,6 +107,8 @@ class IntegrationEngine:
         self._element_registry = element_registry
         # Forward manifest for contract violation repair
         self._forward_manifest: Any = None
+        # Language profile for language-aware repair gating
+        self._language_profile: Any = None
 
     # ------------------------------------------------------------------
     # Phase 4: Manifest diff (IN-1 through IN-3)
@@ -746,6 +748,17 @@ class IntegrationEngine:
             )
             return None
 
+        # P0: Skip repair for languages that disable it (e.g. Go — compiler validates)
+        if (
+            self._language_profile is not None
+            and not self._language_profile.repair_enabled
+        ):
+            logger.info(
+                "Pre-merge repair skipped: language=%s has repair_enabled=False",
+                self._language_profile.language_id,
+            )
+            return None
+
         try:
             # Run checks individually for proper diagnostic routing
             syntax_result = self.checkpoint.check_syntax(gen_paths)
@@ -853,6 +866,17 @@ class IntegrationEngine:
             and self._repair_config is not None
             and getattr(self._repair_config, "repair_enabled", False)
         ):
+            return results, False
+
+        # P0: Skip repair for languages that disable it
+        if (
+            self._language_profile is not None
+            and not self._language_profile.repair_enabled
+        ):
+            logger.info(
+                "Post-merge repair skipped: language=%s has repair_enabled=False",
+                self._language_profile.language_id,
+            )
             return results, False
 
         failed_checks = [

@@ -111,6 +111,7 @@ class IntegrationCheckpoint:
         run_tests: bool = True,
         strict_mode: bool = False,
         src_dirs: Optional[List[str]] = None,
+        language_profile: Optional[Any] = None,
     ):
         """
         Initialize the checkpoint runner.
@@ -120,12 +121,15 @@ class IntegrationCheckpoint:
             run_tests: Whether to run tests as part of validation
             strict_mode: Whether to fail on warnings
             src_dirs: List of source directories to check (default: ["src"])
+            language_profile: Optional LanguageProfile for language-aware
+                validation. When None, defaults to Python behavior.
         """
         self.project_root = project_root or Path.cwd()
         self.run_tests = run_tests
         self.strict_mode = strict_mode
         self.src_dirs = src_dirs or ["src"]
         self._test_baseline: Optional[Set[str]] = None
+        self._language_profile = language_profile
 
     def capture_test_baseline(self) -> Set[str]:
         """
@@ -221,19 +225,57 @@ class IntegrationCheckpoint:
 
         return results
 
+    def _get_source_extensions(self) -> set:
+        """Return set of source file extensions handled by current language profile."""
+        if self._language_profile is not None:
+            return set(self._language_profile.source_extensions)
+        return {".py"}
+
+    def _get_syntax_command(self, file_path: Path) -> Optional[List[str]]:
+        """Return syntax check command for a file, using language profile if available."""
+        if self._language_profile is not None:
+            cmd_template = self._language_profile.syntax_check_command
+            if cmd_template is None:
+                return None
+            return [c.replace("{file}", str(file_path)) for c in cmd_template]
+        # Default: Python
+        return ["python3", "-m", "py_compile", str(file_path)]
+
+    def _get_lint_command(self, file_path: Path) -> Optional[List[str]]:
+        """Return lint command for a file, using language profile if available."""
+        if self._language_profile is not None:
+            cmd_template = self._language_profile.lint_command
+            if cmd_template is None:
+                return None
+            return [c.replace("{file}", str(file_path)) for c in cmd_template]
+        # Default: Python ruff
+        return [
+            "python3", "-m", "ruff", "check", str(file_path),
+            "--select=E7,E9,F", "--output-format=concise",
+        ]
+
     def check_syntax(self, files: List[Path]) -> CheckpointResult:
-        """Check that all Python files have valid syntax."""
+        """Check that all source files have valid syntax.
+
+        Dispatches to language profile's syntax_check_command when available.
+        Falls back to Python py_compile for backward compatibility.
+        """
         errors = []
         checked = 0
+        source_exts = self._get_source_extensions()
 
         for file_path in files:
-            if file_path.suffix != ".py":
+            if file_path.suffix not in source_exts:
                 continue
+
+            cmd = self._get_syntax_command(file_path)
+            if cmd is None:
+                continue  # Language has no standalone syntax check
 
             checked += 1
             try:
                 result = subprocess.run(
-                    ["python3", "-m", "py_compile", str(file_path)],
+                    cmd,
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
@@ -366,16 +408,19 @@ class IntegrationCheckpoint:
         warnings = []
         checked = 0
         downgraded = _STYLE_ONLY_CODES | (style_ignore_codes or set())
+        source_exts = self._get_source_extensions()
 
         for file_path in files:
-            if file_path.suffix != ".py":
+            if file_path.suffix not in source_exts:
                 continue
 
             checked += 1
 
-            # Try ruff if available
-            cmd = ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F", "--output-format=concise"]
-            if ignore_codes:
+            cmd = self._get_lint_command(file_path)
+            if cmd is None:
+                continue  # Language has no linter configured
+            if ignore_codes and self._language_profile is None:
+                # ignore_codes only supported for Python/ruff
                 cmd.extend(["--ignore", ",".join(ignore_codes)])
             try:
                 result = subprocess.run(
@@ -458,8 +503,9 @@ class IntegrationCheckpoint:
         # before running the lint check.  These are common LLM code-gen
         # artifacts that ruff can resolve without changing semantics.
         # --unsafe-fixes is needed for F841 (unused variable removal).
+        # Only applies to Python files (ruff is Python-specific).
         for gf in generated_files:
-            if gf.suffix == ".py":
+            if gf.suffix == ".py" and (self._language_profile is None or self._language_profile.language_id == "python"):
                 try:
                     before = gf.read_text()
                     subprocess.run(

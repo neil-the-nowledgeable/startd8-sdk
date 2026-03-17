@@ -516,6 +516,9 @@ class PrimeContractorWorkflow:
         auto_configure_otel()
         self.size_estimator = size_estimator or registry.get_default_size_estimator()()
         self.merge_strategy = merge_strategy or registry.get_default_merge_strategy(for_python=True)()
+        # Language profile set during develop_feature(); stored here for
+        # merge strategy re-selection when target language changes.
+        self._language_profile = None
         self.integration_history: List[Dict] = []
         self.files_modified_this_session: Dict[str, List[str]] = {}
         self.max_lines_per_feature = max_lines_per_feature
@@ -2333,7 +2336,11 @@ class PrimeContractorWorkflow:
 
         # --- Draft phase ---
         existing_files = gen_context.get("existing_files")
-        draft_system, draft_mode = get_drafter_system_prompt(existing_files=existing_files)
+        draft_system, draft_mode = get_drafter_system_prompt(
+            existing_files=existing_files,
+            language_role=gen_context.get("language_role"),
+            coding_standards=gen_context.get("coding_standards"),
+        )
         logger.info("Prompt build: drafter mode=%s for '%s'", draft_mode, feature.name)
         prompts["draft_system_prompt.md"] = draft_system
 
@@ -2818,7 +2825,11 @@ class PrimeContractorWorkflow:
 
         # --- Draft phase ---
         existing_files = gen_context.get("existing_files")
-        draft_system, draft_mode = get_drafter_system_prompt(existing_files=existing_files)
+        draft_system, draft_mode = get_drafter_system_prompt(
+            existing_files=existing_files,
+            language_role=gen_context.get("language_role"),
+            coding_standards=gen_context.get("coding_standards"),
+        )
         logger.info("Walkthrough: drafter mode=%s for '%s'", draft_mode, feature.name)
         (wt_dir / "draft_system_prompt.md").write_text(
             draft_system, encoding="utf-8",
@@ -2979,6 +2990,9 @@ class PrimeContractorWorkflow:
 
             # Phase 3: Context assembly
             gen_context = self._build_generation_context(feature, prior_error)
+
+            # P0: Wire language profile to checkpoint and merge strategy
+            self._apply_language_profile_to_engine()
 
             # Walkthrough mode: persist prompts, skip LLM calls
             if self.walkthrough:
@@ -3290,7 +3304,49 @@ class PrimeContractorWorkflow:
         # PC-Q3: Propagate edit_min_pct from Prime config into gen_context
         gen_context["edit_min_pct"] = self.edit_min_pct
 
+        # R-ML-003: Resolve language profile from target files
+        from ..languages import resolve_language
+        language_profile = resolve_language(feature.target_files)
+        self._language_profile = language_profile
+        gen_context["language_profile"] = language_profile
+        gen_context["language_role"] = language_profile.system_prompt_role
+        gen_context["coding_standards"] = language_profile.coding_standards
+
         return gen_context
+
+    def _apply_language_profile_to_engine(self) -> None:
+        """Wire resolved language profile to checkpoint and merge strategy.
+
+        Called after ``_build_generation_context()`` sets ``self._language_profile``.
+        Updates the checkpoint's language awareness and re-selects the merge
+        strategy based on the target language (e.g. SimpleMerge for Go instead
+        of AST merge).
+        """
+        profile = self._language_profile
+        if profile is None:
+            return
+
+        # Wire language profile to checkpoint for syntax/lint dispatch
+        self.checkpoint._language_profile = profile
+        if self._engine.checkpoint is not None:
+            self._engine.checkpoint._language_profile = profile
+
+        # Wire language profile to integration engine for repair gating
+        self._engine._language_profile = profile
+
+        # Re-select merge strategy based on language preference
+        lang_id = profile.language_id
+        if lang_id != "python":
+            registry = get_registry()
+            new_strategy = registry.get_default_merge_strategy(
+                language_id=lang_id,
+            )()
+            self.merge_strategy = new_strategy
+            self._engine.merge_strategy = new_strategy
+            logger.info(
+                "Merge strategy re-selected for language=%s: %s",
+                lang_id, type(new_strategy).__name__,
+            )
 
     def _thread_supplemental_context(
         self, feature: FeatureSpec, gen_context: Dict[str, Any],
@@ -4042,11 +4098,19 @@ class PrimeContractorWorkflow:
             logger.debug('Removed snapshot: %s', snapshot_file.relative_to(self.project_root))
             removed += 1
         self._engine._pre_integration_snapshots.clear()
-        for pycache_dir in self.project_root.rglob('__pycache__'):
-            if pycache_dir.is_dir():
-                shutil.rmtree(pycache_dir)
-                logger.debug('Removed: %s', pycache_dir.relative_to(self.project_root))
-                removed += 1
+        # R-PY-008: Language-aware cleanup patterns
+        cleanup_patterns = ['__pycache__']
+        if self._language_profile is not None:
+            cleanup_patterns = [
+                p.rstrip('/') for p in self._language_profile.cleanup_patterns
+                if not p.startswith('*')  # rglob only for directory patterns
+            ]
+        for pattern in cleanup_patterns:
+            for cleanup_dir in self.project_root.rglob(pattern):
+                if cleanup_dir.is_dir():
+                    shutil.rmtree(cleanup_dir)
+                    logger.debug('Removed: %s', cleanup_dir.relative_to(self.project_root))
+                    removed += 1
         if include_targets:
             for feature in self.queue.features.values():
                 for target_file in feature.target_files:

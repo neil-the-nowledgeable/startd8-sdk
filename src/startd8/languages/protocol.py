@@ -1,0 +1,179 @@
+"""LanguageProfile protocol — the extension point all language providers implement.
+
+One monolithic protocol with ~15 properties/methods. Rationale: the pipeline
+always needs all capabilities for a given language — you never need "Go
+validation but Python prompts." If it grows too large later, extract then.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Protocol, Sequence, runtime_checkable
+
+
+@runtime_checkable
+class LanguageProfile(Protocol):
+    """Defines language-specific behavior for code generation pipelines.
+
+    Implementations provide:
+    - File identification (extensions, build files)
+    - Validation commands (syntax, lint, test)
+    - Prompt fragments (system prompt role, coding standards)
+    - Dependency management (framework imports, package aliases)
+    - Cleanup patterns and merge strategy preferences
+    """
+
+    @property
+    def language_id(self) -> str:
+        """Unique identifier (e.g. 'python', 'go', 'nodejs', 'java')."""
+        ...
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name (e.g. 'Python', 'Go', 'Node.js', 'Java')."""
+        ...
+
+    @property
+    def source_extensions(self) -> List[str]:
+        """Source file extensions including the dot (e.g. ['.py'], ['.go'])."""
+        ...
+
+    @property
+    def build_file_patterns(self) -> List[str]:
+        """Build/dependency file names (e.g. ['requirements.txt', 'pyproject.toml'])."""
+        ...
+
+    @property
+    def syntax_check_command(self) -> Optional[List[str]]:
+        """Command template for syntax validation.
+
+        Use ``{file}`` as placeholder for the file path.
+        Return None if the language has no standalone syntax check.
+        Example: ``['python3', '-m', 'py_compile', '{file}']``
+        """
+        ...
+
+    @property
+    def lint_command(self) -> Optional[List[str]]:
+        """Command template for linting.
+
+        Use ``{file}`` as placeholder for the file path.
+        Return None if no linter is available.
+        Example: ``['python3', '-m', 'ruff', 'check', '{file}', '--select=E7,E9,F', '--output-format=concise']``
+        """
+        ...
+
+    @property
+    def test_command(self) -> Optional[List[str]]:
+        """Command for running the project test suite.
+
+        Return None if no test runner is configured.
+        Example: ``['python3', '-m', 'pytest', '-v', '--tb=short', '-q']``
+        """
+        ...
+
+    @property
+    def framework_imports(self) -> Dict[str, dict]:
+        """Framework import registry (same schema as FRAMEWORK_IMPORTS).
+
+        Keys are framework identifiers, values have:
+        - detect: list of keywords for detection
+        - dep_names: set of dependency names
+        - imports: list of import statements
+        - conditional: dict of trigger_pkg -> import statements
+        """
+        ...
+
+    @property
+    def package_alias_map(self) -> Dict[str, str]:
+        """Maps distribution/package names to import names.
+
+        Example: {'grpcio': 'grpc', 'pyyaml': 'yaml'}
+        """
+        ...
+
+    @property
+    def cleanup_patterns(self) -> List[str]:
+        """Directory/file patterns to clean up (e.g. ['__pycache__'])."""
+        ...
+
+    @property
+    def blast_radius_extensions(self) -> List[str]:
+        """File extensions to scan for blast radius (e.g. ['.py'])."""
+        ...
+
+    @property
+    def import_pattern_template(self) -> str:
+        """Regex-friendly pattern for detecting imports in source files.
+
+        Use ``{module}`` as placeholder.
+        Example for Python: ``'import {module}|from {module}'``
+        Example for Go: ``'import.*"{module}"'``
+        """
+        ...
+
+    @property
+    def system_prompt_role(self) -> str:
+        """Language-specific role for system prompts.
+
+        Example: 'an expert Python engineer'
+        """
+        ...
+
+    @property
+    def coding_standards(self) -> str:
+        """Language-specific coding standards for system prompts.
+
+        Example: 'Ruff: no single-letter vars l/O/I; define helpers before use.'
+        """
+        ...
+
+    @property
+    def merge_strategy_preference(self) -> str:
+        """Preferred merge strategy name (e.g. 'ast' for Python, 'simple' for others)."""
+        ...
+
+    @property
+    def repair_enabled(self) -> bool:
+        """Whether the repair pipeline should run for this language.
+
+        Go has compile-time checks, so repair is less useful.
+        """
+        ...
+
+    @property
+    def docker_base_image(self) -> str:
+        """Default Docker base image for this language.
+
+        Example: 'python:3.12-slim'
+        """
+        ...
+
+    @property
+    def docker_runtime_image(self) -> str:
+        """Default Docker runtime image (distroless/minimal).
+
+        Example: 'python:3.12-slim' or 'gcr.io/distroless/static'
+        """
+        ...
+
+    def supports_extension(self, ext: str) -> bool:
+        """Check if this profile handles files with the given extension."""
+        ...
+
+    def get_import_patterns(self, module_stem: str) -> List[str]:
+        """Return text patterns to search for when computing blast radius.
+
+        Args:
+            module_stem: The stem of the target file (without extension).
+
+        Returns:
+            List of string patterns to grep for in source files.
+        """
+        ...
+
+    def get_stdlib_prefixes(self) -> Sequence[str]:
+        """Return standard library top-level module names.
+
+        Used to exclude stdlib imports from dependency alignment checks.
+        """
+        ...

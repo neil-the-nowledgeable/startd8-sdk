@@ -130,46 +130,54 @@ prompts:
   # ---------- DRAFT SYSTEM PROMPTS (mode-aware, sparse) ----------
 
   draft_system_create:
-    description: "System prompt — greenfield CREATE mode"
+    description: "System prompt — greenfield CREATE mode (language-parameterized)"
     template: |
-      You are an expert Python engineer. Implement the spec exactly.
+      You are {language_role}. Implement the spec exactly.
       Complete implementations only — no stubs, TODOs, or pass bodies.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Do not generate project boilerplate — only task-specific code.
-      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      {coding_standards}
       CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
-    placeholders: []
+    placeholders:
+      - language_role
+      - coding_standards
 
   draft_system_edit:
-    description: "System prompt — whole-file EDIT mode"
+    description: "System prompt — whole-file EDIT mode (language-parameterized)"
     template: |
-      You are an expert Python engineer editing existing source code.
+      You are {language_role} editing existing source code.
       PRESERVE all unchanged code. Output the COMPLETE modified file.
       Use parameter names from upstream documents verbatim. Do not rename them.
-      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      {coding_standards}
       CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
-    placeholders: []
+    placeholders:
+      - language_role
+      - coding_standards
 
   draft_system_search_replace:
-    description: "System prompt — large-file EDIT mode (>= 50 lines)"
+    description: "System prompt — large-file EDIT mode (>= 50 lines, language-parameterized)"
     template: |
-      You are an expert Python engineer making targeted edits to large files.
+      You are {language_role} making targeted edits to large files.
       Minimal changes only. Output the COMPLETE modified file — every line.
       Use parameter names from upstream documents verbatim. Do not rename them.
-      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      {coding_standards}
       CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
-    placeholders: []
+    placeholders:
+      - language_role
+      - coding_standards
 
   draft_system_skeleton_fill:
-    description: "System prompt — skeleton fill mode (FR-MPA-005, pre-assembled file)"
+    description: "System prompt — skeleton fill mode (FR-MPA-005, language-parameterized)"
     template: |
-      You are an expert Python engineer filling method bodies in pre-assembled skeleton files.
+      You are {language_role} filling method bodies in pre-assembled skeleton files.
       Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Preserve all imports, class structure, and pre-filled method bodies exactly as provided.
-      Ruff: no single-letter vars l/O/I; define helpers before use; stdlib-only imports unless listed.
+      {coding_standards}
       CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
-    placeholders: []
+    placeholders:
+      - language_role
+      - coding_standards
 
   # ---------- DRAFT USER PROMPT — SKELETON FILL (FR-MPA-005) ----------
 

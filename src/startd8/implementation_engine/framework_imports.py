@@ -92,6 +92,7 @@ def detect_frameworks(
     task_description: str = "",
     target_files: list[str] | None = None,
     dependencies: list[str] | None = None,
+    language_profile: Any = None,
 ) -> list[str]:
     """Return framework keys detected from task metadata.
 
@@ -100,9 +101,23 @@ def detect_frameworks(
     2. ``task_description`` — case-insensitive keyword match against ``detect``
     3. ``target_files`` — filename patterns (currently informational only)
 
+    Args:
+        language_profile: Optional LanguageProfile. When provided, uses
+            the profile's framework_imports instead of the global Python dict.
+
     Returns:
         Sorted list of framework keys (e.g. ``["flask", "grpc"]``).
     """
+    # Use language-specific framework imports when available
+    fw_registry = FRAMEWORK_IMPORTS
+    if language_profile is not None:
+        try:
+            profile_fw = language_profile.framework_imports
+            if profile_fw:
+                fw_registry = profile_fw
+        except AttributeError:
+            pass
+
     detected: set[str] = set()
     dep_names_lower: set[str] = set()
 
@@ -111,7 +126,7 @@ def detect_frameworks(
 
     desc_lower = task_description.lower() if task_description else ""
 
-    for framework_key, config in FRAMEWORK_IMPORTS.items():
+    for framework_key, config in fw_registry.items():
         # Source 1: dependency name match
         framework_dep_names = config.get("dep_names", set())
         if dep_names_lower & framework_dep_names:
@@ -131,6 +146,7 @@ def detect_frameworks(
 def get_import_preamble(
     frameworks: list[str],
     dependencies: list[str] | None = None,
+    language_profile: Any = None,
 ) -> str:
     """Return formatted import block for detected frameworks.
 
@@ -140,12 +156,29 @@ def get_import_preamble(
     Args:
         frameworks: Framework keys from :func:`detect_frameworks`.
         dependencies: Full dependency list for conditional import resolution.
+        language_profile: Optional LanguageProfile. When provided, uses
+            the profile's framework_imports and language-appropriate code fences.
 
     Returns:
         Formatted import preamble string, or empty string if no frameworks.
     """
     if not frameworks:
         return ""
+
+    # Use language-specific framework imports and fence language
+    fw_registry = FRAMEWORK_IMPORTS
+    fence_lang = "python"
+    if language_profile is not None:
+        try:
+            profile_fw = language_profile.framework_imports
+            if profile_fw:
+                fw_registry = profile_fw
+            fence_lang = language_profile.language_id
+            # Map language IDs to common fence tags
+            _FENCE_MAP = {"nodejs": "javascript", "python": "python", "go": "go", "java": "java"}
+            fence_lang = _FENCE_MAP.get(fence_lang, fence_lang)
+        except AttributeError:
+            pass
 
     dep_names_lower: set[str] = set()
     if dependencies:
@@ -161,12 +194,12 @@ def get_import_preamble(
     lines.append("")
 
     for fw_key in frameworks:
-        config = FRAMEWORK_IMPORTS.get(fw_key)
+        config = fw_registry.get(fw_key)
         if not config:
             continue
 
         lines.append(f"### {fw_key}")
-        lines.append("```python")
+        lines.append(f"```{fence_lang}")
         for imp in config.get("imports", []):
             lines.append(imp)
 

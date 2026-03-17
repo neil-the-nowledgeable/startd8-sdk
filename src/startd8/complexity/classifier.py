@@ -60,11 +60,21 @@ def classify_tier(
     cfg = config or ComplexityRoutingConfig()
 
     # --- Non-Python early routing ---
-    # Non-Python files (HTML, Dockerfile, YAML, requirements.txt, etc.) don't
-    # benefit from Python-centric complexity analysis.  Route by LOC only.
+    # Files for supported languages (Go, Node.js, Java) use the full
+    # complexity analysis below.  Non-supported languages (HTML, Dockerfile,
+    # YAML, requirements.txt, etc.) route by LOC only.
     # Run-013 showed an HTML template costing $0.59 via cloud fallback — it
     # should have been TRIVIAL ($0.00).
+    _is_supported_language = False
     if signals.file_extension and signals.file_extension != ".py":
+        try:
+            from startd8.languages import LanguageRegistry
+            _profile = LanguageRegistry.get_by_extension(signals.file_extension)
+            _is_supported_language = _profile is not None
+        except (ImportError, AttributeError):
+            pass
+
+    if signals.file_extension and signals.file_extension != ".py" and not _is_supported_language:
         if signals.estimated_loc <= cfg.non_python_trivial_loc_max:
             return _emit(
                 ComplexityTier.TRIVIAL,

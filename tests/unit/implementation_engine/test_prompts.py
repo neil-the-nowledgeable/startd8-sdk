@@ -70,8 +70,12 @@ class TestFormatPrompt:
         with pytest.raises(KeyError, match="missing placeholder"):
             format_prompt("review", task_description="t")
 
-    def test_format_draft_system_no_placeholders(self):
-        # System prompts have no placeholders
-        result = format_prompt("draft_system_create")
+    def test_format_draft_system_with_language_placeholders(self):
+        # System prompts now accept language_role and coding_standards
+        result = format_prompt(
+            "draft_system_create",
+            language_role="an expert Python engineer",
+            coding_standards="Ruff: no single-letter vars.",
+        )
         assert isinstance(result, str)
-        assert len(result) > 0
+        assert "expert Python engineer" in result

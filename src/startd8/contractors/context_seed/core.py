@@ -5508,19 +5508,29 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
         # Build engine
         registry = get_registry()
         registry.discover()
-        merge_strategy = registry.get_default_merge_strategy(for_python=True)()
+        # R-PY-006: Language-aware merge strategy selection
+        _language_id = context.get("language_profile")
+        if _language_id and hasattr(_language_id, "language_id"):
+            _language_id = _language_id.language_id
+        merge_strategy = registry.get_default_merge_strategy(
+            for_python=True, language_id=_language_id if isinstance(_language_id, str) else None,
+        )()
 
+        # P0: Thread language profile to checkpoint and engine
+        _lang_profile = context.get("language_profile")
         engine = IntegrationEngine(
             project_root=project_root,
             merge_strategy=merge_strategy,
             checkpoint=IntegrationCheckpoint(
                 project_root=project_root, run_tests=False,
+                language_profile=_lang_profile,
             ),
             dry_run=dry_run,
             auto_commit=False,  # Workflow commits once at FINALIZE
             allow_dirty=False,
             check_truncation=self.config.check_truncation,
         )
+        engine._language_profile = _lang_profile
         # R2-O6: Thread manifest_registry from orchestrator context so
         # INTEGRATE can use manifest data for validation/conflict detection.
         engine.manifest_registry = context.get("project_manifests")

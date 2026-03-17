@@ -110,6 +110,12 @@ prime-contractor = "startd8.workflows.builtin.prime_contractor_workflow:PrimeCon
 # Third-party preflight rules can register here:
 # my_rule = "my_package.rules:MyRule"
 
+[project.entry-points."startd8.languages"]
+python = "startd8.languages.python:PythonLanguageProfile"
+go = "startd8.languages.go:GoLanguageProfile"
+nodejs = "startd8.languages.nodejs:NodeLanguageProfile"
+java = "startd8.languages.java:JavaLanguageProfile"
+
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"
 

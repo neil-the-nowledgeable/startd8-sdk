@@ -200,17 +200,36 @@ class ContractorRegistry:
         self.discover()
         return self._merge_strategies.get(name)
 
-    def get_default_merge_strategy(self, for_python: bool = False) -> Type[MergeStrategy]:
-        """
-        Get the default merge strategy.
+    def get_default_merge_strategy(
+        self, for_python: bool = False, *, language_id: Optional[str] = None,
+    ) -> Type[MergeStrategy]:
+        """Get the default merge strategy.
 
         Args:
-            for_python: If True, prefer AST merge for Python files
+            for_python: If True, prefer AST merge for Python files.
+                Deprecated — use ``language_id`` instead.
+            language_id: Language identifier (e.g. 'python', 'go').
+                When provided, selects the merge strategy based on the
+                language profile's ``merge_strategy_preference``.
 
         Returns:
-            ASTMergeStrategy for Python (if available), else SimpleMergeStrategy
+            ASTMergeStrategy for Python (if available), else SimpleMergeStrategy.
         """
         self.discover()
+
+        # Language-aware routing (R-PY-006)
+        if language_id is not None:
+            try:
+                from ..languages import LanguageRegistry
+                profile = LanguageRegistry.get(language_id)
+                if profile is not None:
+                    pref = profile.merge_strategy_preference
+                    if pref in self._merge_strategies:
+                        return self._merge_strategies[pref]
+            except (ImportError, AttributeError):
+                pass
+
+        # Legacy boolean path (backward compat)
         if for_python and "ast" in self._merge_strategies:
             return self._merge_strategies["ast"]
         return self._merge_strategies.get("simple", SimpleMergeStrategy)

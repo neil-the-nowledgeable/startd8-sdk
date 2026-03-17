@@ -168,6 +168,8 @@ def get_drafter_system_prompt(
     existing_files: Optional[Dict[str, str]] = None,
     skeleton_fill: bool = False,
     edit_mode: Optional[Dict] = None,
+    language_role: Optional[str] = None,
+    coding_standards: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Return mode-specific drafter system prompt and the resolved mode name.
 
@@ -175,6 +177,10 @@ def get_drafter_system_prompt(
         existing_files: Existing file contents for edit-mode detection.
         skeleton_fill: When True, selects skeleton-fill mode (FR-MPA-005).
         edit_mode: Edit mode classification dict (CR-M2).
+        language_role: Language-specific role string (e.g. 'an expert Go engineer').
+            Defaults to 'an expert Python engineer' for backward compatibility.
+        coding_standards: Language-specific coding standards string.
+            Defaults to Python ruff standards for backward compatibility.
 
     Returns:
         Tuple of (system_prompt_text, draft_mode_name).
@@ -190,6 +196,15 @@ def get_drafter_system_prompt(
     mode = _resolve_draft_mode(existing_files, skeleton_fill, edit_mode)
     template_key = _MODE_TO_TEMPLATE[mode]
     prompt = get_template(template_key)
+
+    # Inject language-specific fragments into the system prompt template.
+    # Default to Python for backward compatibility.
+    _role = language_role or "an expert Python engineer"
+    _standards = coding_standards or (
+        "Ruff: no single-letter vars l/O/I; define helpers before use; "
+        "stdlib-only imports unless listed."
+    )
+    prompt = prompt.format(language_role=_role, coding_standards=_standards)
 
     logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)
 
@@ -859,10 +874,15 @@ def create_draft(
     skeleton_fill = _detect_skeleton_fill(context, target_files)
 
     # Resolve system prompt mode and log it (CR-M2: pass edit_mode)
+    # R-ML-004: Thread language context from pipeline context if available
+    _lang_role = (context or {}).get("language_role")
+    _coding_std = (context or {}).get("coding_standards")
     sys_prompt, draft_mode = get_drafter_system_prompt(
         existing_files=existing_files,
         skeleton_fill=skeleton_fill,
         edit_mode=edit_mode,
+        language_role=_lang_role,
+        coding_standards=_coding_std,
     )
 
     # Start OTel span for the draft operation

@@ -1,0 +1,132 @@
+"""PythonLanguageProfile — extracts all Python-specific logic into a profile.
+
+Registered as the default language profile.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Optional, Sequence
+
+
+class PythonLanguageProfile:
+    """Language profile for Python code generation."""
+
+    @property
+    def language_id(self) -> str:
+        return "python"
+
+    @property
+    def display_name(self) -> str:
+        return "Python"
+
+    @property
+    def source_extensions(self) -> List[str]:
+        return [".py"]
+
+    @property
+    def build_file_patterns(self) -> List[str]:
+        return ["requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]
+
+    @property
+    def syntax_check_command(self) -> Optional[List[str]]:
+        return ["python3", "-m", "py_compile", "{file}"]
+
+    @property
+    def lint_command(self) -> Optional[List[str]]:
+        return [
+            "python3", "-m", "ruff", "check", "{file}",
+            "--select=E7,E9,F", "--output-format=concise",
+        ]
+
+    @property
+    def test_command(self) -> Optional[List[str]]:
+        return ["python3", "-m", "pytest", "-v", "--tb=short", "-q"]
+
+    @property
+    def framework_imports(self) -> Dict[str, dict]:
+        # Re-export from the existing framework_imports module
+        from ..implementation_engine.framework_imports import FRAMEWORK_IMPORTS
+        return dict(FRAMEWORK_IMPORTS)
+
+    @property
+    def package_alias_map(self) -> Dict[str, str]:
+        from ..implementation_engine.package_aliases import _PYPI_TO_IMPORT
+        return dict(_PYPI_TO_IMPORT)
+
+    @property
+    def cleanup_patterns(self) -> List[str]:
+        return ["__pycache__", "*.pyc", ".pytest_cache", ".mypy_cache"]
+
+    @property
+    def blast_radius_extensions(self) -> List[str]:
+        return [".py"]
+
+    @property
+    def import_pattern_template(self) -> str:
+        return "import {module}|from {module}"
+
+    @property
+    def system_prompt_role(self) -> str:
+        return "an expert Python engineer"
+
+    @property
+    def coding_standards(self) -> str:
+        return (
+            "Ruff: no single-letter vars l/O/I; define helpers before use; "
+            "stdlib-only imports unless listed."
+        )
+
+    @property
+    def merge_strategy_preference(self) -> str:
+        return "ast"
+
+    @property
+    def repair_enabled(self) -> bool:
+        return True
+
+    @property
+    def docker_base_image(self) -> str:
+        return "python:3.12-slim"
+
+    @property
+    def docker_runtime_image(self) -> str:
+        return "python:3.12-slim"
+
+    def supports_extension(self, ext: str) -> bool:
+        return ext.lower() in (".py", ".pyw")
+
+    def get_import_patterns(self, module_stem: str) -> List[str]:
+        return [
+            f"import {module_stem}",
+            f"from {module_stem} import",
+            f"from {module_stem}",
+        ]
+
+    def get_stdlib_prefixes(self) -> Sequence[str]:
+        # Canonical Python stdlib set (from checkpoint.py)
+        return _PYTHON_STDLIB_PREFIXES
+
+
+# Extracted from IntegrationCheckpoint._STDLIB_PREFIXES
+_PYTHON_STDLIB_PREFIXES: tuple[str, ...] = (
+    "abc", "argparse", "ast", "asyncio", "base64", "bisect",
+    "calendar", "collections", "concurrent", "configparser",
+    "contextlib", "copy", "csv", "ctypes", "dataclasses",
+    "datetime", "decimal", "difflib", "email", "enum",
+    "errno", "fcntl", "fileinput", "fnmatch", "fractions",
+    "ftplib", "functools", "getpass", "glob", "gzip",
+    "hashlib", "heapq", "hmac", "html", "http",
+    "importlib", "inspect", "io", "ipaddress", "itertools",
+    "json", "keyword", "linecache", "locale", "logging",
+    "lzma", "math", "mimetypes", "multiprocessing", "numbers",
+    "operator", "os", "pathlib", "pickle", "pkgutil",
+    "platform", "pprint", "queue", "random", "re",
+    "shlex", "shutil", "signal", "site", "socket",
+    "sqlite3", "ssl", "stat", "statistics", "string",
+    "struct", "subprocess", "sys", "sysconfig", "tempfile",
+    "textwrap", "threading", "time", "timeit", "token",
+    "tokenize", "traceback", "types", "typing", "typing_extensions",
+    "unittest", "urllib", "uuid", "venv", "warnings",
+    "weakref", "xml", "xmlrpc", "zipfile", "zipimport", "zlib",
+    "builtins", "_thread", "__future__",
+)

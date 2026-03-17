@@ -179,12 +179,25 @@ def extract_signals_from_feature(
     if estimated_loc <= 0:
         estimated_loc = max(len(description) // 3, 1)
 
-    # blast_radius: count .py files under project_root that import any target.
+    # blast_radius: count source files under project_root that import any target.
     # Exclude manifest-covered files — they are being regenerated in this
     # run, so their imports are pipeline artifacts, not live coupling.
+    # R-ML-006: Use language profile's blast_radius_extensions when available.
+    _blast_extensions: Optional[list] = None
+    _blast_profile = None
+    try:
+        from startd8.languages import LanguageRegistry
+        _blast_profile = LanguageRegistry.get_by_extension(file_extension)
+        if _blast_profile is not None:
+            _blast_extensions = list(_blast_profile.blast_radius_extensions)
+    except (ImportError, AttributeError):
+        pass
+
     blast_radius = _compute_blast_radius(
         target_files, project_root,
         exclude_files=manifest_covered_files,
+        source_extensions=_blast_extensions,
+        language_profile=_blast_profile,
     )
 
     # has_cross_file_edges: True if multi-file and any target imports another
@@ -228,8 +241,10 @@ def _compute_blast_radius(
     target_files: List[str],
     project_root: Path,
     exclude_files: Optional[set] = None,
+    source_extensions: Optional[List[str]] = None,
+    language_profile: Optional[Any] = None,
 ) -> int:
-    """Count .py files under *project_root* that import any target file.
+    """Count source files under *project_root* that import any target file.
 
     Bounded scan: stops after ``_BLAST_RADIUS_SCAN_LIMIT`` files.
 
@@ -249,14 +264,20 @@ def _compute_blast_radius(
     Pipeline-poisoning guard: files listed in ``exclude_files`` (typically
     manifest-covered files being regenerated in the same run) are not
     counted — their imports are pipeline artifacts, not live coupling.
+
+    Args:
+        source_extensions: File extensions to scan (e.g. ['.py', '.go']).
+            Defaults to ['.py'] for backward compatibility.
+        language_profile: Optional LanguageProfile for language-aware import
+            pattern generation. When None, uses Python patterns.
     """
+    _exts = tuple(source_extensions) if source_extensions else (".py",)
     if not target_files:
         return 0
 
-    # Build qualified and bare import patterns for each target file.
-    # Example for "src/emailservice/logger.py":
-    #   qualified: ["emailservice.logger", "emailservice import logger"]
-    #   bare:      ["import logger", "from logger"]
+    # Build import patterns for each target file.
+    # When a language profile is available, use its get_import_patterns().
+    # Otherwise fall back to Python patterns.
     import_patterns: List[str] = []
     for tf in target_files:
         try:
@@ -265,22 +286,32 @@ def _compute_blast_radius(
             if not stem or stem == "__init__":
                 continue
 
-            # Qualified patterns from parent package(s)
-            parts = list(p.with_suffix("").parts)
-            # Strip leading "src" — it's a filesystem convention, not a package
-            if parts and parts[0] == "src":
-                parts = parts[1:]
-            if len(parts) >= 2:
-                # "emailservice.logger" (dotted module path)
-                dotted = ".".join(parts)
-                import_patterns.append(f"import {dotted}")
-                import_patterns.append(f"from {dotted}")
-                # "from emailservice import logger"
-                parent_dotted = ".".join(parts[:-1])
-                import_patterns.append(f"from {parent_dotted} import {stem}")
-            # Bare stem fallback for flat layouts
-            import_patterns.append(f"import {stem}")
-            import_patterns.append(f"from {stem} import")
+            if language_profile is not None:
+                # Language-aware patterns (Go: '"module/stem"', etc.)
+                import_patterns.extend(language_profile.get_import_patterns(stem))
+                # Also add qualified path patterns for multi-dir layouts
+                parts = list(p.with_suffix("").parts)
+                if parts and parts[0] == "src":
+                    parts = parts[1:]
+                if len(parts) >= 2:
+                    qualified = "/".join(parts)
+                    import_patterns.extend(
+                        language_profile.get_import_patterns(qualified)
+                    )
+            else:
+                # Python patterns (backward compat)
+                parts = list(p.with_suffix("").parts)
+                # Strip leading "src" — it's a filesystem convention, not a package
+                if parts and parts[0] == "src":
+                    parts = parts[1:]
+                if len(parts) >= 2:
+                    dotted = ".".join(parts)
+                    import_patterns.append(f"import {dotted}")
+                    import_patterns.append(f"from {dotted}")
+                    parent_dotted = ".".join(parts[:-1])
+                    import_patterns.append(f"from {parent_dotted} import {stem}")
+                import_patterns.append(f"import {stem}")
+                import_patterns.append(f"from {stem} import")
         except (TypeError, ValueError):
             pass
 
@@ -300,7 +331,7 @@ def _compute_blast_radius(
             ]
 
             for fname in filenames:
-                if not fname.endswith(".py"):
+                if not fname.endswith(_exts):
                     continue
                 fpath = os.path.join(dirpath, fname)
                 # Skip target files themselves
