@@ -92,9 +92,17 @@ class LintDiagnostic(Diagnostic):
 
 @dataclass
 class SemanticDiagnostic(Diagnostic):
-    """Semantic correctness violation detected by structural verification."""
+    """Semantic correctness violation detected by structural verification.
 
-    defect_type: str = ""  # "missing_self", "datetime_confusion", etc.
+    Used by the semantic repair pipeline (REQ-SR-100–400) to carry
+    issue metadata from ``validate_disk_compliance()`` through the
+    repair routing table.
+    """
+
+    semantic_category: str = ""  # "method_resolution", "import_resolution", etc.
+    severity: str = "warning"    # from semantic issue dict
+    symbol: str = ""             # the specific symbol involved
+    line: int = 0                # source line number
 
     def __post_init__(self) -> None:
         self.category = "semantic"
@@ -201,11 +209,8 @@ class RepairContext:
     project_root: Optional[Path] = None
     existing_imports: Optional[Dict[Path, set]] = None  # R1-S3
     manifest_registry: Optional[Any] = None  # R3-S8
-    forward_manifest: Optional[Any] = None  # R7-S1 (Phase 2)
-    service_metadata: Optional[Dict[str, Any]] = None  # R7-S6 (Phase 2)
     feature_name: str = ""  # REQ-RPL-004: feature being repaired
     attempt_number: int = 0  # REQ-RPL-004: for circuit breaker tracking
-    test_regressions: List[str] = field(default_factory=list)  # REQ-RPL-004: test names for skip decision
     skeleton_content: Optional[str] = None  # Skeleton/existing file for ground-truth variable recovery
 
 

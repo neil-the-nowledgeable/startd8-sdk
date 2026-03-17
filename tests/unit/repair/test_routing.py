@@ -72,7 +72,12 @@ class TestRouteFailures:
         assert "syntax_error" in route.matched_patterns
         assert "missing_import" in route.matched_patterns
         # Steps deduplicated and in canonical order
-        assert route.steps == ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "import_completion", "duplicate_removal", "ast_validate"]
+        assert route.steps == [
+            "fence_strip", "future_import_reorder", "indent_normalize",
+            "bracket_balance", "class_body_dedup", "definition_order_fix",
+            "import_completion", "variable_initialization", "duplicate_removal",
+            "ast_validate",
+        ]
 
     def test_canonical_step_order(self):
         """Steps always appear in canonical order regardless of input order."""
@@ -82,7 +87,12 @@ class TestRouteFailures:
         ]
         config = RepairConfig()
         route = route_failures(diags, config)
-        expected_order = ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "import_completion", "duplicate_removal", "ast_validate"]
+        expected_order = [
+            "fence_strip", "future_import_reorder", "indent_normalize",
+            "bracket_balance", "class_body_dedup", "definition_order_fix",
+            "import_completion", "variable_initialization", "duplicate_removal",
+            "ast_validate",
+        ]
         assert route.steps == expected_order
 
     def test_disabled_category_not_routed(self):
@@ -99,6 +109,38 @@ class TestRouteFailures:
         route2 = route_failures(diags, config)
         assert route1.steps == route2.steps
         assert route1.matched_patterns == route2.matched_patterns
+
+
+class TestStepFactoryCompleteness:
+    """Verify all routed steps have factory entries and vice versa."""
+
+    def test_all_routed_steps_have_factories(self):
+        """Every step name in _ROUTING_TABLE must have a _STEP_FACTORIES entry."""
+        from startd8.repair.routing import _ROUTING_TABLE, _STEP_FACTORIES
+
+        for _cat, _pattern, steps, _confidence in _ROUTING_TABLE:
+            for step_name in steps:
+                assert step_name in _STEP_FACTORIES, (
+                    f"Routing references step '{step_name}' but no factory registered"
+                )
+
+    def test_all_canonical_steps_have_factories(self):
+        """Every step in _CANONICAL_ORDER must have a _STEP_FACTORIES entry."""
+        from startd8.repair.routing import _CANONICAL_ORDER, _STEP_FACTORIES
+
+        for step_name in _CANONICAL_ORDER:
+            assert step_name in _STEP_FACTORIES, (
+                f"Canonical order references step '{step_name}' but no factory registered"
+            )
+
+    def test_all_factories_in_canonical_order(self):
+        """Every factory entry must appear in _CANONICAL_ORDER."""
+        from startd8.repair.routing import _CANONICAL_ORDER, _STEP_FACTORIES
+
+        for step_name in _STEP_FACTORIES:
+            assert step_name in _CANONICAL_ORDER, (
+                f"Factory '{step_name}' registered but missing from _CANONICAL_ORDER"
+            )
 
 
 class TestCreateStepsFromRoute:

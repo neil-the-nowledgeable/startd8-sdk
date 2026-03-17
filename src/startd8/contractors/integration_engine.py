@@ -1096,29 +1096,31 @@ class IntegrationEngine:
         integrated_files: List[Path],
         unit: IntegrationUnit,
     ) -> None:
-        """Run deterministic semantic checks on integrated Python files.
+        """Run semantic validation on integrated Python files via disk compliance.
 
-        Issues are logged as warnings (non-blocking). This runs after
-        repair but before final commit.
+        Uses ``validate_disk_compliance()`` (the full L1–L10 semantic check
+        suite) rather than the limited ``semantic_checks.py`` module.  Issues
+        are logged as warnings (non-blocking).  This runs after syntax repair
+        but before final commit.
         """
         try:
-            from startd8.validators.semantic_checks import run_semantic_checks
+            from startd8.forward_manifest_validator import validate_disk_compliance
         except ImportError:
             return
+
+        project_root = str(self.project_root) if self.project_root else "."
 
         for fpath in integrated_files:
             if fpath.suffix != ".py" or not fpath.is_file():
                 continue
             try:
-                source = fpath.read_text(encoding="utf-8")
-                issues = run_semantic_checks(source, file_path=str(fpath))
-                for issue in issues:
+                compliance = validate_disk_compliance(str(fpath), project_root)
+                for issue in compliance.semantic_issues or []:
+                    if not isinstance(issue, dict):
+                        continue
                     logger.warning(
-                        "Semantic check [%s] %s (line %s): %s",
-                        issue.check,
-                        fpath.name,
-                        issue.line or "?",
-                        issue.message,
+                        "Semantic issue: %s",
+                        issue.get("message", str(issue)),
                         extra={"unit_id": unit.id},
                     )
             except Exception as exc:

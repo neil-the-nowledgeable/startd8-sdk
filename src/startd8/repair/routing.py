@@ -54,7 +54,6 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH"),
     ("import", "missing_import", ["definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "ast_validate"], "HIGH"),
     ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM"),
-    ("semantic", "semantic_error", ["semantic_method_fix", "ast_validate"], "HIGH"),
 ]
 
 # Step name → step class constructor

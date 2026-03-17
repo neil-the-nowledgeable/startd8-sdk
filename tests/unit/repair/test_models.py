@@ -5,17 +5,19 @@ from pathlib import Path
 from startd8.repair.models import (
     FeatureRepairAttribution,
     RepairContext,
+    SemanticDiagnostic,
 )
 
 
-class TestRepairContextNewFields:
+class TestRepairContextFields:
     """REQ-RPL-004: RepairContext enrichment."""
 
     def test_defaults(self):
         ctx = RepairContext()
         assert ctx.feature_name == ""
         assert ctx.attempt_number == 0
-        assert ctx.test_regressions == []
+        assert ctx.skeleton_content is None
+        assert ctx.project_root is None
 
     def test_feature_name(self):
         ctx = RepairContext(feature_name="auth-login")
@@ -25,28 +27,53 @@ class TestRepairContextNewFields:
         ctx = RepairContext(attempt_number=2)
         assert ctx.attempt_number == 2
 
-    def test_test_regressions(self):
-        ctx = RepairContext(test_regressions=["test_foo", "test_bar"])
-        assert ctx.test_regressions == ["test_foo", "test_bar"]
-
     def test_all_fields_together(self):
         ctx = RepairContext(
             feature_name="payment",
             attempt_number=3,
-            test_regressions=["test_pay"],
             project_root=Path("/tmp"),
         )
         assert ctx.feature_name == "payment"
         assert ctx.attempt_number == 3
-        assert ctx.test_regressions == ["test_pay"]
         assert ctx.project_root == Path("/tmp")
 
-    def test_test_regressions_default_not_shared(self):
-        """Ensure default_factory produces independent lists."""
-        ctx1 = RepairContext()
-        ctx2 = RepairContext()
-        ctx1.test_regressions.append("test_x")
-        assert ctx2.test_regressions == []
+    def test_removed_fields_absent(self):
+        """Verify dead fields (forward_manifest, service_metadata, test_regressions) were removed."""
+        ctx = RepairContext()
+        assert not hasattr(ctx, "forward_manifest")
+        assert not hasattr(ctx, "service_metadata")
+        assert not hasattr(ctx, "test_regressions")
+
+
+class TestSemanticDiagnostic:
+    """Semantic repair diagnostic fields (REQ-SR-100–400)."""
+
+    def test_defaults(self):
+        d = SemanticDiagnostic(category="semantic", file="x.py", message="test")
+        assert d.category == "semantic"
+        assert d.semantic_category == ""
+        assert d.severity == "warning"
+        assert d.symbol == ""
+        assert d.line == 0
+
+    def test_category_auto_set(self):
+        d = SemanticDiagnostic(category="wrong", file="x.py", message="test")
+        assert d.category == "semantic"  # __post_init__ forces "semantic"
+
+    def test_populated(self):
+        d = SemanticDiagnostic(
+            category="semantic",
+            file="locustfile.py",
+            message="'self.index()' is module-level",
+            semantic_category="method_resolution",
+            severity="warning",
+            symbol="index",
+            line=46,
+        )
+        assert d.semantic_category == "method_resolution"
+        assert d.severity == "warning"
+        assert d.symbol == "index"
+        assert d.line == 46
 
 
 class TestFeatureRepairAttributionNewFields:
