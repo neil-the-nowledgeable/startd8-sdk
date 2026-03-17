@@ -453,6 +453,60 @@ def validate_disk_compliance(
     return result
 
 
+def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
+    """Detect language mismatch — e.g. Python content in non-Python files (REQ-MLT-400).
+
+    Returns an error tag like ``"python_content_in_html"`` when a mismatch is
+    detected, or ``None`` when the content appears to match its extension.
+    """
+    ext = Path(file_path).suffix.lower()
+    name = Path(file_path).name.lower()
+
+    # --- Python fingerprints in non-Python files ---
+    if ext != ".py":
+        lines = content.splitlines()
+        # Find first non-blank, non-comment line
+        first_code_line = ""
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                first_code_line = stripped
+                break
+
+        # Definitive: content is ONLY `from __future__ import annotations`
+        if content.strip() == "from __future__ import annotations":
+            label = ext.lstrip(".") if ext else name
+            return f"python_content_in_{label}"
+
+        # Strong signal: `from __future__ import`
+        for line in lines:
+            if line.strip().startswith("from __future__ import"):
+                label = ext.lstrip(".") if ext else name
+                return f"python_content_in_{label}"
+
+        # Strong signal: first code line is a Python import statement
+        if first_code_line.startswith("import ") or first_code_line.startswith("from "):
+            # Exclude Go imports (e.g. inside go.mod or .go files)
+            if ext not in (".go",) and name != "go.mod":
+                label = ext.lstrip(".") if ext else name
+                return f"python_content_in_{label}"
+
+        # Moderate signal: `def ` or `class ` as first code construct
+        if first_code_line.startswith("def ") or first_code_line.startswith("class "):
+            label = ext.lstrip(".") if ext else name
+            return f"python_content_in_{label}"
+
+    # --- Go fingerprints in non-Go files ---
+    if ext not in (".go",) and name != "go.mod":
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "package main" and ext in (".html", ".htm", ".yaml", ".yml", ".json"):
+                label = ext.lstrip(".")
+                return f"go_content_in_{label}"
+
+    return None
+
+
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -472,21 +526,33 @@ def _validate_non_python_file(
         result.error = f"read_error: {exc}"
         return result
 
+    # REQ-MLT-400: Language mismatch detection (universal first-pass)
+    mismatch = _detect_language_mismatch(content, str(abs_path))
+    if mismatch:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"language_mismatch:{mismatch}"
+        return result
+
     suffix = abs_path.suffix.lower()
     name = abs_path.name.lower()
 
-    if suffix == ".in" or name == "requirements.txt":
+    # Filename-based dispatch (before extension-based)
+    if name == "go.mod":
+        result = _validate_go_mod(content, result)
+    elif suffix == ".in" or name == "requirements.txt":
         result = _validate_requirements_file(content, result)
         # L5: Requirements-to-import cross-check (REQ-SV-601)
         if sibling_imports:
             _validate_requirements_coverage(content, sibling_imports, result)
     elif name == "dockerfile" or name.startswith("dockerfile."):
         result = _validate_dockerfile(content, result)
+    elif suffix in (".html", ".htm"):
+        result = _validate_html_file(content, result)
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
-    # HTML, Markdown, etc. — no validator, keep defaults (1.0)
 
     return result
 
@@ -672,6 +738,127 @@ def _validate_json_file(
         result.ast_valid = False
         result.error = f"json_error: {exc}"
         result.contract_compliance = 0.0
+    return result
+
+
+def _validate_go_mod(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate go.mod structure (REQ-MLT-200).
+
+    Checks for ``module`` directive, ``go`` version directive, valid module
+    path, and well-formed ``require`` blocks.
+    """
+    lines = content.splitlines()
+    non_blank = [
+        line.strip() for line in lines
+        if line.strip() and not line.strip().startswith("//")
+    ]
+
+    # Check module directive (first non-comment, non-blank line)
+    has_module = False
+    module_path = ""
+    for line in non_blank:
+        if line.startswith("module "):
+            has_module = True
+            module_path = line[len("module "):].strip()
+            break
+
+    if not has_module:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "missing module directive"
+        return result
+
+    # Validate module path (no spaces, alphanumeric + dots/hyphens/slashes/underscores)
+    if not re.match(r"^[\w./-]+$", module_path):
+        result.semantic_issues.append({
+            "category": "go_mod_module_path",
+            "severity": "warning",
+            "message": f"invalid module path: {module_path}",
+            "symbol": module_path,
+        })
+
+    # Check go version directive
+    has_go_version = any(
+        re.match(r"^go\s+\d+\.\d+", line) for line in non_blank
+    )
+    if not has_go_version:
+        result.contract_compliance = 0.5
+        return result
+
+    # Validate require block entries
+    in_require = False
+    _REQUIRE_LINE_RE = re.compile(r"^\s+[\w./-]+\s+v[\d.]+")
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "require (":
+            in_require = True
+            continue
+        if in_require:
+            if stripped == ")":
+                in_require = False
+                continue
+            if not stripped or stripped.startswith("//"):
+                continue
+            if not _REQUIRE_LINE_RE.match(line):
+                result.semantic_issues.append({
+                    "category": "go_mod_require",
+                    "severity": "warning",
+                    "message": f"invalid require entry: {stripped}",
+                    "symbol": stripped,
+                })
+
+    # All checks passed
+    if result.contract_compliance == 1.0:
+        result.contract_compliance = 1.0
+
+    return result
+
+
+def _validate_html_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate HTML / Go-template / Jinja file content (REQ-MLT-300).
+
+    Checks for non-empty content, HTML-like markers, and balanced Go
+    template delimiters.
+    """
+    # Non-empty check
+    non_blank_lines = [line for line in content.splitlines() if line.strip()]
+    if not non_blank_lines:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_html"
+        return result
+
+    # Must contain HTML-like content
+    html_markers = ("<", "{{", "{%", "<!DOCTYPE")
+    has_html = any(marker in content for marker in html_markers)
+    if not has_html:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "no_html_content"
+        return result
+
+    # Go template delimiter balance
+    open_count = content.count("{{")
+    close_count = content.count("}}")
+    if open_count != close_count:
+        result.contract_compliance = 0.8
+        result.semantic_issues.append({
+            "category": "html_template_balance",
+            "severity": "warning",
+            "message": (
+                f"unbalanced Go template delimiters: "
+                f"{open_count} opening vs {close_count} closing"
+            ),
+        })
+        return result
+
+    result.contract_compliance = 1.0
     return result
 
 

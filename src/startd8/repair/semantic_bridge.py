@@ -25,7 +25,7 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
 
 
 def translate_to_diagnostics(
-    semantic_issues: list[dict],
+    semantic_issues: List[dict],
     file_path: str,
 ) -> List[SemanticDiagnostic]:
     """Convert semantic issue dicts to ``SemanticDiagnostic`` objects.

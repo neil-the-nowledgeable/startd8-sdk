@@ -109,14 +109,18 @@ src/startd8/              # Main package
 │   │   └── phases/               # Individual phase implementations (design, plan, scaffold)
 │   ├── context_schema.py         # Pydantic output models (DesignPhaseOutput, ImplementPhaseOutput, ValidationPhaseOutput)
 │   ├── context_resolution.py     # Context resolution strategies
+│   ├── context_formatters.py     # JSON→Markdown context formatters with prompt injection mitigation
+│   ├── copy_detection.py         # Identifies copy/copy-modify tasks to bypass LLM generation
 │   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec, GateEmitter)
-│   ├── integration_engine.py     # INTEGRATE phase merge engine with pre/post-merge repair
+│   ├── integration_engine.py     # INTEGRATE phase merge engine with pre/post-merge repair + semantic checks
 │   ├── handoff.py                # Design↔Implementation handoff (two-half split)
 │   ├── checkpoint.py             # Checkpoint/crash recovery
 │   ├── prime_contractor.py       # PrimeContractorWorkflow
+│   ├── prime_postmortem.py       # Post-mortem evaluation (16 RootCauses, disk quality scoring, Kaizen suggestions)
+│   ├── batch_postmortem.py       # Cross-run batch analysis (accumulates results across runs sharing same seed)
 │   ├── protocols.py              # Protocol interfaces
 │   ├── registry.py               # Contractor registry
-│   ├── queue.py                  # Task queueing
+│   ├── queue.py                  # Task queueing (with cycle detection/breaking)
 │   ├── cli_helpers.py            # CLI helper functions
 │   ├── generators/               # Code generators (LeadContractor)
 │   ├── adapters/                 # Instrumentation adapters (ContextCore, Standalone)
@@ -188,6 +192,20 @@ src/startd8/              # Main package
 │   ├── config.py         # RepairConfig (repairable_categories, timeouts)
 │   └── steps/            # Individual repair steps (fence_strip, ast_validate, etc.)
 │
+├── languages/            # Multi-language support (Protocol-based)
+│   ├── protocol.py       # LanguageProfile protocol (15 properties/methods)
+│   ├── registry.py       # LanguageRegistry singleton with entry point discovery
+│   ├── resolution.py     # resolve_language() — dominant language from target files
+│   ├── python.py         # PythonLanguageProfile (AST repair, Ruff lint, pytest)
+│   ├── go.py             # GoLanguageProfile (goimports, text-based splicer, go.mod gen)
+│   ├── go_parser.py      # Regex-based Go structure extraction (functions, types, methods)
+│   ├── go_splicer.py     # Text-based Go body splicing with brace matching
+│   ├── nodejs.py         # NodeLanguageProfile (CommonJS+ESM, package.json gen)
+│   └── java.py           # JavaLanguageProfile (Gradle, build.gradle gen)
+│
+├── validators/           # Code quality validators
+│   └── semantic_checks.py  # 4-check AST validator (dupe main guards, dupe defs, bare except, phantom imports)
+│
 ├── implementation_engine/  # Code generation engine for contractors
 │   ├── spec_builder.py   # Spec prompt construction (with enforce_prompt_budget)
 │   ├── drafter.py        # Draft prompt construction (with budget check)
@@ -212,7 +230,7 @@ src/startd8/              # Main package
 │   └── manifest.py       # Project manifest
 │
 ├── forward_manifest.py           # ForwardManifest, InterfaceContract models
-├── forward_manifest_validator.py # Contract violation detection
+├── forward_manifest_validator.py # Contract violation detection + DiskComplianceResult disk validation
 ├── forward_manifest_extractor.py # Extract contracts from source code
 │
 ├── diagnostics/          # Diagnostic/validation system with auto-fix
@@ -230,7 +248,7 @@ src/startd8/              # Main package
 ├── testing/              # Test assertion utilities
 └── help_content/         # TUI help YAML files (topics, contextual, workflow, advanced)
 
-scripts/                  # Runner and utility scripts (~25 files)
+scripts/                  # Runner and utility scripts (~45 files)
 ├── run_artisan_workflow.py       # Full 8-phase artisan workflow
 ├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
 ├── run_artisan_implement_only.py # Impl half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
@@ -243,7 +261,7 @@ scripts/                  # Runner and utility scripts (~25 files)
 ├── generate_observability_manifest.py  # OTel manifest generation
 └── ...                           # OTel, evaluation, decompose scripts
 
-tests/                    # Test suite (~307 files)
+tests/                    # Test suite (~407 files)
 ├── unit/                 # Unit tests
 │   ├── contractors/      # Contractor-specific unit tests (~2744 tests)
 │   ├── micro_prime/      # Micro Prime engine tests (~355 tests)
@@ -252,6 +270,8 @@ tests/                    # Test suite (~307 files)
 │   ├── seeds/            # Seed builder tests
 │   ├── dashboard_creator/  # Dashboard creator tests
 │   ├── implementation_engine/  # Implementation engine tests
+│   ├── languages/        # Multi-language profile tests
+│   ├── validators/       # Semantic checks + disk compliance tests
 │   └── workflows/        # Workflow tests
 ├── contract_validation/  # Pipeline contract validation tests
 ├── contractors/          # Contractor integration tests
@@ -310,8 +330,10 @@ Key patterns:
 - `Pipeline` - Sequential workflow execution
 - `ProviderRegistry` - Dynamic provider discovery via entry points
 - `CostTracker` - Track API costs across providers
-- `ArtisanContractorWorkflow` - 8-phase code generation orchestrator
-- `PrimeContractorWorkflow` - Multi-feature batch code generation
+- `ArtisanContractorWorkflow` - 8-phase code generation orchestrator (ON HOLD)
+- `PrimeContractorWorkflow` - Multi-feature batch code generation (active construction path)
+- `PrimePostMortemEvaluator` - Post-mortem evaluation with disk quality scoring
+- `LanguageRegistry` - Multi-language profile discovery and resolution
 - `WorkflowBase` - Base class for registered workflows
 - `ModelCatalogEntry` - Centralized model defaults with `.agent_spec` property
 
@@ -341,6 +363,49 @@ The SDK routes code generation tasks by complexity tier:
 - `micro_prime/decomposer.py` — Breaks MODERATE elements into SIMPLE sub-elements (Class/Function strategies)
 - `micro_prime/splicer.py` — Splices generated code into existing files
 - `micro_prime/prime_adapter.py` — Bridges PrimeContractor ↔ MicroPrime
+
+### Multi-Language Support
+
+The SDK supports code generation for multiple languages via a Protocol-based abstraction:
+
+```python
+from startd8.languages import LanguageProfile, LanguageRegistry, resolve_language
+
+LanguageRegistry.discover()  # loads from entry points
+profile = resolve_language(["src/main.go", "src/util.go"])  # -> GoLanguageProfile
+```
+
+| Language | ID | Capabilities | MicroPrime |
+|----------|-----|-------------|------------|
+| **Python** | `python` | AST repair, Ruff lint, pytest, pip | Full (AST splicer) |
+| **Go** | `go` | goimports/gofmt, text-based stub detection, body splicing, go.mod gen | Bypass (text-based splicer only) |
+| **Node.js** | `nodejs` | Node syntax check, npm test, CommonJS+ESM, package.json gen | Bypass |
+| **Java** | `java` | Gradle compile, text-based stub detection, build.gradle gen | Bypass |
+
+Key patterns:
+- **LanguageProfile protocol**: 15 properties/methods covering syntax check, lint, test, stub detection, dependency file gen, Docker images, merge strategy
+- **Non-Python bypass**: Non-Python tasks bypass MicroPrime element-level generation and use file-whole generation instead
+- **resolve_language()**: Counts file extensions across target files, returns dominant language profile, falls back to Python
+- **Go-specific tooling**: `go_parser.py` (regex-based structure extraction), `go_splicer.py` (text-based body splicing with brace matching)
+
+### Kaizen Quality System
+
+Cross-run quality measurement and improvement feedback loop (Phases A-E):
+
+- **Phase A — Registry Enrichment**: `engine.py` emits generation metadata (strategy, model, timing, AST validity) per element
+- **Phase B — Disk Validation**: `forward_manifest_validator.py:validate_disk_compliance()` → `DiskComplianceResult` (AST valid, stubs remaining, import completeness, contract compliance, semantic issues)
+- **Phase C — Feedback Loop**: `prime_postmortem.py:CAUSE_TO_SUGGESTION` (25 root cause mappings) → `generate_kaizen_suggestions()` → kaizen hints injected as P1 sections in spec/draft prompts
+- **Phase D — Semantic Validation**: `validators/semantic_checks.py` — 4 AST checks (duplicate main guards, duplicate definitions, bare except:pass, phantom imports). Wired into `integration_engine.py` as non-blocking warnings.
+- **Phase E — Dual Scoring**: `compute_disk_quality_score()` = (contract_compliance × 0.4) + (import_completeness × 0.2) + (stub_penalty × 0.2) + (semantic_penalty × 0.2). `assembly_delta` = requirement_score - disk_quality_score.
+
+Post-mortem artifacts per run:
+- `prime-postmortem-report.json` — per-feature scores, disk compliance, semantic issues
+- `prime-postmortem-summary.md` — human-readable summary
+- `kaizen-metrics.json` — aggregate metrics (success rate, cost, assembly delta, semantic breakdown)
+- `kaizen-suggestions.json` — actionable improvement suggestions
+- `batch-postmortem-report.json` — cross-run progression tracking
+- `kaizen-trends.json/md` — success rate slope, cost slope, failure patterns across runs
+- `kaizen-correlation.json/md` — prompt feature ↔ outcome Spearman correlations
 
 ### Keiyaku A2A Contracts (Micro Prime)
 
@@ -373,8 +438,8 @@ The `implementation_engine/` module handles spec→draft→review prompt constru
 Design-time contract forwarding for review-time validation:
 - `forward_manifest.py` — `ForwardManifest`, `InterfaceContract` models
 - `forward_manifest_extractor.py` — Extracts contracts from source code AST
-- `forward_manifest_validator.py` — Validates generated code against contracts, produces `ContractViolation` list
-- Consumed by `ReviewPhaseHandler` to enforce structural compliance
+- `forward_manifest_validator.py` — Validates generated code against contracts, produces `ContractViolation` list; also provides `DiskComplianceResult` + `validate_disk_compliance()` for post-assembly disk validation (10 validation layers: imports, stubs, duplicates, factory returns, discarded returns, service identity, method resolution, reachability, contract compliance, semantic issues)
+- Consumed by `ReviewPhaseHandler` to enforce structural compliance and by `PrimePostMortemEvaluator` for disk quality scoring
 
 ### Context Seed Compat Wrapper Pattern
 
@@ -394,12 +459,18 @@ The SDK uses `pyproject.toml` entry points for plugin discovery:
 [project.entry-points."startd8.providers"]
 anthropic, openai, ollama, gemini, mistral, mock
 
-# Workflows (13 registered)
+# Workflows (16 registered)
 [project.entry-points."startd8.workflows"]
 pipeline, doc-enhancement, iterative-dev, design-polish,
 critical-review, convergent-review, lead-contractor,
-lead-contractor-contextcore, architectural-review-log,
-policy-analysis, plain-language, plan-ingestion, domain-preflight
+lead-contractor-contextcore, primary-contractor,
+primary-contractor-contextcore, architectural-review-log,
+policy-analysis, plain-language, plan-ingestion,
+domain-preflight, dashboard-create
+
+# Language profiles (4 registered)
+[project.entry-points."startd8.languages"]
+python, go, nodejs, java
 
 # Contractor plugins
 [project.entry-points."startd8.contractors.instrumentors"]
@@ -451,6 +522,8 @@ Agents are specified as `provider:model` strings:
 - When modifying `context_seed/` subpackage, verify new symbols are re-exported in `context_seed_handlers.py` compat wrapper
 - When splitting modules, run `grep -rn 'from old_module import\|patch.*old_module' tests/` to find all symbols and patch targets that need forwarding
 - When adding new LLM-calling boundaries in `micro_prime/`, define JSON input/output contracts before implementation (REQ-MP-1010, Keiyaku compliance gate)
+- Call `LanguageRegistry.discover()` before using language profiles (same pattern as ProviderRegistry)
+- Non-Python tasks must bypass MicroPrime — use file-whole generation path via `prime_adapter.py`
 
 ### Must Avoid
 - Don't hardcode API keys - they come from environment variables
@@ -510,6 +583,7 @@ Key docs in `docs/`:
 - `docs/design/` - Design documents for major features
 - `docs/design/micro-prime/` - Micro Prime engine requirements and plans
 - `docs/design/prime/` - Prime Contractor requirements, Kaizen convergent review
+- `docs/design/kaizen/` - Kaizen quality system requirements, validation reports, phase plans
 - `docs/design-princples/` - Cross-cutting design principles:
   - `MOTTAINAI_DESIGN_PRINCIPLE.md` - Don't discard artifacts (within a run)
   - `KAIZEN_DESIGN_PRINCIPLE.md` - Don't discard lessons (across runs)

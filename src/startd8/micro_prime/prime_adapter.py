@@ -720,6 +720,40 @@ class MicroPrimeCodeGenerator:
                 )
                 continue
 
+            # REQ-MLT-100: Non-Python file-level bypass — delegate to fallback
+            # generator instead of running through MicroPrime element engine
+            # which produces Python skeletons for files with 0 elements
+            # (e.g., go.mod, HTML templates, YAML configs).
+            from startd8.micro_prime.engine import _is_non_python_file
+
+            if _is_non_python_file(file_path):
+                # Try deterministic generation for go.mod files first
+                go_mod_content = self._try_generate_go_mod(
+                    file_path, file_spec, context,
+                )
+                if go_mod_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(go_mod_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote go.mod %s (deterministic, %d lines)",
+                        file_path,
+                        go_mod_content.count("\n") + 1,
+                    )
+                    continue
+
+                # All other non-Python files: delegate to fallback (LLM)
+                logger.info(
+                    "Micro Prime bypass: %s is non-Python — "
+                    "delegating to fallback for file-whole generation",
+                    file_path,
+                )
+                st.bypass_files.append(file_path)
+                continue
+
             # REQ-SIG-201: Enrich file_spec imports with dependency modules
             # from service communication graph. This ensures MicroPrime element
             # prompts include correct proto module names (e.g., demo_pb2) even
@@ -1790,6 +1824,66 @@ class MicroPrimeCodeGenerator:
             logger.warning("Ollama not reachable at %s: %s", base_url, exc)
             self._ollama_available = False
             return False
+
+    def _try_generate_go_mod(
+        self,
+        file_path: str,
+        file_spec: Any,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Try deterministic go.mod generation from seed metadata (REQ-MLT-103).
+
+        Returns go.mod content string, or None if the file is not a go.mod
+        or if generation cannot proceed (missing metadata).
+        """
+        if Path(file_path).name != "go.mod":
+            return None
+
+        try:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("go")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
+            return None
+
+        # Extract module path from file_spec or infer from directory
+        module_path = ""
+        if file_spec is not None:
+            # Check for module_path in file_spec metadata
+            meta = getattr(file_spec, "metadata", None) or {}
+            if isinstance(meta, dict):
+                module_path = meta.get("module_path", "")
+
+        if not module_path:
+            # Infer from directory structure: src/shippingservice/go.mod
+            # → github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice
+            parts = Path(file_path).parent.parts
+            if parts:
+                module_path = "/".join(parts)
+
+        # Extract dependencies from context
+        dependencies: List[str] = []
+        seed_deps = context.get("dependencies") or []
+        if isinstance(seed_deps, list):
+            dependencies = [str(d) for d in seed_deps if d]
+
+        # Extract go version from context
+        metadata = {}
+        go_version = context.get("go_version")
+        if go_version:
+            metadata["go_version"] = go_version
+
+        content = profile.generate_dependency_file(
+            project_root=self._output_dir,
+            service_name=Path(file_path).parent.name or "service",
+            module_path=module_path,
+            dependencies=dependencies,
+            metadata=metadata or None,
+        )
+        return content
 
     def _generate_requirements_in(
         self,

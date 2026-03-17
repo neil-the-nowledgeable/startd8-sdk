@@ -45,6 +45,9 @@ def _infer_variable_name(
 
         if not name or keyword.iskeyword(name) or name in ("true", "false", "none"):
             return "_result"
+        # Guard against digit-leading names (e.g., "1PASSWORD_KEY" → "_1password_key")
+        if name[0].isdigit():
+            name = "_" + name
         if name in existing_names:
             return f"{name}_value"
         return name
@@ -88,37 +91,42 @@ class SemanticDiscardedReturnFixStep:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 existing_names.add(node.name)
 
+        # Build lineno → Expr node lookup for O(n+m) instead of O(n×m) [SDK Leg 9 #24]
+        expr_by_line: dict[int, ast.Expr] = {}
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Call)
+            ):
+                expr_by_line[node.lineno] = node
+
         # Build repair targets: (line_idx, var_name)
         targets: list[tuple[int, str]] = []
         for diag in diagnostics:
-            # Find the matching AST Expr node
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Expr)
-                    and isinstance(node.value, ast.Call)
-                    and node.lineno == diag.line
-                ):
-                    # Single-line only (v1 scope — Q9 decision)
-                    if hasattr(node, "end_lineno") and node.end_lineno != node.lineno:
-                        logger.debug(
-                            "Discarded return at line %d is multi-line — skipping (v1 scope)",
-                            diag.line,
-                        )
-                        break
+            node = expr_by_line.get(diag.line)
+            if node is None:
+                continue
 
-                    # Infer variable name from first string argument
-                    first_arg_value = None
-                    if (
-                        node.value.args
-                        and isinstance(node.value.args[0], ast.Constant)
-                        and isinstance(node.value.args[0].value, str)
-                    ):
-                        first_arg_value = node.value.args[0].value
+            # Single-line only (v1 scope — Q9 decision)
+            if node.end_lineno != node.lineno:
+                logger.debug(
+                    "Discarded return at line %d is multi-line — skipping (v1 scope)",
+                    diag.line,
+                )
+                continue
 
-                    var_name = _infer_variable_name(first_arg_value, existing_names)
-                    existing_names.add(var_name)  # prevent duplicates
-                    targets.append((node.lineno - 1, var_name))
-                    break
+            # Infer variable name from first string argument
+            first_arg_value = None
+            if (
+                node.value.args
+                and isinstance(node.value.args[0], ast.Constant)
+                and isinstance(node.value.args[0].value, str)
+            ):
+                first_arg_value = node.value.args[0].value
+
+            var_name = _infer_variable_name(first_arg_value, existing_names)
+            existing_names.add(var_name)  # prevent duplicates
+            targets.append((node.lineno - 1, var_name))
 
         # Apply in reverse line order for stable indices
         for line_idx, var_name in sorted(targets, reverse=True):

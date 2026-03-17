@@ -7,6 +7,7 @@ LLM generation via the fallback code generator.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -228,3 +229,64 @@ class TestTrySimpleShortcircuitBypass:
         # Should return None without calling templates
         assert result is None
         mock_templates.match.assert_not_called()
+
+
+# ── _try_generate_go_mod tests ──
+
+
+class TestTryGenerateGoMod:
+    """Tests for REQ-MLT-103: deterministic go.mod generation."""
+
+    def _make_generator(self, output_dir="/tmp/test-output"):
+        """Create a MicroPrimeCodeGenerator with minimal config."""
+        from startd8.micro_prime.prime_adapter import MicroPrimeCodeGenerator
+
+        config = MicroPrimeConfig(provider="ollama", model="test")
+        gen = MicroPrimeCodeGenerator.__new__(MicroPrimeCodeGenerator)
+        gen._config = config
+        gen._output_dir = Path(output_dir)
+        return gen
+
+    def test_go_mod_returns_content(self):
+        """go.mod file should produce valid go.mod content."""
+        gen = self._make_generator()
+        result = gen._try_generate_go_mod(
+            "src/shippingservice/go.mod", None, {},
+        )
+        assert result is not None
+        assert result.startswith("module ")
+        assert "\ngo " in result
+
+    def test_go_mod_infers_module_path(self):
+        """Module path should be inferred from directory structure."""
+        gen = self._make_generator()
+        result = gen._try_generate_go_mod(
+            "src/shippingservice/go.mod", None, {},
+        )
+        assert result is not None
+        assert "src/shippingservice" in result
+
+    def test_non_go_mod_returns_none(self):
+        """Non-go.mod files should return None."""
+        gen = self._make_generator()
+        result = gen._try_generate_go_mod(
+            "src/main.go", None, {},
+        )
+        assert result is None
+
+    def test_go_mod_with_go_version(self):
+        """go_version from context should be used."""
+        gen = self._make_generator()
+        result = gen._try_generate_go_mod(
+            "src/service/go.mod", None, {"go_version": "1.22"},
+        )
+        assert result is not None
+        assert "go 1.22" in result
+
+    def test_html_returns_none(self):
+        """HTML files should return None (not go.mod)."""
+        gen = self._make_generator()
+        result = gen._try_generate_go_mod(
+            "templates/home.html", None, {},
+        )
+        assert result is None

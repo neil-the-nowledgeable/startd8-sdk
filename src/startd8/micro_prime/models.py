@@ -43,6 +43,7 @@ class EscalationReason(str, Enum):
     DECOMPOSITION_FAILED = "decomposition_failed"
     NOT_DECOMPOSABLE = "not_decomposable"
     OLLAMA_WHOLE_FAILED = "ollama_whole_failed"
+    NON_PYTHON_BYPASS = "non_python_bypass"
 
 
 # Re-export from shared repair package for backward compatibility.

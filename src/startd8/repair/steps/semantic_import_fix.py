@@ -84,12 +84,18 @@ class SemanticImportFixStep:
                 # Guard: skip ambiguous cross-service imports
                 importing_dir = file_path.parent
                 module_base = module_path.split(".")[0]
-                if (
-                    importing_dir / f"{module_base}.py"
-                ).exists() and service_dir.resolve() != importing_dir.resolve():
+                local_module = importing_dir / f"{module_base}.py"
+                try:
+                    is_cross_service = (
+                        local_module.is_file()
+                        and service_dir.resolve() != importing_dir.resolve()
+                    )
+                except OSError:
+                    is_cross_service = False
+                if is_cross_service:
                     logger.warning(
-                        "Ambiguous cross-service import: %s exists in both %s and %s — skipping repair",
-                        module_base, importing_dir.name, service_dir_name,
+                        "Ambiguous cross-service import: %s exists in both %s and %s — skipping repair of '%s'",
+                        module_base, importing_dir.name, service_dir_name, symbol,
                     )
                     continue
 

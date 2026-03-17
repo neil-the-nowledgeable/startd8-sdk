@@ -51,6 +51,9 @@ class TestInferVariableName:
     def test_special_chars(self):
         assert _infer_variable_name("MY-VAR.NAME", set()) == "my_var_name"
 
+    def test_digit_leading_name(self):
+        assert _infer_variable_name("1PASSWORD_KEY", set()) == "_1password_key"
+
     def test_consecutive_underscores(self):
         assert _infer_variable_name("A___B___C", set()) == "a_b_c"
 

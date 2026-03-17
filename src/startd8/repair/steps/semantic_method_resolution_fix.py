@@ -70,16 +70,27 @@ class SemanticMethodResolutionFixStep:
                 continue
 
             call_start = match.start()
-            paren_start = line.index("(", match.start())
+            # match ends right after the '(' — guaranteed by regex r"\("
+            paren_start = match.end() - 1
 
-            # Find matching close paren (handle nested parens)
+            # Find matching close paren, skipping parens inside string literals
             depth = 1
             i = paren_start + 1
+            in_single = False
+            in_double = False
             while i < len(line) and depth > 0:
-                if line[i] == "(":
-                    depth += 1
-                elif line[i] == ")":
-                    depth -= 1
+                ch = line[i]
+                # Toggle string state (single-char quotes only; triple-quotes
+                # are rare in single-line call args and not worth the complexity)
+                if ch == "'" and not in_double:
+                    in_single = not in_single
+                elif ch == '"' and not in_single:
+                    in_double = not in_double
+                elif not in_single and not in_double:
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
                 i += 1
 
             if depth != 0:

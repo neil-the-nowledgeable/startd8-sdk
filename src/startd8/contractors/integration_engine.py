@@ -46,6 +46,66 @@ _INTEGRATION_MIN_LINES = 50
 logger = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# REQ-MLT-102: Python-stub cross-language guard
+# ---------------------------------------------------------------------------
+
+_PYTHON_FUTURE_IMPORT_RE = "from __future__ import"
+
+
+def _detect_python_stub_in_non_python(
+    content: str, target_path: str,
+) -> Optional[str]:
+    """Return an error string if *content* looks like a Python stub but
+    *target_path* is a non-Python file.  Returns ``None`` when the file is
+    safe to write.
+
+    This is a lightweight safety-net — it catches the obvious case where
+    the template/skeleton system emits Python boilerplate into Go, HTML,
+    Java, etc. files.
+    """
+    if target_path.endswith(".py"):
+        return None
+
+    # Fast-exit: no Python fingerprint at all.
+    if _PYTHON_FUTURE_IMPORT_RE not in content:
+        return None
+
+    # Strip blank lines / whitespace for "only substantive lines" checks.
+    substantive = [
+        line for line in content.splitlines() if line.strip()
+    ]
+
+    # Case 1: content is *only* ``from __future__ import annotations``
+    if len(substantive) == 1 and substantive[0].strip().startswith(
+        "from __future__ import"
+    ):
+        return (
+            "content consists solely of a Python __future__ import "
+            f"('{substantive[0].strip()}')"
+        )
+
+    # Case 2: __future__ import + raise NotImplementedError skeleton
+    non_future = [
+        line for line in substantive
+        if not line.strip().startswith("from __future__ import")
+    ]
+    if all(
+        line.strip() == "raise NotImplementedError"
+        for line in non_future
+    ) and len(non_future) >= 1:
+        return (
+            "content is a Python skeleton stub "
+            "(from __future__ import + raise NotImplementedError)"
+        )
+
+    # Case 3: generic — __future__ import present in a non-Python file
+    return (
+        f"Python 'from __future__ import' detected in non-Python target "
+        f"({target_path.rsplit('.', 1)[-1]} file)"
+    )
+
+
 class NullListener:
     """Default no-op listener satisfying IntegrationListener protocol."""
 
@@ -1557,6 +1617,31 @@ class IntegrationEngine:
                     extra={"unit_id": unit.id},
                 )
                 continue
+
+            # REQ-MLT-102: Python-stub cross-language guard
+            try:
+                _source_text = source_path.read_text(encoding="utf-8")
+                _stub_error = _detect_python_stub_in_non_python(
+                    _source_text, str(target_path),
+                )
+                if _stub_error is not None:
+                    logger.warning(
+                        "Python stub detected in non-Python target %s: %s",
+                        target_path, _stub_error,
+                        extra={"unit_id": unit.id},
+                    )
+                    skipped_files.append({
+                        "path": str(source_path),
+                        "reason": "python_stub_in_non_python",
+                        "detail": _stub_error,
+                    })
+                    continue
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning(
+                    "Cross-language guard read failed for %s: %s — proceeding",
+                    source_path.name, exc,
+                    extra={"unit_id": unit.id},
+                )
 
             # Truncation detection
             if self.check_truncation:
