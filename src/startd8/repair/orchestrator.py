@@ -28,6 +28,7 @@ from .models import (
 )
 from .protocol import AstParseValidator, RepairStep
 from .routing import create_steps_from_route, route_failures
+from .semantic_bridge import translate_to_diagnostics
 
 logger = get_logger(__name__)
 
@@ -803,3 +804,164 @@ _OTEL_DESCRIPTORS: dict = {
         },
     ],
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Semantic repair orchestration (REQ-SR-100–400)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def run_semantic_repair(
+    files: List[Path],
+    config: RepairConfig,
+    project_root: Path,
+) -> Dict[str, object]:
+    """Detect semantic issues, apply deterministic repairs, and verify.
+
+    Runs the full detect → translate → route → repair → verify cycle
+    on each Python file.  Non-Python files are skipped.
+
+    Args:
+        files: Integrated file paths to check.
+        config: Repair config (must have ``semantic_repair_categories`` set).
+        project_root: Project root for ``validate_disk_compliance()``.
+
+    Returns:
+        Dict with keys ``issues_found``, ``issues_repaired``,
+        ``issues_unfixable``, ``per_file`` details.
+    """
+    try:
+        from startd8.forward_manifest_validator import (
+            validate_disk_compliance,
+        )
+    except ImportError:
+        logger.debug("forward_manifest_validator not available; skipping semantic repair")
+        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}}
+
+    if not config.semantic_repair_categories:
+        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}}
+
+    total_found = 0
+    total_repaired = 0
+    total_unfixable = 0
+    per_file: dict[str, dict[str, object]] = {}
+    breaker_failures = 0
+
+    for fpath in files:
+        if fpath.suffix != ".py" or not fpath.is_file():
+            continue
+
+        # Circuit breaker (per-run, separate from syntax repair)
+        if breaker_failures >= config.semantic_repair_circuit_breaker_threshold:
+            logger.warning(
+                "Semantic repair circuit breaker tripped (%d consecutive failures); "
+                "skipping remaining files",
+                breaker_failures,
+            )
+            break
+
+        try:
+            source = fpath.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.debug("Cannot read %s for semantic repair: %s", fpath, exc)
+            continue
+
+        # 1. Detect
+        try:
+            compliance = validate_disk_compliance(str(fpath), str(project_root))
+        except Exception as exc:
+            logger.debug("Disk compliance failed for %s: %s", fpath, exc)
+            continue
+
+        repairable = [
+            issue for issue in (compliance.semantic_issues or [])
+            if isinstance(issue, dict)
+            and issue.get("category", "") in config.semantic_repair_categories
+        ]
+        if not repairable:
+            continue
+
+        found_count = min(len(repairable), config.max_semantic_repairs_per_file)
+        total_found += found_count
+
+        # 2. Translate → Route → Repair
+        diagnostics = translate_to_diagnostics(repairable[:config.max_semantic_repairs_per_file], str(fpath))
+        route = route_failures(diagnostics, config)
+        if not route.steps:
+            total_unfixable += found_count
+            continue
+
+        steps = create_steps_from_route(route)
+        if not steps:
+            # Routing matched but no factories registered yet (steps not implemented)
+            total_unfixable += found_count
+            continue
+
+        context = RepairContext(
+            diagnostics=diagnostics,
+            config=config,
+            project_root=project_root,
+        )
+
+        try:
+            repaired_code = source
+            for step in steps:
+                result = step(repaired_code, context, fpath)
+                if result.modified:
+                    repaired_code = result.code
+        except Exception as exc:
+            logger.warning("Semantic repair step failed for %s: %s", fpath, exc)
+            breaker_failures += 1
+            total_unfixable += found_count
+            continue
+
+        if repaired_code == source:
+            total_unfixable += found_count
+            continue
+
+        # 3. Verify — re-run compliance on repaired code
+        try:
+            fpath.write_text(repaired_code, encoding="utf-8")
+            post_compliance = validate_disk_compliance(str(fpath), str(project_root))
+        except Exception as exc:
+            # Rollback on verification failure
+            fpath.write_text(source, encoding="utf-8")
+            logger.warning("Semantic repair verification failed for %s: %s", fpath, exc)
+            breaker_failures += 1
+            total_unfixable += found_count
+            continue
+
+        post_repairable = [
+            issue for issue in (post_compliance.semantic_issues or [])
+            if isinstance(issue, dict)
+            and issue.get("category", "") in config.semantic_repair_categories
+        ]
+
+        repaired_count = found_count - len(post_repairable)
+        if repaired_count > 0:
+            total_repaired += repaired_count
+            total_unfixable += len(post_repairable)
+            breaker_failures = 0  # Reset on success
+            logger.info(
+                "Semantic repair: %s — %d/%d issues repaired",
+                fpath.name, repaired_count, found_count,
+            )
+            per_file[str(fpath)] = {
+                "repaired": repaired_count,
+                "remaining": len(post_repairable),
+                "categories": list({d.semantic_category for d in diagnostics}),
+            }
+        else:
+            # Rollback — repair didn't reduce issues
+            fpath.write_text(source, encoding="utf-8")
+            total_unfixable += found_count
+            logger.debug(
+                "Semantic repair rollback: %s — no issues resolved", fpath.name,
+            )
+
+    return {
+        "issues_found": total_found,
+        "issues_repaired": total_repaired,
+        "issues_unfixable": total_unfixable,
+        "per_file": per_file,
+    }

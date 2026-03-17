@@ -114,23 +114,32 @@ class TestRouteFailures:
 class TestStepFactoryCompleteness:
     """Verify all routed steps have factory entries and vice versa."""
 
-    def test_all_routed_steps_have_factories(self):
-        """Every step name in _ROUTING_TABLE must have a _STEP_FACTORIES entry."""
+    # Steps in _CANONICAL_ORDER that are reserved but not yet implemented.
+    # Remove entries from this set as each step ships (Commits 2–5).
+    _PENDING_STEPS = {
+        "semantic_import_fix",
+        "semantic_method_resolution_fix",
+        "semantic_discarded_return_fix",
+        "semantic_duplicate_main_fix",
+    }
+
+    def test_all_routed_steps_have_factories_or_pending(self):
+        """Every step in _ROUTING_TABLE has a factory or is in the pending set."""
         from startd8.repair.routing import _ROUTING_TABLE, _STEP_FACTORIES
 
         for _cat, _pattern, steps, _confidence in _ROUTING_TABLE:
             for step_name in steps:
-                assert step_name in _STEP_FACTORIES, (
-                    f"Routing references step '{step_name}' but no factory registered"
+                assert step_name in _STEP_FACTORIES or step_name in self._PENDING_STEPS, (
+                    f"Routing references step '{step_name}' but no factory registered and not pending"
                 )
 
-    def test_all_canonical_steps_have_factories(self):
-        """Every step in _CANONICAL_ORDER must have a _STEP_FACTORIES entry."""
+    def test_all_canonical_steps_have_factories_or_pending(self):
+        """Every step in _CANONICAL_ORDER has a factory or is pending."""
         from startd8.repair.routing import _CANONICAL_ORDER, _STEP_FACTORIES
 
         for step_name in _CANONICAL_ORDER:
-            assert step_name in _STEP_FACTORIES, (
-                f"Canonical order references step '{step_name}' but no factory registered"
+            assert step_name in _STEP_FACTORIES or step_name in self._PENDING_STEPS, (
+                f"Canonical order references step '{step_name}' but no factory and not pending"
             )
 
     def test_all_factories_in_canonical_order(self):

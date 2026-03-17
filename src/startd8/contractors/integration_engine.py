@@ -1128,6 +1128,42 @@ class IntegrationEngine:
                     "Semantic check failed for %s: %s", fpath, exc,
                 )
 
+    def _attempt_semantic_repair(
+        self,
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+    ) -> None:
+        """Run semantic repair on integrated files (REQ-SR-100–400).
+
+        Delegates to ``run_semantic_repair()`` in the repair orchestrator.
+        Only active when ``semantic_repair_categories`` is non-empty.
+        """
+        if (
+            self._repair_config is None
+            or not getattr(self._repair_config, "repair_enabled", False)
+            or not getattr(self._repair_config, "semantic_repair_categories", None)
+        ):
+            return
+
+        try:
+            from startd8.repair.orchestrator import run_semantic_repair
+        except ImportError:
+            return
+
+        project_root = self.project_root or Path(".")
+        result = run_semantic_repair(
+            integrated_files, self._repair_config, project_root,
+        )
+        if result.get("issues_repaired", 0) > 0:
+            logger.info(
+                "Semantic repair complete: %d/%d issues repaired across %d files",
+                result["issues_repaired"],
+                result["issues_found"],
+                len(result.get("per_file", {})),
+            )
+            # Re-run semantic checks to update warning state with post-repair results
+            self._run_semantic_checks(integrated_files, unit)
+
     # ------------------------------------------------------------------
     # Fix-2 / Gap-C: Post-integrate contract violation repair
     # ------------------------------------------------------------------
@@ -1911,6 +1947,9 @@ class IntegrationEngine:
 
             # ── Semantic checks (Phase D — Kaizen Quality) ──
             self._run_semantic_checks(integrated_files, unit)
+
+            # ── Semantic repair (Phase D+ — REQ-SR-100–400) ──
+            self._attempt_semantic_repair(integrated_files, unit)
 
             # Advisory downgrade (only if repair not attempted or failed)
             # R6-S1: When repair succeeds, skip downgrade — results are
