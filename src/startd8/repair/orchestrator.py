@@ -831,20 +831,22 @@ def run_semantic_repair(
         ``issues_unfixable``, ``per_file`` details.
     """
     try:
+        from startd8.contractors.prime_postmortem import compute_disk_quality_score
         from startd8.forward_manifest_validator import (
             validate_disk_compliance,
         )
     except ImportError:
         logger.debug("forward_manifest_validator not available; skipping semantic repair")
-        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}}
+        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}, "pre_repair_scores": {}}
 
     if not config.semantic_repair_categories:
-        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}}
+        return {"issues_found": 0, "issues_repaired": 0, "issues_unfixable": 0, "per_file": {}, "pre_repair_scores": {}}
 
     total_found = 0
     total_repaired = 0
     total_unfixable = 0
     per_file: dict[str, dict[str, object]] = {}
+    pre_repair_scores: dict[str, float] = {}
     breaker_failures = 0
 
     for fpath in files:
@@ -880,6 +882,9 @@ def run_semantic_repair(
         ]
         if not repairable:
             continue
+
+        # Capture pre-repair score for dual scoring (DC-3)
+        pre_repair_scores[str(fpath)] = compute_disk_quality_score(compliance)
 
         found_count = min(len(repairable), config.max_semantic_repairs_per_file)
         total_found += found_count
@@ -964,4 +969,5 @@ def run_semantic_repair(
         "issues_repaired": total_repaired,
         "issues_unfixable": total_unfixable,
         "per_file": per_file,
+        "pre_repair_scores": pre_repair_scores,
     }

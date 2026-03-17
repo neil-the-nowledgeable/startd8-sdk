@@ -1132,23 +1132,26 @@ class IntegrationEngine:
         self,
         integrated_files: List[Path],
         unit: IntegrationUnit,
-    ) -> None:
+    ) -> Optional[Dict[str, Any]]:
         """Run semantic repair on integrated files (REQ-SR-100–400).
 
         Delegates to ``run_semantic_repair()`` in the repair orchestrator.
         Only active when ``semantic_repair_categories`` is non-empty.
+
+        Returns:
+            Semantic repair result dict (for postmortem dual scoring), or None.
         """
         if (
             self._repair_config is None
             or not getattr(self._repair_config, "repair_enabled", False)
             or not getattr(self._repair_config, "semantic_repair_categories", None)
         ):
-            return
+            return None
 
         try:
             from startd8.repair.orchestrator import run_semantic_repair
         except ImportError:
-            return
+            return None
 
         project_root = self.project_root or Path(".")
         result = run_semantic_repair(
@@ -1163,6 +1166,8 @@ class IntegrationEngine:
             )
             # Re-run semantic checks to update warning state with post-repair results
             self._run_semantic_checks(integrated_files, unit)
+
+        return result
 
     # ------------------------------------------------------------------
     # Fix-2 / Gap-C: Post-integrate contract violation repair
@@ -1949,7 +1954,9 @@ class IntegrationEngine:
             self._run_semantic_checks(integrated_files, unit)
 
             # ── Semantic repair (Phase D+ — REQ-SR-100–400) ──
-            self._attempt_semantic_repair(integrated_files, unit)
+            sem_repair = self._attempt_semantic_repair(integrated_files, unit)
+            if sem_repair is not None:
+                result_obj_metadata["semantic_repair"] = sem_repair
 
             # Advisory downgrade (only if repair not attempted or failed)
             # R6-S1: When repair succeeds, skip downgrade — results are

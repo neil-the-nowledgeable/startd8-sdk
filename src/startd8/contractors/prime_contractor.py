@@ -3877,7 +3877,7 @@ class PrimeContractorWorkflow:
                     0, feature.integration_attempts - 1,
                 )
             self.queue.complete_feature(feature.id)
-            self.integration_history.append({
+            history_entry: Dict[str, Any] = {
                 'feature_name': feature.name,
                 'feature_id': feature.id,
                 'success': True,
@@ -3885,7 +3885,12 @@ class PrimeContractorWorkflow:
                 'files': [str(f) for f in result.integrated_files],
                 'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}),
                 'timestamp': datetime.now().isoformat(),
-            })
+            }
+            # Thread semantic repair data for postmortem dual scoring (DC-3)
+            sem_repair = result.metadata.get("semantic_repair")
+            if sem_repair and sem_repair.get("issues_found", 0) > 0:
+                history_entry["semantic_repair"] = sem_repair
+            self.integration_history.append(history_entry)
             if self.on_feature_complete:
                 self.on_feature_complete(feature)
             return True

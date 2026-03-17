@@ -533,6 +533,23 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
         metrics["semantic_verdict_downgrades"] = verdict_downgrades
         metrics["features_with_semantic_errors"] = features_with_errors
 
+    # Semantic repair summary (DC-3 dual scoring)
+    repair_summary: dict[str, object] = {}
+    total_repairs = 0
+    features_repaired: list[str] = []
+    for fpm in getattr(report, "features", []):
+        n = getattr(fpm, "semantic_repairs_applied", 0)
+        if n > 0:
+            total_repairs += n
+            features_repaired.append(fpm.feature_id)
+        pre = getattr(fpm, "pre_semantic_repair_score", None)
+        if pre is not None:
+            repair_summary.setdefault("pre_repair_scores", {})[fpm.feature_id] = pre
+    if total_repairs > 0:
+        repair_summary["total_repairs"] = total_repairs
+        repair_summary["features_repaired"] = features_repaired
+        metrics["semantic_repair_summary"] = repair_summary
+
     metrics_path = output_dir / "kaizen-metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, default=str),

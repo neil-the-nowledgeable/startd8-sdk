@@ -270,6 +270,10 @@ class FeaturePostMortem:
     disk_quality_score: Optional[float] = None
     assembly_delta: Optional[float] = None
     semantic_error_count: int = 0  # Count of error-severity semantic issues
+    # Semantic repair dual scoring (DC-3, REQ-SR)
+    pre_semantic_repair_score: Optional[float] = None
+    semantic_repairs_applied: int = 0
+    semantic_repair_categories: List[str] = dataclasses.field(default_factory=list)
 
     @property
     def semantic_issue_summary(self) -> Dict[str, int]:
@@ -573,6 +577,7 @@ class PrimePostMortemEvaluator:
         force_regenerated_ids: Optional[Set[str]] = None,
         project_root: Optional[str] = None,
         forward_manifest: Optional[Any] = None,
+        semantic_repair_data: Optional[Dict[str, Any]] = None,
     ) -> PrimePostMortemReport:
         """Evaluate a PrimeContractor run and produce a post-mortem report.
 
@@ -675,9 +680,24 @@ class PrimePostMortemEvaluator:
 
         # Disk quality evaluation (opt-in when project_root provided)
         if project_root:
+            # Aggregate semantic repair data from history entries (DC-3 dual scoring)
+            aggregated_repair: Dict[str, Any] = semantic_repair_data or {}
+            if not aggregated_repair:
+                # Fallback: collect from per-feature history entries
+                agg_pre: Dict[str, float] = {}
+                agg_per_file: Dict[str, Dict] = {}
+                for entry in history:
+                    sem = entry.get("semantic_repair")
+                    if isinstance(sem, dict):
+                        agg_pre.update(sem.get("pre_repair_scores", {}))
+                        agg_per_file.update(sem.get("per_file", {}))
+                if agg_pre or agg_per_file:
+                    aggregated_repair = {"pre_repair_scores": agg_pre, "per_file": agg_per_file}
+
             self._evaluate_disk_quality(
                 report.features, project_root, forward_manifest,
                 seed_by_id=seed_by_id,
+                semantic_repair_data=aggregated_repair if aggregated_repair else None,
             )
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
@@ -906,6 +926,7 @@ class PrimePostMortemEvaluator:
         forward_manifest: Optional[Any] = None,
         *,
         seed_by_id: Optional[Dict[str, Dict]] = None,
+        semantic_repair_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Evaluate disk compliance and compute quality scores for each feature.
 
@@ -916,6 +937,10 @@ class PrimePostMortemEvaluator:
             seed_by_id: Optional mapping of task_id → seed task dict.
                 When provided, ``import_map`` and sibling file context
                 are extracted and passed to semantic validation.
+            semantic_repair_data: Optional dict from ``run_semantic_repair()``.
+                When provided, ``pre_repair_scores`` are used for the Kaizen
+                assembly_delta (DC-3: Kaizen sees generator quality, not
+                repair quality).
         """
         try:
             from startd8.forward_manifest_validator import validate_disk_compliance
@@ -1026,9 +1051,22 @@ class PrimePostMortemEvaluator:
                         fpm.verdict = "FAIL:semantic"
                         fpm.success = False
 
-                    # Assembly delta: quality_score (from elements) - disk_quality_score
+                    # Semantic repair dual scoring (DC-3, REQ-SR)
+                    pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})
+                    per_file_data = (semantic_repair_data or {}).get("per_file", {})
+                    pre_score = pre_scores.get(file_path) or pre_scores.get(str(abs_file))
+                    if pre_score is not None:
+                        fpm.pre_semantic_repair_score = pre_score
+                    file_repair = per_file_data.get(file_path) or per_file_data.get(str(abs_file))
+                    if isinstance(file_repair, dict):
+                        fpm.semantic_repairs_applied = file_repair.get("repaired", 0)
+                        fpm.semantic_repair_categories = file_repair.get("categories", [])
+
+                    # Assembly delta: use pre-repair score for Kaizen (generator quality)
+                    # and post-repair score for display (output quality).
                     if fpm.disk_quality_score is not None:
-                        fpm.assembly_delta = fpm.requirement_score - fpm.disk_quality_score
+                        kaizen_score = pre_score if pre_score is not None else fpm.disk_quality_score
+                        fpm.assembly_delta = fpm.requirement_score - kaizen_score
                 except Exception as exc:
                     logger.debug(
                         "Disk validation failed for %s in %s: %s",
