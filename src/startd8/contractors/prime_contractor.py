@@ -3532,6 +3532,35 @@ class PrimeContractorWorkflow:
         generator = self.code_generator
         if not (self._complexity_routing_enabled and self._complexity_router is not None):
             return generator
+
+        # Non-Python languages bypass MicroPrime — force COMPLEX tier to
+        # route to LeadContractor (cloud) which has language-aware prompts.
+        # MicroPrime's engine, prompts, and quality gates are Python-specific.
+        if (
+            self._language_profile is not None
+            and self._language_profile.language_id != "python"
+            and self._micro_prime_enabled
+        ):
+            from startd8.complexity.models import ComplexityTier
+            tier = ComplexityTier.COMPLEX
+            reason = (
+                f"non-Python language ({self._language_profile.language_id}) "
+                f"— MicroPrime bypass, routing to cloud"
+            )
+            generator = self._complexity_router.select(tier) or generator
+            tier_agent_spec = self._complexity_router.select_agent_spec(tier)
+            if tier_agent_spec:
+                gen_context["_tier_agent_spec"] = tier_agent_spec
+            if feature.metadata is None:
+                feature.metadata = {}
+            feature.metadata["_complexity_tier"] = tier.value
+            feature.metadata["_complexity_reason"] = reason
+            logger.info(
+                "Complexity routing for '%s': tier=%s, reason=%s",
+                feature.name, tier.value, reason,
+            )
+            return generator
+
         try:
             from startd8.complexity import (
                 classify_tier,
