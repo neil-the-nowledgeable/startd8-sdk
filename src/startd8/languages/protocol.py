@@ -217,6 +217,14 @@ class LanguageProfile(Protocol):
         """
         ...
 
+    def validate_syntax(self, code: str) -> tuple[bool, str]:
+        """Return (True, '') if code is syntactically valid, (False, error_msg) otherwise.
+
+        Used by MicroPrime to replace hardcoded ``ast.parse()`` validation
+        gates with language-dispatched validation.
+        """
+        ...
+
     def generate_dependency_file(
         self,
         project_root: Path,

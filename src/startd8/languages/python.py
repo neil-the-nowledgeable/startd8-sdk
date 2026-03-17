@@ -122,6 +122,15 @@ class PythonLanguageProfile:
         # No separate post-generation step needed.
         return []
 
+    def validate_syntax(self, code: str) -> tuple[bool, str]:
+        """Validate Python syntax via ast.parse()."""
+        import ast
+        try:
+            ast.parse(code)
+            return True, ""
+        except SyntaxError as e:
+            return False, str(e)
+
     def generate_dependency_file(
         self,
         project_root: Path,

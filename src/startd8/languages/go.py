@@ -222,6 +222,38 @@ class GoLanguageProfile:
 
         return warnings
 
+    def validate_syntax(self, code: str) -> tuple[bool, str]:
+        """Validate Go syntax via gofmt -e on a temp file."""
+        import tempfile
+        tmp = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".go", mode="w", delete=False)
+            tmp.write(code)
+            tmp.flush()
+            tmp.close()
+            result = subprocess.run(
+                ["gofmt", "-e", tmp.name],
+                capture_output=True, text=True, timeout=_GO_TOOL_TIMEOUT,
+            )
+            if result.returncode == 0:
+                return True, ""
+            return False, result.stderr.strip()
+        except FileNotFoundError:
+            # gofmt not installed — assume valid (best-effort)
+            logger.warning("gofmt not found on PATH — skipping Go syntax validation")
+            return True, ""
+        except subprocess.TimeoutExpired:
+            return False, "gofmt timed out"
+        except OSError as exc:
+            return False, str(exc)
+        finally:
+            if tmp is not None:
+                import os
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+
     def generate_dependency_file(
         self,
         project_root: Path,

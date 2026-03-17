@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import textwrap
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from startd8.forward_manifest import ForwardElementSpec
 from startd8.logging_config import get_logger
@@ -931,12 +931,18 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
     return "\n".join(_dedent_lines(rest_lines))
 
 
-def _validate_skeleton(skeleton: str) -> bool:
-    """Validate that the full skeleton passes ``ast.parse()``.
+def _validate_skeleton(skeleton: str, language_profile: Any = None) -> bool:
+    """Validate that the full skeleton is syntactically valid.
+
+    For Python: uses ``ast.parse()``.
+    For other languages: dispatches to ``language_profile.validate_syntax()`` (MP-P1b).
 
     Intentionally validates the entire file (not just the spliced region)
     so that interaction effects between elements are caught early.
     """
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    if lang_id != "python" and language_profile is not None:
+        return language_profile.validate_syntax(skeleton)[0]
     try:
         ast.parse(skeleton)
         return True

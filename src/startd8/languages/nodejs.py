@@ -148,6 +148,37 @@ class NodeLanguageProfile:
         # prettier could format, but doesn't fix imports.
         return []
 
+    def validate_syntax(self, code: str) -> tuple[bool, str]:
+        """Validate Node.js syntax via node --check on a temp file."""
+        import subprocess
+        import tempfile
+        tmp = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".js", mode="w", delete=False)
+            tmp.write(code)
+            tmp.flush()
+            tmp.close()
+            result = subprocess.run(
+                ["node", "--check", tmp.name],
+                capture_output=True, text=True, timeout=15,
+            )
+            if result.returncode == 0:
+                return True, ""
+            return False, result.stderr.strip()
+        except FileNotFoundError:
+            return True, ""  # node not installed — best-effort
+        except subprocess.TimeoutExpired:
+            return False, "node --check timed out"
+        except OSError as exc:
+            return False, str(exc)
+        finally:
+            if tmp is not None:
+                import os
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+
     def generate_dependency_file(
         self,
         project_root: Path,

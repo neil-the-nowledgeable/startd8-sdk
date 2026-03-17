@@ -410,6 +410,7 @@ class MicroPrimeCodeGenerator:
         cloud_agent_spec: Optional[str] = None,
         element_registry: Optional[ElementRegistry] = None,
         project_root: Optional[Path] = None,
+        language_profile: Optional[Any] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
@@ -423,9 +424,11 @@ class MicroPrimeCodeGenerator:
         self._element_registry = element_registry
         self._registry_hits = 0
         self._registry_misses = 0
+        self._language_profile = language_profile
         self._engine = MicroPrimeEngine(
             config=self._config,
             element_registry=element_registry,
+            language_profile=language_profile,
         )
         self._ollama_available: Optional[bool] = None
         self._cloud_agent_spec = cloud_agent_spec

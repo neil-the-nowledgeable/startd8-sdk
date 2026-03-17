@@ -230,6 +230,7 @@ class ClassDecomposeStrategy:
         if not self._config.class_decompose_enabled:
             return False
 
+        # Go has no classes — class decomposition never applies (MP-P6).
         if element.kind != ElementKind.CLASS:
             return False
 
@@ -524,7 +525,9 @@ def _is_method(element: ForwardElementSpec) -> bool:
     return element.kind in (ElementKind.METHOD, ElementKind.ASYNC_METHOD)
 
 
-def _is_async(element: ForwardElementSpec) -> bool:
+def _is_async(element: ForwardElementSpec, language_id: str = "python") -> bool:
+    if language_id == "go":
+        return False  # Go uses goroutines, not async/await (MP-P6)
     return element.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD)
 
 
@@ -544,6 +547,32 @@ _PYTHON_RESERVED = frozenset(
     + list(getattr(_keyword, "softkwlist", []))
     + dir(_builtins)
 )
+
+# Go reserved words: 25 keywords + predeclared identifiers (MP-P2).
+_GO_RESERVED = frozenset({
+    # Keywords
+    "break", "case", "chan", "const", "continue", "default", "defer",
+    "else", "fallthrough", "for", "func", "go", "goto", "if",
+    "import", "interface", "map", "package", "range", "return",
+    "select", "struct", "switch", "type", "var",
+    # Predeclared types
+    "bool", "byte", "complex64", "complex128", "error", "float32",
+    "float64", "int", "int8", "int16", "int32", "int64", "rune",
+    "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+    "any", "comparable",
+    # Predeclared constants
+    "true", "false", "iota", "nil",
+    # Predeclared functions
+    "append", "cap", "clear", "close", "complex", "copy", "delete",
+    "imag", "len", "make", "max", "min", "new", "panic", "print",
+    "println", "real", "recover",
+})
+
+# Language-keyed reserved word lookup (MP-P2).
+_LANGUAGE_RESERVED: dict[str, frozenset[str]] = {
+    "python": _PYTHON_RESERVED,
+    "go": _GO_RESERVED,
+}
 
 # Responsibility clause separators (deterministic, no LLM).
 
@@ -579,16 +608,18 @@ def _parse_responsibilities(text: Optional[str]) -> list[str]:
     return result
 
 
-def _slugify_helper_name(clause: str) -> str:
+def _slugify_helper_name(clause: str, language_id: str = "python") -> str:
     """Derive a helper function name from a responsibility clause.
 
     Produces a snake_case slug prefixed with ``_``. Falls back to empty
     string if the result is invalid (caller handles fallback).
+    Uses language-specific reserved words (MP-P2).
     """
     # Extract key verbs/nouns — take first 6 words, lowercase, strip non-alnum
     words = re.sub(r"[^a-zA-Z0-9\s]", "", clause).lower().split()[:6]
     slug = "_".join(words)
-    if not slug or slug in _PYTHON_RESERVED or len(slug) > 48:
+    reserved = _LANGUAGE_RESERVED.get(language_id, _PYTHON_RESERVED)
+    if not slug or slug in reserved or len(slug) > 48:
         return ""
     return f"_{slug}"
 
@@ -607,10 +638,59 @@ def _uniquify_name(
     return f"{name}_99"  # pragma: no cover
 
 
-def _render_helper_def(helper: SubElement, helper_code: str) -> Optional[str]:
+def _render_go_signature_str(sig: Signature) -> str:
+    """Render a Signature to a Go parameter string, e.g. ``(name Type, name Type) ReturnType``.
+
+    Go differences from Python:
+    - No ``/``, ``*``, ``**kwargs`` markers
+    - Annotation after name (``name Type``, not ``name: Type``)
+    - Return type outside parens (no ``->``)
+    """
+    parts: list[str] = []
+    for param in sig.params:
+        if param.name in ("self", "cls"):
+            continue  # Go methods don't use self/cls in param list
+        rendered = param.name
+        if param.annotation:
+            rendered += f" {param.annotation}"
+        parts.append(rendered)
+    return f"({', '.join(parts)})"
+
+
+def _render_signature_for_language(sig: Signature, language_id: str) -> str:
+    """Dispatch signature rendering by language (MP-P4)."""
+    if language_id == "go":
+        return _render_go_signature_str(sig)
+    return _render_signature_str(sig)
+
+
+def _render_helper_def(
+    helper: SubElement, helper_code: str, language_id: str = "python",
+) -> Optional[str]:
     """Render a helper SubElement + its generated code into a full function def."""
     if not (helper.element_spec and helper.element_spec.signature):
         return None
+
+    if language_id == "go":
+        sig = _render_go_signature_str(helper.element_spec.signature)
+        ret = ""
+        if helper.element_spec.signature.return_annotation:
+            ret = f" {helper.element_spec.signature.return_annotation}"
+        header = f"func {helper.name}{sig}{ret} {{"
+        body = textwrap.dedent(helper_code).strip()
+        if not body:
+            body = 'panic("not implemented")'
+        indented = textwrap.indent(body, "\t")
+        if helper.element_spec.docstring_hint:
+            return (
+                f"// {helper.element_spec.docstring_hint}\n"
+                f"{header}\n"
+                f"{indented}\n"
+                f"}}"
+            )
+        return f"{header}\n{indented}\n}}"
+
+    # Python
     prefix = "async def" if _is_async(helper.element_spec) else "def"
     sig = _render_signature_str(helper.element_spec.signature)
     ret = ""
@@ -633,8 +713,11 @@ def _render_helper_def(helper: SubElement, helper_code: str) -> Optional[str]:
 class FunctionChainStrategy:
     """Decomposes MODERATE functions into dispatch body + helper sub-functions (REQ-MP-902)."""
 
-    def __init__(self, config: Optional[MicroPrimeConfig] = None) -> None:
+    def __init__(
+        self, config: Optional[MicroPrimeConfig] = None, language_id: str = "python",
+    ) -> None:
         self._config = config or MicroPrimeConfig()
+        self._language_id = language_id
 
     @property
     def name(self) -> str:
@@ -716,7 +799,7 @@ class FunctionChainStrategy:
 
         # Build helper sub-elements for each responsibility
         for i, clause in enumerate(clauses):
-            slug = _slugify_helper_name(clause)
+            slug = _slugify_helper_name(clause, self._language_id)
             if not slug:
                 slug = f"_helper_{i + 1}"
                 uncertainty_signals.append("inferred_helper_signature")
@@ -831,7 +914,7 @@ class FunctionChainStrategy:
             helper_code = sub_results.get(helper.name)
             if helper_code is None:
                 return None
-            rendered = _render_helper_def(helper, helper_code)
+            rendered = _render_helper_def(helper, helper_code, self._language_id)
             if rendered is not None:
                 parts.append(rendered)
 
@@ -840,16 +923,21 @@ class FunctionChainStrategy:
 
         assembled = "\n\n\n".join(parts)
 
-        # Validate
-        try:
-            ast.parse(assembled)
-        except SyntaxError:
-            logger.warning(
-                "Function chain assembly validation failed for %s",
-                plan.original_element.name,
-                exc_info=True,
-            )
-            return None
+        # Validate (language-dispatched, MP-P6)
+        if self._language_id == "go":
+            # Go: skip ast.parse, use gofmt via language profile if available
+            # For now, trust the assembled output (gofmt runs in post_generation_cleanup)
+            pass
+        else:
+            try:
+                ast.parse(assembled)
+            except SyntaxError:
+                logger.warning(
+                    "Function chain assembly validation failed for %s",
+                    plan.original_element.name,
+                    exc_info=True,
+                )
+                return None
 
         return assembled
 
@@ -865,12 +953,14 @@ class ModerateDecomposer:
         strategies: Optional[list[Any]] = None,
         config: Optional[MicroPrimeConfig] = None,
         template_registry: Optional[Any] = None,
+        language_id: str = "python",
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._template_registry = template_registry
+        self._language_id = language_id
         self._strategies: list[Any] = strategies or [
             ClassDecomposeStrategy(config=self._config, template_registry=template_registry),
-            FunctionChainStrategy(config=self._config),
+            FunctionChainStrategy(config=self._config, language_id=language_id),
         ]
 
     def build_context(

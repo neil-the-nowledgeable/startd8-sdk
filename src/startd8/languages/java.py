@@ -138,6 +138,10 @@ class JavaLanguageProfile:
         # google-java-format could format but requires java runtime.
         return []
 
+    def validate_syntax(self, code: str) -> tuple[bool, str]:
+        """Java syntax validation stub — no lightweight CLI checker available."""
+        return True, ""
+
     def generate_dependency_file(
         self,
         project_root: Path,

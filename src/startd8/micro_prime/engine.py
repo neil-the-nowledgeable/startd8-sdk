@@ -91,6 +91,47 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 }
 
 
+# REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
+# MicroPrime element generation and use file-whole LLM generation instead.
+# NOTE: ".go" removed — Go files now flow through MicroPrime (MP-P6).
+_NON_PYTHON_EXTENSIONS = frozenset({
+    ".html", ".yaml", ".yml", ".json", ".md", ".txt",
+    ".in", ".cfg", ".toml", ".js", ".ts", ".tsx", ".jsx",
+    ".java", ".kt", ".rs", ".rb", ".sh", ".bash", ".zsh",
+    ".css", ".scss", ".less", ".xml", ".proto", ".sql",
+    ".c", ".cpp", ".h", ".hpp",
+})
+
+# Filenames without a standard extension that are non-Python.
+_NON_PYTHON_FILENAMES = frozenset({
+    "Dockerfile", "Makefile", "Procfile", "Vagrantfile",
+    "go.mod", "go.sum",
+})
+
+
+def _is_non_python_file(file_path: str) -> bool:
+    """Return True if *file_path* is NOT a Python file (REQ-MLT-100).
+
+    Handles edge cases like ``go.mod`` and ``Dockerfile`` which lack
+    standard extensions.  Returns False for ``.py`` files and files
+    with no recognised non-Python extension.
+    """
+    from pathlib import PurePosixPath
+
+    p = PurePosixPath(file_path)
+    # Check exact filename first (Dockerfile, go.mod, etc.)
+    if p.name in _NON_PYTHON_FILENAMES:
+        return True
+    suffix = p.suffix.lower()
+    if suffix == ".py":
+        return False
+    if suffix in _NON_PYTHON_EXTENSIONS:
+        return True
+    # Unknown extension — conservatively treat as Python-compatible
+    # so existing behaviour is preserved.
+    return False
+
+
 def _attempt_splice_violation_repair(
     spliced_code: str,
     violations: list[SpliceViolation],
@@ -645,40 +686,177 @@ _ELEMENT_FULL_FUNCTION_SYSTEM_PROMPT = (
 )
 
 
+def _build_system_prompt(
+    profile: Any,
+    mode: str,
+) -> str:
+    """Build a language-appropriate system prompt from a LanguageProfile.
+
+    Args:
+        profile: LanguageProfile instance (or None for Python defaults).
+        mode: One of ``"body"``, ``"full_function"``, ``"file_whole"``.
+
+    Returns:
+        System prompt string.  For Python, output matches the existing
+        constant exactly (backward compat).
+    """
+    if profile is None or profile.language_id == "python":
+        # Return the exact legacy constants for Python
+        if mode == "body":
+            return _ELEMENT_BODY_SYSTEM_PROMPT
+        elif mode == "full_function":
+            return _ELEMENT_FULL_FUNCTION_SYSTEM_PROMPT
+        elif mode == "file_whole":
+            return _FILE_WHOLE_SYSTEM_PROMPT
+        return _ELEMENT_BODY_SYSTEM_PROMPT
+
+    role = profile.system_prompt_role
+    standards = profile.coding_standards
+    lang = profile.display_name
+
+    # Determine language-specific formatting instructions
+    is_go = profile.language_id == "go"
+    indent_rule = "Use tab indentation." if is_go else "Use 4-space indentation."
+    stub_marker = 'panic("not implemented")' if is_go else "raise NotImplementedError"
+
+    if mode == "body":
+        return (
+            f"You are {role}. "
+            f"Output the indented body lines of the target function.\n"
+            f"\n"
+            f"FORMAT: {indent_rule} "
+            f"Output raw {lang} code — no ```{lang.lower()} fences, no prose, no function/method signature line.\n"
+            f"\n"
+            f"IMPORTS: Use ONLY imports shown in the prompt. "
+            f"Do not add import statements to your output.\n"
+            f"\n"
+            f"SCOPE: Output ONLY the body of the single requested function. "
+            f"Stop after the last line of the body. "
+            f"Do not output additional functions, types, or statements.\n"
+            f"\n"
+            f"STYLE: {standards}"
+        )
+    elif mode == "full_function":
+        return (
+            f"You are {role}. "
+            f"Output the complete function implementation.\n"
+            f"\n"
+            f"FORMAT: Output a single {lang} function with its signature and body. "
+            f"{indent_rule} Output raw {lang} code — no ```{lang.lower()} fences, "
+            f"no prose, no explanations.\n"
+            f"\n"
+            f"IMPORTS: Do NOT output import statements. "
+            f"The imports are already provided in the file.\n"
+            f"\n"
+            f"SCOPE: Output ONLY the single requested function definition. "
+            f"Stop after the closing brace. "
+            f"Do not output additional functions, types, or standalone statements.\n"
+            f"\n"
+            f"STYLE: {standards}"
+        )
+    elif mode == "file_whole":
+        return (
+            f"You are {role}. "
+            f"You receive a skeleton {lang} file with `{stub_marker}` stubs.\n"
+            f"\n"
+            f"TASK: Replace every `{stub_marker}` with a working implementation. "
+            f"Output the COMPLETE file with all stubs filled.\n"
+            f"\n"
+            f"PRESERVE: Keep all existing imports, type definitions, signatures, "
+            f"and declarations exactly as given. {indent_rule} "
+            f"Each function body goes directly under its signature — "
+            f"never nest a function inside itself.\n"
+            f"\n"
+            f"FORMAT: Output raw {lang} code only. "
+            f"No ```{lang.lower()} fences, no explanations, no commentary.\n"
+            f"\n"
+            f"STYLE: {standards}"
+        )
+
+    return _ELEMENT_BODY_SYSTEM_PROMPT
+
+
+def _coerce_literals_for_language(code: str, language_id: str) -> str:
+    """Fix Python literals the LLM may emit in non-Python context (MP-P5).
+
+    For Go: ``None`` -> ``nil``, ``True`` -> ``true``, ``False`` -> ``false``
+    (word-boundary regex, outside string literals).
+    For Python: no-op.
+    """
+    if language_id != "go":
+        return code
+    import re
+    # Replace outside of quoted strings — simple heuristic: operate on
+    # each line, skip content inside double quotes.
+    result_lines = []
+    for line in code.splitlines(keepends=True):
+        # Only replace outside of string literals (simple heuristic)
+        parts = line.split('"')
+        for i in range(0, len(parts), 2):  # even indices are outside strings
+            if i < len(parts):
+                parts[i] = re.sub(r'\bNone\b', 'nil', parts[i])
+                parts[i] = re.sub(r'\bTrue\b', 'true', parts[i])
+                parts[i] = re.sub(r'\bFalse\b', 'false', parts[i])
+        result_lines.append('"'.join(parts))
+    return "".join(result_lines)
+
+
 def extract_function_body(
     raw_code: str,
     element: ForwardElementSpec,
+    language_profile: Any = None,
 ) -> str | None:
-    """Extract the function body from a full-function model output via AST.
+    """Extract the function body from a full-function model output.
 
-    The model outputs ``def foo(...):\\n    body``.  This function parses it,
-    finds the target function/method, and returns only the indented body lines
-    (the same format the body-only prompt would have produced).
+    For Python: uses AST parsing.  The model outputs ``def foo(...):\\n    body``.
+    This parses it, finds the target function/method, and returns only the
+    indented body lines.
 
-    Returns None if extraction fails (syntax error, no matching function found).
+    For Go: uses brace-based extraction from ``go_splicer`` (MP-P3).
+
+    Returns None if extraction fails.
     """
     code = raw_code.strip()
     if not code:
         return None
 
-    # Strip markdown fences before AST parsing — the model frequently wraps
-    # full-function output in ```python ... ``` even when told not to.
+    # Strip markdown fences
     if code.startswith("```"):
         lines_raw = code.splitlines()
-        # Remove opening fence line
         if lines_raw and lines_raw[0].startswith("```"):
             lines_raw = lines_raw[1:]
-        # Remove closing fence line
         if lines_raw and lines_raw[-1].strip() == "```":
             lines_raw = lines_raw[:-1]
         code = "\n".join(lines_raw).strip()
 
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+
+    if lang_id == "go":
+        # Go: brace-based body extraction
+        try:
+            from startd8.languages.go_splicer import _find_func_declaration, _find_body_range
+            lines = code.splitlines()
+            decl_line = _find_func_declaration(lines, element.name)
+            if decl_line is None:
+                return None
+            body_range = _find_body_range(lines, decl_line)
+            if body_range is None:
+                return None
+            body_start, body_end = body_range
+            # Body lines are between opening { and closing }
+            body_lines = lines[body_start + 1:body_end]
+            if not body_lines:
+                return None
+            return "\n".join(body_lines)
+        except (ImportError, Exception):
+            return None
+
+    # Python: AST-based
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return None
 
-    # Find the target function node
     target_name = element.name
     lines = code.splitlines()
 
@@ -688,7 +866,6 @@ def extract_function_body(
         if node.name != target_name:
             continue
 
-        # Extract body lines (everything after the def line)
         if not node.body:
             return None
 
@@ -790,20 +967,22 @@ def _build_escalation_handoff(
     failure_message: str,
     raw_output: Optional[str] = None,
     repair_outcome: Optional[EscalationRepairOutcome] = None,
+    language_id: str = "python",
 ) -> EscalationHandoff:
     """Build a Keiyaku-compliant EscalationHandoff from element data (K-6).
 
     Centralises handoff construction so that all escalation sites in
     ``_handle_simple`` produce consistently structured contracts.
     """
+    from startd8.micro_prime.decomposer import _render_signature_for_language
     sig_str = ""
     if element.signature:
-        params = ", ".join(
-            f"{p.name}: {p.annotation}" if p.annotation else p.name
-            for p in element.signature.params
-        )
-        ret = f" -> {element.signature.return_annotation}" if element.signature.return_annotation else ""
-        sig_str = f"({params}){ret}"
+        sig_str = _render_signature_for_language(element.signature, language_id)
+        if element.signature.return_annotation:
+            if language_id == "go":
+                sig_str += f" {element.signature.return_annotation}"
+            else:
+                sig_str += f" -> {element.signature.return_annotation}"
 
     element_fqn = (
         f"{element.parent_class}.{element.name}"
@@ -940,14 +1119,33 @@ def _strip_fences(code: str) -> str:
 from startd8.utils.ast_checks import is_stub_only_body as _is_stub_only_body  # noqa: E402
 
 
-def _skeleton_has_stubs(skeleton: str) -> bool:
-    """Return True if any function/method body in *skeleton* is a NotImplementedError stub.
+def _skeleton_has_stubs(skeleton: str, language_profile: Any = None) -> bool:
+    """Return True if any function/method body in *skeleton* is a stub.
 
-    Uses AST parsing + ``is_stub_only_body()`` to avoid false positives on
-    conditional ``raise NotImplementedError`` branches and string literals
-    containing the phrase.  Falls back to string search if AST parsing fails
-    (e.g. skeleton has placeholder syntax).
+    For Python: uses AST parsing + ``is_stub_only_body()`` to avoid false
+    positives.  Falls back to string search if AST parsing fails.
+
+    For non-Python: uses ``language_profile.stub_patterns`` regex list
+    and ``function_start_pattern`` to locate function bodies and check
+    for stub markers (MP-P3).
     """
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+
+    if lang_id != "python":
+        # Non-Python: regex-based stub detection via language profile
+        import re
+        stub_patterns = getattr(language_profile, "stub_patterns", [])
+        if not stub_patterns:
+            # No stub patterns defined — conservative: check for common markers
+            return "raise NotImplementedError" in skeleton or 'panic("not implemented"' in skeleton
+        compiled = [re.compile(p) for p in stub_patterns]
+        for line in skeleton.splitlines():
+            for pat in compiled:
+                if pat.search(line):
+                    return True
+        return False
+
+    # Python path: AST-based
     try:
         tree = ast.parse(skeleton)
     except SyntaxError:
@@ -1170,14 +1368,15 @@ def _validate_file_whole_result(
     generated_code: str,
     skeleton: str,
     file_spec: ForwardFileSpec,
+    language_profile: Any = None,
 ) -> tuple[bool, str, list[str]]:
     """Validate a file-level Ollama-whole generation result.
 
     Checks:
-    1. AST parses successfully
-    2. No stub-only function/method bodies (AST-based)
-    3. No nested duplicate function definitions
-    4. Structural position: elements at correct nesting level
+    1. Syntax parses successfully (language-dispatched)
+    2. No stub-only function/method bodies (AST-based for Python, regex for others)
+    3. No nested duplicate function definitions (Python only)
+    4. Structural position: elements at correct nesting level (Python only)
     5. No skeleton markers remain
 
     Returns:
@@ -1192,7 +1391,24 @@ def _validate_file_whole_result(
     if not code:
         return False, "empty output", []
 
-    # AST parse — hard fail
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+
+    # Apply literal coercion for non-Python (MP-P5)
+    code = _coerce_literals_for_language(code, lang_id)
+
+    # Syntax parse — hard fail (language-dispatched, MP-P1b)
+    if language_profile is not None and lang_id != "python":
+        valid, err = language_profile.validate_syntax(code)
+        if not valid:
+            return False, f"syntax validation failed: {err}", []
+        # Non-Python: skip AST-based structural checks, only check stubs + skeleton markers
+        if _skeleton_has_stubs(code, language_profile):
+            return False, "stub bodies remain", []
+        if SKELETON_MARKER in code:
+            return False, "contains skeleton markers", []
+        return True, "", []
+
+    # Python path: AST-based validation
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
@@ -1311,6 +1527,7 @@ class MicroPrimeEngine:
         template_registry: Optional[TemplateRegistry] = None,
         metrics_collector: Optional[MetricsCollector] = None,
         element_registry: Optional[ElementRegistry] = None,
+        language_profile: Optional[Any] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._templates = template_registry or TemplateRegistry(
@@ -1318,6 +1535,11 @@ class MicroPrimeEngine:
         )
         self._metrics = metrics_collector or MetricsCollector()
         self._completed: list[dict[str, Any]] = []
+        # Language profile (MP-P1): defaults to PythonLanguageProfile
+        if language_profile is None:
+            from startd8.languages.python import PythonLanguageProfile
+            language_profile = PythonLanguageProfile()
+        self._language_profile = language_profile
         # Circuit breaker state (R3-S2 + E1)
         self._consecutive_failures: int = 0       # per-file, reset between files
         self._run_consecutive_failures: int = 0   # per-run (E1), persists across files
@@ -1327,7 +1549,10 @@ class MicroPrimeEngine:
         # Element registry for cross-task/cross-run caching (ER-007)
         self._element_registry = element_registry
         # Decomposer for MODERATE elements (REQ-MP-900)
-        self._decomposer = ModerateDecomposer(config=self._config, template_registry=self._templates)
+        self._decomposer = ModerateDecomposer(
+            config=self._config, template_registry=self._templates,
+            language_id=self._language_profile.language_id,
+        )
         # Phase 3: Function-body decomposer for SIMPLE elements (lazy import, Leg 11 #55)
         self._function_body_decomposer: Optional[Any] = None
         if self._config.enable_simple_decomposer:
@@ -1352,6 +1577,19 @@ class MicroPrimeEngine:
     @property
     def metrics_collector(self) -> MetricsCollector:
         return self._metrics
+
+    @property
+    def language_profile(self) -> Any:
+        """The active LanguageProfile for this engine instance."""
+        return self._language_profile
+
+    def _get_system_prompt(self, mode: str) -> str:
+        """Return language-appropriate system prompt for the given mode."""
+        return _build_system_prompt(self._language_profile, mode)
+
+    def _syntax_valid(self, code: str) -> bool:
+        """Language-dispatched syntax validation (MP-P1b)."""
+        return self._language_profile.validate_syntax(code)[0]
 
     @property
     def _circuit_open(self) -> bool:
@@ -1941,7 +2179,7 @@ class MicroPrimeEngine:
         # fill-rate gate in prime_adapter catches partial skeletons
         # instead of writing them to disk.  Uses AST-based stub detection
         # (AC-R3) to avoid false positives on branch/comment usage.
-        _has_stubs = _skeleton_has_stubs(current_skeleton)
+        _has_stubs = _skeleton_has_stubs(current_skeleton, self._language_profile)
         _has_marker = SKELETON_MARKER in current_skeleton
         if _has_stubs or _has_marker:
             for er in file_result.element_results:
@@ -2166,7 +2404,7 @@ class MicroPrimeEngine:
         """
         if not self._config.file_ollama_whole_enabled:
             return False
-        if not _skeleton_has_stubs(skeleton):
+        if not _skeleton_has_stubs(skeleton, self._language_profile):
             logger.debug(
                 "File-whole skipped for %s: no stubs in skeleton",
                 file_spec.file,
@@ -2176,7 +2414,7 @@ class MicroPrimeEngine:
         # Coupling override: prefer file-whole for coupled files regardless
         # of size, because element-by-element generation loses cross-element
         # context (run-042 PI-003, PI-008, PI-009 first-pass failures).
-        if _has_high_within_file_coupling(file_spec, skeleton):
+        if _has_high_within_file_coupling(file_spec, skeleton, self._language_profile):
             logger.info(
                 "File-whole PREFERRED for %s: high within-file coupling detected",
                 file_spec.file,
@@ -2271,7 +2509,9 @@ class MicroPrimeEngine:
             # raw LLM output often has ```python fences that prevent ast.parse.
             cleaned_code = extract_code_from_response(raw_code) or raw_code
             reordered_code = _reorder_forward_references(cleaned_code)
-            valid, reason, missing = _validate_file_whole_result(reordered_code, skeleton, file_spec)
+            valid, reason, missing = _validate_file_whole_result(
+                reordered_code, skeleton, file_spec, self._language_profile,
+            )
             if valid:
                 _fw_state.update(valid=True, missing=[])
                 return reordered_code, None
@@ -2286,7 +2526,7 @@ class MicroPrimeEngine:
                 repair_result = run_file_repair_pipeline(raw_code, file_spec)
                 if repair_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(
-                        repair_result.code, skeleton, file_spec,
+                        repair_result.code, skeleton, file_spec, self._language_profile,
                     )
                     if re_valid:
                         logger.info(
@@ -2304,7 +2544,7 @@ class MicroPrimeEngine:
                 )
                 if contractor_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(
-                        contractor_result.code, skeleton, file_spec,
+                        contractor_result.code, skeleton, file_spec, self._language_profile,
                     )
                     if re_valid:
                         logger.info(
@@ -2320,7 +2560,7 @@ class MicroPrimeEngine:
             return None, reason
 
         retry_outcome = self._generate_with_ollama_retry(
-            prompt, _FILE_WHOLE_SYSTEM_PROMPT, file_path,
+            prompt, self._get_system_prompt("file_whole"), file_path,
             max_tokens=file_whole_max_tokens,
             stop_sequences=self._FILE_WHOLE_STOP_SEQUENCES,
             validate_and_repair=_validate_file_whole,
@@ -3224,6 +3464,24 @@ class MicroPrimeEngine:
         reasoning: str = "",
     ) -> ElementResult:
         """Handle TRIVIAL tier: use template registry."""
+        # REQ-MLT-100: Non-Python files bypass element generation entirely.
+        if _is_non_python_file(file_path):
+            logger.info(
+                "Non-Python file %s bypassing MicroPrime element generation "
+                "(TRIVIAL tier, element=%s)",
+                file_path, element.name,
+            )
+            return ElementResult.make_escalation(
+                element.name, file_path, TierClassification.TRIVIAL, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path,
+                    tier=TierClassification.TRIVIAL,
+                    reason=EscalationReason.NON_PYTHON_BYPASS,
+                    detail=f"Non-Python file {file_path} — skipping element generation",
+                ),
+                generation_strategy="non_python_bypass",
+            )
+
         match = self._templates.match(element, file_spec, contracts)
         if match is None:
             # Template failed — escalate to SIMPLE
@@ -3275,6 +3533,24 @@ class MicroPrimeEngine:
         task_description: Optional[str] = None,
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
+        # REQ-MLT-101: Non-Python files bypass element generation entirely.
+        if _is_non_python_file(file_path):
+            logger.info(
+                "Non-Python file %s bypassing MicroPrime element generation "
+                "(SIMPLE tier, element=%s)",
+                file_path, element.name,
+            )
+            return ElementResult.make_escalation(
+                element.name, file_path, TierClassification.SIMPLE, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    reason=EscalationReason.NON_PYTHON_BYPASS,
+                    detail=f"Non-Python file {file_path} — skipping element generation",
+                ),
+                generation_strategy="non_python_bypass",
+            )
+
         start_time = time.monotonic()
         model_name = f"{self._config.provider}:{self._config.model}"
         element_fqn = (
@@ -3318,6 +3594,12 @@ class MicroPrimeEngine:
         Returns an ``ElementResult`` if the element was handled without
         invoking Ollama, or ``None`` to proceed to generation.
         """
+        # REQ-MLT-101: Non-Python files should not attempt Python template
+        # matching or decomposition — caller (_handle_simple) already guards,
+        # but defense-in-depth.
+        if _is_non_python_file(file_path):
+            return None  # signal: not handled, fall through to _handle_simple guard
+
         # REQ-MP-1006: Template-first short-circuit
         template_match = self._templates.match(element, file_spec, contracts)
         if template_match is not None:
@@ -3634,8 +3916,8 @@ class MicroPrimeEngine:
             return code, None
 
         system_prompt = (
-            _ELEMENT_FULL_FUNCTION_SYSTEM_PROMPT if use_full_function
-            else _ELEMENT_BODY_SYSTEM_PROMPT
+            self._get_system_prompt("full_function") if use_full_function
+            else self._get_system_prompt("body")
         )
         retry_outcome = self._generate_with_ollama_retry(
             prompt, system_prompt, element.name,
@@ -3672,6 +3954,7 @@ class MicroPrimeEngine:
                     repair_result_out.last_error or "ast.parse() failed",
                     raw_output=raw_out,
                     repair_outcome=esc_repair,
+                    language_id=self._language_profile.language_id,
                 )
                 failure = ElementResult.make_escalation(
                     element.name, file_path, TierClassification.SIMPLE, reasoning,
@@ -3779,6 +4062,7 @@ class MicroPrimeEngine:
                     structural_reason or "structural_verification_failed",
                     raw_output=outcome.raw_output,
                     repair_outcome=struct_repair,
+                    language_id=self._language_profile.language_id,
                 )
             return ElementResult.make_escalation(
                 element.name, file_path, TierClassification.SIMPLE, reasoning,
@@ -3823,6 +4107,7 @@ class MicroPrimeEngine:
                         semantic_reason or "semantic_verification_failed",
                         raw_output=outcome.raw_output,
                         repair_outcome=sem_repair,
+                        language_id=self._language_profile.language_id,
                     )
                 return ElementResult.make_escalation(
                     element.name, file_path, TierClassification.SIMPLE, reasoning,
@@ -3955,7 +4240,7 @@ class MicroPrimeEngine:
             else self._OLLAMA_STOP_SEQUENCES
         )
         gen_kwargs: dict[str, Any] = dict(
-            system_prompt=system_prompt or _ELEMENT_BODY_SYSTEM_PROMPT,
+            system_prompt=system_prompt or self._get_system_prompt("body"),
             temperature=self._config.temperature,
             stop=effective_stops,
         )
@@ -4080,6 +4365,7 @@ class MicroPrimeEngine:
 def _has_high_within_file_coupling(
     file_spec: ForwardFileSpec,
     skeleton: str,
+    language_profile: Any = None,
 ) -> bool:
     """Detect within-file element coupling that makes element-by-element risky.
 
@@ -4089,9 +4375,16 @@ def _has_high_within_file_coupling(
     3. Classes with methods sharing instance state (``self.x`` writes in one
        method, reads in another)
 
+    For non-Python languages, returns True to bias toward file-whole generation
+    which is correct for Go (package-level compilation) (MP-P3).
+
     This is a skeleton-based heuristic (no call graph required) so it works
     even when the manifest doesn't carry call graph data.
     """
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    if lang_id != "python":
+        return True  # Non-Python: prefer file-whole generation
+
     try:
         tree = ast.parse(skeleton)
     except SyntaxError:
