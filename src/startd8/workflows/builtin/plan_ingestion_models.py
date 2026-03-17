@@ -97,8 +97,9 @@ class PlanIngestionConfig:
     review_providers: Optional[List[str]] = None
 
     # LLM settings
-    llm_read_timeout_seconds: float = 300.0
-    llm_max_attempts: int = 1
+    llm_read_timeout_seconds: float = 600.0
+    llm_max_attempts: int = 3
+    enable_prompt_caching: bool = True
     enable_heuristic_parse_fallback: bool = True
 
     # Scope & files

@@ -3986,7 +3986,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     warn_cost_usd,
                     max_cost_usd,
                     enable_apply=_refine_apply,
-                    enable_prompt_caching=config.get("enable_prompt_caching"),
+                    enable_prompt_caching=config.get("enable_prompt_caching", cfg.enable_prompt_caching),
                     enable_triage=_refine_triage,
                     providers=review_providers,
                     custom_review_profile=_refine_profile,
