@@ -23,7 +23,7 @@ import subprocess
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from startd8.logging_config import get_logger
 
@@ -161,7 +161,9 @@ def _extract_body_from_generated(
     # If { is on the declaration line, body starts on next line
     body_lines = []
     first_line = lines[open_line]
-    brace_pos = first_line.index("{")
+    brace_pos = first_line.find("{")
+    if brace_pos == -1:
+        return None  # Should not happen after _find_body_range, but guard anyway
     after_brace = first_line[brace_pos + 1 :].strip()
     if after_brace and after_brace != "}":
         body_lines.append(after_brace)
@@ -303,6 +305,7 @@ def splice_and_format(
             elif proc.stderr:
                 result.warnings.append(f"gofmt: {proc.stderr.strip()}")
         except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.warning("gofmt failed: %s", exc, exc_info=True)
             result.warnings.append(f"gofmt failed: {exc}")
 
     return result

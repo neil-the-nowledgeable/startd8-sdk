@@ -21,10 +21,13 @@ Limitations:
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,7 +41,7 @@ class GoElement:
     parent_type: Optional[str] = None  # receiver type for methods
     receiver_name: Optional[str] = None  # receiver variable name
     is_pointer_receiver: bool = False
-    bases: list = field(default_factory=list)  # embedded types for structs
+    bases: list[str] = field(default_factory=list)  # embedded types for structs
     is_exported: bool = False  # capitalized name
     is_interface: bool = False  # type X interface vs type X struct
     line_number: int = 0
@@ -246,8 +249,11 @@ def parse_go_source(source: str) -> List[GoElement]:
             doc_comment=_get_doc_comment(source, m.start()),
         ))
 
-    # --- Type aliases ---
+    # --- Type aliases and simple type definitions ---
+    # Track positions to avoid duplicates between alias (=) and def patterns.
+    type_alias_positions: set = set()
     for m in _TYPE_ALIAS_RE.finditer(source):
+        type_alias_positions.add(m.start())
         elements.append(GoElement(
             kind="type_alias",
             name=m.group("name"),
@@ -257,8 +263,9 @@ def parse_go_source(source: str) -> List[GoElement]:
             doc_comment=_get_doc_comment(source, m.start()),
         ))
 
-    # --- Simple type definitions (type Name OtherType) ---
     for m in _TYPE_DEF_RE.finditer(source):
+        if m.start() in type_alias_positions:
+            continue
         elements.append(GoElement(
             kind="type_alias",
             name=m.group("name"),
@@ -296,6 +303,12 @@ def parse_go_source(source: str) -> List[GoElement]:
                 if paren_depth == 0:
                     block_end = i
                     break
+        if block_end == block_start:
+            logger.debug(
+                "Unterminated %s block at line %d",
+                m.group("kind"), _line_number(source, m.start()),
+            )
+            continue
         block = source[block_start:block_end]
         for entry in _BLOCK_ENTRY_RE.finditer(block):
             elements.append(GoElement(
@@ -344,5 +357,6 @@ def parse_go_file(path: Path) -> List[GoElement]:
     try:
         source = path.read_text(encoding="utf-8")
         return parse_go_source(source)
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.debug("Failed to parse Go file %s: %s", path, exc)
         return []

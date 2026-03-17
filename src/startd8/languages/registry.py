@@ -40,8 +40,10 @@ class LanguageRegistry:
 
     _instance: ClassVar[Optional[LanguageRegistry]] = None
     _lock: ClassVar[threading.Lock] = threading.Lock()
-    _profiles: Dict[str, LanguageProfile] = {}
-    _discovered: bool = False
+    # Shared singleton state — intentionally class-level (not instance).
+    # All access goes through the singleton; clear() resets for testing.
+    _profiles: ClassVar[Dict[str, LanguageProfile]] = {}
+    _discovered: ClassVar[bool] = False
 
     def __new__(cls) -> LanguageRegistry:
         if cls._instance is None:

@@ -166,26 +166,22 @@ class GoLanguageProfile:
         if not go_files:
             return warnings
 
-        # Prefer goimports (fixes imports + formats), fall back to gofmt (formats only)
+        # Resolve tool once — prefer goimports (fixes imports + formats),
+        # fall back to gofmt (formats only).
         goimports_bin = shutil.which("goimports")
         gofmt_bin = shutil.which("gofmt")
+        tool_bin = goimports_bin or gofmt_bin
+        tool_name = "goimports" if goimports_bin else ("gofmt" if gofmt_bin else None)
+
+        if tool_bin is None:
+            warnings.append(
+                "neither goimports nor gofmt found on PATH — "
+                "install with: go install golang.org/x/tools/cmd/goimports@latest"
+            )
+            return warnings
 
         for go_file in go_files:
-            tool_name = None
-            cmd: List[str] = []
-
-            if goimports_bin:
-                tool_name = "goimports"
-                cmd = [goimports_bin, "-w", str(go_file)]
-            elif gofmt_bin:
-                tool_name = "gofmt"
-                cmd = [gofmt_bin, "-w", str(go_file)]
-            else:
-                warnings.append(
-                    f"{go_file.name}: neither goimports nor gofmt found on PATH"
-                )
-                continue
-
+            cmd = [tool_bin, "-w", str(go_file)]
             try:
                 result = subprocess.run(
                     cmd,
@@ -210,8 +206,9 @@ class GoLanguageProfile:
                 )
             except OSError as exc:
                 warnings.append(f"{go_file.name}: {tool_name} failed: {exc}")
+                logger.warning("%s failed for %s: %s", tool_name, go_file.name, exc, exc_info=True)
 
-        if not goimports_bin and gofmt_bin:
+        if tool_name == "gofmt":
             warnings.append(
                 "goimports not found — install with: go install golang.org/x/tools/cmd/goimports@latest"
             )

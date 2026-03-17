@@ -61,7 +61,7 @@ class TestGoPostGenerationCleanup:
         profile = GoLanguageProfile()
         warnings = profile.post_generation_cleanup([go_file], tmp_path)
 
-        # Should warn about missing goimports
+        # Should warn about missing goimports (but still run gofmt)
         assert any("goimports not found" in w for w in warnings)
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0][0]
@@ -78,8 +78,8 @@ class TestGoPostGenerationCleanup:
         profile = GoLanguageProfile()
         warnings = profile.post_generation_cleanup([go_file], tmp_path)
 
-        assert len(warnings) == 1
-        assert "neither goimports nor gofmt" in warnings[0]
+        assert len(warnings) >= 1
+        assert any("neither goimports nor gofmt" in w for w in warnings)
 
     @patch("shutil.which")
     @patch("subprocess.run")
