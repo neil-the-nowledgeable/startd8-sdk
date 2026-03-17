@@ -117,6 +117,19 @@ class JavaLanguageProfile:
             f"import static {module_stem}",
         ]
 
+    @property
+    def stub_patterns(self) -> List[str]:
+        return [
+            r'throw\s+new\s+UnsupportedOperationException\s*\(',
+            r'throw\s+new\s+RuntimeException\s*\(\s*"not implemented',
+            r'throw\s+new\s+RuntimeException\s*\(\s*"TODO',
+            r'^\s*//\s*TODO\b',
+        ]
+
+    @property
+    def function_start_pattern(self) -> Optional[str]:
+        return r'^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)?(?P<name>[A-Za-z_]\w*)\s*\('
+
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _JAVA_STDLIB_PREFIXES
 

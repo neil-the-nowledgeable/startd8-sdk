@@ -128,6 +128,18 @@ class NodeLanguageProfile:
             f'from "{module_stem}',
         ]
 
+    @property
+    def stub_patterns(self) -> List[str]:
+        return [
+            r'throw\s+new\s+Error\s*\(\s*["\']not implemented',
+            r'throw\s+new\s+Error\s*\(\s*["\']TODO',
+            r'^\s*//\s*TODO\b',
+        ]
+
+    @property
+    def function_start_pattern(self) -> Optional[str]:
+        return r'^\s*(?:export\s+)?(?:async\s+)?function\s+(?P<name>[A-Za-z_$]\w*)\s*\('
+
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _NODE_STDLIB_PREFIXES
 

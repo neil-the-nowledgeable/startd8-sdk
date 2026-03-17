@@ -134,6 +134,20 @@ class GoLanguageProfile:
             f'/{module_stem}"',
         ]
 
+    @property
+    def stub_patterns(self) -> List[str]:
+        return [
+            r'panic\s*\(\s*"not implemented"',
+            r'panic\s*\(\s*"TODO',
+            r'panic\s*\(\s*"unimplemented',
+            r'^\s*//\s*TODO\b',
+            r'^\s*return\s+(nil,\s*)?fmt\.Errorf\s*\(\s*"not implemented',
+        ]
+
+    @property
+    def function_start_pattern(self) -> Optional[str]:
+        return r'^func\s+(?:\(.*?\)\s+)?(?P<name>[A-Za-z_]\w*)\s*\('
+
     def get_stdlib_prefixes(self) -> Sequence[str]:
         return _GO_STDLIB_PREFIXES
 

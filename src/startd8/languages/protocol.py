@@ -179,6 +179,28 @@ class LanguageProfile(Protocol):
         """
         ...
 
+    @property
+    def stub_patterns(self) -> List[str]:
+        """Regex patterns that indicate a function body is a stub.
+
+        Each pattern is matched against individual lines within a function body.
+        If any line matches, the function is considered a stub.
+
+        Example for Go: ``[r'panic\\("not implemented"\\)', r'^\\s*//\\s*TODO']``
+        """
+        ...
+
+    @property
+    def function_start_pattern(self) -> Optional[str]:
+        """Regex pattern that matches the start of a function/method declaration.
+
+        Used for text-based stub detection in non-Python languages.
+        The pattern should capture a ``name`` group.
+
+        Example for Go: ``r'^func\\s+(?:\\(.*?\\)\\s+)?(?P<name>\\w+)\\s*\\('``
+        """
+        ...
+
     def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
         """Run language-specific cleanup on generated files before validation.
 

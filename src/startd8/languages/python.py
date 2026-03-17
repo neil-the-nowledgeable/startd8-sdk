@@ -103,6 +103,16 @@ class PythonLanguageProfile:
             f"from {module_stem}",
         ]
 
+    @property
+    def stub_patterns(self) -> List[str]:
+        # Python uses AST-based stub detection, not text patterns
+        return []
+
+    @property
+    def function_start_pattern(self) -> Optional[str]:
+        # Python uses AST-based stub detection
+        return None
+
     def get_stdlib_prefixes(self) -> Sequence[str]:
         # Canonical Python stdlib set (from checkpoint.py)
         return _PYTHON_STDLIB_PREFIXES

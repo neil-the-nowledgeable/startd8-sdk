@@ -562,51 +562,42 @@ class IntegrationCheckpoint:
         NotImplementedError`` without the sentinel) indicate the LLM
         didn't implement the function.  Files exceeding
         *max_stub_ratio* of LLM stubs are reported as warnings.
+
+        For non-Python languages, uses text-based detection via
+        language profile's ``stub_patterns`` and ``function_start_pattern``.
         """
         warnings: List[str] = []
         info: List[str] = []
         checked = 0
 
         for file_path in files:
-            if file_path.suffix != ".py":
-                continue
-            checked += 1
-            cached = (_ast_cache or {}).get(file_path)
-            if cached:
-                source, tree = cached
-            else:
-                try:
-                    source = file_path.read_text(encoding="utf-8")
-                    tree = ast.parse(source, filename=str(file_path))
-                except (SyntaxError, OSError):
-                    continue
-
-            is_pipeline_stub = STUB_SENTINEL in source
-
-            total_funcs = 0
-            llm_stub_funcs = 0
-            for node in ast.walk(tree):
-                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    continue
-                total_funcs += 1
-                if self._is_stub_body(node.body):
-                    if is_pipeline_stub:
-                        # Pipeline stub — expected, just info
-                        pass
-                    else:
-                        llm_stub_funcs += 1
-
-            if is_pipeline_stub:
-                info.append(
-                    f"{file_path.name}: pipeline stub (STUB_SENTINEL present)"
+            # Python: AST-based detection
+            if file_path.suffix == ".py":
+                checked += 1
+                result = self._check_stubs_python(
+                    file_path, max_stub_ratio, _ast_cache,
                 )
-            elif total_funcs > 0:
-                ratio = llm_stub_funcs / total_funcs
-                if ratio > max_stub_ratio:
-                    warnings.append(
-                        f"{file_path.name}: {llm_stub_funcs}/{total_funcs} functions "
-                        f"are LLM stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
+                if result == "pipeline_stub":
+                    info.append(
+                        f"{file_path.name}: pipeline stub (STUB_SENTINEL present)"
                     )
+                elif result:
+                    warnings.append(result)
+                continue
+
+            # Non-Python: text-based detection via language profile
+            if self._language_profile is not None:
+                if file_path.suffix in set(self._language_profile.source_extensions):
+                    checked += 1
+                    result = self._check_stubs_text(
+                        file_path, max_stub_ratio,
+                    )
+                    if result == "pipeline_stub":
+                        info.append(
+                            f"{file_path.name}: pipeline stub (STUB_SENTINEL present)"
+                        )
+                    elif result:
+                        warnings.append(result)
 
         details: Dict[str, Any] = {"files_checked": checked}
         if info:
@@ -627,6 +618,130 @@ class IntegrationCheckpoint:
             message=f"{checked} file(s) checked, no excessive stubs",
             details=details,
         )
+
+    def _check_stubs_python(
+        self,
+        file_path: Path,
+        max_stub_ratio: float,
+        _ast_cache: Optional[AstCache],
+    ) -> Optional[str]:
+        """Python AST-based stub detection. Returns warning string or 'pipeline_stub' or None."""
+        cached = (_ast_cache or {}).get(file_path)
+        if cached:
+            source, tree = cached
+        else:
+            try:
+                source = file_path.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(file_path))
+            except (SyntaxError, OSError):
+                return None
+
+        is_pipeline_stub = STUB_SENTINEL in source
+        total_funcs = 0
+        llm_stub_funcs = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            total_funcs += 1
+            if self._is_stub_body(node.body):
+                if not is_pipeline_stub:
+                    llm_stub_funcs += 1
+
+        if is_pipeline_stub:
+            return "pipeline_stub"
+        if total_funcs > 0:
+            ratio = llm_stub_funcs / total_funcs
+            if ratio > max_stub_ratio:
+                return (
+                    f"{file_path.name}: {llm_stub_funcs}/{total_funcs} functions "
+                    f"are LLM stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
+                )
+        return None
+
+    def _check_stubs_text(
+        self,
+        file_path: Path,
+        max_stub_ratio: float,
+    ) -> Optional[str]:
+        """Text-based stub detection for non-Python languages.
+
+        Uses language profile's stub_patterns and function_start_pattern
+        to detect stub bodies without AST parsing.
+
+        Returns warning string or 'pipeline_stub' or None.
+        """
+        import re
+
+        profile = self._language_profile
+        if profile is None:
+            return None
+
+        func_pattern_str = profile.function_start_pattern
+        stub_pattern_strs = profile.stub_patterns
+        if not func_pattern_str or not stub_pattern_strs:
+            return None
+
+        try:
+            source = file_path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+        if STUB_SENTINEL in source:
+            return "pipeline_stub"
+
+        func_re = re.compile(func_pattern_str, re.MULTILINE)
+        stub_res = [re.compile(p, re.MULTILINE) for p in stub_pattern_strs]
+
+        # Also detect empty brace bodies: func X() {}
+        empty_body_re = re.compile(
+            func_pattern_str + r"[^{]*\{\s*\}", re.MULTILINE,
+        )
+
+        lines = source.splitlines()
+        total_funcs = 0
+        llm_stub_funcs = 0
+
+        i = 0
+        while i < len(lines):
+            m = func_re.match(lines[i])
+            if not m:
+                i += 1
+                continue
+
+            total_funcs += 1
+            # Check for empty body on the same line: func X() {}
+            if empty_body_re.match(lines[i]):
+                llm_stub_funcs += 1
+                i += 1
+                continue
+
+            # Scan the function body (next ~20 lines or until closing brace)
+            body_lines = []
+            depth = 0
+            for j in range(i, min(i + 50, len(lines))):
+                depth += lines[j].count("{") - lines[j].count("}")
+                if j > i:
+                    body_lines.append(lines[j])
+                if depth <= 0 and j > i:
+                    break
+
+            # Check if any body line matches a stub pattern
+            body_text = "\n".join(body_lines)
+            for stub_re in stub_res:
+                if stub_re.search(body_text):
+                    llm_stub_funcs += 1
+                    break
+
+            i += 1
+
+        if total_funcs > 0:
+            ratio = llm_stub_funcs / total_funcs
+            if ratio > max_stub_ratio:
+                return (
+                    f"{file_path.name}: {llm_stub_funcs}/{total_funcs} functions "
+                    f"are LLM stubs ({ratio:.0%} > {max_stub_ratio:.0%} threshold)"
+                )
+        return None
 
     @staticmethod
     def _is_stub_body(body: List[Any]) -> bool:
