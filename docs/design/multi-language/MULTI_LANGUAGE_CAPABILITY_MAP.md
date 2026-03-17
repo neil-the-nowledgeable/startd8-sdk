@@ -623,18 +623,127 @@ dependencies {
 
 Based on impact to online-boutique Go success (4/7 services):
 
-| Priority | Work Item | Capabilities | Effort |
-|----------|-----------|-------------|--------|
-| **P0** | Wire checkpoint + merge strategy to use language_profile | C-2, C-4, C-5 | Small |
-| **P1** | Wire blast radius + framework preamble to use profile | C-10, C-11 | Small |
-| **P2** | Go import post-processing (`goimports`) | C-6 | Small |
-| **P3** | go.mod template generation | C-12 | Small |
-| **P4** | Go structure extraction (regex heuristic) | C-1 | Medium |
-| **P5** | Go stub detection patterns | C-7 | Small |
-| **P6** | Go body splicing (brace matching) | C-9 | Medium |
-| **P7** | Node.js package.json generation | C-12 | Small |
-| **P8** | Node.js import resolution (dual CJS/ESM) | C-3 | Medium |
-| **P9** | Java build.gradle generation | C-12 | Medium |
-| **P10** | Java structure extraction (`javalang`) | C-1 | Medium |
+| Priority | Work Item | Capabilities | Effort | Status |
+|----------|-----------|-------------|--------|--------|
+| **P0** | Wire checkpoint + merge strategy to use language_profile | C-2, C-4, C-5 | Small | Done (a3c210f) |
+| **P1** | Wire blast radius + framework preamble to use profile | C-10, C-11 | Small | Done (a3c210f) |
+| **P2** | Go import post-processing (`goimports`) | C-6 | Small | Done (f7ddccd) |
+| **P3** | Dependency file generation (go.mod, package.json, build.gradle) | C-12 | Small | Done (f7ddccd) |
+| **P4** | Go structure extraction (regex heuristic) | C-1 | Medium | |
+| **P5** | Go stub detection patterns | C-7 | Small | |
+| **P6** | Go body splicing (brace matching) | C-9 | Medium | |
+| **P7** | Node.js import resolution (dual CJS/ESM) | C-3 | Medium | |
+| **P8** | Java structure extraction (`javalang`) | C-1 | Medium | |
 
-**P0-P3 unblock Go for online-boutique.** P4-P6 improve quality. P7-P10 are for Node/Java.
+**P0-P3 unblock Go for online-boutique.** P4-P6 improve quality. P7-P8 are for Node/Java.
+
+---
+
+## 6. Language Implementation Difficulty Ranking
+
+Ranked by complexity of adding support beyond the existing Python baseline, easiest first.
+
+### 6.1 Go — Easiest
+
+**Why:** Go's compiler and standard tooling do the heavy lifting — we can *skip* entire capabilities that require complex Python implementation.
+
+**Compiler safety net (strong):** Unused imports, unused variables, duplicate definitions, and type errors are all compile-time errors. The Go compiler enforces what Python needs AST analysis for (C-6 import audit, C-8 duplicate detection).
+
+**Authoritative post-gen tools:** `goimports` replaces our entire import audit pipeline with one subprocess call — it adds missing imports, removes unused ones, and formats the import block. `gofmt` is the authoritative formatter with zero configuration. No equivalent exists for Python, Node.js, or Java.
+
+**Regular syntax:** Go declarations are uniform (`func X()`, `type X struct`, `type X interface`, `func (x *X) Method()`). No classes, no decorators, no multiple module systems. Regex-based structure extraction (P4) is reliable because the syntax has minimal variation.
+
+**What can be skipped entirely:**
+- C-6 Import audit — `goimports` handles it
+- C-8 Duplicate detection — compiler error
+
+**Main remaining work:**
+- P4: Regex structure extraction for ForwardManifest population
+- P5: Stub detection (`panic("not implemented")`, empty bodies)
+- P6: Text-based body splicing with brace matching + `gofmt`
+
+**Key differences from Python:**
+- No classes — structs with method receivers instead
+- Package-level functions, not module-level
+- Multiple files share a package namespace (no `__init__.py`)
+- Exported vs unexported by capitalization, not `__all__`
+- `go vet` validates per-package, not per-file
+
+---
+
+### 6.2 Java — Medium
+
+**Why:** A Python-native AST parser exists (`javalang` on PyPI), and the compiler catches most correctness issues, but the build system is the most complex of the three.
+
+**Compiler safety net (strong):** Same as Go — duplicate definitions and missing imports are compile errors. Unused imports are warnings. Type checking is enforced at compile time.
+
+**Python-native AST parsing:** The `javalang` PyPI package parses Java source directly from Python, extracting classes, methods, fields, interfaces, annotations, and inheritance. No subprocess needed. This is the closest equivalent to Python's `ast` module across all three languages.
+
+**Regular syntax:** Java's import syntax (`import pkg.Class;`) is highly regular — regex extraction is reliable. Method signatures carry type information. Annotations map to Python decorators.
+
+**Main costs:**
+- `build.gradle` generation is the most complex dependency file (Groovy DSL with plugins, source sets, dependency configurations, repository declarations)
+- Package hierarchy ↔ directory structure mapping (`com.example.service` → `com/example/service/`) adds a layer Python doesn't have
+- One public class per file (filename must match class name) — affects code extraction and file routing
+
+**What can be skipped:**
+- C-8 Duplicate detection — compiler error
+- C-5 Lint — no built-in linter (checkstyle/spotbugs optional)
+
+**No authoritative import fixer:** Unlike Go's `goimports`, Java has no single CLI tool that fixes imports. `google-java-format` organizes but doesn't add missing imports. IDE-level tools (IntelliJ, Eclipse) do this but aren't CLI-callable.
+
+---
+
+### 6.3 Node.js — Hardest
+
+**Why:** Every design decision in JavaScript maximizes flexibility at the cost of static analyzability. No compiler, no authoritative tools, dual module systems, and irregular syntax compound into the highest implementation cost.
+
+**No compiler safety net:** Missing imports, duplicate definitions, type errors, and unused variables are all runtime failures. Nothing catches them before execution. We must build detection for everything that Go and Java compilers provide for free.
+
+**Dual module system:** CommonJS (`require()`) and ESM (`import from`) coexist. Every import-related capability requires handling both patterns:
+```javascript
+// CommonJS
+const grpc = require('@grpc/grpc-js');
+const { Server } = require('@grpc/grpc-js');
+
+// ESM
+import grpc from '@grpc/grpc-js';
+import { Server } from '@grpc/grpc-js';
+```
+This doubles the regex patterns, test cases, and edge cases for C-3 (import resolution), C-6 (import audit), and C-10 (blast radius).
+
+**Irregular syntax:** JavaScript's syntactic flexibility makes regex-based structure extraction unreliable:
+- Arrow functions: `const handler = (req, res) => { ... }` vs `function handler(req, res) { ... }`
+- Object methods: `module.exports = { handler() { ... } }`
+- Destructured exports: `const { a, b } = require('pkg')`
+- Default exports: `export default class X { ... }` vs `module.exports = X`
+- Template literals containing braces break naive brace matching
+- No static types — signatures carry only parameter names, not types
+
+**No authoritative import fixer:** No `goimports` equivalent. `prettier` formats code but doesn't fix imports. `eslint --fix` can remove unused imports with plugins, but can't add missing ones. There is no single tool that authoritatively resolves import correctness.
+
+**Weakest validation:** `node --check` is syntax-only. It verifies the file parses, but doesn't check whether `require('nonexistent')` will fail. Dynamic `require()` calls can't be statically analyzed at all.
+
+**What can be skipped:** Nothing. We need to build everything ourselves.
+
+**Main costs:**
+- C-6 Import audit: Must build regex-based detection for both CJS and ESM, with no authoritative fixer as fallback
+- C-1 Structure extraction: Limited accuracy due to arrow functions, object patterns, destructuring
+- C-9 Body splicing: Fragile due to template literals, arrow functions in object methods
+- C-8 Duplicate detection: Must implement (JS allows silent redefinition in non-strict mode)
+
+---
+
+### Summary Table
+
+| Dimension | Go | Java | Node.js |
+|-----------|-----|------|---------|
+| **Compiler catches errors** | Yes (strong) | Yes (strong) | No |
+| **Authoritative import fixer** | `goimports` | None | None |
+| **Python-native AST parser** | No (regex) | `javalang` (PyPI) | No (regex, low accuracy) |
+| **Syntax regularity** | High | High | Low |
+| **Module system complexity** | Single | Single | Dual (CJS + ESM) |
+| **Capabilities we can skip** | C-6, C-8 | C-8, C-5 | None |
+| **Remaining effort after P0-P3** | Small (P4-P6) | Medium (P8 + build.gradle complexity) | Large (all capabilities) |
+
+**The counterintuitive takeaway:** Go's strictness makes it the *easiest* to support. Node's flexibility makes it the *hardest*. The compiler does work for you in Go and Java that we'd have to build ourselves for Node.
