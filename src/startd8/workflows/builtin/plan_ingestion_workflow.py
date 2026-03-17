@@ -109,6 +109,7 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "refinement_suggestions",
     "module_path",
     "service_name",
+    "mode",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -308,6 +309,9 @@ and extract structured information.
 Return a JSON object wrapped in ```json code fences with exactly these keys:
 {{
   "title": "string — plan title",
+  "intent": "Why this plan exists — the problem being solved (1-2 sentences)",
+  "scope_boundary": "What is explicitly OUT of scope or excluded from this plan",
+  "approach": "High-level technical strategy (1-2 sentences)",
   "goals": ["string — each high-level goal"],
   "features": [
     {{
@@ -318,6 +322,7 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "dependencies": ["F-002"],
       "estimated_loc": 100,
       "labels": ["label"],
+      "mode": "create or edit",
       "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
       "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
       "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
@@ -344,6 +349,7 @@ Rules for target_files:
    (e.g. `tests/__init__.py`, `tests/unit/__init__.py`). Python 3 + pytest
    do not require them — they are wasted implementation slots.
 
+mode: "create" for new files (plan says implement, add, new, create) or "edit" for modifying existing files (plan says update, modify, change, refactor, fix). Default to "create" if unclear.
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
 api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
@@ -771,6 +777,48 @@ def _infer_service_metadata(
         metadata["go_version"] = go_version
 
     return metadata
+
+
+def _break_dependency_cycles(
+    dep_graph: Dict[str, List[str]],
+) -> List[tuple]:
+    """Detect and break cycles in a dependency graph (OI-002).
+
+    Uses iterative DFS to find back-edges, then removes them.
+    Mutates *dep_graph* in place. Returns list of broken (src, dst) edges.
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: Dict[str, int] = {n: WHITE for n in dep_graph}
+    # Ensure all targets are in color map
+    for deps in dep_graph.values():
+        for d in deps:
+            if d not in color:
+                color[d] = WHITE
+    broken: List[tuple] = []
+
+    for start in list(dep_graph):
+        if color[start] != WHITE:
+            continue
+        stack = [(start, 0)]
+        while stack:
+            node, idx = stack.pop()
+            children = dep_graph.get(node, [])
+            if idx == 0:
+                color[node] = GRAY
+            if idx < len(children):
+                stack.append((node, idx + 1))
+                child = children[idx]
+                if color.get(child, WHITE) == GRAY:
+                    # Back-edge → cycle. Remove it.
+                    broken.append((node, child))
+                    children.remove(child)
+                    # Re-adjust index since list shrunk
+                    stack[-1] = (node, idx)
+                elif color.get(child, WHITE) == WHITE:
+                    stack.append((child, 0))
+            else:
+                color[node] = BLACK
+    return broken
 
 
 def _derive_target_files_from_artifact_ids(
@@ -1261,6 +1309,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 protocol=f.get("protocol", ""),
                 runtime_dependencies=f.get("runtime_dependencies", []),
                 negative_scope=f.get("negative_scope", []),
+                mode=f.get("mode", "create"),
                 module_path=f.get("module_path", ""),
                 service_name=f.get("service_name", ""),
             ))
@@ -1272,6 +1321,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             dependency_graph=data.get("dependency_graph", {}),
             mentioned_files=data.get("mentioned_files", []),
             raw_text=plan_text,
+            intent=data.get("intent", ""),
+            scope_boundary=data.get("scope_boundary", ""),
+            approach=data.get("approach", ""),
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
@@ -3656,6 +3708,24 @@ class PlanIngestionWorkflow(WorkflowBase):
                         "total_features": len(parsed_plan.features),
                     })
 
+            # OI-002: Acyclicity gate — detect and break cycles in the
+            # dependency graph BEFORE ASSESS to avoid wasting LLM calls on
+            # plans that would deadlock the FeatureQueue at runtime.
+            _dep_graph = parsed_plan.dependency_graph
+            if _dep_graph:
+                _broken = _break_dependency_cycles(_dep_graph)
+                if _broken:
+                    logger.warning(
+                        "Dependency graph had %d cycle(s) — broke back-edges: %s",
+                        len(_broken),
+                        ", ".join(f"{a}→{b}" for a, b in _broken),
+                    )
+                    if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
+                        _parse_span.add_event("acyclicity_gate.cycles_broken", {
+                            "cycles_broken": len(_broken),
+                            "edges": [f"{a}->{b}" for a, b in _broken],
+                        })
+
             state.parsed_plan = parsed_plan
             logger.debug(
                 "Parsed plan: '%s' with %d features (heuristic=%s, enriched=%d)",
@@ -4020,6 +4090,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                             str(_rs_response),
                         )
 
+            # OI-004: Capture design snapshot from last REFINE round
+            design_snapshot = None
+            if refine_steps and not skip_arc_review:
+                # Last review round's output is the most refined design context
+                _last_refine = refine_steps[-1]
+                if _last_refine.output:
+                    design_snapshot = str(_last_refine.output)[:8000]
+                    logger.info(
+                        "Design snapshot captured from REFINE round %d (%d chars)",
+                        len(refine_steps), len(design_snapshot),
+                    )
+
             cost_err = _check_cost("refine")
 
             if _HAS_OTEL and not isinstance(_refine_span, _NoOpSpan):
@@ -4041,6 +4123,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.EMIT
 
             _emit_project_root = Path(cfg.project_root) if cfg.project_root else None
+
+            # OI-004: Attach design snapshot to parsed_plan so to_seed_dict() includes it
+            if design_snapshot and parsed_plan is not None:
+                parsed_plan.design_snapshot = design_snapshot
 
             emit_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,

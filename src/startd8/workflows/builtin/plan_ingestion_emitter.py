@@ -899,6 +899,15 @@ class PhaseEmitter:
             forward_manifest=forward_manifest_dict,
         )
 
+        # OI-005: Build capability coverage map (requirement_id → task_ids)
+        _coverage_map: Dict[str, List[str]] = {}
+        for _task in tasks:
+            _ctx = (_task.get("config") or {}).get("context") or {}
+            for _req_id in _ctx.get("requirement_ids", []):
+                _coverage_map.setdefault(_req_id, []).append(_task.get("task_id", ""))
+        if _coverage_map:
+            seed.capability_coverage_map = _coverage_map
+
         seed_dict = seed.to_dict()
 
         # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)

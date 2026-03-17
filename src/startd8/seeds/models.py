@@ -57,6 +57,7 @@ class ContextSeed:
     forward_manifest: Optional[Dict[str, Any]] = None
     route: Optional[str] = None
     generation_profile: Optional[str] = None  # REQ-GPC-400
+    capability_coverage_map: Optional[Dict[str, List[str]]] = None  # OI-005
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -95,6 +96,8 @@ class ContextSeed:
             d["route"] = self.route
         if self.generation_profile is not None:
             d["generation_profile"] = self.generation_profile
+        if self.capability_coverage_map is not None:
+            d["capability_coverage_map"] = self.capability_coverage_map
         return d
 
 
@@ -130,6 +133,7 @@ class SeedTask:
     protocol: str = ""
     runtime_dependencies: list[str] = field(default_factory=list)
     negative_scope: list[str] = field(default_factory=list)
+    mode: str = "create"  # OI-001: "create" or "edit"
     module_path: str = ""  # Go: module path for go.mod
     service_name: str = ""  # Go: service directory name
     wave_index: Optional[int] = None
@@ -262,6 +266,7 @@ class SeedTask:
             protocol=context.get("protocol", ""),
             runtime_dependencies=context.get("runtime_dependencies", []),
             negative_scope=context.get("negative_scope", []),
+            mode=context.get("mode", "create"),
             module_path=context.get("module_path", ""),
             service_name=context.get("service_name", ""),
             wave_index=wave_index,

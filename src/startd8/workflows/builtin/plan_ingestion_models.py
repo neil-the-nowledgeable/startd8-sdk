@@ -234,6 +234,8 @@ class ParsedFeature:
     runtime_dependencies: List[str] = field(default_factory=list)
     # IMP-4: Things this feature explicitly does NOT do
     negative_scope: List[str] = field(default_factory=list)
+    # OI-001: create vs edit mode (declared upfront, not discovered at gen time)
+    mode: str = ""  # "create" or "edit"
     # Go-specific: module path for go.mod (e.g. "github.com/org/repo/src/svc")
     module_path: str = ""
     # Go-specific: service name for package declaration and directory naming
@@ -255,6 +257,12 @@ class ParsedPlan:
     dependency_graph: Dict[str, List[str]] = field(default_factory=dict)
     mentioned_files: List[str] = field(default_factory=list)
     raw_text: str = ""
+    # OI-003: Proposal capture (intent, scope boundary, approach)
+    intent: str = ""
+    scope_boundary: str = ""
+    approach: str = ""
+    # OI-004: Design snapshot from REFINE (set post-parse, before EMIT)
+    design_snapshot: str = ""
 
     # LLM metrics from parsing
     input_tokens: int = 0
@@ -289,6 +297,10 @@ class ParsedPlan:
             ],
             "dependency_graph": dict(self.dependency_graph),
             "mentioned_files": list(self.mentioned_files),
+            "intent": self.intent,
+            "scope_boundary": self.scope_boundary,
+            "approach": self.approach,
+            "design_snapshot": self.design_snapshot,
         }
 
 

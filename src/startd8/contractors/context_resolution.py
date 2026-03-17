@@ -877,11 +877,21 @@ class StandaloneContextStrategy(ContextStrategy):
                 if _val and _go_field not in gen_context:
                     gen_context[_go_field] = _val
 
-        # Per-task module_path/service_name override (from QP-1 threading)
-        for _task_field in ("module_path", "service_name"):
+        # Per-task module_path/service_name/mode override (from QP-1 threading)
+        for _task_field in ("module_path", "service_name", "mode"):
             _task_val = metadata.get(_task_field)
             if _task_val:
                 gen_context[_task_field] = _task_val  # task-level overrides service-level
+
+        # OI-003/OI-004: Lift scope_boundary and design_snapshot from seed plan metadata
+        _plan_meta = seed_data.get("plan") or {}
+        if isinstance(_plan_meta, dict):
+            _scope_b = _plan_meta.get("scope_boundary")
+            if _scope_b and isinstance(_scope_b, str) and _scope_b.strip():
+                gen_context["scope_boundary"] = _scope_b.strip()
+            _design_snap = _plan_meta.get("design_snapshot")
+            if _design_snap and isinstance(_design_snap, str) and _design_snap.strip():
+                gen_context["design_document"] = _design_snap.strip()
 
         # Gap 9: per-task metadata from seed enrichment
         self._inject_enrichment(gen_context, metadata)

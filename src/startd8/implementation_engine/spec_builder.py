@@ -970,9 +970,11 @@ def build_spec_prompt(
     if plan_section:
         prioritized.append((2, "plan", plan_section))
 
-    # P3: Reference implementation, scope boundary (drop first)
+    # P1: Scope boundary — tells LLM what NOT to implement (OI-003d)
     if scope_boundary:
-        prioritized.append((3, "scope", f"## Scope Boundary\n{scope_boundary}"))
+        prioritized.append((1, "scope", f"## Scope Boundary (do NOT implement)\n{scope_boundary}"))
+
+    # P3: Reference implementation (drop first)
     if reference_implementation:
         prioritized.append((3, "reference", (
             "## Reference Implementation (predecessor — adapt, do not copy verbatim)\n"
