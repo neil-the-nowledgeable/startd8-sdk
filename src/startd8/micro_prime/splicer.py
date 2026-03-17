@@ -154,21 +154,31 @@ def splice_body_into_skeleton(
     body: str,
     element: ForwardElementSpec,
     skeleton: str,
+    *,
+    file_path: str = "",
 ) -> SpliceResult:
     """Replace the NotImplementedError stub for an element with its body.
 
     Finds the element's ``raise NotImplementedError`` stub in the skeleton,
     replaces it with the provided body code, and validates the result.
 
+    Supports Go files via the ``go_splicer`` module when the skeleton is
+    detected as Go source (``package`` keyword) or *file_path* ends in ``.go``.
+
     Args:
         body: The generated function body (may be a full def or body-only).
         element: The manifest element being spliced.
         skeleton: The full skeleton file content.
+        file_path: Optional file path hint for language detection.
 
     Returns:
         SpliceResult with the updated skeleton (or None on failure)
         and any detected violations.
     """
+    # Language dispatch: Go files use brace-based splicing instead of AST
+    if _is_go_source(skeleton, file_path):
+        return _splice_go_dispatch(body, element, skeleton)
+
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         code = _splice_constant(body, element, skeleton)
         return SpliceResult(code=code)
@@ -181,6 +191,57 @@ def splice_body_into_skeleton(
 
     code = _splice_function_body(body, element, skeleton)
     return SpliceResult(code=code)
+
+
+def _is_go_source(skeleton: str, file_path: str) -> bool:
+    """Detect if skeleton content is Go source."""
+    if file_path.endswith(".go"):
+        return True
+    # Go files start with 'package <name>'
+    for line in skeleton.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        return stripped.startswith("package ")
+    return False
+
+
+def _splice_go_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -> SpliceResult:
+    """Dispatch to Go splicer for Go skeleton files."""
+    try:
+        from startd8.languages.go_splicer import splice_go_bodies
+    except ImportError:
+        logger.warning("go_splicer not available — cannot splice Go skeleton")
+        return SpliceResult(code=None, violations=[
+            SpliceViolation(
+                violation_type="language_unsupported",
+                message="Go splicer not available",
+                element_name=element.name,
+            )
+        ])
+
+    func_name = element.name
+    receiver_types = {}
+    if element.parent_class:
+        receiver_types[func_name] = element.parent_class
+
+    # Wrap the body as a full function for the Go splicer's extraction
+    # The Go splicer expects generated code with the full function signature
+    go_result = splice_go_bodies(
+        skeleton,
+        {func_name: body},
+        receiver_types=receiver_types,
+    )
+
+    violations = []
+    for w in go_result.warnings:
+        violations.append(SpliceViolation(
+            violation_type="go_splice_warning",
+            message=w,
+            element_name=func_name,
+        ))
+
+    return SpliceResult(code=go_result.code, violations=violations)
 
 
 def _splice_function_body(

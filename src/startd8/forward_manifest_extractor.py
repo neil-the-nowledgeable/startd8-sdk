@@ -1367,7 +1367,10 @@ class SourceReconciler:
     encoding: str = "utf-8"
 
     def reconcile(self, features: list[ParsedFeature]) -> list[InterfaceContract]:
-        """Scan project Python files and return source-derived contracts."""
+        """Scan project source files and return source-derived contracts.
+
+        Supports Python (AST-based) and Go (regex-based) files.
+        """
         if not self.project_root.is_dir():
             logger.warning("project_root does not exist: %s", self.project_root)
             return []
@@ -1381,20 +1384,38 @@ class SourceReconciler:
             for target_file in feature.target_files:
                 feature_by_file.setdefault(target_file, []).append(feature)
 
-        # Scan Python files
-        for py_file in self.project_root.glob("**/*.py"):
-            try:
-                relpath = py_file.relative_to(self.project_root).as_posix()
-            except ValueError:
-                continue
+        # Determine which file extensions to scan
+        scan_globs = ["**/*.py"]
+        try:
+            from startd8.languages import LanguageRegistry
+            LanguageRegistry.discover()
+            for lang_id in LanguageRegistry.list_languages():
+                profile = LanguageRegistry.get(lang_id)
+                if profile and lang_id != "python":
+                    for ext in profile.source_extensions:
+                        scan_globs.append(f"**/*{ext}")
+        except (ImportError, AttributeError):
+            pass
 
-            # Lookup features for this file
-            matching_features = feature_by_file.get(relpath, [])
-            feature_ids = [f.feature_id for f in matching_features]
+        # Scan source files
+        for glob_pattern in scan_globs:
+            for src_file in self.project_root.glob(glob_pattern):
+                try:
+                    relpath = src_file.relative_to(self.project_root).as_posix()
+                except ValueError:
+                    continue
 
-            contracts.extend(self._reconcile_file(
-                py_file, relpath, feature_ids, seen_ids
-            ))
+                matching_features = feature_by_file.get(relpath, [])
+                feature_ids = [f.feature_id for f in matching_features]
+
+                if src_file.suffix == ".py":
+                    contracts.extend(self._reconcile_file(
+                        src_file, relpath, feature_ids, seen_ids
+                    ))
+                elif src_file.suffix == ".go":
+                    contracts.extend(self._reconcile_go_file(
+                        src_file, relpath, feature_ids, seen_ids
+                    ))
 
         return contracts
 
@@ -1473,6 +1494,73 @@ class SourceReconciler:
             source_ref="source-ast",
             source_label="existing source",
         ))
+
+        return contracts
+
+    def _reconcile_go_file(
+        self,
+        go_file: Path,
+        relpath: str,
+        feature_ids: list[str],
+        seen_ids: set[str],
+    ) -> list[InterfaceContract]:
+        """Reconcile a single Go file using regex-based parsing."""
+        try:
+            from startd8.languages.go_parser import parse_go_source
+        except ImportError:
+            return []
+
+        try:
+            source = go_file.read_text(encoding=self.encoding)
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Cannot read %s: %s", go_file, exc)
+            return []
+
+        elements = parse_go_source(source)
+        contracts: list[InterfaceContract] = []
+
+        for elem in elements:
+            if elem.kind == "function" or elem.kind == "method":
+                abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
+                name_key = elem.name
+                if elem.parent_type:
+                    name_key = f"{elem.parent_type}.{elem.name}"
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{name_key}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    desc = f"{'Method' if elem.kind == 'method' else 'Function'} {name_key} in {relpath}"
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.FUNCTION_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=desc,
+                        function_name=name_key,
+                        source_reference="source-go-parser",
+                        applicable_task_ids=feature_ids,
+                    ))
+            elif elem.kind == "class":
+                abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{elem.name}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    kind_label = "interface" if elem.is_interface else "struct"
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.CLASS_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=f"Go {kind_label} {elem.name} in {relpath}",
+                        class_name=elem.name,
+                        source_reference="source-go-parser",
+                        applicable_task_ids=feature_ids,
+                    ))
 
         return contracts
 

@@ -3348,6 +3348,71 @@ class PrimeContractorWorkflow:
                 lang_id, type(new_strategy).__name__,
             )
 
+        # Generate dependency file if the language profile provides one
+        # and it doesn't already exist on disk (e.g. go.mod, package.json)
+        self._ensure_dependency_file(profile)
+
+    def _ensure_dependency_file(self, profile: Any) -> None:
+        """Generate a language-specific dependency file if one doesn't exist.
+
+        Writes go.mod, package.json, or build.gradle based on the language
+        profile and seed service metadata. Skips if the file already exists
+        or if the profile doesn't support generation.
+        """
+        if not hasattr(profile, "generate_dependency_file"):
+            return
+
+        build_patterns = profile.build_file_patterns
+        if not build_patterns:
+            return
+
+        # Check if any build file already exists
+        for pattern in build_patterns:
+            if (self.project_root / pattern).exists():
+                return
+
+        # Extract metadata for generation
+        service_name = ""
+        module_path = ""
+        dependencies: list = []
+        if self.seed_service_metadata:
+            service_name = self.seed_service_metadata.get("service_name", "")
+            module_path = self.seed_service_metadata.get("module_path", "")
+            dependencies = self.seed_service_metadata.get("runtime_dependencies", [])
+
+        if not service_name and not module_path:
+            return  # Not enough metadata to generate
+
+        try:
+            content = profile.generate_dependency_file(
+                project_root=self.project_root,
+                service_name=service_name,
+                module_path=module_path,
+                dependencies=dependencies,
+                metadata=self.seed_service_metadata,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Dependency file generation failed for %s: %s",
+                profile.language_id, exc,
+            )
+            return
+
+        if not content:
+            return
+
+        # Write to the first build file pattern (e.g. go.mod, package.json)
+        target = self.project_root / build_patterns[0]
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            logger.info(
+                "Generated %s for language=%s (%d bytes)",
+                target.name, profile.language_id, len(content),
+            )
+        except OSError as exc:
+            logger.warning("Failed to write %s: %s", target, exc)
+
     def _thread_supplemental_context(
         self, feature: FeatureSpec, gen_context: Dict[str, Any],
     ) -> None:
