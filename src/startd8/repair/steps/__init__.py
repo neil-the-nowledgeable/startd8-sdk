@@ -14,6 +14,7 @@ from .fence_strip import FenceStripStep
 from .future_import_reorder import FutureImportReorderStep
 from .import_completion import ErrorDrivenImportCompletion, ManifestImportCompletion
 from .indent_normalize import IndentNormalizeStep
+from .semantic_discarded_return_fix import SemanticDiscardedReturnFixStep
 from .semantic_import_fix import SemanticImportFixStep
 from .semantic_method_fix import SemanticMethodFixStep
 from .semantic_method_resolution_fix import SemanticMethodResolutionFixStep
@@ -33,6 +34,7 @@ __all__ = [
     "ErrorDrivenImportCompletion",
     "IndentNormalizeStep",
     "ManifestImportCompletion",
+    "SemanticDiscardedReturnFixStep",
     "SemanticImportFixStep",
     "SemanticMethodFixStep",
     "SemanticMethodResolutionFixStep",

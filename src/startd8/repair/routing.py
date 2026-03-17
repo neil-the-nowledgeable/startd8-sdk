@@ -21,6 +21,7 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    SemanticDiscardedReturnFixStep,
     SemanticImportFixStep,
     SemanticMethodFixStep,
     SemanticMethodResolutionFixStep,
@@ -86,7 +87,8 @@ _STEP_FACTORIES: dict[str, type] = {
     # Semantic repair steps (REQ-SR-100–400)
     "semantic_import_fix": SemanticImportFixStep,
     "semantic_method_resolution_fix": SemanticMethodResolutionFixStep,
-    # Remaining semantic steps registered when implementations ship (Commits 4–5).
+    "semantic_discarded_return_fix": SemanticDiscardedReturnFixStep,
+    # Remaining: semantic_duplicate_main_fix (Commit 5).
     "ast_validate": AstValidateStep,
 }
 
