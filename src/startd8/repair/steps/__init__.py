@@ -14,6 +14,7 @@ from .fence_strip import FenceStripStep
 from .future_import_reorder import FutureImportReorderStep
 from .import_completion import ErrorDrivenImportCompletion, ManifestImportCompletion
 from .indent_normalize import IndentNormalizeStep
+from .semantic_import_fix import SemanticImportFixStep
 from .semantic_method_fix import SemanticMethodFixStep
 from .unused_variable_removal import UnusedVariableRemovalStep
 from .variable_initialization import VariableInitializationStep
@@ -31,6 +32,7 @@ __all__ = [
     "ErrorDrivenImportCompletion",
     "IndentNormalizeStep",
     "ManifestImportCompletion",
+    "SemanticImportFixStep",
     "SemanticMethodFixStep",
     "UnusedVariableRemovalStep",
     "VariableInitializationStep",

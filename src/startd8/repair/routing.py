@@ -21,6 +21,7 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    SemanticImportFixStep,
     SemanticMethodFixStep,
     UnusedVariableRemovalStep,
     VariableInitializationStep,
@@ -81,9 +82,9 @@ _STEP_FACTORIES: dict[str, type] = {
     "dunder_all_fix": DunderAllFixStep,
     "semantic_method_fix": SemanticMethodFixStep,
     "unused_variable_removal": UnusedVariableRemovalStep,
-    # Semantic repair steps (REQ-SR-100–400) — factories added in Commits 2–5.
-    # Steps are in _CANONICAL_ORDER for position but factories are registered
-    # when each step implementation ships.
+    # Semantic repair steps (REQ-SR-100–400)
+    "semantic_import_fix": SemanticImportFixStep,
+    # Remaining semantic steps registered when implementations ship (Commits 3–5).
     "ast_validate": AstValidateStep,
 }
 
