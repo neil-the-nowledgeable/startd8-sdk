@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -107,6 +108,40 @@ def _safe_int(val: Any, default: int) -> int:
 
 _HEURISTIC_FALLBACK_DESCRIPTION = "Fallback parsed feature from plan text"
 
+# File extensions that indicate a real file path (not a Python dotted expression)
+_FILE_EXTENSIONS = frozenset({
+    ".py", ".js", ".ts", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".h",
+    ".html", ".css", ".yaml", ".yml", ".json", ".toml", ".md", ".txt",
+    ".sh", ".in", ".cfg", ".ini", ".xml", ".proto", ".sql",
+})
+
+
+def _extract_file_paths_from_block(block: str) -> List[str]:
+    """Extract file paths from a plan feature block, filtering Python expressions.
+
+    The backtick regex ``[A-Za-z0-9_./-]+\\.[A-Za-z0-9_]+`` matches both
+    file paths (``src/emailservice/logger.py``) and Python dotted expressions
+    (``logging.INFO``, ``typing.Any``).  This function filters using:
+
+    1. Must end with a known file extension, OR contain ``/`` (directory separator)
+    2. Reject entries matching common Python patterns (stdlib modules, uppercase
+       constants, ``self.`` / ``request.`` / ``record.`` prefixes)
+    """
+    raw = re.findall(r"`([A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)`", block)
+    result: List[str] = []
+    for candidate in raw:
+        # Check for known file extension
+        _, ext = os.path.splitext(candidate)
+        if ext.lower() in _FILE_EXTENSIONS:
+            result.append(candidate)
+            continue
+        # Has directory separator → likely a file path
+        if "/" in candidate:
+            result.append(candidate)
+            continue
+        # Everything else is likely a Python dotted expression — skip
+    return result
+
 
 def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
     """Deterministic fallback parser when LLM parse fails."""
@@ -147,12 +182,7 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
         end_pos = start_pos + (next_match.start() if next_match else len(plan_text[start_pos:]))
         block = plan_text[start_pos:end_pos]
         files = sorted(
-            set(
-                re.findall(
-                    r"`([A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)`",
-                    block,
-                )
-            )
+            set(_extract_file_paths_from_block(block))
         )
         deps = sorted(set(re.findall(r"\b([A-Z]{1,4}-\d+)\b", block)))
         deps = [d.upper() for d in deps if d.upper() != fid and d.upper() in known_fids]

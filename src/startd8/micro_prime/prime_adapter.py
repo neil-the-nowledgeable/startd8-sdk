@@ -668,6 +668,22 @@ class MicroPrimeCodeGenerator:
             file_spec = manifest.file_specs.get(file_path)
             skeleton = skeletons.get(file_path, "")
 
+            # Fallback: try basename match when exact path fails.
+            # Covers cases where target_files has a bare filename (e.g., "logger.py")
+            # but the manifest key is the full relative path ("src/emailservice/logger.py").
+            if file_spec is None:
+                basename = Path(file_path).name
+                for mkey, mspec in manifest.file_specs.items():
+                    if Path(mkey).name == basename:
+                        file_spec = mspec
+                        logger.info(
+                            "Micro Prime: resolved %s → %s via basename fallback",
+                            file_path, mkey,
+                        )
+                        if not skeleton:
+                            skeleton = skeletons.get(mkey, "")
+                        break
+
             if file_spec is None or not skeleton:
                 # FR-DFA-001: File-level bypass — MP can't process this file
                 # type at all (no manifest entry or no skeleton).  Distinct
