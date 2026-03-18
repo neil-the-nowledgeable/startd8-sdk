@@ -100,9 +100,12 @@ def _detect_python_stub_in_non_python(
         )
 
     # Case 3: generic — __future__ import present in a non-Python file
+    from pathlib import PurePosixPath
+    _ext = PurePosixPath(target_path).suffix
+    _label = _ext.lstrip(".") if _ext else PurePosixPath(target_path).name
     return (
         f"Python 'from __future__ import' detected in non-Python target "
-        f"({target_path.rsplit('.', 1)[-1]} file)"
+        f"({_label} file)"
     )
 
 

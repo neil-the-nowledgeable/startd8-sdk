@@ -31,17 +31,20 @@ class TestCSharpBypass:
         from startd8.micro_prime.engine import _is_non_python_file
         assert _is_non_python_file("cartservice.sln") is True
 
-    def test_cs_is_non_python_in_drafter(self):
-        from startd8.implementation_engine.drafter import _is_non_python_file
-        assert _is_non_python_file("src/CartService.cs") is True
+    def test_cs_is_source_in_drafter(self):
+        """REQ-PE-501: .cs is source code, NOT config — gets quality gates."""
+        from startd8.implementation_engine.drafter import _is_config_or_data_file
+        assert _is_config_or_data_file("src/CartService.cs") is False
 
-    def test_csproj_is_non_python_in_drafter(self):
-        from startd8.implementation_engine.drafter import _is_non_python_file
-        assert _is_non_python_file("cartservice.csproj") is True
+    def test_csproj_is_config_in_drafter(self):
+        """.csproj is a build/project file — skips code heuristics."""
+        from startd8.implementation_engine.drafter import _is_config_or_data_file
+        assert _is_config_or_data_file("cartservice.csproj") is True
 
-    def test_sln_is_non_python_in_drafter(self):
-        from startd8.implementation_engine.drafter import _is_non_python_file
-        assert _is_non_python_file("cartservice.sln") is True
+    def test_sln_is_config_in_drafter(self):
+        """.sln is a solution file — skips code heuristics."""
+        from startd8.implementation_engine.drafter import _is_config_or_data_file
+        assert _is_config_or_data_file("cartservice.sln") is True
 
     def test_feature_flag_default_off(self):
         from startd8.micro_prime.engine import CSHARP_MICROPRIME_ENABLED

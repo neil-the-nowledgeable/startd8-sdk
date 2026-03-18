@@ -453,6 +453,20 @@ def validate_disk_compliance(
     return result
 
 
+# Extensions where `import`/`from` are native keywords (not Python-specific).
+_IMPORT_KEYWORD_EXTENSIONS = frozenset({
+    ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+    ".java",
+})
+
+# Extensions where `def`/`class` are native keywords (not Python-specific).
+_DEF_CLASS_KEYWORD_EXTENSIONS = frozenset({
+    ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+    ".cs",
+})
+
+
 def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     """Detect language mismatch — e.g. Python content in non-Python files (REQ-MLT-400).
 
@@ -486,27 +500,12 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
 
         # Strong signal: first code line is a Python import statement
         if first_code_line.startswith("import ") or first_code_line.startswith("from "):
-            # Exclude languages that share `import`/`from` keywords with Python:
-            #   Go — `import "pkg"` / go.mod
-            #   JS/TS — ESM `import X from 'pkg'`
-            #   Groovy/Gradle — `import groovy.transform.CompileStatic`
-            #   Java — `import java.util.List` (.java handled by _validate_java_file)
-            _IMPORT_EXCLUDE = (
-                ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-                ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
-                ".java",
-            )
-            if ext not in _IMPORT_EXCLUDE and name != "go.mod":
+            if ext not in _IMPORT_KEYWORD_EXTENSIONS and name != "go.mod":
                 label = ext.lstrip(".") if ext else name
                 return f"python_content_in_{label}"
 
         # Moderate signal: `def ` or `class ` as first code construct
-        # Exclude languages where `def` and `class` are native keywords
-        _DEF_CLASS_EXCLUDE = (
-            ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
-            ".cs",  # C# uses `class` natively
-        )
-        if ext not in _DEF_CLASS_EXCLUDE:
+        if ext not in _DEF_CLASS_KEYWORD_EXTENSIONS:
             if first_code_line.startswith("def ") or first_code_line.startswith("class "):
                 label = ext.lstrip(".") if ext else name
                 return f"python_content_in_{label}"
