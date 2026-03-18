@@ -277,6 +277,7 @@ class IntegrationCheckpoint:
         """
         errors = []
         checked = 0
+        skipped = 0
         source_exts = self._get_source_extensions()
 
         for file_path in files:
@@ -317,6 +318,7 @@ class IntegrationCheckpoint:
                     file_path.name,
                     cmd[0],
                 )
+                skipped += 1
                 continue
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: syntax check timed out")
@@ -333,11 +335,14 @@ class IntegrationCheckpoint:
                 errors=errors,
             )
 
+        msg = f"{checked} file(s) have valid syntax"
+        if skipped:
+            msg += f" ({skipped} skipped — tool not found)"
         return CheckpointResult(
             status=CheckpointStatus.PASSED,
             name="Syntax Check",
-            message=f"{checked} file(s) have valid syntax",
-            details={"files_checked": checked},
+            message=msg,
+            details={"files_checked": checked, "files_skipped": skipped},
         )
 
     def check_imports(self, files: List[Path]) -> CheckpointResult:

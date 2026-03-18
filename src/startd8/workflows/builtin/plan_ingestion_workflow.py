@@ -110,6 +110,8 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "module_system",
     "node_version",
     "spring_boot",
+    "csharp_namespace",
+    "target_framework",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -316,6 +318,10 @@ _PARSE_LANG_SCHEMA: Dict[str, str] = {
         '      "module_system": "optional Node.js module system: commonjs or esm",\n'
         '      "node_version": "optional Node.js version e.g. 20"'
     ),
+    "csharp": (
+        '      "csharp_namespace": "optional C# root namespace e.g. MyApp.Services",\n'
+        '      "target_framework": "optional .NET target framework e.g. net8.0"'
+    ),
 }
 
 _PARSE_LANG_GUIDANCE: Dict[str, str] = {
@@ -331,6 +337,10 @@ _PARSE_LANG_GUIDANCE: Dict[str, str] = {
     "nodejs": (
         'module_system: (Node.js projects only) "esm" if the project uses ES modules (import/export, "type": "module" in package.json, .mjs files), "commonjs" if the project uses require()/module.exports (.cjs files, no "type" field). Default "commonjs" if unclear. Omit or empty for non-Node.js projects.\n'
         'node_version: (Node.js projects only) Node.js version from the plan. Default "20". Omit or empty for non-Node.js projects.'
+    ),
+    "csharp": (
+        'csharp_namespace: (C# projects only) the root namespace, inferred from target file paths (e.g. "src/MyApp/Services/OrderService.cs" → "MyApp.Services"). Omit or empty for non-C# projects.\n'
+        'target_framework: (C# projects only) .NET target framework from the plan. Default "net8.0". Omit or empty for non-C# projects.'
     ),
 }
 
@@ -356,6 +366,13 @@ _PARSE_DEP_ORDERING_GUIDANCE: Dict[str, str] = {
         "Place package.json before source files. "
         "Place configuration/environment files before application code."
     ),
+    "csharp": (
+        "\n## C# dependency ordering\n"
+        "Order features so that shared libraries and interfaces come before "
+        "implementations. Place .csproj before source files. "
+        "Place model/entity classes before services that use them. "
+        "Place configuration (appsettings.json) before application code."
+    ),
 }
 
 
@@ -373,12 +390,16 @@ _LANG_DETECT_SIGNALS: Dict[str, List[str]] = {
     "nodejs": [
         "package.json", ".js", ".ts", ".tsx", "Node.js", "Node ",
         "Express", "express", "React", "Next.js", "npm ", "yarn ",
-        "require(", "import from", "module.exports",
+        "require(", "module.exports",
     ],
     "python": [
         "requirements.txt", "pyproject.toml", ".py", "Python ",
         "pip ", "pytest", "django", "flask", "FastAPI",
-        "def ", "import ", "from ",
+    ],
+    "csharp": [
+        ".csproj", ".sln", ".cs", "C# ", "C#", ".NET", "dotnet",
+        "ASP.NET", "Entity Framework", "namespace ", "using ",
+        "NuGet", "Blazor", "MAUI",
     ],
 }
 
@@ -387,13 +408,22 @@ def _detect_plan_language(plan_text: str) -> Optional[str]:
     """Detect the primary language of a plan from text signals (REQ-PLI-202).
 
     Scans plan text for language-specific keywords, file extensions, and
-    framework mentions. Returns the dominant language or None if ambiguous.
+    framework mentions. Returns the dominant language or ``None`` when
+    ambiguous (winner must score at least 2x the runner-up).
+
+    Python is the default language, so it is never returned as a detection
+    result — the hint is only useful for non-Python languages.
     """
+    if not plan_text:
+        return None
+
     scores: Dict[str, int] = {}
     plan_lower = plan_text.lower()
     for lang, signals in _LANG_DETECT_SIGNALS.items():
         count = 0
         for signal in signals:
+            if not signal:
+                continue  # R1: guard against empty signals
             # Case-sensitive signals (e.g. "Go ", "Java ") check original text
             if signal[0].isupper():
                 count += plan_text.count(signal)
@@ -424,16 +454,14 @@ def _build_parse_prompt(plan_text: str) -> str:
     """
     detected_lang = _detect_plan_language(plan_text)
 
-    # Build language-specific schema fields — always include all languages
+    # Build language-specific schema fields and guidance — always include all
+    _LANG_ORDER = ("go", "java", "nodejs", "csharp")
     lang_schema_lines = []
-    for lang in ("go", "java", "nodejs"):
-        lang_schema_lines.append(_PARSE_LANG_SCHEMA[lang])
-    lang_schema_block = ",\n".join(lang_schema_lines)
-
-    # Build language-specific guidance — always include all languages
     lang_guidance_lines = []
-    for lang in ("go", "java", "nodejs"):
+    for lang in _LANG_ORDER:
+        lang_schema_lines.append(_PARSE_LANG_SCHEMA[lang])
         lang_guidance_lines.append(_PARSE_LANG_GUIDANCE[lang])
+    lang_schema_block = ",\n".join(lang_schema_lines)
     lang_guidance_block = "\n".join(lang_guidance_lines)
 
     # Language hint for the LLM (REQ-PLI-202)
@@ -837,16 +865,16 @@ def _infer_service_metadata(
 ) -> Dict[str, Any]:
     """Infer service-level metadata from features and onboarding data.
 
-    Extracts transport protocol, runtime dependencies, and API surface
-    from ParsedFeature fields. Falls back to onboarding metadata if present.
-
-    For Go projects, also extracts module_path, service_name, and
-    go_version from feature-level fields and api_signatures.
+    Extracts language-agnostic metadata (transport protocol, runtime
+    dependencies, API surface, primary language) from ParsedFeature fields,
+    then delegates to the resolved LanguageProfile's
+    ``derive_service_metadata()`` for language-specific fields (e.g.
+    Go module_path, Java java_package, Node.js module_system).
 
     Returns:
         Dict with keys: transport_protocol, runtime_dependencies,
-        primary_language, api_signatures, negative_scope, and
-        (Go only) module_path, service_name, go_version.
+        primary_language, api_signatures, negative_scope, plus
+        language-specific keys from the profile.
     """
     _ext_map = LanguageRegistry.get_extension_map()
 
@@ -855,8 +883,6 @@ def _infer_service_metadata(
     all_api_sigs: list[str] = []
     all_negative_scope: list[str] = []
     languages: list[str] = []
-    module_paths: list[str] = []
-    service_names: list[str] = []
 
     for f in features:
         if f.protocol:
@@ -864,10 +890,6 @@ def _infer_service_metadata(
         all_runtime_deps.extend(f.runtime_dependencies)
         all_api_sigs.extend(f.api_signatures)
         all_negative_scope.extend(f.negative_scope)
-        if f.module_path:
-            module_paths.append(f.module_path)
-        if f.service_name:
-            service_names.append(f.service_name)
         # Infer language from target files
         for tf in f.target_files:
             # Extract extension after last dot, or empty string if no dot
@@ -902,142 +924,23 @@ def _infer_service_metadata(
     if negative_scope:
         metadata["negative_scope"] = negative_scope
 
-    # Go-specific: derive module_path, service_name, go_version
+    # Language-specific metadata derivation — delegate to LanguageProfile
+    # (REQ-LA-201). Each profile's derive_service_metadata() handles
+    # Go module_path/service_name, Java java_package/build_system,
+    # Node.js module_system, etc.
     primary_lang = metadata.get("primary_language", "")
-    is_go = primary_lang == "go" or (
-        isinstance(primary_lang, list) and "go" in primary_lang
+    lang_id = primary_lang if isinstance(primary_lang, str) else (
+        primary_lang[0] if primary_lang else ""
     )
-    if is_go:
-        # module_path: prefer explicit from features, else scan api_signatures
-        # for "module ..." declarations (common in go.mod task signatures)
-        if module_paths:
-            metadata["module_path"] = module_paths[0]
-        else:
-            for sig in api_sigs:
-                if sig.startswith("module "):
-                    metadata["module_path"] = sig.split(None, 1)[1].strip()
-                    break
-
-        # service_name: prefer explicit from features, else derive from
-        # the common parent directory of Go target files
-        if service_names:
-            metadata["service_name"] = service_names[0]
-        else:
-            go_dirs: set[str] = set()
-            for f in features:
-                for tf in f.target_files:
-                    if tf.endswith(".go"):
-                        parts = tf.replace("\\", "/").rsplit("/", 1)
-                        if len(parts) == 2:
-                            go_dirs.add(parts[0].rsplit("/", 1)[-1])
-            if len(go_dirs) == 1:
-                metadata["service_name"] = go_dirs.pop()
-
-        # go_version: extract from onboarding or default
-        go_version = "1.23"
-        if onboarding:
-            go_version = str(onboarding.get("go_version", go_version))
-        metadata["go_version"] = go_version
-
-    # Java-specific: derive java_package, build_system, java_version
-    is_java = primary_lang == "java" or (
-        isinstance(primary_lang, list) and "java" in primary_lang
-    )
-    if is_java:
-        # java_package: derive from target file paths
-        java_packages: list[str] = []
-        for f in features:
-            jp = getattr(f, "java_package", "")
-            if jp:
-                java_packages.append(jp)
-        if java_packages:
-            metadata["java_package"] = java_packages[0]
-        else:
-            # Infer from target_files: src/main/java/com/example/svc/X.java → com.example.svc
-            for f in features:
-                for tf in f.target_files:
-                    if tf.endswith(".java"):
-                        from startd8.utils.java_file_assembler import _derive_package
-                        pkg = _derive_package(tf)
-                        if pkg:
-                            metadata["java_package"] = pkg
-                            break
-                if "java_package" in metadata:
-                    break
-
-        # build_system: prefer explicit, else detect from target files
-        build_systems: list[str] = []
-        for f in features:
-            bs = getattr(f, "build_system", "")
-            if bs:
-                build_systems.append(bs)
-        if build_systems:
-            metadata["build_system"] = build_systems[0]
-        else:
-            all_files = [tf for f in features for tf in f.target_files]
-            if any("build.gradle" in tf or "build.gradle.kts" in tf for tf in all_files):
-                metadata["build_system"] = "gradle"
-            elif any("pom.xml" in tf for tf in all_files):
-                metadata["build_system"] = "maven"
-            else:
-                metadata["build_system"] = "gradle"  # default
-
-        # java_version
-        java_version = "21"
-        for f in features:
-            jv = getattr(f, "java_version", "")
-            if jv:
-                java_version = jv
-                break
-        if onboarding:
-            java_version = str(onboarding.get("java_version", java_version))
-        metadata["java_version"] = java_version
-
-        # spring_boot detection
-        for f in features:
-            if getattr(f, "spring_boot", False):
-                metadata["spring_boot"] = True
-                break
-        if "spring_boot" not in metadata:
-            all_deps = " ".join(all_runtime_deps + all_api_sigs).lower()
-            if "spring" in all_deps or "springboot" in all_deps:
-                metadata["spring_boot"] = True
-
-    # Node.js-specific: derive module_system, node_version
-    is_nodejs = primary_lang == "nodejs" or primary_lang == "javascript" or (
-        isinstance(primary_lang, list)
-        and ("nodejs" in primary_lang or "javascript" in primary_lang)
-    )
-    if is_nodejs:
-        # module_system: prefer explicit, else infer from file extensions
-        module_systems: list[str] = []
-        for f in features:
-            ms = getattr(f, "module_system", "")
-            if ms:
-                module_systems.append(ms)
-        if module_systems:
-            metadata["module_system"] = module_systems[0]
-        else:
-            all_files = [tf for f in features for tf in f.target_files]
-            has_mjs = any(tf.endswith(".mjs") for tf in all_files)
-            has_cjs = any(tf.endswith(".cjs") for tf in all_files)
-            if has_mjs and not has_cjs:
-                metadata["module_system"] = "esm"
-            elif has_cjs and not has_mjs:
-                metadata["module_system"] = "commonjs"
-            else:
-                metadata["module_system"] = "esm"  # default
-
-        # node_version
-        node_version = "20"
-        for f in features:
-            nv = getattr(f, "node_version", "")
-            if nv:
-                node_version = nv
-                break
-        if onboarding:
-            node_version = str(onboarding.get("node_version", node_version))
-        metadata["node_version"] = node_version
+    profile = LanguageRegistry.get(lang_id)
+    if profile is not None and hasattr(profile, "derive_service_metadata"):
+        lang_metadata = profile.derive_service_metadata(
+            features,
+            onboarding=onboarding,
+            api_signatures=api_sigs,
+            runtime_dependencies=runtime_deps,
+        )
+        metadata.update(lang_metadata)
 
     return metadata
 
@@ -1581,6 +1484,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 spring_boot=bool(f.get("spring_boot", False)),
                 module_system=f.get("module_system", ""),
                 node_version=f.get("node_version", ""),
+                csharp_namespace=f.get("csharp_namespace", ""),
+                target_framework=f.get("target_framework", ""),
             ))
 
         parsed = ParsedPlan(

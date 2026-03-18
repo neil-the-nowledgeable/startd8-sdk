@@ -52,8 +52,8 @@ def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Lang
             without inference.
 
     Returns:
-        Language identifier: "python", "dockerfile", "go", "proto",
-        or "unknown".
+        Language identifier: "python", "go", "java", "nodejs",
+        "csharp", "dockerfile", "proto", "text", or "unknown".
     """
     if explicit_lang is not None:
         return explicit_lang
