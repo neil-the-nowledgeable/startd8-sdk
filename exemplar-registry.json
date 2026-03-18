@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "",
+  "last_updated": "2026-03-18T21:08:15.517132+00:00",
+  "exemplars": [
+    {
+      "id": "ex-1421318a--feat-1",
+      "fingerprint": "python:source:none:source_module",
+      "maturity": 1,
+      "source_run_id": "",
+      "source_feature_id": "feat-1",
+      "spec_artifact_path": "",
+      "code_artifact_path": "/abs/path/service.py",
+      "draft_artifact_path": "",
+      "seed_task_digest": "",
+      "scores": {
+        "requirement_score": 1.0,
+        "disk_quality_score": null,
+        "assembly_delta": 0.0,
+        "semantic_error_count": 0,
+        "cost_usd": 0.001
+      },
+      "agent_specs": {},
+      "code_summary": "",
+      "timestamp": "2026-03-18T21:08:15.517125+00:00"
+    }
+  ]
+}
