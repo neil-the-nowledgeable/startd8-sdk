@@ -19,6 +19,55 @@ _CSHARP_STDLIB_PREFIXES: tuple[str, ...] = (
     "Windows",
 )
 
+
+# ~80 C# keywords + contextual keywords (C# 12/13)
+_CSHARP_RESERVED: frozenset[str] = frozenset({
+    # Standard keywords
+    "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
+    "char", "checked", "class", "const", "continue", "decimal", "default",
+    "delegate", "do", "double", "else", "enum", "event", "explicit",
+    "extern", "false", "finally", "fixed", "float", "for", "foreach",
+    "goto", "if", "implicit", "in", "int", "interface", "internal", "is",
+    "lock", "long", "namespace", "new", "null", "object", "operator",
+    "out", "override", "params", "private", "protected", "public",
+    "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
+    "stackalloc", "static", "string", "struct", "switch", "this", "throw",
+    "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe",
+    "ushort", "using", "virtual", "void", "volatile", "while",
+    # Contextual keywords (C# 7+/8+/9+/10+/11+/12+)
+    "add", "and", "alias", "ascending", "args", "async", "await", "by",
+    "descending", "dynamic", "equals", "file", "from", "get", "global",
+    "group", "init", "into", "join", "let", "managed", "nameof", "nint",
+    "not", "notnull", "nuint", "on", "or", "orderby", "partial",
+    "record", "remove", "required", "scoped", "select", "set",
+    "unmanaged", "value", "var", "when", "where", "with", "yield",
+})
+
+
+def _csharp_literal_coerce(value: object) -> str:
+    """Coerce a Python literal to C# syntax.
+
+    ``True`` -> ``true``, ``None`` -> ``null``, ``[1, 2]`` -> ``new[] { 1, 2 }``.
+    """
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        items = ", ".join(_csharp_literal_coerce(v) for v in value)
+        return f"new[] {{ {items} }}"
+    if isinstance(value, dict):
+        entries = ", ".join(
+            f"{{ {_csharp_literal_coerce(k)}, {_csharp_literal_coerce(v)} }}"
+            for k, v in value.items()
+        )
+        return f"new Dictionary<string, object> {{ {entries} }}"
+    if isinstance(value, str):
+        return f'"{value}"'
+    return str(value)
+
 # Python fingerprints -- if these appear in a .cs file, it's cross-language contamination.
 _PYTHON_FINGERPRINTS = (
     "def ", "import os", "from __future__", "print(", "self.",
@@ -237,9 +286,42 @@ class CSharpLanguageProfile:
     def post_generation_cleanup(
         self, files: List[Path], project_root: Path,
     ) -> List[str]:
-        # C# has no standalone import fixer callable from CLI.
-        # dotnet format requires a project context.
-        return []
+        """Run ``dotnet format`` on generated C# files if available (REQ-CS-300).
+
+        Best-effort style formatting only — does not fix missing ``using``
+        directives.  Requires a ``.csproj`` in *project_root* or a parent
+        directory.  Skips silently when ``dotnet`` is not on PATH.
+        """
+        import shutil
+        import subprocess
+
+        dotnet = shutil.which("dotnet")
+        if not dotnet:
+            return []
+
+        # dotnet format needs a project file — check if one exists
+        csproj_files = list(project_root.glob("**/*.csproj"))
+        if not csproj_files:
+            return []
+
+        formatted: List[str] = []
+        cs_files = [f for f in files if f.suffix.lower() == ".cs"]
+        if not cs_files:
+            return []
+
+        # dotnet format operates on the whole project, not individual files.
+        # Run once and report all .cs files as formatted.
+        try:
+            subprocess.run(
+                [dotnet, "format", str(csproj_files[0]), "--no-restore"],
+                capture_output=True,
+                timeout=60,
+                cwd=str(project_root),
+            )
+            formatted = [str(f) for f in cs_files]
+        except (subprocess.TimeoutExpired, OSError):
+            pass  # best-effort — skip on failure
+        return formatted
 
     def validate_syntax(self, code: str) -> tuple[bool, str]:
         """C# syntax validation via tree-sitter (with text-based fallback).
