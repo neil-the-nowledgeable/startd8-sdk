@@ -37,7 +37,8 @@ class TestGetDrafterSystemPrompt:
 
     def test_create_mode_has_coding_standards(self):
         prompt, mode = get_drafter_system_prompt()
-        assert "E741" in prompt or "ruff" in prompt.lower()
+        # REQ-PE-500: language-neutral defaults (no Ruff/Python-specific)
+        assert "style guide" in prompt.lower() or "idioms" in prompt.lower()
 
     def test_edit_mode_small_files(self):
         files = {"app.py": "line\n" * 10}
@@ -95,6 +96,56 @@ class TestGetDrafterSystemPrompt:
         files = {"app.py": "line\n" * 10}
         prompt, mode = get_drafter_system_prompt(files, skeleton_fill=True)
         assert mode == "skeleton_fill"
+
+    # ── REQ-PE-100: Raw output instruction in all system prompts ──
+
+    def test_create_mode_has_raw_output_instruction(self):
+        """REQ-PE-100: create mode must tell LLM to output raw file content."""
+        prompt, _ = get_drafter_system_prompt()
+        assert "raw file content" in prompt.lower() or "as it should appear on disk" in prompt.lower()
+        assert "do not wrap" in prompt.lower()
+
+    def test_edit_mode_has_raw_output_instruction(self):
+        """REQ-PE-100: edit mode must tell LLM to output raw file content."""
+        files = {"app.py": "x = 1\n"}
+        prompt, _ = get_drafter_system_prompt(files)
+        assert "raw file content" in prompt.lower() or "as it should appear on disk" in prompt.lower()
+
+    def test_search_replace_mode_has_raw_output_instruction(self):
+        """REQ-PE-100: search/replace mode must tell LLM to output raw file content."""
+        big = "\n".join(f"line {i}" for i in range(60))
+        prompt, _ = get_drafter_system_prompt({"big.py": big})
+        assert "raw file content" in prompt.lower() or "as it should appear on disk" in prompt.lower()
+
+    def test_skeleton_fill_mode_has_raw_output_instruction(self):
+        """REQ-PE-100: skeleton fill mode must tell LLM to output raw file content."""
+        prompt, _ = get_drafter_system_prompt(skeleton_fill=True)
+        assert "raw file content" in prompt.lower() or "as it should appear on disk" in prompt.lower()
+
+    # ── REQ-PE-500: Language-neutral defaults ──
+
+    def test_default_role_is_language_neutral(self):
+        """REQ-PE-500: missing language_role must not default to Python."""
+        prompt, _ = get_drafter_system_prompt()
+        assert "python" not in prompt.lower().split("do not wrap")[0]
+        assert "ruff" not in prompt.lower()
+
+    def test_explicit_language_role_used(self):
+        """When language_role is provided, it should appear in the prompt."""
+        prompt, _ = get_drafter_system_prompt(
+            language_role="an expert Go engineer",
+            coding_standards="Idiomatic Go with explicit error handling.",
+        )
+        assert "expert go engineer" in prompt.lower()
+        assert "idiomatic go" in prompt.lower()
+
+    def test_default_fallback_logs_warning(self):
+        """REQ-PE-500: warning logged when language_role is not provided."""
+        import logging
+        with patch.object(logging.getLogger("startd8.implementation_engine.drafter"), "warning") as mock_warn:
+            get_drafter_system_prompt()
+            mock_warn.assert_called_once()
+            assert "language-neutral defaults" in mock_warn.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------

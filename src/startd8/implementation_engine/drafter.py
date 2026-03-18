@@ -198,12 +198,19 @@ def get_drafter_system_prompt(
     prompt = get_template(template_key)
 
     # Inject language-specific fragments into the system prompt template.
-    # Default to Python for backward compatibility.
-    _role = language_role or "an expert Python engineer"
+    # Defaults are language-neutral; callers should always provide
+    # language_role and coding_standards from the resolved LanguageProfile.
+    _role = language_role or "a senior software engineer"
     _standards = coding_standards or (
-        "Ruff: no single-letter vars l/O/I; define helpers before use; "
-        "stdlib-only imports unless listed."
+        "Follow the language's standard style guide and idioms. "
+        "Complete implementations only — no stubs or placeholders."
     )
+    if not language_role:
+        logger.warning(
+            "Drafter using language-neutral defaults — no language_role in context "
+            "(template=%s). Callers should provide language_role from LanguageProfile.",
+            template_key,
+        )
     prompt = prompt.format(language_role=_role, coding_standards=_standards)
 
     logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)

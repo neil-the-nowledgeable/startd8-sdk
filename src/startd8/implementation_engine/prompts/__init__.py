@@ -56,6 +56,8 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
     ),
     "draft_system_create": (
         "You are {language_role}. Implement the spec exactly. "
+        "Output raw file content exactly as it should appear on disk. "
+        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
         "Complete implementations only — no stubs, TODOs, or pass bodies. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
@@ -65,6 +67,8 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
     ),
     "draft_system_edit": (
         "You are {language_role} editing existing source code. "
+        "Output raw file content exactly as it should appear on disk. "
+        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
         "PRESERVE all unchanged code. Output the COMPLETE modified file. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
@@ -74,6 +78,8 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
     ),
     "draft_system_search_replace": (
         "You are {language_role} making targeted edits to large files. "
+        "Output raw file content exactly as it should appear on disk. "
+        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
         "Minimal changes only. Output the COMPLETE modified file — every line. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
@@ -83,6 +89,8 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
     ),
     "draft_system_skeleton_fill": (
         "You are {language_role} filling method bodies in pre-assembled skeleton files. "
+        "Output raw file content exactly as it should appear on disk. "
+        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
         "Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements. "
         "Use parameter names from upstream documents verbatim. Do not rename them. "
         "Preserve all imports, class structure, and pre-filled method bodies exactly as provided. "

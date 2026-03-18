@@ -681,15 +681,33 @@ class PrimaryContractorWorkflow(WorkflowBase):
             current_step += 1
             self._emit_progress(on_progress, current_step, total_steps, "Integrating final implementation")
 
-            integration = self._integrate_final(
-                lead_agent=lead_agent,
-                task_description=task_description,
-                implementation=current_implementation,
-                reviews=result.reviews,
-                integration_instructions=integration_instructions,
-                target_files=context.get("target_files"),
-                existing_files=context.get("existing_files"),
-            )
+            # When the last review passed, skip the integration LLM call and
+            # use the passing draft directly.  The integration step re-sends
+            # the task_description (which may contain specs for sibling files)
+            # to the LLM, risking content-type confusion — e.g. Dockerfile
+            # tasks whose description includes a package.json spec can cause
+            # the integration LLM to emit JSON instead of Dockerfile syntax.
+            last_review = result.reviews[-1] if result.reviews else None
+            if last_review and last_review.passed:
+                logger.info(
+                    "Review passed (score=%d) — using draft directly, "
+                    "skipping integration LLM call",
+                    last_review.score,
+                )
+                integration = IntegrationResult(
+                    integration_id=f"int-passthrough-{uuid.uuid4().hex[:8]}",
+                    final_implementation=current_implementation,
+                )
+            else:
+                integration = self._integrate_final(
+                    lead_agent=lead_agent,
+                    task_description=task_description,
+                    implementation=current_implementation,
+                    reviews=result.reviews,
+                    integration_instructions=integration_instructions,
+                    target_files=context.get("target_files"),
+                    existing_files=context.get("existing_files"),
+                )
             result.integration = integration
 
             step_results.append(StepResult(
@@ -1249,15 +1267,29 @@ class PrimaryContractorWorkflow(WorkflowBase):
             current_step += 1
             self._emit_progress(on_progress, current_step, total_steps, "Integrating final implementation")
 
-            integration = await self._aintegrate_final(
-                lead_agent=lead_agent,
-                task_description=task_description,
-                implementation=current_implementation,
-                reviews=result.reviews,
-                integration_instructions=integration_instructions,
-                target_files=context.get("target_files"),
-                existing_files=context.get("existing_files"),
-            )
+            # Same passthrough optimization as sync path — skip integration
+            # LLM call when the last review already passed.
+            last_review = result.reviews[-1] if result.reviews else None
+            if last_review and last_review.passed:
+                logger.info(
+                    "Review passed (score=%d) — using draft directly, "
+                    "skipping integration LLM call",
+                    last_review.score,
+                )
+                integration = IntegrationResult(
+                    integration_id=f"int-passthrough-{uuid.uuid4().hex[:8]}",
+                    final_implementation=current_implementation,
+                )
+            else:
+                integration = await self._aintegrate_final(
+                    lead_agent=lead_agent,
+                    task_description=task_description,
+                    implementation=current_implementation,
+                    reviews=result.reviews,
+                    integration_instructions=integration_instructions,
+                    target_files=context.get("target_files"),
+                    existing_files=context.get("existing_files"),
+                )
             result.integration = integration
 
             step_results.append(StepResult(
