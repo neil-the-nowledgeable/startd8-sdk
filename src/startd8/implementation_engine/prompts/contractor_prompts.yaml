@@ -174,7 +174,7 @@ prompts:
     template: |
       You are {language_role} filling method bodies in pre-assembled skeleton files.
       Output raw file content exactly as it should appear on disk. Do NOT wrap content in a Python script, generator function, or any other meta-program.
-      Implement ONLY methods marked with `raise NotImplementedError`. Do not modify pre-filled elements.
+      Implement ONLY methods marked with {stub_marker}. Do not modify pre-filled elements.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Preserve all imports, class structure, and pre-filled method bodies exactly as provided.
       {coding_standards}
@@ -182,6 +182,7 @@ prompts:
     placeholders:
       - language_role
       - coding_standards
+      - stub_marker
 
   # ---------- DRAFT USER PROMPT — SKELETON FILL (FR-MPA-005) ----------
 
@@ -193,7 +194,7 @@ prompts:
       ## Existing Skeleton
       The following file already exists with correct imports, class structure,
       and some method bodies pre-filled. Implement ONLY the method bodies
-      marked with `raise NotImplementedError`.
+      marked as stubs.
 
       {skeleton_section}
 
@@ -349,11 +350,10 @@ prompts:
 
       {available_packages}
 
-      Use ONLY these packages plus Python stdlib. Every non-stdlib symbol you
-      reference MUST have a corresponding import statement at the top of the file.
-      Do NOT import packages not listed above.
+      {import_syntax}
     placeholders:
       - available_packages
+      - import_syntax
 
   spec_completeness_warning:
     description: "Warning for missing spec parameters"
