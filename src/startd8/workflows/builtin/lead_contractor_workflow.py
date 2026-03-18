@@ -421,7 +421,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
                 max_iterations, pass_threshold, output_format,
                 integration_instructions, check_truncation, strict_truncation,
                 fail_on_api_truncation, fail_on_heuristic_truncation,
-                project_context, on_progress,
+                project_context, on_progress, started_at,
             )
         finally:
             for agent in (lead_agent, drafter_agent):
@@ -450,6 +450,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         fail_on_heuristic_truncation,
         project_context,
         on_progress,
+        started_at,
     ):
         """Main workflow body — extracted for try/finally cleanup in _execute."""
         # Initialize result tracking
