@@ -518,6 +518,138 @@ class ClassDecomposeStrategy:
         ]
 
 
+# ── Java Class Decomposition Strategy ─────────────────────────────────
+
+
+class JavaClassDecomposeStrategy:
+    """Decomposes MODERATE Java class elements into shell + method sub-elements.
+
+    Java's one-class-per-file structure makes decomposition straightforward:
+    class shell + each method as a SIMPLE sub-element.
+
+    Rejection: complex inheritance (3+ interfaces + abstract), reflection,
+    annotation processors.
+    """
+
+    def __init__(self, config: Optional[MicroPrimeConfig] = None, template_registry: Optional[Any] = None) -> None:
+        self._config = config or MicroPrimeConfig()
+        self._template_registry = template_registry
+
+    @property
+    def name(self) -> str:
+        return "java_class_decompose"
+
+    def can_handle(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+        external_dependency_count: Optional[int] = None,
+    ) -> bool:
+        if not self._config.class_decompose_enabled:
+            return False
+        if element.kind != ElementKind.CLASS:
+            return False
+
+        # Reject complex inheritance: 3+ interfaces + abstract
+        bases = element.bases or []
+        decorators = element.decorators or []
+        if len(bases) > 3 and "abstract" in " ".join(decorators).lower():
+            return False
+
+        # Reject reflection/annotation processor markers
+        for dec in decorators:
+            if any(marker in dec for marker in ("Retention", "Target", "Processor")):
+                return False
+
+        # Methods must be separate elements in file_spec
+        child_methods = [
+            e for e in file_spec.elements
+            if e.parent_class == element.name
+            and e.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+        ]
+        return len(child_methods) >= 3
+
+    def plan(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+    ) -> Optional[DecompositionPlan]:
+        sub_elements: list[SubElement] = []
+        uncertainty_signals: list[str] = []
+        order = 0
+        max_sub = self._config.max_sub_elements
+
+        # 1. Class shell
+        sub_elements.append(SubElement(
+            name="class_shell",
+            kind="class_shell",
+            prompt_context="",
+            depends_on=[],
+            assembly_order=order,
+            element_spec=None,
+            deterministic=True,
+        ))
+        order += 1
+
+        # 2. Each method as a SIMPLE sub-element
+        child_methods = [
+            e for e in file_spec.elements
+            if e.parent_class == element.name
+            and e.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+        ]
+        for method_elem in child_methods:
+            if len(sub_elements) >= max_sub:
+                break
+            sub_elements.append(SubElement(
+                name=method_elem.name,
+                kind="method",
+                prompt_context=f"Implement {method_elem.name} for {element.name}.",
+                depends_on=["class_shell"],
+                assembly_order=order,
+                element_spec=method_elem,
+            ))
+            order += 1
+
+        plan = DecompositionPlan(
+            original_element=element,
+            sub_elements=sub_elements,
+            strategy=self.name,
+            assembly_kind="class_compose",
+            confidence=0.0,
+        )
+        plan.confidence = _compute_confidence(plan, uncertainty_signals)
+        return plan
+
+    def assemble(
+        self,
+        plan: DecompositionPlan,
+        sub_results: dict[str, str],
+        skeleton: str,
+    ) -> Optional[str]:
+        """Assemble Java class from decomposed sub-elements."""
+        shell_code = sub_results.get("class_shell")
+        if shell_code is None:
+            return None
+
+        parts: list[str] = []
+        for sub in sorted(plan.sub_elements, key=lambda s: s.assembly_order):
+            if sub.name == "class_shell":
+                continue
+            code = sub_results.get(sub.name)
+            if code:
+                parts.append(textwrap.dedent(code).strip("\n"))
+
+        if parts:
+            return "\n\n".join(parts)
+        return shell_code
+
+
 # ── Function Chain Strategy (REQ-MP-902) ─────────────────────────────
 
 
@@ -568,10 +700,14 @@ _GO_RESERVED = frozenset({
     "println", "real", "recover",
 })
 
+# Canonical source: languages/java.py — import to avoid triplication.
+from startd8.languages.java import _JAVA_RESERVED
+
 # Language-keyed reserved word lookup (MP-P2).
 _LANGUAGE_RESERVED: dict[str, frozenset[str]] = {
     "python": _PYTHON_RESERVED,
     "go": _GO_RESERVED,
+    "java": _JAVA_RESERVED,
 }
 
 # Responsibility clause separators (deterministic, no LLM).
@@ -958,10 +1094,18 @@ class ModerateDecomposer:
         self._config = config or MicroPrimeConfig()
         self._template_registry = template_registry
         self._language_id = language_id
-        self._strategies: list[Any] = strategies or [
-            ClassDecomposeStrategy(config=self._config, template_registry=template_registry),
-            FunctionChainStrategy(config=self._config, language_id=language_id),
-        ]
+        if strategies is not None:
+            self._strategies: list[Any] = strategies
+        elif language_id == "java":
+            self._strategies = [
+                JavaClassDecomposeStrategy(config=self._config, template_registry=template_registry),
+                FunctionChainStrategy(config=self._config, language_id=language_id),
+            ]
+        else:
+            self._strategies = [
+                ClassDecomposeStrategy(config=self._config, template_registry=template_registry),
+                FunctionChainStrategy(config=self._config, language_id=language_id),
+            ]
 
     def build_context(
         self,

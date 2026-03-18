@@ -553,6 +553,10 @@ def _validate_non_python_file(
         result = _validate_yaml_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
+    elif suffix == ".java":
+        result = _validate_java_file(content, result)
+    elif name in ("build.gradle", "build.gradle.kts"):
+        result = _validate_build_gradle(content, result)
 
     return result
 
@@ -738,6 +742,122 @@ def _validate_json_file(
         result.ast_valid = False
         result.error = f"json_error: {exc}"
         result.contract_compliance = 0.0
+    return result
+
+
+# Pre-compiled patterns for Java disk validation (avoid per-call re.compile)
+_JAVA_TYPE_DECL_VALIDATOR_RE = re.compile(
+    r"\b(?:class|interface|enum|record|@interface)\s+\w+",
+)
+_JAVA_PACKAGE_RE = re.compile(r"^\s*package\s+[\w.]+\s*;", re.MULTILINE)
+
+
+def _validate_java_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate Java source file structure.
+
+    Checks:
+    1. javalang parse (if available) or text-based fallback
+    2. Contains a type declaration (class/interface/enum/record)
+    3. Package declaration present
+    4. No Python fingerprints
+    """
+    # Python fingerprint guard
+    _py_fingerprints = ("def ", "import os", "from __future__", "self.", "#!/usr/bin/env python")
+    for fp in _py_fingerprints:
+        if fp in content:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"Python fingerprint in .java file: {fp!r}"
+            return result
+
+    # Try javalang parse
+    try:
+        import javalang
+        try:
+            javalang.parse.parse(content)
+        except (javalang.parser.JavaSyntaxError, javalang.tokenizer.LexerError) as exc:
+            result.ast_valid = False
+            result.contract_compliance = 0.3
+            result.error = f"Java syntax error: {exc}"
+            return result
+    except ImportError:
+        # Text-based fallback: check balanced braces
+        depth = 0
+        for ch in content:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    result.ast_valid = False
+                    result.contract_compliance = 0.2
+                    result.error = "unbalanced braces"
+                    return result
+        if depth != 0:
+            result.ast_valid = False
+            result.contract_compliance = 0.2
+            result.error = f"unbalanced braces (depth={depth})"
+            return result
+
+    # Type declaration check
+    if not _JAVA_TYPE_DECL_VALIDATOR_RE.search(content):
+        result.semantic_issues.append({
+            "category": "java_structure",
+            "severity": "warning",
+            "message": "no type declaration found",
+        })
+        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+
+    # Package declaration check
+    if not _JAVA_PACKAGE_RE.search(content):
+        result.semantic_issues.append({
+            "category": "java_structure",
+            "severity": "warning",
+            "message": "missing package declaration",
+        })
+
+    return result
+
+
+def _validate_build_gradle(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate build.gradle / build.gradle.kts structure.
+
+    Checks for plugins block, dependencies block, and no Python content.
+    """
+    # Python content guard
+    _py_fingerprints = ("def ", "import os", "from __future__", "print(")
+    for fp in _py_fingerprints:
+        if fp in content:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"Python content in build.gradle: {fp!r}"
+            return result
+
+    # Plugins block
+    has_plugins = bool(re.search(r"\bplugins\s*\{", content))
+    if not has_plugins:
+        result.semantic_issues.append({
+            "category": "gradle_structure",
+            "severity": "warning",
+            "message": "missing plugins block",
+        })
+        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+
+    # Dependencies block
+    has_deps = bool(re.search(r"\bdependencies\s*\{", content))
+    if not has_deps:
+        result.semantic_issues.append({
+            "category": "gradle_structure",
+            "severity": "info",
+            "message": "no dependencies block found",
+        })
+
     return result
 
 

@@ -179,6 +179,10 @@ def splice_body_into_skeleton(
     if _is_go_source(skeleton, file_path):
         return _splice_go_dispatch(body, element, skeleton)
 
+    # Language dispatch: Java files use brace-based splicing
+    if _is_java_source(skeleton, file_path):
+        return _splice_java_dispatch(body, element, skeleton)
+
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         code = _splice_constant(body, element, skeleton)
         return SpliceResult(code=code)
@@ -242,6 +246,57 @@ def _splice_go_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -
         ))
 
     return SpliceResult(code=go_result.code, violations=violations)
+
+
+def _is_java_source(skeleton: str, file_path: str) -> bool:
+    """Detect if skeleton content is Java source."""
+    if file_path.endswith(".java"):
+        return True
+    # Java files start with 'package com.example;' — require semicolon to
+    # distinguish from Python 'import logging' (no semicolons in Python).
+    for line in skeleton.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        if stripped.startswith("package ") and stripped.endswith(";"):
+            return True
+        if stripped.startswith("import ") and stripped.endswith(";"):
+            return True
+        return False
+    return False
+
+
+def _splice_java_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -> SpliceResult:
+    """Dispatch to Java splicer for Java skeleton files."""
+    try:
+        from startd8.languages.java_splicer import splice_java_bodies
+    except ImportError:
+        logger.warning("java_splicer not available — cannot splice Java skeleton")
+        return SpliceResult(code=None, violations=[
+            SpliceViolation(
+                violation_type="language_unsupported",
+                message="Java splicer not available",
+                element_name=element.name,
+            )
+        ])
+
+    method_name = element.name
+
+    # Wrap the body as a full method for the Java splicer's extraction
+    java_result = splice_java_bodies(
+        skeleton,
+        {method_name: body},
+    )
+
+    violations = []
+    for w in java_result.warnings:
+        violations.append(SpliceViolation(
+            violation_type="java_splice_warning",
+            message=w,
+            element_name=method_name,
+        ))
+
+    return SpliceResult(code=java_result.code, violations=violations)
 
 
 def _splice_function_body(

@@ -91,9 +91,14 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 }
 
 
+# Feature flag: when True, .java files flow through MicroPrime instead of
+# bypassing to file-whole generation.  Default off — enable after Phase 3.
+JAVA_MICROPRIME_ENABLED = False
+
 # REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
 # MicroPrime element generation and use file-whole LLM generation instead.
 # NOTE: ".go" removed — Go files now flow through MicroPrime (MP-P6).
+# NOTE: ".java" conditionally removed when JAVA_MICROPRIME_ENABLED is True.
 _NON_PYTHON_EXTENSIONS = frozenset({
     ".html", ".yaml", ".yml", ".json", ".md", ".txt",
     ".in", ".cfg", ".toml", ".js", ".ts", ".tsx", ".jsx",
@@ -115,6 +120,9 @@ def _is_non_python_file(file_path: str) -> bool:
     Handles edge cases like ``go.mod`` and ``Dockerfile`` which lack
     standard extensions.  Returns False for ``.py`` files and files
     with no recognised non-Python extension.
+
+    When ``JAVA_MICROPRIME_ENABLED`` is True, ``.java`` files are treated
+    as MicroPrime-compatible (returns False), enabling element-level generation.
     """
     from pathlib import PurePosixPath
 
@@ -124,6 +132,9 @@ def _is_non_python_file(file_path: str) -> bool:
         return True
     suffix = p.suffix.lower()
     if suffix == ".py":
+        return False
+    # Java files optionally flow through MicroPrime
+    if suffix == ".java" and JAVA_MICROPRIME_ENABLED:
         return False
     if suffix in _NON_PYTHON_EXTENSIONS:
         return True
@@ -716,8 +727,14 @@ def _build_system_prompt(
 
     # Determine language-specific formatting instructions
     is_go = profile.language_id == "go"
+    is_java = profile.language_id == "java"
     indent_rule = "Use tab indentation." if is_go else "Use 4-space indentation."
-    stub_marker = 'panic("not implemented")' if is_go else "raise NotImplementedError"
+    if is_go:
+        stub_marker = 'panic("not implemented")'
+    elif is_java:
+        stub_marker = 'throw new UnsupportedOperationException("TODO")'
+    else:
+        stub_marker = "raise NotImplementedError"
 
     if mode == "body":
         return (

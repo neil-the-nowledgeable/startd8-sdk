@@ -5,8 +5,52 @@ Most complex dependency file generation (Gradle), lowest payoff (1 service).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+
+
+# ~55 Java keywords + contextual keywords (Java 17+)
+_JAVA_RESERVED: frozenset[str] = frozenset({
+    # Standard keywords
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+    "char", "class", "const", "continue", "default", "do", "double",
+    "else", "enum", "extends", "final", "finally", "float", "for",
+    "goto", "if", "implements", "import", "instanceof", "int",
+    "interface", "long", "native", "new", "package", "private",
+    "protected", "public", "return", "short", "static", "strictfp",
+    "super", "switch", "synchronized", "this", "throw", "throws",
+    "transient", "try", "void", "volatile", "while",
+    # Contextual keywords (Java 10+/14+/17+)
+    "var", "yield", "record", "sealed", "permits", "non-sealed",
+    # Literals that act as keywords
+    "true", "false", "null",
+})
+
+
+def _java_literal_coerce(value: object) -> str:
+    """Coerce a Python literal to Java syntax.
+
+    ``True`` → ``true``, ``None`` → ``null``, ``[1, 2]`` → ``List.of(1, 2)``.
+    """
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    if isinstance(value, list):
+        items = ", ".join(_java_literal_coerce(v) for v in value)
+        return f"List.of({items})"
+    if isinstance(value, dict):
+        entries = ", ".join(
+            f"{_java_literal_coerce(k)}, {_java_literal_coerce(v)}"
+            for k, v in value.items()
+        )
+        return f"Map.of({entries})"
+    if isinstance(value, str):
+        return f'"{value}"'
+    return str(value)
 
 
 class JavaLanguageProfile:
@@ -44,6 +88,46 @@ class JavaLanguageProfile:
     @property
     def framework_imports(self) -> Dict[str, dict]:
         return {
+            "spring_boot": {
+                "detect": [
+                    "@SpringBootApplication", "spring-boot-starter",
+                    "SpringApplication", "spring-boot",
+                ],
+                "dep_names": {
+                    "org.springframework.boot:spring-boot-starter",
+                    "org.springframework.boot:spring-boot-starter-web",
+                },
+                "imports": [
+                    "import org.springframework.boot.SpringApplication;",
+                    "import org.springframework.boot.autoconfigure.SpringBootApplication;",
+                ],
+                "conditional": {},
+            },
+            "jpa": {
+                "detect": [
+                    "@Entity", "jakarta.persistence", "javax.persistence",
+                    "JpaRepository", "CrudRepository",
+                ],
+                "dep_names": {
+                    "org.springframework.boot:spring-boot-starter-data-jpa",
+                    "jakarta.persistence:jakarta.persistence-api",
+                },
+                "imports": [
+                    "import jakarta.persistence.Entity;",
+                    "import jakarta.persistence.Id;",
+                    "import jakarta.persistence.GeneratedValue;",
+                ],
+                "conditional": {},
+            },
+            "slf4j": {
+                "detect": ["SLF4J", "LoggerFactory", "slf4j", "@Slf4j"],
+                "dep_names": {"org.slf4j:slf4j-api"},
+                "imports": [
+                    "import org.slf4j.Logger;",
+                    "import org.slf4j.LoggerFactory;",
+                ],
+                "conditional": {},
+            },
             "grpc": {
                 "detect": ["grpc", "proto", "protobuf", "gRPC"],
                 "dep_names": {"io.grpc:grpc-netty", "io.grpc:grpc-stub"},
@@ -54,7 +138,7 @@ class JavaLanguageProfile:
                 "conditional": {},
             },
             "logging": {
-                "detect": ["log4j", "slf4j", "logging"],
+                "detect": ["log4j", "logging"],
                 "dep_names": {"org.apache.logging.log4j:log4j-core"},
                 "imports": [
                     "import org.apache.logging.log4j.LogManager;",
@@ -139,8 +223,8 @@ class JavaLanguageProfile:
         return []
 
     def validate_syntax(self, code: str) -> tuple[bool, str]:
-        """Java syntax validation stub — no lightweight CLI checker available."""
-        return True, ""
+        """Java syntax validation via javalang parser (with text-based fallback)."""
+        return _validate_java_syntax(code)
 
     def generate_dependency_file(
         self,
@@ -195,3 +279,69 @@ class JavaLanguageProfile:
 _JAVA_STDLIB_PREFIXES: tuple[str, ...] = (
     "java.", "javax.", "jdk.", "sun.",
 )
+
+
+# Python fingerprints — if these appear in a .java file, it's cross-language contamination.
+_PYTHON_FINGERPRINTS = (
+    "def ", "import os", "from __future__", "print(", "self.",
+    "#!/usr/bin/env python", "#!/usr/bin/python",
+)
+
+# Java type declaration patterns (class, interface, enum, record, @interface)
+_JAVA_TYPE_DECL_RE = re.compile(
+    r"\b(?:class|interface|enum|record|@interface)\s+\w+",
+)
+
+
+def _validate_java_syntax(code: str) -> tuple[bool, str]:
+    """Validate Java source via javalang AST parser; fall back to text heuristics.
+
+    Returns ``(True, "")`` on success or ``(False, error_message)`` on failure.
+    """
+    # Try javalang first
+    try:
+        import javalang
+        try:
+            javalang.parse.parse(code)
+            return True, ""
+        except javalang.parser.JavaSyntaxError as exc:
+            return False, f"javalang syntax error: {exc}"
+        except javalang.tokenizer.LexerError as exc:
+            return False, f"javalang lexer error: {exc}"
+    except ImportError:
+        pass  # Fall through to text-based validation
+
+    # Text-based fallback (when javalang is not installed)
+    return _text_based_java_validate(code)
+
+
+def _text_based_java_validate(code: str) -> tuple[bool, str]:
+    """Lightweight text-based Java validation (no javalang dependency).
+
+    Checks:
+    1. Balanced braces
+    2. Contains at least one type declaration (class/interface/enum/record)
+    3. No Python fingerprints
+    """
+    # Check for Python fingerprints
+    for fp in _PYTHON_FINGERPRINTS:
+        if fp in code:
+            return False, f"Python fingerprint detected: {fp!r}"
+
+    # Balanced braces
+    depth = 0
+    for ch in code:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                return False, "unbalanced braces (extra closing brace)"
+    if depth != 0:
+        return False, f"unbalanced braces (depth={depth})"
+
+    # Must contain a type declaration
+    if not _JAVA_TYPE_DECL_RE.search(code):
+        return False, "no type declaration found (class/interface/enum/record)"
+
+    return True, ""

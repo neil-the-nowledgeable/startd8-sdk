@@ -84,6 +84,57 @@ def format_context_value(value: Any) -> str:
     return str(value)
 
 
+def detect_java_frameworks(context: Dict[str, Any]) -> List[str]:
+    """Detect Java frameworks from task context for spec enrichment.
+
+    Returns list of framework pattern descriptions to inject into spec prompts.
+    """
+    frameworks: List[str] = []
+    context_str = str(context).lower() if context else ""
+
+    _JAVA_FRAMEWORK_PATTERNS = {
+        "spring_boot": {
+            "detect": ["@springbootapplication", "spring-boot-starter", "springapplication"],
+            "guidance": (
+                "Spring Boot: Use @RestController for REST endpoints, "
+                "@Service for business logic, @Repository for data access. "
+                "Constructor injection preferred over field injection."
+            ),
+        },
+        "jpa": {
+            "detect": ["@entity", "jakarta.persistence", "javax.persistence", "jparepository"],
+            "guidance": (
+                "JPA/Hibernate: Use @Entity, @Id, @GeneratedValue for entities. "
+                "Prefer Spring Data JPA repository interfaces. "
+                "Use @Transactional on service methods."
+            ),
+        },
+        "grpc": {
+            "detect": ["grpc", "protobuf", "proto"],
+            "guidance": (
+                "gRPC: Extend generated *ImplBase stubs. "
+                "Use StreamObserver for responses. Handle StatusRuntimeException."
+            ),
+        },
+        "slf4j": {
+            "detect": ["slf4j", "loggerfactory", "@slf4j"],
+            "guidance": (
+                "SLF4J: Use LoggerFactory.getLogger(ClassName.class) or @Slf4j. "
+                "Prefer parameterized logging: log.info(\"msg {}\", arg)."
+            ),
+        },
+    }
+
+    for name, spec in _JAVA_FRAMEWORK_PATTERNS.items():
+        if any(marker in context_str for marker in spec["detect"]):
+            frameworks.append(spec["guidance"])
+
+    if frameworks:
+        logger.debug("Detected %d Java framework(s) from context", len(frameworks))
+
+    return frameworks
+
+
 def build_spec_context_section(
     context: Dict[str, Any],
     output_format: Optional[str],
@@ -102,7 +153,7 @@ def build_spec_context_section(
             f"classes/functions."
         )
 
-    # REQ-SPEC-102: Context budget management. 
+    # REQ-SPEC-102: Context budget management.
     # If context is massive, we should avoid dumping everything.
     # However, for now, we just ensure it doesn't crash.
     context_str = (
@@ -110,6 +161,14 @@ def build_spec_context_section(
     )
     if output_format:
         context_str += f"\n\nExpected Output Format:\n{output_format}"
+
+    # Inject detected Java framework patterns when target files include .java
+    if target_files and any(f.endswith(".java") for f in target_files):
+        java_fw = detect_java_frameworks(context)
+        if java_fw:
+            fw_block = "\n".join(f"- {g}" for g in java_fw)
+            context_str += f"\n\n## Java Framework Patterns\n{fw_block}"
+
     parts.append(f"## Context\n{context_str}")
     return "\n\n".join(parts)
 
