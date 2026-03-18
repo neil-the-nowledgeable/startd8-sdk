@@ -447,6 +447,26 @@ class GoLanguageProfile:
             "Do NOT import modules not listed above.\n"
         )
 
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract import statements from Go source (REQ-PE-400)."""
+        import re
+        imports: list[str] = []
+        # Single imports: import "pkg"
+        for m in re.finditer(r'^import\s+"([^"]+)"', source, re.MULTILINE):
+            imports.append(f'import "{m.group(1)}"')
+        # Block imports: import ( ... )
+        for block in re.finditer(r'import\s*\((.*?)\)', source, re.DOTALL):
+            for line in block.group(1).splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("//"):
+                    imports.append(stripped)
+        return imports
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Go stub marker for skeleton fill prompts."""
+        return '`panic("not implemented")`'
+
 
 _GO_STDLIB_PREFIXES: tuple[str, ...] = (
     "bufio", "bytes", "compress", "container", "context",

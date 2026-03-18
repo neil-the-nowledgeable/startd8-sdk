@@ -159,9 +159,34 @@ class PythonLanguageProfile:
     def get_import_syntax_guidance(self) -> str:
         """Return Python import rules for LLM prompts."""
         return (
-            "Use `import module` or `from module import name`. "
-            "Prefer absolute imports. No wildcard imports."
+            "Use ONLY these packages plus Python stdlib. Every non-stdlib symbol you\n"
+            "reference MUST have a corresponding import statement at the top of the file.\n"
+            "Do NOT import packages not listed above.\n"
         )
+
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract import statements from Python source (REQ-PE-400).
+
+        Uses AST for precision. Falls back to empty list on parse failure.
+        """
+        import ast as _ast
+        try:
+            tree = _ast.parse(source)
+        except SyntaxError:
+            return []
+        imports: list[str] = []
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+                try:
+                    imports.append(_ast.unparse(node))
+                except (AttributeError, ValueError):
+                    pass
+        return imports
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Python stub marker for skeleton fill prompts."""
+        return "`raise NotImplementedError`"
 
     def generate_dependency_file(
         self,

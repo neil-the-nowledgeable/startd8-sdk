@@ -152,6 +152,11 @@ def audit_and_inject_imports(
     try:
         tree = ast.parse(code)
     except SyntaxError:
+        # REQ-PE-601: Log skip for non-Python code (ast.parse fails on Go/Java/etc.)
+        logger.info(
+            "Import audit skipped: non-Python source (ast.parse failed, %d chars)",
+            len(code),
+        )
         return code, []
 
     imported_names, imported_modules = _collect_imported_names(tree)
@@ -286,6 +291,22 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
                 )
 
     if matches:
+        # REQ-PE-600: When language hint is provided, prefer blocks whose
+        # fence tag matches.  This prevents selecting a Python explanation
+        # block over the actual Java/Go/Gradle file content.
+        if language and len(matches) > 1:
+            tagged_pattern = rf'```{re.escape(language)}\s*\n(.*?)```'
+            tagged_matches = re.findall(tagged_pattern, response, re.DOTALL)
+            if tagged_matches:
+                largest_tagged = max(tagged_matches, key=len).strip()
+                if largest_tagged:
+                    logger.debug(
+                        "REQ-PE-600: Preferred %s-tagged block (%d chars) "
+                        "over %d total blocks",
+                        language, len(largest_tagged), len(matches),
+                    )
+                    matches = [largest_tagged]
+
         # Return the first (and typically main) code block
         extracted = matches[0].strip()
 

@@ -434,6 +434,19 @@ class JavaLanguageProfile:
             "No wildcard imports. Do NOT import packages not listed above.\n"
         )
 
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract import statements from Java source (REQ-PE-400)."""
+        import re
+        imports: list[str] = []
+        for m in re.finditer(r'^import\s+(?:static\s+)?[\w.]+\s*;', source, re.MULTILINE):
+            imports.append(m.group(0))
+        return imports
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Java stub marker for skeleton fill prompts."""
+        return "`throw new UnsupportedOperationException()`"
+
 
 _JAVA_STDLIB_PREFIXES: tuple[str, ...] = (
     "java.", "javax.", "jdk.", "sun.",

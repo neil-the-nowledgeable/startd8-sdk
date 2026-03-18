@@ -1418,13 +1418,12 @@ def _validate_file_whole_result(
         (syntax error, nested duplicates, skeleton markers).  Callers can use
         the missing list for partial acceptance.
     """
-    # Strip markdown fences if present
-    code = extract_code_from_response(generated_code)
+    # Strip markdown fences if present — pass language hint for multi-block disambiguation
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    code = extract_code_from_response(generated_code, language=lang_id)
 
     if not code:
         return False, "empty output", []
-
-    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
 
     # Apply literal coercion for non-Python (MP-P5)
     code = _coerce_literals_for_language(code, lang_id)
@@ -2540,7 +2539,8 @@ class MicroPrimeEngine:
         def _validate_file_whole(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
             # Strip markdown fences first, then reorder forward references —
             # raw LLM output often has ```python fences that prevent ast.parse.
-            cleaned_code = extract_code_from_response(raw_code) or raw_code
+            _fw_lang = getattr(self._language_profile, "language_id", None)
+            cleaned_code = extract_code_from_response(raw_code, language=_fw_lang) or raw_code
             reordered_code = _reorder_forward_references(cleaned_code)
             valid, reason, missing = _validate_file_whole_result(
                 reordered_code, skeleton, file_spec, self._language_profile,
@@ -2610,7 +2610,8 @@ class MicroPrimeEngine:
         if not final_raw:
             return None
 
-        code = extract_code_from_response(final_raw)
+        _final_lang = getattr(self._language_profile, "language_id", None)
+        code = extract_code_from_response(final_raw, language=_final_lang)
 
         # ── Partial acceptance ──
         missing_set: set[str] = set()

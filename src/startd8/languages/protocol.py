@@ -301,3 +301,30 @@ class LanguageProfile(Protocol):
         how to write import statements for this language.
         """
         ...
+
+    def extract_import_lines(self, source: str) -> List[str]:
+        """Extract import statements from source code (REQ-PE-400).
+
+        Returns a list of import line strings found in *source*.
+        Used by ``_build_sibling_imports_section()`` in the prompt engine
+        to provide sibling import context for non-Python languages.
+
+        Default implementation returns empty list. Language profiles
+        should override with regex-based extraction for their syntax.
+        """
+        ...
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Human-readable stub marker for skeleton fill prompts (REQ-PE-301).
+
+        Returns backtick-wrapped text describing the language's stub pattern.
+        Used by drafter system prompt ``{stub_marker}`` placeholder.
+
+        Examples::
+
+            Python:  '`raise NotImplementedError`'
+            Go:      '`panic("not implemented")`'
+            Java:    '`throw new UnsupportedOperationException()`'
+        """
+        ...

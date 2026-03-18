@@ -638,6 +638,19 @@ class CSharpLanguageProfile:
             "not listed above.\n"
         )
 
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract using directives from C# source (REQ-PE-400)."""
+        import re
+        return [
+            m.group(0)
+            for m in re.finditer(r'^using\s+[\w.]+\s*;', source, re.MULTILINE)
+        ]
+
+    @property
+    def stub_marker_text(self) -> str:
+        """C# stub marker for skeleton fill prompts."""
+        return '`throw new NotImplementedException()`'
+
 
 def _derive_namespace(file_path: str) -> str:
     """Derive a C# namespace from a file path.

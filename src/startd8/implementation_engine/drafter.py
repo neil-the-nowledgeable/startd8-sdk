@@ -170,6 +170,7 @@ def get_drafter_system_prompt(
     edit_mode: Optional[Dict] = None,
     language_role: Optional[str] = None,
     coding_standards: Optional[str] = None,
+    language_profile: Optional[Any] = None,
 ) -> Tuple[str, str]:
     """Return mode-specific drafter system prompt and the resolved mode name.
 
@@ -181,6 +182,7 @@ def get_drafter_system_prompt(
             Defaults to 'a senior software engineer' (language-neutral, REQ-PE-500).
         coding_standards: Language-specific coding standards string.
             Defaults to generic style guidance (language-neutral, REQ-PE-500).
+        language_profile: Optional LanguageProfile for stub_marker_text (REQ-PE-301).
 
     Returns:
         Tuple of (system_prompt_text, draft_mode_name).
@@ -211,14 +213,11 @@ def get_drafter_system_prompt(
             "(template=%s). Callers should provide language_role from LanguageProfile.",
             template_key,
         )
-    # REQ-PE-301: Resolve stub marker for skeleton fill mode
-    _stub_marker = '`raise NotImplementedError`'  # Python default
-    if language_role and "go" in language_role.lower():
-        _stub_marker = '`panic("not implemented")`'
-    elif language_role and "java" in language_role.lower():
-        _stub_marker = "`throw new UnsupportedOperationException()`"
-    elif language_role and ("node" in language_role.lower() or "javascript" in language_role.lower() or "typescript" in language_role.lower()):
-        _stub_marker = '`throw new Error("not implemented")`'
+    # REQ-PE-301: Resolve stub marker for skeleton fill mode from
+    # the language profile. Falls back to Python default when no profile.
+    _stub_marker = '`raise NotImplementedError`'
+    if language_profile is not None and hasattr(language_profile, "stub_marker_text"):
+        _stub_marker = language_profile.stub_marker_text
 
     prompt = prompt.format(
         language_role=_role,
@@ -570,33 +569,41 @@ def build_output_format(
 
 
 # ---------------------------------------------------------------------------
-# Non-Python file detection
+# Config/data file detection (REQ-PE-501)
 # ---------------------------------------------------------------------------
 
-# Extensions for files where Python-centric heuristics (size regression,
-# code structure detection, search_replace mode) produce false positives.
-_NON_PYTHON_EXTENSIONS = frozenset({
+# REQ-PE-501: Config/data files where code-structure heuristics (size
+# regression, truncation detection, unclosed brackets) are meaningless.
+# Source code extensions (.go, .java, .js, .ts) are intentionally EXCLUDED
+# so they receive the same quality gates as Python source files.
+_CONFIG_DATA_EXTENSIONS = frozenset({
     ".in", ".txt", ".cfg", ".ini", ".toml", ".yaml", ".yml", ".json",
-    ".md", ".rst", ".html", ".css", ".js", ".ts", ".sh", ".bash",
+    ".md", ".rst", ".html", ".css", ".sh", ".bash",
     ".dockerfile", ".env", ".conf", ".xml", ".csv", ".sql", ".proto",
-    ".graphql", ".tf", ".hcl",
-    ".cs", ".csproj", ".sln",
+    ".graphql", ".tf", ".hcl", ".properties", ".gradle",
+    ".csproj", ".sln",
 })
 
-# Filenames (no extension) that are non-Python
-_NON_PYTHON_FILENAMES = frozenset({
+# Filenames (no extension) that are config/data/build files
+_CONFIG_DATA_FILENAMES = frozenset({
     "Dockerfile", "Makefile", "Procfile", "Jenkinsfile",
     "docker-compose", ".gitignore", ".dockerignore",
+    "go.mod", "go.sum",
 })
 
 
-def _is_non_python_file(path: str) -> bool:
-    """Return True if *path* is a non-Python file based on extension or name."""
+def _is_config_or_data_file(path: str) -> bool:
+    """Return True if *path* is a config/data/build file (not source code).
+
+    REQ-PE-501: Source code files (.go, .java, .js, .ts, .py) return False
+    so they receive truncation detection and size regression checks.
+    Config, data, and build files return True to skip code-structure heuristics.
+    """
     from pathlib import PurePosixPath
     p = PurePosixPath(path)
-    if p.suffix.lower() in _NON_PYTHON_EXTENSIONS:
+    if p.suffix.lower() in _CONFIG_DATA_EXTENSIONS:
         return True
-    if p.name in _NON_PYTHON_FILENAMES:
+    if p.name in _CONFIG_DATA_FILENAMES:
         return True
     # Dockerfile variants: Dockerfile.prod, Dockerfile.dev, etc.
     if p.name.startswith("Dockerfile"):
@@ -604,23 +611,86 @@ def _is_non_python_file(path: str) -> bool:
     return False
 
 
-def _all_files_non_python(
+# Keep the old name as an alias for backward compatibility with callers
+# outside this module (e.g., tests that import it directly).
+_is_non_python_file = _is_config_or_data_file
+
+
+def _all_files_config_or_data(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
 ) -> bool:
-    """Return True if ALL target/existing files are non-Python.
+    """Return True if ALL target/existing files are config/data (not source code).
 
-    When target_files is provided, only those are checked — sibling .py
-    files in existing_files (added for import context) should not mask
-    a non-Python target like requirements.in.
+    REQ-PE-501: When target_files contains .go, .java, .js, .ts files,
+    returns False so quality gates (truncation, size regression) apply.
     """
-    # Prefer target_files when available — they represent the actual
-    # files being generated, not import context siblings.
     if target_files:
-        return all(_is_non_python_file(p) for p in target_files)
+        return all(_is_config_or_data_file(p) for p in target_files)
     if existing_files:
-        return all(_is_non_python_file(p) for p in existing_files)
+        return all(_is_config_or_data_file(p) for p in existing_files)
     return False
+
+
+# Backward-compatible alias
+_all_files_non_python = _all_files_config_or_data
+
+
+# ---------------------------------------------------------------------------
+# Language hint for code extraction
+# ---------------------------------------------------------------------------
+
+# Map filename patterns → fence language tag for extract_code_from_response.
+# Only includes file types where multi-block ambiguity is a real risk.
+_FILENAME_TO_FENCE_LANG: Dict[str, str] = {
+    "dockerfile": "dockerfile",
+    "go.mod": "go",
+    "package.json": "json",
+    "build.gradle": "groovy",
+    "build.gradle.kts": "kotlin",
+}
+_EXT_TO_FENCE_LANG: Dict[str, str] = {
+    ".go": "go",
+    ".java": "java",
+    ".cs": "csharp",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".py": "python",
+}
+
+
+def _infer_extraction_language(
+    target_files: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Infer a language hint for ``extract_code_from_response``.
+
+    When the drafter produces a response with multiple code blocks
+    (e.g. a Dockerfile block AND a package.json block), the language
+    hint tells the extractor which block to prefer.
+
+    Returns ``None`` when no hint can be inferred (single-file Python
+    targets don't need disambiguation).
+    """
+    if not target_files or len(target_files) != 1:
+        return None  # multi-file uses extract_multi_file_code, not this path
+
+    target = target_files[0]
+    name = target.rsplit("/", 1)[-1].lower() if "/" in target else target.lower()
+
+    # Exact filename match first (Dockerfile, go.mod, etc.)
+    if name in _FILENAME_TO_FENCE_LANG:
+        return _FILENAME_TO_FENCE_LANG[name]
+    # Dockerfile variants (Dockerfile.dev, Dockerfile.prod)
+    if name.startswith("dockerfile"):
+        return "dockerfile"
+
+    # Extension-based
+    from pathlib import PurePosixPath
+    ext = PurePosixPath(target).suffix.lower()
+    return _EXT_TO_FENCE_LANG.get(ext)
 
 
 # ---------------------------------------------------------------------------
@@ -1071,8 +1141,11 @@ def create_draft(
             prompt, system_prompt=sys_prompt
         )
 
-        # Extract code
-        implementation_code = extract_code_from_response(response_text)
+        # Extract code — pass language hint for multi-block disambiguation
+        _lang_hint = _infer_extraction_language(target_files)
+        implementation_code = extract_code_from_response(
+            response_text, language=_lang_hint,
+        )
 
         # API truncation detection
         api_truncated = token_usage.was_truncated if token_usage else False

@@ -75,6 +75,121 @@ def _detect_downstream_files(
     return downstream
 
 
+def _check_content_coherence(
+    content: str,
+    target_file: str,
+) -> Optional[str]:
+    """Check if content matches the expected file type.
+
+    Returns an error description if the content is incoherent with the
+    target filename, or ``None`` if it looks correct.
+
+    This is a pre-write safety net that catches cross-file-type confusion
+    — e.g. JSON/package.json content written to a Dockerfile, or Python
+    stubs written to .go files.
+    """
+    name = target_file.rsplit("/", 1)[-1].lower() if "/" in target_file else target_file.lower()
+    stripped = content.strip()
+    if not stripped:
+        return None
+
+    # Dockerfile must contain FROM directive
+    if name == "dockerfile" or name.startswith("dockerfile."):
+        if not any(
+            line.strip().upper().startswith("FROM ")
+            for line in stripped.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ):
+            return "Dockerfile missing FROM directive — content may be from wrong file type"
+
+    # package.json must be valid JSON with "name" key
+    if name == "package.json":
+        if not stripped.startswith("{"):
+            return "package.json does not start with '{' — content may be from wrong file type"
+
+    # .csproj must be XML
+    if name.endswith(".csproj"):
+        if not stripped.startswith("<"):
+            return ".csproj does not start with '<' — content may be from wrong file type"
+
+    # go.mod must start with "module "
+    if name == "go.mod":
+        if not stripped.startswith("module "):
+            return "go.mod does not start with 'module ' — content may be from wrong file type"
+
+    # build.gradle must not be JSON
+    if name in ("build.gradle", "build.gradle.kts"):
+        if stripped.startswith("{") and '"name"' in stripped[:200]:
+            return "build.gradle contains JSON (likely package.json) — content may be from wrong file type"
+
+    return None
+
+
+def _try_reextract_for_filetype(
+    raw_response: str,
+    target_file: str,
+) -> Optional[str]:
+    """Attempt to re-extract the correct content from a raw LLM response.
+
+    When ``_check_content_coherence`` detects a mismatch, this function
+    scans ALL code blocks in the response for one that matches the target
+    file type, rather than blindly picking the largest.
+    """
+    import re as _re
+
+    name = target_file.rsplit("/", 1)[-1].lower() if "/" in target_file else target_file.lower()
+    if not raw_response:
+        return None
+
+    # Extract all code blocks with their language tags
+    pattern = _re.compile(r'```(\w*)\s*\n(.*?)```', _re.DOTALL)
+    blocks = pattern.findall(raw_response)
+    if not blocks:
+        return None
+
+    # Dockerfile: find a block that contains FROM
+    if name == "dockerfile" or name.startswith("dockerfile."):
+        for lang_tag, block_content in blocks:
+            if lang_tag.lower() in ("dockerfile", "docker", ""):
+                if any(
+                    line.strip().upper().startswith("FROM ")
+                    for line in block_content.splitlines()
+                    if line.strip()
+                ):
+                    logger.info(
+                        "Re-extracted Dockerfile content from code block "
+                        "(tag=%r, %d chars) — original extraction was incoherent",
+                        lang_tag,
+                        len(block_content),
+                    )
+                    return block_content.strip()
+
+    # package.json: find a JSON block with "name"
+    if name == "package.json":
+        for lang_tag, block_content in blocks:
+            stripped = block_content.strip()
+            if stripped.startswith("{") and '"name"' in stripped[:200]:
+                logger.info(
+                    "Re-extracted package.json from code block (tag=%r)",
+                    lang_tag,
+                )
+                return stripped
+
+    # go.mod: find block starting with "module "
+    if name == "go.mod":
+        for lang_tag, block_content in blocks:
+            if block_content.strip().startswith("module "):
+                return block_content.strip()
+
+    # .csproj: find XML block
+    if name.endswith(".csproj"):
+        for lang_tag, block_content in blocks:
+            if block_content.strip().startswith("<"):
+                return block_content.strip()
+
+    return None
+
+
 class PrimaryContractorCodeGenerator:
     """
     Code generator using the Primary Contractor workflow.
@@ -385,6 +500,11 @@ class PrimaryContractorCodeGenerator:
                             stubbed_files,
                         )
 
+            # Grab raw drafter response for coherence recovery (if needed)
+            raw_drafter_for_recovery = result.output.get(
+                "last_draft_raw_response", ""
+            )
+
             for target_file in target_files:
                 # Use full target path (e.g. src/pkg/__init__.py), not just filename.
                 # Defense Layer 1: correct path resolution prevents project-root writes.
@@ -393,6 +513,34 @@ class PrimaryContractorCodeGenerator:
                 content = per_file_code.get(target_file, final_implementation)
                 # L7: Strip repair traceability markers before project write
                 content = strip_repair_markers(content)
+
+                # L8: Content-type coherence check — catch cross-file-type
+                # confusion (e.g. JSON in Dockerfile) before writing to disk.
+                coherence_err = _check_content_coherence(content, target_file)
+                if coherence_err:
+                    logger.warning(
+                        "Content coherence check FAILED for %s: %s — "
+                        "attempting re-extraction from raw drafter response",
+                        target_file,
+                        coherence_err,
+                    )
+                    recovered = _try_reextract_for_filetype(
+                        raw_drafter_for_recovery, target_file,
+                    )
+                    if recovered:
+                        content = strip_repair_markers(recovered)
+                        logger.info(
+                            "Content coherence RECOVERED for %s (%d chars)",
+                            target_file,
+                            len(content),
+                        )
+                    else:
+                        logger.error(
+                            "Content coherence recovery FAILED for %s — "
+                            "writing incoherent content as-is (will fail disk validation)",
+                            target_file,
+                        )
+
                 output_path.write_text(content, encoding="utf-8")
                 generated_files.append(output_path)
                 logger.info("Generated: %s", output_path)

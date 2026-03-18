@@ -413,6 +413,23 @@ class NodeLanguageProfile:
             "Do NOT import packages not listed above.\n"
         )
 
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract import/require statements from JS/TS source (REQ-PE-400)."""
+        import re
+        imports: list[str] = []
+        # ESM: import ... from "pkg"
+        for m in re.finditer(r'^import\s+.*?from\s+["\'].*?["\'];?', source, re.MULTILINE):
+            imports.append(m.group(0))
+        # CommonJS: const x = require("pkg")
+        for m in re.finditer(r'^(?:const|let|var)\s+.*?=\s*require\(["\'].*?["\']\);?', source, re.MULTILINE):
+            imports.append(m.group(0))
+        return imports
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Node.js stub marker for skeleton fill prompts."""
+        return '`throw new Error("not implemented")`'
+
 
 def detect_module_system(project_root: Path) -> str:
     """Detect CommonJS vs ESM from package.json ``type`` field (REQ-NODE-104).
