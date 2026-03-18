@@ -103,6 +103,10 @@ def _strip_version(dep: str) -> str:
     # Python-style version separators
     for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
         dep = dep.split(sep)[0]
+    # NuGet/Go space-separated: "Grpc.AspNetCore 2.76.0" → "Grpc.AspNetCore"
+    # Also handles Go: "github.com/grpc/grpc-go v1.56.0"
+    if " " in dep.strip():
+        dep = dep.strip().split()[0]
     return dep.strip().lower()
 
 
@@ -145,8 +149,9 @@ def detect_frameworks(
     desc_lower = task_description.lower() if task_description else ""
 
     for framework_key, config in fw_registry.items():
-        # Source 1: dependency name match
-        framework_dep_names = config.get("dep_names", set())
+        # Source 1: dependency name match (case-insensitive —
+        # _strip_version lowercases deps; profile dep_names may be PascalCase)
+        framework_dep_names = {d.lower() for d in config.get("dep_names", set())}
         if dep_names_lower & framework_dep_names:
             detected.add(framework_key)
             continue

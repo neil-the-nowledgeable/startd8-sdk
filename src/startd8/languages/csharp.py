@@ -405,10 +405,14 @@ class CSharpLanguageProfile:
         return "\n".join(lines)
 
     def strip_dependency_version(self, dep: str) -> str:
-        """Strip version from NuGet dependency. 'Package/1.0.0' -> 'Package'."""
+        """Strip version from NuGet dependency.
+
+        Handles 'Package/1.0.0' and 'Package 1.0.0' formats.
+        """
         if "/" in dep:
             return dep.split("/")[0].strip()
-        return dep.strip()
+        # Space-separated: 'Grpc.AspNetCore 2.76.0'
+        return dep.split()[0].strip() if dep.strip() else dep
 
     def get_import_syntax_guidance(self) -> str:
         """Return C# using rules for LLM prompts."""
@@ -424,9 +428,12 @@ def _derive_namespace(file_path: str) -> str:
     """Derive a C# namespace from a file path.
 
     Converts directory structure to dotted namespace.
-    Strips common prefixes like 'src/' and removes the filename.
+    Strips directory components named ``src``, ``source``, ``lib`` (common
+    in .NET project layouts like ``src/cartservice/src/cartstore/``).
 
-    Examples:
+    Examples::
+
+        'src/cartservice/src/cartstore/RedisCartStore.cs' -> 'cartservice.cartstore'
         'src/MyApp/Services/UserService.cs' -> 'MyApp.Services'
         'Services/UserService.cs' -> 'Services'
     """
@@ -434,10 +441,9 @@ def _derive_namespace(file_path: str) -> str:
 
     parts = PurePosixPath(file_path).parent.parts
 
-    # Strip common prefixes
-    skip_prefixes = {"src", "source", "lib"}
-    if parts and parts[0].lower() in skip_prefixes:
-        parts = parts[1:]
+    # Strip common non-namespace directory names
+    skip = {"src", "source", "lib"}
+    parts = tuple(p for p in parts if p.lower() not in skip)
 
     if not parts or parts == (".",):
         return ""
