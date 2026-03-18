@@ -274,6 +274,14 @@ class FeaturePostMortem:
     pre_semantic_repair_score: Optional[float] = None
     semantic_repairs_applied: int = 0
     semantic_repair_categories: List[str] = dataclasses.field(default_factory=list)
+    # Exemplar injection tracking (REQ-PEP-103)
+    exemplar_used: bool = False
+    exemplar_id: Optional[str] = None
+    exemplar_match_type: Optional[str] = None  # "exact" | "partial" | "none"
+    # TODO scanner counts (REQ-TCW-100)
+    todo_count_a: int = 0
+    todo_count_b: int = 0
+    todo_count_c: int = 0
 
     @property
     def semantic_issue_summary(self) -> Dict[str, int]:
@@ -527,6 +535,14 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         "phase": "spec",
         "hint": "Reduce batch size or complexity to stay within circuit breaker thresholds.",
     },
+    "language_mismatch_in_generation": {
+        "phase": "spec",
+        "hint": (
+            "Non-Python files received Python stubs. Check template-match routing "
+            "for non-Python trivial tasks. Ensure _NON_PYTHON_EXTENSIONS includes "
+            "all target file extensions."
+        ),
+    },
 }
 
 
@@ -760,6 +776,18 @@ class PrimePostMortemEvaluator:
             self._write_outputs(report, output_dir)
         except Exception:
             logger.warning("Failed to write postmortem outputs", exc_info=True)
+
+        # Extract exemplars from perfect-scoring features (REQ-PEP-000)
+        try:
+            self._extract_exemplars(report, output_dir)
+        except Exception:
+            logger.debug("Exemplar extraction failed (non-fatal)", exc_info=True)
+
+        # Run TODO scanner on generated files (REQ-TCW-100)
+        try:
+            self._scan_todos(report, project_root, output_dir)
+        except Exception:
+            logger.debug("TODO scan failed (non-fatal)", exc_info=True)
 
         return report
 
@@ -1230,6 +1258,34 @@ class PrimePostMortemEvaluator:
                         severity="low",
                     ))
 
+        # Pattern 4: Language mismatch in generated files (REQ-MLT-401)
+        mismatch_features: List[str] = []
+        for fpm in features:
+            dc = fpm.disk_compliance
+            if dc is not None:
+                error = getattr(dc, "error", "") or ""
+                if "language_mismatch" in error:
+                    mismatch_features.append(fpm.feature_id)
+            # Also check per-file disk results if available
+            for file_dc in getattr(fpm, "per_file_disk", []) or []:
+                error = getattr(file_dc, "error", "") or ""
+                if "language_mismatch" in error:
+                    if fpm.feature_id not in mismatch_features:
+                        mismatch_features.append(fpm.feature_id)
+                        break
+
+        if len(mismatch_features) >= 2:
+            patterns.append(CrossFeaturePattern(
+                pattern_type="language_mismatch_in_generation",
+                description=(
+                    f"{len(mismatch_features)} feature(s) have language mismatch "
+                    f"errors (non-Python files received Python stubs)"
+                ),
+                affected_features=mismatch_features,
+                frequency=len(mismatch_features),
+                severity="high" if len(mismatch_features) >= 3 else "medium",
+            ))
+
         return patterns
 
     def _build_cost_summary(
@@ -1325,6 +1381,57 @@ class PrimePostMortemEvaluator:
             lessons_json = json.dumps(lessons_data, indent=2, default=str)
             lessons_path.write_text(lessons_json, encoding="utf-8")
             logger.info("Post-mortem lessons: %s", lessons_path)
+
+    def _extract_exemplars(
+        self, report: PrimePostMortemReport, output_dir: str,
+    ) -> None:
+        """Extract exemplars from features scoring 1.00 (REQ-PEP-000)."""
+        from startd8.exemplars.extractor import extract_exemplars_from_run
+        from startd8.exemplars.registry import ExemplarRegistry
+
+        registry_path = Path(output_dir) / "exemplar-registry.json"
+        registry = ExemplarRegistry.load(registry_path)
+        extracted = extract_exemplars_from_run(output_dir, registry=registry)
+        if extracted:
+            promotions = registry.promote_maturity()
+            registry.save(registry_path)
+            logger.info(
+                "Exemplars: extracted %d, promotions %d, total %d",
+                len(extracted), len(promotions), len(registry),
+            )
+
+    def _scan_todos(
+        self,
+        report: PrimePostMortemReport,
+        project_root: Optional[str],
+        output_dir: str,
+    ) -> None:
+        """Scan generated files for TODO markers (REQ-TCW-100)."""
+        from startd8.validators.todo_scanner import scan_file, TodoInventory
+
+        if not project_root:
+            return
+
+        inventory = TodoInventory()
+        for fpm in report.features:
+            for gf in fpm.generated_files:
+                gf_path = Path(project_root) / gf
+                if not gf_path.is_file():
+                    gf_path = Path(output_dir) / "generated" / gf
+                entries = scan_file(gf_path)
+                inventory.entries.extend(entries)
+
+                # Update per-feature counts
+                for e in entries:
+                    if e.category == "A":
+                        fpm.todo_count_a += 1
+                    elif e.category == "B":
+                        fpm.todo_count_b += 1
+                    else:
+                        fpm.todo_count_c += 1
+
+        if inventory.entries:
+            inventory.save(Path(output_dir) / "todo-inventory.json")
 
     def _render_markdown(self, report: PrimePostMortemReport) -> str:
         """Render the report as markdown."""

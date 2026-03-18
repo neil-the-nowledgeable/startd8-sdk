@@ -176,9 +176,31 @@ class NodeLanguageProfile:
         return _NODE_STDLIB_PREFIXES
 
     def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
-        # Node.js has no authoritative import fixer like goimports.
-        # prettier could format, but doesn't fix imports.
-        return []
+        """Run prettier on generated JS files if available (REQ-NODE-300).
+
+        Best-effort cosmetic formatting only — does not fix imports.
+        Returns list of formatted file paths.
+        """
+        import shutil
+        import subprocess
+
+        prettier = shutil.which("prettier")
+        if not prettier:
+            return []
+
+        formatted: List[str] = []
+        js_exts = (".js", ".mjs", ".cjs")
+        js_files = [f for f in files if f.suffix.lower() in js_exts]
+        for f in js_files:
+            try:
+                subprocess.run(
+                    [prettier, "--write", str(f)],
+                    capture_output=True, timeout=30,
+                )
+                formatted.append(str(f))
+            except (subprocess.TimeoutExpired, OSError):
+                pass  # best-effort — skip on failure
+        return formatted
 
     def validate_syntax(self, code: str) -> tuple[bool, str]:
         """Validate Node.js syntax via node --check on a temp file."""
