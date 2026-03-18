@@ -60,7 +60,7 @@ Constructor, getter/setter, `equals`/`hashCode`/`toString`, and Builder patterns
 
 ## 2. Java Language Profile — Current State
 
-**File:** `src/startd8/languages/java.py` (347 lines)
+**File:** `src/startd8/languages/java.py` (367 lines)
 
 ### Implemented Capabilities
 
@@ -1148,7 +1148,7 @@ forward_manifest_validator._validate_java_file()
 |--------|---------------|------|
 | `languages/resolution.py` | `resolve_language()` | `.java` -> `JavaLanguageProfile` |
 | `micro_prime/lang_detect.py` | `detect_language()` | `.java` -> `"java"` for ForwardFileSpec |
-| `languages/java.py` | `JavaLanguageProfile` | 15-property language profile (347 lines) |
+| `languages/java.py` | `JavaLanguageProfile` | 15-property language profile (367 lines) |
 | `languages/java_parser.py` | `parse_java_source()` | javalang-based element extraction |
 | `languages/java_splicer.py` | `splice_java_bodies()` | Brace-based body replacement |
 | `micro_prime/prime_adapter.py` | `_try_generate_build_gradle()` | Deterministic build.gradle |

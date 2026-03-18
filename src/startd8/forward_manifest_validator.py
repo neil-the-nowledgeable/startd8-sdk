@@ -486,15 +486,29 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
 
         # Strong signal: first code line is a Python import statement
         if first_code_line.startswith("import ") or first_code_line.startswith("from "):
-            # Exclude Go imports (e.g. inside go.mod or .go files)
-            if ext not in (".go",) and name != "go.mod":
+            # Exclude languages that share `import`/`from` keywords with Python:
+            #   Go — `import "pkg"` / go.mod
+            #   JS/TS — ESM `import X from 'pkg'`
+            #   Groovy/Gradle — `import groovy.transform.CompileStatic`
+            #   Java — `import java.util.List` (.java handled by _validate_java_file)
+            _IMPORT_EXCLUDE = (
+                ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+                ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+                ".java",
+            )
+            if ext not in _IMPORT_EXCLUDE and name != "go.mod":
                 label = ext.lstrip(".") if ext else name
                 return f"python_content_in_{label}"
 
         # Moderate signal: `def ` or `class ` as first code construct
-        if first_code_line.startswith("def ") or first_code_line.startswith("class "):
-            label = ext.lstrip(".") if ext else name
-            return f"python_content_in_{label}"
+        # Exclude Groovy/Gradle/Kotlin — `def` and `class` are native keywords
+        _DEF_CLASS_EXCLUDE = (
+            ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+        )
+        if ext not in _DEF_CLASS_EXCLUDE:
+            if first_code_line.startswith("def ") or first_code_line.startswith("class "):
+                label = ext.lstrip(".") if ext else name
+                return f"python_content_in_{label}"
 
     # --- Go fingerprints in non-Go files ---
     if ext not in (".go",) and name != "go.mod":
@@ -503,6 +517,19 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
             if stripped == "package main" and ext in (".html", ".htm", ".yaml", ".yml", ".json"):
                 label = ext.lstrip(".")
                 return f"go_content_in_{label}"
+
+    # --- Node.js/JavaScript fingerprints in non-JS files (REQ-NODE-202) ---
+    _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
+    if ext not in _JS_EXTENSIONS and ext != ".py":
+        _NODE_FINGERPRINT_RE = re.compile(
+            r"^\s*(?:const|let|var)\s+\w+\s*=\s*require\(", re.MULTILINE,
+        )
+        _MODULE_EXPORTS_RE = re.compile(
+            r"^\s*module\.exports\s*=", re.MULTILINE,
+        )
+        if _NODE_FINGERPRINT_RE.search(content) or _MODULE_EXPORTS_RE.search(content):
+            label = ext.lstrip(".") if ext else name
+            return f"nodejs_content_in_{label}"
 
     return None
 
@@ -540,6 +567,8 @@ def _validate_non_python_file(
     # Filename-based dispatch (before extension-based)
     if name == "go.mod":
         result = _validate_go_mod(content, result)
+    elif name == "package.json":
+        result = _validate_package_json(content, result)
     elif suffix == ".in" or name == "requirements.txt":
         result = _validate_requirements_file(content, result)
         # L5: Requirements-to-import cross-check (REQ-SV-601)
@@ -551,13 +580,53 @@ def _validate_non_python_file(
         result = _validate_html_file(content, result)
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
+    elif suffix in (".js", ".mjs", ".cjs"):
+        result = _validate_js_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
     elif suffix == ".java":
         result = _validate_java_file(content, result)
     elif name in ("build.gradle", "build.gradle.kts"):
         result = _validate_build_gradle(content, result)
+    elif suffix == ".cs":
+        result = _validate_csharp_file(content, result)
 
+    return result
+
+
+def _validate_csharp_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate C# source file structure."""
+    issues: list = []
+
+    # Check for balanced braces
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                issues.append("unbalanced braces (extra closing brace)")
+                break
+    if depth > 0:
+        issues.append(f"unbalanced braces (depth={depth})")
+
+    # Check for namespace or using declaration (basic C# structure)
+    has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
+    has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
+    has_type_decl = bool(
+        re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content)
+    )
+
+    if not has_namespace and not has_using and not has_type_decl:
+        issues.append("no C# structure found (namespace/using/type declaration)")
+
+    if issues:
+        result.semantic_issues = issues
+    result.ast_valid = len(issues) == 0
     return result
 
 
@@ -730,6 +799,114 @@ def _validate_yaml_file(
     return result
 
 
+_JS_KEYWORD_SET = frozenset({
+    "function", "const", "let", "var", "require",
+    "import", "export", "class", "module",
+})
+
+
+def _validate_js_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate JavaScript file via ``node --check`` with text-based fallback (REQ-NODE-200)."""
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # Text-based keyword check
+    has_keyword = any(kw in content for kw in _JS_KEYWORD_SET) or "=>" in content
+    if not has_keyword:
+        result.ast_valid = False
+        result.contract_compliance = 0.3
+        result.error = "no_js_keywords"
+        return result
+
+    # Try node --check for real syntax validation
+    import subprocess
+    import tempfile
+    import os
+
+    tmp = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".js", mode="w", delete=False)
+        tmp.write(content)
+        tmp.flush()
+        tmp.close()
+        proc = subprocess.run(
+            ["node", "--check", tmp.name],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            result.ast_valid = True
+            result.contract_compliance = 1.0
+        else:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"syntax_error: {proc.stderr.strip()[:200]}"
+    except FileNotFoundError:
+        # node not installed — text-based pass (best-effort)
+        result.ast_valid = True
+        result.contract_compliance = 0.8
+    except subprocess.TimeoutExpired:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "node_check_timeout"
+    except OSError as exc:
+        # Other OS errors (permissions, etc.) — text-based pass
+        result.ast_valid = True
+        result.contract_compliance = 0.8
+        result.error = f"node_check_unavailable: {exc}"
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    return result
+
+
+def _validate_package_json(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate package.json beyond generic JSON (REQ-NODE-201)."""
+    import json as _json
+
+    try:
+        data = _json.loads(content)
+    except (_json.JSONDecodeError, ValueError) as exc:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"invalid_json: {exc}"
+        return result
+
+    if not isinstance(data, dict):
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "package_json_not_object"
+        return result
+
+    result.ast_valid = True
+
+    if "name" not in data:
+        result.contract_compliance = 0.3
+        result.error = "missing_name_field"
+        return result
+
+    has_deps = "dependencies" in data or "devDependencies" in data
+    if not has_deps:
+        result.contract_compliance = 0.5
+        result.error = "missing_dependencies"
+        return result
+
+    result.contract_compliance = 1.0
+    return result
+
+
 def _validate_json_file(
     content: str,
     result: DiskComplianceResult,
@@ -822,17 +999,23 @@ def _validate_java_file(
     return result
 
 
+_GRADLE_PY_ONLY_FINGERPRINTS = ("import os", "from __future__", "print(")
+"""Python-only fingerprints for Gradle files.
+
+Excludes ``def`` and ``import`` which are native Groovy/Kotlin DSL keywords.
+"""
+
+
 def _validate_build_gradle(
     content: str,
     result: DiskComplianceResult,
 ) -> DiskComplianceResult:
     """Validate build.gradle / build.gradle.kts structure.
 
-    Checks for plugins block, dependencies block, and no Python content.
+    Checks for plugins block, dependencies block, and absence of
+    Python-only fingerprints (excludes Groovy-native keywords like ``def``).
     """
-    # Python content guard
-    _py_fingerprints = ("def ", "import os", "from __future__", "print(")
-    for fp in _py_fingerprints:
+    for fp in _GRADLE_PY_ONLY_FINGERPRINTS:
         if fp in content:
             result.ast_valid = False
             result.contract_compliance = 0.0

@@ -1738,55 +1738,16 @@ class MicroPrimeCodeGenerator:
                     )
                 continue
 
-            # Non-Python files (go.mod, YAML, HTML, etc.) must not go through
-            # the Python DeterministicFileAssembler — it emits `from __future__
-            # import annotations` stubs.  Use existing content or skip so the
-            # cloud/file-whole generation path handles them.
-            if _is_non_python_file(file_path):
-                existing = existing_files.get(file_path, "")
-                if existing:
-                    skeletons[file_path] = existing
-                    logger.debug(
-                        "Non-Python skeleton for %s: passthrough existing "
-                        "content (%d lines)",
-                        file_path,
-                        existing.count("\n") + 1,
-                    )
-                else:
-                    logger.debug(
-                        "Non-Python file %s has no existing content, "
-                        "skipping skeleton (cloud/file-whole generation)",
-                        file_path,
-                    )
-                continue
-
-            # .go source files: use existing content if available, otherwise
-            # skip — the file-whole generation path handles Go without needing
-            # a Python-style skeleton.  Go skeletons with panic("not implemented")
-            # stubs would require a Go-aware assembler (future enhancement).
+            # --- Language-specific skeleton generators (before generic bypass) ---
+            # These must run BEFORE _is_non_python_file() because they have
+            # dedicated DFA assemblers that produce real skeletons, not passthrough.
             from pathlib import PurePosixPath
-            if PurePosixPath(file_path).suffix.lower() == ".go":
-                existing = existing_files.get(file_path, "")
-                if existing:
-                    skeletons[file_path] = existing
-                    logger.debug(
-                        "Go skeleton for %s: passthrough existing content "
-                        "(%d lines)",
-                        file_path,
-                        existing.count("\n") + 1,
-                    )
-                else:
-                    logger.debug(
-                        "Go file %s has no existing content, skipping "
-                        "skeleton (file-whole generation)",
-                        file_path,
-                    )
-                continue
+            _suffix = PurePosixPath(file_path).suffix.lower()
 
             # .java source files: use JavaDeterministicFileAssembler for
             # skeleton generation (real Java skeletons with package statement,
             # 2-tier imports, and UnsupportedOperationException stubs).
-            if PurePosixPath(file_path).suffix.lower() == ".java":
+            if _suffix == ".java":
                 try:
                     from startd8.utils.java_file_assembler import (
                         JavaDeterministicFileAssembler,
@@ -1810,6 +1771,51 @@ class MicroPrimeCodeGenerator:
                     logger.warning(
                         "Java skeleton generation failed for %s: %s",
                         file_path, exc,
+                    )
+                continue
+
+            # .go source files: use existing content if available, otherwise
+            # skip — the file-whole generation path handles Go without needing
+            # a Python-style skeleton.  Go skeletons with panic("not implemented")
+            # stubs would require a Go-aware assembler (future enhancement).
+            if _suffix == ".go":
+                existing = existing_files.get(file_path, "")
+                if existing:
+                    skeletons[file_path] = existing
+                    logger.debug(
+                        "Go skeleton for %s: passthrough existing content "
+                        "(%d lines)",
+                        file_path,
+                        existing.count("\n") + 1,
+                    )
+                else:
+                    logger.debug(
+                        "Go file %s has no existing content, skipping "
+                        "skeleton (file-whole generation)",
+                        file_path,
+                    )
+                continue
+
+            # --- Generic non-Python bypass (after language-specific checks) ---
+            # Non-Python files (go.mod, YAML, HTML, etc.) must not go through
+            # the Python DeterministicFileAssembler — it emits `from __future__
+            # import annotations` stubs.  Use existing content or skip so the
+            # cloud/file-whole generation path handles them.
+            if _is_non_python_file(file_path):
+                existing = existing_files.get(file_path, "")
+                if existing:
+                    skeletons[file_path] = existing
+                    logger.debug(
+                        "Non-Python skeleton for %s: passthrough existing "
+                        "content (%d lines)",
+                        file_path,
+                        existing.count("\n") + 1,
+                    )
+                else:
+                    logger.debug(
+                        "Non-Python file %s has no existing content, "
+                        "skipping skeleton (cloud/file-whole generation)",
+                        file_path,
                     )
                 continue
 

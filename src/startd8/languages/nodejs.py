@@ -22,7 +22,7 @@ class NodeLanguageProfile:
 
     @property
     def source_extensions(self) -> List[str]:
-        return [".js", ".mjs", ".cjs"]
+        return [".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"]
 
     @property
     def build_file_patterns(self) -> List[str]:
@@ -53,6 +53,30 @@ class NodeLanguageProfile:
                 ],
                 "conditional": {},
             },
+            "otel": {
+                "detect": ["opentelemetry", "OTel", "tracing", "instrumentation"],
+                "dep_names": {
+                    "@opentelemetry/sdk-node",
+                    "@opentelemetry/api",
+                    "@opentelemetry/instrumentation-grpc",
+                    "@opentelemetry/exporter-trace-otlp-grpc",
+                },
+                "imports": [
+                    "const opentelemetry = require('@opentelemetry/sdk-node');",
+                    "const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');",
+                    "const { GrpcInstrumentation } = require('@opentelemetry/instrumentation-grpc');",
+                    "const { registerInstrumentations } = require('@opentelemetry/instrumentation');",
+                ],
+                "conditional": {},
+            },
+            "profiler": {
+                "detect": ["profiler", "cloud profiler"],
+                "dep_names": {"@google-cloud/profiler"},
+                "imports": [
+                    "require('@google-cloud/profiler').start({serviceContext: {service: '<SERVICE_NAME>', version: '1.0.0'}});",
+                ],
+                "conditional": {},
+            },
             "express": {
                 "detect": ["express", "web server", "REST API"],
                 "dep_names": {"express"},
@@ -66,6 +90,14 @@ class NodeLanguageProfile:
                 "dep_names": {"pino"},
                 "imports": [
                     "const pino = require('pino');",
+                ],
+                "conditional": {},
+            },
+            "uuid": {
+                "detect": ["uuid", "transaction id"],
+                "dep_names": {"uuid"},
+                "imports": [
+                    "const { v4: uuidv4 } = require('uuid');",
                 ],
                 "conditional": {},
             },
@@ -118,7 +150,7 @@ class NodeLanguageProfile:
         return "node:20-alpine"
 
     def supports_extension(self, ext: str) -> bool:
-        return ext.lower() in (".js", ".mjs", ".cjs")
+        return ext.lower() in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
 
     def get_import_patterns(self, module_stem: str) -> List[str]:
         return [
@@ -218,6 +250,126 @@ class NodeLanguageProfile:
                 pkg["dependencies"] = deps
 
         return json.dumps(pkg, indent=2) + "\n"
+
+
+    def derive_service_metadata(
+        self,
+        features: Sequence[Any],
+        *,
+        onboarding: Optional[Dict[str, Any]] = None,
+        api_signatures: Optional[List[str]] = None,
+        runtime_dependencies: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Derive Node.js-specific service metadata from plan features.
+
+        Extracts module_system and node_version.
+        """
+        metadata: Dict[str, Any] = {}
+
+        # module_system: prefer explicit, else infer from file extensions
+        module_systems: list[str] = []
+        for f in features:
+            ms = getattr(f, "module_system", "")
+            if ms:
+                module_systems.append(ms)
+        if module_systems:
+            metadata["module_system"] = module_systems[0]
+        else:
+            all_files = [tf for f in features for tf in getattr(f, "target_files", [])]
+            has_mjs = any(tf.endswith(".mjs") for tf in all_files)
+            has_cjs = any(tf.endswith(".cjs") for tf in all_files)
+            if has_mjs and not has_cjs:
+                metadata["module_system"] = "esm"
+            elif has_cjs and not has_mjs:
+                metadata["module_system"] = "commonjs"
+            else:
+                metadata["module_system"] = "esm"  # default
+
+        # node_version
+        node_version = "20"
+        for f in features:
+            nv = getattr(f, "node_version", "")
+            if nv:
+                node_version = nv
+                break
+        if onboarding:
+            node_version = str(onboarding.get("node_version", node_version))
+        metadata["node_version"] = node_version
+
+        return metadata
+
+    def build_project_context_section(self, context: Dict[str, Any]) -> str:
+        """Build Node.js module context section for correct import/export generation."""
+        module_system = context.get("module_system", "")
+        node_version = context.get("node_version", "20")
+
+        # Check service_metadata
+        svc_meta = context.get("service_metadata")
+        if isinstance(svc_meta, dict):
+            if not module_system:
+                module_system = svc_meta.get("module_system", "")
+            if not node_version or node_version == "20":
+                node_version = svc_meta.get("node_version", node_version)
+        if not module_system:
+            module_system = "commonjs"  # Node.js default when package.json has no "type" field
+
+        is_esm = module_system == "esm"
+
+        lines = [
+            "## Node.js Module Context (CRITICAL — required for correct imports)\n",
+            f"- **Module system**: {'ES Modules (ESM)' if is_esm else 'CommonJS (CJS)'}",
+            f"- **Node.js version**: {node_version}",
+        ]
+
+        if is_esm:
+            lines.extend([
+                "",
+                "**ESM import/export rules:**",
+                "- Use `import X from 'pkg'` for default imports",
+                "- Use `import { X, Y } from 'pkg'` for named imports",
+                "- Use `export default` or `export { X, Y }` for exports",
+                "- Use `import { readFile } from 'node:fs/promises'` for Node builtins (node: prefix)",
+                "- File extensions required in relative imports: `import X from './util.js'`",
+                "- No `require()` or `module.exports` — ESM only",
+                "- Top-level `await` is supported",
+            ])
+        else:
+            lines.extend([
+                "",
+                "**CommonJS import/export rules:**",
+                "- Use `const X = require('pkg')` for imports",
+                "- Use `const { X, Y } = require('pkg')` for destructured imports",
+                "- Use `module.exports = X` or `exports.X = ...` for exports",
+                "- Use `const fs = require('fs')` for Node builtins (no node: prefix needed)",
+                "- No `import`/`export` statements — CommonJS only",
+            ])
+
+        lines.extend([
+            "",
+            "**Node.js structural rules:**",
+            "- camelCase for variables and functions, PascalCase for classes",
+            "- Use `async`/`await` for asynchronous code (not callbacks)",
+            "- Handle errors with try/catch or `.catch()` — never swallow rejections",
+            "- Use `const` by default, `let` only when reassignment is needed, never `var`",
+        ])
+
+        return "\n".join(lines)
+
+    def strip_dependency_version(self, dep: str) -> str:
+        """Strip version from Node.js dependency. '@scope/pkg@1.0' -> '@scope/pkg'."""
+        if dep.startswith("@"):
+            rest = dep[1:]
+            at_idx = rest.find("@")
+            return ("@" + rest[:at_idx]) if at_idx > 0 else dep.strip()
+        return dep.split("@")[0].strip()
+
+    def get_import_syntax_guidance(self) -> str:
+        """Return Node.js import rules for LLM prompts."""
+        return (
+            "Use ONLY these packages plus Node.js builtins (fs, path, http, etc.).\n"
+            "Every package you reference MUST be listed above or be a Node builtin.\n"
+            "Do NOT import packages not listed above.\n"
+        )
 
 
 _NODE_STDLIB_PREFIXES: tuple[str, ...] = (

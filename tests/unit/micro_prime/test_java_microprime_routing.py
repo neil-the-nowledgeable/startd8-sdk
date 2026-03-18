@@ -6,18 +6,18 @@ from unittest.mock import patch
 
 class TestJavaMicroPrimeRouting:
 
-    def test_java_bypass_by_default(self):
-        """Java files should bypass MicroPrime by default."""
+    def test_java_routes_through_microprime(self):
+        """Java files route through MicroPrime (JAVA_MICROPRIME_ENABLED=True)."""
         from startd8.micro_prime.engine import _is_non_python_file
-        assert _is_non_python_file("src/main/java/com/example/MyClass.java") is True
+        assert _is_non_python_file("src/main/java/com/example/MyClass.java") is False
 
-    def test_java_routes_when_enabled(self):
-        """When JAVA_MICROPRIME_ENABLED=True, .java files are NOT non-Python."""
+    def test_java_bypass_when_disabled(self):
+        """When JAVA_MICROPRIME_ENABLED=False, .java files bypass MicroPrime."""
         import startd8.micro_prime.engine as engine_mod
         original = engine_mod.JAVA_MICROPRIME_ENABLED
         try:
-            engine_mod.JAVA_MICROPRIME_ENABLED = True
-            assert engine_mod._is_non_python_file("MyClass.java") is False
+            engine_mod.JAVA_MICROPRIME_ENABLED = False
+            assert engine_mod._is_non_python_file("MyClass.java") is True
         finally:
             engine_mod.JAVA_MICROPRIME_ENABLED = original
 

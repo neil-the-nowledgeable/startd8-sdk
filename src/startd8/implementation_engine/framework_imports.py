@@ -14,12 +14,13 @@ from typing import Any
 
 __all__ = [
     "FRAMEWORK_IMPORTS",
+    "_PYTHON_FRAMEWORK_IMPORTS",
     "detect_frameworks",
     "get_import_preamble",
 ]
 
 
-FRAMEWORK_IMPORTS: dict[str, dict[str, Any]] = {
+_PYTHON_FRAMEWORK_IMPORTS: dict[str, dict[str, Any]] = {
     "grpc": {
         "detect": ["grpc", "grpcio", "proto", "protobuf", "gRPC"],
         "dep_names": {"grpcio", "grpcio-health-checking", "grpcio-tools"},
@@ -80,9 +81,26 @@ FRAMEWORK_IMPORTS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Backward-compatible alias
+FRAMEWORK_IMPORTS = _PYTHON_FRAMEWORK_IMPORTS
+
 
 def _strip_version(dep: str) -> str:
-    """Strip version pins: ``grpcio==1.76.0`` → ``grpcio``."""
+    """Strip version pins: ``grpcio==1.76.0`` → ``grpcio``.
+
+    Also handles npm scoped packages: ``@grpc/grpc-js@1.14.3`` → ``@grpc/grpc-js``.
+    """
+    dep = dep.strip()
+    # Handle npm @scope/name@version — scoped packages start with @,
+    # so a second @ separates name from version.
+    at_count = dep.count("@")
+    if at_count >= 2 and dep.startswith("@"):
+        # Scoped + versioned: @scope/name@version → @scope/name
+        dep = dep.rsplit("@", 1)[0]
+    elif at_count == 1 and not dep.startswith("@"):
+        # Unscoped + versioned: name@version → name
+        dep = dep.split("@")[0]
+    # Python-style version separators
     for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
         dep = dep.split(sep)[0]
     return dep.strip().lower()
@@ -109,7 +127,7 @@ def detect_frameworks(
         Sorted list of framework keys (e.g. ``["flask", "grpc"]``).
     """
     # Use language-specific framework imports when available
-    fw_registry = FRAMEWORK_IMPORTS
+    fw_registry = _PYTHON_FRAMEWORK_IMPORTS
     if language_profile is not None:
         try:
             profile_fw = language_profile.framework_imports
@@ -166,7 +184,7 @@ def get_import_preamble(
         return ""
 
     # Use language-specific framework imports and fence language
-    fw_registry = FRAMEWORK_IMPORTS
+    fw_registry = _PYTHON_FRAMEWORK_IMPORTS
     fence_lang = "python"
     if language_profile is not None:
         try:
@@ -175,7 +193,10 @@ def get_import_preamble(
                 fw_registry = profile_fw
             fence_lang = language_profile.language_id
             # Map language IDs to common fence tags
-            _FENCE_MAP = {"nodejs": "javascript", "python": "python", "go": "go", "java": "java"}
+            _FENCE_MAP = {
+                "nodejs": "javascript", "python": "python", "go": "go",
+                "java": "java", "csharp": "csharp",
+            }
             fence_lang = _FENCE_MAP.get(fence_lang, fence_lang)
         except AttributeError:
             pass

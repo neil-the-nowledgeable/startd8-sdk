@@ -92,8 +92,8 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 
 
 # Feature flag: when True, .java files flow through MicroPrime instead of
-# bypassing to file-whole generation.  Default off — enable after Phase 3.
-JAVA_MICROPRIME_ENABLED = False
+# bypassing to file-whole generation.  All 5 phases implemented (23c7af3).
+JAVA_MICROPRIME_ENABLED = True
 
 # REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
 # MicroPrime element generation and use file-whole LLM generation instead.
