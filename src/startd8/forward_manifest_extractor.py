@@ -1416,6 +1416,10 @@ class SourceReconciler:
                     contracts.extend(self._reconcile_go_file(
                         src_file, relpath, feature_ids, seen_ids
                     ))
+                elif src_file.suffix == ".java":
+                    contracts.extend(self._reconcile_java_file(
+                        src_file, relpath, feature_ids, seen_ids
+                    ))
 
         return contracts
 
@@ -1559,6 +1563,75 @@ class SourceReconciler:
                         description=f"Go {kind_label} {elem.name} in {relpath}",
                         class_name=elem.name,
                         source_reference="source-go-parser",
+                        applicable_task_ids=feature_ids,
+                    ))
+
+        return contracts
+
+    def _reconcile_java_file(
+        self,
+        java_file: Path,
+        relpath: str,
+        feature_ids: list[str],
+        seen_ids: set[str],
+    ) -> list[InterfaceContract]:
+        """Reconcile a single Java file using javalang-based parsing."""
+        try:
+            from startd8.languages.java_parser import parse_java_source
+        except ImportError:
+            return []
+
+        try:
+            source = java_file.read_text(encoding=self.encoding)
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Cannot read %s: %s", java_file, exc)
+            return []
+
+        elements = parse_java_source(source)
+        contracts: list[InterfaceContract] = []
+
+        for elem in elements:
+            if elem.kind in ("method", "constructor"):
+                abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
+                name_key = elem.name
+                if elem.parent:
+                    name_key = f"{elem.parent}.{elem.name}"
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{name_key}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    desc = (
+                        f"{'Constructor' if elem.kind == 'constructor' else 'Method'}"
+                        f" {name_key} in {relpath}"
+                    )
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.FUNCTION_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=desc,
+                        function_name=name_key,
+                        source_reference="source-java-parser",
+                        applicable_task_ids=feature_ids,
+                    ))
+            elif elem.kind in ("class", "interface", "enum"):
+                abbrev = _CATEGORY_ABBREV[ContractCategory.CLASS_NAME]
+                contract_id = make_element_id(
+                    abbrev,
+                    f"src-{Path(relpath).stem}-{elem.name}",
+                    file_path=relpath,
+                )
+                if contract_id not in seen_ids:
+                    seen_ids.add(contract_id)
+                    contracts.append(_make_contract(
+                        contract_id=contract_id,
+                        category=ContractCategory.CLASS_NAME,
+                        confidence=ContractConfidence.INFERRED,
+                        description=f"Java {elem.kind} {elem.name} in {relpath}",
+                        class_name=elem.name,
+                        source_reference="source-java-parser",
                         applicable_task_ids=feature_ids,
                     ))
 

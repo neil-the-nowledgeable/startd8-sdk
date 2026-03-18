@@ -9,13 +9,14 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-Language = Literal["python", "dockerfile", "go", "proto", "text", "unknown"]
+Language = Literal["python", "dockerfile", "go", "java", "proto", "text", "unknown"]
 
 
 _EXTENSION_TO_LANG: dict[str, Language] = {
     ".py": "python",
     ".pyi": "python",
     ".go": "go",
+    ".java": "java",
     ".proto": "proto",
     ".txt": "text",
     ".in": "text",

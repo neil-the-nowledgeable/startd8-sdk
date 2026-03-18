@@ -745,6 +745,24 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
+                # Try deterministic generation for build.gradle files
+                gradle_content = self._try_generate_build_gradle(
+                    file_path, file_spec, context,
+                )
+                if gradle_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(gradle_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote build.gradle %s (deterministic, %d lines)",
+                        file_path,
+                        gradle_content.count("\n") + 1,
+                    )
+                    continue
+
                 # All other non-Python files: delegate to fallback (LLM)
                 logger.info(
                     "Micro Prime bypass: %s is non-Python — "
@@ -1765,6 +1783,36 @@ class MicroPrimeCodeGenerator:
                     )
                 continue
 
+            # .java source files: use JavaDeterministicFileAssembler for
+            # skeleton generation (real Java skeletons with package statement,
+            # 2-tier imports, and UnsupportedOperationException stubs).
+            if PurePosixPath(file_path).suffix.lower() == ".java":
+                try:
+                    from startd8.utils.java_file_assembler import (
+                        JavaDeterministicFileAssembler,
+                    )
+
+                    java_assembler = JavaDeterministicFileAssembler()
+                    java_source = java_assembler.render_file(file_spec)
+                    if java_source:
+                        skeletons[file_path] = java_source
+                        logger.debug(
+                            "Generated Java skeleton for %s (%d lines)",
+                            file_path,
+                            java_source.count("\n") + 1,
+                        )
+                    else:
+                        logger.debug(
+                            "Java DFA returned None for %s, skipping skeleton",
+                            file_path,
+                        )
+                except (ImportError, ValueError, TypeError, AttributeError) as exc:
+                    logger.warning(
+                        "Java skeleton generation failed for %s: %s",
+                        file_path, exc,
+                    )
+                continue
+
             try:
                 source = assembler.render_file(file_spec)
                 skeletons[file_path] = source
@@ -1875,6 +1923,65 @@ class MicroPrimeCodeGenerator:
         go_version = context.get("go_version")
         if go_version:
             metadata["go_version"] = go_version
+
+        content = profile.generate_dependency_file(
+            project_root=self._output_dir,
+            service_name=Path(file_path).parent.name or "service",
+            module_path=module_path,
+            dependencies=dependencies,
+            metadata=metadata or None,
+        )
+        return content
+
+    def _try_generate_build_gradle(
+        self,
+        file_path: str,
+        file_spec: Any,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Try deterministic build.gradle generation from seed metadata.
+
+        Returns build.gradle content string, or None if the file is not a
+        build.gradle or if generation cannot proceed (missing metadata).
+        """
+        name = Path(file_path).name
+        if name not in ("build.gradle", "build.gradle.kts"):
+            return None
+
+        try:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("java")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
+            return None
+
+        # Extract module path / main class from file_spec or context
+        module_path = ""
+        if file_spec is not None:
+            meta = getattr(file_spec, "metadata", None) or {}
+            if isinstance(meta, dict):
+                module_path = meta.get("main_class", "")
+
+        if not module_path:
+            # Infer main class from sibling Application.java or directory name
+            parent = Path(file_path).parent
+            if parent.name:
+                module_path = f"com.example.{parent.name}.Application"
+
+        # Extract dependencies from context
+        dependencies: List[str] = []
+        seed_deps = context.get("dependencies") or []
+        if isinstance(seed_deps, list):
+            dependencies = [str(d) for d in seed_deps if d]
+
+        # Extract java version from context
+        metadata = {}
+        java_version = context.get("java_version")
+        if java_version:
+            metadata["java_version"] = java_version
 
         content = profile.generate_dependency_file(
             project_root=self._output_dir,
