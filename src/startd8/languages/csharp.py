@@ -260,15 +260,24 @@ class CSharpLanguageProfile:
         dependencies: List[str],
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        """Generate .csproj XML content from service metadata."""
+        """Generate .csproj XML content from service metadata.
+
+        Handles dependency formats: ``Name/Version``, ``Name Version``,
+        or plain ``Name``.  Supports ``sdk_type`` and ``protobuf_items``
+        in *metadata*.
+        """
         target_framework = "net8.0"
+        sdk_type = "Microsoft.NET.Sdk.Web"
+        protobuf_items: List[str] = []
         if metadata:
             target_framework = str(
                 metadata.get("target_framework", target_framework),
             )
+            sdk_type = str(metadata.get("sdk_type", sdk_type))
+            protobuf_items = metadata.get("protobuf_items", [])
 
         lines = [
-            '<Project Sdk="Microsoft.NET.Sdk.Web">',
+            f'<Project Sdk="{sdk_type}">',
             "",
             "  <PropertyGroup>",
             f"    <TargetFramework>{target_framework}</TargetFramework>",
@@ -283,22 +292,101 @@ class CSharpLanguageProfile:
                 dep = dep.strip()
                 if not dep:
                     continue
-                # NuGet format: Name/Version or plain Name
+                # NuGet format: Name/Version, Name Version, or plain Name
                 if "/" in dep:
                     name, version = dep.split("/", 1)
-                    name = name.strip()
-                    version = version.strip()
+                elif " " in dep:
+                    parts = dep.split(None, 1)
+                    name, version = parts[0], parts[1]
                 else:
-                    name = dep
-                    version = "*"
+                    name, version = dep, ""
+                name = name.strip()
+                version = version.strip()
+                if version:
+                    lines.append(
+                        f'    <PackageReference Include="{name}" '
+                        f'Version="{version}" />',
+                    )
+                else:
+                    lines.append(
+                        f'    <PackageReference Include="{name}" />',
+                    )
+            lines.append("  </ItemGroup>")
+
+        if protobuf_items:
+            lines.append("")
+            lines.append("  <ItemGroup>")
+            for proto in protobuf_items:
                 lines.append(
-                    f'    <PackageReference Include="{name}" '
-                    f'Version="{version}" />',
+                    f'    <Protobuf Include="{proto}" GrpcServices="Both" />',
                 )
             lines.append("  </ItemGroup>")
 
         lines.append("")
         lines.append("</Project>")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def generate_solution_file(
+        self,
+        solution_name: str,
+        projects: List[Dict[str, str]],
+    ) -> str:
+        """Generate .sln file content (REQ-CS-104).
+
+        Args:
+            solution_name: Solution name (used in header comment).
+            projects: List of dicts with keys ``name``, ``path``, ``guid``.
+                ``guid`` should include braces, e.g. ``{2348C29F-...}``.
+
+        Returns:
+            Complete .sln file content with correct Visual Studio format.
+        """
+        cs_project_type = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}"
+
+        lines = [
+            "",
+            "Microsoft Visual Studio Solution File, Format Version 12.00",
+            "# Visual Studio 15",
+        ]
+
+        for proj in projects:
+            name = proj["name"]
+            path = proj["path"]
+            guid = proj["guid"]
+            lines.append(
+                f'Project("{cs_project_type}") = "{name}", '
+                f'"{path}", "{guid}"'
+            )
+            lines.append("EndProject")
+
+        lines.append("Global")
+        lines.append(
+            "\tGlobalSection(SolutionConfigurationPlatforms) = preSolution"
+        )
+        for config in ("Debug", "Release"):
+            for platform in ("Any CPU",):
+                lines.append(f"\t\t{config}|{platform} = {config}|{platform}")
+        lines.append("\tEndGlobalSection")
+
+        lines.append(
+            "\tGlobalSection(ProjectConfigurationPlatforms) = postSolution"
+        )
+        for proj in projects:
+            guid = proj["guid"]
+            for config in ("Debug", "Release"):
+                for platform in ("Any CPU",):
+                    lines.append(
+                        f"\t\t{guid}.{config}|{platform}.ActiveCfg = "
+                        f"{config}|{platform}"
+                    )
+                    lines.append(
+                        f"\t\t{guid}.{config}|{platform}.Build.0 = "
+                        f"{config}|{platform}"
+                    )
+        lines.append("\tEndGlobalSection")
+        lines.append("EndGlobal")
         lines.append("")
 
         return "\n".join(lines)
@@ -349,6 +437,19 @@ class CSharpLanguageProfile:
                 onboarding.get("target_framework", target_framework),
             )
         metadata["target_framework"] = target_framework
+
+        # sdk_type: detect from target files and dependencies
+        all_files = [
+            tf for f in features for tf in getattr(f, "target_files", [])
+        ]
+        has_web_files = any(
+            "Startup.cs" in tf or "Program.cs" in tf for tf in all_files
+        )
+        all_deps = " ".join(runtime_dependencies or []).lower()
+        if has_web_files or "grpc" in all_deps or "aspnetcore" in all_deps:
+            metadata["sdk_type"] = "Microsoft.NET.Sdk.Web"
+        else:
+            metadata["sdk_type"] = "Microsoft.NET.Sdk"
 
         return metadata
 
@@ -401,6 +502,40 @@ class CSharpLanguageProfile:
             "- Prefer async/await for I/O-bound operations",
             "- Use `using` declarations for IDisposable resources",
         ])
+
+        # REQ-CS-601: Dockerfile context for .NET services
+        has_dockerfile = any(
+            Path(f).name.lower().startswith("dockerfile")
+            for f in target_files
+        )
+        if has_dockerfile:
+            csproj_name = ""
+            if isinstance(svc_meta, dict):
+                csproj_name = svc_meta.get("csproj_name", "")
+            lines.extend([
+                "",
+                "**Dockerfile patterns for .NET:**",
+                "- Multi-stage build: `dotnet/sdk` builder → `dotnet/runtime-deps` runtime (chiseled/distroless)",
+                f"- Builder: `COPY {csproj_name or '*.csproj'} .` then `RUN dotnet restore`",
+                "- Publish: `RUN dotnet publish -c release -o /app --self-contained true -p:PublishTrimmed=true`",
+                "- Runtime: `COPY --from=builder /app .`",
+                "- Set `ENV DOTNET_EnableDiagnostics=0` and `ENV ASPNETCORE_HTTP_PORTS=<port>`",
+                "- Run as non-root: `USER 1000`",
+                "- No HEALTHCHECK instruction — use gRPC health protocol instead",
+            ])
+
+        # REQ-CS-602: Proto file context for gRPC services
+        has_proto = any(f.endswith(".proto") for f in target_files)
+        if has_proto:
+            lines.extend([
+                "",
+                "**Proto file patterns for C# gRPC:**",
+                "- Use `syntax = \"proto3\";`",
+                "- Define `package` matching the C# namespace convention",
+                "- Service RPCs use `returns (ResponseType)` syntax",
+                "- Messages use snake_case field names (C# codegen converts to PascalCase)",
+                "- This is a service-specific proto, NOT a shared demo.proto",
+            ])
 
         return "\n".join(lines)
 
