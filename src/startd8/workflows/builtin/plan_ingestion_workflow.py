@@ -69,6 +69,7 @@ from .plan_ingestion_models import (
     PlanIngestionConfig,
 )
 from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
+from ...languages.registry import LanguageRegistry
 from ...logging_config import get_logger
 from ...seeds.utils import is_omitted
 
@@ -88,13 +89,6 @@ logger = get_logger(__name__)
 # REQ-GPC-300: profiles that require parameter resolvability in preflight
 _RESOLVABILITY_PROFILES = frozenset({"full", "observability", "monitoring", "operator"})
 
-# File-extension → language mapping for service metadata inference
-_EXT_TO_LANGUAGE: Dict[str, str] = {
-    "py": "python", "go": "go", "js": "javascript",
-    "ts": "typescript", "rs": "rust", "java": "java",
-    "rb": "ruby", "cs": "csharp",
-}
-
 # QP-1: Declarative set of PARSE fields that are threaded into task context.
 # Adding a new field here automatically wires it through seed assembly —
 # no manual ``if feat.X: ctx["X"] = ...`` block required.
@@ -110,6 +104,12 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "module_path",
     "service_name",
     "mode",
+    "java_package",
+    "build_system",
+    "java_version",
+    "module_system",
+    "node_version",
+    "spring_boot",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -330,7 +330,12 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
       "negative_scope": ["things explicitly excluded from this feature"],
       "module_path": "optional Go module path e.g. github.com/org/repo/src/svc",
-      "service_name": "optional service directory name e.g. shippingservice"
+      "service_name": "optional service directory name e.g. shippingservice",
+      "java_package": "optional Java package e.g. com.example.service",
+      "build_system": "optional: gradle or maven",
+      "java_version": "optional Java version e.g. 21",
+      "module_system": "optional Node.js module system: commonjs or esm",
+      "node_version": "optional Node.js version e.g. 20"
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
@@ -358,6 +363,11 @@ runtime_dependencies: list of third-party packages with version constraints ment
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
 module_path: (Go projects only) the Go module path for this service, typically found in go.mod or the plan's module structure section (e.g. "github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice"). Omit or empty for non-Go projects.
 service_name: (Go projects only) the service directory name (e.g. "shippingservice", "frontend"). For Go, this determines the directory where go.mod and source files live. Infer from the target_files path (e.g. "src/shippingservice/main.go" → "shippingservice"). Omit or empty for non-Go projects.
+java_package: (Java projects only) the root Java package, inferred from target_files (e.g. "src/main/java/com/example/service/OrderService.java" → "com.example.service"). Omit or empty for non-Java projects.
+build_system: (Java projects only) "gradle" if build.gradle present, "maven" if pom.xml present. Default to "gradle" if unclear. Omit or empty for non-Java projects.
+java_version: (Java projects only) Java version from the plan or build file. Default "21". Omit or empty for non-Java projects.
+module_system: (Node.js projects only) "esm" if the project uses ES modules (import/export, "type": "module" in package.json, .mjs files), "commonjs" if the project uses require()/module.exports (.cjs files, no "type" field). Default "esm" if unclear. Omit or empty for non-Node.js projects.
+node_version: (Node.js projects only) Node.js version from the plan. Default "20". Omit or empty for non-Node.js projects.
 
 Be thorough. Extract every feature, file reference, and dependency.
 """
@@ -687,6 +697,8 @@ def _infer_service_metadata(
         primary_language, api_signatures, negative_scope, and
         (Go only) module_path, service_name, go_version.
     """
+    _ext_map = LanguageRegistry.get_extension_map()
+
     protocols: list[str] = []
     all_runtime_deps: list[str] = []
     all_api_sigs: list[str] = []
@@ -709,7 +721,7 @@ def _infer_service_metadata(
         for tf in f.target_files:
             # Extract extension after last dot, or empty string if no dot
             ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
-            lang = _EXT_TO_LANGUAGE.get(ext)
+            lang = _ext_map.get("." + ext) if ext else None
             if lang and lang not in languages:
                 languages.append(lang)
 
@@ -775,6 +787,106 @@ def _infer_service_metadata(
         if onboarding:
             go_version = str(onboarding.get("go_version", go_version))
         metadata["go_version"] = go_version
+
+    # Java-specific: derive java_package, build_system, java_version
+    is_java = primary_lang == "java" or (
+        isinstance(primary_lang, list) and "java" in primary_lang
+    )
+    if is_java:
+        # java_package: derive from target file paths
+        java_packages: list[str] = []
+        for f in features:
+            jp = getattr(f, "java_package", "")
+            if jp:
+                java_packages.append(jp)
+        if java_packages:
+            metadata["java_package"] = java_packages[0]
+        else:
+            # Infer from target_files: src/main/java/com/example/svc/X.java → com.example.svc
+            for f in features:
+                for tf in f.target_files:
+                    if tf.endswith(".java"):
+                        from startd8.utils.java_file_assembler import _derive_package
+                        pkg = _derive_package(tf)
+                        if pkg:
+                            metadata["java_package"] = pkg
+                            break
+                if "java_package" in metadata:
+                    break
+
+        # build_system: prefer explicit, else detect from target files
+        build_systems: list[str] = []
+        for f in features:
+            bs = getattr(f, "build_system", "")
+            if bs:
+                build_systems.append(bs)
+        if build_systems:
+            metadata["build_system"] = build_systems[0]
+        else:
+            all_files = [tf for f in features for tf in f.target_files]
+            if any("build.gradle" in tf or "build.gradle.kts" in tf for tf in all_files):
+                metadata["build_system"] = "gradle"
+            elif any("pom.xml" in tf for tf in all_files):
+                metadata["build_system"] = "maven"
+            else:
+                metadata["build_system"] = "gradle"  # default
+
+        # java_version
+        java_version = "21"
+        for f in features:
+            jv = getattr(f, "java_version", "")
+            if jv:
+                java_version = jv
+                break
+        if onboarding:
+            java_version = str(onboarding.get("java_version", java_version))
+        metadata["java_version"] = java_version
+
+        # spring_boot detection
+        for f in features:
+            if getattr(f, "spring_boot", False):
+                metadata["spring_boot"] = True
+                break
+        if "spring_boot" not in metadata:
+            all_deps = " ".join(all_runtime_deps + all_api_sigs).lower()
+            if "spring" in all_deps or "springboot" in all_deps:
+                metadata["spring_boot"] = True
+
+    # Node.js-specific: derive module_system, node_version
+    is_nodejs = primary_lang == "nodejs" or primary_lang == "javascript" or (
+        isinstance(primary_lang, list)
+        and ("nodejs" in primary_lang or "javascript" in primary_lang)
+    )
+    if is_nodejs:
+        # module_system: prefer explicit, else infer from file extensions
+        module_systems: list[str] = []
+        for f in features:
+            ms = getattr(f, "module_system", "")
+            if ms:
+                module_systems.append(ms)
+        if module_systems:
+            metadata["module_system"] = module_systems[0]
+        else:
+            all_files = [tf for f in features for tf in f.target_files]
+            has_mjs = any(tf.endswith(".mjs") for tf in all_files)
+            has_cjs = any(tf.endswith(".cjs") for tf in all_files)
+            if has_mjs and not has_cjs:
+                metadata["module_system"] = "esm"
+            elif has_cjs and not has_mjs:
+                metadata["module_system"] = "commonjs"
+            else:
+                metadata["module_system"] = "esm"  # default
+
+        # node_version
+        node_version = "20"
+        for f in features:
+            nv = getattr(f, "node_version", "")
+            if nv:
+                node_version = nv
+                break
+        if onboarding:
+            node_version = str(onboarding.get("node_version", node_version))
+        metadata["node_version"] = node_version
 
     return metadata
 
@@ -1312,6 +1424,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 mode=f.get("mode", "create"),
                 module_path=f.get("module_path", ""),
                 service_name=f.get("service_name", ""),
+                java_package=f.get("java_package", ""),
+                build_system=f.get("build_system", ""),
+                java_version=f.get("java_version", ""),
+                spring_boot=bool(f.get("spring_boot", False)),
+                module_system=f.get("module_system", ""),
+                node_version=f.get("node_version", ""),
             ))
 
         parsed = ParsedPlan(

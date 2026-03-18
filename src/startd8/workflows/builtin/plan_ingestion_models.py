@@ -240,6 +240,14 @@ class ParsedFeature:
     module_path: str = ""
     # Go-specific: service name for package declaration and directory naming
     service_name: str = ""
+    # Java-specific fields
+    java_package: str = ""       # "com.example.service"
+    build_system: str = ""       # "gradle" or "maven"
+    java_version: str = ""       # "21"
+    spring_boot: bool = False    # Spring Boot project indicator
+    # Node.js-specific fields
+    module_system: str = ""      # "commonjs" or "esm"
+    node_version: str = ""       # "20"
     # Phase 6: CG-PI-2 — union of callers across all target FQNs
     affected_callers: List[str] = field(default_factory=list)
     # Phase 6: CG-PI-3 — True when max blast radius exceeds threshold

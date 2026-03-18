@@ -136,6 +136,12 @@ class SeedTask:
     mode: str = "create"  # OI-001: "create" or "edit"
     module_path: str = ""  # Go: module path for go.mod
     service_name: str = ""  # Go: service directory name
+    java_package: str = ""   # Java: base package
+    build_system: str = ""   # Java: "gradle" or "maven"
+    java_version: str = ""   # Java: version e.g. "21"
+    module_system: str = ""  # Node.js: "commonjs" or "esm"
+    node_version: str = ""   # Node.js: version e.g. "20"
+    spring_boot: bool = False  # Java: Spring Boot project indicator
     wave_index: Optional[int] = None
     complexity_tier_override: Optional[str] = None
 
@@ -269,6 +275,11 @@ class SeedTask:
             mode=context.get("mode", "create"),
             module_path=context.get("module_path", ""),
             service_name=context.get("service_name", ""),
+            java_package=context.get("java_package", ""),
+            build_system=context.get("build_system", ""),
+            java_version=context.get("java_version", ""),
+            module_system=context.get("module_system", ""),
+            node_version=context.get("node_version", ""),
             wave_index=wave_index,
             complexity_tier_override=complexity_tier_override,
         )

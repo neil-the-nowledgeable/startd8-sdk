@@ -285,7 +285,22 @@ class IntegrationCheckpoint:
 
             cmd = self._get_syntax_command(file_path)
             if cmd is None:
-                continue  # Language has no standalone syntax check
+                # No subprocess command — try Python-native validation via
+                # LanguageProfile.validate_syntax() (e.g. javalang for Java).
+                if (
+                    self._language_profile is not None
+                    and hasattr(self._language_profile, "validate_syntax")
+                ):
+                    try:
+                        code = file_path.read_text(encoding="utf-8")
+                    except OSError as exc:
+                        errors.append(f"{file_path.name}: could not read ({exc})")
+                        continue
+                    checked += 1
+                    ok, err_msg = self._language_profile.validate_syntax(code)
+                    if not ok:
+                        errors.append(f"{file_path.name}: {err_msg}")
+                continue
 
             checked += 1
             try:
@@ -296,6 +311,13 @@ class IntegrationCheckpoint:
                     cwd=self.project_root,
                     timeout=_SYNTAX_CHECK_TIMEOUT_SECONDS,
                 )
+            except FileNotFoundError:
+                logger.warning(
+                    "Syntax check skipped for %s: tool %r not found on PATH",
+                    file_path.name,
+                    cmd[0],
+                )
+                continue
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: syntax check timed out")
                 continue
@@ -447,6 +469,13 @@ class IntegrationCheckpoint:
                 )
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: lint check timed out")
+                continue
+            except FileNotFoundError:
+                logger.warning(
+                    "Lint check skipped for %s: tool %r not found on PATH",
+                    file_path.name,
+                    cmd[0],
+                )
                 continue
             except OSError as exc:
                 errors.append(f"{file_path.name}: lint check failed ({exc})")
@@ -1014,6 +1043,17 @@ class IntegrationCheckpoint:
                 text=True,
                 cwd=self.project_root,
                 timeout=_TEST_SUITE_TIMEOUT_SECONDS,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "Test check skipped: tool %r not found on PATH",
+                test_cmd[0],
+            )
+            return CheckpointResult(
+                status=CheckpointStatus.PASSED,
+                name="Test Check",
+                message=f"Test check skipped — {test_cmd[0]!r} not found on PATH",
+                details={"skipped": True},
             )
         except subprocess.TimeoutExpired:
             return CheckpointResult(

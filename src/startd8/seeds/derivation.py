@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..languages.registry import LanguageRegistry
 from ..logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -33,17 +34,6 @@ __all__ = [
 ]
 
 _SAFE_TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
-
-_EXT_TO_LANGUAGE: Dict[str, str] = {
-    "py": "python",
-    "go": "go",
-    "js": "javascript",
-    "ts": "typescript",
-    "rs": "rust",
-    "java": "java",
-    "rb": "ruby",
-    "cs": "csharp",
-}
 
 DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
     "brief": {
@@ -243,14 +233,13 @@ def infer_service_metadata(
 
     For Go projects, also derives module_path, service_name, and go_version.
     """
+    _ext_map = LanguageRegistry.get_extension_map()
+
     protocols: list[str] = []
     all_runtime_deps: list[str] = []
     all_api_sigs: list[str] = []
     all_negative_scope: list[str] = []
     languages: list[str] = []
-    module_paths: list[str] = []
-    service_names: list[str] = []
-
     for f in features:
         if not hasattr(f, "protocol"):
             logger.warning(
@@ -263,15 +252,9 @@ def infer_service_metadata(
         all_runtime_deps.extend(getattr(f, "runtime_dependencies", []))
         all_api_sigs.extend(getattr(f, "api_signatures", []))
         all_negative_scope.extend(getattr(f, "negative_scope", []))
-        _mp = getattr(f, "module_path", "")
-        if _mp:
-            module_paths.append(_mp)
-        _sn = getattr(f, "service_name", "")
-        if _sn:
-            service_names.append(_sn)
         for tf in getattr(f, "target_files", []):
             ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
-            lang = _EXT_TO_LANGUAGE.get(ext)
+            lang = _ext_map.get("." + ext) if ext else None
             if lang and lang not in languages:
                 languages.append(lang)
 
@@ -299,37 +282,20 @@ def infer_service_metadata(
     if negative_scope:
         metadata["negative_scope"] = negative_scope
 
-    # Go-specific: derive module_path, service_name, go_version
+    # Language-specific metadata derivation (REQ-LA-201)
     primary_lang = metadata.get("primary_language", "")
-    is_go = primary_lang == "go" or (
-        isinstance(primary_lang, list) and "go" in primary_lang
+    lang_id = primary_lang if isinstance(primary_lang, str) else (
+        primary_lang[0] if primary_lang else ""
     )
-    if is_go:
-        if module_paths:
-            metadata["module_path"] = module_paths[0]
-        else:
-            for sig in api_sigs:
-                if sig.startswith("module "):
-                    metadata["module_path"] = sig.split(None, 1)[1].strip()
-                    break
-
-        if service_names:
-            metadata["service_name"] = service_names[0]
-        else:
-            go_dirs: set[str] = set()
-            for feat in features:
-                for tf in getattr(feat, "target_files", []):
-                    if tf.endswith(".go"):
-                        parts = tf.replace("\\", "/").rsplit("/", 1)
-                        if len(parts) == 2:
-                            go_dirs.add(parts[0].rsplit("/", 1)[-1])
-            if len(go_dirs) == 1:
-                metadata["service_name"] = go_dirs.pop()
-
-        go_version = "1.23"
-        if onboarding:
-            go_version = str(onboarding.get("go_version", go_version))
-        metadata["go_version"] = go_version
+    profile = LanguageRegistry.get(lang_id)
+    if profile is not None and hasattr(profile, "derive_service_metadata"):
+        lang_metadata = profile.derive_service_metadata(
+            features,
+            onboarding=onboarding,
+            api_signatures=api_sigs,
+            runtime_dependencies=runtime_deps,
+        )
+        metadata.update(lang_metadata)
 
     return metadata
 

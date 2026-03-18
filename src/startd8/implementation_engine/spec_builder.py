@@ -84,56 +84,6 @@ def format_context_value(value: Any) -> str:
     return str(value)
 
 
-def detect_java_frameworks(context: Dict[str, Any]) -> List[str]:
-    """Detect Java frameworks from task context for spec enrichment.
-
-    Returns list of framework pattern descriptions to inject into spec prompts.
-    """
-    frameworks: List[str] = []
-    context_str = str(context).lower() if context else ""
-
-    _JAVA_FRAMEWORK_PATTERNS = {
-        "spring_boot": {
-            "detect": ["@springbootapplication", "spring-boot-starter", "springapplication"],
-            "guidance": (
-                "Spring Boot: Use @RestController for REST endpoints, "
-                "@Service for business logic, @Repository for data access. "
-                "Constructor injection preferred over field injection."
-            ),
-        },
-        "jpa": {
-            "detect": ["@entity", "jakarta.persistence", "javax.persistence", "jparepository"],
-            "guidance": (
-                "JPA/Hibernate: Use @Entity, @Id, @GeneratedValue for entities. "
-                "Prefer Spring Data JPA repository interfaces. "
-                "Use @Transactional on service methods."
-            ),
-        },
-        "grpc": {
-            "detect": ["grpc", "protobuf", "proto"],
-            "guidance": (
-                "gRPC: Extend generated *ImplBase stubs. "
-                "Use StreamObserver for responses. Handle StatusRuntimeException."
-            ),
-        },
-        "slf4j": {
-            "detect": ["slf4j", "loggerfactory", "@slf4j"],
-            "guidance": (
-                "SLF4J: Use LoggerFactory.getLogger(ClassName.class) or @Slf4j. "
-                "Prefer parameterized logging: log.info(\"msg {}\", arg)."
-            ),
-        },
-    }
-
-    for name, spec in _JAVA_FRAMEWORK_PATTERNS.items():
-        if any(marker in context_str for marker in spec["detect"]):
-            frameworks.append(spec["guidance"])
-
-    if frameworks:
-        logger.debug("Detected %d Java framework(s) from context", len(frameworks))
-
-    return frameworks
-
 
 def build_spec_context_section(
     context: Dict[str, Any],
@@ -161,13 +111,6 @@ def build_spec_context_section(
     )
     if output_format:
         context_str += f"\n\nExpected Output Format:\n{output_format}"
-
-    # Inject detected Java framework patterns when target files include .java
-    if target_files and any(f.endswith(".java") for f in target_files):
-        java_fw = detect_java_frameworks(context)
-        if java_fw:
-            fw_block = "\n".join(f"- {g}" for g in java_fw)
-            context_str += f"\n\n## Java Framework Patterns\n{fw_block}"
 
     parts.append(f"## Context\n{context_str}")
     return "\n\n".join(parts)
@@ -293,20 +236,14 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
     if not deps:
         return ""
 
-    # Detect Go by checking if any dep looks like a Go module path
     lang_profile = context.get("language_profile")
-    is_go = (
-        (lang_profile is not None and getattr(lang_profile, "language_id", "") == "go")
-        or any("/" in d and not d.startswith("-") for d in deps[:5])
-    )
 
     package_lines = []
     for dep in sorted(deps):
-        if is_go:
-            # Go: "github.com/sirupsen/logrus v1.9.4" → "github.com/sirupsen/logrus"
-            pkg = dep.split()[0].strip()
+        if lang_profile is not None and hasattr(lang_profile, "strip_dependency_version"):
+            pkg = lang_profile.strip_dependency_version(dep)
         else:
-            # Python: "grpcio==1.76.0" → "grpcio"
+            # Fallback: Python-style version stripping
             pkg = dep
             for sep in ("==", ">=", "<=", "~=", "!=", "<", ">"):
                 pkg = pkg.split(sep)[0]
@@ -317,16 +254,9 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
         return ""
     packages_str = "\n".join(package_lines)
 
-    if is_go:
-        stdlib_name = "Go standard library"
-        import_syntax = (
-            "Use ONLY these modules plus Go stdlib. Every non-stdlib package you\n"
-            "reference MUST have a corresponding import statement. Use full module\n"
-            "paths in import statements (e.g. `import \"github.com/sirupsen/logrus\"`).\n"
-            "Do NOT import modules not listed above.\n"
-        )
+    if lang_profile is not None and hasattr(lang_profile, "get_import_syntax_guidance"):
+        import_syntax = lang_profile.get_import_syntax_guidance()
     else:
-        stdlib_name = "Python stdlib"
         import_syntax = (
             "Use ONLY these packages plus Python stdlib. Every non-stdlib symbol you\n"
             "reference MUST have a corresponding import statement at the top of the file.\n"
@@ -344,75 +274,6 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
             f"{import_syntax}"
         )
 
-
-def _build_go_module_section(context: Dict[str, Any]) -> str:
-    """Build Go module context section for correct package and import generation.
-
-    Returns empty string for non-Go targets.  When active, provides the LLM
-    with the module path, package name, and Go-specific structural rules that
-    are required for syntactically correct Go output.
-    """
-    lang_profile = context.get("language_profile")
-    if lang_profile is None or getattr(lang_profile, "language_id", "") != "go":
-        return ""
-
-    # Derive package name from target file path
-    target_files = context.get("target_files") or []
-    package_name = "main"  # default for executable entry points
-    service_name = context.get("service_name", "")
-    module_path = context.get("module_path", "")
-
-    # Also check service_metadata (populated at service level)
-    svc_meta = context.get("service_metadata")
-    if isinstance(svc_meta, dict):
-        if not module_path:
-            module_path = svc_meta.get("module_path", "")
-        if not service_name:
-            service_name = svc_meta.get("service_name", "")
-
-    # Derive package from target file: main.go → "main", server.go → service dir name
-    for tf in target_files:
-        fname = tf.rsplit("/", 1)[-1] if "/" in tf else tf
-        if fname == "main.go":
-            package_name = "main"
-            break
-        elif fname.endswith("_test.go"):
-            # Test files use same package as the code they test
-            if service_name:
-                package_name = service_name.replace("-", "")
-            break
-        elif fname.endswith(".go"):
-            # Non-main Go files use the service/directory name as package
-            if service_name:
-                package_name = service_name.replace("-", "")
-            break
-
-    lines = [
-        "## Go Module Context (CRITICAL — required for compilation)\n",
-        f"- **Package declaration**: `package {package_name}` (MUST be the first line of the file)",
-    ]
-    if module_path:
-        lines.append(f"- **Module path**: `{module_path}`")
-        lines.append(f"  - Internal imports use: `\"{module_path}/...\"` paths")
-    if service_name:
-        lines.append(f"- **Service**: `{service_name}`")
-
-    lines.extend([
-        "",
-        "**Go import rules:**",
-        "- Every import must use the full quoted module path (e.g. `\"github.com/sirupsen/logrus\"`)",
-        "- Group imports: stdlib first, then a blank line, then third-party",
-        "- No unused imports (Go compiler error) — only import what you use",
-        "- No unused variables (Go compiler error) — use `_` for intentionally unused values",
-        "",
-        "**Go structural rules:**",
-        "- `context.Context` is always the first parameter in functions that accept it",
-        "- Error is always the last return value: `func Foo() (ResultType, error)`",
-        "- Exported names start with uppercase, unexported with lowercase",
-        "- Use `if err != nil { return ..., err }` — do not use try/catch or panic for control flow",
-    ])
-
-    return "\n".join(lines)
 
 
 def _build_framework_imports_section(
@@ -966,10 +827,12 @@ def build_spec_prompt(
     ctx_section = build_spec_context_section(context, output_format, target_files)
     prioritized: List[tuple] = [(0, "context", ctx_section)]
 
-    # P0: Go module context — package declaration and module path
-    go_module_section = _build_go_module_section(context)
-    if go_module_section:
-        prioritized.append((0, "go_module", go_module_section))
+    # P0: Language-specific project context (REQ-LA-1003)
+    lang_profile = context.get("language_profile")
+    if lang_profile is not None and hasattr(lang_profile, "build_project_context_section"):
+        project_section = lang_profile.build_project_context_section(context)
+        if project_section:
+            prioritized.append((0, "project_context", project_section))
 
     # P1: Kaizen quality hints from prior run analysis
     if kaizen_hints and isinstance(kaizen_hints, str) and kaizen_hints.strip():

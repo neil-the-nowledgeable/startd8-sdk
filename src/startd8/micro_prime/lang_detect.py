@@ -9,14 +9,11 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-Language = Literal["python", "dockerfile", "go", "java", "proto", "text", "unknown"]
+Language = Literal["python", "dockerfile", "go", "java", "nodejs", "csharp", "proto", "text", "unknown"]
 
-
-_EXTENSION_TO_LANG: dict[str, Language] = {
-    ".py": "python",
+# Non-language extensions that the LanguageRegistry does not cover.
+_TEXT_AND_OTHER_EXTENSIONS: dict[str, Language] = {
     ".pyi": "python",
-    ".go": "go",
-    ".java": "java",
     ".proto": "proto",
     ".txt": "text",
     ".in": "text",
@@ -29,13 +26,17 @@ _EXTENSION_TO_LANG: dict[str, Language] = {
     ".md": "text",
     ".html": "text",
     ".css": "text",
-    ".js": "text",
-    ".ts": "text",
     ".sh": "text",
 }
 
 _FILENAME_TO_LANG: dict[str, Language] = {
     "Dockerfile": "dockerfile",
+    "build.gradle": "java",
+    "build.gradle.kts": "java",
+    "settings.gradle": "java",
+    "pom.xml": "java",
+    "package.json": "nodejs",
+    "Directory.Build.props": "csharp",
 }
 
 _DOCKERFILE_PATTERN = re.compile(r"^Dockerfile(\..+)?$", re.IGNORECASE)
@@ -69,7 +70,13 @@ def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Lang
 
     # Extension-based detection
     ext = Path(file_path).suffix.lower()
-    return _EXTENSION_TO_LANG.get(ext, "unknown")
+    # Try language registry first (covers .py, .go, .java, .js, .cs, etc.)
+    from startd8.languages.registry import LanguageRegistry
+    lang_id = LanguageRegistry.get_extension_map().get(ext)
+    if lang_id is not None:
+        return lang_id
+    # Fall back to non-language extensions
+    return _TEXT_AND_OTHER_EXTENSIONS.get(ext, "unknown")
 
 
 def is_dockerfile(file_path: str, explicit_lang: Optional[str] = None) -> bool:
