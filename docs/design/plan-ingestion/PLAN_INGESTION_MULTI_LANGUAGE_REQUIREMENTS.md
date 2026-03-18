@@ -530,11 +530,9 @@ node_version: str = ""     # Node.js version e.g. "20"
 | REQ-PLI-202 | Pre-PARSE language detection from plan text (`_detect_plan_language()`) | 2026-03-18 |
 | REQ-PLI-601 | Cross-language dependency ordering guidance (Go, Java, Node.js) | 2026-03-18 |
 
-### Not Yet Implemented
+### All Requirements Implemented
 
-| REQ | Description | Priority | Language |
-|-----|-------------|----------|----------|
-| REQ-PLI-402 (Node.js) | package.json deterministic generation | P3 | Node.js |
+REQ-PLI-402 (Node.js package.json generation) was already implemented — `NodeLanguageProfile.generate_dependency_file()` produces valid package.json, and `PrimeContractorWorkflow._ensure_dependency_file()` is fully generic (routes any language with `build_file_patterns` + `generate_dependency_file()`).
 
 ---
 
