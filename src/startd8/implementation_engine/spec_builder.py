@@ -334,7 +334,11 @@ def _build_available_imports_section(context: Dict[str, Any]) -> str:
 
     try:
         template = get_template("available_imports")
-        return template.format(available_packages=packages_str)
+        # REQ-PE-300: Pass import_syntax from language profile into YAML template
+        return template.format(
+            available_packages=packages_str,
+            import_syntax=import_syntax,
+        )
     except (FileNotFoundError, KeyError, ImportError):
         return (
             "## Available Imports\n\n"
@@ -385,36 +389,62 @@ def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
     template can match (e.g. the exact proto module names, the
     project's logging pattern, the OTel setup convention).
 
-    Returns empty string if no Python siblings with imports are found.
+    REQ-PE-201: Supports non-Python languages via regex-based extraction
+    when a language profile is available. Falls back to Python AST parsing.
+
+    Returns empty string if no siblings with imports are found.
     """
     existing_files = context.get("existing_files_content") or context.get("existing_files", {})
     if not existing_files:
         return ""
 
-    # Determine the target directory from target_files
     target_files = context.get("target_files", [])
     if not target_files:
         return ""
 
-    # Use the directory of the first target file
     target_dir = os.path.dirname(target_files[0]) if target_files else ""
+
+    # REQ-PE-201: Resolve language profile for extension filtering and fence label
+    lang_profile = context.get("language_profile")
+    if lang_profile is not None:
+        source_exts = set(getattr(lang_profile, "source_extensions", [".py"]))
+        fence_lang = getattr(lang_profile, "language_id", "python")
+    else:
+        source_exts = {".py"}
+        fence_lang = "python"
 
     sibling_imports: set[str] = set()
     for path, content in existing_files.items():
-        if not isinstance(content, str) or not path.endswith(".py"):
+        if not isinstance(content, str):
+            continue
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in source_exts:
             continue
         if os.path.dirname(path) != target_dir:
             continue
-        try:
-            tree = ast.parse(content)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                try:
-                    sibling_imports.add(ast.unparse(node))
-                except (AttributeError, ValueError):
-                    pass
+
+        if ext == ".py":
+            # Python: AST-based extraction (existing behavior)
+            try:
+                tree = ast.parse(content)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    try:
+                        sibling_imports.add(ast.unparse(node))
+                    except (AttributeError, ValueError):
+                        pass
+        else:
+            # Non-Python: regex-based import line extraction
+            if lang_profile is not None and hasattr(lang_profile, "extract_import_lines"):
+                sibling_imports.update(lang_profile.extract_import_lines(content))
+            else:
+                # Generic fallback: grab lines that look like imports
+                for line in content.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("import ") or stripped.startswith("from "):
+                        sibling_imports.add(stripped)
 
     if not sibling_imports:
         return ""
@@ -424,7 +454,7 @@ def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
         "The following imports are used by other files in this",
         "service. Use the same packages and import patterns",
         "where applicable:\n",
-        "```python",
+        f"```{fence_lang}",
     ]
     lines.extend(sorted(sibling_imports))
     lines.append("```")
@@ -469,8 +499,17 @@ def _build_import_conventions_section(context: Dict[str, Any]) -> str:
     imports (``from emailservice import demo_pb2``). Injecting this guidance
     eliminates the L1.2 namespace-as-package defect (60% of runs).
 
+    REQ-PE-401: Returns empty string for non-Python tasks (Go/Java/Node.js
+    have different module systems covered by their coding_standards).
+
     Returns empty string when the layout is package-style or unknown.
     """
+    # REQ-PE-401: Python-only — non-Python import conventions are covered
+    # by the language profile's coding_standards and get_import_syntax_guidance()
+    lang_profile = context.get("language_profile")
+    if lang_profile is not None and getattr(lang_profile, "language_id", "python") != "python":
+        return ""
+
     existing_files = context.get("existing_files_content") or context.get("existing_files", {})
     target_files = context.get("target_files", [])
     if not existing_files or not target_files:
@@ -529,8 +568,16 @@ def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) 
     the L6 discarded-return pattern (``os.getenv("KEY")`` as a bare expression
     statement). This defect appears in 50% of runs and never self-corrects.
 
+    REQ-PE-202: Returns empty string for non-Python tasks (Go compiler catches
+    unused values, Java has no ``os.getenv`` bare expression pattern).
+
     Returns empty string when the task doesn't involve env vars.
     """
+    # REQ-PE-202: Skip for non-Python — anti-pattern examples are Python-specific
+    lang_profile = context.get("language_profile")
+    if lang_profile is not None and getattr(lang_profile, "language_id", "python") != "python":
+        return ""
+
     # Detect env-var relevance from task description and dependencies
     desc_lower = task_description.lower()
     env_signals = (
@@ -972,9 +1019,12 @@ def build_spec_prompt(
 
     # P3: Reference implementation (drop first)
     if reference_implementation:
+        # REQ-PE-200: Use target language for code fence, not hardcoded python
+        _lang_profile = context.get("language_profile")
+        _fence_lang = getattr(_lang_profile, "language_id", "") if _lang_profile else ""
         prioritized.append((3, "reference", (
             "## Reference Implementation (predecessor — adapt, do not copy verbatim)\n"
-            "```python\n"
+            f"```{_fence_lang}\n"
             f"{reference_implementation}\n"
             "```"
         )))
