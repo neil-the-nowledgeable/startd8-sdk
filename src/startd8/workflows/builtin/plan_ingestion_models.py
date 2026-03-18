@@ -248,6 +248,9 @@ class ParsedFeature:
     # Node.js-specific fields
     module_system: str = ""      # "commonjs" or "esm"
     node_version: str = ""       # "20"
+    # C#-specific fields
+    csharp_namespace: str = ""   # "MyApp.Services"
+    target_framework: str = ""   # "net8.0"
     # Phase 6: CG-PI-2 — union of callers across all target FQNs
     affected_callers: List[str] = field(default_factory=list)
     # Phase 6: CG-PI-3 — True when max blast radius exceeds threshold

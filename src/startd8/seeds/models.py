@@ -142,6 +142,8 @@ class SeedTask:
     module_system: str = ""  # Node.js: "commonjs" or "esm"
     node_version: str = ""   # Node.js: version e.g. "20"
     spring_boot: bool = False  # Java: Spring Boot project indicator
+    csharp_namespace: str = ""  # C#: root namespace e.g. "MyApp.Services"
+    target_framework: str = ""  # C#: .NET target framework e.g. "net8.0"
     wave_index: Optional[int] = None
     complexity_tier_override: Optional[str] = None
 
@@ -280,6 +282,9 @@ class SeedTask:
             java_version=context.get("java_version", ""),
             module_system=context.get("module_system", ""),
             node_version=context.get("node_version", ""),
+            spring_boot=bool(context.get("spring_boot", False)),
+            csharp_namespace=context.get("csharp_namespace", ""),
+            target_framework=context.get("target_framework", ""),
             wave_index=wave_index,
             complexity_tier_override=complexity_tier_override,
         )
