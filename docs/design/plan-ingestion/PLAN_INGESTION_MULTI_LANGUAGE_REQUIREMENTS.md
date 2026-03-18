@@ -522,14 +522,19 @@ node_version: str = ""     # Node.js version e.g. "20"
 | REQ-PLI-700 (Node.js) | ParsedFeature Node.js fields | 2026-03-18 |
 | REQ-PLI-701 (Node.js) | SeedTask Node.js fields | 2026-03-18 |
 
+### Implemented (Cross-Language Infrastructure)
+
+| REQ | Description | Commit |
+|-----|-------------|--------|
+| REQ-PLI-201 | Language-agnostic PARSE prompt structure (template dict + `_build_parse_prompt()`) | 2026-03-18 |
+| REQ-PLI-202 | Pre-PARSE language detection from plan text (`_detect_plan_language()`) | 2026-03-18 |
+| REQ-PLI-601 | Cross-language dependency ordering guidance (Go, Java, Node.js) | 2026-03-18 |
+
 ### Not Yet Implemented
 
 | REQ | Description | Priority | Language |
 |-----|-------------|----------|----------|
-| REQ-PLI-201 | Language-agnostic PARSE prompt structure (template dict) | P2 | All |
-| REQ-PLI-202 | Primary language detection from plan text (pre-PARSE) | P3 | All |
 | REQ-PLI-402 (Node.js) | package.json deterministic generation | P3 | Node.js |
-| REQ-PLI-601 | Cross-language dependency ordering | P3 | All |
 
 ---
 
@@ -627,7 +632,7 @@ The Go implementation established patterns that generalize. For each new languag
 6. ~~**REQ-PLI-100 (Node.js)**: Fix `.js`/`.ts` → `"nodejs"` in lang_detect~~ ✅
 7. ~~**REQ-PLI-101**: Fix lang_detect ↔ resolution.py ID consistency~~ ✅
 8. ~~**REQ-PLI-102**: Filename-based detection (build.gradle, package.json, etc.)~~ ✅
-9. **REQ-PLI-201**: Refactor PARSE prompt to language-agnostic base + extensions — OPEN
+9. ~~**REQ-PLI-201**: Refactor PARSE prompt to language-agnostic base + extensions~~ ✅
 10. ~~**REQ-PLI-500 (Java)**: Java-formatted available-imports section~~ ✅
 
 ### P3 — Future (Node.js and cross-language) — MOSTLY DONE
@@ -635,8 +640,8 @@ The Go implementation established patterns that generalize. For each new languag
 11. ~~**REQ-PLI-200 (Node.js)**: Node.js PARSE prompt fields~~ ✅
 12. ~~**REQ-PLI-300 (Node.js)**: Node.js service metadata inference~~ ✅
 13. ~~**REQ-PLI-501 (Node.js)**: `_build_nodejs_module_section()`~~ ✅
-14. **REQ-PLI-601**: Cross-language dependency ordering — OPEN
-15. **REQ-PLI-202**: Pre-PARSE language detection from plan text — OPEN
+14. ~~**REQ-PLI-601**: Cross-language dependency ordering~~ ✅
+15. ~~**REQ-PLI-202**: Pre-PARSE language detection from plan text~~ ✅
 
 ---
 

@@ -298,10 +298,170 @@ def _fmt_prompt(prompt_name: str, **kwargs: Any) -> str:
 
 _FALLBACK_PROMPTS: Dict[str, str] = {}
 
-_FALLBACK_PROMPTS["parse"] = """\
+# ---------------------------------------------------------------------------
+# REQ-PLI-201: Language-specific PARSE schema fields and guidance.
+# Keyed by language — assembled into the PARSE prompt dynamically.
+# ---------------------------------------------------------------------------
+_PARSE_LANG_SCHEMA: Dict[str, str] = {
+    "go": (
+        '      "module_path": "optional Go module path e.g. github.com/org/repo/src/svc",\n'
+        '      "service_name": "optional service directory name e.g. shippingservice"'
+    ),
+    "java": (
+        '      "java_package": "optional Java package e.g. com.example.service",\n'
+        '      "build_system": "optional: gradle or maven",\n'
+        '      "java_version": "optional Java version e.g. 21"'
+    ),
+    "nodejs": (
+        '      "module_system": "optional Node.js module system: commonjs or esm",\n'
+        '      "node_version": "optional Node.js version e.g. 20"'
+    ),
+}
+
+_PARSE_LANG_GUIDANCE: Dict[str, str] = {
+    "go": (
+        'module_path: (Go projects only) the Go module path for this service, typically found in go.mod or the plan\'s module structure section (e.g. "github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice"). Omit or empty for non-Go projects.\n'
+        'service_name: (Go projects only) the service directory name (e.g. "shippingservice", "frontend"). For Go, this determines the directory where go.mod and source files live. Infer from the target_files path (e.g. "src/shippingservice/main.go" → "shippingservice"). Omit or empty for non-Go projects.'
+    ),
+    "java": (
+        'java_package: (Java projects only) the root Java package, inferred from target_files (e.g. "src/main/java/com/example/service/OrderService.java" → "com.example.service"). Omit or empty for non-Java projects.\n'
+        'build_system: (Java projects only) "gradle" if build.gradle present, "maven" if pom.xml present. Default to "gradle" if unclear. Omit or empty for non-Java projects.\n'
+        'java_version: (Java projects only) Java version from the plan or build file. Default "21". Omit or empty for non-Java projects.'
+    ),
+    "nodejs": (
+        'module_system: (Node.js projects only) "esm" if the project uses ES modules (import/export, "type": "module" in package.json, .mjs files), "commonjs" if the project uses require()/module.exports (.cjs files, no "type" field). Default "commonjs" if unclear. Omit or empty for non-Node.js projects.\n'
+        'node_version: (Node.js projects only) Node.js version from the plan. Default "20". Omit or empty for non-Node.js projects.'
+    ),
+}
+
+# REQ-PLI-601: Language-aware dependency ordering guidance.
+_PARSE_DEP_ORDERING_GUIDANCE: Dict[str, str] = {
+    "go": (
+        "\n## Go dependency ordering\n"
+        "Order features so that shared libraries and proto definitions come before "
+        "services that import them. Place go.mod before Dockerfile. "
+        "Place main.go after utility packages it imports."
+    ),
+    "java": (
+        "\n## Java dependency ordering\n"
+        "Order features so that shared libraries and interfaces come before "
+        "implementations. Place build.gradle before source files. "
+        "Place configuration files (application.yml, application.properties) before "
+        "application code that reads them. Place entity/model classes before "
+        "repositories/services that use them."
+    ),
+    "nodejs": (
+        "\n## Node.js dependency ordering\n"
+        "Order features so that shared utility modules come before services. "
+        "Place package.json before source files. "
+        "Place configuration/environment files before application code."
+    ),
+}
+
+
+# REQ-PLI-202: Pre-PARSE language detection from plan text.
+_LANG_DETECT_SIGNALS: Dict[str, List[str]] = {
+    "go": [
+        "go.mod", "go.sum", ".go", "Go ", "Golang", "golang",
+        "goroutine", "gRPC", "package main", "func main()",
+    ],
+    "java": [
+        "build.gradle", "pom.xml", ".java", "Java ", "Spring Boot",
+        "SpringBoot", "@SpringBootApplication", "JPA", "Maven", "Gradle",
+        "jakarta.", "javax.", "public class", "public interface",
+    ],
+    "nodejs": [
+        "package.json", ".js", ".ts", ".tsx", "Node.js", "Node ",
+        "Express", "express", "React", "Next.js", "npm ", "yarn ",
+        "require(", "import from", "module.exports",
+    ],
+    "python": [
+        "requirements.txt", "pyproject.toml", ".py", "Python ",
+        "pip ", "pytest", "django", "flask", "FastAPI",
+        "def ", "import ", "from ",
+    ],
+}
+
+
+def _detect_plan_language(plan_text: str) -> Optional[str]:
+    """Detect the primary language of a plan from text signals (REQ-PLI-202).
+
+    Scans plan text for language-specific keywords, file extensions, and
+    framework mentions. Returns the dominant language or None if ambiguous.
+    """
+    scores: Dict[str, int] = {}
+    plan_lower = plan_text.lower()
+    for lang, signals in _LANG_DETECT_SIGNALS.items():
+        count = 0
+        for signal in signals:
+            # Case-sensitive signals (e.g. "Go ", "Java ") check original text
+            if signal[0].isupper():
+                count += plan_text.count(signal)
+            else:
+                count += plan_lower.count(signal)
+        if count > 0:
+            scores[lang] = count
+
+    if not scores:
+        return None
+
+    # Require the winner to have at least 2x the runner-up score
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+    winner, winner_score = ranked[0]
+    if len(ranked) >= 2:
+        runner_up_score = ranked[1][1]
+        if winner_score < 2 * runner_up_score:
+            return None  # Ambiguous — don't guess
+    return winner
+
+
+def _build_parse_prompt(plan_text: str) -> str:
+    """Build the PARSE prompt with language-specific extensions (REQ-PLI-201).
+
+    Detects the plan's language and injects relevant schema fields and guidance.
+    Always includes all language extensions (the LLM ignores irrelevant ones),
+    but when a language is detected, adds a hint and dependency ordering guidance.
+    """
+    detected_lang = _detect_plan_language(plan_text)
+
+    # Build language-specific schema fields — always include all languages
+    lang_schema_lines = []
+    for lang in ("go", "java", "nodejs"):
+        lang_schema_lines.append(_PARSE_LANG_SCHEMA[lang])
+    lang_schema_block = ",\n".join(lang_schema_lines)
+
+    # Build language-specific guidance — always include all languages
+    lang_guidance_lines = []
+    for lang in ("go", "java", "nodejs"):
+        lang_guidance_lines.append(_PARSE_LANG_GUIDANCE[lang])
+    lang_guidance_block = "\n".join(lang_guidance_lines)
+
+    # Language hint for the LLM (REQ-PLI-202)
+    lang_hint = ""
+    if detected_lang and detected_lang != "python":
+        lang_hint = (
+            f"\n**Detected language: {detected_lang}** — pay special attention to "
+            f"{detected_lang}-specific fields in the schema below.\n"
+        )
+
+    # Dependency ordering guidance (REQ-PLI-601)
+    dep_ordering = ""
+    if detected_lang and detected_lang in _PARSE_DEP_ORDERING_GUIDANCE:
+        dep_ordering = _PARSE_DEP_ORDERING_GUIDANCE[detected_lang]
+
+    return _PARSE_PROMPT_TEMPLATE.format(
+        plan_text=plan_text,
+        lang_hint=lang_hint,
+        lang_schema_fields=lang_schema_block,
+        lang_guidance=lang_guidance_block,
+        dep_ordering_guidance=dep_ordering,
+    )
+
+
+_PARSE_PROMPT_TEMPLATE = """\
 You are an expert software architect. Analyze the following implementation plan \
 and extract structured information.
-
+{lang_hint}
 <plan>
 {plan_text}
 </plan>
@@ -329,13 +489,7 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
       "negative_scope": ["things explicitly excluded from this feature"],
-      "module_path": "optional Go module path e.g. github.com/org/repo/src/svc",
-      "service_name": "optional service directory name e.g. shippingservice",
-      "java_package": "optional Java package e.g. com.example.service",
-      "build_system": "optional: gradle or maven",
-      "java_version": "optional Java version e.g. 21",
-      "module_system": "optional Node.js module system: commonjs or esm",
-      "node_version": "optional Node.js version e.g. 20"
+{lang_schema_fields}
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
@@ -361,16 +515,13 @@ api_signatures: list of class, function, and method signatures defined or implem
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
-module_path: (Go projects only) the Go module path for this service, typically found in go.mod or the plan's module structure section (e.g. "github.com/GoogleCloudPlatform/microservices-demo/src/shippingservice"). Omit or empty for non-Go projects.
-service_name: (Go projects only) the service directory name (e.g. "shippingservice", "frontend"). For Go, this determines the directory where go.mod and source files live. Infer from the target_files path (e.g. "src/shippingservice/main.go" → "shippingservice"). Omit or empty for non-Go projects.
-java_package: (Java projects only) the root Java package, inferred from target_files (e.g. "src/main/java/com/example/service/OrderService.java" → "com.example.service"). Omit or empty for non-Java projects.
-build_system: (Java projects only) "gradle" if build.gradle present, "maven" if pom.xml present. Default to "gradle" if unclear. Omit or empty for non-Java projects.
-java_version: (Java projects only) Java version from the plan or build file. Default "21". Omit or empty for non-Java projects.
-module_system: (Node.js projects only) "esm" if the project uses ES modules (import/export, "type": "module" in package.json, .mjs files), "commonjs" if the project uses require()/module.exports (.cjs files, no "type" field). Default "esm" if unclear. Omit or empty for non-Node.js projects.
-node_version: (Node.js projects only) Node.js version from the plan. Default "20". Omit or empty for non-Node.js projects.
-
+{lang_guidance}
+{dep_ordering_guidance}
 Be thorough. Extract every feature, file reference, and dependency.
 """
+
+# Keep the old key for _fmt_prompt fallback compatibility — populated lazily
+_FALLBACK_PROMPTS["parse"] = ""  # Replaced by _build_parse_prompt()
 
 _FALLBACK_PROMPTS["assess"] = """\
 You are a complexity assessor for software plans.
@@ -1352,7 +1503,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         self, plan_text: str, agent: BaseAgent
     ) -> Tuple[Optional[ParsedPlan], StepResult]:
         t0 = time.time()
-        prompt = _fmt_prompt("parse", plan_text=plan_text)
+        prompt = _build_parse_prompt(plan_text)
         if getattr(self, "_kaizen_config", None) and self._kaizen_config.parse_prompt_suffix:
             prompt += self._kaizen_config.parse_prompt_suffix
 

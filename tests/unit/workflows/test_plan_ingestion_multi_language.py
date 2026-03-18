@@ -471,3 +471,110 @@ class TestSeedTaskNodejsFields:
         task = SeedTask.from_seed_entry(entry)
         assert task.module_system == "commonjs"
         assert task.node_version == "18"
+
+
+# ---------------------------------------------------------------------------
+# REQ-PLI-202: _detect_plan_language()
+# ---------------------------------------------------------------------------
+
+class TestDetectPlanLanguage:
+    """REQ-PLI-202: Pre-PARSE language detection from plan text."""
+
+    def _detect(self, text):
+        from startd8.workflows.builtin.plan_ingestion_workflow import _detect_plan_language
+        return _detect_plan_language(text)
+
+    def test_go_project(self):
+        text = """
+        # Online Boutique Go Services
+        Implement the shippingservice in Go. The service uses gRPC
+        and reads from go.mod for dependencies. Files: main.go, handler.go
+        """
+        assert self._detect(text) == "go"
+
+    def test_java_project(self):
+        text = """
+        # Order Service (Java Spring Boot)
+        Implement the OrderService using Spring Boot and JPA.
+        Build with Gradle (build.gradle). Java 21.
+        Files: OrderService.java, OrderRepository.java
+        """
+        assert self._detect(text) == "java"
+
+    def test_nodejs_project(self):
+        text = """
+        # Currency Service (Node.js)
+        Implement the currency conversion service using Express.
+        Dependencies in package.json. Files: server.js, converter.ts
+        """
+        assert self._detect(text) == "nodejs"
+
+    def test_python_project(self):
+        text = """
+        # Recommendation Engine (Python)
+        Implement using Flask and pytest. Dependencies in requirements.txt.
+        Files: app.py, recommender.py, test_recommender.py
+        """
+        assert self._detect(text) == "python"
+
+    def test_ambiguous_returns_none(self):
+        text = "Implement a microservice with REST API endpoints."
+        assert self._detect(text) is None
+
+    def test_empty_returns_none(self):
+        assert self._detect("") is None
+
+
+# ---------------------------------------------------------------------------
+# REQ-PLI-201: _build_parse_prompt() structure
+# ---------------------------------------------------------------------------
+
+class TestBuildParsePrompt:
+    """REQ-PLI-201: Language-agnostic PARSE prompt with extensions."""
+
+    def _build(self, plan_text):
+        from startd8.workflows.builtin.plan_ingestion_workflow import _build_parse_prompt
+        return _build_parse_prompt(plan_text)
+
+    def test_always_includes_all_language_schemas(self):
+        prompt = self._build("Implement a simple utility.")
+        assert "module_path" in prompt  # Go
+        assert "java_package" in prompt  # Java
+        assert "module_system" in prompt  # Node.js
+
+    def test_always_includes_all_language_guidance(self):
+        prompt = self._build("Implement a simple utility.")
+        assert "Go projects only" in prompt
+        assert "Java projects only" in prompt
+        assert "Node.js projects only" in prompt
+
+    def test_go_plan_gets_hint(self):
+        prompt = self._build("Implement Go gRPC service with go.mod")
+        assert "Detected language: go" in prompt
+
+    def test_java_plan_gets_hint(self):
+        prompt = self._build("Spring Boot Java service with build.gradle and JPA")
+        assert "Detected language: java" in prompt
+
+    def test_nodejs_plan_gets_hint(self):
+        prompt = self._build("Node.js Express service with package.json")
+        assert "Detected language: nodejs" in prompt
+
+    def test_python_plan_no_hint(self):
+        """Python is the default — no special hint needed."""
+        prompt = self._build("Python Flask app with pytest and requirements.txt")
+        assert "Detected language:" not in prompt
+
+    def test_go_plan_gets_dep_ordering(self):
+        prompt = self._build("Implement Go gRPC service with go.mod")
+        assert "Go dependency ordering" in prompt
+
+    def test_java_plan_gets_dep_ordering(self):
+        prompt = self._build("Spring Boot Java service with build.gradle and JPA")
+        assert "Java dependency ordering" in prompt
+
+    def test_ambiguous_plan_no_hint(self):
+        prompt = self._build("Implement a REST API service.")
+        assert "Detected language:" not in prompt
+        # But all language fields are still present
+        assert "module_path" in prompt
