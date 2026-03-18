@@ -2540,6 +2540,103 @@ class PrimeContractorWorkflow:
         except Exception as exc:
             logger.warning("Kaizen: hint injection failed (non-fatal): %s", exc)
 
+    def _inject_exemplar(
+        self, feature: "FeatureSpec", gen_context: Dict[str, Any],
+    ) -> None:
+        """Inject proven exemplar into gen_context (REQ-PEP-100).
+
+        Loads the exemplar registry, computes the task's fingerprint, finds
+        the best match, and injects it as ``gen_context["exemplar"]``.
+        Non-fatal — failures are logged and silently swallowed.
+        """
+        try:
+            from startd8.exemplars.models import ConfigFingerprint
+            from startd8.exemplars.registry import ExemplarRegistry
+
+            # Locate registry file
+            output_dir = getattr(self, "_output_dir", None)
+            if not output_dir:
+                return
+            registry_path = Path(output_dir) / "exemplar-registry.json"
+            if not registry_path.is_file():
+                return
+
+            registry = ExemplarRegistry.load(registry_path)
+            if len(registry) == 0:
+                return
+
+            # Compute fingerprint for current task
+            target_files = gen_context.get("target_files", [])
+            if not target_files:
+                target_files = getattr(feature, "target_files", [])
+            if not target_files:
+                return
+
+            primary_file = target_files[0] if isinstance(target_files, list) else str(target_files)
+            feature_meta = getattr(feature, "metadata", None) or {}
+            language = feature_meta.get("language", "")
+            transport = "none"
+            svc_meta = feature_meta.get("service_metadata", {})
+            if isinstance(svc_meta, dict):
+                transport = svc_meta.get("transport_protocol", "none").lower()
+
+            fp = ConfigFingerprint.compute(
+                primary_file, language=language, transport=transport,
+            )
+
+            match = registry.find_best_match(fp)
+            if not match:
+                return
+
+            match_type = registry.get_match_type(fp)
+
+            # Build exemplar context dict for spec_builder / drafter injection
+            exemplar_ctx: Dict[str, Any] = {
+                "id": match.id,
+                "fingerprint": str(match.fingerprint),
+                "source_run_id": match.source_run_id,
+                "source_feature_id": match.source_feature_id,
+                "match_type": match_type,
+                "scores": {
+                    "requirement_score": match.scores.requirement_score,
+                    "disk_quality_score": match.scores.disk_quality_score,
+                },
+                "code_summary": match.code_summary,
+                "code_excerpt": match.code_summary,  # code_summary is the excerpt
+                "language": match.fingerprint.language,
+            }
+
+            # Try to load full spec/code artifacts for richer injection
+            if output_dir:
+                base = Path(output_dir)
+                if match.spec_artifact_path:
+                    spec_file = base / match.spec_artifact_path
+                    if spec_file.is_file():
+                        try:
+                            spec_text = spec_file.read_text(encoding="utf-8", errors="replace")
+                            lines = spec_text.splitlines()[:80]
+                            exemplar_ctx["spec_excerpt"] = "\n".join(lines)
+                        except OSError:
+                            pass
+                if match.code_artifact_path:
+                    code_file = base / match.code_artifact_path
+                    if code_file.is_file():
+                        try:
+                            code_text = code_file.read_text(encoding="utf-8", errors="replace")
+                            lines = code_text.splitlines()[:100]
+                            exemplar_ctx["code_excerpt"] = "\n".join(lines)
+                        except OSError:
+                            pass
+
+            gen_context["exemplar"] = exemplar_ctx
+            logger.info(
+                "Exemplar injected for '%s': %s (match=%s, score=%.2f)",
+                feature.name, match.id, match_type,
+                match.scores.disk_quality_score,
+            )
+        except Exception as exc:
+            logger.warning("Exemplar injection failed (non-fatal): %s", exc)
+
     def _persist_kaizen_prompts(
         self,
         feature: "FeatureSpec",
@@ -3475,6 +3572,9 @@ class PrimeContractorWorkflow:
         if self._kaizen.config:
             self._apply_kaizen_hints(gen_context)
 
+        # Proven exemplar injection (REQ-PEP-100) — non-fatal
+        self._inject_exemplar(feature, gen_context)
+
         # Dependency import threading — surface dep tasks' modules in spec prompt
         dep_imports = self._collect_dependency_imports(feature)
         if dep_imports:
@@ -3581,15 +3681,34 @@ class PrimeContractorWorkflow:
         # Non-Python languages bypass MicroPrime — force COMPLEX tier to
         # route to LeadContractor (cloud) which has language-aware prompts.
         # MicroPrime's engine, prompts, and quality gates are Python-specific.
+        #
+        # Two checks: (1) resolved language profile is non-Python, OR
+        # (2) ALL target files are non-Python (catches Dockerfiles, HTML,
+        # go.mod, etc. that resolve as "python" because they have no
+        # recognized language extension).
+        from startd8.micro_prime.engine import _is_non_python_file
+
+        _all_targets_non_python = (
+            feature.target_files
+            and all(_is_non_python_file(f) for f in feature.target_files)
+        )
         if (
-            self._language_profile is not None
-            and self._language_profile.language_id != "python"
-            and self._micro_prime_enabled
+            self._micro_prime_enabled
+            and (
+                (self._language_profile is not None
+                 and self._language_profile.language_id != "python")
+                or _all_targets_non_python
+            )
         ):
             from startd8.complexity.models import ComplexityTier
             tier = ComplexityTier.COMPLEX
+            _lang_id = (
+                self._language_profile.language_id
+                if self._language_profile is not None
+                else "unknown"
+            )
             reason = (
-                f"non-Python language ({self._language_profile.language_id}) "
+                f"non-Python targets ({_lang_id}) "
                 f"— MicroPrime bypass, routing to cloud"
             )
             generator = self._complexity_router.select(tier) or generator

@@ -24,6 +24,7 @@ __all__ = [
     "TOTAL_SPEC_BUDGET_TOKENS",
     "TOTAL_DRAFT_BUDGET_TOKENS",
     "CHARS_PER_TOKEN",
+    "EXEMPLAR_BUDGET_CHARS",
     "truncate_with_marker",
     "truncate_arch_context",
     "estimate_tokens",
@@ -67,6 +68,9 @@ ENRICHMENT_BUDGET_CHARS: int = 8_000      # ~2000 tokens — review prompt (T2)
 TOTAL_SPEC_BUDGET_TOKENS: int = 4_096     # Spec prompt (architect agent)
 TOTAL_DRAFT_BUDGET_TOKENS: int = 8_192    # Draft prompt (includes existing files)
 CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
+
+# Exemplar injection budget (REQ-PEP-101/102)
+EXEMPLAR_BUDGET_CHARS: int = 3_200        # ~800 tokens for exemplar section
 
 # CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
 # files need more prompt headroom for context injection; TRIVIAL tasks need
