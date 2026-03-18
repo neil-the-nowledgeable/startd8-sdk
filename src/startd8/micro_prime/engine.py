@@ -105,6 +105,9 @@ _NON_PYTHON_EXTENSIONS = frozenset({
     ".java", ".kt", ".rs", ".rb", ".sh", ".bash", ".zsh",
     ".css", ".scss", ".less", ".xml", ".proto", ".sql",
     ".c", ".cpp", ".h", ".hpp",
+    ".gradle", ".kts", ".properties", ".env", ".ini",
+    ".swift", ".m", ".mm", ".cs", ".fs", ".ex", ".exs",
+    ".lua", ".r", ".R", ".pl", ".pm", ".php",
 })
 
 # Filenames without a standard extension that are non-Python.
@@ -118,8 +121,9 @@ def _is_non_python_file(file_path: str) -> bool:
     """Return True if *file_path* is NOT a Python file (REQ-MLT-100).
 
     Handles edge cases like ``go.mod`` and ``Dockerfile`` which lack
-    standard extensions.  Returns False for ``.py`` files and files
-    with no recognised non-Python extension.
+    standard extensions.  Returns False for ``.py`` and ``.go`` files
+    (both have MicroPrime paths) and True for all other non-Python
+    extensions and unknown extensions.
 
     When ``JAVA_MICROPRIME_ENABLED`` is True, ``.java`` files are treated
     as MicroPrime-compatible (returns False), enabling element-level generation.
@@ -131,16 +135,18 @@ def _is_non_python_file(file_path: str) -> bool:
     if p.name in _NON_PYTHON_FILENAMES:
         return True
     suffix = p.suffix.lower()
-    if suffix == ".py":
+    # Extensions with dedicated MicroPrime paths
+    if suffix in (".py", ".go"):
         return False
     # Java files optionally flow through MicroPrime
     if suffix == ".java" and JAVA_MICROPRIME_ENABLED:
         return False
     if suffix in _NON_PYTHON_EXTENSIONS:
         return True
-    # Unknown extension — conservatively treat as Python-compatible
-    # so existing behaviour is preserved.
-    return False
+    # Unknown extension — treat as non-Python to prevent emitting
+    # Python stubs (e.g. `from __future__ import annotations`) into
+    # files the Python assembler doesn't understand.
+    return True
 
 
 def _attempt_splice_violation_repair(

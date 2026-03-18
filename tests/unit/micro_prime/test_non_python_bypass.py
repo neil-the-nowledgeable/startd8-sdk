@@ -80,12 +80,20 @@ class TestIsNonPythonFile:
         assert _is_non_python_file("service.proto") is True
 
     def test_is_non_python_file_unknown_extension(self) -> None:
-        """Unknown extensions are conservatively treated as Python-compatible."""
-        assert _is_non_python_file("data.xyz") is False
+        """Unknown extensions are treated as non-Python to prevent Python stub emission."""
+        assert _is_non_python_file("data.xyz") is True
 
     def test_is_non_python_file_no_extension(self) -> None:
-        """Files without extension and not in known filenames → Python-compatible."""
-        assert _is_non_python_file("README") is False
+        """Files without extension and not in known filenames → non-Python."""
+        assert _is_non_python_file("README") is True
+
+    def test_is_non_python_file_gradle(self) -> None:
+        """Gradle build files are non-Python."""
+        assert _is_non_python_file("build.gradle") is True
+
+    def test_is_non_python_file_gradle_kts(self) -> None:
+        """Kotlin script Gradle files are non-Python."""
+        assert _is_non_python_file("build.gradle.kts") is True
 
     def test_is_non_python_file_requirements_in(self) -> None:
         assert _is_non_python_file("requirements.in") is True
