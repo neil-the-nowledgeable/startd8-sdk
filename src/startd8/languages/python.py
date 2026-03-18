@@ -46,8 +46,8 @@ class PythonLanguageProfile:
     @property
     def framework_imports(self) -> Dict[str, dict]:
         # Re-export from the existing framework_imports module
-        from ..implementation_engine.framework_imports import FRAMEWORK_IMPORTS
-        return dict(FRAMEWORK_IMPORTS)
+        from ..implementation_engine.framework_imports import _PYTHON_FRAMEWORK_IMPORTS
+        return dict(_PYTHON_FRAMEWORK_IMPORTS)
 
     @property
     def package_alias_map(self) -> Dict[str, str]:
@@ -130,6 +130,38 @@ class PythonLanguageProfile:
             return True, ""
         except SyntaxError as e:
             return False, str(e)
+
+    def derive_service_metadata(
+        self,
+        features: Sequence[Any],
+        *,
+        onboarding: Optional[Dict[str, Any]] = None,
+        api_signatures: Optional[List[str]] = None,
+        runtime_dependencies: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Python has no language-specific service metadata."""
+        return {}
+
+    def build_project_context_section(self, context: Dict[str, Any]) -> str:
+        """Python needs no special project context section."""
+        return ""
+
+    def strip_dependency_version(self, dep: str) -> str:
+        """Strip version pin from a Python dependency string.
+
+        Example: ``'grpcio==1.76.0'`` -> ``'grpcio'``
+        """
+        for sep in ("==", ">=", "<=", "~=", "!=", ">", "<"):
+            if sep in dep:
+                return dep.split(sep, 1)[0].strip()
+        return dep.strip()
+
+    def get_import_syntax_guidance(self) -> str:
+        """Return Python import rules for LLM prompts."""
+        return (
+            "Use `import module` or `from module import name`. "
+            "Prefer absolute imports. No wildcard imports."
+        )
 
     def generate_dependency_file(
         self,

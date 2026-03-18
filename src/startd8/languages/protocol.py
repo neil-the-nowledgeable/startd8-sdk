@@ -246,3 +246,58 @@ class LanguageProfile(Protocol):
             File content string, or None if not applicable.
         """
         ...
+
+    def derive_service_metadata(
+        self,
+        features: Sequence[Any],
+        *,
+        onboarding: Optional[Dict[str, Any]] = None,
+        api_signatures: Optional[List[str]] = None,
+        runtime_dependencies: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Derive language-specific service metadata from plan features.
+
+        Called by ``seeds/derivation.py:infer_service_metadata()`` after
+        language-agnostic metadata (transport, deps) is computed.
+
+        Args:
+            features: List of parsed features from plan ingestion.
+            onboarding: Optional onboarding config with version overrides.
+            api_signatures: Pre-aggregated API signatures from features.
+            runtime_dependencies: Pre-aggregated runtime dependencies.
+
+        Returns:
+            Dict of metadata keys (e.g. ``module_path``, ``java_package``).
+        """
+        ...
+
+    def build_project_context_section(self, context: Dict[str, Any]) -> str:
+        """Build language-specific project context for spec prompts.
+
+        Returns a markdown section with package/namespace declaration rules,
+        import syntax, and structural conventions.  Empty string if no
+        special guidance is needed (e.g. Python).
+
+        Called by ``spec_builder.py:build_spec_prompt()`` as a P0 section.
+        """
+        ...
+
+    def strip_dependency_version(self, dep: str) -> str:
+        """Strip version pin from a dependency string for prompt display.
+
+        Examples::
+
+            Python:  ``'grpcio==1.76.0'`` → ``'grpcio'``
+            Go:      ``'github.com/sirupsen/logrus v1.9.4'`` → ``'github.com/sirupsen/logrus'``
+            Java:    ``'io.grpc:grpc-netty:1.68.0'`` → ``'io.grpc:grpc-netty'``
+            Node.js: ``'@grpc/grpc-js@1.10.0'`` → ``'@grpc/grpc-js'``
+        """
+        ...
+
+    def get_import_syntax_guidance(self) -> str:
+        """Return language-specific import rules for LLM prompts.
+
+        Used by ``_build_available_imports_section()`` to tell the LLM
+        how to write import statements for this language.
+        """
+        ...

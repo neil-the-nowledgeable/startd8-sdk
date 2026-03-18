@@ -160,6 +160,14 @@ class LanguageRegistry:
             except ImportError:
                 logger.debug("JavaLanguageProfile not available")
 
+        # C#
+        if "csharp" not in already:
+            try:
+                from .csharp import CSharpLanguageProfile
+                cls.register(CSharpLanguageProfile())
+            except ImportError:
+                logger.debug("CSharpLanguageProfile not available")
+
     @classmethod
     def get(cls, language_id: str) -> Optional[LanguageProfile]:
         """Get language profile by ID (case-insensitive)."""
@@ -203,6 +211,25 @@ class LanguageRegistry:
                 if profile.supports_extension(ext_lower):
                     return profile
         return None
+
+    @classmethod
+    def get_extension_map(cls) -> Dict[str, str]:
+        """Canonical extension->language_id mapping from all registered profiles.
+
+        Calls :meth:`discover` on first access.  The mapping is computed
+        from each profile's ``source_extensions`` property.
+
+        Returns:
+            Dict mapping file extensions (with dot, e.g. ``'.py'``) to
+            language IDs (e.g. ``'python'``).
+        """
+        cls.discover()
+        mapping: Dict[str, str] = {}
+        with cls._lock:
+            for profile in cls._profiles.values():
+                for ext in profile.source_extensions:
+                    mapping[ext] = profile.language_id
+        return mapping
 
     @classmethod
     def clear(cls) -> None:

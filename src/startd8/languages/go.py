@@ -316,6 +316,138 @@ class GoLanguageProfile:
         return "\n".join(lines)
 
 
+    def derive_service_metadata(
+        self,
+        features: Sequence[Any],
+        *,
+        onboarding: Optional[Dict[str, Any]] = None,
+        api_signatures: Optional[List[str]] = None,
+        runtime_dependencies: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Derive Go-specific service metadata from plan features.
+
+        Extracts module_path, service_name, and go_version.
+        """
+        metadata: Dict[str, Any] = {}
+        api_sigs = api_signatures or []
+
+        # module_path: prefer explicit feature attribute, else parse from api_signatures
+        module_paths: List[str] = []
+        service_names: List[str] = []
+        for f in features:
+            _mp = getattr(f, "module_path", "")
+            if _mp:
+                module_paths.append(_mp)
+            _sn = getattr(f, "service_name", "")
+            if _sn:
+                service_names.append(_sn)
+
+        if module_paths:
+            metadata["module_path"] = module_paths[0]
+        else:
+            for sig in api_sigs:
+                if sig.startswith("module "):
+                    metadata["module_path"] = sig.split(None, 1)[1].strip()
+                    break
+
+        if service_names:
+            metadata["service_name"] = service_names[0]
+        else:
+            go_dirs: set[str] = set()
+            for feat in features:
+                for tf in getattr(feat, "target_files", []):
+                    if tf.endswith(".go"):
+                        parts = tf.replace("\\", "/").rsplit("/", 1)
+                        if len(parts) == 2:
+                            go_dirs.add(parts[0].rsplit("/", 1)[-1])
+            if len(go_dirs) == 1:
+                metadata["service_name"] = go_dirs.pop()
+
+        go_version = "1.23"
+        if onboarding:
+            go_version = str(onboarding.get("go_version", go_version))
+        metadata["go_version"] = go_version
+
+        return metadata
+
+    def build_project_context_section(self, context: Dict[str, Any]) -> str:
+        """Build Go module context section for correct package and import generation.
+
+        Provides the LLM with the module path, package name, and Go-specific
+        structural rules required for syntactically correct Go output.
+        """
+        # Derive package name from target file path
+        target_files = context.get("target_files") or []
+        package_name = "main"  # default for executable entry points
+        service_name = context.get("service_name", "")
+        module_path = context.get("module_path", "")
+
+        # Also check service_metadata (populated at service level)
+        svc_meta = context.get("service_metadata")
+        if isinstance(svc_meta, dict):
+            if not module_path:
+                module_path = svc_meta.get("module_path", "")
+            if not service_name:
+                service_name = svc_meta.get("service_name", "")
+
+        # Derive package from target file: main.go -> "main", server.go -> service dir name
+        for tf in target_files:
+            fname = tf.rsplit("/", 1)[-1] if "/" in tf else tf
+            if fname == "main.go":
+                package_name = "main"
+                break
+            elif fname.endswith("_test.go"):
+                # Test files use same package as the code they test
+                if service_name:
+                    package_name = service_name.replace("-", "")
+                break
+            elif fname.endswith(".go"):
+                # Non-main Go files use the service/directory name as package
+                if service_name:
+                    package_name = service_name.replace("-", "")
+                break
+
+        lines = [
+            "## Go Module Context (CRITICAL — required for compilation)\n",
+            f"- **Package declaration**: `package {package_name}` (MUST be the first line of the file)",
+        ]
+        if module_path:
+            lines.append(f"- **Module path**: `{module_path}`")
+            lines.append(f"  - Internal imports use: `\"{module_path}/...\"` paths")
+        if service_name:
+            lines.append(f"- **Service**: `{service_name}`")
+
+        lines.extend([
+            "",
+            "**Go import rules:**",
+            "- Every import must use the full quoted module path (e.g. `\"github.com/sirupsen/logrus\"`)",
+            "- Group imports: stdlib first, then a blank line, then third-party",
+            "- No unused imports (Go compiler error) — only import what you use",
+            "- No unused variables (Go compiler error) — use `_` for intentionally unused values",
+            "",
+            "**Go structural rules:**",
+            "- `context.Context` is always the first parameter in functions that accept it",
+            "- Error is always the last return value: `func Foo() (ResultType, error)`",
+            "- Exported names start with uppercase, unexported with lowercase",
+            "- Use `if err != nil { return ..., err }` — do not use try/catch or panic for control flow",
+        ])
+
+        return "\n".join(lines)
+
+    def strip_dependency_version(self, dep: str) -> str:
+        """Strip version from Go dependency. 'mod v1.0' -> 'mod'."""
+        return dep.split()[0].strip() if dep.strip() else dep
+
+    def get_import_syntax_guidance(self) -> str:
+        """Return Go import rules for LLM prompts."""
+        return (
+            "Use ONLY these modules plus Go stdlib. Every non-stdlib package you\n"
+            "reference MUST have a corresponding import statement. Use full module\n"
+            'paths in import statements (e.g. `import "github.com/sirupsen/logrus"`).\n'
+            "Do NOT import modules not listed above.\n"
+        )
+
+
 _GO_STDLIB_PREFIXES: tuple[str, ...] = (
     "bufio", "bytes", "compress", "container", "context",
     "crypto", "database", "debug", "embed", "encoding",
