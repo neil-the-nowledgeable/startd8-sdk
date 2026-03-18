@@ -501,9 +501,10 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
                 return f"python_content_in_{label}"
 
         # Moderate signal: `def ` or `class ` as first code construct
-        # Exclude Groovy/Gradle/Kotlin — `def` and `class` are native keywords
+        # Exclude languages where `def` and `class` are native keywords
         _DEF_CLASS_EXCLUDE = (
             ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+            ".cs",  # C# uses `class` natively
         )
         if ext not in _DEF_CLASS_EXCLUDE:
             if first_code_line.startswith("def ") or first_code_line.startswith("class "):
@@ -530,6 +531,27 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
         if _NODE_FINGERPRINT_RE.search(content) or _MODULE_EXPORTS_RE.search(content):
             label = ext.lstrip(".") if ext else name
             return f"nodejs_content_in_{label}"
+
+    # --- C# fingerprints in non-C# files (REQ-CS-203) ---
+    _CS_EXTENSIONS = (".cs", ".csx")
+    if ext not in _CS_EXTENSIONS and ext != ".py":
+        # "using System;" or "using Microsoft." — C# using directives
+        _CS_USING_RE = re.compile(
+            r"^\s*using\s+(?:System|Microsoft)\b[\w.]*\s*;", re.MULTILINE,
+        )
+        # "namespace X {" or "namespace X;" (file-scoped) — C# namespace
+        _CS_NAMESPACE_RE = re.compile(
+            r"^\s*namespace\s+[\w.]+\s*[{;]", re.MULTILINE,
+        )
+        # "[assembly:" — C# assembly attribute
+        _CS_ASSEMBLY_RE = re.compile(r"^\s*\[assembly:", re.MULTILINE)
+        if (
+            _CS_USING_RE.search(content)
+            or _CS_NAMESPACE_RE.search(content)
+            or _CS_ASSEMBLY_RE.search(content)
+        ):
+            label = ext.lstrip(".") if ext else name
+            return f"csharp_content_in_{label}"
 
     return None
 
@@ -590,6 +612,10 @@ def _validate_non_python_file(
         result = _validate_build_gradle(content, result)
     elif suffix == ".cs":
         result = _validate_csharp_file(content, result)
+    elif suffix == ".csproj":
+        result = _validate_csproj_file(content, result)
+    elif suffix == ".sln":
+        result = _validate_sln_file(content, result)
 
     return result
 
@@ -598,10 +624,57 @@ def _validate_csharp_file(
     content: str,
     result: DiskComplianceResult,
 ) -> DiskComplianceResult:
-    """Validate C# source file structure."""
+    """Validate C# source file structure (REQ-CS-200).
+
+    Uses tree-sitter-c-sharp for per-file syntax validation when available
+    (~5ms, in-process). Falls back to text-based heuristics.
+    """
     issues: list = []
 
-    # Check for balanced braces
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # Python fingerprint guard
+    _py_fingerprints = ("def ", "import os", "from __future__", "self.")
+    for fp in _py_fingerprints:
+        if fp in content:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"Python fingerprint in .cs file: {fp!r}"
+            return result
+
+    # Try tree-sitter first (REQ-CS-200 Tier 1)
+    try:
+        from startd8.languages.csharp_parser import parse_csharp
+        parse_result = parse_csharp(content)
+        if parse_result.parser_used == "tree_sitter":
+            if parse_result.has_error:
+                result.ast_valid = False
+                result.contract_compliance = 0.0
+                result.error = "csharp_syntax_error"
+                return result
+            # Structural checks on parsed tree
+            kinds = {e.kind for e in parse_result.elements}
+            has_type = kinds & {"class", "interface", "struct", "record", "enum"}
+            if not has_type and not parse_result.namespace:
+                issues.append({
+                    "category": "csharp_structure",
+                    "severity": "warning",
+                    "message": "no type declaration found (class/interface/struct/record/enum)",
+                })
+                result.contract_compliance = max(
+                    0.0, result.contract_compliance - 0.3,
+                )
+            if issues:
+                result.semantic_issues = issues
+            return result
+    except ImportError:
+        pass  # Fall through to text-based
+
+    # Text-based fallback (REQ-CS-200 Tier 2)
     depth = 0
     for ch in content:
         if ch == "{":
@@ -609,24 +682,151 @@ def _validate_csharp_file(
         elif ch == "}":
             depth -= 1
             if depth < 0:
-                issues.append("unbalanced braces (extra closing brace)")
-                break
+                result.ast_valid = False
+                result.contract_compliance = 0.5
+                result.error = "unbalanced_braces"
+                return result
     if depth > 0:
-        issues.append(f"unbalanced braces (depth={depth})")
+        result.ast_valid = False
+        result.contract_compliance = 0.5
+        result.error = "unbalanced_braces"
+        return result
 
-    # Check for namespace or using declaration (basic C# structure)
     has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
     has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
     has_type_decl = bool(
-        re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content)
+        re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content),
     )
 
     if not has_namespace and not has_using and not has_type_decl:
-        issues.append("no C# structure found (namespace/using/type declaration)")
+        result.ast_valid = False
+        result.contract_compliance = 0.3
+        result.error = "no_csharp_keywords"
+        return result
 
-    if issues:
-        result.semantic_issues = issues
-    result.ast_valid = len(issues) == 0
+    # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
+    result.contract_compliance = min(result.contract_compliance, 0.8)
+    return result
+
+
+def _validate_csproj_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate .csproj file structure (REQ-CS-201).
+
+    Checks XML well-formedness, <Project> root, <TargetFramework>,
+    and <PackageReference> attributes.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # XML well-formedness
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(content)
+    except ET.ParseError as exc:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"xml_parse_error: {exc}"
+        return result
+
+    # Strip namespace for tag matching
+    tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+    if tag != "Project":
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "missing_project_root"
+        return result
+
+    # Check Sdk attribute
+    sdk = root.get("Sdk", "")
+    if not sdk:
+        result.semantic_issues.append({
+            "category": "csproj_structure",
+            "severity": "warning",
+            "message": "missing Sdk attribute on <Project> element",
+        })
+
+    # Check TargetFramework(s) — search all PropertyGroup children
+    has_target_framework = False
+    for elem in root.iter():
+        etag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if etag in ("TargetFramework", "TargetFrameworks"):
+            has_target_framework = True
+            break
+
+    if not has_target_framework:
+        result.contract_compliance = 0.3
+        result.semantic_issues.append({
+            "category": "csproj_structure",
+            "severity": "error",
+            "message": "missing <TargetFramework> or <TargetFrameworks> element",
+        })
+
+    # Check PackageReference entries have required attributes
+    for elem in root.iter():
+        etag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if etag == "PackageReference":
+            inc = elem.get("Include", "")
+            ver = elem.get("Version", "")
+            if not inc:
+                result.semantic_issues.append({
+                    "category": "csproj_structure",
+                    "severity": "warning",
+                    "message": "PackageReference missing Include attribute",
+                })
+
+    return result
+
+
+def _validate_sln_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate .sln file structure (REQ-CS-202).
+
+    Checks for solution header, project entries, and balanced
+    Project/EndProject blocks.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # Check solution header
+    if "Microsoft Visual Studio Solution File" not in content:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "missing_solution_header"
+        return result
+
+    # Count Project/EndProject pairs
+    project_count = content.count("Project(")
+    end_project_count = content.count("EndProject")
+
+    if project_count == 0:
+        result.contract_compliance = 0.3
+        result.semantic_issues.append({
+            "category": "sln_structure",
+            "severity": "warning",
+            "message": "no Project entries found in solution file",
+        })
+    elif project_count != end_project_count:
+        result.contract_compliance = 0.5
+        result.semantic_issues.append({
+            "category": "sln_structure",
+            "severity": "error",
+            "message": (
+                f"unbalanced Project/EndProject: "
+                f"{project_count} Project( vs {end_project_count} EndProject"
+            ),
+        })
+
     return result
 
 
