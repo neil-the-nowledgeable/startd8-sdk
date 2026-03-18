@@ -452,7 +452,8 @@ def _match_contract_fields(
 
     if "stat" in fn_lower or "metric" in fn_lower or "meter" in fn_lower:
         metrics = contract.get("metrics", {})
-        # StartD8 schema: metrics.required; ContextCore schema: metrics.convention_based
+        # Check both schemas: callers using scan_file() get auto-normalization,
+        # but direct classify_todo() callers may pass either schema raw.
         has_metrics = (
             metrics.get("required")
             or metrics.get("convention_based")
@@ -491,8 +492,8 @@ def normalize_instrumentation_data(
     if not isinstance(metrics, dict):
         return data
 
-    # Already normalized (has metrics.required)
-    if metrics.get("required"):
+    # Already normalized (has metrics.required — even if empty list)
+    if "required" in metrics:
         return data
 
     # Merge convention_based + manifest_declared into required

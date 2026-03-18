@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence
+from typing import Any, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -79,16 +79,19 @@ _NODE_KIND_MAP = {
 }
 
 
-def _get_ts_parser():
+_UNSET = object()  # sentinel for uninitialized cache
+_ts_parser_cache: Any = _UNSET
+
+
+def _get_ts_parser() -> Any:
     """Create and cache a tree-sitter parser for C#.
 
-    Returns None if tree-sitter or tree-sitter-c-sharp is not installed.
+    Returns the cached ``Parser`` instance, or ``None`` if tree-sitter
+    or tree-sitter-c-sharp is not installed.
     """
     global _ts_parser_cache
-    try:
+    if _ts_parser_cache is not _UNSET:
         return _ts_parser_cache
-    except NameError:
-        pass
 
     try:
         import tree_sitter_c_sharp as ts_cs
@@ -98,13 +101,25 @@ def _get_ts_parser():
         parser = Parser(language)
         _ts_parser_cache = parser
         return parser
-    except (ImportError, Exception):
+    except ImportError:
+        _ts_parser_cache = None
+        return None
+    except (OSError, RuntimeError) as exc:
+        # Unexpected failure (e.g. corrupt shared library, ABI mismatch)
+        import logging
+        logging.getLogger(__name__).warning(
+            "tree-sitter-c-sharp init failed: %s", exc,
+        )
         _ts_parser_cache = None
         return None
 
 
-def _extract_modifiers(node) -> List[str]:
-    """Extract modifier keywords (public, private, static, async, etc.)."""
+def _extract_modifiers(node: Any) -> List[str]:
+    """Extract modifier keywords (public, private, static, async, etc.).
+
+    Args:
+        node: A tree-sitter ``Node`` (declaration node with modifier children).
+    """
     mods = []
     for child in node.children:
         if child.type == "modifier":
@@ -119,7 +134,7 @@ def _extract_modifiers(node) -> List[str]:
     return mods
 
 
-def _node_name(node) -> str:
+def _node_name(node: Any) -> str:
     """Get the name of a declaration node."""
     name_node = node.child_by_field_name("name")
     if name_node is not None:
@@ -127,7 +142,7 @@ def _node_name(node) -> str:
     return ""
 
 
-def _node_return_type(node) -> Optional[str]:
+def _node_return_type(node: Any) -> Optional[str]:
     """Get the return type of a method declaration."""
     ret = node.child_by_field_name("returns")
     if ret is None:
@@ -137,7 +152,7 @@ def _node_return_type(node) -> Optional[str]:
     return None
 
 
-def _node_parameters(node) -> Optional[str]:
+def _node_parameters(node: Any) -> Optional[str]:
     """Get the raw parameter list text."""
     params = node.child_by_field_name("parameters")
     if params is not None:
@@ -145,7 +160,7 @@ def _node_parameters(node) -> Optional[str]:
     return None
 
 
-def _extract_body_range(node):
+def _extract_body_range(node: Any) -> tuple[Optional[int], Optional[int]]:
     """Get the body byte range of a declaration, if it has one."""
     body = node.child_by_field_name("body")
     if body is not None:
@@ -273,13 +288,6 @@ _TYPE_DECL_RE = re.compile(
     r"\s*(?P<kind>class|interface|struct|record|enum)\s+(?P<name>[A-Za-z_]\w*)",
     re.MULTILINE,
 )
-_METHOD_DECL_RE = re.compile(
-    r"^\s*(?:public|private|protected|internal|static|abstract|virtual|override|async|sealed\s+)*"
-    r"\s*(?P<ret>[\w<>\[\],\s?]+?)\s+(?P<name>[A-Za-z_]\w*)\s*\(",
-    re.MULTILINE,
-)
-
-
 def _parse_with_regex(source: str) -> CSharpParseResult:
     """Fallback regex-based C# structure extraction."""
     usings = _USING_RE.findall(source)
@@ -332,11 +340,8 @@ def validate_csharp_syntax(source: str) -> tuple[bool, str]:
     from ._validation_utils import check_balanced_braces
 
     # Python fingerprint check (fast, catches cross-language contamination)
-    _PYTHON_FINGERPRINTS = (
-        "def ", "import os", "from __future__", "print(", "self.",
-        "#!/usr/bin/env python", "#!/usr/bin/python",
-    )
-    for fp in _PYTHON_FINGERPRINTS:
+    from ._validation_utils import PYTHON_FINGERPRINTS
+    for fp in PYTHON_FINGERPRINTS:
         if fp in source:
             return False, f"Python fingerprint detected: {fp!r}"
 
