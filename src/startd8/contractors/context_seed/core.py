@@ -3101,7 +3101,9 @@ class Test{class_name}:
                     resumed_cost = sum(
                         gr.cost_usd for gr in cached_results.values()
                     )
-                    total_cost = resumed_cost
+                    # Report zero cost for resumed phase — no LLM calls were
+                    # made.  Historical cost tracked in metadata["resumed_cost"].
+                    total_cost = 0.0
                     truncation_flags = saved.get("truncation_flags", {})
                     logger.info(
                         "IMPLEMENT inner loop: resumed %d tasks from cache ($%.4f)",
