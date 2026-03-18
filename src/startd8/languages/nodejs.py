@@ -353,6 +353,26 @@ class NodeLanguageProfile:
             "- Use `const` by default, `let` only when reassignment is needed, never `var`",
         ])
 
+        # REQ-NODE-601: Dockerfile context for Node.js services
+        target_files = context.get("target_files") or []
+        has_dockerfile = any(
+            Path(f).name.lower().startswith("dockerfile")
+            for f in target_files
+        )
+        if has_dockerfile:
+            entry_point = "index.js"
+            if isinstance(svc_meta, dict):
+                entry_point = svc_meta.get("entry_point", entry_point)
+            lines.extend([
+                "",
+                "**Dockerfile patterns for Node.js:**",
+                "- Multi-stage build: `node:20-alpine` builder → `alpine` runtime with `apk add nodejs`",
+                "- Builder stage: `COPY package*.json ./` then `RUN npm install --only=production`",
+                "- Runtime stage: `COPY --from=builder /usr/src/app/node_modules ./node_modules`",
+                f"- Entry point: `ENTRYPOINT [ \"node\", \"{entry_point}\" ]`",
+                "- No HEALTHCHECK instruction — use gRPC health protocol instead",
+            ])
+
         return "\n".join(lines)
 
     def strip_dependency_version(self, dep: str) -> str:
@@ -370,6 +390,24 @@ class NodeLanguageProfile:
             "Every package you reference MUST be listed above or be a Node builtin.\n"
             "Do NOT import packages not listed above.\n"
         )
+
+
+def detect_module_system(project_root: Path) -> str:
+    """Detect CommonJS vs ESM from package.json ``type`` field (REQ-NODE-104).
+
+    Returns ``"commonjs"`` or ``"esm"``. Defaults to ``"commonjs"``
+    (Node.js default when ``package.json`` has no ``type`` field).
+    """
+    import json
+
+    pkg_path = project_root / "package.json"
+    if not pkg_path.is_file():
+        return "commonjs"
+    try:
+        data = json.loads(pkg_path.read_text(encoding="utf-8"))
+        return "esm" if data.get("type") == "module" else "commonjs"
+    except (json.JSONDecodeError, OSError):
+        return "commonjs"
 
 
 _NODE_STDLIB_PREFIXES: tuple[str, ...] = (

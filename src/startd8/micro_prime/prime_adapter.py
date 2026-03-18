@@ -687,47 +687,32 @@ class MicroPrimeCodeGenerator:
                             skeleton = skeletons.get(mkey, "")
                         break
 
-            if file_spec is None or not skeleton:
-                # FR-DFA-001: File-level bypass — MP can't process this file
-                # type at all (no manifest entry or no skeleton).  Distinct
-                # from element-level escalation where MP tried but elements
-                # were too complex.
-                reason = (
-                    "no ForwardFileSpec in manifest"
-                    if file_spec is None
-                    else "no skeleton source available"
-                )
-                logger.info(
-                    "Micro Prime bypass: %s (%s) — delegating to fallback",
-                    file_path, reason,
-                )
-                st.bypass_files.append(file_path)
-                continue
-
-            # FR-DFA-003: Dockerfile file-level processing — no element engine
-            lang = getattr(file_spec, "language", None)
-            if lang == "dockerfile":
-                output_path = self._output_dir / file_path
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(skeleton, encoding="utf-8")
-                st.generated_files.append(output_path)
-                st.written_file_paths.add(file_path)
-                st.effective_file_count += 1
-                logger.info(
-                    "Micro Prime wrote Dockerfile %s (%d lines, passthrough)",
-                    file_path,
-                    skeleton.count("\n") + 1,
-                )
-                continue
-
-            # REQ-MLT-100: Non-Python file-level bypass — delegate to fallback
-            # generator instead of running through MicroPrime element engine
-            # which produces Python skeletons for files with 0 elements
-            # (e.g., go.mod, HTML templates, YAML configs).
+            # REQ-MLT-100: Non-Python file-level bypass — must come BEFORE
+            # the skeleton/file_spec check so that Dockerfiles, HTML, go.mod,
+            # etc. are caught early regardless of whether they have a skeleton.
+            # Without this, non-Python files without skeletons fall into the
+            # generic "no skeleton" bypass and get routed to the LLM fallback
+            # via MicroPrime's bypass path instead of being handled directly.
             from startd8.micro_prime.engine import _is_non_python_file
 
             if _is_non_python_file(file_path):
-                # Try deterministic generation for go.mod files first
+                # FR-DFA-003: Dockerfile passthrough (skeleton available)
+                lang = getattr(file_spec, "language", None) if file_spec else None
+                if lang == "dockerfile" and skeleton:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(skeleton, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote Dockerfile %s (%d lines, passthrough)",
+                        file_path,
+                        skeleton.count("\n") + 1,
+                    )
+                    continue
+
+                # REQ-MLT-103: Deterministic go.mod generation
                 go_mod_content = self._try_generate_go_mod(
                     file_path, file_spec, context,
                 )
@@ -745,7 +730,7 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
-                # Try deterministic generation for build.gradle files
+                # Deterministic build.gradle generation
                 gradle_content = self._try_generate_build_gradle(
                     file_path, file_spec, context,
                 )
@@ -763,11 +748,46 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
+                # REQ-NODE-103: Deterministic package.json generation
+                pkg_json_content = self._try_generate_package_json(
+                    file_path, file_spec, context,
+                )
+                if pkg_json_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(pkg_json_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote package.json %s (deterministic, %d lines)",
+                        file_path,
+                        pkg_json_content.count("\n") + 1,
+                    )
+                    continue
+
                 # All other non-Python files: delegate to fallback (LLM)
                 logger.info(
-                    "Micro Prime bypass: %s is non-Python — "
+                    "Micro Prime: non-Python file %s — "
                     "delegating to fallback for file-whole generation",
                     file_path,
+                )
+                st.bypass_files.append(file_path)
+                continue
+
+            if file_spec is None or not skeleton:
+                # FR-DFA-001: Python file-level bypass — MP can't process this
+                # Python file (no manifest entry or no skeleton).  Distinct
+                # from element-level escalation where MP tried but elements
+                # were too complex.
+                reason = (
+                    "no ForwardFileSpec in manifest"
+                    if file_spec is None
+                    else "no skeleton source available"
+                )
+                logger.info(
+                    "Micro Prime bypass: %s (%s) — delegating to fallback",
+                    file_path, reason,
                 )
                 st.bypass_files.append(file_path)
                 continue
@@ -1995,6 +2015,49 @@ class MicroPrimeCodeGenerator:
             module_path=module_path,
             dependencies=dependencies,
             metadata=metadata or None,
+        )
+        return content
+
+    def _try_generate_package_json(
+        self,
+        file_path: str,
+        file_spec: Any,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Try deterministic package.json generation from seed metadata (REQ-NODE-103).
+
+        Returns package.json content string, or None if the file is not a
+        package.json or if the dependency list is empty (fall through to LLM
+        for richer output).
+        """
+        if Path(file_path).name != "package.json":
+            return None
+
+        # Only generate when dependencies are available — an empty package.json
+        # is less useful than what the LLM produces with full prompt context.
+        dependencies: List[str] = []
+        seed_deps = context.get("dependencies") or context.get("runtime_dependencies") or []
+        if isinstance(seed_deps, list):
+            dependencies = [str(d) for d in seed_deps if d]
+        if not dependencies:
+            return None
+
+        try:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("nodejs")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
+            return None
+
+        service_name = Path(file_path).parent.name or "service"
+        content = profile.generate_dependency_file(
+            project_root=self._output_dir,
+            service_name=service_name,
+            module_path="",
+            dependencies=dependencies,
         )
         return content
 
