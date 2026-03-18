@@ -32,6 +32,7 @@ __all__ = [
     "scan_todos",
     "classify_todo",
     "scan_file",
+    "normalize_instrumentation_data",
 ]
 
 
@@ -440,12 +441,24 @@ def _match_contract_fields(
     function_name: str,
     contract: Dict[str, Any],
 ) -> List[str]:
-    """Match a function name to instrumentation contract fields."""
+    """Match a function name to instrumentation contract fields.
+
+    Handles both StartD8's ``instrumentation_contract`` schema
+    (``metrics.required``) and ContextCore's ``instrumentation_hints``
+    schema (``metrics.convention_based`` / ``metrics.manifest_declared``).
+    """
     fn_lower = function_name.lower()
     fields: List[str] = []
 
     if "stat" in fn_lower or "metric" in fn_lower or "meter" in fn_lower:
-        if contract.get("metrics", {}).get("required"):
+        metrics = contract.get("metrics", {})
+        # StartD8 schema: metrics.required; ContextCore schema: metrics.convention_based
+        has_metrics = (
+            metrics.get("required")
+            or metrics.get("convention_based")
+            or metrics.get("manifest_declared")
+        )
+        if has_metrics:
             fields.append("metrics.required")
     if "trac" in fn_lower or "span" in fn_lower:
         if contract.get("traces", {}).get("required"):
@@ -457,6 +470,46 @@ def _match_contract_fields(
         fields.append("profiler")
 
     return fields
+
+
+def normalize_instrumentation_data(
+    data: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Normalize ContextCore ``instrumentation_hints`` to ``instrumentation_contract`` schema.
+
+    ContextCore's ``derive_instrumentation_hints()`` emits per-service dicts with
+    ``metrics.convention_based`` and ``metrics.manifest_declared`` arrays.  StartD8's
+    TODO scanner expects ``metrics.required``.  This function bridges the two by
+    merging both arrays into ``metrics.required`` without losing the originals.
+
+    Accepts either schema unchanged — if ``metrics.required`` already exists, returns as-is.
+    """
+    if not data or not isinstance(data, dict):
+        return data
+
+    metrics = data.get("metrics")
+    if not isinstance(metrics, dict):
+        return data
+
+    # Already normalized (has metrics.required)
+    if metrics.get("required"):
+        return data
+
+    # Merge convention_based + manifest_declared into required
+    required: List[Dict[str, Any]] = []
+    for key in ("convention_based", "manifest_declared"):
+        entries = metrics.get(key, [])
+        if isinstance(entries, list):
+            required.extend(entries)
+
+    if required:
+        # Don't mutate the original — shallow-copy metrics
+        normalized = dict(data)
+        normalized["metrics"] = dict(metrics)
+        normalized["metrics"]["required"] = required
+        return normalized
+
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +551,12 @@ def scan_file(
     file_path: str | Path,
     instrumentation_contract: Optional[Dict[str, Any]] = None,
 ) -> List[TodoEntry]:
-    """Scan a file on disk, returning classified TodoEntries."""
+    """Scan a file on disk, returning classified TodoEntries.
+
+    Accepts both ContextCore's ``instrumentation_hints`` schema and
+    StartD8's ``instrumentation_contract`` schema — automatically
+    normalizes via :func:`normalize_instrumentation_data`.
+    """
     p = Path(file_path)
     if not p.is_file():
         return []
@@ -509,11 +567,14 @@ def scan_file(
         logger.warning("Failed to read %s: %s", file_path, exc)
         return []
 
+    # Normalize ContextCore hints → contract schema
+    normalized = normalize_instrumentation_data(instrumentation_contract)
+
     language = _detect_language(str(file_path))
     raw_entries = scan_todos(str(file_path), content, language)
     lines = content.splitlines()
 
-    return [classify_todo(entry, lines, instrumentation_contract) for entry in raw_entries]
+    return [classify_todo(entry, lines, normalized) for entry in raw_entries]
 
 
 def scan_directory(

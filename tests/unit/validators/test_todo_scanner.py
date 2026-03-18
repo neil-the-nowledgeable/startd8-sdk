@@ -12,6 +12,7 @@ from startd8.validators.todo_scanner import (
     TodoEntry,
     TodoInventory,
     classify_todo,
+    normalize_instrumentation_data,
     scan_directory,
     scan_file,
     scan_todos,
@@ -335,6 +336,102 @@ class TestTodoInventory:
 # ---------------------------------------------------------------------------
 # Test: scan_file integration
 # ---------------------------------------------------------------------------
+
+class TestNormalizeInstrumentationData:
+    """Cross-repo key name alignment: ContextCore hints → StartD8 contract."""
+
+    def test_none_passthrough(self):
+        assert normalize_instrumentation_data(None) is None
+
+    def test_empty_dict_passthrough(self):
+        assert normalize_instrumentation_data({}) == {}
+
+    def test_already_normalized_passthrough(self):
+        """StartD8 schema with metrics.required — returned unchanged."""
+        contract = {
+            "metrics": {
+                "required": [{"name": "rpc_server_duration_seconds"}],
+            },
+        }
+        result = normalize_instrumentation_data(contract)
+        assert result["metrics"]["required"] == contract["metrics"]["required"]
+
+    def test_contextcore_convention_based_normalized(self):
+        """ContextCore schema with convention_based → creates metrics.required."""
+        hints = {
+            "metrics": {
+                "convention_based": [
+                    {"name": "rpc.server.duration", "type": "histogram"},
+                    {"name": "rpc.server.request.size", "type": "histogram"},
+                ],
+                "manifest_declared": [
+                    {"name": "custom_metric", "source": "semantic_conventions"},
+                ],
+            },
+        }
+        result = normalize_instrumentation_data(hints)
+        assert "required" in result["metrics"]
+        assert len(result["metrics"]["required"]) == 3
+        # Originals preserved
+        assert result["metrics"]["convention_based"] == hints["metrics"]["convention_based"]
+
+    def test_contextcore_no_metrics_passthrough(self):
+        hints = {"traces": {"required": [{"span_name": "test"}]}}
+        result = normalize_instrumentation_data(hints)
+        assert result == hints
+
+    def test_does_not_mutate_input(self):
+        """Normalization must not mutate the original dict."""
+        hints = {
+            "metrics": {
+                "convention_based": [{"name": "m1"}],
+            },
+        }
+        original_metrics = dict(hints["metrics"])
+        normalize_instrumentation_data(hints)
+        assert hints["metrics"] == original_metrics
+        assert "required" not in hints["metrics"]
+
+    def test_category_b_with_contextcore_hints(self):
+        """End-to-end: ContextCore hints schema triggers Category B classification."""
+        lines = JAVA_GRPC_SERVER.splitlines()
+        entries = scan_todos("AdService.java", JAVA_GRPC_SERVER, "java")
+        init_stats = [e for e in entries if e.containing_function == "initStats" and "implement" in e.raw_text.lower()]
+        assert len(init_stats) >= 1
+
+        # Use ContextCore's schema (convention_based, not required)
+        hints = {
+            "metrics": {
+                "convention_based": [
+                    {"name": "rpc.server.duration", "type": "histogram"},
+                ],
+            },
+            "traces": {"required": []},
+        }
+        # normalize_instrumentation_data bridges the gap
+        normalized = normalize_instrumentation_data(hints)
+        classified = classify_todo(init_stats[0], lines, normalized)
+        assert classified.category == "B"
+        assert classified.confidence >= 0.9
+        assert "metrics.required" in classified.contract_fields
+
+    def test_scan_file_with_contextcore_hints(self, tmp_path):
+        """scan_file auto-normalizes ContextCore hints."""
+        java_file = tmp_path / "AdService.java"
+        java_file.write_text(JAVA_GRPC_SERVER, encoding="utf-8")
+
+        hints = {
+            "metrics": {
+                "convention_based": [
+                    {"name": "rpc.server.duration", "type": "histogram"},
+                ],
+            },
+            "traces": {"required": []},
+        }
+        entries = scan_file(java_file, instrumentation_contract=hints)
+        b_entries = [e for e in entries if e.category == "B" and e.contract_fields]
+        assert len(b_entries) >= 1
+
 
 class TestScanFile:
     """Integration: scan_file reads from disk and classifies."""
