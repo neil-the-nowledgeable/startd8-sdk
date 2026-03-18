@@ -221,3 +221,113 @@ class TestBuildNodejsModuleSection:
         assert "camelCase" in result
         assert "async" in result
         assert "const" in result
+
+
+class TestBuildCsharpProjectSection:
+    """REQ-PLI-501: C# build_project_context_section()."""
+
+    def _build(self, context):
+        from startd8.languages.csharp import CSharpLanguageProfile
+        profile = CSharpLanguageProfile()
+        return profile.build_project_context_section(context)
+
+    def test_empty_for_no_cs_files(self):
+        result = self._build({"target_files": ["app.py"]})
+        # Still produces section (profile is C# regardless of files)
+        assert "C# Project Context" in result
+
+    def test_basic_section(self):
+        ctx = {
+            "csharp_namespace": "MyApp.Services",
+            "target_files": ["src/MyApp/Services/OrderService.cs"],
+            "target_framework": "net8.0",
+        }
+        result = self._build(ctx)
+        assert "C# Project Context" in result
+        assert "namespace MyApp.Services;" in result
+        assert "net8.0" in result
+
+    def test_namespace_from_service_metadata(self):
+        ctx = {
+            "target_files": ["src/MyApp/Services/OrderService.cs"],
+            "service_metadata": {
+                "csharp_namespace": "MyApp.Services",
+                "target_framework": "net9.0",
+            },
+        }
+        result = self._build(ctx)
+        assert "MyApp.Services" in result
+        assert "net9.0" in result
+
+    def test_namespace_inferred_from_path(self):
+        ctx = {
+            "target_files": ["src/CartService/Controllers/CartController.cs"],
+        }
+        result = self._build(ctx)
+        assert "CartService" in result
+
+    def test_using_rules_present(self):
+        ctx = {"target_files": ["App.cs"]}
+        result = self._build(ctx)
+        assert "using" in result
+
+    def test_structural_rules_present(self):
+        ctx = {"target_files": ["App.cs"]}
+        result = self._build(ctx)
+        assert "PascalCase" in result or "structural" in result.lower()
+
+
+class TestAvailableImportsCsharp:
+    """REQ-PLI-500: C# dependency formatting in available imports."""
+
+    def _build(self, context):
+        from startd8.implementation_engine.spec_builder import _build_available_imports_section
+        return _build_available_imports_section(context)
+
+    def test_csharp_dep_stripping(self):
+        from startd8.languages.csharp import CSharpLanguageProfile
+        ctx = {
+            "language_profile": CSharpLanguageProfile(),
+            "runtime_dependencies": [
+                "Grpc.AspNetCore/2.60.0",
+                "Microsoft.EntityFrameworkCore/8.0.0",
+            ],
+        }
+        result = self._build(ctx)
+        assert "Grpc.AspNetCore" in result
+        assert "Microsoft.EntityFrameworkCore" in result
+        # Versions should be stripped
+        assert "2.60.0" not in result
+        assert "8.0.0" not in result
+
+    def test_csharp_plain_dep(self):
+        from startd8.languages.csharp import CSharpLanguageProfile
+        ctx = {
+            "language_profile": CSharpLanguageProfile(),
+            "runtime_dependencies": ["Serilog"],
+        }
+        result = self._build(ctx)
+        assert "Serilog" in result
+
+
+class TestCsharpDependencyFileGeneration:
+    """REQ-PLI-402: C# .csproj generation."""
+
+    def test_generates_valid_csproj(self):
+        from startd8.languages.csharp import CSharpLanguageProfile
+        from pathlib import Path
+
+        profile = CSharpLanguageProfile()
+        content = profile.generate_dependency_file(
+            project_root=Path("."),
+            service_name="cartservice",
+            module_path="",
+            dependencies=["Grpc.AspNetCore/2.60.0", "Serilog"],
+            metadata={"target_framework": "net8.0"},
+        )
+        assert content is not None
+        assert "<Project" in content
+        assert "net8.0" in content
+        assert 'Include="Grpc.AspNetCore"' in content
+        assert 'Version="2.60.0"' in content
+        assert 'Include="Serilog"' in content

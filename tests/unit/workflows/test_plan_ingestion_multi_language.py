@@ -33,6 +33,8 @@ class _FakeFeature:
     spring_boot: bool = False
     module_system: str = ""
     node_version: str = ""
+    csharp_namespace: str = ""
+    target_framework: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -573,8 +575,164 @@ class TestBuildParsePrompt:
         prompt = self._build("Spring Boot Java service with build.gradle and JPA")
         assert "Java dependency ordering" in prompt
 
+    def test_csharp_plan_gets_hint(self):
+        prompt = self._build("C# ASP.NET service with Entity Framework and .csproj")
+        assert "Detected language: csharp" in prompt
+
+    def test_csharp_plan_gets_dep_ordering(self):
+        prompt = self._build("C# ASP.NET service with Entity Framework and .csproj")
+        assert "C# dependency ordering" in prompt
+
     def test_ambiguous_plan_no_hint(self):
         prompt = self._build("Implement a REST API service.")
         assert "Detected language:" not in prompt
         # But all language fields are still present
         assert "module_path" in prompt
+        assert "csharp_namespace" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _infer_service_metadata() — C# features
+# ---------------------------------------------------------------------------
+
+class TestInferServiceMetadataCsharp:
+    """REQ-PLI-300: C# metadata inference via derive_service_metadata()."""
+
+    def _infer(self, features, onboarding=None):
+        from startd8.seeds.derivation import infer_service_metadata
+        return infer_service_metadata(features, onboarding)
+
+    def test_namespace_from_feature(self):
+        feat = _FakeFeature(
+            target_files=["src/MyApp/Services/OrderService.cs"],
+            csharp_namespace="MyApp.Services",
+        )
+        meta = self._infer([feat])
+        assert meta["csharp_namespace"] == "MyApp.Services"
+
+    def test_namespace_inferred_from_path(self):
+        feat = _FakeFeature(
+            target_files=["src/CartService/Controllers/CartController.cs"],
+        )
+        meta = self._infer([feat])
+        assert "csharp_namespace" in meta
+        assert "CartService" in meta["csharp_namespace"]
+
+    def test_target_framework_default(self):
+        feat = _FakeFeature(
+            target_files=["src/MyApp/Program.cs"],
+        )
+        meta = self._infer([feat])
+        assert meta["target_framework"] == "net8.0"
+
+    def test_target_framework_from_feature(self):
+        feat = _FakeFeature(
+            target_files=["src/MyApp/Program.cs"],
+            target_framework="net9.0",
+        )
+        meta = self._infer([feat])
+        assert meta["target_framework"] == "net9.0"
+
+    def test_target_framework_from_onboarding(self):
+        feat = _FakeFeature(
+            target_files=["src/MyApp/Program.cs"],
+        )
+        meta = self._infer([feat], onboarding={"target_framework": "net7.0"})
+        assert meta["target_framework"] == "net7.0"
+
+    def test_no_csharp_metadata_for_java(self):
+        feat = _FakeFeature(
+            target_files=["src/main/java/com/ex/App.java"],
+            java_package="com.ex",
+        )
+        meta = self._infer([feat])
+        assert "csharp_namespace" not in meta
+
+
+# ---------------------------------------------------------------------------
+# QP-1: C# fields in _CONTEXT_THREADABLE_FIELDS
+# ---------------------------------------------------------------------------
+
+class TestQP1CsharpFieldThreading:
+    """REQ-PLI-301: C# fields in _CONTEXT_THREADABLE_FIELDS."""
+
+    def test_csharp_fields_in_threadable(self):
+        from startd8.workflows.builtin.plan_ingestion_workflow import (
+            _CONTEXT_THREADABLE_FIELDS,
+        )
+        assert "csharp_namespace" in _CONTEXT_THREADABLE_FIELDS
+        assert "target_framework" in _CONTEXT_THREADABLE_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# ParsedFeature C# fields
+# ---------------------------------------------------------------------------
+
+class TestParsedFeatureCsharpFields:
+    """REQ-PLI-700: C# fields on ParsedFeature."""
+
+    def test_defaults(self):
+        f = ParsedFeature(feature_id="F-001", name="test")
+        assert f.csharp_namespace == ""
+        assert f.target_framework == ""
+
+    def test_explicit_values(self):
+        f = ParsedFeature(
+            feature_id="F-001",
+            name="test",
+            csharp_namespace="MyApp.Services",
+            target_framework="net8.0",
+        )
+        assert f.csharp_namespace == "MyApp.Services"
+        assert f.target_framework == "net8.0"
+
+
+# ---------------------------------------------------------------------------
+# SeedTask C# fields
+# ---------------------------------------------------------------------------
+
+class TestSeedTaskCsharpFields:
+    """REQ-PLI-701: C# fields on SeedTask."""
+
+    def test_defaults(self):
+        from startd8.seeds.models import SeedTask
+        entry = {
+            "task_id": "PI-001",
+            "title": "Test task",
+            "config": {"context": {}},
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert task.csharp_namespace == ""
+        assert task.target_framework == ""
+
+    def test_from_context(self):
+        from startd8.seeds.models import SeedTask
+        entry = {
+            "task_id": "PI-001",
+            "title": "Test task",
+            "config": {
+                "context": {
+                    "csharp_namespace": "MyApp.Services",
+                    "target_framework": "net9.0",
+                },
+            },
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert task.csharp_namespace == "MyApp.Services"
+        assert task.target_framework == "net9.0"
+
+
+# ---------------------------------------------------------------------------
+# lang_detect C# mappings
+# ---------------------------------------------------------------------------
+
+class TestLangDetectCsharp:
+    """REQ-PLI-100: C# language detection."""
+
+    def test_cs_extension(self):
+        from startd8.micro_prime.lang_detect import detect_language
+        assert detect_language("OrderService.cs") == "csharp"
+
+    def test_directory_build_props(self):
+        from startd8.micro_prime.lang_detect import detect_language
+        assert detect_language("Directory.Build.props") == "csharp"
