@@ -560,6 +560,7 @@ _NON_PYTHON_EXTENSIONS = frozenset({
     ".md", ".rst", ".html", ".css", ".js", ".ts", ".sh", ".bash",
     ".dockerfile", ".env", ".conf", ".xml", ".csv", ".sql", ".proto",
     ".graphql", ".tf", ".hcl",
+    ".cs", ".csproj", ".sln",
 })
 
 # Filenames (no extension) that are non-Python
@@ -723,6 +724,25 @@ def build_supplementary_sections(
         p1_sections.append(
             f"## Quality Hints (from prior run analysis)\n{kh.strip()}"
         )
+
+    # P1: Proven exemplar reference implementation (REQ-PEP-102)
+    exemplar = context.get("exemplar")
+    if exemplar and isinstance(exemplar, dict):
+        code_excerpt = exemplar.get("code_excerpt", "") or exemplar.get("code_summary", "")
+        if code_excerpt:
+            fp = exemplar.get("fingerprint", "")
+            score = exemplar.get("scores", {})
+            dq = score.get("disk_quality_score", 1.0) if isinstance(score, dict) else getattr(score, "disk_quality_score", 1.0)
+            lang = exemplar.get("language", "")
+            from startd8.implementation_engine.budget import EXEMPLAR_BUDGET_CHARS
+            if len(code_excerpt) > EXEMPLAR_BUDGET_CHARS:
+                code_excerpt = code_excerpt[:EXEMPLAR_BUDGET_CHARS].rsplit("\n", 1)[0] + "\n... [truncated]"
+            p1_sections.append(
+                f"## Verified Reference Implementation\n\n"
+                f"This code scored {dq:.2f} in a prior run for a {fp} task.\n"
+                f"Match its structure, import ordering, and patterns.\n\n"
+                f"```{lang}\n{code_excerpt}\n```"
+            )
 
     # P1: Critical parameters
     cp = context.get("critical_parameters")

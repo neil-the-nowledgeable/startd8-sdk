@@ -95,10 +95,16 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 # bypassing to file-whole generation.  All 5 phases implemented (23c7af3).
 JAVA_MICROPRIME_ENABLED = True
 
+# Feature flag: when True, .cs files flow through MicroPrime instead of
+# bypassing to file-whole generation.  Default False — file-whole cloud
+# generation until Phase 6 (splicer, decomposer, DFA) is implemented.
+CSHARP_MICROPRIME_ENABLED = False
+
 # REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
 # MicroPrime element generation and use file-whole LLM generation instead.
 # NOTE: ".go" removed — Go files now flow through MicroPrime (MP-P6).
 # NOTE: ".java" conditionally removed when JAVA_MICROPRIME_ENABLED is True.
+# NOTE: ".cs" conditionally removed when CSHARP_MICROPRIME_ENABLED is True.
 _NON_PYTHON_EXTENSIONS = frozenset({
     ".html", ".yaml", ".yml", ".json", ".md", ".txt",
     ".in", ".cfg", ".toml", ".js", ".ts", ".tsx", ".jsx",
@@ -108,6 +114,7 @@ _NON_PYTHON_EXTENSIONS = frozenset({
     ".gradle", ".kts", ".properties", ".env", ".ini",
     ".swift", ".m", ".mm", ".cs", ".fs", ".ex", ".exs",
     ".lua", ".r", ".R", ".pl", ".pm", ".php",
+    ".csproj", ".sln",
 })
 
 # Filenames without a standard extension that are non-Python.
@@ -140,6 +147,9 @@ def _is_non_python_file(file_path: str) -> bool:
         return False
     # Java files optionally flow through MicroPrime
     if suffix == ".java" and JAVA_MICROPRIME_ENABLED:
+        return False
+    # C# files optionally flow through MicroPrime (REQ-CS-100)
+    if suffix == ".cs" and CSHARP_MICROPRIME_ENABLED:
         return False
     if suffix in _NON_PYTHON_EXTENSIONS:
         return True

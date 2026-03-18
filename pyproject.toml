@@ -46,6 +46,7 @@ all = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
 ]
 java = ["javalang>=0.13.0"]
+csharp = ["tree-sitter>=0.24.0", "tree-sitter-c-sharp>=0.23.0"]
 validation = ["jsonschema>=4.0.0"]
 otel = [
     "opentelemetry-api>=1.20.0",
@@ -105,6 +106,7 @@ convergent-review = "startd8.workflows.builtin.convergent_review_workflow:Conver
 architectural-review-log = "startd8.workflows.builtin.architectural_review_log_workflow:ArchitecturalReviewLogWorkflow"
 dashboard-create = "startd8.dashboard_creator.workflow:DashboardCreatorWorkflow"
 prime-contractor = "startd8.workflows.builtin.prime_contractor_workflow:PrimeContractorWorkflowAdapter"
+todo-completion = "startd8.workflows.builtin.todo_completion_workflow:TodoCompletionWorkflow"
 
 # Prime Contractor entry points for plugin discovery
 [project.entry-points."startd8.preflight_rules"]
@@ -116,6 +118,7 @@ python = "startd8.languages.python:PythonLanguageProfile"
 go = "startd8.languages.go:GoLanguageProfile"
 nodejs = "startd8.languages.nodejs:NodeLanguageProfile"
 java = "startd8.languages.java:JavaLanguageProfile"
+csharp = "startd8.languages.csharp:CSharpLanguageProfile"
 
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"

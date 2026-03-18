@@ -133,7 +133,7 @@ The SDK states "Python 3.9+" but the venv uses 3.14. `tree-sitter-c-sharp` suppo
 **File:** Does not exist. Must be created as `src/startd8/languages/csharp.py`.
 **Supporting libraries (to create):**
 - `csharp_parser.py` — tree-sitter-based structure extraction (classes, methods, properties, using directives)
-- `csharp_splicer.py` — body splicing using tree-sitter byte offsets (if MicroPrime path chosen)
+- `csharp_splicer.py` — body splicing using tree-sitter byte offsets (Phase 6)
 
 | Capability | Status | Notes |
 |-----------|--------|-------|
@@ -164,7 +164,7 @@ The SDK states "Python 3.9+" but the venv uses 3.14. `tree-sitter-c-sharp` suppo
 | **Generation path** | `.cs` NOT in `_NON_PYTHON_EXTENSIONS` | **Critical:** Must add `.cs`, `.csproj`, `.sln` to bypass sets |
 | **Language profile** | Nothing | Full `CSharpLanguageProfile` class |
 | **Parser** | `tree-sitter` + `tree-sitter-c-sharp` available on PyPI | `csharp_parser.py` wrapping tree-sitter for structure extraction |
-| **Splicer** | Nothing | `csharp_splicer.py` using tree-sitter byte offsets (if MicroPrime path) |
+| **Splicer** | Nothing | `csharp_splicer.py` using tree-sitter byte offsets (Phase 6) |
 | **Entry point** | Nothing | `pyproject.toml` entry point registration |
 | **Syntax validation** | Nothing | tree-sitter in-process `has_error` check (per-file, no project needed) |
 | **Disk validation** | `_validate_json_file()` (for appsettings.json), `_validate_dockerfile()` | No `.cs`-specific validator, no `.csproj`-specific validator, no `.sln` validator |
@@ -210,7 +210,7 @@ project-root/
 
 | Type | Count | Pipeline Path |
 |------|-------|--------------|
-| `.cs` | 8 | File-whole LLM generation |
+| `.cs` | 8 | File-whole LLM (Phase 1, flag off) → MicroPrime element-level (Phase 6, flag on) |
 | `.csproj` | 2 | File-whole LLM or template generation |
 | `.sln` | 1 | Template generation (rigid format with GUIDs) |
 | `.json` (appsettings) | 1 | File-whole LLM generation |
@@ -262,15 +262,15 @@ using cartservice.cartstore;
 
 ### 3.1 Generation Path (REQ-CS-100 series)
 
-#### REQ-CS-100: C# MicroPrime Bypass with Feature Flag
+#### REQ-CS-100: C# Extension Bypass + MicroPrime Feature Flag
 
-C# source files (`.cs`) MUST be added to `_NON_PYTHON_EXTENSIONS` in both `micro_prime/engine.py` and `implementation_engine/drafter.py`. A feature flag `CSHARP_MICROPRIME_ENABLED` (default `False`) controls whether `.cs` files flow through MicroPrime or bypass to file-whole cloud generation.
+C# source files (`.cs`) MUST be added to `_NON_PYTHON_EXTENSIONS` in both `micro_prime/engine.py` and `implementation_engine/drafter.py`. A feature flag `CSHARP_MICROPRIME_ENABLED` (default `False`) in `micro_prime/engine.py` controls whether `.cs` files flow through MicroPrime or bypass to file-whole cloud generation (same pattern as `JAVA_MICROPRIME_ENABLED` in the same file).
 
 **When False (default):** `.cs` is in the bypass set, all C# files use file-whole cloud generation (safe fallback for first runs).
 
-**When True:** `_is_non_python_file()` returns `False` for `.cs` files, routing them through MicroPrime classify → generate → splice → verify pipeline (same pattern as `JAVA_MICROPRIME_ENABLED`).
+**When True:** `_is_non_python_file()` returns `False` for `.cs` files, routing them through MicroPrime classify → generate → splice → verify pipeline.
 
-**Implementation:** Add `.cs` to `_NON_PYTHON_EXTENSIONS`. Add `.csproj`, `.sln` to bypass sets. Add `CSHARP_MICROPRIME_ENABLED = False` flag with conditional check in `_is_non_python_file()`.
+**Implementation:** Add `.cs` to `_NON_PYTHON_EXTENSIONS`. Add `.csproj`, `.sln` to bypass sets. Add `CSHARP_MICROPRIME_ENABLED = False` flag in `micro_prime/engine.py` with conditional check in `_is_non_python_file()`.
 
 **Status:** NOT IMPLEMENTED — **Critical gap.** `.cs` is missing from both extension sets. Without this, C# files will be treated as Python-compatible and routed through Python AST parsing, which will fail.
 
@@ -759,7 +759,7 @@ The phasing below follows the MicroPrime-first strategy (same as Java). Phases 1
 | 3 | CS-102, 400, 401, 402 | S | Phase 1 (can parallelize with Phase 2) |
 | 4 | CS-103, 104, 105, 600, 601, 602 | M | Phase 3 (framework detection) |
 | 5 | CS-300, 501, 502 | S | Phase 2 (validators) |
-| 6 | MicroPrime integration (splicer, decomposer, DFA, templates) | M-L | Phase 1 (parser) |
+| 6 | MicroPrime integration (splicer, decomposer, DFA, templates) | M | Phases 1+2+3 (parser, validators, prompts) |
 
 ---
 
@@ -934,4 +934,4 @@ The following row should be added to the Section 2 mapping table:
 | 3 | Java | Medium | `javalang` PyPI parser (aging, less capable than tree-sitter); Gradle complexity |
 | 4 | Node.js | Hardest | No compiler, no parser, dual module system, irregular syntax |
 
-**Notable:** C# ranks ahead of Java for MicroPrime feasibility due to tree-sitter-c-sharp being a significantly better parser than javalang. If Java were being implemented today, `tree-sitter-java` (also available on PyPI) would be the better choice.
+**Notable:** C# ranks ahead of Java for MicroPrime feasibility due to tree-sitter-c-sharp being a significantly better parser than javalang. If Java were being implemented today, `tree-sitter-java` (also available on PyPI) would be the better choice. Migration of Java from javalang to tree-sitter-java is not in scope for this document.
