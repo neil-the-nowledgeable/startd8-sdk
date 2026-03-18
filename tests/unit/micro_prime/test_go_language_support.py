@@ -503,10 +503,10 @@ class TestLanguageProfileValidateSyntax:
         ok, _ = PythonLanguageProfile().validate_syntax("x = 1")
         assert ok is True
 
-    def test_java_profile_stub(self) -> None:
+    def test_java_profile_valid(self) -> None:
         from startd8.languages.java import JavaLanguageProfile
-        ok, _ = JavaLanguageProfile().validate_syntax("anything")
-        assert ok is True  # stub always returns True
+        ok, _ = JavaLanguageProfile().validate_syntax("public class Foo { }")
+        assert ok is True
 
     def test_nodejs_profile_has_method(self) -> None:
         from startd8.languages.nodejs import NodeLanguageProfile

@@ -59,29 +59,41 @@ class TestJavaFrameworkImports:
             assert "conditional" in spec, f"Missing conditional in {name}"
 
 
-class TestJavaFrameworkDetectionInSpec:
-    """Tests for detect_java_frameworks() in spec_builder."""
+class TestJavaFrameworkDetectionViaProfile:
+    """Tests for Java framework detection via detect_frameworks() with JavaLanguageProfile."""
 
     def test_spring_boot_detected(self):
-        from startd8.implementation_engine.spec_builder import detect_java_frameworks
-        context = {"description": "Build a @SpringBootApplication REST API"}
-        frameworks = detect_java_frameworks(context)
-        assert any("Spring Boot" in f for f in frameworks)
+        from startd8.implementation_engine.framework_imports import detect_frameworks
+        profile = JavaLanguageProfile()
+        frameworks = detect_frameworks(
+            task_description="Build a @SpringBootApplication REST API",
+            language_profile=profile,
+        )
+        assert "spring_boot" in frameworks
 
     def test_jpa_detected(self):
-        from startd8.implementation_engine.spec_builder import detect_java_frameworks
-        context = {"description": "Create @Entity classes with jakarta.persistence"}
-        frameworks = detect_java_frameworks(context)
-        assert any("JPA" in f for f in frameworks)
+        from startd8.implementation_engine.framework_imports import detect_frameworks
+        profile = JavaLanguageProfile()
+        frameworks = detect_frameworks(
+            task_description="Create @Entity classes with jakarta.persistence",
+            language_profile=profile,
+        )
+        assert "jpa" in frameworks
 
     def test_no_framework(self):
-        from startd8.implementation_engine.spec_builder import detect_java_frameworks
-        context = {"description": "Build a simple utility class"}
-        frameworks = detect_java_frameworks(context)
+        from startd8.implementation_engine.framework_imports import detect_frameworks
+        profile = JavaLanguageProfile()
+        frameworks = detect_frameworks(
+            task_description="Build a simple utility class",
+            language_profile=profile,
+        )
         assert frameworks == []
 
     def test_multiple_frameworks(self):
-        from startd8.implementation_engine.spec_builder import detect_java_frameworks
-        context = {"description": "Spring Boot app with @Entity and LoggerFactory"}
-        frameworks = detect_java_frameworks(context)
+        from startd8.implementation_engine.framework_imports import detect_frameworks
+        profile = JavaLanguageProfile()
+        frameworks = detect_frameworks(
+            task_description="Spring Boot app with @Entity and LoggerFactory",
+            language_profile=profile,
+        )
         assert len(frameworks) >= 2
