@@ -2,6 +2,14 @@
 from __future__ import annotations
 
 
+# Python fingerprints — if these appear in non-Python files, it's
+# cross-language contamination.  Shared by Java and C# validators.
+PYTHON_FINGERPRINTS: tuple[str, ...] = (
+    "def ", "import os", "from __future__", "print(", "self.",
+    "#!/usr/bin/env python", "#!/usr/bin/python",
+)
+
+
 def check_balanced_braces(code: str) -> tuple[bool, str]:
     """Check that braces are balanced in source code.
 

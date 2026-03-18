@@ -180,7 +180,9 @@ class TestCSharpSystemPrompt:
         )
         assert "C# / .NET" in prompt
         assert "PascalCase" in prompt
-        assert "python" not in prompt.lower() or "Python" not in prompt
+        # The prompt may mention "Python" in negative instructions
+        # ("Do NOT wrap in a Python script") — verify the role is C#, not Python
+        assert "expert C#" in prompt or "expert c#" in prompt.lower()
 
     def test_drafter_defaults_to_python_without_role(self):
         from startd8.implementation_engine.drafter import get_drafter_system_prompt

@@ -15,7 +15,6 @@ Architecture:
 from __future__ import annotations
 
 import re
-import textwrap
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -71,6 +70,10 @@ def _extract_method_bodies_ts(source: str) -> Dict[str, tuple[int, int, str]]:
         if elem.kind not in ("method", "constructor"):
             continue
         if elem.body_start_byte is None or elem.body_end_byte is None:
+            continue
+        if elem.name in bodies:
+            # Duplicate method name (overload or partial class) — keep first
+            logger.debug("Duplicate method '%s' in source — keeping first", elem.name)
             continue
         body_text = source_bytes[elem.body_start_byte:elem.body_end_byte].decode(
             "utf-8", errors="replace",

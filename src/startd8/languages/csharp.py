@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from ._validation_utils import check_balanced_braces
+from ._validation_utils import PYTHON_FINGERPRINTS, check_balanced_braces
 
 
 _CSHARP_STDLIB_PREFIXES: tuple[str, ...] = (
@@ -68,11 +68,8 @@ def _csharp_literal_coerce(value: object) -> str:
         return f'"{value}"'
     return str(value)
 
-# Python fingerprints -- if these appear in a .cs file, it's cross-language contamination.
-_PYTHON_FINGERPRINTS = (
-    "def ", "import os", "from __future__", "print(", "self.",
-    "#!/usr/bin/env python", "#!/usr/bin/python",
-)
+# Re-export for backward compat; canonical source is _validation_utils
+_PYTHON_FINGERPRINTS = PYTHON_FINGERPRINTS
 
 # C# type declaration patterns
 _CSHARP_TYPE_DECL_RE = re.compile(
@@ -312,13 +309,14 @@ class CSharpLanguageProfile:
         # dotnet format operates on the whole project, not individual files.
         # Run once and report all .cs files as formatted.
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [dotnet, "format", str(csproj_files[0]), "--no-restore"],
                 capture_output=True,
                 timeout=60,
                 cwd=str(project_root),
             )
-            formatted = [str(f) for f in cs_files]
+            if proc.returncode == 0:
+                formatted = [str(f) for f in cs_files]
         except (subprocess.TimeoutExpired, OSError):
             pass  # best-effort — skip on failure
         return formatted
