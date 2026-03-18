@@ -178,9 +178,9 @@ def get_drafter_system_prompt(
         skeleton_fill: When True, selects skeleton-fill mode (FR-MPA-005).
         edit_mode: Edit mode classification dict (CR-M2).
         language_role: Language-specific role string (e.g. 'an expert Go engineer').
-            Defaults to 'an expert Python engineer' for backward compatibility.
+            Defaults to 'a senior software engineer' (language-neutral, REQ-PE-500).
         coding_standards: Language-specific coding standards string.
-            Defaults to Python ruff standards for backward compatibility.
+            Defaults to generic style guidance (language-neutral, REQ-PE-500).
 
     Returns:
         Tuple of (system_prompt_text, draft_mode_name).
@@ -211,7 +211,20 @@ def get_drafter_system_prompt(
             "(template=%s). Callers should provide language_role from LanguageProfile.",
             template_key,
         )
-    prompt = prompt.format(language_role=_role, coding_standards=_standards)
+    # REQ-PE-301: Resolve stub marker for skeleton fill mode
+    _stub_marker = '`raise NotImplementedError`'  # Python default
+    if language_role and "go" in language_role.lower():
+        _stub_marker = '`panic("not implemented")`'
+    elif language_role and "java" in language_role.lower():
+        _stub_marker = "`throw new UnsupportedOperationException()`"
+    elif language_role and ("node" in language_role.lower() or "javascript" in language_role.lower() or "typescript" in language_role.lower()):
+        _stub_marker = '`throw new Error("not implemented")`'
+
+    prompt = prompt.format(
+        language_role=_role,
+        coding_standards=_standards,
+        stub_marker=_stub_marker,
+    )
 
     logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)
 
