@@ -411,6 +411,47 @@ class PrimaryContractorWorkflow(WorkflowBase):
                 f"Failed to resolve agents: {e}"
             )
 
+        # Wrap main body in try/finally to ensure agent cleanup — each agent
+        # holds an event loop (socketpair = 2 FDs) and httpx AsyncClient.
+        # Without cleanup, FDs accumulate across features until EMFILE.
+        try:
+            return self._execute_with_agents(
+                lead_agent, drafter_agent, lead_spec, drafter_spec,
+                workflow_id, config, context, task_description,
+                max_iterations, pass_threshold, output_format,
+                integration_instructions, check_truncation, strict_truncation,
+                fail_on_api_truncation, fail_on_heuristic_truncation,
+                project_context, on_progress,
+            )
+        finally:
+            for agent in (lead_agent, drafter_agent):
+                try:
+                    agent.cleanup()
+                except Exception:
+                    pass
+
+    def _execute_with_agents(
+        self,
+        lead_agent,
+        drafter_agent,
+        lead_spec,
+        drafter_spec,
+        workflow_id,
+        config,
+        context,
+        task_description,
+        max_iterations,
+        pass_threshold,
+        output_format,
+        integration_instructions,
+        check_truncation,
+        strict_truncation,
+        fail_on_api_truncation,
+        fail_on_heuristic_truncation,
+        project_context,
+        on_progress,
+    ):
+        """Main workflow body — extracted for try/finally cleanup in _execute."""
         # Initialize result tracking
         result = LeadContractorResult(
             workflow_id=workflow_id,
@@ -565,6 +606,11 @@ class PrimaryContractorWorkflow(WorkflowBase):
                                 "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
                             )
                         logger.error(error_msg)
+                        for _a in (lead_agent, drafter_agent):
+                            try:
+                                _a.cleanup()
+                            except Exception:
+                                pass
                         return WorkflowResult.from_error(
                             self.metadata.workflow_id,
                             error_msg,
@@ -1134,6 +1180,11 @@ class PrimaryContractorWorkflow(WorkflowBase):
                                 "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
                             )
                         logger.error(error_msg)
+                        for _a in (lead_agent, drafter_agent):
+                            try:
+                                _a.cleanup()
+                            except Exception:
+                                pass
                         return WorkflowResult.from_error(
                             self.metadata.workflow_id,
                             error_msg,
@@ -1249,6 +1300,13 @@ class PrimaryContractorWorkflow(WorkflowBase):
         )
 
         completed_at = datetime.now(timezone.utc)
+
+        # Clean up agents to release event loops and httpx clients (FD leak fix).
+        for agent in (lead_agent, drafter_agent):
+            try:
+                agent.cleanup()
+            except Exception:
+                pass
 
         return WorkflowResult(
             workflow_id=self.metadata.workflow_id,
