@@ -2113,6 +2113,7 @@ class TestResumeCacheDefenseInDepth:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestResumeCacheWriteV2:
     """Tests for the v2 cache envelope written by execute().
 
@@ -2244,6 +2245,7 @@ class TestResumeCacheWriteV2:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestResumeCacheDownstreamMapPersistence:
     """Verify downstream_map survives a cache write → resume roundtrip."""
 
@@ -2332,6 +2334,7 @@ class TestResumeCacheDownstreamMapPersistence:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestResumeCostReporting:
     """Verify resumed IMPLEMENT reports cost=0.0 with historical cost in metadata."""
 
@@ -2417,6 +2420,7 @@ class TestResumeCostReporting:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestResumeCacheExceptionHandling:
     """Verify corrupt/inaccessible cache files gracefully fall through."""
 
@@ -2488,6 +2492,7 @@ class TestResumeCacheExceptionHandling:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestForceImplementBypassesCache:
     """Verify force_implement=True ignores valid cache on disk."""
 
@@ -2559,6 +2564,7 @@ class TestForceImplementBypassesCache:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestResumeOutputStructuralParity:
     """Verify resumed output dict has the same keys as fresh-run output."""
 
@@ -2606,6 +2612,7 @@ class TestResumeOutputStructuralParity:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestCacheWriteFailureNonFatal:
     """Verify IMPLEMENT cache write failures don't crash the phase."""
 
@@ -2659,6 +2666,7 @@ class TestCacheWriteFailureNonFatal:
 # ============================================================================
 
 
+@pytest.mark.integration
 class TestAllTasksFailedGuard:
     """IMPLEMENT phase raises RuntimeError when all tasks fail generation.
 

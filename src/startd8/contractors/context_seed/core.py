@@ -7054,7 +7054,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
     # -- helper: constraint checklist (L4) -----------------------------------
 
-    def _build_constraint_checklist_section(self, task: SeedTask) -> str:
+    @staticmethod
+    def _build_constraint_checklist_section(task: SeedTask) -> str:
         """Build a structured constraint checklist for the reviewer.
 
         Each constraint is presented as a numbered assertion the reviewer
