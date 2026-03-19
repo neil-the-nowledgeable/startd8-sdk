@@ -71,6 +71,7 @@ from .plan_ingestion_models import (
 from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
 from ...languages.registry import LanguageRegistry
 from ...logging_config import get_logger
+from ...seeds.derivation import rewrite_split_dependencies
 from ...seeds.utils import is_omitted
 
 # OTel graceful degradation (follows artisan_contractor.py pattern)
@@ -2670,6 +2671,32 @@ class PlanIngestionWorkflow(WorkflowBase):
         tasks = PlanIngestionWorkflow._split_oversized_tasks(
             tasks, max_files=1,
         )
+
+        # ── Gate 2a-post: rewrite depends_on from parent → sub-task IDs ──
+        tasks = rewrite_split_dependencies(tasks)
+
+        # ── Gate 2a-dedup: remove duplicate tasks by title ────────────
+        # LLM may emit the same feature/file multiple times.  Keep first
+        # occurrence; drop duplicates with a warning.
+        seen_titles: Dict[str, str] = {}
+        deduped: List[Dict[str, Any]] = []
+        for t in tasks:
+            title = t.get("title", "")
+            if title in seen_titles:
+                logger.warning(
+                    "Gate 2a-dedup: dropping duplicate task %s "
+                    "(same title as %s: %r)",
+                    t["task_id"], seen_titles[title], title,
+                )
+                continue
+            seen_titles[title] = t["task_id"]
+            deduped.append(t)
+        if len(deduped) < len(tasks):
+            logger.info(
+                "Gate 2a-dedup: removed %d duplicate task(s) (%d → %d)",
+                len(tasks) - len(deduped), len(tasks), len(deduped),
+            )
+        tasks = deduped
 
         # ── Validate task IDs against safe pattern ──────────────────
         for t in tasks:
