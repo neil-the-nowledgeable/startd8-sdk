@@ -310,8 +310,8 @@ class ManifestDiff:
                             changed_resolved.append((fqn, old_str, new_str))
 
                     # IN-2: MRO restructuring
-                    old_mro = getattr(old_info, "mro", None)
-                    new_mro = getattr(new_info, "mro", None)
+                    old_mro = getattr(old_info, "class_mro", None)
+                    new_mro = getattr(new_info, "class_mro", None)
                     if old_mro is not None and new_mro is not None and old_mro != new_mro:
                         mro_changes.append((fqn, list(old_mro), list(new_mro)))
 
@@ -778,7 +778,7 @@ class ManifestRegistry:
                     inspect_info = getattr(elem, "inspect_info", None)
                     if inspect_info is None:
                         continue
-                    mro = getattr(inspect_info, "mro", None)
+                    mro = getattr(inspect_info, "class_mro", None)
                     if not mro:
                         continue
                     # Filter out builtins.object, keep only non-trivial chains

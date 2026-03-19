@@ -32,7 +32,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Generator, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from startd8.logging_config import get_logger
 
@@ -335,10 +335,10 @@ class InspectInfo(BaseModel):
     that cannot be determined from static analysis alone.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     resolved_signature: Optional[ResolvedSignature] = None
-    mro: list[str] = []
+    class_mro: list[str] = Field(default=[], serialization_alias="mro", validation_alias="mro")
     resolved_annotations: dict[str, str] = {}
     runtime_attributes: list[str] = []
     is_callable: bool = False

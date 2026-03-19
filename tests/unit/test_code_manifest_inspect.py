@@ -131,7 +131,7 @@ class TestInspectInfoModel:
     def test_defaults(self):
         info = InspectInfo()
         assert info.resolved_signature is None
-        assert info.mro == []
+        assert info.class_mro == []
         assert info.resolved_annotations == {}
         assert info.runtime_attributes == []
         assert info.is_callable is False
@@ -304,7 +304,7 @@ class TestClassMRO:
         assert dog is not None
         assert dog.inspect_info is not None
         # Dog's MRO should include Animal
-        assert any("Animal" in cls for cls in dog.inspect_info.mro)
+        assert any("Animal" in cls for cls in dog.inspect_info.class_mro)
 
     def test_base_class_empty_mro(self, project_env):
         """Animal only inherits from object — MRO should be empty."""
@@ -314,7 +314,7 @@ class TestClassMRO:
         assert animal is not None
         assert animal.inspect_info is not None
         # Animal inherits only from object, which is excluded
-        assert animal.inspect_info.mro == []
+        assert animal.inspect_info.class_mro == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
