@@ -36,12 +36,18 @@ from startd8.query_prime.models import (
     SecurityVerificationResult,
     TransactionBoundary,
 )
+from startd8.query_prime.decomposer import decompose_feature
+from startd8.query_prime.generator import generate_query
+from startd8.query_prime.router import QueryRouterConfig
 from startd8.query_prime.security import verify_file
 
 __all__ = [
     "QueryPrimeEngine",
     "QueryRoutingConfig",
+    "QueryRouterConfig",
     "classify_query_tier",
+    "decompose_feature",
+    "generate_query",
     "verify_file",
     "DatabaseType",
     "OperationType",
