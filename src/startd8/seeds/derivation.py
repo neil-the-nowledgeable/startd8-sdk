@@ -594,6 +594,8 @@ def split_oversized_tasks(
             file_name = target_file.rsplit("/", 1)[-1]
             sub_title = f"{task['title']} — {file_name}"
 
+            from ..workflows.builtin.plan_ingestion_parsing import _infer_file_role
+            file_role = _infer_file_role(target_file)
             result.append({
                 "task_id": sub_id,
                 "title": sub_title,
@@ -607,6 +609,7 @@ def split_oversized_tasks(
                         f"{parent_desc}\n\n"
                         f"[Auto-split from {parent_id}: implement "
                         f"`{target_file}` only.]"
+                        f"{file_role}"
                     ),
                     "requirements_text": task.get("config", {}).get(
                         "requirements_text", ""

@@ -111,9 +111,15 @@ _HEURISTIC_FALLBACK_DESCRIPTION = "Fallback parsed feature from plan text"
 # File extensions that indicate a real file path (not a Python dotted expression)
 _FILE_EXTENSIONS = frozenset({
     ".py", ".js", ".ts", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".h",
+    ".cs", ".csproj", ".sln", ".props", ".gradle", ".kts",
     ".html", ".css", ".yaml", ".yml", ".json", ".toml", ".md", ".txt",
     ".sh", ".in", ".cfg", ".ini", ".xml", ".proto", ".sql",
 })
+
+# Extensionless filenames that should be treated as file paths (e.g. Dockerfile, Makefile)
+_EXTENSIONLESS_FILENAMES = re.compile(
+    r'`((?:[\w./-]+/)?(?:Dockerfile|Makefile|Procfile|Vagrantfile|Jenkinsfile|Gemfile|Rakefile|Brewfile)(?:\.\w+)?)`'
+)
 
 
 def _extract_file_paths_from_block(block: str) -> List[str]:
@@ -140,6 +146,13 @@ def _extract_file_paths_from_block(block: str) -> List[str]:
             result.append(candidate)
             continue
         # Everything else is likely a Python dotted expression — skip
+
+    # Second pass: extensionless filenames (Dockerfile, Makefile, etc.)
+    for m in _EXTENSIONLESS_FILENAMES.finditer(block):
+        candidate = m.group(1)
+        if candidate not in result:
+            result.append(candidate)
+
     return result
 
 
@@ -459,6 +472,59 @@ def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute
     for f in parsed_plan.features:
         lines.extend([f"### {f.feature_id}: {f.name}", f.description or f.name, ""])
     return "\n".join(lines).strip() + "\n"
+
+
+def _infer_file_role(file_path: str) -> str:
+    """Infer a FILE ROLE CONSTRAINT string for auto-split task descriptions.
+
+    When a multi-file task is split into single-file sub-tasks, the parent
+    description may overwhelm the per-file context.  This function returns
+    a role constraint that guides the LLM toward correct content for the
+    target file type (e.g. interface-only for IFoo.cs, Dockerfile for
+    Dockerfile).
+    """
+    name = file_path.rsplit("/", 1)[-1]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+
+    # C# interface: IFoo.cs
+    if name.endswith(".cs") and stem.startswith("I") and len(stem) > 1 and stem[1].isupper():
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
+            f"Generate ONLY the `{stem}` interface definition with method signatures. "
+            f"Do NOT include any implementation classes."
+        )
+    # Java interface: files explicitly named *Interface.java or containing "interface" in path
+    if name.endswith(".java") and stem.endswith("Interface"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is an INTERFACE file. "
+            f"Generate ONLY the interface definition with method signatures. "
+            f"Do NOT include any implementation classes."
+        )
+    # Dockerfile
+    if stem.lower().startswith("dockerfile") or name.lower() == "dockerfile":
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Dockerfile. "
+            f"Generate ONLY Docker build instructions."
+        )
+    # C# project files
+    if name.endswith((".csproj", ".sln")):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a project configuration file. "
+            f"Generate ONLY the project/solution XML or format — no source code."
+        )
+    # Java build files
+    if name in ("build.gradle", "build.gradle.kts", "settings.gradle", "pom.xml"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a build configuration file. "
+            f"Generate ONLY build configuration — no source code."
+        )
+    # Proto files
+    if name.endswith(".proto"):
+        return (
+            f"\n**FILE ROLE CONSTRAINT**: `{name}` is a Protocol Buffer definition. "
+            f"Generate ONLY protobuf service/message definitions."
+        )
+    return ""
 
 
 def _parse_context_files(

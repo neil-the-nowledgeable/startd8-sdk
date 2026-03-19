@@ -177,7 +177,12 @@ class JavaLanguageProfile:
         return (
             "Java conventions: PascalCase classes, camelCase methods, explicit access "
             "modifiers. Prefer immutability. Use try-with-resources for AutoCloseable. "
-            "No wildcard imports."
+            "No wildcard imports. "
+            "SECURITY: Use PreparedStatement for ALL SQL — "
+            "NEVER use String concatenation or String.format() in SQL strings. "
+            "LOGGING: Use SLF4J (LoggerFactory.getLogger(ClassName.class)) — "
+            "NEVER use System.out.println() or System.err.println() for logging. "
+            "INTERFACES: Interface files MUST contain ONLY the interface definition, not implementations."
         )
 
     @property
@@ -416,6 +421,12 @@ class JavaLanguageProfile:
             "- Explicit access modifiers on all classes, methods, and fields",
             "- Prefer immutability — use `final` where possible",
             "- Use try-with-resources for AutoCloseable resources",
+            "",
+            "**Java service patterns (CRITICAL):**",
+            "- Interface files MUST contain ONLY the interface definition — no implementations",
+            "- Implementation classes go in their own files (e.g., RedisCartStore.java implements CartStore)",
+            "- Use SLF4J (LoggerFactory.getLogger()) for ALL logging — never System.out.println()",
+            "- Use PreparedStatement for ALL database access — never String concatenation in SQL",
         ])
 
         return "\n".join(lines)

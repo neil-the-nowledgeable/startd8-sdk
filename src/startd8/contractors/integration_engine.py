@@ -1174,22 +1174,57 @@ class IntegrationEngine:
         project_root = str(self.project_root) if self.project_root else "."
 
         for fpath in integrated_files:
-            if fpath.suffix != ".py" or not fpath.is_file():
+            if not fpath.is_file():
                 continue
-            try:
-                compliance = validate_disk_compliance(str(fpath), project_root)
-                for issue in compliance.semantic_issues or []:
-                    if not isinstance(issue, dict):
-                        continue
-                    logger.warning(
-                        "Semantic issue: %s",
-                        issue.get("message", str(issue)),
-                        extra={"unit_id": unit.id},
+            if fpath.suffix == ".py":
+                try:
+                    compliance = validate_disk_compliance(str(fpath), project_root)
+                    for issue in compliance.semantic_issues or []:
+                        if not isinstance(issue, dict):
+                            continue
+                        logger.warning(
+                            "Semantic issue: %s",
+                            issue.get("message", str(issue)),
+                            extra={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Semantic check failed for %s: %s", fpath, exc,
                     )
-            except Exception as exc:
-                logger.debug(
-                    "Semantic check failed for %s: %s", fpath, exc,
-                )
+            elif fpath.suffix in (".cs", ".csproj"):
+                try:
+                    from startd8.validators.csharp_semantic_checks import (
+                        run_csharp_semantic_checks,
+                    )
+                    source = fpath.read_text(encoding="utf-8")
+                    issues = run_csharp_semantic_checks(source, file_path=str(fpath))
+                    for issue in issues:
+                        logger.warning(
+                            "C# semantic: %s",
+                            issue.message,
+                            extra={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "C# semantic check failed for %s: %s", fpath, exc,
+                    )
+            elif fpath.suffix == ".java":
+                try:
+                    from startd8.validators.java_semantic_checks import (
+                        run_java_semantic_checks,
+                    )
+                    source = fpath.read_text(encoding="utf-8")
+                    issues = run_java_semantic_checks(source, file_path=str(fpath))
+                    for issue in issues:
+                        logger.warning(
+                            "Java semantic: %s",
+                            issue.message,
+                            extra={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Java semantic check failed for %s: %s", fpath, exc,
+                    )
 
     def _attempt_semantic_repair(
         self,

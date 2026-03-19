@@ -737,6 +737,7 @@ from .plan_ingestion_parsing import (  # noqa: F401
     _parse_context_files,
     _parse_file_list,
     _safe_json_load,
+    _infer_file_role,
 )
 from .plan_ingestion_contracts import (  # noqa: F401
     _extract_implementation_contracts,
@@ -2846,6 +2847,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     file_name = file_group[0].rsplit("/", 1)[-1]
                     sub_title = f"{task['title']} — {file_name}"
                     desc_detail = f"implement `{file_group[0]}` only."
+                    file_role = _infer_file_role(file_group[0])
                 else:
                     sub_title = (
                         f"{task['title']} — {len(file_group)} files "
@@ -2858,6 +2860,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         f"implement {len(file_group)} files: "
                         f"{file_list}."
                     )
+                    file_role = ""
 
                 result.append({
                     "task_id": sub_id,
@@ -2873,6 +2876,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         "task_description": (
                             f"{parent_desc}\n\n"
                             f"[Auto-split from {parent_id}: {desc_detail}]"
+                            f"{file_role}"
                         ),
                         "requirements_text": task.get("config", {}).get("requirements_text", ""),
                         "context": sub_ctx,

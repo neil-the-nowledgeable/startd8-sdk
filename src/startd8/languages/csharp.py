@@ -230,10 +230,15 @@ class CSharpLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
-            "PascalCase for public members, camelCase for private fields/locals. "
+            "PascalCase for public members, camelCase for private fields/locals (prefix with _). "
             "Use nullable reference types. Prefer async/await. "
             "Use 'using' declarations for IDisposable. "
-            "Expression-bodied members for simple accessors."
+            "Expression-bodied members for simple accessors. "
+            "SECURITY: Use parameterized queries (NpgsqlCommand.Parameters, SpannerParameterCollection) for ALL SQL — "
+            "NEVER use string interpolation or concatenation in SQL strings. "
+            "LOGGING: Use ILogger<T> via constructor dependency injection — "
+            "NEVER use Console.WriteLine() or Console.Write() for logging in service classes. "
+            "INTERFACES: Files named IFoo.cs MUST contain ONLY the interface definition, not implementations."
         )
 
     @property
@@ -581,6 +586,13 @@ class CSharpLanguageProfile:
             "- Enable nullable reference types (`#nullable enable` or via .csproj)",
             "- Prefer async/await for I/O-bound operations",
             "- Use `using` declarations for IDisposable resources",
+            "",
+            "**C# service patterns (CRITICAL):**",
+            "- Files named `IFoo.cs` MUST contain ONLY the `IFoo` interface — no implementation classes",
+            "- Implementation classes go in their own files (e.g., RedisCartStore.cs implements ICartStore)",
+            "- Use ILogger<T> via constructor injection for ALL logging — never Console.WriteLine()",
+            "- Use parameterized queries for ALL database access — never string interpolation in SQL",
+            "- .csproj MUST include `<Nullable>enable</Nullable>` in PropertyGroup",
         ])
 
         # REQ-CS-601: Dockerfile context for .NET services

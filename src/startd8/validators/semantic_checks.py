@@ -182,25 +182,37 @@ def run_semantic_checks(
     issues.extend(check_bare_except_pass(tree))
     issues.extend(check_phantom_dependencies(tree, known_packages))
 
-    # Stamp file_path on all issues
-    if file_path:
-        issues = [
-            SemanticIssue(
-                check=i.check,
-                severity=i.severity,
-                message=i.message,
-                line=i.line,
-                file_path=file_path,
-            )
-            for i in issues
-        ]
-
-    return issues
+    return _stamp_file_path(issues, file_path)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — shared across Python/C#/Java semantic check modules
 # ---------------------------------------------------------------------------
+
+
+def _stamp_file_path(
+    issues: List[SemanticIssue],
+    file_path: Optional[str],
+) -> List[SemanticIssue]:
+    """Stamp ``file_path`` onto every issue if provided."""
+    if not file_path:
+        return issues
+    return [
+        SemanticIssue(
+            check=i.check,
+            severity=i.severity,
+            message=i.message,
+            line=i.line,
+            file_path=file_path,
+        )
+        for i in issues
+    ]
+
+
+def _basename(file_path: str) -> str:
+    """Extract the filename from a path, handling both ``/`` and ``\\``."""
+    name = file_path.rsplit("/", 1)[-1]
+    return name.rsplit("\\", 1)[-1]
 
 
 def _is_main_guard(node: ast.If) -> bool:
