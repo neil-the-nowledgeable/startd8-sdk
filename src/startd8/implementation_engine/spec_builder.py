@@ -40,6 +40,7 @@ __all__ = [
     "build_constraint_block",
     "extract_spec_constraints",
     "format_context_value",
+    "_build_accumulated_contracts_section",
 ]
 
 logger = get_logger(__name__)
@@ -290,6 +291,95 @@ def _build_exemplar_section(context: Dict[str, Any]) -> str:
         if len(code_excerpt) > code_budget:
             truncated_code = truncated_code.rsplit("\n", 1)[0] + "\n... [truncated]"
         parts.append(f"\n### Code that was validated:\n```\n{truncated_code}\n```")
+
+    return "\n".join(parts)
+
+
+def _build_accumulated_contracts_section(context: Dict[str, Any]) -> str:
+    """Build the upstream API contracts section from accumulated manifests.
+
+    Injects interface contracts from completed upstream features so the
+    LLM uses exact signatures when calling upstream services.
+
+    Returns empty string if no upstream contracts are available.
+    """
+    from startd8.implementation_engine.budget import ACCUMULATED_MANIFEST_BUDGET_CHARS
+
+    upstream = context.get("upstream_contracts")
+    if not upstream or not isinstance(upstream, list):
+        return ""
+
+    parts = ["## Upstream API Contracts (from completed features)"]
+
+    for entry in upstream:
+        name = entry.get("feature_name", "unknown")
+        lang = entry.get("language", "")
+        contracts = entry.get("contracts", [])
+        if not contracts:
+            continue
+
+        lang_suffix = f" ({lang})" if lang and lang != "unknown" else ""
+        parts.append(f"### {name}{lang_suffix}")
+
+        for c in contracts:
+            binding = c.get("binding_text", c.get("name", ""))
+            confidence = c.get("confidence", "explicit")
+            parts.append(f"- `{binding}` [{confidence}]")
+
+    parts.append("\nUse these exact signatures when calling upstream services.")
+
+    result = "\n".join(parts)
+
+    # Truncate to budget
+    if len(result) > ACCUMULATED_MANIFEST_BUDGET_CHARS:
+        result = result[:ACCUMULATED_MANIFEST_BUDGET_CHARS - 20] + "\n... [truncated]"
+
+    return result
+
+
+def _build_structural_reference_section(context: Dict[str, Any]) -> str:
+    """Build cross-language structural reference section.
+
+    When a cross-language exemplar match exists, injects a prose directive
+    describing the architectural pattern to follow. The pattern contains
+    lifecycle phases, middleware registration order, config keys, and
+    error strategy — all language-agnostic.
+
+    Returns empty string if no cross-language pattern is available.
+    """
+    structural_ref = context.get("structural_reference")
+    if not structural_ref or not isinstance(structural_ref, dict):
+        return ""
+
+    source_fp = structural_ref.get("source_fingerprint", "")
+    source_lang = structural_ref.get("source_language", "")
+    target_lang = structural_ref.get("target_language", "")
+    score = structural_ref.get("score", 0.0)
+
+    phases = structural_ref.get("lifecycle_phases", [])
+    middleware = structural_ref.get("middleware_points", [])
+    config_keys = structural_ref.get("config_keys", [])
+    error_strategy = structural_ref.get("error_strategy", "unknown")
+
+    if not phases:
+        return ""
+
+    parts = [
+        f"## Structural Reference (cross-language from {source_fp})",
+        f"Validated in {source_lang} (score: {score:.2f}). Adapt to {target_lang}:",
+    ]
+
+    for i, phase in enumerate(phases, 1):
+        parts.append(f"{i}. {phase.replace('_', ' ').title()}")
+
+    if middleware:
+        parts.append(f"\nMiddleware/interceptor order: {', '.join(middleware)}")
+
+    if config_keys:
+        parts.append(f"Config keys: {', '.join(config_keys)}")
+
+    if error_strategy != "unknown":
+        parts.append(f"Error strategy: {error_strategy.replace('_', ' ')}")
 
     return "\n".join(parts)
 
@@ -943,6 +1033,20 @@ def build_spec_prompt(
     ctx_section = build_spec_context_section(context, output_format, target_files)
     prioritized: List[tuple] = [(0, "context", ctx_section)]
 
+    # P0: Security constraint (Anzen — never trimmed by budget enforcement)
+    security_contract = context.pop("security_contract", None)
+    if security_contract and isinstance(security_contract, dict):
+        _sec_db = security_contract.get("database", "")
+        _sec_pattern = security_contract.get("safe_pattern_example", "parameterized queries")
+        security_section = (
+            "## SECURITY CONSTRAINT (MANDATORY)\n"
+            f"Use parameterized queries for all external inputs. "
+            f"{_sec_db}-specific pattern: {_sec_pattern}\n"
+            "NEVER use string interpolation or concatenation for "
+            "user-supplied values in SQL strings."
+        )
+        prioritized.append((0, "security_constraint", security_section))
+
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")
     if lang_profile is not None and hasattr(lang_profile, "build_project_context_section"):
@@ -962,6 +1066,16 @@ def build_spec_prompt(
     exemplar_section = _build_exemplar_section(context)
     if exemplar_section:
         prioritized.append((1, "exemplar", exemplar_section))
+
+    # P1: Upstream API contracts (Layer 3: within-run manifest accumulation)
+    contracts_section = _build_accumulated_contracts_section(context)
+    if contracts_section:
+        prioritized.append((1, "upstream_contracts", contracts_section))
+
+    # P2: Cross-language structural reference (Layer 2)
+    structural_section = _build_structural_reference_section(context)
+    if structural_section:
+        prioritized.append((2, "structural_reference", structural_section))
 
     # P1: Available imports (L1 — reduces import repair rate)
     available_imports_section = _build_available_imports_section(context)

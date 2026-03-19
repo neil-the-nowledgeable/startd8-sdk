@@ -76,6 +76,7 @@ class RootCause(str, Enum):
     SIZE_REGRESSION = "size_regression"
     GENERATION_ERROR = "generation_error"
     DEPENDENCY_BLOCKED = "dependency_blocked"
+    SECURITY_VIOLATION = "security_violation"
     UNKNOWN = "unknown"
 
 
@@ -420,7 +421,23 @@ def compute_disk_quality_score(compliance: Any) -> float:
             warning_count += 1
     semantic_penalty = max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
 
+    # Security findings penalty (Anzen): security errors are more severe
+    # than semantic issues — each error-severity finding deducts 0.5.
+    security_findings = getattr(compliance, "security_findings", [])
+    security_error_count = 0
+    for sf in (security_findings or []):
+        sev = getattr(sf, "severity", "warning") if not isinstance(sf, dict) else sf.get("severity", "warning")
+        if sev == "error":
+            security_error_count += 1
+    security_penalty = max(0.0, 1.0 - security_error_count * 0.5)
+
     composite = (
+        contract_compliance * 0.35
+        + import_completeness * 0.15
+        + stub_penalty * 0.15
+        + semantic_penalty * 0.15
+        + security_penalty * 0.20
+    ) if security_findings else (
         contract_compliance * 0.4
         + import_completeness * 0.2
         + stub_penalty * 0.2
@@ -541,6 +558,14 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "Non-Python files received Python stubs. Check template-match routing "
             "for non-Python trivial tasks. Ensure _NON_PYTHON_EXTENSIONS includes "
             "all target file extensions."
+        ),
+    },
+    "security_violation": {
+        "phase": "draft",
+        "hint": (
+            "SECURITY: Use parameterized queries for ALL external inputs. "
+            "Never use string interpolation or concatenation in SQL strings. "
+            "Use the database-specific parameter binding API."
         ),
     },
 }
@@ -1079,6 +1104,23 @@ class PrimePostMortemEvaluator:
                         fpm.verdict = "FAIL:semantic"
                         fpm.success = False
 
+                    # Security findings gate (Anzen): promote to SECURITY_VIOLATION
+                    sec_findings = getattr(compliance, "security_findings", []) or []
+                    sec_errors = [
+                        f for f in sec_findings
+                        if getattr(f, "severity", "warning") == "error"
+                    ]
+                    if sec_errors:
+                        fpm.root_cause = RootCause.SECURITY_VIOLATION
+                        fpm.pipeline_stage = PipelineStage.INTEGRATION
+                        if fpm.verdict in ("PASS", "PARTIAL", "PARTIAL:semantic"):
+                            fpm.verdict = "FAIL:security"
+                            fpm.success = False
+                        logger.warning(
+                            "Security violation in %s: %d error findings",
+                            fpm.feature_id, len(sec_errors),
+                        )
+
                     # Semantic repair dual scoring (DC-3, REQ-SR)
                     pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})
                     per_file_data = (semantic_repair_data or {}).get("per_file", {})
@@ -1284,6 +1326,24 @@ class PrimePostMortemEvaluator:
                 affected_features=mismatch_features,
                 frequency=len(mismatch_features),
                 severity="high" if len(mismatch_features) >= 3 else "medium",
+            ))
+
+        # Pattern 5: Security violations (Anzen)
+        security_features: List[str] = []
+        for fpm in features:
+            if fpm.root_cause == RootCause.SECURITY_VIOLATION:
+                security_features.append(fpm.feature_id)
+        if len(security_features) >= 1:
+            patterns.append(CrossFeaturePattern(
+                pattern_type="security_violation",
+                description=(
+                    f"{len(security_features)} feature(s) have security "
+                    f"violations (SQL injection, credential leakage, or "
+                    f"resource lifecycle issues)"
+                ),
+                affected_features=security_features,
+                frequency=len(security_features),
+                severity="critical" if len(security_features) >= 2 else "high",
             ))
 
         return patterns

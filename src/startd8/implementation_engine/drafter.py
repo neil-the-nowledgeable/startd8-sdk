@@ -60,6 +60,7 @@ __all__ = [
     "build_skeleton_section",
     "build_pre_assembly_status",
     "detect_size_regression",
+    "_build_cross_language_element_context",
     "DRAFT_MODE_CREATE",
     "DRAFT_MODE_EDIT",
     "DRAFT_MODE_SEARCH_REPLACE",
@@ -781,6 +782,34 @@ def _format_value(val: Any) -> str:
     return str(val)
 
 
+def _build_cross_language_element_context(context: Dict[str, Any]) -> str:
+    """Build cross-language element reference section.
+
+    Shows validated element bodies from other languages for the same
+    archetype, providing few-shot structural examples.
+
+    Args:
+        context: Generation context dict, may contain ``cross_language_elements``.
+
+    Returns:
+        Formatted section string, or empty string if no elements available.
+    """
+    elements = context.get("cross_language_elements")
+    if not elements or not isinstance(elements, list):
+        return ""
+
+    parts: List[str] = ["## Cross-Language Element Reference"]
+    for elem in elements[:3]:  # limit to 3 examples
+        name = elem.get("name", "unknown")
+        lang = elem.get("language", "")
+        code = elem.get("code_excerpt", "")
+        if code:
+            parts.append(f"### {name} ({lang})")
+            parts.append(f"```\n{code[:500]}\n```")
+
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
 def build_supplementary_sections(
     context: Dict[str, Any],
     task_id: str = "",
@@ -813,6 +842,16 @@ def build_supplementary_sections(
     if kh and isinstance(kh, str) and kh.strip():
         p1_sections.append(
             f"## Quality Hints (from prior run analysis)\n{kh.strip()}"
+        )
+
+    # P1: Security hints from prior security findings (Anzen/Kaizen)
+    prior_sec = context.get("prior_security_findings")
+    if prior_sec and isinstance(prior_sec, list) and prior_sec:
+        sec_hints = "\n".join(f"- {f}" for f in prior_sec[:10])
+        p1_sections.append(
+            "## Security Hints (from prior run findings)\n\n"
+            "Previous runs detected these security issues. "
+            "Avoid repeating them:\n" + sec_hints
         )
 
     # P1: Proven exemplar reference implementation (REQ-PEP-102)
@@ -849,6 +888,23 @@ def build_supplementary_sections(
     fc = context.get("forward_contracts")
     if fc:
         p1_sections.append(f"## Interface Contract Bindings\n{fc}")
+
+    # P1: Upstream API contracts (Layer 3: within-run manifest accumulation)
+    upstream = context.get("upstream_contracts")
+    if upstream and isinstance(upstream, list):
+        upstream_lines = ["## Upstream API Contracts"]
+        for entry in upstream:
+            name = entry.get("feature_name", "unknown")
+            for c in entry.get("contracts", []):
+                upstream_lines.append(f"- {name}: `{c.get('binding_text', '')}`")
+        upstream_text = "\n".join(upstream_lines)
+        if upstream_text.strip():
+            p1_sections.append(upstream_text)
+
+    # P2: Cross-language element reference (Layer 5)
+    cross_lang_section = _build_cross_language_element_context(context)
+    if cross_lang_section:
+        p2_sections.append(cross_lang_section)
 
     # P2: Manifest structural context
     mc = context.get("manifest_context")

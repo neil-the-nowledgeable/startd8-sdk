@@ -314,6 +314,7 @@ class DiskComplianceResult:
     contract_compliance: float = 1.0
     contract_violations: List[ContractViolation] = field(default_factory=list)
     semantic_issues: List[Any] = field(default_factory=list)
+    security_findings: List[Any] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -616,6 +617,123 @@ def _validate_non_python_file(
     elif suffix == ".sln":
         result = _validate_sln_file(content, result)
 
+    # Query Prime security verification for database-facing files (Anzen gate)
+    result = _run_query_security_check(content, str(abs_path), suffix, result)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Query Prime security verification (Anzen gate)
+# ---------------------------------------------------------------------------
+
+# Database client import patterns per language extension
+_DATABASE_IMPORT_PATTERNS: Dict[str, Dict[str, str]] = {
+    ".cs": {
+        "Npgsql": "postgresql",
+        "NpgsqlConnection": "postgresql",
+        "NpgsqlDataSource": "postgresql",
+        "SpannerConnection": "spanner",
+        "SpannerParameter": "spanner",
+        "MySqlConnection": "mysql",
+        "MySqlConnector": "mysql",
+        "SqliteConnection": "sqlite",
+        "StackExchange.Redis": "redis",
+        "ConnectionMultiplexer": "redis",
+    },
+    ".py": {
+        "psycopg2": "postgresql",
+        "asyncpg": "postgresql",
+        "mysql.connector": "mysql",
+        "sqlite3": "sqlite",
+        "redis": "redis",
+    },
+    ".js": {
+        "pg": "postgresql",
+        "mysql2": "mysql",
+        "better-sqlite3": "sqlite",
+        "ioredis": "redis",
+        "redis": "redis",
+    },
+    ".ts": {
+        "pg": "postgresql",
+        "mysql2": "mysql",
+        "better-sqlite3": "sqlite",
+        "ioredis": "redis",
+        "redis": "redis",
+    },
+    ".go": {
+        "database/sql": "postgresql",
+        "cloud.google.com/go/spanner": "spanner",
+        "github.com/go-redis": "redis",
+    },
+    ".java": {
+        "java.sql": "postgresql",
+        "com.google.cloud.spanner": "spanner",
+        "redis.clients": "redis",
+    },
+}
+
+# Extension to language ID mapping
+_EXT_TO_LANGUAGE: Dict[str, str] = {
+    ".cs": "csharp",
+    ".py": "python",
+    ".js": "nodejs",
+    ".ts": "nodejs",
+    ".go": "go",
+    ".java": "java",
+}
+
+
+def _run_query_security_check(
+    content: str,
+    file_path: str,
+    suffix: str,
+    result: "DiskComplianceResult",
+) -> "DiskComplianceResult":
+    """Run Query Prime security checks on database-facing files.
+
+    Detects database client imports, then runs the security verification
+    pipeline (injection, credential leakage, lifecycle). Populates
+    ``result.security_findings`` with any findings.
+
+    Non-fatal: import failures or missing Query Prime module are silently
+    skipped to avoid breaking existing validation.
+    """
+    import_patterns = _DATABASE_IMPORT_PATTERNS.get(suffix)
+    if not import_patterns:
+        return result
+
+    language = _EXT_TO_LANGUAGE.get(suffix)
+    if not language:
+        return result
+
+    # Detect which database client is used in this file
+    detected_database = None
+    for pattern_text, database in import_patterns.items():
+        if pattern_text in content:
+            detected_database = database
+            break
+
+    if detected_database is None:
+        return result
+
+    try:
+        from startd8.query_prime.security import verify_file
+
+        verification = verify_file(
+            content, file_path, detected_database, language,
+        )
+        if verification.findings:
+            result.security_findings.extend(
+                f.to_semantic_issue() for f in verification.findings
+            )
+    except (ImportError, Exception) as exc:
+        logger.debug(
+            "Query Prime security check skipped for %s: %s",
+            file_path, exc,
+        )
+
     return result
 
 
@@ -646,10 +764,12 @@ def _validate_csharp_file(
             return result
 
     # Try tree-sitter first (REQ-CS-200 Tier 1)
+    tree_sitter_ran = False
     try:
         from startd8.languages.csharp_parser import parse_csharp
         parse_result = parse_csharp(content)
         if parse_result.parser_used == "tree_sitter":
+            tree_sitter_ran = True
             if parse_result.has_error:
                 result.ast_valid = False
                 result.contract_compliance = 0.0
@@ -669,42 +789,61 @@ def _validate_csharp_file(
                 )
             if issues:
                 result.semantic_issues = issues
-            return result
     except ImportError:
         pass  # Fall through to text-based
 
-    # Text-based fallback (REQ-CS-200 Tier 2)
-    depth = 0
-    for ch in content:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                result.ast_valid = False
-                result.contract_compliance = 0.5
-                result.error = "unbalanced_braces"
-                return result
-    if depth > 0:
-        result.ast_valid = False
-        result.contract_compliance = 0.5
-        result.error = "unbalanced_braces"
-        return result
+    # Text-based fallback (REQ-CS-200 Tier 2) — only if tree-sitter didn't run
+    if not tree_sitter_ran:
+        depth = 0
+        for ch in content:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth < 0:
+                    result.ast_valid = False
+                    result.contract_compliance = 0.5
+                    result.error = "unbalanced_braces"
+                    return result
+        if depth > 0:
+            result.ast_valid = False
+            result.contract_compliance = 0.5
+            result.error = "unbalanced_braces"
+            return result
 
-    has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
-    has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
-    has_type_decl = bool(
-        re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content),
-    )
+        has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
+        has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
+        has_type_decl = bool(
+            re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content),
+        )
 
-    if not has_namespace and not has_using and not has_type_decl:
-        result.ast_valid = False
-        result.contract_compliance = 0.3
-        result.error = "no_csharp_keywords"
-        return result
+        if not has_namespace and not has_using and not has_type_decl:
+            result.ast_valid = False
+            result.contract_compliance = 0.3
+            result.error = "no_csharp_keywords"
+            return result
 
-    # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
-    result.contract_compliance = min(result.contract_compliance, 0.8)
+        # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
+        result.contract_compliance = min(result.contract_compliance, 0.8)
+
+    # C# semantic checks (P0: REQ-KZ-CS-200 wiring into disk validation)
+    try:
+        from startd8.validators.csharp_semantic_checks import (
+            run_csharp_semantic_checks,
+        )
+        cs_issues = run_csharp_semantic_checks(
+            content, file_path=result.file_path,
+        )
+        for issue in cs_issues:
+            result.semantic_issues.append({
+                "category": issue.check,
+                "severity": issue.severity,
+                "message": issue.message,
+                "line": issue.line,
+            })
+    except ImportError:
+        pass  # csharp_semantic_checks not available
+
     return result
 
 
@@ -778,6 +917,23 @@ def _validate_csproj_file(
                     "severity": "warning",
                     "message": "PackageReference missing Include attribute",
                 })
+
+    # C# semantic checks for .csproj (P0: REQ-KZ-CS-200 wiring)
+    try:
+        from startd8.validators.csharp_semantic_checks import (
+            run_csharp_semantic_checks,
+        )
+        cs_issues = run_csharp_semantic_checks(
+            content, file_path=result.file_path,
+        )
+        for issue in cs_issues:
+            result.semantic_issues.append({
+                "category": issue.check,
+                "severity": issue.severity,
+                "message": issue.message,
+            })
+    except ImportError:
+        pass  # csharp_semantic_checks not available
 
     return result
 

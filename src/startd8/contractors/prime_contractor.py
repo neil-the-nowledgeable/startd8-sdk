@@ -520,6 +520,8 @@ class PrimeContractorWorkflow:
         # merge strategy re-selection when target language changes.
         self._language_profile = None
         self.integration_history: List[Dict] = []
+        # Layer 3: Within-run forward manifest accumulation
+        self._accumulated_manifests: Dict[str, "ForwardManifest"] = {}
         self.files_modified_this_session: Dict[str, List[str]] = {}
         self.max_lines_per_feature = max_lines_per_feature
         self.max_tokens_per_feature = max_tokens_per_feature
@@ -2629,11 +2631,65 @@ class PrimeContractorWorkflow:
                             pass
 
             gen_context["exemplar"] = exemplar_ctx
+            # Stash registry + fingerprint for exemplar-informed complexity routing (Layer 1)
+            gen_context["_exemplar_registry"] = registry
+            gen_context["_exemplar_fingerprint"] = fp
             logger.info(
                 "Exemplar injected for '%s': %s (match=%s, score=%.2f)",
                 feature.name, match.id, match_type,
                 match.scores.disk_quality_score,
             )
+
+            # --- Layer 2: Cross-language structural transfer ---
+            # When no same-language match exists, try to transfer architectural
+            # patterns from a validated cross-language exemplar.
+            if not match or match_type != "exact":
+                cross_lang_match = registry.find_cross_language_match(fp)
+                if cross_lang_match and cross_lang_match.code_summary:
+                    try:
+                        from startd8.exemplars.structural_extractor import (
+                            extract_structural_pattern,
+                        )
+
+                        pattern = extract_structural_pattern(
+                            cross_lang_match.code_summary,
+                            archetype=cross_lang_match.fingerprint.archetype,
+                            source_language=cross_lang_match.fingerprint.language,
+                            source_fingerprint=str(cross_lang_match.fingerprint),
+                        )
+                        if pattern:
+                            gen_context["structural_reference"] = {
+                                "source_fingerprint": str(
+                                    cross_lang_match.fingerprint,
+                                ),
+                                "source_language": (
+                                    cross_lang_match.fingerprint.language
+                                ),
+                                "target_language": fp.language,
+                                "score": (
+                                    cross_lang_match.scores.disk_quality_score
+                                ),
+                                "lifecycle_phases": list(
+                                    pattern.lifecycle_phases,
+                                ),
+                                "middleware_points": list(
+                                    pattern.middleware_points,
+                                ),
+                                "config_keys": list(pattern.config_keys),
+                                "error_strategy": pattern.error_strategy,
+                            }
+                            logger.info(
+                                "Cross-language structural transfer for '%s': "
+                                "%s -> %s",
+                                feature.name,
+                                cross_lang_match.fingerprint.language,
+                                fp.language,
+                            )
+                    except Exception as exc:
+                        logger.debug(
+                            "Cross-language transfer failed (non-fatal): %s",
+                            exc,
+                        )
         except Exception as exc:
             logger.warning("Exemplar injection failed (non-fatal): %s", exc)
 
@@ -3580,6 +3636,213 @@ class PrimeContractorWorkflow:
         if dep_imports:
             gen_context["dependency_imports"] = dep_imports
 
+        # Upstream contract injection (Layer 3: within-run manifest accumulation)
+        upstream_contracts = self._get_upstream_contracts(feature)
+        if upstream_contracts:
+            gen_context["upstream_contracts"] = upstream_contracts
+
+        # Anzen: Security contract injection for database-facing tasks
+        self._inject_security_contract(feature, gen_context)
+
+    # ------------------------------------------------------------------
+    # Anzen: Security contract injection for database-facing tasks
+    # ------------------------------------------------------------------
+
+    def _inject_security_contract(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> None:
+        """Detect database-facing tasks and inject security_contract into context.
+
+        Inspects target file extensions and task description/metadata for
+        database keywords. When detected, injects a ``security_contract``
+        dict that ``spec_builder`` renders as a P0 SECURITY CONSTRAINT section.
+
+        Also injects ``prior_security_findings`` from prior postmortem results
+        for Kaizen feedback via the drafter.
+        """
+        try:
+            from startd8.forward_manifest_validator import _DATABASE_IMPORT_PATTERNS
+        except ImportError:
+            return
+
+        # Detect database type from feature description or metadata
+        desc = (feature.description or "").lower()
+        metadata = feature.metadata or {}
+        desc += " " + " ".join(str(v) for v in metadata.values() if isinstance(v, str)).lower()
+
+        database = None
+        safe_pattern_example = "parameterized queries"
+
+        # Priority: explicit metadata, then description heuristics
+        if "spanner" in desc:
+            database = "spanner"
+            safe_pattern_example = "@param with SpannerParameterCollection"
+        elif "npgsql" in desc or "postgresql" in desc or "alloydb" in desc or "postgres" in desc:
+            database = "postgresql"
+            safe_pattern_example = "@param with NpgsqlParameter / AddWithValue"
+        elif "redis" in desc:
+            database = "redis"
+            safe_pattern_example = "command-based API (no SQL)"
+        elif "mysql" in desc:
+            database = "mysql"
+            safe_pattern_example = "@param with MySqlParameter"
+        elif "sqlite" in desc:
+            database = "sqlite"
+            safe_pattern_example = "? placeholders with tuple"
+
+        # Also check target file extensions for database imports
+        if database is None and feature.target_files:
+            for tf in feature.target_files:
+                ext = Path(tf).suffix.lower()
+                patterns = _DATABASE_IMPORT_PATTERNS.get(ext, {})
+                if patterns:
+                    # Check existing files for database imports
+                    existing = gen_context.get("existing_files", {})
+                    content = existing.get(tf, "")
+                    if content:
+                        for pattern_text, db_name in patterns.items():
+                            if pattern_text in content:
+                                database = db_name
+                                break
+                if database:
+                    break
+
+        if database is None:
+            return
+
+        gen_context["security_contract"] = {
+            "database": database,
+            "safe_pattern_example": safe_pattern_example,
+        }
+        logger.info(
+            "Anzen: injected security_contract for '%s' (database=%s)",
+            feature.name, database,
+        )
+
+        # Feed back prior security findings from Kaizen
+        if self._kaizen.config:
+            prior_findings = self._kaizen.config.get("security_findings", [])
+            if prior_findings:
+                gen_context["prior_security_findings"] = prior_findings
+                logger.info(
+                    "Anzen: injected %d prior_security_findings for '%s'",
+                    len(prior_findings), feature.name,
+                )
+
+    # ------------------------------------------------------------------
+    # Layer 3: Within-run forward manifest accumulation
+    # ------------------------------------------------------------------
+
+    def _accumulate_manifest(self, feature: FeatureSpec) -> None:
+        """Store the feature's ForwardManifest after successful integration.
+
+        Only accumulates manifests from features with disk_quality_score >= 0.9.
+        Within-run only -- cleared at workflow start.
+        """
+        try:
+            # Get the manifest from feature metadata
+            manifest = None
+            if feature.metadata:
+                manifest_data = feature.metadata.get("_forward_manifest")
+                if manifest_data:
+                    from startd8.forward_manifest import ForwardManifest
+                    if isinstance(manifest_data, ForwardManifest):
+                        manifest = manifest_data
+                    elif isinstance(manifest_data, dict):
+                        manifest = ForwardManifest.model_validate(manifest_data)
+
+            if not manifest:
+                return
+
+            # Quality gate: only accumulate high-quality outputs
+            score = 0.0
+            if feature.metadata:
+                score = feature.metadata.get("_disk_quality_score") or 0.0
+            if score < 0.9:
+                logger.debug(
+                    "Skipping manifest accumulation for '%s' (score=%.2f < 0.9)",
+                    feature.name, score,
+                )
+                return
+
+            self._accumulated_manifests[feature.id] = manifest
+            logger.info(
+                "Accumulated manifest for '%s' (%d contracts, %d file specs)",
+                feature.name,
+                len(manifest.contracts),
+                len(manifest.file_specs),
+            )
+        except Exception as exc:
+            logger.warning("Manifest accumulation failed (non-fatal): %s", exc, exc_info=True)
+
+    def _get_upstream_contracts(self, feature: FeatureSpec) -> List[Dict[str, Any]]:
+        """Get interface contracts from upstream dependencies that have been accumulated.
+
+        Uses the feature's dependency list to find completed upstream features
+        and returns their explicit interface contracts.
+
+        Args:
+            feature: The current feature being processed.
+
+        Returns:
+            List of contract dicts with feature_name, language, and contracts.
+        """
+        if not feature.dependencies or not self._accumulated_manifests:
+            return []
+
+        upstream: List[Dict[str, Any]] = []
+        for dep_id in feature.dependencies:
+            manifest = self._accumulated_manifests.get(dep_id)
+            if not manifest:
+                # Try matching by name (deps might be names not IDs)
+                if not hasattr(self.queue, "get_feature"):
+                    continue
+                for fid, m in self._accumulated_manifests.items():
+                    dep_feature = self.queue.get_feature(fid)
+                    if dep_feature and dep_feature.name == dep_id:
+                        manifest = m
+                        break
+
+            if not manifest:
+                continue
+
+            # Extract explicit contracts (highest confidence)
+            explicit_contracts = []
+            for c in manifest.contracts:
+                conf_val = c.confidence.value if hasattr(c.confidence, "value") else str(c.confidence)
+                if conf_val == "explicit":
+                    cat_val = c.category.value if hasattr(c.category, "value") else str(c.category)
+                    explicit_contracts.append({
+                        "name": c.description,
+                        "category": cat_val,
+                        "binding_text": c.binding_text,
+                        "confidence": conf_val,
+                    })
+
+            if not explicit_contracts:
+                continue
+
+            # Determine language from file specs
+            lang = "unknown"
+            for fs in manifest.file_specs.values():
+                if hasattr(fs, "language") and fs.language:
+                    lang = fs.language
+                    break
+
+            dep_name = dep_id
+            dep_feature = self.queue.get_feature(dep_id)
+            if dep_feature:
+                dep_name = dep_feature.name
+
+            upstream.append({
+                "feature_name": dep_name,
+                "feature_id": dep_id,
+                "language": lang,
+                "contracts": explicit_contracts,
+            })
+
+        return upstream
+
     def _collect_dependency_imports(
         self, feature: FeatureSpec,
     ) -> Dict[str, Dict[str, Any]]:
@@ -3735,7 +3998,11 @@ class PrimeContractorWorkflow:
                 feature, self.project_root,
                 manifest=gen_context.get("manifest"),
             )
-            tier, reason = classify_tier(signals, self._complexity_config)
+            tier, reason = classify_tier(
+                signals, self._complexity_config,
+                exemplar_registry=gen_context.get("_exemplar_registry"),
+                fingerprint=gen_context.get("_exemplar_fingerprint"),
+            )
             generator = self._complexity_router.select(tier) or generator
             # D3: Route tier-specific agent spec for cloud escalation
             tier_agent_spec = self._complexity_router.select_agent_spec(tier)
@@ -3996,6 +4263,7 @@ class PrimeContractorWorkflow:
                     0, feature.integration_attempts - 1,
                 )
             self.queue.complete_feature(feature.id)
+            self._accumulate_manifest(feature)
             history_entry: Dict[str, Any] = {
                 'feature_name': feature.name,
                 'feature_id': feature.id,

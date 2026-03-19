@@ -55,6 +55,14 @@ _INSTRUMENTATION_VOCAB = frozenset({
     "setuptelemetry", "setupmetrics", "setuptracing",
 })
 
+# Security vocabulary — words that indicate database/query security context
+_SECURITY_VOCAB = frozenset({
+    "sql", "query", "select", "insert", "update", "delete",
+    "database", "connection", "credential", "password",
+    "parameterized", "injection", "npgsql", "spanner",
+    "redis", "mysql", "sqlite",
+})
+
 # Comment prefixes by language family
 _SINGLE_LINE_COMMENT = re.compile(r"^\s*(?://|#)\s?")
 _BLOCK_COMMENT_START = re.compile(r"^\s*/\*")
@@ -116,6 +124,8 @@ class TodoEntry:
     confidence: float = 1.0
     rationale: str = ""
     contract_fields: Tuple[str, ...] = ()
+    security_sensitive: bool = False
+    security_contract_ref: Optional[str] = None
 
     @property
     def id(self) -> str:
@@ -138,10 +148,12 @@ class TodoInventory:
     summary: Dict[str, int] = field(default_factory=dict)
 
     def compute_summary(self) -> None:
-        self.summary = {"A": 0, "B": 0, "C": 0, "total": 0}
+        self.summary = {"A": 0, "B": 0, "C": 0, "total": 0, "security_todos": 0}
         for e in self.entries:
             self.summary[e.category] = self.summary.get(e.category, 0) + 1
             self.summary["total"] += 1
+            if e.security_sensitive:
+                self.summary["security_todos"] += 1
 
     def to_dict(self) -> Dict[str, Any]:
         self.compute_summary()
@@ -273,6 +285,15 @@ def classify_todo(
             contract_fields=contract_fields,
             matched_requirements=tuple(cat_b_result.get("matched_requirements", [])),
         )
+
+    # --- Category S annotation: security-sensitive TODO ---
+    # Check if the surrounding context contains security vocabulary
+    context_start = max(0, idx - 5)
+    context_end = min(len(lines), idx + 6)
+    context_text = " ".join(lines[context_start:context_end]).lower()
+    is_security = any(word in context_text for word in _SECURITY_VOCAB)
+    if is_security:
+        entry = dataclasses.replace(entry, security_sensitive=True)
 
     # --- Category C: default ---
     return entry
