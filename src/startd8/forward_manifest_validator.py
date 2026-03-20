@@ -8,6 +8,7 @@ function signatures).
 """
 
 import ast
+import importlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -560,6 +561,11 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
 # Cache avoids repeated registry lookups per file.
 _STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
 
+_STUB_EXT_TO_LANG: dict[str, str] = {
+    ".java": "java", ".go": "go", ".cs": "csharp",
+    ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
+}
+
 
 def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
     """Return compiled stub patterns for a file extension, cached."""
@@ -567,11 +573,7 @@ def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
         return _STUB_PATTERNS_CACHE[suffix]
 
     patterns: list[re.Pattern[str]] = []
-    _EXT_MAP = {
-        ".java": "java", ".go": "go", ".cs": "csharp",
-        ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
-    }
-    lang_id = _EXT_MAP.get(suffix)
+    lang_id = _STUB_EXT_TO_LANG.get(suffix)
     if lang_id:
         try:
             from startd8.languages.registry import LanguageRegistry
@@ -622,7 +624,6 @@ def _wire_semantic_checks(
     """
     module_path, func_name = run_checks_fn.rsplit(".", 1)
     try:
-        import importlib
         mod = importlib.import_module(module_path)
         run_fn = getattr(mod, func_name)
     except (ImportError, AttributeError):

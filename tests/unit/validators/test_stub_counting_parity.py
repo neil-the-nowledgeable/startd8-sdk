@@ -5,8 +5,6 @@ language-specific stub patterns, so postmortem scoring doesn't
 default to 1.0 for non-Python files with stubs.
 """
 
-import pytest
-
 from startd8.forward_manifest_validator import (
     DiskComplianceResult,
     _validate_go_file,
