@@ -69,9 +69,9 @@ def _split_type_list(s: str) -> list[str]:
     depth = 0
     current: list[str] = []
     for ch in s:
-        if ch in ("<",):
+        if ch == "<":
             depth += 1
-        elif ch in (">",):
+        elif ch == ">":
             depth -= 1
         elif ch == "," and depth == 0:
             parts.append("".join(current).strip())
@@ -174,3 +174,6 @@ def _try_parse(sig: str) -> Optional[ForwardElementSpec]:
         )
 
     return None
+
+
+__all__ = ["parse_java_signatures"]

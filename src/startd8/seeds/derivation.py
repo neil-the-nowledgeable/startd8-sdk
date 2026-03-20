@@ -495,13 +495,22 @@ def _inject_build_order_dependencies(
     for t in tasks:
         existing_deps[t["task_id"]] = set(t.get("depends_on", []))
 
-    def _transitive_deps(tid: str, cache: Dict[str, set]) -> set:
+    def _transitive_deps(
+        tid: str, cache: Dict[str, set], visiting: Optional[set] = None,
+    ) -> set:
         if tid in cache:
             return cache[tid]
+        # Guard against cycles in pre-existing deps (broken later by
+        # _break_task_dependency_cycles, but we run before that).
+        if visiting is None:
+            visiting = set()
+        if tid in visiting:
+            return set()
+        visiting.add(tid)
         result: set = set()
         for dep in existing_deps.get(tid, set()):
             result.add(dep)
-            result.update(_transitive_deps(dep, cache))
+            result.update(_transitive_deps(dep, cache, visiting))
         cache[tid] = result
         return result
 

@@ -58,8 +58,7 @@ def _extract_params(raw: str) -> list[Param]:
             continue
         # Strip TS type annotations: "name: Type" -> "name"
         name = part.split(":")[0].split("=")[0].strip()
-        # Strip destructuring / rest operator
-        name = name.lstrip(".")  # ...rest -> rest
+        # Strip rest operator: ...rest -> rest
         if name.startswith("..."):
             name = name[3:]
         if name and name.isidentifier():
@@ -102,7 +101,6 @@ def parse_nodejs_signatures(
             logger.debug("Skipping export declaration: %s", sig_stripped)
             continue
 
-        visibility = Visibility.PUBLIC if _has_export(sig_stripped) else Visibility.PUBLIC
         exported = _has_export(sig_stripped)
 
         # --- Class / interface / type ---
@@ -161,3 +159,6 @@ def parse_nodejs_signatures(
         logger.debug("Skipping unparseable Node.js signature: %s", sig_stripped)
 
     return specs
+
+
+__all__ = ["parse_nodejs_signatures"]

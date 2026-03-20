@@ -66,9 +66,7 @@ def _parse_bases(raw: Optional[str]) -> list[str]:
     return [b.strip() for b in raw.split(",") if b.strip()]
 
 
-def _empty_signature() -> Signature:
-    """Return a minimal Signature with no params (placeholder for methods)."""
-    return Signature(params=[], return_annotation=None)
+_EMPTY_SIG = Signature(params=[], return_annotation=None)
 
 
 def parse_csharp_signatures(
@@ -115,7 +113,7 @@ def _parse_one(sig: str) -> Optional[ForwardElementSpec]:
             kind=ElementKind.METHOD,
             name=m.group(2),
             parent_class=m.group(1),
-            signature=_empty_signature(),
+            signature=_EMPTY_SIG,
             visibility=vis,
             is_static=is_static,
             is_abstract=is_abstract,
@@ -157,3 +155,6 @@ def _parse_one(sig: str) -> Optional[ForwardElementSpec]:
 
     # --- Skip field declarations (no parens, no type keyword) ---
     return None
+
+
+__all__ = ["parse_csharp_signatures"]
