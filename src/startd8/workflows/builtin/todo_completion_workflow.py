@@ -45,7 +45,12 @@ class TodoCompletionWorkflow:
         categories (str): Comma-separated categories to process (default: "A,B").
         execute (bool): Whether to execute the plan (default: False = scan only).
         max_tasks (int): Maximum number of tasks in the plan (default: 20).
+        generation_profile (str): Optional generation profile. When present,
+            recorded in provenance. Does not override explicit ``execute``.
     """
+
+    # Profiles that imply instrumentation is relevant
+    _INSTRUMENTATION_PROFILES = frozenset({"source", "full"})
 
     @property
     def metadata(self) -> WorkflowMetadata:
@@ -115,6 +120,10 @@ class TodoCompletionWorkflow:
         execute = config.get("execute", False)
         max_tasks = config.get("max_tasks", 20)
         instrumentation_contract = config.get("instrumentation_contract")
+        generation_profile = config.get("generation_profile", "")
+
+        if generation_profile:
+            logger.info("Generation profile: %s", generation_profile)
 
         categories = {c.strip().upper() for c in str(categories_str).split(",")}
 
@@ -206,9 +215,51 @@ class TodoCompletionWorkflow:
         elif on_progress:
             on_progress(3, 4, "Skipping execution (scan-only mode)")
 
+        # --- Phase 3.5: Coverage (REQ-TCW-402) ---
+        coverage_result = None
+        if instrumentation_contract:
+            try:
+                from startd8.validators.instrumentation_coverage import (
+                    compute_instrumentation_coverage,
+                )
+                coverage_result = compute_instrumentation_coverage(
+                    Path(scan_dir),
+                    instrumentation_contract,
+                )
+                logger.info(
+                    "Instrumentation coverage: %.1f%% (%d/%d)",
+                    coverage_result.coverage_pct,
+                    coverage_result.satisfied_entries,
+                    coverage_result.contract_entries,
+                )
+            except Exception as exc:
+                logger.warning("Coverage computation failed: %s", exc)
+
+        # --- Phase 3.6: Provenance (REQ-TCW-400) ---
+        provenance = {
+            "source": "instrumentation",
+            "parent_run_id": source_run_id,
+            "scan_dir": str(scan_dir),
+            "output_dir": str(output_dir),
+            "seed_path": str(seed_path),
+            "inventory_path": str(out / "todo-inventory.json"),
+        }
+        if generation_profile:
+            provenance["generation_profile"] = generation_profile
+        provenance_path = out / "instrumentation-provenance.json"
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2, default=str), encoding="utf-8",
+        )
+
         # --- Phase 4: Report ---
         if on_progress:
             on_progress(4, 4, "Writing report...")
+
+        todo_completed = 0
+        todo_deferred = 0
+        if execution_result and isinstance(execution_result, dict):
+            todo_completed = execution_result.get("pass_count", len(tasks) if execution_result.get("success") else 0)
+            todo_deferred = len(tasks) - todo_completed
 
         result_output = {
             "todo_count": inventory.summary.get("total", 0),
@@ -218,7 +269,17 @@ class TodoCompletionWorkflow:
             "executed": executed,
             "seed_path": str(seed_path),
             "inventory_path": str(out / "todo-inventory.json"),
+            "todo_completed": todo_completed,
+            "todo_deferred": todo_deferred,
+            "todo_completion_rate": (
+                round(todo_completed / len(tasks) * 100, 2) if tasks else 0.0
+            ),
         }
+        if coverage_result:
+            result_output["instrumentation_coverage"] = coverage_result.coverage_pct
+            result_output["instrumentation_gaps"] = coverage_result.gaps
+        if generation_profile:
+            result_output["generation_profile"] = generation_profile
         if execution_result:
             result_output["execution"] = execution_result
 
@@ -232,6 +293,7 @@ class TodoCompletionWorkflow:
                 "todo_count_b": inventory.summary.get("B", 0),
                 "task_count": len(tasks),
                 "executed": executed,
+                "generation_profile": generation_profile or "",
             },
         )
 
@@ -244,33 +306,63 @@ class TodoCompletionWorkflow:
     ) -> Dict[str, Any]:
         """Execute the completion plan via Prime Contractor.
 
-        This is a thin wrapper that delegates to PrimeContractorWorkflow
-        with the generated seed, running in edit mode.
+        Follows the established pattern from ``run_prime_workflow.py``:
+        1. Write seed to a temp file (``add_features_from_seed`` takes a path)
+        2. Instantiate ``PrimeContractorWorkflow`` with constructor args
+        3. Load features via ``queue.add_features_from_seed(path)``
+        4. Load seed context via ``load_seed_context(data)``
+        5. Call ``run()`` with no positional args
 
         Returns:
-            Dict with ``success``, ``status``, and ``output_dir`` keys.
+            Dict with ``success``, ``status``, ``output_dir``, and
+            optional ``pass_count`` keys.
 
         Raises:
             Exception: Propagated from PrimeContractorWorkflow if execution fails.
         """
+        import json as _json
+
         from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+        from startd8.contractors.generators import LeadContractorCodeGenerator
 
-        instrumentation_dir = str(Path(output_dir) / "instrumentation")
-        Path(instrumentation_dir).mkdir(parents=True, exist_ok=True)
+        instrumentation_dir = Path(output_dir) / "instrumentation"
+        instrumentation_dir.mkdir(parents=True, exist_ok=True)
 
-        prime_config = {
-            "seed": seed,
-            "output_dir": instrumentation_dir,
-            "project_root": config.get("scan_dir", "."),
-            "source": "instrumentation",
-            "parent_run_id": seed.get("source_run_id", ""),
-        }
+        # Write seed dict to a temp file — add_features_from_seed reads a path.
+        seed_file = instrumentation_dir / "instrumentation-seed.json"
+        seed_file.write_text(
+            _json.dumps(seed, indent=2, default=str), encoding="utf-8",
+        )
 
-        workflow = PrimeContractorWorkflow()
-        result = workflow.run(prime_config, agents=agents)
+        project_root = Path(config.get("scan_dir", "."))
+
+        code_generator = LeadContractorCodeGenerator(
+            output_dir=instrumentation_dir / "generated",
+        )
+
+        workflow = PrimeContractorWorkflow(
+            project_root=project_root,
+            dry_run=False,
+            allow_dirty=True,
+            auto_commit=False,
+            code_generator=code_generator,
+        )
+
+        added = workflow.queue.add_features_from_seed(str(seed_file))
+        logger.info("Loaded %d instrumentation tasks from seed", len(added))
+
+        workflow.load_seed_context(seed)
+
+        result = workflow.run()
+
+        success = result.get("successful_features", 0) > 0
+        pass_count = result.get("successful_features", 0)
+        total = result.get("total_features", len(added))
 
         return {
-            "success": result.success,
-            "status": str(result.status),
-            "output_dir": instrumentation_dir,
+            "success": success,
+            "status": "complete",
+            "output_dir": str(instrumentation_dir),
+            "pass_count": pass_count,
+            "total_features": total,
         }
