@@ -3653,13 +3653,45 @@ class PrimeContractorWorkflow:
     ) -> None:
         """Detect database-facing tasks and inject security_contract into context.
 
-        Inspects target file extensions and task description/metadata for
-        database keywords. When detected, injects a ``security_contract``
-        dict that ``spec_builder`` renders as a P0 SECURITY CONSTRAINT section.
+        Phase 2 (SP-PL-010): Tries manifest-derived contract first, then falls
+        back to heuristic detection for standalone mode.
 
         Also injects ``prior_security_findings`` from prior postmortem results
         for Kaizen feedback via the drafter.
         """
+        # Phase 2: Try manifest-derived contract first (pipeline mode)
+        try:
+            from startd8.security_prime.enrichment import enrich_gen_context
+            enrich_gen_context(
+                gen_context,
+                feature.description or "",
+                feature.target_files,
+                feature.metadata,
+            )
+            if gen_context.get("security_sensitive"):
+                # Enrichment detected a database — try richer contract
+                try:
+                    from startd8.security_prime.contract import derive_security_contract
+                    manifest_path = getattr(self, "_contextcore_yaml_path", None)
+                    contract = derive_security_contract(
+                        manifest_path=str(manifest_path) if manifest_path else None,
+                        feature_descriptions=[feature.description or ""],
+                    )
+                    if contract:
+                        gen_context["security_contract"] = contract
+                        logger.info(
+                            "Anzen: security_contract from %s for '%s' (database=%s)",
+                            contract.get("source", "auto"),
+                            feature.name, contract.get("database", "?"),
+                        )
+                        self._inject_kaizen_security_hints(feature, gen_context)
+                        return
+                except ImportError:
+                    pass  # Fall through to legacy detection
+        except ImportError:
+            pass  # security_prime not available — use legacy path
+
+        # Legacy standalone path: heuristic keyword detection
         try:
             from startd8.forward_manifest_validator import _DATABASE_IMPORT_PATTERNS
         except ImportError:
@@ -3714,12 +3746,21 @@ class PrimeContractorWorkflow:
             "database": database,
             "safe_pattern_example": safe_pattern_example,
         }
+        # SP-PL-001/002: Enrich gen_context with security_sensitive + detected_database
+        # so spec_builder P1 guidance and complexity classifier can consume them.
+        gen_context["security_sensitive"] = True
+        gen_context["detected_database"] = database
         logger.info(
-            "Anzen: injected security_contract for '%s' (database=%s)",
+            "Anzen: injected security_contract for '%s' (database=%s, security_sensitive=True)",
             feature.name, database,
         )
 
-        # Feed back prior security findings from Kaizen
+        self._inject_kaizen_security_hints(feature, gen_context)
+
+    def _inject_kaizen_security_hints(
+        self, feature: FeatureSpec, gen_context: Dict[str, Any],
+    ) -> None:
+        """Feed back prior security findings from Kaizen into gen_context."""
         if self._kaizen.config:
             prior_findings = self._kaizen.config.get("security_findings", [])
             if prior_findings:
