@@ -356,12 +356,17 @@ class TodoCompletionWorkflow:
             output_dir=instrumentation_dir / "generated",
         )
 
+        # Use a dedicated state file so TODO completion doesn't collide
+        # with the main PrimeContractor run's state.
+        todo_state_file = instrumentation_dir / ".todo_prime_state.json"
+
         workflow = PrimeContractorWorkflow(
             project_root=project_root,
             dry_run=False,
             allow_dirty=True,
             auto_commit=False,
             code_generator=code_generator,
+            state_file=todo_state_file,
         )
 
         added = workflow.queue.add_features_from_seed(str(seed_file))

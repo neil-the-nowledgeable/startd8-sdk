@@ -463,7 +463,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, state_file: Optional[Path]=None):
         """
         Initialize the Prime Contractor workflow.
 
@@ -504,7 +504,7 @@ class PrimeContractorWorkflow:
         self.on_checkpoint_failed = on_checkpoint_failed
         self.check_truncation = check_truncation
         self.stash_ref: Optional[str] = None
-        self.queue = FeatureQueue(project_root=self.project_root)
+        self.queue = FeatureQueue(project_root=self.project_root, state_file=state_file)
         self.checkpoint = IntegrationCheckpoint(project_root=self.project_root, run_tests=True, strict_mode=strict_checkpoints)
         registry = get_registry()
         registry.discover()
