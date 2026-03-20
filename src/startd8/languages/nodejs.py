@@ -455,6 +455,21 @@ class NodeLanguageProfile:
             "Do NOT import packages not listed above.\n"
         )
 
+    def extract_import_lines(self, source: str) -> list[str]:
+        """Extract import/require statements from JS/TS source (REQ-PE-400)."""
+        import re
+        lines: list[str] = []
+        for line in source.splitlines():
+            stripped = line.strip()
+            if re.match(r"^(?:import\s|const\s+\w+\s*=\s*require\(|let\s+\w+\s*=\s*require\(|var\s+\w+\s*=\s*require\()", stripped):
+                lines.append(stripped)
+        return lines
+
+    @property
+    def stub_marker_text(self) -> str:
+        """Node.js stub marker for skeleton fill prompts (REQ-PE-301)."""
+        return '`throw new Error("not implemented")`'
+
 
 def detect_module_system(project_root: Path) -> str:
     """Detect CommonJS vs ESM from package.json ``type`` field (REQ-NODE-104).
