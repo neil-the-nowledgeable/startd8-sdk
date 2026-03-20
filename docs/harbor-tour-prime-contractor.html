@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prime Contractor — Harbor Tour</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface-2: #232736;
+    --border: #2e3346;
+    --text: #e2e4ea;
+    --text-muted: #8b8fa4;
+    --accent: #6c8cff;
+    --accent-dim: #3d5299;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --cyan: #22d3ee;
+    --purple: #a78bfa;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* --- Hero --- */
+  .hero {
+    position: relative;
+    padding: 80px 40px 60px;
+    text-align: center;
+    background: linear-gradient(170deg, #161a28 0%, #0f1117 60%);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -120px; right: -120px;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(108,140,255,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    border: 1px solid rgba(34,211,238,0.25);
+    background: rgba(34,211,238,0.06);
+    margin-bottom: 20px;
+  }
+  .hero h1 {
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #e2e4ea 30%, #6c8cff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .hero p {
+    font-size: 18px;
+    color: var(--text-muted);
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  /* --- Layout --- */
+  .container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 56px 0; }
+  section + section { border-top: 1px solid var(--border); }
+  h2 {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    letter-spacing: -0.3px;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--text);
+  }
+  .section-lead {
+    font-size: 15px;
+    color: var(--text-muted);
+    margin-bottom: 32px;
+    max-width: 680px;
+  }
+
+  /* --- KPI Row --- */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin: 40px 0;
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+  .kpi-value {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: -1px;
+  }
+  .kpi-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 4px;
+  }
+  .kpi-value.green { color: var(--green); }
+  .kpi-value.amber { color: var(--amber); }
+  .kpi-value.accent { color: var(--accent); }
+  .kpi-value.cyan { color: var(--cyan); }
+
+  /* --- Flow diagram --- */
+  .flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 32px 0;
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+  .flow-step {
+    flex: 1;
+    min-width: 130px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 14px;
+    text-align: center;
+    position: relative;
+  }
+  .flow-step + .flow-step { margin-left: 28px; }
+  .flow-step + .flow-step::before {
+    content: '\2192';
+    position: absolute;
+    left: -22px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent-dim);
+    font-size: 18px;
+  }
+  .flow-step .step-num {
+    display: inline-block;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--accent-dim);
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .flow-step h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .flow-step p {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  /* --- Agent cards --- */
+  .agent-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+  .agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 22px;
+  }
+  .agent-card .agent-name {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .agent-card .agent-role {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .agent-card ul {
+    list-style: none;
+    padding: 0;
+  }
+  .agent-card li {
+    font-size: 13px;
+    padding: 3px 0;
+    color: var(--text);
+  }
+  .agent-card li::before {
+    content: '\2022';
+    color: var(--accent);
+    margin-right: 8px;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .tag-local { background: rgba(74,222,128,0.12); color: var(--green); }
+  .tag-cloud { background: rgba(108,140,255,0.12); color: var(--accent); }
+  .tag-zero { background: rgba(34,211,238,0.12); color: var(--cyan); }
+
+  /* --- Tier table --- */
+  .tier-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 24px 0;
+    font-size: 14px;
+  }
+  .tier-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .tier-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tier-table tr:last-child td { border-bottom: none; }
+  .tier-label {
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  /* --- Contract table --- */
+  .contract-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 24px 0;
+  }
+  .contract {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .contract .cid {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--purple);
+    margin-bottom: 4px;
+  }
+  .contract .cdesc {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+
+  /* --- Safety section --- */
+  .safety-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+    margin: 24px 0;
+  }
+  .safety-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .safety-item .icon {
+    font-size: 22px;
+    margin-bottom: 8px;
+  }
+  .safety-item h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .safety-item p {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  /* --- Observability strip --- */
+  .otel-strip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px 28px;
+    margin: 24px 0;
+    display: flex;
+    gap: 32px;
+    align-items: flex-start;
+  }
+  .otel-strip .col { flex: 1; }
+  .otel-strip h4 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+  .otel-strip code {
+    display: block;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--cyan);
+    line-height: 1.7;
+  }
+
+  /* --- Footer --- */
+  footer {
+    padding: 32px 0;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  /* --- Responsive --- */
+  @media (max-width: 768px) {
+    .kpi-row { grid-template-columns: repeat(2, 1fr); }
+    .agent-grid, .contract-grid { grid-template-columns: 1fr; }
+    .safety-grid { grid-template-columns: 1fr; }
+    .flow { flex-direction: column; }
+    .flow-step + .flow-step { margin-left: 0; margin-top: 12px; }
+    .flow-step + .flow-step::before { display: none; }
+    .otel-strip { flex-direction: column; }
+    .hero h1 { font-size: 30px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== HERO ===== -->
+<div class="hero">
+  <div class="hero-badge">Harbor Tour</div>
+  <h1>Prime Contractor</h1>
+  <p>Multi-agent code generation that routes tasks to the cheapest model that can handle them, merges each result immediately, and gives you full cost and quality telemetry.</p>
+</div>
+
+<!-- ===== WHAT IT DOES ===== -->
+<div class="container">
+<section>
+  <h2>What It Does</h2>
+  <p class="section-lead">The Prime Contractor takes a batch of code generation tasks (derived from a plan + requirements) and processes them one at a time through a tiered agent hierarchy. Each feature is generated, merged, tested, and committed before the next one starts.</p>
+
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-value green">26/26</div>
+      <div class="kpi-label">Tasks Passed (run-056)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value amber">$0.00</div>
+      <div class="kpi-label">Cost (local models)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value accent">0.92</div>
+      <div class="kpi-label">Aggregate Score</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value cyan">4</div>
+      <div class="kpi-label">Languages Supported</div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="step-num">1</div>
+      <h4>Classify</h4>
+      <p>Score complexity signals, assign tier</p>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">2</div>
+      <h4>Route</h4>
+      <p>Pick cheapest capable agent for tier</p>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">3</div>
+      <h4>Generate</h4>
+      <p>Produce code (template, local, or cloud)</p>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">4</div>
+      <h4>Repair</h4>
+      <p>Fix syntax, imports, indentation</p>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">5</div>
+      <h4>Integrate</h4>
+      <p>Merge, test, commit or rollback</p>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">6</div>
+      <h4>Evaluate</h4>
+      <p>Disk quality scoring + postmortem</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TIER ROUTING ===== -->
+<section>
+  <h2>Cost-Optimized Tier Routing</h2>
+  <p class="section-lead">Every task is classified by 12 complexity signals (blast radius, dynamic dispatch, inheritance depth, cross-file edges, etc.) and routed to the cheapest model tier that can handle it. No task pays for Opus if Haiku will do.</p>
+
+  <table class="tier-table">
+    <thead>
+      <tr>
+        <th>Tier</th>
+        <th>Generator</th>
+        <th>Cost</th>
+        <th>When Used</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="tier-label" style="color:var(--cyan)">TRIVIAL</span></td>
+        <td>Template Registry <span class="tag tag-zero">$0</span></td>
+        <td>Zero</td>
+        <td>Boilerplate, __init__.py, config stubs</td>
+      </tr>
+      <tr>
+        <td><span class="tier-label" style="color:var(--green)">SIMPLE</span></td>
+        <td>Ollama (local 7B) <span class="tag tag-local">local</span></td>
+        <td>~$0.00</td>
+        <td>Single-function, no cross-file deps, low blast radius</td>
+      </tr>
+      <tr>
+        <td><span class="tier-label" style="color:var(--amber)">MODERATE</span></td>
+        <td>Ollama file-whole <span class="tag tag-local">local</span></td>
+        <td>~$0.00</td>
+        <td>Multi-element files, class hierarchies, moderate deps</td>
+      </tr>
+      <tr>
+        <td><span class="tier-label" style="color:var(--red)">COMPLEX</span></td>
+        <td>Primary Contractor <span class="tag tag-cloud">cloud</span></td>
+        <td>~$0.50</td>
+        <td>Cross-file, dynamic dispatch, deep inheritance, high blast radius</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ===== AGENT ARCHITECTURE ===== -->
+<section>
+  <h2>Agent Architecture</h2>
+  <p class="section-lead">Four agent roles with typed contracts at every handoff boundary. The orchestrator is stateless &mdash; all coordination state lives in the task queue and context dict, making runs reproducible and resumable.</p>
+
+  <div class="agent-grid">
+    <div class="agent-card">
+      <div class="agent-name">MicroPrime Engine <span class="tag tag-local">local</span></div>
+      <div class="agent-role">SIMPLE + MODERATE tiers &mdash; Ollama (startd8-coder 7B)</div>
+      <ul>
+        <li>Element-level generation with AST splicer (Python)</li>
+        <li>File-whole generation for MODERATE tasks</li>
+        <li>Decomposition fallback: Class &amp; Function strategies</li>
+        <li>Circuit breaker: 8 per-file, 12 per-run</li>
+        <li>Auto-escalates to cloud on repeated failure</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Primary Contractor <span class="tag tag-cloud">cloud</span></div>
+      <div class="agent-role">COMPLEX tier &mdash; Sonnet (lead) + Haiku (drafter)</div>
+      <ul>
+        <li>Lead agent writes 8-section spec (budget-capped at 4K tokens)</li>
+        <li>Drafter agent implements from spec (4 draft modes)</li>
+        <li>Lead agent reviews, scores 0&ndash;100</li>
+        <li>Up to 3 iterations if score &lt; 80</li>
+        <li>Expensive model reviews; cheap model generates</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Repair Pipeline</div>
+      <div class="agent-role">Post-generation fixup &mdash; deterministic, no LLM</div>
+      <ul>
+        <li>fence_strip: remove markdown fences</li>
+        <li>indent_normalize: fix indentation errors</li>
+        <li>import_completion: add missing imports</li>
+        <li>bare_statement_wrap: fix expressions-as-statements</li>
+        <li>Per-feature circuit breaker reset</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Integration Engine</div>
+      <div class="agent-role">Merge, test, commit/rollback &mdash; deterministic</div>
+      <ul>
+        <li>Snapshot originals before merge</li>
+        <li>Splice bodies or overwrite (per merge strategy)</li>
+        <li>Checkpoint: run tests + lint</li>
+        <li>Auto-commit on pass, restore snapshot on fail</li>
+        <li>Semantic checks: dupe defs, phantom imports, bare except</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ===== A2A CONTRACTS ===== -->
+<section>
+  <h2>Agent-to-Agent Contracts (Keiyaku)</h2>
+  <p class="section-lead">Every agent boundary uses a frozen dataclass &mdash; not prose, not bare dicts. When an Ollama model fails and escalates to cloud, the handoff carries structured failure context so the cloud model knows what was already tried.</p>
+
+  <div class="contract-grid">
+    <div class="contract">
+      <div class="cid">K-10: ClassificationResult</div>
+      <div class="cdesc">Classifier &rarr; Router/Decomposer. Carries the tier label <em>plus</em> all 12 complexity signals. Decomposer uses signals to choose strategy, not just the tier.</div>
+    </div>
+    <div class="contract">
+      <div class="cid">K-6: EscalationHandoff</div>
+      <div class="cdesc">Local model &rarr; Cloud agent. Includes element FQN, attempt count, failure category, repair outcome. Renders as both JSON and human-readable summary.</div>
+    </div>
+    <div class="contract">
+      <div class="cid">K-9: EscalationRepairOutcome</div>
+      <div class="cdesc">Repair pipeline &rarr; Escalation context. Per-step results (which repairs were tried), AST validity before/after, final verdict. Prevents cloud from repeating failed repairs.</div>
+    </div>
+    <div class="contract">
+      <div class="cid">K-7: SemanticVerificationResult</div>
+      <div class="cdesc">LLM semantic validator &rarr; Engine. Verdict (pass/fail/inconclusive), confidence score, frozen issue list. Fail-open on format parse, fail-closed on content.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SAFETY + RESILIENCE ===== -->
+<section>
+  <h2>Safety &amp; Resilience</h2>
+  <p class="section-lead">The pipeline is designed so that a single bad task cannot take down the entire run, and every destructive action is reversible until explicitly committed.</p>
+
+  <div class="safety-grid">
+    <div class="safety-item">
+      <div class="icon">&#x1F6E1;</div>
+      <h4>Snapshot-Before-Merge</h4>
+      <p>Every file is backed up before modification. Failed integrations restore the snapshot automatically.</p>
+    </div>
+    <div class="safety-item">
+      <div class="icon">&#x26A1;</div>
+      <h4>Circuit Breakers</h4>
+      <p>Per-file (8 failures) resets between files. Per-run (12) persists &mdash; detects systemic issues like Ollama being down.</p>
+    </div>
+    <div class="safety-item">
+      <div class="icon">&#x1F504;</div>
+      <h4>Error-Informed Retry</h4>
+      <p>Failed feature errors are injected into the regeneration prompt as structured feedback, so the next attempt avoids the same mistake.</p>
+    </div>
+    <div class="safety-item">
+      <div class="icon">&#x1F4CA;</div>
+      <h4>Checkpoint Validation</h4>
+      <p>Tests + lint run after every merge. Nothing is committed unless the checkpoint passes.</p>
+    </div>
+    <div class="safety-item">
+      <div class="icon">&#x1F30D;</div>
+      <h4>Language Detection</h4>
+      <p>Python stubs in Go files are caught by non-Python guard. 4 language profiles: Python, Go, Node.js, Java.</p>
+    </div>
+    <div class="safety-item">
+      <div class="icon">&#x1F4DD;</div>
+      <h4>Kaizen Postmortem</h4>
+      <p>Every run produces disk quality scores, assembly deltas, cross-feature patterns, and kaizen suggestions for the next run.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== OBSERVABILITY ===== -->
+<section>
+  <h2>Observability</h2>
+  <p class="section-lead">Every agent call, cost event, and quality score flows through OpenTelemetry into the local Grafana stack. Post-mortem runs automatically after each batch.</p>
+
+  <div class="otel-strip">
+    <div class="col">
+      <h4>OTel Span Tree</h4>
+      <code>
+        prime_contractor.run<br>
+        &nbsp;&nbsp;feature.develop<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;micro_prime.process_element<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;repair.run_file_repair<br>
+        &nbsp;&nbsp;feature.integrate<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;checkpoint.test<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;checkpoint.lint<br>
+        &nbsp;&nbsp;workflow.postmortem
+      </code>
+    </div>
+    <div class="col">
+      <h4>Post-Mortem Artifacts</h4>
+      <code>
+        prime-postmortem-report.json<br>
+        prime-postmortem-summary.md<br>
+        kaizen-metrics.json<br>
+        kaizen-suggestions.json<br>
+        batch-postmortem-report.json<br>
+        kaizen-trends.json<br>
+        kaizen-correlation.json
+      </code>
+    </div>
+    <div class="col">
+      <h4>Key Metrics</h4>
+      <code>
+        success_rate: 100%<br>
+        aggregate_score: 0.92<br>
+        avg_assembly_delta: 0.077<br>
+        cost_per_success: $0.00<br>
+        success_rate_slope: +3.68%/run<br>
+        consecutive_passes: 15
+      </code>
+    </div>
+  </div>
+</section>
+
+<!-- ===== BATCH PROGRESSION ===== -->
+<section>
+  <h2>Batch Progression</h2>
+  <p class="section-lead">Large projects are broken into batches. Each run processes a slice, and the batch ledger tracks cumulative progress across runs with velocity projections.</p>
+
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-value accent">96</div>
+      <div class="kpi-label">Total Tasks</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value green">26</div>
+      <div class="kpi-label">Completed (run-056)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value amber">70</div>
+      <div class="kpi-label">Remaining</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value cyan">~3</div>
+      <div class="kpi-label">Est. Runs Left</div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WHAT THIS MEANS FOR YOU ===== -->
+<section>
+  <h2>What This Means for Engineering Managers</h2>
+  <p class="section-lead">The Prime Contractor changes the economics of code generation by routing 80%+ of tasks to free local models, while preserving cloud quality for the tasks that need it.</p>
+
+  <div class="agent-grid">
+    <div class="agent-card">
+      <div class="agent-name">Cost Control</div>
+      <div class="agent-role">Pay only for complexity, not volume</div>
+      <ul>
+        <li>TRIVIAL/SIMPLE/MODERATE tasks cost $0 (local Ollama)</li>
+        <li>Only COMPLEX tasks hit cloud APIs (~$0.50 each)</li>
+        <li>Budget enforcement caps prompt sizes (P0-P3 priority trimming)</li>
+        <li>Per-run, per-feature, per-agent cost tracking with OTel export</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Quality Visibility</div>
+      <div class="agent-role">Measure what matters, automatically</div>
+      <ul>
+        <li>Dual scoring: requirement fulfillment vs. disk quality</li>
+        <li>Assembly delta detects systematic degradation</li>
+        <li>Kaizen trends track improvement across 20+ runs</li>
+        <li>Correlation analysis links prompt features to outcomes</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Operational Safety</div>
+      <div class="agent-role">Nothing ships without passing tests</div>
+      <ul>
+        <li>Snapshot-restore on every merge (reversible by default)</li>
+        <li>Circuit breakers prevent cascade failures</li>
+        <li>Typed A2A contracts prevent silent data corruption</li>
+        <li>Non-Python language guard prevents wrong-language stubs</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <div class="agent-name">Team Leverage</div>
+      <div class="agent-role">Automate the routine, escalate the hard</div>
+      <ul>
+        <li>96-task batches processed with 3-4 runs, not 96 PRs</li>
+        <li>Postmortem reports surface patterns humans should review</li>
+        <li>Kaizen suggestions are actionable (not just metrics)</li>
+        <li>Resumable: crash mid-batch, pick up where you left off</li>
+      </ul>
+    </div>
+  </div>
+</section>
+</div>
+
+<footer>
+  <div class="container">
+    StartD8 SDK &mdash; Prime Contractor Harbor Tour &mdash; <a href="https://github.com/forcemultiplier-labs/startd8-sdk">Source</a><br>
+    Built with the <code>/dev-tour-guide</code> skill &bull; Run <code>startd8 tui</code> to explore interactively
+  </div>
+</footer>
+
+</body>
+</html>
