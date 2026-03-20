@@ -24,6 +24,7 @@ def derive_tasks_from_todos(
     instrumentation_contract: Optional[Dict[str, Any]] = None,
     *,
     source_run_id: str = "",
+    security_contract: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate seed tasks from a classified TODO inventory.
 
@@ -32,28 +33,47 @@ def derive_tasks_from_todos(
         instrumentation_contract: Optional per-service instrumentation contract
             from onboarding metadata (REQ-TCW-003).
         source_run_id: The run that produced the TODO-bearing code.
+        security_contract: Optional security contract for Category S enrichment.
+            When provided, B+S TODOs receive dual contract context
+            (instrumentation + security).
 
     Returns:
         List of seed task dicts in Prime Contractor format, ordered:
         1. Dependency additions (build file changes)
         2. Category A (uncomment) tasks
         3. Category B (implement) tasks
+
+        C+S TODOs (security-sensitive with insufficient context) are
+        excluded from the task list and logged as requiring human review.
     """
     dep_tasks: List[Dict[str, Any]] = []
     uncomment_tasks: List[Dict[str, Any]] = []
     implement_tasks: List[Dict[str, Any]] = []
+    deferred_cs: List[TodoEntry] = []
 
     # Track which files need dependency additions
     dep_files_added: set = set()
 
     for entry in inventory.entries:
+        # SP-TD-003: C+S TODOs require mandatory human review — skip auto-resolution
+        if entry.category == "C" and entry.security_sensitive:
+            deferred_cs.append(entry)
+            continue
+
         if entry.category == "A":
             task = _make_uncomment_task(entry, source_run_id)
             if task:
+                # A+S: mark as security-sensitive in task context
+                if entry.security_sensitive:
+                    task["labels"].append("security-sensitive")
+                    task["config"]["context"]["security_sensitive"] = True
                 uncomment_tasks.append(task)
 
         elif entry.category == "B":
-            task = _make_implement_task(entry, instrumentation_contract, source_run_id)
+            task = _make_implement_task(
+                entry, instrumentation_contract, source_run_id,
+                security_contract=security_contract,
+            )
             if task:
                 implement_tasks.append(task)
 
@@ -81,6 +101,13 @@ def derive_tasks_from_todos(
         "Derived %d tasks from TODO inventory: %d dep, %d uncomment, %d implement",
         len(all_tasks), len(dep_tasks), len(uncomment_tasks), len(implement_tasks),
     )
+    if deferred_cs:
+        logger.warning(
+            "Deferred %d C+S TODOs (security-sensitive, insufficient context — "
+            "requires human review): %s",
+            len(deferred_cs),
+            ", ".join(f"{e.file_path}:{e.line}" for e in deferred_cs[:5]),
+        )
 
     # Clean up internal fields
     for task in all_tasks:
@@ -120,6 +147,7 @@ def _make_uncomment_task(
                 f"Rationale: {entry.rationale}"
             ),
             "context": {
+                "target_files": [entry.file_path],
                 "todo_line": entry.line,
                 "todo_text": entry.raw_text,
                 "containing_function": entry.containing_function,
@@ -134,8 +162,15 @@ def _make_implement_task(
     entry: TodoEntry,
     instrumentation_contract: Optional[Dict[str, Any]],
     source_run_id: str,
+    *,
+    security_contract: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Create an implement task for a Category B TODO."""
+    """Create an implement task for a Category B TODO.
+
+    For B+S TODOs (security-sensitive), injects both instrumentation and
+    security contract context into the task (dual contract injection,
+    SP-TD-010–012).
+    """
     contract_context = {}
     if instrumentation_contract and entry.contract_fields:
         for contract_field in entry.contract_fields:
@@ -147,6 +182,58 @@ def _make_implement_task(
             if section:
                 contract_context[contract_field] = section
 
+    labels = ["instrumentation", "category-b", "auto-derived"]
+    security_context: Optional[Dict[str, Any]] = None
+
+    # SP-TD-010–012: Dual contract injection for B+S TODOs
+    if entry.security_sensitive:
+        labels.append("security-sensitive")
+        if security_contract:
+            # Inject security contract — database-specific safe patterns
+            db_id = entry.security_contract_ref or security_contract.get("database", "")
+            db_entry = security_contract.get("databases", {}).get(db_id, {})
+            security_context = {
+                "security_sensitive": True,
+                "detected_database": db_id,
+                "safe_pattern_example": db_entry.get("safe_param_syntax", "parameterized queries"),
+                "client_library": db_entry.get("client_library", ""),
+            }
+
+    description_parts = [
+        f"Implement the stub method '{entry.containing_function}' "
+        f"at line {entry.line} in {entry.file_path}.\n",
+        f"TODO text: {entry.raw_text}",
+        f"Contract fields: {', '.join(entry.contract_fields)}",
+        f"Rationale: {entry.rationale}",
+    ]
+    if entry.security_sensitive:
+        description_parts.append(
+            "\nSECURITY: This method handles database queries. "
+            "Use parameterized queries for all external inputs."
+        )
+
+    description = "\n".join(description_parts)
+
+    context: Dict[str, Any] = {
+        "target_files": [entry.file_path],
+        "todo_line": entry.line,
+        "todo_text": entry.raw_text,
+        "containing_function": entry.containing_function,
+        "context_lines": entry.context_lines,
+        "instrumentation_contract": contract_context,
+        "contract_fields": entry.contract_fields,
+        "source_run_id": source_run_id,
+    }
+
+    # Dual contract: both instrumentation AND security when applicable
+    if security_context:
+        context["security_sensitive"] = True
+        context["detected_database"] = security_context["detected_database"]
+        context["security_contract"] = {
+            "database": security_context["detected_database"],
+            "safe_pattern_example": security_context["safe_pattern_example"],
+        }
+
     return {
         "_task_type": "implement",
         "task_id": "",  # assigned later
@@ -157,35 +244,15 @@ def _make_implement_task(
         "task_type": "implement",
         "story_points": 2,
         "priority": "high",
-        "labels": ["instrumentation", "category-b", "auto-derived"],
+        "labels": labels,
         "depends_on": [],
-        "description": (
-            f"Implement the stub method '{entry.containing_function}' "
-            f"at line {entry.line} in {entry.file_path}.\n\n"
-            f"TODO text: {entry.raw_text}\n"
-            f"Contract fields: {', '.join(entry.contract_fields)}\n"
-            f"Rationale: {entry.rationale}"
-        ),
+        "description": description,
         "target_files": [entry.file_path],
         "estimated_loc": 30,
         "mode": "edit",
         "config": {
-            "task_description": (
-                f"Implement the stub method '{entry.containing_function}' "
-                f"at line {entry.line} in {entry.file_path}.\n\n"
-                f"TODO text: {entry.raw_text}\n"
-                f"Contract fields: {', '.join(entry.contract_fields)}\n"
-                f"Rationale: {entry.rationale}"
-            ),
-            "context": {
-                "todo_line": entry.line,
-                "todo_text": entry.raw_text,
-                "containing_function": entry.containing_function,
-                "context_lines": entry.context_lines,
-                "instrumentation_contract": contract_context,
-                "contract_fields": entry.contract_fields,
-                "source_run_id": source_run_id,
-            },
+            "task_description": description,
+            "context": context,
         },
     }
 
@@ -242,6 +309,7 @@ def _make_dependency_task(
                 f"These are required for OTel instrumentation."
             ),
             "context": {
+                "target_files": [build_path],
                 "dependencies": deps,
                 "source_run_id": source_run_id,
             },

@@ -170,10 +170,26 @@ class TodoCompletionWorkflow:
             on_progress(2, 4, "Generating completion plan...")
 
         from startd8.seeds.todo_derivation import derive_tasks_from_todos
+
+        # SP-TD-010: Load security contract for dual contract injection (B+S TODOs)
+        security_contract = config.get("security_contract")
+        if security_contract is None:
+            try:
+                from startd8.security_prime.contract import derive_security_contract
+                security_contract = derive_security_contract(
+                    plan_text=config.get("plan_text", ""),
+                    feature_descriptions=[
+                        e.raw_text for e in inventory.entries if e.security_sensitive
+                    ] or None,
+                )
+            except ImportError:
+                pass  # security_prime not available
+
         tasks = derive_tasks_from_todos(
             inventory,
             instrumentation_contract=instrumentation_contract,
             source_run_id=source_run_id,
+            security_contract=security_contract,
         )
 
         # Enforce max_tasks limit
