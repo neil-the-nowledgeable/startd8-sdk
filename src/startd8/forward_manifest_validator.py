@@ -556,6 +556,57 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
+# Extension → stub regex patterns (loaded lazily from LanguageRegistry).
+# Cache avoids repeated registry lookups per file.
+_STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
+
+
+def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
+    """Return compiled stub patterns for a file extension, cached."""
+    if suffix in _STUB_PATTERNS_CACHE:
+        return _STUB_PATTERNS_CACHE[suffix]
+
+    patterns: list[re.Pattern[str]] = []
+    _EXT_MAP = {
+        ".java": "java", ".go": "go", ".cs": "csharp",
+        ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
+    }
+    lang_id = _EXT_MAP.get(suffix)
+    if lang_id:
+        try:
+            from startd8.languages.registry import LanguageRegistry
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get(lang_id)
+            if profile:
+                for pat_str in profile.stub_patterns:
+                    try:
+                        patterns.append(re.compile(pat_str))
+                    except re.error:
+                        pass
+        except (ImportError, AttributeError):
+            pass
+    _STUB_PATTERNS_CACHE[suffix] = patterns
+    return patterns
+
+
+def _count_stubs_text(content: str, suffix: str) -> int:
+    """Count stub markers in non-Python source using language-specific patterns.
+
+    Uses the ``stub_patterns`` property from the language profile resolved
+    by file extension.  Returns 0 if no patterns are available.
+    """
+    patterns = _get_stub_patterns(suffix)
+    if not patterns:
+        return 0
+    count = 0
+    for line in content.splitlines():
+        for pat in patterns:
+            if pat.search(line):
+                count += 1
+                break  # one match per line is enough
+    return count
+
+
 def _wire_semantic_checks(
     content: str,
     result: "DiskComplianceResult",
@@ -862,6 +913,9 @@ def _validate_csharp_file(
         content, result,
         "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
     )
+
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".cs")
 
     return result
 
@@ -1246,6 +1300,9 @@ def _validate_js_file(
         "startd8.validators.nodejs_semantic_checks.run_nodejs_semantic_checks",
     )
 
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".js")
+
     return result
 
 
@@ -1371,6 +1428,9 @@ def _validate_go_file(
         "startd8.validators.go_semantic_checks.run_go_semantic_checks",
     )
 
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".go")
+
     return result
 
 
@@ -1453,6 +1513,9 @@ def _validate_java_file(
         content, result,
         "startd8.validators.java_semantic_checks.run_java_semantic_checks",
     )
+
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".java")
 
     return result
 
