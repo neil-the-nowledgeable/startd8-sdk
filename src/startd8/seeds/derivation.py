@@ -31,6 +31,9 @@ __all__ = [
     "filter_trivial_test_init_tasks",
     "derive_architectural_context",
     "derive_design_calibration",
+    "_file_type_priority",
+    "_extract_service_dir",
+    "_inject_build_order_dependencies",
 ]
 
 _SAFE_TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -297,35 +300,6 @@ def infer_service_metadata(
         )
         metadata.update(lang_metadata)
 
-    # REQ-PLI-NODE-104: Detect Node.js frameworks from plan text
-    _primary_lang_str = lang_id
-    if _primary_lang_str == "nodejs":
-        detected_frameworks: list[str] = []
-        scan_text = " ".join(
-            getattr(f, "description", "") + " " + " ".join(getattr(f, "api_signatures", []))
-            for f in features
-        ).lower()
-
-        _NODEJS_FRAMEWORK_SIGNALS = {
-            "express": ["express", "app.get(", "app.use(", "app.post(", "middleware", "router"],
-            "grpc": ["grpc", "protobuf", ".proto", "@grpc/", "grpc-js", "proto-loader"],
-            "react": ["react", "jsx", "usestate", "useeffect", "component", "next.js", "nextjs"],
-            "nestjs": ["nestjs", "@nestjs/", "controller", "@injectable", "@module"],
-            "fastify": ["fastify"],
-            "koa": ["koa"],
-        }
-
-        for framework, keywords in _NODEJS_FRAMEWORK_SIGNALS.items():
-            if any(kw in scan_text for kw in keywords):
-                detected_frameworks.append(framework)
-
-        if detected_frameworks:
-            metadata["detected_frameworks"] = detected_frameworks
-            logger.info(
-                "Node.js framework detection: %s",
-                ", ".join(detected_frameworks),
-            )
-
     return metadata
 
 
@@ -350,6 +324,266 @@ def derive_target_files_from_artifact_ids(
             continue
         targets.append(output_template.replace("{target}", target_slug))
     return sorted(set(targets))
+
+
+def _file_type_priority(file_path: str) -> int:
+    """Return build-order priority for a file path (lower = earlier).
+
+    Used to add implicit ordering edges when explicit dependencies
+    don't capture language-specific build order.
+
+    Priority tiers:
+        0 — Protocol/IDL definitions (needed by all services)
+        1 — Shared configuration files
+        2 — Source code
+        3 — Test files
+        4 — Build/dependency manifest files
+        5 — Wrapper/tooling files (default)
+        6 — Deployment files (Dockerfiles, deploy YAMLs)
+        7 — Data files
+    """
+    name = Path(file_path).name.lower()
+    suffix = Path(file_path).suffix.lower()
+
+    # Priority 0: Protocol/IDL definitions (needed by all services)
+    if suffix == ".proto":
+        return 0
+
+    # Priority 1: Shared configuration
+    if name in (
+        "application.yml", "application.yaml", "application.properties",
+        "appsettings.json", "appsettings.development.json",
+    ):
+        return 1
+
+    # Priority 3: Test files (check BEFORE generic source so test files
+    # don't match the source tier)
+    if (
+        "_test" in name
+        or "test_" in name
+        or name.endswith("_test.go")
+        or (name.startswith("test") and name[4:5] in ("_", "."))
+    ):
+        return 3
+
+    # Priority 2: Source code
+    if suffix in (".go", ".java", ".cs", ".py", ".js", ".ts", ".tsx"):
+        return 2
+
+    # Priority 4: Build/dependency files
+    if name in (
+        "go.mod", "go.sum", "build.gradle", "settings.gradle",
+        "pom.xml", "package.json", "requirements.txt", "pyproject.toml",
+    ) or suffix in (".csproj", ".sln", ".gradle"):
+        return 4
+
+    # Priority 6: Deployment files
+    if name.startswith("dockerfile") or name == "dockerfile":
+        return 6
+    if suffix in (".yaml", ".yml") and "deploy" in name:
+        return 6
+
+    # Priority 5: Wrapper/tooling files
+    if "wrapper" in name or suffix == ".properties":
+        return 5
+
+    # Priority 7: Data files
+    if suffix in (".json", ".xml", ".csv"):
+        return 7
+
+    # Default: middle priority
+    return 5
+
+
+def _extract_service_dir(file_path: str) -> str:
+    """Extract the service directory from a file path.
+
+    Returns the first path component after ``src/`` if present,
+    otherwise the first path component. Returns ``""`` for
+    top-level files with no directory component.
+    """
+    parts = file_path.replace("\\", "/").split("/")
+    # Look for src/ prefix and use the component after it
+    for i, part in enumerate(parts):
+        if part == "src" and i + 1 < len(parts) - 1:
+            return parts[i + 1]
+    # Fallback: first directory component (if any)
+    if len(parts) >= 2:
+        return parts[0]
+    return ""
+
+
+def _break_task_dependency_cycles(
+    tasks: List[Dict[str, Any]],
+) -> List[tuple]:
+    """Detect and break cycles in a task dependency list.
+
+    Builds an adjacency graph from ``depends_on``, runs iterative DFS
+    to find back-edges, removes them, and mutates tasks in place.
+    Returns the list of broken ``(src_task_id, dst_task_id)`` edges.
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+
+    # Build adjacency as task_id -> list[task_id]
+    adj: Dict[str, List[str]] = {}
+    for t in tasks:
+        tid = t["task_id"]
+        adj[tid] = list(t.get("depends_on", []))
+
+    # Ensure all dependency targets are in colour map
+    color: Dict[str, int] = {n: WHITE for n in adj}
+    for deps in adj.values():
+        for d in deps:
+            if d not in color:
+                color[d] = WHITE
+
+    broken: List[tuple] = []
+    for start in list(adj):
+        if color[start] != WHITE:
+            continue
+        stack = [(start, 0)]
+        while stack:
+            node, idx = stack.pop()
+            children = adj.get(node, [])
+            if idx == 0:
+                color[node] = GRAY
+            if idx < len(children):
+                stack.append((node, idx + 1))
+                child = children[idx]
+                if color.get(child, WHITE) == GRAY:
+                    broken.append((node, child))
+                    children.remove(child)
+                    stack[-1] = (node, idx)
+                elif color.get(child, WHITE) == WHITE:
+                    stack.append((child, 0))
+            else:
+                color[node] = BLACK
+
+    # Propagate removals back to task dicts
+    if broken:
+        for t in tasks:
+            t["depends_on"] = list(adj.get(t["task_id"], []))
+
+    return broken
+
+
+def _inject_build_order_dependencies(
+    tasks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Add implicit build-order dependencies between tasks (REQ-PLI-601).
+
+    When two tasks in the same service directory have no explicit dependency
+    relationship, this function adds an implicit ``depends_on`` edge from
+    higher-priority (later in build order) to lower-priority (earlier in
+    build order) tasks.
+
+    Rules:
+    - Group tasks by service directory (via :func:`_extract_service_dir`).
+    - Within each group, for tasks with no existing ordering relationship,
+      add an edge from the higher-priority task to the lower-priority task.
+    - Do NOT add edges across different service directories.
+    - Do NOT override explicit ``depends_on`` — only add new edges.
+    - Run :func:`_break_task_dependency_cycles` after injection to catch
+      any cycles introduced.
+    """
+    if len(tasks) <= 1:
+        return tasks
+
+    # Build transitive closure of existing dependencies so we don't
+    # add edges that create redundant paths or contradict existing ordering.
+    existing_deps: Dict[str, set] = {}
+    for t in tasks:
+        existing_deps[t["task_id"]] = set(t.get("depends_on", []))
+
+    def _transitive_deps(tid: str, cache: Dict[str, set]) -> set:
+        if tid in cache:
+            return cache[tid]
+        result: set = set()
+        for dep in existing_deps.get(tid, set()):
+            result.add(dep)
+            result.update(_transitive_deps(dep, cache))
+        cache[tid] = result
+        return result
+
+    trans_cache: Dict[str, set] = {}
+    for t in tasks:
+        _transitive_deps(t["task_id"], trans_cache)
+
+    # Group tasks by service directory
+    service_groups: Dict[str, List[Dict[str, Any]]] = {}
+    for t in tasks:
+        ctx = t.get("config", {}).get("context", {})
+        target_files = ctx.get("target_files", [])
+        if not target_files:
+            continue
+        svc_dir = _extract_service_dir(target_files[0])
+        if not svc_dir:
+            continue
+        service_groups.setdefault(svc_dir, []).append(t)
+
+    # Within each service group, add implicit ordering edges
+    edges_added = 0
+    for _svc_dir, group in service_groups.items():
+        if len(group) <= 1:
+            continue
+
+        # Compute priority for each task (use minimum priority across
+        # target files — a task is "ready" as early as its earliest file)
+        task_priorities: List[tuple] = []
+        for t in group:
+            ctx = t.get("config", {}).get("context", {})
+            target_files = ctx.get("target_files", [])
+            prio = min(
+                (_file_type_priority(f) for f in target_files),
+                default=5,
+            )
+            task_priorities.append((prio, t))
+
+        # Sort by priority (lowest = earliest in build order)
+        task_priorities.sort(key=lambda x: x[0])
+
+        # For each pair where later-build-order depends on earlier,
+        # add an edge if no existing relationship
+        for i, (prio_i, task_i) in enumerate(task_priorities):
+            tid_i = task_i["task_id"]
+            for j in range(i + 1, len(task_priorities)):
+                prio_j, task_j = task_priorities[j]
+                tid_j = task_j["task_id"]
+
+                if prio_i == prio_j:
+                    # Same priority tier — no implicit ordering
+                    continue
+
+                # task_j has higher priority number (later in build order)
+                # so it should depend on task_i (earlier in build order)
+                # Skip if there's already a relationship in either direction
+                if tid_i in trans_cache.get(tid_j, set()):
+                    continue  # already depends (directly or transitively)
+                if tid_j in trans_cache.get(tid_i, set()):
+                    continue  # reverse dependency exists — don't contradict
+
+                deps_j = task_j.get("depends_on", [])
+                if tid_i not in deps_j:
+                    deps_j.append(tid_i)
+                    task_j["depends_on"] = deps_j
+                    edges_added += 1
+
+    if edges_added:
+        logger.info(
+            "REQ-PLI-601: injected %d implicit build-order dependency edge(s)",
+            edges_added,
+        )
+        # Run cycle detection to catch any introduced cycles
+        broken = _break_task_dependency_cycles(tasks)
+        if broken:
+            logger.warning(
+                "REQ-PLI-601: broke %d cycle(s) introduced by build-order "
+                "injection: %s",
+                len(broken),
+                ", ".join(f"{a}->{b}" for a, b in broken),
+            )
+
+    return tasks
 
 
 def derive_tasks_from_features(
@@ -547,6 +781,9 @@ def derive_tasks_from_features(
             )
 
     tasks = filter_trivial_test_init_tasks(tasks)
+
+    # --- Stage 6: Cross-language build-order dependency injection (REQ-PLI-601) ---
+    tasks = _inject_build_order_dependencies(tasks)
 
     if not tasks and features:
         logger.warning(

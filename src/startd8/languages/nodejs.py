@@ -176,31 +176,73 @@ class NodeLanguageProfile:
         return _NODE_STDLIB_PREFIXES
 
     def post_generation_cleanup(self, files: List[Path], project_root: Path) -> List[str]:
-        """Run prettier on generated JS files if available (REQ-NODE-300).
+        """Run prettier on generated JS/TS files if available (REQ-PLI-NODE-P1).
 
         Best-effort cosmetic formatting only — does not fix imports.
-        Returns list of formatted file paths.
+        Returns list of warning strings (empty on success).
         """
         import shutil
         import subprocess
 
-        prettier = shutil.which("prettier")
+        warnings: List[str] = []
+        prettier = shutil.which("prettier") or shutil.which("npx")
         if not prettier:
             return []
 
-        formatted: List[str] = []
-        js_exts = (".js", ".mjs", ".cjs")
+        js_exts = (".js", ".mjs", ".cjs", ".ts", ".tsx")
         js_files = [f for f in files if f.suffix.lower() in js_exts]
+        if not js_files:
+            return []
+
         for f in js_files:
             try:
-                subprocess.run(
-                    [prettier, "--write", str(f)],
-                    capture_output=True, timeout=30,
+                cmd = [prettier]
+                if "npx" in prettier:
+                    cmd.extend(["prettier"])
+                cmd.extend(["--write", str(f)])
+                result = subprocess.run(
+                    cmd, capture_output=True, timeout=15,
+                    cwd=str(project_root),
                 )
-                formatted.append(str(f))
-            except (subprocess.TimeoutExpired, OSError):
-                pass  # best-effort — skip on failure
-        return formatted
+                if result.returncode != 0:
+                    stderr = result.stderr
+                    if isinstance(stderr, bytes):
+                        stderr = stderr.decode("utf-8", errors="replace")
+                    warnings.append(f"prettier failed on {f.name}: {stderr[:200]}")
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass  # best-effort
+        return warnings
+
+    def generate_tsconfig(
+        self,
+        *,
+        strict: bool = True,
+        target: str = "ES2022",
+        module: str = "NodeNext",
+        out_dir: str = "./dist",
+    ) -> str:
+        """Generate tsconfig.json content for TypeScript projects (REQ-PLI-NODE-P3)."""
+        import json
+
+        config = {
+            "compilerOptions": {
+                "target": target,
+                "module": module,
+                "moduleResolution": "NodeNext",
+                "strict": strict,
+                "esModuleInterop": True,
+                "skipLibCheck": True,
+                "forceConsistentCasingInFileNames": True,
+                "resolveJsonModule": True,
+                "declaration": True,
+                "declarationMap": True,
+                "sourceMap": True,
+                "outDir": out_dir,
+            },
+            "include": ["src/**/*"],
+            "exclude": ["node_modules", "dist"],
+        }
+        return json.dumps(config, indent=2) + "\n"
 
     def validate_syntax(self, code: str) -> tuple[bool, str]:
         """Validate Node.js syntax via node --check on a temp file."""
@@ -412,23 +454,6 @@ class NodeLanguageProfile:
             "Every package you reference MUST be listed above or be a Node builtin.\n"
             "Do NOT import packages not listed above.\n"
         )
-
-    def extract_import_lines(self, source: str) -> list[str]:
-        """Extract import/require statements from JS/TS source (REQ-PE-400)."""
-        import re
-        imports: list[str] = []
-        # ESM: import ... from "pkg"
-        for m in re.finditer(r'^import\s+.*?from\s+["\'].*?["\'];?', source, re.MULTILINE):
-            imports.append(m.group(0))
-        # CommonJS: const x = require("pkg")
-        for m in re.finditer(r'^(?:const|let|var)\s+.*?=\s*require\(["\'].*?["\']\);?', source, re.MULTILINE):
-            imports.append(m.group(0))
-        return imports
-
-    @property
-    def stub_marker_text(self) -> str:
-        """Node.js stub marker for skeleton fill prompts."""
-        return '`throw new Error("not implemented")`'
 
 
 def detect_module_system(project_root: Path) -> str:

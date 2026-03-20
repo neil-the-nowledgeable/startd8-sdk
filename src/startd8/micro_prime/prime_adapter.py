@@ -766,7 +766,7 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
-                # REQ-PLI-CS-402: Deterministic .csproj generation
+                # REQ-PLI-CS-404: Deterministic .csproj generation
                 csproj_content = self._try_generate_csproj(
                     file_path, file_spec, context,
                 )
@@ -781,6 +781,24 @@ class MicroPrimeCodeGenerator:
                         "Micro Prime wrote .csproj %s (deterministic, %d lines)",
                         file_path,
                         csproj_content.count("\n") + 1,
+                    )
+                    continue
+
+                # REQ-PLI-CS-404: Deterministic .sln generation
+                sln_content = self._try_generate_sln(
+                    file_path, file_spec, context,
+                )
+                if sln_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(sln_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote .sln %s (deterministic, %d lines)",
+                        file_path,
+                        sln_content.count("\n") + 1,
                     )
                     continue
 
@@ -2085,23 +2103,32 @@ class MicroPrimeCodeGenerator:
         file_spec: Any,
         context: Dict[str, Any],
     ) -> Optional[str]:
-        """Try deterministic .csproj generation from seed metadata (REQ-PLI-CS-402).
+        """Try deterministic .csproj generation from seed metadata (REQ-PLI-CS-404).
 
-        Returns .csproj XML content string, or None if the file is not a
-        .csproj or if generation cannot proceed (missing profile/metadata).
+        Returns .csproj content string, or None if the file is not a .csproj
+        or if generation cannot proceed (missing metadata).
         """
         if not file_path.endswith(".csproj"):
             return None
 
         try:
-            from startd8.languages.registry import LanguageRegistry
-
-            LanguageRegistry.discover()
-            profile = LanguageRegistry.get("csharp")
-            if profile is None:
-                return None
-        except (ImportError, AttributeError):
+            from startd8.languages.csharp import CSharpLanguageProfile
+        except ImportError:
             return None
+
+        profile = CSharpLanguageProfile()
+
+        # Extract module path from file_spec or infer from directory
+        module_path = ""
+        if file_spec is not None:
+            meta = getattr(file_spec, "metadata", None) or {}
+            if isinstance(meta, dict):
+                module_path = meta.get("module_path", "")
+
+        if not module_path:
+            parts = Path(file_path).parent.parts
+            if parts:
+                module_path = ".".join(parts)
 
         # Extract dependencies from context
         dependencies: List[str] = []
@@ -2109,7 +2136,7 @@ class MicroPrimeCodeGenerator:
         if isinstance(seed_deps, list):
             dependencies = [str(d) for d in seed_deps if d]
 
-        # Extract C#-specific metadata from context and service_metadata
+        # Extract metadata
         metadata: Dict[str, Any] = {}
         target_framework = context.get("target_framework")
         if target_framework:
@@ -2117,25 +2144,72 @@ class MicroPrimeCodeGenerator:
         sdk_type = context.get("sdk_type")
         if sdk_type:
             metadata["sdk_type"] = sdk_type
+        svc_meta = context.get("service_metadata")
+        if isinstance(svc_meta, dict):
+            if not target_framework:
+                metadata["target_framework"] = svc_meta.get(
+                    "target_framework", "net8.0",
+                )
+            if not sdk_type:
+                metadata["sdk_type"] = svc_meta.get(
+                    "sdk_type", "Microsoft.NET.Sdk.Web",
+                )
 
-        # Check file_spec metadata as fallback
-        if file_spec is not None:
-            meta = getattr(file_spec, "metadata", None) or {}
-            if isinstance(meta, dict):
-                if not target_framework and meta.get("target_framework"):
-                    metadata["target_framework"] = meta["target_framework"]
-                if not sdk_type and meta.get("sdk_type"):
-                    metadata["sdk_type"] = meta["sdk_type"]
-
-        service_name = Path(file_path).parent.name or "service"
+        service_name = Path(file_path).stem or "service"
         content = profile.generate_dependency_file(
             project_root=self._output_dir,
             service_name=service_name,
-            module_path="",
+            module_path=module_path,
             dependencies=dependencies,
             metadata=metadata or None,
         )
         return content
+
+    def _try_generate_sln(
+        self,
+        file_path: str,
+        file_spec: Any,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Generate .sln file deterministically if metadata is available (REQ-PLI-CS-404).
+
+        Scans target_files for .csproj entries and generates a Visual Studio
+        solution file referencing them.  Uses uuid5 seeded from project names
+        for reproducible GUIDs.
+        """
+        if not file_path.endswith(".sln"):
+            return None
+
+        import uuid
+
+        try:
+            from startd8.languages.csharp import CSharpLanguageProfile
+        except ImportError:
+            return None
+
+        profile = CSharpLanguageProfile()
+
+        # Namespace for deterministic GUIDs
+        _SLN_UUID_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+        # Derive project entries from context
+        projects: List[Dict[str, str]] = []
+        target_files = context.get("target_files") or []
+        for tf in target_files:
+            if isinstance(tf, str) and tf.endswith(".csproj"):
+                proj_name = Path(tf).stem
+                proj_guid = "{" + str(uuid.uuid5(_SLN_UUID_NAMESPACE, proj_name)).upper() + "}"
+                projects.append({
+                    "name": proj_name,
+                    "path": tf,
+                    "guid": proj_guid,
+                })
+
+        if not projects:
+            return None  # No .csproj files found
+
+        solution_name = context.get("service_name", Path(file_path).stem)
+        return profile.generate_solution_file(solution_name, projects)
 
     def _generate_requirements_in(
         self,

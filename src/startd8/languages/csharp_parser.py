@@ -284,21 +284,92 @@ _NAMESPACE_RE = re.compile(
     r"^\s*namespace\s+([\w.]+)", re.MULTILINE,
 )
 _TYPE_DECL_RE = re.compile(
-    r"^\s*(?:public|private|protected|internal|static|abstract|sealed|partial|readonly\s+)*"
-    r"\s*(?P<kind>class|interface|struct|record|enum)\s+(?P<name>[A-Za-z_]\w*)",
+    r"^\s*(?P<mods>(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly)\s+)*)"
+    r"(?P<kind>class|interface|struct|record|enum)\s+(?P<name>[A-Za-z_]\w*)",
     re.MULTILINE,
 )
+_METHOD_DECL_RE = re.compile(
+    r"^\s*(?P<mods>(?:(?:public|private|protected|internal|static|async|override|virtual|abstract|sealed|new|extern)\s+)*)"
+    r"(?P<ret>[\w<>\[\],?\s]+?)\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+_PROPERTY_DECL_RE = re.compile(
+    r"^\s*(?P<mods>(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|new)\s+)*)"
+    r"(?P<type>[\w<>\[\]?]+)\s+(?P<name>[A-Za-z_]\w*)\s*\{[^}]*(?:get|set)",
+    re.MULTILINE,
+)
+
+# C# keywords that should NOT be treated as method names
+_CS_NON_METHOD_KEYWORDS = frozenset({
+    "if", "else", "for", "foreach", "while", "do", "switch", "case",
+    "try", "catch", "finally", "lock", "using", "return", "throw",
+    "new", "class", "struct", "interface", "enum", "record",
+    "namespace", "void", "get", "set", "value",
+})
+
+
+def _extract_mods_from_text(mods_text: str) -> List[str]:
+    """Extract modifier words from a regex capture group."""
+    return [m for m in mods_text.split() if m]
+
+
+def _find_parent_class_at(source: str, offset: int, type_elements: List[CSharpElement]) -> Optional[str]:
+    """Determine which type declaration encloses the given offset using brace depth.
+
+    Walks *source* from each type declaration's start, tracking ``{`` / ``}``
+    depth.  If *offset* falls inside the braces of a type, that type is the
+    enclosing parent.
+    """
+    best: Optional[str] = None
+    best_start = -1
+
+    for te in type_elements:
+        if te.start_byte > offset:
+            continue
+        # Walk from the type start and find its opening brace
+        depth = 0
+        in_body = False
+        pos = te.start_byte
+        body_end = len(source)
+        while pos < len(source):
+            ch = source[pos]
+            if ch == '{':
+                depth += 1
+                if not in_body:
+                    in_body = True
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    body_end = pos
+                    break
+            pos += 1
+
+        if in_body and te.start_byte < offset <= body_end:
+            # Prefer the innermost (closest start_byte)
+            if te.start_byte > best_start:
+                best = te.name
+                best_start = te.start_byte
+
+    return best
+
+
 def _parse_with_regex(source: str) -> CSharpParseResult:
-    """Fallback regex-based C# structure extraction."""
+    """Fallback regex-based C# structure extraction.
+
+    Extracts type declarations (class, interface, struct, record, enum),
+    method declarations, and property declarations.  Uses brace-depth
+    tracking to assign ``parent`` for members inside a type body.
+    """
     usings = _USING_RE.findall(source)
     ns_match = _NAMESPACE_RE.search(source)
     namespace = ns_match.group(1) if ns_match else None
 
     elements: List[CSharpElement] = []
-    lines = source.split("\n")
 
+    # Pass 1: type declarations
     for m in _TYPE_DECL_RE.finditer(source):
         line_num = source[:m.start()].count("\n")
+        mods = _extract_mods_from_text(m.group("mods"))
         elements.append(CSharpElement(
             kind=m.group("kind"),
             name=m.group("name"),
@@ -306,7 +377,55 @@ def _parse_with_regex(source: str) -> CSharpParseResult:
             end_byte=m.end(),
             start_line=line_num,
             end_line=line_num,
+            modifiers=mods,
         ))
+
+    type_elements = list(elements)  # snapshot for parent lookup
+
+    # Pass 2: method declarations
+    for m in _METHOD_DECL_RE.finditer(source):
+        name = m.group("name")
+        if name in _CS_NON_METHOD_KEYWORDS:
+            continue
+        ret = m.group("ret").strip()
+        # Skip if ret is a type keyword (these are type decls, not methods)
+        if ret in ("class", "interface", "struct", "record", "enum", "namespace"):
+            continue
+        line_num = source[:m.start()].count("\n")
+        mods = _extract_mods_from_text(m.group("mods"))
+        parent = _find_parent_class_at(source, m.start(), type_elements)
+        elements.append(CSharpElement(
+            kind="method",
+            name=name,
+            start_byte=m.start(),
+            end_byte=m.end(),
+            start_line=line_num,
+            end_line=line_num,
+            modifiers=mods,
+            return_type=ret,
+            parent=parent,
+        ))
+
+    # Pass 3: property declarations
+    for m in _PROPERTY_DECL_RE.finditer(source):
+        name = m.group("name")
+        line_num = source[:m.start()].count("\n")
+        mods = _extract_mods_from_text(m.group("mods"))
+        parent = _find_parent_class_at(source, m.start(), type_elements)
+        elements.append(CSharpElement(
+            kind="property",
+            name=name,
+            start_byte=m.start(),
+            end_byte=m.end(),
+            start_line=line_num,
+            end_line=line_num,
+            modifiers=mods,
+            return_type=m.group("type").strip(),
+            parent=parent,
+        ))
+
+    # Sort by source position for stable ordering
+    elements.sort(key=lambda e: e.start_byte)
 
     return CSharpParseResult(
         has_error=False,  # regex can't detect errors
@@ -370,6 +489,17 @@ def validate_csharp_syntax(source: str) -> tuple[bool, str]:
         return False, "no C# keywords detected"
 
     return True, ""
+
+
+def parse_csharp_source(source: str) -> List[CSharpElement]:
+    """Extract structural elements from C# source code.
+
+    Convenience wrapper around :func:`parse_csharp` that returns just the
+    element list (REQ-PLI-CS-202).  Uses tree-sitter-c-sharp when available,
+    falls back to regex.
+    """
+    result = parse_csharp(source)
+    return result.elements
 
 
 def is_tree_sitter_available() -> bool:
