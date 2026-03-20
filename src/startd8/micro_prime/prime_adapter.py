@@ -654,29 +654,6 @@ class MicroPrimeCodeGenerator:
 
     # ── generate() sub-steps ──────────────────────────────────────────
 
-    def _write_deterministic_file(
-        self,
-        st: _FileProcessingState,
-        file_path: str,
-        content: str,
-        label: str,
-    ) -> None:
-        """Write deterministically-generated content to disk and update state.
-
-        Shared by Dockerfile passthrough, go.mod, build.gradle, and
-        package.json deterministic generators to avoid 4x copy-paste.
-        """
-        output_path = self._output_dir / file_path
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content, encoding="utf-8")
-        st.generated_files.append(output_path)
-        st.written_file_paths.add(file_path)
-        st.effective_file_count += 1
-        logger.info(
-            "Micro Prime wrote %s %s (deterministic, %d lines)",
-            label, file_path, content.count("\n") + 1,
-        )
-
     def _process_target_files(
         self,
         st: _FileProcessingState,
@@ -688,8 +665,6 @@ class MicroPrimeCodeGenerator:
         context: Dict[str, Any],
     ) -> None:
         """Process each target file through the engine, writing results to disk."""
-        from startd8.micro_prime.engine import _is_non_python_file
-
         existing_files: Dict[str, str] = mp_context.existing_file_contents
 
         for file_path in target_files:
@@ -715,31 +690,97 @@ class MicroPrimeCodeGenerator:
             # REQ-MLT-100: Non-Python file-level bypass — must come BEFORE
             # the skeleton/file_spec check so that Dockerfiles, HTML, go.mod,
             # etc. are caught early regardless of whether they have a skeleton.
+            # Without this, non-Python files without skeletons fall into the
+            # generic "no skeleton" bypass and get routed to the LLM fallback
+            # via MicroPrime's bypass path instead of being handled directly.
+            from startd8.micro_prime.engine import _is_non_python_file
+
             if _is_non_python_file(file_path):
-                # Try deterministic generators in order; first match wins.
+                # FR-DFA-003: Dockerfile passthrough (skeleton available)
                 lang = getattr(file_spec, "language", None) if file_spec else None
-                deterministic_content: Optional[str] = None
-                deterministic_label = ""
-
                 if lang == "dockerfile" and skeleton:
-                    deterministic_content = skeleton
-                    deterministic_label = "Dockerfile"
-                else:
-                    # Chain deterministic generators — each returns None if not applicable
-                    for gen_fn, label in (
-                        (self._try_generate_go_mod, "go.mod"),
-                        (self._try_generate_build_gradle, "build.gradle"),
-                        (self._try_generate_package_json, "package.json"),
-                    ):
-                        result = gen_fn(file_path, file_spec, context)
-                        if result is not None:
-                            deterministic_content = result
-                            deterministic_label = label
-                            break
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(skeleton, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote Dockerfile %s (%d lines, passthrough)",
+                        file_path,
+                        skeleton.count("\n") + 1,
+                    )
+                    continue
 
-                if deterministic_content is not None:
-                    self._write_deterministic_file(
-                        st, file_path, deterministic_content, deterministic_label,
+                # REQ-MLT-103: Deterministic go.mod generation
+                go_mod_content = self._try_generate_go_mod(
+                    file_path, file_spec, context,
+                )
+                if go_mod_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(go_mod_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote go.mod %s (deterministic, %d lines)",
+                        file_path,
+                        go_mod_content.count("\n") + 1,
+                    )
+                    continue
+
+                # Deterministic build.gradle generation
+                gradle_content = self._try_generate_build_gradle(
+                    file_path, file_spec, context,
+                )
+                if gradle_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(gradle_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote build.gradle %s (deterministic, %d lines)",
+                        file_path,
+                        gradle_content.count("\n") + 1,
+                    )
+                    continue
+
+                # REQ-NODE-103: Deterministic package.json generation
+                pkg_json_content = self._try_generate_package_json(
+                    file_path, file_spec, context,
+                )
+                if pkg_json_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(pkg_json_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote package.json %s (deterministic, %d lines)",
+                        file_path,
+                        pkg_json_content.count("\n") + 1,
+                    )
+                    continue
+
+                # REQ-PLI-CS-402: Deterministic .csproj generation
+                csproj_content = self._try_generate_csproj(
+                    file_path, file_spec, context,
+                )
+                if csproj_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(csproj_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote .csproj %s (deterministic, %d lines)",
+                        file_path,
+                        csproj_content.count("\n") + 1,
                     )
                     continue
 
@@ -2038,6 +2079,64 @@ class MicroPrimeCodeGenerator:
         )
         return content
 
+    def _try_generate_csproj(
+        self,
+        file_path: str,
+        file_spec: Any,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Try deterministic .csproj generation from seed metadata (REQ-PLI-CS-402).
+
+        Returns .csproj XML content string, or None if the file is not a
+        .csproj or if generation cannot proceed (missing profile/metadata).
+        """
+        if not file_path.endswith(".csproj"):
+            return None
+
+        try:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("csharp")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
+            return None
+
+        # Extract dependencies from context
+        dependencies: List[str] = []
+        seed_deps = context.get("dependencies") or context.get("runtime_dependencies") or []
+        if isinstance(seed_deps, list):
+            dependencies = [str(d) for d in seed_deps if d]
+
+        # Extract C#-specific metadata from context and service_metadata
+        metadata: Dict[str, Any] = {}
+        target_framework = context.get("target_framework")
+        if target_framework:
+            metadata["target_framework"] = target_framework
+        sdk_type = context.get("sdk_type")
+        if sdk_type:
+            metadata["sdk_type"] = sdk_type
+
+        # Check file_spec metadata as fallback
+        if file_spec is not None:
+            meta = getattr(file_spec, "metadata", None) or {}
+            if isinstance(meta, dict):
+                if not target_framework and meta.get("target_framework"):
+                    metadata["target_framework"] = meta["target_framework"]
+                if not sdk_type and meta.get("sdk_type"):
+                    metadata["sdk_type"] = meta["sdk_type"]
+
+        service_name = Path(file_path).parent.name or "service"
+        content = profile.generate_dependency_file(
+            project_root=self._output_dir,
+            service_name=service_name,
+            module_path="",
+            dependencies=dependencies,
+            metadata=metadata or None,
+        )
+        return content
+
     def _generate_requirements_in(
         self,
         requirements_file: str,
@@ -2315,9 +2414,7 @@ class MicroPrimeCodeGenerator:
             temperature=0.2,
         )
 
-        # Pass language hint to prefer correct code block in multi-block responses
-        _lang = getattr(file_spec, "language", None)
-        code = extract_code_from_response(result_text, language=_lang)
+        code = extract_code_from_response(result_text)
         if not code or not code.strip():
             logger.debug(
                 "Cloud agent returned empty code for element %s", element_name,

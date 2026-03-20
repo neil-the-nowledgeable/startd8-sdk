@@ -28,8 +28,6 @@ __all__ = [
     "derive_target_files_from_artifact_ids",
     "derive_tasks_from_features",
     "split_oversized_tasks",
-    "rewrite_split_dependencies",
-    "dedup_tasks_by_title",
     "filter_trivial_test_init_tasks",
     "derive_architectural_context",
     "derive_design_calibration",
@@ -299,6 +297,35 @@ def infer_service_metadata(
         )
         metadata.update(lang_metadata)
 
+    # REQ-PLI-NODE-104: Detect Node.js frameworks from plan text
+    _primary_lang_str = lang_id
+    if _primary_lang_str == "nodejs":
+        detected_frameworks: list[str] = []
+        scan_text = " ".join(
+            getattr(f, "description", "") + " " + " ".join(getattr(f, "api_signatures", []))
+            for f in features
+        ).lower()
+
+        _NODEJS_FRAMEWORK_SIGNALS = {
+            "express": ["express", "app.get(", "app.use(", "app.post(", "middleware", "router"],
+            "grpc": ["grpc", "protobuf", ".proto", "@grpc/", "grpc-js", "proto-loader"],
+            "react": ["react", "jsx", "usestate", "useeffect", "component", "next.js", "nextjs"],
+            "nestjs": ["nestjs", "@nestjs/", "controller", "@injectable", "@module"],
+            "fastify": ["fastify"],
+            "koa": ["koa"],
+        }
+
+        for framework, keywords in _NODEJS_FRAMEWORK_SIGNALS.items():
+            if any(kw in scan_text for kw in keywords):
+                detected_frameworks.append(framework)
+
+        if detected_frameworks:
+            metadata["detected_frameworks"] = detected_frameworks
+            logger.info(
+                "Node.js framework detection: %s",
+                ", ".join(detected_frameworks),
+            )
+
     return metadata
 
 
@@ -511,8 +538,6 @@ def derive_tasks_from_features(
 
     # --- Stage 5: Post-filters (split oversized, remove trivial inits) ---
     tasks = split_oversized_tasks(tasks, max_files=1)
-    tasks = rewrite_split_dependencies(tasks)
-    tasks = dedup_tasks_by_title(tasks)
 
     for t in tasks:
         tid = t.get("task_id", "")
@@ -594,8 +619,6 @@ def split_oversized_tasks(
             file_name = target_file.rsplit("/", 1)[-1]
             sub_title = f"{task['title']} — {file_name}"
 
-            from ..workflows.builtin.plan_ingestion_parsing import _infer_file_role
-            file_role = _infer_file_role(target_file)
             result.append({
                 "task_id": sub_id,
                 "title": sub_title,
@@ -609,7 +632,6 @@ def split_oversized_tasks(
                         f"{parent_desc}\n\n"
                         f"[Auto-split from {parent_id}: implement "
                         f"`{target_file}` only.]"
-                        f"{file_role}"
                     ),
                     "requirements_text": task.get("config", {}).get(
                         "requirements_text", ""
@@ -618,91 +640,6 @@ def split_oversized_tasks(
                 },
             })
 
-    return result
-
-
-def rewrite_split_dependencies(
-    tasks: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Rewrite ``depends_on`` references from split parent IDs to sub-task IDs.
-
-    After :func:`split_oversized_tasks` replaces parent tasks (e.g. ``PI-001``)
-    with lettered sub-tasks (``PI-001a``, ``PI-001b``), downstream tasks that
-    depend on the parent ID are left with phantom references.  This pass builds
-    a ``parent → [sub-task IDs]`` map from ``_split_from`` metadata and rewrites
-    every ``depends_on`` entry that references a now-removed parent.
-    """
-    # Build parent → children map from _split_from metadata
-    parent_to_children: Dict[str, List[str]] = {}
-    live_ids: set[str] = set()
-    for t in tasks:
-        tid = t["task_id"]
-        live_ids.add(tid)
-        split_from = t.get("config", {}).get("context", {}).get("_split_from")
-        if split_from:
-            parent_to_children.setdefault(split_from, []).append(tid)
-
-    if not parent_to_children:
-        return tasks  # no splits occurred
-
-    rewritten = 0
-    for t in tasks:
-        old_deps = t.get("depends_on", [])
-        if not old_deps:
-            continue
-        new_deps: List[str] = []
-        changed = False
-        for dep in old_deps:
-            if dep in live_ids:
-                new_deps.append(dep)
-            elif dep in parent_to_children:
-                new_deps.extend(parent_to_children[dep])
-                changed = True
-            else:
-                new_deps.append(dep)  # keep unknown refs for dangling-dep cleanup
-        if changed:
-            t["depends_on"] = new_deps
-            rewritten += 1
-            logger.info(
-                "Rewrote depends_on for %s: %s → %s",
-                t["task_id"], old_deps, new_deps,
-            )
-
-    if rewritten:
-        logger.info(
-            "Split dependency rewrite: updated %d task(s) across %d parent(s)",
-            rewritten, len(parent_to_children),
-        )
-
-    return tasks
-
-
-def dedup_tasks_by_title(
-    tasks: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Remove duplicate tasks that share the same title.
-
-    LLM plan parsing may emit the same feature/file multiple times.
-    Keeps the first occurrence; drops subsequent duplicates.
-    """
-    seen: Dict[str, str] = {}
-    result: List[Dict[str, Any]] = []
-    for t in tasks:
-        title = t.get("title", "")
-        if title in seen:
-            logger.warning(
-                "Gate 2a-dedup: dropping duplicate task %s "
-                "(same title as %s: %r)",
-                t["task_id"], seen[title], title,
-            )
-            continue
-        seen[title] = t["task_id"]
-        result.append(t)
-    if len(result) < len(tasks):
-        logger.info(
-            "Gate 2a-dedup: removed %d duplicate task(s) (%d → %d)",
-            len(tasks) - len(result), len(tasks), len(result),
-        )
     return result
 
 

@@ -71,7 +71,6 @@ from .plan_ingestion_models import (
 from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
 from ...languages.registry import LanguageRegistry
 from ...logging_config import get_logger
-from ...seeds.derivation import rewrite_split_dependencies
 from ...seeds.utils import is_omitted
 
 # OTel graceful degradation (follows artisan_contractor.py pattern)
@@ -113,7 +112,6 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "spring_boot",
     "csharp_namespace",
     "target_framework",
-    "csharp_project_type",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -322,8 +320,7 @@ _PARSE_LANG_SCHEMA: Dict[str, str] = {
     ),
     "csharp": (
         '      "csharp_namespace": "optional C# root namespace e.g. MyApp.Services",\n'
-        '      "target_framework": "optional .NET target framework e.g. net8.0",\n'
-        '      "csharp_project_type": "optional: webapi, grpc, console, or classlib"'
+        '      "target_framework": "optional .NET target framework e.g. net8.0"'
     ),
 }
 
@@ -343,8 +340,7 @@ _PARSE_LANG_GUIDANCE: Dict[str, str] = {
     ),
     "csharp": (
         'csharp_namespace: (C# projects only) the root namespace, inferred from target file paths (e.g. "src/MyApp/Services/OrderService.cs" → "MyApp.Services"). Omit or empty for non-C# projects.\n'
-        'target_framework: (C# projects only) .NET target framework from the plan. Default "net8.0". Omit or empty for non-C# projects.\n'
-        'csharp_project_type: (C# projects only) "webapi", "grpc", "console", or "classlib". Default "webapi". Omit for non-C# projects.'
+        'target_framework: (C# projects only) .NET target framework from the plan. Default "net8.0". Omit or empty for non-C# projects.'
     ),
 }
 
@@ -517,7 +513,7 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "mode": "create or edit",
       "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
       "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
-      "api_signatures": ["see api_signatures guidance below for language-specific syntax"],
+      "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
       "negative_scope": ["things explicitly excluded from this feature"],
@@ -543,13 +539,7 @@ Rules for target_files:
 mode: "create" for new files (plan says implement, add, new, create) or "edit" for modifying existing files (plan says update, modify, change, refactor, fix). Default to "create" if unclear.
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
-api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the syntax of the target language:
-  Python: "def get_ads(request: AdRequest) -> AdResponse", "class AdService(BaseService)", "def AdService.get_ads(request: AdRequest) -> AdResponse"
-  Go: "func GetQuote(items []*pb.CartItem) *pb.Money", "func (s *ShippingService) ShipOrder(ctx context.Context, req *pb.ShipOrderReq) (string, error)", "type ShippingService struct"
-  Java: "public class AdService extends AdServiceGrpc.AdServiceImplBase", "public void getAds(AdRequest request, StreamObserver<AdResponse> responseObserver)"
-  Node.js: "function chargeServiceHandlers(charge)", "async function main()", "class CurrencyConverter", "const convert = (from, to, amount) => Money"
-  C#: "public class CartService : CartServiceBase", "public override async Task<Empty> AddItem(AddItemRequest request, ServerCallContext context)", "public interface ICartStore"
-For gRPC services, model RPC handlers as methods of their Servicer class (e.g. Python: "def EmailService.SendOrderConfirmation(request, context)", Go: "func (s *EmailService) SendOrderConfirmation(ctx context.Context, req *pb.SendRequest) (*pb.SendResponse, error)"). Include ALL signatures mentioned for the feature.
+api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
@@ -746,7 +736,6 @@ from .plan_ingestion_parsing import (  # noqa: F401
     _parse_context_files,
     _parse_file_list,
     _safe_json_load,
-    _infer_file_role,
 )
 from .plan_ingestion_contracts import (  # noqa: F401
     _extract_implementation_contracts,
@@ -952,6 +941,40 @@ def _infer_service_metadata(
             runtime_dependencies=runtime_deps,
         )
         metadata.update(lang_metadata)
+
+    # REQ-PLI-NODE-104: Detect Node.js frameworks from plan text
+    primary_language = metadata.get("primary_language", "")
+    _primary_lang_str = (
+        primary_language if isinstance(primary_language, str)
+        else (primary_language[0] if primary_language else "")
+    )
+    if _primary_lang_str == "nodejs":
+        detected_frameworks: list[str] = []
+        # Scan plan text and feature descriptions for framework keywords
+        scan_text = " ".join(
+            getattr(f, "description", "") + " " + " ".join(getattr(f, "api_signatures", []))
+            for f in features
+        ).lower()
+
+        _NODEJS_FRAMEWORK_SIGNALS = {
+            "express": ["express", "app.get(", "app.use(", "app.post(", "middleware", "router"],
+            "grpc": ["grpc", "protobuf", ".proto", "@grpc/", "grpc-js", "proto-loader"],
+            "react": ["react", "jsx", "usestate", "useeffect", "component", "next.js", "nextjs"],
+            "nestjs": ["nestjs", "@nestjs/", "controller", "@injectable", "@module"],
+            "fastify": ["fastify"],
+            "koa": ["koa"],
+        }
+
+        for framework, keywords in _NODEJS_FRAMEWORK_SIGNALS.items():
+            if any(kw in scan_text for kw in keywords):
+                detected_frameworks.append(framework)
+
+        if detected_frameworks:
+            metadata["detected_frameworks"] = detected_frameworks
+            logger.info(
+                "Node.js framework detection: %s",
+                ", ".join(detected_frameworks),
+            )
 
     return metadata
 
@@ -1497,7 +1520,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 node_version=f.get("node_version", ""),
                 csharp_namespace=f.get("csharp_namespace", ""),
                 target_framework=f.get("target_framework", ""),
-                csharp_project_type=f.get("csharp_project_type", ""),
             ))
 
         parsed = ParsedPlan(
@@ -2683,32 +2705,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             tasks, max_files=1,
         )
 
-        # ── Gate 2a-post: rewrite depends_on from parent → sub-task IDs ──
-        tasks = rewrite_split_dependencies(tasks)
-
-        # ── Gate 2a-dedup: remove duplicate tasks by title ────────────
-        # LLM may emit the same feature/file multiple times.  Keep first
-        # occurrence; drop duplicates with a warning.
-        seen_titles: Dict[str, str] = {}
-        deduped: List[Dict[str, Any]] = []
-        for t in tasks:
-            title = t.get("title", "")
-            if title in seen_titles:
-                logger.warning(
-                    "Gate 2a-dedup: dropping duplicate task %s "
-                    "(same title as %s: %r)",
-                    t["task_id"], seen_titles[title], title,
-                )
-                continue
-            seen_titles[title] = t["task_id"]
-            deduped.append(t)
-        if len(deduped) < len(tasks):
-            logger.info(
-                "Gate 2a-dedup: removed %d duplicate task(s) (%d → %d)",
-                len(tasks) - len(deduped), len(tasks), len(deduped),
-            )
-        tasks = deduped
-
         # ── Validate task IDs against safe pattern ──────────────────
         for t in tasks:
             tid = t.get("task_id", "")
@@ -2857,7 +2853,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                     file_name = file_group[0].rsplit("/", 1)[-1]
                     sub_title = f"{task['title']} — {file_name}"
                     desc_detail = f"implement `{file_group[0]}` only."
-                    file_role = _infer_file_role(file_group[0])
                 else:
                     sub_title = (
                         f"{task['title']} — {len(file_group)} files "
@@ -2870,7 +2865,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                         f"implement {len(file_group)} files: "
                         f"{file_list}."
                     )
-                    file_role = ""
 
                 result.append({
                     "task_id": sub_id,
@@ -2886,7 +2880,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                         "task_description": (
                             f"{parent_desc}\n\n"
                             f"[Auto-split from {parent_id}: {desc_detail}]"
-                            f"{file_role}"
                         ),
                         "requirements_text": task.get("config", {}).get("requirements_text", ""),
                         "context": sub_ctx,

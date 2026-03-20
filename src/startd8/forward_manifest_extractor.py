@@ -249,33 +249,99 @@ def _extract_function_name(sig_str: str) -> Optional[str]:
     return cleaned[:paren_idx].strip()
 
 
-def _parse_non_python_signatures(
-    lang: str,
-    api_signatures: list[str],
-    target_file: str,
-) -> list[ForwardElementSpec]:
-    """REQ-EE-100: Dispatch to language-specific signature parsers.
+# ── REQ-EE-200: Go/Java source element converters ────────────────────────
 
-    Returns ForwardElementSpec objects for Go, Java, Node.js, and C# signatures.
-    Returns empty list for unsupported languages (Dockerfile, YAML, etc.).
+
+def _go_elements_to_specs(elements: list, file_path: str) -> list[ForwardElementSpec]:
+    """Convert GoElement objects to ForwardElementSpec for MicroPrime.
+
+    Maps Go structural elements (function, method, struct, interface) to
+    ForwardElementSpec with ``decomposition_source="source-go-parser"``.
+    Constants, variables, and type aliases are skipped (not useful for
+    element-level generation).
     """
-    if lang == "go":
-        from startd8.utils.go_signature_parser import parse_go_signatures
+    specs: list[ForwardElementSpec] = []
+    for el in elements:
+        go_kind = getattr(el, "kind", "")
+        name = getattr(el, "name", "")
+        if not name:
+            continue
 
-        return parse_go_signatures(api_signatures, target_file)
-    elif lang == "java":
-        from startd8.utils.java_signature_parser import parse_java_signatures
+        if go_kind in ("function", "method"):
+            kind = ElementKind.METHOD if go_kind == "method" else ElementKind.FUNCTION
+            ret = getattr(el, "return_type", None)
+            specs.append(ForwardElementSpec(
+                kind=kind,
+                name=name,
+                parent_class=getattr(el, "parent_type", None),
+                signature=Signature(params=[], return_annotation=ret),
+                decomposition_source="source-go-parser",
+            ))
+        elif go_kind == "class":
+            is_iface = getattr(el, "is_interface", False)
+            bases = list(getattr(el, "bases", []))
+            specs.append(ForwardElementSpec(
+                kind=ElementKind.CLASS,
+                name=name,
+                bases=bases,
+                is_abstract=is_iface,
+                decomposition_source="source-go-parser",
+            ))
+        # Skip constant, variable, type_alias — not useful for element generation
 
-        return parse_java_signatures(api_signatures, target_file)
-    elif lang == "nodejs":
-        from startd8.utils.nodejs_signature_parser import parse_nodejs_signatures
+    return specs
 
-        return parse_nodejs_signatures(api_signatures, target_file)
-    elif lang == "csharp":
-        from startd8.utils.csharp_signature_parser import parse_csharp_signatures
 
-        return parse_csharp_signatures(api_signatures, target_file)
-    return []
+def _java_elements_to_specs(elements: list, file_path: str) -> list[ForwardElementSpec]:
+    """Convert JavaElement objects to ForwardElementSpec for MicroPrime.
+
+    Maps Java structural elements (class, interface, enum, method, constructor)
+    to ForwardElementSpec with ``decomposition_source="source-java-parser"``.
+    Fields and constants are skipped.
+    """
+    specs: list[ForwardElementSpec] = []
+    for el in elements:
+        kind_str = getattr(el, "kind", "")
+        name = getattr(el, "name", "")
+        if not name:
+            continue
+
+        if kind_str in ("class", "interface", "enum", "record"):
+            bases: list[str] = []
+            extends_val = getattr(el, "extends", None)
+            if extends_val:
+                if isinstance(extends_val, str):
+                    bases.append(extends_val)
+                elif isinstance(extends_val, list):
+                    bases.extend(extends_val)
+            implements_val = getattr(el, "implements", None)
+            if implements_val:
+                if isinstance(implements_val, list):
+                    bases.extend(implements_val)
+                elif isinstance(implements_val, str):
+                    bases.append(implements_val)
+            specs.append(ForwardElementSpec(
+                kind=ElementKind.CLASS,
+                name=name,
+                bases=bases,
+                is_abstract=kind_str == "interface",
+                decomposition_source="source-java-parser",
+            ))
+        elif kind_str in ("method", "constructor"):
+            ret = getattr(el, "return_type", None)
+            modifiers = getattr(el, "modifiers", [])
+            specs.append(ForwardElementSpec(
+                kind=ElementKind.METHOD,
+                name=name,
+                parent_class=getattr(el, "parent", None),
+                signature=Signature(params=[], return_annotation=ret),
+                is_static="static" in modifiers,
+                is_abstract="abstract" in modifiers,
+                decomposition_source="source-java-parser",
+            ))
+        # Skip field, constant — not useful for element generation
+
+    return specs
 
 
 def _parse_class_signature(
@@ -647,38 +713,19 @@ class DeterministicExtractor:
         file_elements: dict[str, list[ForwardElementSpec]],
     ) -> list[InterfaceContract]:
         """Parse api_signatures into FUNCTION_NAME contracts + ForwardElementSpecs."""
-        # REQ-EE-100: dispatch to language-specific parsers for non-Python files
+        # Skip signature extraction for non-Python files (Dockerfile, .in, .yaml, etc.)
         if feature.target_files:
             ext = Path(feature.target_files[0]).suffix.lower()
             # Files with no extension (e.g. "Dockerfile") get ext=""
             if ext not in self._PYTHON_EXTENSIONS:
                 if feature.api_signatures:
-                    from startd8.micro_prime.lang_detect import detect_language
-
-                    lang = detect_language(feature.target_files[0])
-                    specs = _parse_non_python_signatures(
-                        lang, feature.api_signatures, feature.target_files[0],
+                    logger.debug(
+                        "Feature %s targets non-Python file %s; "
+                        "skipping %d api_signature(s)",
+                        feature.feature_id,
+                        feature.target_files[0],
+                        len(feature.api_signatures),
                     )
-                    if specs:
-                        for tf in feature.target_files:
-                            file_elements.setdefault(tf, []).extend(specs)
-                        logger.info(
-                            "Feature %s: parsed %d element(s) from %d "
-                            "api_signature(s) (lang=%s)",
-                            feature.feature_id,
-                            len(specs),
-                            len(feature.api_signatures),
-                            lang,
-                        )
-                    else:
-                        logger.debug(
-                            "Feature %s targets %s file %s; "
-                            "no elements parsed from %d api_signature(s)",
-                            feature.feature_id,
-                            lang,
-                            feature.target_files[0],
-                            len(feature.api_signatures),
-                        )
                 return []
 
         contracts: list[InterfaceContract] = []
@@ -1414,10 +1461,18 @@ class SourceReconciler:
     project_root: Path
     encoding: str = "utf-8"
 
-    def reconcile(self, features: list[ParsedFeature]) -> list[InterfaceContract]:
+    def reconcile(
+        self,
+        features: list[ParsedFeature],
+        file_elements: Optional[dict[str, list[ForwardElementSpec]]] = None,
+    ) -> list[InterfaceContract]:
         """Scan project source files and return source-derived contracts.
 
-        Supports Python (AST-based) and Go (regex-based) files.
+        Supports Python (AST-based), Go (regex-based), and Java files.
+
+        When *file_elements* is provided, Go/Java reconciliation also populates
+        element specs (REQ-EE-200).  Source-derived elements take precedence
+        over ``parse-llm`` elements for the same file.
         """
         if not self.project_root.is_dir():
             logger.warning("project_root does not exist: %s", self.project_root)
@@ -1462,11 +1517,13 @@ class SourceReconciler:
                     ))
                 elif src_file.suffix == ".go":
                     contracts.extend(self._reconcile_go_file(
-                        src_file, relpath, feature_ids, seen_ids
+                        src_file, relpath, feature_ids, seen_ids,
+                        file_elements=file_elements,
                     ))
                 elif src_file.suffix == ".java":
                     contracts.extend(self._reconcile_java_file(
-                        src_file, relpath, feature_ids, seen_ids
+                        src_file, relpath, feature_ids, seen_ids,
+                        file_elements=file_elements,
                     ))
 
         return contracts
@@ -1555,6 +1612,7 @@ class SourceReconciler:
         relpath: str,
         feature_ids: list[str],
         seen_ids: set[str],
+        file_elements: Optional[dict[str, list[ForwardElementSpec]]] = None,
     ) -> list[InterfaceContract]:
         """Reconcile a single Go file using regex-based parsing."""
         try:
@@ -1614,6 +1672,19 @@ class SourceReconciler:
                         applicable_task_ids=feature_ids,
                     ))
 
+        # REQ-EE-200: Populate file_elements from Go parser output
+        if file_elements is not None:
+            go_specs = _go_elements_to_specs(elements, relpath)
+            if go_specs:
+                # Source elements take precedence over parse-llm elements
+                existing = file_elements.get(relpath, [])
+                non_parse = [e for e in existing if e.decomposition_source != "parse-llm"]
+                file_elements[relpath] = non_parse + go_specs
+                logger.info(
+                    "REQ-EE-200: Extracted %d Go element specs from %s",
+                    len(go_specs), relpath,
+                )
+
         return contracts
 
     def _reconcile_java_file(
@@ -1622,6 +1693,7 @@ class SourceReconciler:
         relpath: str,
         feature_ids: list[str],
         seen_ids: set[str],
+        file_elements: Optional[dict[str, list[ForwardElementSpec]]] = None,
     ) -> list[InterfaceContract]:
         """Reconcile a single Java file using javalang-based parsing."""
         try:
@@ -1682,6 +1754,19 @@ class SourceReconciler:
                         source_reference="source-java-parser",
                         applicable_task_ids=feature_ids,
                     ))
+
+        # REQ-EE-200: Populate file_elements from Java parser output
+        if file_elements is not None:
+            java_specs = _java_elements_to_specs(elements, relpath)
+            if java_specs:
+                # Source elements take precedence over parse-llm elements
+                existing = file_elements.get(relpath, [])
+                non_parse = [e for e in existing if e.decomposition_source != "parse-llm"]
+                file_elements[relpath] = non_parse + java_specs
+                logger.info(
+                    "REQ-EE-200: Extracted %d Java element specs from %s",
+                    len(java_specs), relpath,
+                )
 
         return contracts
 
@@ -1884,7 +1969,7 @@ def extract_forward_contracts(
     src_contracts = []
     if project_root:
         src_reconciler = SourceReconciler(project_root)
-        src_contracts = src_reconciler.reconcile(features)
+        src_contracts = src_reconciler.reconcile(features, file_elements=file_elements)
 
     # Merge all contract lists
     merger = ManifestMerger()

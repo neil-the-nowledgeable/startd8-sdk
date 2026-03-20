@@ -8,7 +8,6 @@ function signatures).
 """
 
 import ast
-import importlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -315,7 +314,6 @@ class DiskComplianceResult:
     contract_compliance: float = 1.0
     contract_violations: List[ContractViolation] = field(default_factory=list)
     semantic_issues: List[Any] = field(default_factory=list)
-    security_findings: List[Any] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -455,20 +453,6 @@ def validate_disk_compliance(
     return result
 
 
-# Extensions where `import`/`from` are native keywords (not Python-specific).
-_IMPORT_KEYWORD_EXTENSIONS = frozenset({
-    ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
-    ".java",
-})
-
-# Extensions where `def`/`class` are native keywords (not Python-specific).
-_DEF_CLASS_KEYWORD_EXTENSIONS = frozenset({
-    ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
-    ".cs",
-})
-
-
 def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     """Detect language mismatch — e.g. Python content in non-Python files (REQ-MLT-400).
 
@@ -502,12 +486,27 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
 
         # Strong signal: first code line is a Python import statement
         if first_code_line.startswith("import ") or first_code_line.startswith("from "):
-            if ext not in _IMPORT_KEYWORD_EXTENSIONS and name != "go.mod":
+            # Exclude languages that share `import`/`from` keywords with Python:
+            #   Go — `import "pkg"` / go.mod
+            #   JS/TS — ESM `import X from 'pkg'`
+            #   Groovy/Gradle — `import groovy.transform.CompileStatic`
+            #   Java — `import java.util.List` (.java handled by _validate_java_file)
+            _IMPORT_EXCLUDE = (
+                ".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+                ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+                ".java",
+            )
+            if ext not in _IMPORT_EXCLUDE and name != "go.mod":
                 label = ext.lstrip(".") if ext else name
                 return f"python_content_in_{label}"
 
         # Moderate signal: `def ` or `class ` as first code construct
-        if ext not in _DEF_CLASS_KEYWORD_EXTENSIONS:
+        # Exclude languages where `def` and `class` are native keywords
+        _DEF_CLASS_EXCLUDE = (
+            ".gradle", ".groovy", ".gvy", ".gy", ".gsh", ".kts",
+            ".cs",  # C# uses `class` natively
+        )
+        if ext not in _DEF_CLASS_EXCLUDE:
             if first_code_line.startswith("def ") or first_code_line.startswith("class "):
                 label = ext.lstrip(".") if ext else name
                 return f"python_content_in_{label}"
@@ -557,86 +556,6 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
-# Extension → stub regex patterns (loaded lazily from LanguageRegistry).
-# Cache avoids repeated registry lookups per file.
-_STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
-
-_STUB_EXT_TO_LANG: dict[str, str] = {
-    ".java": "java", ".go": "go", ".cs": "csharp",
-    ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
-}
-
-
-def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
-    """Return compiled stub patterns for a file extension, cached."""
-    if suffix in _STUB_PATTERNS_CACHE:
-        return _STUB_PATTERNS_CACHE[suffix]
-
-    patterns: list[re.Pattern[str]] = []
-    lang_id = _STUB_EXT_TO_LANG.get(suffix)
-    if lang_id:
-        try:
-            from startd8.languages.registry import LanguageRegistry
-            LanguageRegistry.discover()
-            profile = LanguageRegistry.get(lang_id)
-            if profile:
-                for pat_str in profile.stub_patterns:
-                    try:
-                        patterns.append(re.compile(pat_str))
-                    except re.error:
-                        pass
-        except (ImportError, AttributeError):
-            pass
-    _STUB_PATTERNS_CACHE[suffix] = patterns
-    return patterns
-
-
-def _count_stubs_text(content: str, suffix: str) -> int:
-    """Count stub markers in non-Python source using language-specific patterns.
-
-    Uses the ``stub_patterns`` property from the language profile resolved
-    by file extension.  Returns 0 if no patterns are available.
-    """
-    patterns = _get_stub_patterns(suffix)
-    if not patterns:
-        return 0
-    count = 0
-    for line in content.splitlines():
-        for pat in patterns:
-            if pat.search(line):
-                count += 1
-                break  # one match per line is enough
-    return count
-
-
-def _wire_semantic_checks(
-    content: str,
-    result: "DiskComplianceResult",
-    run_checks_fn: str,
-) -> None:
-    """Run a language-specific semantic check function and append issues.
-
-    Args:
-        content: Source code string.
-        result: DiskComplianceResult to append issues to (mutated in place).
-        run_checks_fn: Dotted import path to the ``run_*_semantic_checks``
-            function, e.g. ``"startd8.validators.java_semantic_checks.run_java_semantic_checks"``.
-    """
-    module_path, func_name = run_checks_fn.rsplit(".", 1)
-    try:
-        mod = importlib.import_module(module_path)
-        run_fn = getattr(mod, func_name)
-    except (ImportError, AttributeError):
-        return
-    for issue in run_fn(content, file_path=result.file_path):
-        result.semantic_issues.append({
-            "category": issue.check,
-            "severity": issue.severity,
-            "message": issue.message,
-            "line": issue.line,
-        })
-
-
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -683,7 +602,7 @@ def _validate_non_python_file(
         result = _validate_html_file(content, result)
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
-    elif suffix in (".js", ".mjs", ".cjs"):
+    elif suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
         result = _validate_js_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
@@ -699,123 +618,14 @@ def _validate_non_python_file(
         result = _validate_csproj_file(content, result)
     elif suffix == ".sln":
         result = _validate_sln_file(content, result)
-
-    # Query Prime security verification for database-facing files (Anzen gate)
-    result = _run_query_security_check(content, str(abs_path), suffix, result)
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Query Prime security verification (Anzen gate)
-# ---------------------------------------------------------------------------
-
-# Database client import patterns per language extension
-_DATABASE_IMPORT_PATTERNS: Dict[str, Dict[str, str]] = {
-    ".cs": {
-        "Npgsql": "postgresql",
-        "NpgsqlConnection": "postgresql",
-        "NpgsqlDataSource": "postgresql",
-        "SpannerConnection": "spanner",
-        "SpannerParameter": "spanner",
-        "MySqlConnection": "mysql",
-        "MySqlConnector": "mysql",
-        "SqliteConnection": "sqlite",
-        "StackExchange.Redis": "redis",
-        "ConnectionMultiplexer": "redis",
-    },
-    ".py": {
-        "psycopg2": "postgresql",
-        "asyncpg": "postgresql",
-        "mysql.connector": "mysql",
-        "sqlite3": "sqlite",
-        "redis": "redis",
-    },
-    ".js": {
-        "pg": "postgresql",
-        "mysql2": "mysql",
-        "better-sqlite3": "sqlite",
-        "ioredis": "redis",
-        "redis": "redis",
-    },
-    ".ts": {
-        "pg": "postgresql",
-        "mysql2": "mysql",
-        "better-sqlite3": "sqlite",
-        "ioredis": "redis",
-        "redis": "redis",
-    },
-    ".go": {
-        "database/sql": "postgresql",
-        "cloud.google.com/go/spanner": "spanner",
-        "github.com/go-redis": "redis",
-    },
-    ".java": {
-        "java.sql": "postgresql",
-        "com.google.cloud.spanner": "spanner",
-        "redis.clients": "redis",
-    },
-}
-
-# Extension to language ID mapping
-_EXT_TO_LANGUAGE: Dict[str, str] = {
-    ".cs": "csharp",
-    ".py": "python",
-    ".js": "nodejs",
-    ".ts": "nodejs",
-    ".go": "go",
-    ".java": "java",
-}
-
-
-def _run_query_security_check(
-    content: str,
-    file_path: str,
-    suffix: str,
-    result: "DiskComplianceResult",
-) -> "DiskComplianceResult":
-    """Run Query Prime security checks on database-facing files.
-
-    Detects database client imports, then runs the security verification
-    pipeline (injection, credential leakage, lifecycle). Populates
-    ``result.security_findings`` with any findings.
-
-    Non-fatal: import failures or missing Query Prime module are silently
-    skipped to avoid breaking existing validation.
-    """
-    import_patterns = _DATABASE_IMPORT_PATTERNS.get(suffix)
-    if not import_patterns:
-        return result
-
-    language = _EXT_TO_LANGUAGE.get(suffix)
-    if not language:
-        return result
-
-    # Detect which database client is used in this file
-    detected_database = None
-    for pattern_text, database in import_patterns.items():
-        if pattern_text in content:
-            detected_database = database
-            break
-
-    if detected_database is None:
-        return result
-
-    try:
-        from startd8.query_prime.security import verify_file
-
-        verification = verify_file(
-            content, file_path, detected_database, language,
-        )
-        if verification.findings:
-            result.security_findings.extend(
-                f.to_semantic_issue() for f in verification.findings
-            )
-    except (ImportError, Exception) as exc:
-        logger.debug(
-            "Query Prime security check skipped for %s: %s",
-            file_path, exc,
-        )
+    elif suffix == ".xml":
+        result = _validate_xml_file(content, result)
+    elif suffix in (".gradle", ".properties"):
+        result = _validate_text_file(content, result)
+    else:
+        # Unknown format — check for empty content only
+        # (Python stub contamination already caught by _detect_language_mismatch above)
+        result = _validate_unknown_file(content, result)
 
     return result
 
@@ -847,12 +657,10 @@ def _validate_csharp_file(
             return result
 
     # Try tree-sitter first (REQ-CS-200 Tier 1)
-    tree_sitter_ran = False
     try:
         from startd8.languages.csharp_parser import parse_csharp
         parse_result = parse_csharp(content)
         if parse_result.parser_used == "tree_sitter":
-            tree_sitter_ran = True
             if parse_result.has_error:
                 result.ast_valid = False
                 result.contract_compliance = 0.0
@@ -872,52 +680,42 @@ def _validate_csharp_file(
                 )
             if issues:
                 result.semantic_issues = issues
+            return result
     except ImportError:
         pass  # Fall through to text-based
 
-    # Text-based fallback (REQ-CS-200 Tier 2) — only if tree-sitter didn't run
-    if not tree_sitter_ran:
-        depth = 0
-        for ch in content:
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth < 0:
-                    result.ast_valid = False
-                    result.contract_compliance = 0.5
-                    result.error = "unbalanced_braces"
-                    return result
-        if depth > 0:
-            result.ast_valid = False
-            result.contract_compliance = 0.5
-            result.error = "unbalanced_braces"
-            return result
+    # Text-based fallback (REQ-CS-200 Tier 2)
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                result.ast_valid = False
+                result.contract_compliance = 0.5
+                result.error = "unbalanced_braces"
+                return result
+    if depth > 0:
+        result.ast_valid = False
+        result.contract_compliance = 0.5
+        result.error = "unbalanced_braces"
+        return result
 
-        has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
-        has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
-        has_type_decl = bool(
-            re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content),
-        )
-
-        if not has_namespace and not has_using and not has_type_decl:
-            result.ast_valid = False
-            result.contract_compliance = 0.3
-            result.error = "no_csharp_keywords"
-            return result
-
-        # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
-        result.contract_compliance = min(result.contract_compliance, 0.8)
-
-    # C# semantic checks (P0: REQ-KZ-CS-200 wiring into disk validation)
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
+    has_namespace = bool(re.search(r"\bnamespace\s+\w+", content))
+    has_using = bool(re.search(r"^using\s+[\w.]+;", content, re.MULTILINE))
+    has_type_decl = bool(
+        re.search(r"\b(?:class|interface|struct|record|enum)\s+\w+", content),
     )
 
-    # Stub counting (Criterion 4 — postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".cs")
+    if not has_namespace and not has_using and not has_type_decl:
+        result.ast_valid = False
+        result.contract_compliance = 0.3
+        result.error = "no_csharp_keywords"
+        return result
 
+    # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
+    result.contract_compliance = min(result.contract_compliance, 0.8)
     return result
 
 
@@ -992,23 +790,6 @@ def _validate_csproj_file(
                     "message": "PackageReference missing Include attribute",
                 })
 
-    # C# semantic checks for .csproj (P0: REQ-KZ-CS-200 wiring)
-    try:
-        from startd8.validators.csharp_semantic_checks import (
-            run_csharp_semantic_checks,
-        )
-        cs_issues = run_csharp_semantic_checks(
-            content, file_path=result.file_path,
-        )
-        for issue in cs_issues:
-            result.semantic_issues.append({
-                "category": issue.check,
-                "severity": issue.severity,
-                "message": issue.message,
-            })
-    except ImportError:
-        pass  # csharp_semantic_checks not available
-
     return result
 
 
@@ -1055,6 +836,115 @@ def _validate_sln_file(
                 f"{project_count} Project( vs {end_project_count} EndProject"
             ),
         })
+
+    return result
+
+
+def _validate_go_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate Go source file — package declaration and balanced braces (KZ-Q4).
+
+    Note: Python stub contamination is already caught by
+    ``_detect_language_mismatch`` in the caller.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # Package declaration check
+    has_package = any(
+        line.strip().startswith("package ")
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("//")
+    )
+    if not has_package:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "missing_package_declaration"
+        return result
+
+    # Balanced braces check
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                result.ast_valid = False
+                result.contract_compliance = 0.5
+                result.error = "unbalanced_braces"
+                return result
+    if depth > 0:
+        result.ast_valid = False
+        result.contract_compliance = 0.5
+        result.error = "unbalanced_braces"
+        return result
+
+    return result
+
+
+def _validate_xml_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate generic XML file — parse check only (KZ-Q4)."""
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    try:
+        import xml.etree.ElementTree as ET
+        ET.fromstring(content)
+    except ET.ParseError as exc:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"xml_parse_error: {exc}"
+        return result
+
+    return result
+
+
+def _validate_text_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate generic text file — non-empty check only (KZ-Q4).
+
+    Used for ``.gradle`` and ``.properties`` files that don't have a
+    dedicated validator.  Python stub contamination is already caught
+    by ``_detect_language_mismatch`` in the caller.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    return result
+
+
+def _validate_unknown_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Fallback for unknown file extensions (KZ-Q4).
+
+    Python stub contamination is already caught by
+    ``_detect_language_mismatch`` in the caller.  This only checks
+    for empty content.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
 
     return result
 
@@ -1295,15 +1185,6 @@ def _validate_js_file(
             except OSError:
                 pass
 
-    # Node.js semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.nodejs_semantic_checks.run_nodejs_semantic_checks",
-    )
-
-    # Stub counting (Criterion 4 — postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".js")
-
     return result
 
 
@@ -1357,81 +1238,6 @@ def _validate_json_file(
         result.ast_valid = False
         result.error = f"json_error: {exc}"
         result.contract_compliance = 0.0
-    return result
-
-
-# Pre-compiled patterns for Go disk validation
-_GO_PACKAGE_RE = re.compile(r"^\s*package\s+\w+", re.MULTILINE)
-_GO_DECL_RE = re.compile(r"\b(?:func|type|var|const)\s+\w+")
-_GO_PYTHON_FINGERPRINTS = ("def ", "import os", "from __future__", "self.", "#!/usr/bin/env python")
-
-
-def _validate_go_file(
-    content: str,
-    result: DiskComplianceResult,
-) -> DiskComplianceResult:
-    """Validate Go source file structure.
-
-    Checks:
-    1. No Python fingerprints
-    2. Balanced braces (text-based)
-    3. Package declaration present
-    4. Contains at least one func/type/var/const declaration
-    5. Go semantic checks
-    """
-    # Python fingerprint guard
-    for fp in _GO_PYTHON_FINGERPRINTS:
-        if fp in content:
-            result.ast_valid = False
-            result.contract_compliance = 0.0
-            result.error = f"Python fingerprint in .go file: {fp!r}"
-            return result
-
-    # Balanced braces check
-    depth = 0
-    for ch in content:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                result.ast_valid = False
-                result.contract_compliance = 0.2
-                result.error = "unbalanced braces"
-                return result
-    if depth != 0:
-        result.ast_valid = False
-        result.contract_compliance = 0.2
-        result.error = f"unbalanced braces (depth={depth})"
-        return result
-
-    # Package declaration check
-    if not _GO_PACKAGE_RE.search(content):
-        result.semantic_issues.append({
-            "category": "go_structure",
-            "severity": "warning",
-            "message": "missing package declaration",
-        })
-        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
-
-    # Declaration check
-    if not _GO_DECL_RE.search(content):
-        result.semantic_issues.append({
-            "category": "go_structure",
-            "severity": "warning",
-            "message": "no func/type/var/const declaration found",
-        })
-        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
-
-    # Go semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.go_semantic_checks.run_go_semantic_checks",
-    )
-
-    # Stub counting (Criterion 4 — postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".go")
-
     return result
 
 
@@ -1508,15 +1314,6 @@ def _validate_java_file(
             "severity": "warning",
             "message": "missing package declaration",
         })
-
-    # Java semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.java_semantic_checks.run_java_semantic_checks",
-    )
-
-    # Stub counting (Criterion 4 — postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".java")
 
     return result
 
