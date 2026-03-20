@@ -1603,6 +1603,30 @@ class PrimeContractorWorkflow:
                 len(self._skeleton_sources),
             )
 
+        # REQ-TCW-250: Extract instrumentation contract from onboarding metadata
+        self._instrumentation_contract: dict[str, Any] | None = None
+        _instr_hints = onboarding.get("instrumentation_hints")
+        if _instr_hints and isinstance(_instr_hints, dict):
+            from startd8.validators.todo_scanner import normalize_instrumentation_data
+            self._instrumentation_contract = normalize_instrumentation_data(_instr_hints)
+            _metric_count = len(
+                (self._instrumentation_contract or {}).get("metrics", {}).get("required", [])
+            )
+            logger.info(
+                "Instrumentation contract loaded from seed (%d metric entries)",
+                _metric_count,
+            )
+
+        # REQ-TCW-251: Extract guidance from onboarding metadata
+        self._guidance_context: dict[str, Any] | None = None
+        _guidance = onboarding.get("guidance")
+        if _guidance and isinstance(_guidance, dict):
+            self._guidance_context = _guidance
+            logger.info(
+                "Guidance context loaded from seed: %d keys",
+                len(_guidance),
+            )
+
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
             "plan_document_path"
@@ -3430,6 +3454,15 @@ class PrimeContractorWorkflow:
             )
         if self._security_contract and "security_contract" not in gen_context:
             gen_context["security_contract"] = self._security_contract
+
+        # REQ-TCW-250: Thread instrumentation contract — enables LLM to fill
+        # stubs during initial generation rather than leaving them empty.
+        if self._instrumentation_contract and "instrumentation_contract" not in gen_context:
+            gen_context["instrumentation_contract"] = self._instrumentation_contract
+
+        # REQ-TCW-251: Thread guidance context — domain-aware steering
+        if self._guidance_context and "guidance" not in gen_context:
+            gen_context["guidance"] = self._guidance_context
 
         return gen_context
 

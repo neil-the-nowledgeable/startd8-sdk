@@ -78,7 +78,7 @@ class TestRouteFailures:
         assert "missing_import" in route.matched_patterns
         # Python steps only — no language-specific validate steps
         assert route.steps == [
-            "fence_strip", "future_import_reorder", "indent_normalize",
+            "fence_strip", "todo_uncomment", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
             "ast_validate",
@@ -98,7 +98,7 @@ class TestRouteFailures:
         config = RepairConfig()
         route = route_failures(diags, config)
         expected_order = [
-            "fence_strip", "future_import_reorder", "indent_normalize",
+            "fence_strip", "todo_uncomment", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
             "ast_validate",

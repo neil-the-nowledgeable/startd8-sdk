@@ -33,6 +33,7 @@ from .steps import (
     SemanticImportFixStep,
     SemanticMethodFixStep,
     SemanticMethodResolutionFixStep,
+    TodoUncommentStep,
     UnusedVariableRemovalStep,
     VariableInitializationStep,
 )
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 # regardless of which diagnostics matched them.
 _CANONICAL_ORDER = [
     "fence_strip",
+    "todo_uncomment",
     "future_import_reorder",
     "indent_normalize",
     "bracket_balance",
@@ -73,31 +75,32 @@ _CANONICAL_ORDER = [
 # language_id is provided for backward compatibility).
 _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     # Python routes (language=None for backward compat — these are the original routes)
-    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH", "python"),
+    ("syntax", "syntax_error", ["fence_strip", "todo_uncomment", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH", "python"),
     ("import", "missing_import", ["definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "ast_validate"], "HIGH", "python"),
-    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM", "python"),
+    ("lint", "lint_violation", ["fence_strip", "todo_uncomment", "future_import_reorder", "indent_normalize", "class_body_dedup", "definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM", "python"),
     # Semantic repair: per-category routing (REQ-SR-100–400) — Python-specific
     ("semantic", "import_resolution", ["semantic_import_fix", "ast_validate"], "HIGH", "python"),
     ("semantic", "method_resolution", ["semantic_method_resolution_fix", "ast_validate"], "HIGH", "python"),
     ("semantic", "discarded_return", ["semantic_discarded_return_fix", "ast_validate"], "MEDIUM", "python"),
     ("semantic", "duplicate_main_guard", ["semantic_duplicate_main_fix", "ast_validate"], "HIGH", "python"),
     # Java repair routes
-    ("syntax", "java_syntax_error", ["fence_strip", "bracket_balance", "java_syntax_validate"], "HIGH", "java"),
-    ("import", "java_import_error", ["fence_strip", "java_syntax_validate"], "MEDIUM", "java"),
+    ("syntax", "java_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "java_syntax_validate"], "HIGH", "java"),
+    ("import", "java_import_error", ["fence_strip", "todo_uncomment", "java_syntax_validate"], "MEDIUM", "java"),
     # Go repair routes
-    ("syntax", "go_syntax_error", ["fence_strip", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
-    ("import", "go_import_error", ["fence_strip", "go_syntax_validate"], "MEDIUM", "go"),
+    ("syntax", "go_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
+    ("import", "go_import_error", ["fence_strip", "todo_uncomment", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
-    ("syntax", "csharp_syntax_error", ["fence_strip", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
-    ("import", "csharp_import_error", ["fence_strip", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("syntax", "csharp_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
+    ("import", "csharp_import_error", ["fence_strip", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     # Node.js repair routes
-    ("syntax", "js_syntax_error", ["fence_strip", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
-    ("import", "js_import_error", ["fence_strip", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    ("syntax", "js_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
+    ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
 ]
 
 # Step name → step class constructor
 _STEP_FACTORIES: dict[str, type] = {
     "fence_strip": FenceStripStep,
+    "todo_uncomment": TodoUncommentStep,
     "future_import_reorder": FutureImportReorderStep,
     "indent_normalize": IndentNormalizeStep,
     "bracket_balance": BracketBalanceStep,

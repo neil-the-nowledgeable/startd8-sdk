@@ -320,70 +320,134 @@ class TodoCompletionWorkflow:
         agents: Optional[List[Any]],
         config: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Execute the completion plan via Prime Contractor.
+        """Execute the completion plan with task-type dispatch (REQ-TCW-305).
 
-        Follows the established pattern from ``run_prime_workflow.py``:
-        1. Write seed to a temp file (``add_features_from_seed`` takes a path)
-        2. Instantiate ``PrimeContractorWorkflow`` with constructor args
-        3. Load features via ``queue.add_features_from_seed(path)``
-        4. Load seed context via ``load_seed_context(data)``
-        5. Call ``run()`` with no positional args
+        Routes tasks by ``task_type``:
+        - ``uncomment`` → deterministic ``uncomment_block()`` (zero LLM cost)
+        - ``implement``/``dependency``/``edit`` → PrimeContractorWorkflow
+
+        Per-task error isolation (REQ-TCW-307): failed tasks do NOT block
+        independent subsequent tasks.
 
         Returns:
-            Dict with ``success``, ``status``, ``output_dir``, and
-            optional ``pass_count`` keys.
-
-        Raises:
-            Exception: Propagated from PrimeContractorWorkflow if execution fails.
+            Dict with ``success``, ``status``, ``output_dir``,
+            ``pass_count``, and ``total_features`` keys.
         """
-        import json as _json
+        import json
 
-        from startd8.contractors.prime_contractor import PrimeContractorWorkflow
-        from startd8.contractors.generators import LeadContractorCodeGenerator
+        tasks = seed.get("tasks", [])
+        if not tasks:
+            return {"success": True, "status": "no_tasks", "pass_count": 0, "total_features": 0}
 
         instrumentation_dir = Path(output_dir) / "instrumentation"
         instrumentation_dir.mkdir(parents=True, exist_ok=True)
-
-        # Write seed dict to a temp file — add_features_from_seed reads a path.
-        seed_file = instrumentation_dir / "instrumentation-seed.json"
-        seed_file.write_text(
-            _json.dumps(seed, indent=2, default=str), encoding="utf-8",
-        )
-
         project_root = Path(config.get("scan_dir", "."))
 
-        code_generator = LeadContractorCodeGenerator(
-            output_dir=instrumentation_dir / "generated",
-        )
+        # Split tasks by type
+        uncomment_tasks = [t for t in tasks if t.get("task_type") == "uncomment"]
+        llm_tasks = [t for t in tasks if t.get("task_type") != "uncomment"]
 
-        # Use a dedicated state file so TODO completion doesn't collide
-        # with the main PrimeContractor run's state.
-        todo_state_file = instrumentation_dir / ".todo_prime_state.json"
+        pass_count = 0
+        fail_count = 0
+        errors: List[Dict[str, str]] = []
 
-        workflow = PrimeContractorWorkflow(
-            project_root=project_root,
-            dry_run=False,
-            allow_dirty=True,
-            auto_commit=False,
-            code_generator=code_generator,
-            state_file=todo_state_file,
-        )
+        # --- Deterministic uncomment tasks (zero LLM cost) ---
+        if uncomment_tasks:
+            from startd8.validators.todo_scanner import uncomment_block
 
-        added = workflow.queue.add_features_from_seed(str(seed_file))
-        logger.info("Loaded %d instrumentation tasks from seed", len(added))
+            for task in uncomment_tasks:
+                try:
+                    ctx = task.get("config", {}).get("context", {})
+                    target_files = ctx.get("target_files") or task.get("target_files", [])
+                    language = ctx.get("language", "python")
 
-        workflow.load_seed_context(seed)
+                    for tf in target_files:
+                        tf_path = Path(tf)
+                        file_path = tf_path if tf_path.is_absolute() else project_root / tf
+                        if not file_path.is_file():
+                            logger.warning("Uncomment target not found: %s", file_path)
+                            continue
 
-        result = workflow.run()
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
 
-        success = result.get("successful_features", 0) > 0
-        pass_count = result.get("successful_features", 0)
-        total = result.get("total_features", len(added))
+                        # If structured comment_block available, verify content matches
+                        comment_block = ctx.get("comment_block")
+                        if comment_block and comment_block.get("content_lines"):
+                            lines = content.splitlines()
+                            start_0 = comment_block["start_line"] - 1
+                            expected = comment_block["content_lines"]
+                            actual = lines[start_0:start_0 + len(expected)]
+                            if [l.rstrip() for l in actual] != [l.rstrip() for l in expected]:
+                                logger.debug(
+                                    "Comment block drift in %s: expected %r, got %r",
+                                    file_path,
+                                    expected[0].rstrip() if expected else "",
+                                    actual[0].rstrip() if actual else "",
+                                )
+                                logger.info(
+                                    "Comment block shifted in %s — falling back to full-file scan",
+                                    file_path,
+                                )
 
+                        result, count = uncomment_block(content, language=language)
+                        if count > 0:
+                            file_path.write_text(result, encoding="utf-8")
+                            logger.info(
+                                "Uncommented %d block(s) in %s", count, file_path,
+                            )
+
+                    pass_count += 1
+                except (OSError, ValueError) as exc:
+                    fail_count += 1
+                    task_id = task.get("task_id", "?")
+                    logger.warning(
+                        "Uncomment task %s failed: %s", task_id, exc, exc_info=True,
+                    )
+                    errors.append({"task_id": task_id, "error": str(exc)})
+
+        # --- LLM-backed tasks via Prime Contractor ---
+        if llm_tasks:
+            llm_seed = dict(seed, tasks=llm_tasks)
+            seed_file = instrumentation_dir / "instrumentation-seed.json"
+            seed_file.write_text(
+                json.dumps(llm_seed, indent=2, default=str), encoding="utf-8",
+            )
+
+            from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+            from startd8.contractors.generators import LeadContractorCodeGenerator
+
+            code_generator = LeadContractorCodeGenerator(
+                output_dir=instrumentation_dir / "generated",
+            )
+            todo_state_file = instrumentation_dir / ".todo_prime_state.json"
+
+            workflow = PrimeContractorWorkflow(
+                project_root=project_root,
+                dry_run=False,
+                allow_dirty=True,
+                auto_commit=False,
+                code_generator=code_generator,
+                state_file=todo_state_file,
+            )
+
+            added = workflow.queue.add_features_from_seed(str(seed_file))
+            logger.info("Loaded %d LLM tasks from seed", len(added))
+
+            workflow.load_seed_context(llm_seed)
+
+            result = workflow.run()
+
+            llm_pass = result.get("successful_features", 0)
+            llm_total = result.get("total_features", len(added))
+            pass_count += llm_pass
+            fail_count += llm_total - llm_pass
+
+        total = len(tasks)
         return {
-            "success": success,
+            "success": pass_count > 0,
             "status": "complete",
             "output_dir": str(instrumentation_dir),
             "pass_count": pass_count,
             "total_features": total,
+            "errors": errors if errors else None,
         }

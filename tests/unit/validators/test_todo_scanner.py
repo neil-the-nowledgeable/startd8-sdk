@@ -16,6 +16,7 @@ from startd8.validators.todo_scanner import (
     scan_directory,
     scan_file,
     scan_todos,
+    uncomment_block,
 )
 
 
@@ -455,3 +456,131 @@ class TestScanFile:
 
         inventory = scan_directory(tmp_path)
         assert inventory.summary["total"] >= 4  # at least 4 TODOs across files
+
+
+# ---------------------------------------------------------------------------
+# Test: uncomment_block (REQ-TCW-253)
+# ---------------------------------------------------------------------------
+
+class TestUncommentBlock:
+    """REQ-TCW-253: shared uncomment utility."""
+
+    def test_python_uncomment(self):
+        code = (
+            "def setup():\n"
+            "    # TODO: uncomment\n"
+            "    # import otel\n"
+            "    # metrics = otel.get_metrics()\n"
+            "    # metrics.init()\n"
+            "    pass\n"
+        )
+        result, count = uncomment_block(code, language="python")
+        assert count == 1
+        assert "import otel" in result
+        assert "# TODO" not in result
+
+    def test_go_uncomment(self):
+        code = (
+            "func initMetrics() {\n"
+            "    // TODO: uncomment\n"
+            "    // stats := otel.NewProvider()\n"
+            "    // stats.RegisterCallback(f)\n"
+            "    // stats.Start()\n"
+            "}\n"
+        )
+        result, count = uncomment_block(code, language="go")
+        assert count == 1
+        assert "stats := otel.NewProvider()" in result
+
+    def test_no_op_when_no_blocks(self):
+        code = "def foo():\n    pass\n"
+        result, count = uncomment_block(code)
+        assert count == 0
+        assert result == code
+
+
+# ---------------------------------------------------------------------------
+# Test: comment_block structured field (REQ-TCW-301)
+# ---------------------------------------------------------------------------
+
+class TestCommentBlockField:
+    """REQ-TCW-301: classify_todo populates comment_block for Cat A."""
+
+    def test_category_a_has_comment_block(self):
+        source = textwrap.dedent("""\
+            # TODO: enable
+            # import otel
+            # meter = otel.get_meter()
+            # meter.start()
+            pass
+        """)
+        lines = source.splitlines()
+        entries = scan_todos("test.py", source, "python")
+        assert len(entries) >= 1
+        classified = classify_todo(entries[0], lines)
+        assert classified.category == "A"
+        assert classified.comment_block is not None
+        assert "start_line" in classified.comment_block
+        assert "end_line" in classified.comment_block
+        assert "content_lines" in classified.comment_block
+        assert len(classified.comment_block["content_lines"]) >= 3
+
+    def test_category_b_has_no_comment_block(self):
+        """Category B should not have comment_block."""
+        source = textwrap.dedent("""\
+            def initMetrics():
+                # TODO: implement metrics
+                pass
+        """)
+        lines = source.splitlines()
+        entries = scan_todos("test.py", source, "python")
+        assert len(entries) >= 1
+        classified = classify_todo(entries[0], lines)
+        # This is either B or C — either way, no comment_block
+        assert classified.comment_block is None
+
+
+# ---------------------------------------------------------------------------
+# Test: scan_directory deduplication (REQ-TCW-308)
+# ---------------------------------------------------------------------------
+
+class TestScanDirectoryDedup:
+    """REQ-TCW-308: deduplicate TODOs across generated/ and src/ copies."""
+
+    def test_dedup_same_file_different_paths(self, tmp_path):
+        """Same file in src/ and generated/ — generated/ preferred."""
+        src = tmp_path / "src"
+        src.mkdir()
+        gen = tmp_path / "generated"
+        gen.mkdir()
+
+        content = textwrap.dedent("""\
+            def initMetrics():
+                # TODO: implement metrics
+                pass
+        """)
+        (src / "service.py").write_text(content, encoding="utf-8")
+        (gen / "service.py").write_text(content, encoding="utf-8")
+
+        inventory = scan_directory(tmp_path)
+        # Only one entry for this TODO (deduplicated)
+        todo_entries = [
+            e for e in inventory.entries
+            if "implement metrics" in e.raw_text
+        ]
+        assert len(todo_entries) == 1
+        assert "generated" in todo_entries[0].file_path
+
+    def test_excludes_stale_run_dirs(self, tmp_path):
+        """Stale prior-run directories matching /run-NNN-/ are excluded."""
+        stale = tmp_path / "run-042-online-boutique"
+        stale.mkdir()
+        content = textwrap.dedent("""\
+            def initStats():
+                # TODO: implement stats
+                pass
+        """)
+        (stale / "service.py").write_text(content, encoding="utf-8")
+
+        inventory = scan_directory(tmp_path)
+        assert len(inventory.entries) == 0

@@ -153,6 +153,8 @@ def _make_uncomment_task(
                 "containing_function": entry.containing_function,
                 "context_lines": entry.context_lines,
                 "source_run_id": source_run_id,
+                "language": entry.language,
+                "comment_block": entry.comment_block,
             },
         },
     }
@@ -223,6 +225,7 @@ def _make_implement_task(
         "instrumentation_contract": contract_context,
         "contract_fields": entry.contract_fields,
         "source_run_id": source_run_id,
+        "language": entry.language,
     }
 
     # Dual contract: both instrumentation AND security when applicable
@@ -312,6 +315,7 @@ def _make_dependency_task(
                 "target_files": [build_path],
                 "dependencies": deps,
                 "source_run_id": source_run_id,
+                "language": entry.language,
             },
         },
     }

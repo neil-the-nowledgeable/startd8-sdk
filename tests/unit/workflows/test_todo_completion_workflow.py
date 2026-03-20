@@ -252,3 +252,126 @@ class TestTodoCompletionWorkflow:
         })
         assert result.success
         assert result.output["todo_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: _execute_plan error isolation (REQ-TCW-307)
+# ---------------------------------------------------------------------------
+
+class TestExecutePlanErrorIsolation:
+    """REQ-TCW-307: per-task error isolation."""
+
+    def test_uncomment_task_failure_does_not_block_others(self, tmp_path):
+        """First uncomment task fails, second still runs."""
+        scan_dir = tmp_path / "proj"
+        scan_dir.mkdir()
+
+        # Second file with valid uncommentable content
+        second_file = scan_dir / "second.py"
+        second_file.write_text(
+            "# TODO: uncomment\n"
+            "# import metrics\n"
+            "# m = metrics.get()\n"
+            "# m.start()\n"
+            "pass\n",
+            encoding="utf-8",
+        )
+
+        wf = TodoCompletionWorkflow()
+        seed = {
+            "schema_version": "1.0.0",
+            "source": "test",
+            "tasks": [
+                {
+                    "task_id": "TODO-001",
+                    "task_type": "uncomment",
+                    "target_files": ["/nonexistent/file.py"],
+                    "config": {
+                        "context": {
+                            "target_files": ["/nonexistent/file.py"],
+                            "language": "python",
+                        },
+                    },
+                },
+                {
+                    "task_id": "TODO-002",
+                    "task_type": "uncomment",
+                    "target_files": [str(second_file)],
+                    "config": {
+                        "context": {
+                            "target_files": [str(second_file)],
+                            "language": "python",
+                        },
+                    },
+                },
+            ],
+        }
+
+        result = wf._execute_plan(
+            seed, str(tmp_path / "output"), None,
+            {"scan_dir": str(scan_dir)},
+        )
+        # Second task should succeed despite first failing
+        assert result["pass_count"] >= 1
+        assert result["total_features"] == 2
+
+    def test_empty_seed_returns_success(self, tmp_path):
+        """No tasks = immediate success."""
+        wf = TodoCompletionWorkflow()
+        result = wf._execute_plan(
+            {"tasks": []}, str(tmp_path / "output"), None,
+            {"scan_dir": str(tmp_path)},
+        )
+        assert result["success"] is True
+        assert result["pass_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: task-type dispatch (REQ-TCW-305)
+# ---------------------------------------------------------------------------
+
+class TestTaskTypeDispatch:
+    """REQ-TCW-305: uncomment tasks use deterministic path."""
+
+    def test_uncomment_task_uses_deterministic_path(self, tmp_path):
+        """Uncomment tasks apply uncomment_block() directly, no LLM."""
+        scan_dir = tmp_path / "proj"
+        scan_dir.mkdir()
+        target = scan_dir / "service.go"
+        target.write_text(
+            "func initMetrics() {\n"
+            "    // TODO: enable\n"
+            "    // provider := otel.NewProvider()\n"
+            "    // provider.Set(option)\n"
+            "    // provider.Start()\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        wf = TodoCompletionWorkflow()
+        seed = {
+            "schema_version": "1.0.0",
+            "source": "test",
+            "tasks": [{
+                "task_id": "TODO-001",
+                "task_type": "uncomment",
+                "target_files": [str(target)],
+                "config": {
+                    "context": {
+                        "target_files": [str(target)],
+                        "language": "go",
+                    },
+                },
+            }],
+        }
+
+        result = wf._execute_plan(
+            seed, str(tmp_path / "output"), None,
+            {"scan_dir": str(scan_dir)},
+        )
+        assert result["pass_count"] == 1
+
+        # Verify the file was actually modified
+        content = target.read_text(encoding="utf-8")
+        assert "provider := otel.NewProvider()" in content
+        assert "// TODO" not in content

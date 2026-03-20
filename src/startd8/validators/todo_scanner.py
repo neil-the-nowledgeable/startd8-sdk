@@ -33,6 +33,7 @@ __all__ = [
     "classify_todo",
     "scan_file",
     "normalize_instrumentation_data",
+    "uncomment_block",
 ]
 
 
@@ -123,6 +124,7 @@ class TodoEntry:
     matched_requirements: Tuple[str, ...] = ()
     confidence: float = 1.0
     rationale: str = ""
+    comment_block: Optional[Dict[str, Any]] = None
     contract_fields: Tuple[str, ...] = ()
     security_sensitive: bool = False
     security_contract_ref: Optional[str] = None
@@ -266,8 +268,9 @@ def classify_todo(
         return dataclasses.replace(
             entry,
             category="A",
-            rationale=cat_a_result,
+            rationale=cat_a_result["rationale"],
             confidence=0.9,
+            comment_block=cat_a_result,
         )
 
     # --- Category B: empty stub + instrumentation vocabulary ---
@@ -299,10 +302,15 @@ def classify_todo(
     return entry
 
 
-def _check_category_a(lines: List[str], idx: int, language: str) -> str:
+def _check_category_a(
+    lines: List[str], idx: int, language: str,
+) -> Optional[Dict[str, Any]]:
     """Check if TODO is adjacent to a commented-out code block.
 
-    Returns rationale string if Category A, empty string otherwise.
+    Returns:
+        Dict with block boundaries if Category A (keys: ``start_line``,
+        ``end_line``, ``content_lines``, ``todo_line``, ``rationale``),
+        or None otherwise.  Line numbers are 1-indexed.
     """
     # Search within 3 lines of the TODO for a contiguous commented block
     search_range = range(max(0, idx - 3), min(len(lines), idx + 4))
@@ -318,12 +326,18 @@ def _check_category_a(lines: List[str], idx: int, language: str) -> str:
                 1 for _, bl in block_lines if _CODE_LIKE.search(bl)
             )
             if code_like_count >= 2:
-                return (
-                    f"Adjacent commented-out code block at lines "
-                    f"{block_lines[0][0]+1}-{block_lines[-1][0]+1} "
-                    f"({code_like_count} code-like lines)"
-                )
-    return ""
+                return {
+                    "start_line": block_lines[0][0] + 1,  # 1-indexed
+                    "end_line": block_lines[-1][0] + 1,
+                    "content_lines": [bl for _, bl in block_lines],
+                    "todo_line": idx + 1,
+                    "rationale": (
+                        f"Adjacent commented-out code block at lines "
+                        f"{block_lines[0][0]+1}-{block_lines[-1][0]+1} "
+                        f"({code_like_count} code-like lines)"
+                    ),
+                }
+    return None
 
 
 def _find_comment_block(
@@ -535,6 +549,68 @@ def normalize_instrumentation_data(
 
 
 # ---------------------------------------------------------------------------
+# Uncomment Block Utility (REQ-TCW-253, REQ-TCW-301)
+# ---------------------------------------------------------------------------
+
+def uncomment_block(code: str, language: str = "python") -> Tuple[str, int]:
+    """Strip TODO-adjacent commented-out code blocks from source.
+
+    Reuses the same detection logic as ``_check_category_a``: finds TODO
+    markers, locates adjacent comment blocks with 3+ lines and 2+ code-like
+    patterns, strips comment prefixes, and removes the TODO marker line.
+
+    Args:
+        code: Source code as a string.
+        language: Language identifier (for comment prefix detection).
+
+    Returns:
+        Tuple of (modified_code, blocks_uncommented).
+    """
+    lines = code.splitlines(keepends=True)
+    plain_lines = [line.rstrip("\n\r") for line in lines]
+    blocks_found: List[Dict[str, Any]] = []
+
+    # Find all TODO-adjacent comment blocks
+    for i, line in enumerate(plain_lines):
+        if not _TODO_PATTERN.search(line):
+            continue
+        result = _check_category_a(plain_lines, i, language)
+        if result is not None:
+            # Avoid duplicate blocks (same start_line)
+            if not any(b["start_line"] == result["start_line"] for b in blocks_found):
+                blocks_found.append(result)
+
+    if not blocks_found:
+        return code, 0
+
+    # Process blocks in reverse order so earlier indices stay valid
+    blocks_found.sort(key=lambda b: b["start_line"], reverse=True)
+    count = 0
+    for block in blocks_found:
+        start_0 = block["start_line"] - 1  # to 0-indexed
+        end_0 = block["end_line"] - 1
+        todo_0 = block["todo_line"] - 1
+
+        # Strip comment prefixes from block lines
+        uncommented = []
+        for j in range(start_0, min(end_0 + 1, len(lines))):
+            stripped = _SINGLE_LINE_COMMENT.sub("", lines[j], count=1)
+            uncommented.append(stripped)
+
+        # Replace block lines with uncommented versions
+        lines[start_0:end_0 + 1] = uncommented
+
+        # Remove the TODO marker line.  The block replacement above is
+        # length-preserving (same line count), so todo_0 hasn't shifted.
+        if 0 <= todo_0 < len(lines):
+            del lines[todo_0]
+
+        count += 1
+
+    return "".join(lines), count
+
+
+# ---------------------------------------------------------------------------
 # Containing Function Extraction
 # ---------------------------------------------------------------------------
 
@@ -599,13 +675,21 @@ def scan_file(
     return [classify_todo(entry, lines, normalized) for entry in raw_entries]
 
 
+_STALE_RUN_DIR = re.compile(r"/run-\d{3}-")
+
+
 def scan_directory(
     directory: str | Path,
     *,
     instrumentation_contract: Optional[Dict[str, Any]] = None,
     extensions: Optional[Sequence[str]] = None,
 ) -> TodoInventory:
-    """Scan all files in a directory, returning a TodoInventory."""
+    """Scan all files in a directory, returning a TodoInventory.
+
+    Deduplicates entries from generated/ and src/ copies of the same file
+    (prefers the generated path). Excludes stale prior-run directories
+    matching ``/run-NNN-`` patterns.
+    """
     d = Path(directory)
     if not d.is_dir():
         return TodoInventory()
@@ -613,11 +697,26 @@ def scan_directory(
     if extensions is None:
         extensions = (".java", ".go", ".py", ".js", ".ts", ".cs", ".gradle", ".xml")
 
-    inventory = TodoInventory()
+    all_entries: List[TodoEntry] = []
     for ext in extensions:
         for f in d.rglob(f"*{ext}"):
+            # Exclude stale prior-run directories
+            if _STALE_RUN_DIR.search(str(f)):
+                continue
             entries = scan_file(f, instrumentation_contract)
-            inventory.entries.extend(entries)
+            all_entries.extend(entries)
 
+    # Deduplicate by (filename, line, raw_text) — prefer generated/ path
+    seen: Dict[Tuple[str, int, str], TodoEntry] = {}
+    for entry in all_entries:
+        key = (Path(entry.file_path).name, entry.line, entry.raw_text)
+        existing = seen.get(key)
+        if existing is None:
+            seen[key] = entry
+        elif "generated" in entry.file_path and "generated" not in existing.file_path:
+            seen[key] = entry  # prefer generated path
+
+    inventory = TodoInventory()
+    inventory.entries = list(seen.values())
     inventory.compute_summary()
     return inventory
