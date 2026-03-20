@@ -121,8 +121,7 @@ class GoLanguageProfile:
 
     @property
     def repair_enabled(self) -> bool:
-        # Go has compile-time checks — repair pipeline is less useful
-        return False
+        return True
 
     @property
     def docker_base_image(self) -> str:

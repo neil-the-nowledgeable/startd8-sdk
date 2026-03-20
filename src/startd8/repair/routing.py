@@ -21,6 +21,7 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    GoSyntaxValidateStep,
     JavaSyntaxValidateStep,
     SemanticDiscardedReturnFixStep,
     SemanticDuplicateMainFixStep,
@@ -57,6 +58,7 @@ _CANONICAL_ORDER = [
     "semantic_duplicate_main_fix",
     "ast_validate",
     "java_syntax_validate",
+    "go_syntax_validate",
 ]
 
 # Routing table: category → (matched_pattern, step_names, confidence)
@@ -73,6 +75,9 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     # Java repair routes
     ("syntax", "java_syntax_error", ["fence_strip", "bracket_balance", "java_syntax_validate"], "HIGH"),
     ("import", "java_import_error", ["fence_strip", "java_syntax_validate"], "MEDIUM"),
+    # Go repair routes
+    ("syntax", "go_syntax_error", ["fence_strip", "bracket_balance", "go_syntax_validate"], "HIGH"),
+    ("import", "go_import_error", ["fence_strip", "go_syntax_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor
@@ -97,6 +102,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "semantic_duplicate_main_fix": SemanticDuplicateMainFixStep,
     "ast_validate": AstValidateStep,
     "java_syntax_validate": JavaSyntaxValidateStep,
+    "go_syntax_validate": GoSyntaxValidateStep,
 }
 
 

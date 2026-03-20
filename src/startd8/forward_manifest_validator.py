@@ -606,6 +606,8 @@ def _validate_non_python_file(
         result = _validate_js_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
+    elif suffix == ".go":
+        result = _validate_go_file(content, result)
     elif suffix == ".java":
         result = _validate_java_file(content, result)
     elif name in ("build.gradle", "build.gradle.kts"):
@@ -1274,6 +1276,90 @@ def _validate_json_file(
         result.ast_valid = False
         result.error = f"json_error: {exc}"
         result.contract_compliance = 0.0
+    return result
+
+
+# Pre-compiled patterns for Go disk validation
+_GO_PACKAGE_RE = re.compile(r"^\s*package\s+\w+", re.MULTILINE)
+_GO_DECL_RE = re.compile(r"\b(?:func|type|var|const)\s+\w+")
+_GO_PYTHON_FINGERPRINTS = ("def ", "import os", "from __future__", "self.", "#!/usr/bin/env python")
+
+
+def _validate_go_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate Go source file structure.
+
+    Checks:
+    1. No Python fingerprints
+    2. Balanced braces (text-based)
+    3. Package declaration present
+    4. Contains at least one func/type/var/const declaration
+    5. Go semantic checks
+    """
+    # Python fingerprint guard
+    for fp in _GO_PYTHON_FINGERPRINTS:
+        if fp in content:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"Python fingerprint in .go file: {fp!r}"
+            return result
+
+    # Balanced braces check
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                result.ast_valid = False
+                result.contract_compliance = 0.2
+                result.error = "unbalanced braces"
+                return result
+    if depth != 0:
+        result.ast_valid = False
+        result.contract_compliance = 0.2
+        result.error = f"unbalanced braces (depth={depth})"
+        return result
+
+    # Package declaration check
+    if not _GO_PACKAGE_RE.search(content):
+        result.semantic_issues.append({
+            "category": "go_structure",
+            "severity": "warning",
+            "message": "missing package declaration",
+        })
+        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+
+    # Declaration check
+    if not _GO_DECL_RE.search(content):
+        result.semantic_issues.append({
+            "category": "go_structure",
+            "severity": "warning",
+            "message": "no func/type/var/const declaration found",
+        })
+        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+
+    # Go semantic checks
+    try:
+        from startd8.validators.go_semantic_checks import (
+            run_go_semantic_checks,
+        )
+        go_issues = run_go_semantic_checks(
+            content, file_path=result.file_path,
+        )
+        for issue in go_issues:
+            result.semantic_issues.append({
+                "category": issue.check,
+                "severity": issue.severity,
+                "message": issue.message,
+                "line": issue.line,
+            })
+    except ImportError:
+        pass  # go_semantic_checks not available
+
     return result
 
 
