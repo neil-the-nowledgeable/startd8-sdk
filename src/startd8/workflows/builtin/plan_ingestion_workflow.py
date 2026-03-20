@@ -2658,6 +2658,21 @@ class PlanIngestionWorkflow(WorkflowBase):
                     )
                 ctx["mapping_rationale"] = rationale
 
+            # Anzen: tag security-sensitive tasks at ingestion time so the
+            # seed file is self-describing and prime_contractor doesn't need
+            # to re-detect database surfaces at generation time.
+            try:
+                from startd8.security_prime.enrichment import enrich_security_fields
+                _sec = enrich_security_fields(
+                    feat.description or "", ordered_files,
+                    getattr(feat, "metadata", None),
+                )
+                if _sec["security_sensitive"]:
+                    ctx["security_sensitive"] = True
+                    ctx["detected_database"] = _sec["detected_database"]
+            except ImportError:
+                pass  # security_prime not available
+
             # REQ-PD-003: Build requirements_text from description +
             # acceptance_obligations + source_references so DESIGN has
             # authoritative parameter details without re-deriving.
