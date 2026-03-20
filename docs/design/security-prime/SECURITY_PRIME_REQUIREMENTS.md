@@ -1,7 +1,7 @@
 # Security Prime — Security Orchestration Layer Requirements
 
-> **Version:** 1.0.0
-> **Status:** DRAFT
+> **Version:** 1.1.0
+> **Status:** IMPLEMENTED (Phases 0–2 + Category S + extensions shipped 2026-03-19/20)
 > **Date:** 2026-03-19
 > **Author:** human:neil + agent:claude-code
 > **Design Principle:** [ANZEN_DESIGN_PRINCIPLE.md](../../design-princples/ANZEN_DESIGN_PRINCIPLE.md) — Security Correctness by Design (安全)
@@ -248,29 +248,29 @@ Task Seed ──▶ INTERCEPT 1: Context Assembly ──▶ INTERCEPT 2: Prompt 
 
 ---
 
-## 10. Future Extensions
+## 10. Extensions and Future Work
 
-These are NOT part of the current requirements but are documented as the natural evolution path. They build on the orchestration layer without modifying `query_prime/`.
+### Shipped Extensions (2026-03-19/20)
 
-### 10.1 LLM-Augmented Validation (Tiers 1–3)
+| Extension | Status | Commit | Location |
+|-----------|--------|--------|----------|
+| **Category S TODOs** | SHIPPED | `56d43a1` | `seeds/todo_derivation.py`, `todo_completion_workflow.py` |
+| **OWASP Coverage Matrix** | SHIPPED | `e3d33c1` | `security_prime/owasp_coverage.py` |
+| **Allowlist** | SHIPPED | `e3d33c1` | `security_prime/allowlist.py`, wired into `_run_anzen_gate()` |
+| **Security Profile CLI** | SHIPPED | `e3d33c1` | `scripts/run_security_profile.py` |
+| **Anzen Gate OTel Wiring** | SHIPPED | `e3d33c1` | Wired into `_run_anzen_gate()` |
+| **Plan Ingestion Enrichment** | SHIPPED | `db30fb0` | `plan_ingestion_workflow.py` EMIT phase |
 
-Lightweight (T1) and deep (T3) LLM security analysis for data flow tracing, auth coverage, STRIDE threat modeling. **Defer until Tier 0 FP rate data from production runs justifies the cost** (~$0.02–$1.20/file).
+### Remaining Work
 
-### 10.2 Security TODO Pattern — Category S
+| Item | Effort | Blocker |
+|------|--------|---------|
+| Kaizen metrics persistence | ~30 lines | Wire `update_security_metrics()` into postmortem |
+| Batch postmortem security trends | ~50 lines | Needs Kaizen metrics persistence first |
+| LLM tiers 1–3 | ~400 lines | Needs empirical FP rate data from 10+ production runs |
+| De facto S-only detection | ~80 lines | Needs design decision: TODO inventory vs. standalone report |
 
-Extend the TODO Completion workflow (REQ-TCW-100) to classify security-sensitive TODOs as Category S with dual contract injection (instrumentation + security). **Defer until TODO Completion workflow is mature.**
-
-### 10.3 Security Profile Generation
-
-`--security-profile` mode for $0.00 pre-code security analysis. Essentially a thin wrapper around `query_prime.decomposer.detect_database_type()` + `DatabasePatternRegistry` coverage check. **Defer until pipeline integration (Phase 2) is stable.**
-
-### 10.4 OWASP Coverage Matrix
-
-Static mapping from security check types to OWASP Top 10 categories. ~50 lines. Can ship as a utility in `security_prime/` whenever convenient.
-
-### 10.5 Allowlist
-
-`security_allowlist.yaml` for operator-declared false positive suppression. Read by the Anzen gate before scoring. Schema: `entries: [{file_pattern, check_id, justification}]`.
+See [SECURITY_PRIME_REMAINING_WORK.md](./SECURITY_PRIME_REMAINING_WORK.md) for details.
 
 ---
 
@@ -329,60 +329,32 @@ Static mapping from security check types to OWASP Top 10 categories. ~50 lines. 
 
 ## 13. Phased Delivery Plan
 
-### Phase 0: Wire It In (~50 lines, 1 PR)
+### Phase 0: Wire It In — SHIPPED (`992543a`, `21163d4`)
 
-Wire `query_prime.security.verify_file()` into `integration_engine.py`. Add P0 constraint string in drafter. Add `security_sensitive` signal + MODERATE floor in classifier. Add `SECURITY_VIOLATION` root cause. Map verdict to score in quality gate.
+Anzen gate in `integration_engine.py`, P0 drafter constraint, `security_sensitive` classifier signal, `SECURITY_VIOLATION` root cause. +211 lines across 5 files.
 
-**Requirements:** SP-GT-001–006, SP-GT-010–012, SP-INJ-001–003, SP-INJ-010, SP-SCR-001–002, SP-SCR-010–012, SP-KZ-001–003, SP-PL-002
+### Phase 1: `security_prime/` Package — SHIPPED (`00eec89`)
 
-**Files modified (5):**
-- `contractors/integration_engine.py` — gate insertion after semantic checks
-- `implementation_engine/drafter.py` — P0 constraint in system prompt
-- `implementation_engine/spec_builder.py` — P0 constraint for security_sensitive tasks
-- `complexity/classifier.py` + `complexity/models.py` — security_sensitive signal
-- `contractors/prime_postmortem.py` — SECURITY_VIOLATION root cause
+Scorer, P1 guidance from `DatabasePatternRegistry`, Kaizen escalation, OTel, YAML templates, budget P0/P1 registration. +549 lines, 6 new files.
 
-**Done when:** C# cartservice run → AlloyDB file REJECTED, Spanner file PASSES, `security-gate-results.json` written.
+### Phase 2: Full Pipeline Integration — SHIPPED (`42fa7a2`, `db30fb0`)
 
-### Phase 1: `security_prime/` Package (~300 lines)
+Security contract derivation from `.contextcore.yaml`, task enrichment, standalone auto-detect, plan ingestion EMIT-time tagging. +324 lines, 2 new files.
 
-Structured orchestration: scoring formula, P1 YAML templates backed by `DatabasePatternRegistry`, Kaizen escalation, OTel instrumentation, budget system P0/P1 registration.
+### Category S TODOs — SHIPPED (`56d43a1`)
 
-**Requirements:** SP-SCR-003, SP-INJ-020–022, SP-KZ-010–011, SP-KZ-020–021, SP-PL-020–021, SP-OBS-001–013
+B+S dual contract injection, C+S deferral with human review warning, security labels. +110 lines.
 
-**Files created (6):**
-- `src/startd8/security_prime/__init__.py`
-- `security_prime/scorer.py` — max-severity-weighted scoring
-- `security_prime/guidance.py` — P1 template injection from pattern registry
-- `security_prime/kaizen.py` — escalation logic + metrics
-- `security_prime/otel.py` — spans + metrics
-- `security_prime/templates/security_constraints.yaml`
+### Extensions — SHIPPED (`e3d33c1`)
 
-**Files modified (3):**
-- `implementation_engine/budget.py` — P0/P1 registration
-- `contractors/batch_postmortem.py` — security trends
-- `implementation_engine/spec_builder.py` — P1 guidance injection
+OWASP coverage matrix, allowlist with suppression in Anzen gate, security profile CLI, OTel wiring in gate. +498 lines, 3 new files.
 
-### Phase 2: Full Pipeline Integration (~200 lines)
+### Remaining (deferred — see [SECURITY_PRIME_REMAINING_WORK.md](./SECURITY_PRIME_REMAINING_WORK.md))
 
-Security contract from manifest, plan ingestion enrichment, reference deviation tracking in postmortem, OWASP coverage matrix.
-
-**Requirements:** SP-PL-001, SP-PL-010–012
-
-**Files created (2):**
-- `security_prime/contract.py` — derivation from manifest + plan
-- `security_prime/enrichment.py` — plan ingestion task tagging
-
-**Files modified (2):**
-- `workflows/builtin/plan_ingestion_workflow.py` — enrichment call
-- `contractors/prime_contractor.py` — contract loading from gen_context
-
-### Future Phases (deferred — see §10)
-
-- LLM tiers 1–3: when Tier 0 FP data warrants ($0.02–$1.20/file)
-- Category S TODOs: when TODO Completion workflow is mature
-- Security profile: thin wrapper around existing contract derivation
-- Allowlist: when operator false-positive volume justifies
+- Kaizen metrics persistence (~30 lines wiring)
+- Batch postmortem security trends (~50 lines)
+- LLM tiers 1–3: when Tier 0 FP data warrants
+- De facto S-only detection: needs design decision on report location
 
 ---
 

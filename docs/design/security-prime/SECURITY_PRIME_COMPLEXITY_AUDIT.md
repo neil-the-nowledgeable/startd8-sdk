@@ -1,8 +1,9 @@
 # Security Prime — Complexity Audit: What Exists vs. What the Requirements Specify
 
-> **Date:** 2026-03-19
-> **Purpose:** Eliminate accidental complexity by mapping existing code to requirements
-> **Critical Finding:** `query_prime/` already implements ~60% of the requirements
+> **Date:** 2026-03-19 (historical — written during v0.3→v1.0 requirements revision)
+> **Status:** RESOLVED — all findings absorbed into requirements v1.1.0 and implementation
+> **Purpose:** Eliminated accidental complexity by mapping existing `query_prime/` code to requirements
+> **Outcome:** Requirements dropped from 203 to 46; new code from ~4,000 lines to ~1,700; `query_prime/` check infrastructure reused, not rebuilt
 
 ---
 

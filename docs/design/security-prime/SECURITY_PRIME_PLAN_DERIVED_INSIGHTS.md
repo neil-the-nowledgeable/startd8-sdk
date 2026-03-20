@@ -1,6 +1,7 @@
 # Security Prime — Plan-Derived Insights and Requirements Refinement
 
-> **Date:** 2026-03-19
+> **Date:** 2026-03-19 (historical — written during v0.2→v0.3 requirements revision)
+> **Status:** RESOLVED — all 12 insights absorbed into requirements v1.1.0 and implementation
 > **Source:** Implementation planning for SECURITY_PRIME_REQUIREMENTS.md (v0.2.0)
 > **Purpose:** Insights that emerged from planning the implementation but were not visible from the requirements alone. Each insight maps to a concrete requirements improvement.
 

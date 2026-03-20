@@ -1,11 +1,12 @@
 # Security Prime — Implementation Plan
 
-> **Version:** 4.0.0
-> **Date:** 2026-03-19
-> **Requirements:** [SECURITY_PRIME_REQUIREMENTS.md](./SECURITY_PRIME_REQUIREMENTS.md) v1.0.0 (46 requirements)
+> **Version:** 5.0.0 — COMPLETE
+> **Date:** 2026-03-20
+> **Requirements:** [SECURITY_PRIME_REQUIREMENTS.md](./SECURITY_PRIME_REQUIREMENTS.md) v1.1.0 (46 requirements)
 > **Check Infrastructure:** `src/startd8/query_prime/` — IMPLEMENTED (not rebuilt)
-> **New Code:** ~550 lines across 3 phases
+> **Shipped Code:** ~1,700 lines across 9 commits (Phases 0–2 + Category S + extensions + emitter enrichment)
 > **Principle:** Anzen — Security Correctness by Design (安全)
+> **Status:** All planned phases SHIPPED. Remaining items tracked in [SECURITY_PRIME_REMAINING_WORK.md](./SECURITY_PRIME_REMAINING_WORK.md).
 
 ---
 
