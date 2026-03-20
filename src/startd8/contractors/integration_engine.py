@@ -1176,6 +1176,15 @@ class IntegrationEngine:
         except ImportError:
             return  # query_prime not available — skip silently
 
+        # Load allowlist for false-positive suppression
+        allowlist = []
+        try:
+            from startd8.security_prime.allowlist import load_allowlist, is_allowlisted
+            project_root = str(self.project_root) if self.project_root else "."
+            allowlist = load_allowlist(project_root)
+        except ImportError:
+            is_allowlisted = None  # type: ignore[assignment]
+
         gate_results = []
 
         for fpath in integrated_files:
@@ -1203,7 +1212,58 @@ class IntegrationEngine:
             sv_result = verify_file(
                 source, str(fpath), db_type, language,
             )
+
+            # Allowlist suppression: filter out operator-declared false positives
+            if allowlist and is_allowlisted is not None and sv_result.findings:
+                unsuppressed = []
+                for finding in sv_result.findings:
+                    justification = is_allowlisted(
+                        str(fpath), finding.check_type.value, allowlist,
+                    )
+                    if justification:
+                        logger.info(
+                            "Anzen allowlist: suppressed %s in %s (%s)",
+                            finding.check_type.value, fpath.name, justification,
+                        )
+                    else:
+                        unsuppressed.append(finding)
+                # Recompute verdict with unsuppressed findings only
+                if len(unsuppressed) < len(sv_result.findings):
+                    from startd8.query_prime.models import SecurityCheckType
+                    has_hard = any(
+                        f.check_type in (SecurityCheckType.INJECTION, SecurityCheckType.CREDENTIAL_LEAKAGE)
+                        and f.severity == "error"
+                        for f in unsuppressed
+                    )
+                    if has_hard:
+                        new_verdict = SecurityVerdict.FAIL
+                    elif unsuppressed:
+                        new_verdict = SecurityVerdict.WARN
+                    else:
+                        new_verdict = SecurityVerdict.PASS
+                    # Replace result with filtered version
+                    from dataclasses import replace as _dc_replace
+                    sv_result = _dc_replace(
+                        sv_result, findings=unsuppressed, verdict=new_verdict,
+                    )
+
             gate_results.append(sv_result)
+
+            # OTel recording
+            try:
+                from startd8.security_prime.otel import record_gate_result
+                from startd8.security_prime.scorer import compute_security_score
+                score = compute_security_score(
+                    sv_result.verdict.value,
+                    [f.severity for f in sv_result.findings] if sv_result.findings else None,
+                )
+                record_gate_result(
+                    str(fpath), sv_result.verdict.value, score,
+                    db_type.value if hasattr(db_type, "value") else str(db_type),
+                    language, len(sv_result.findings),
+                )
+            except ImportError:
+                pass
 
             if sv_result.verdict == SecurityVerdict.FAIL:
                 logger.error(
