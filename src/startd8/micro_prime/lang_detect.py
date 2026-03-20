@@ -14,6 +14,8 @@ Language = Literal["python", "dockerfile", "go", "java", "nodejs", "csharp", "pr
 # Non-language extensions that the LanguageRegistry does not cover.
 _TEXT_AND_OTHER_EXTENSIONS: dict[str, Language] = {
     ".pyi": "python",
+    ".csx": "csharp",
+    ".razor": "csharp",
     ".proto": "proto",
     ".txt": "text",
     ".in": "text",
@@ -67,6 +69,10 @@ def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Lang
     # Dockerfile variants (Dockerfile.dev, Dockerfile.prod)
     if _DOCKERFILE_PATTERN.match(filename):
         return "dockerfile"
+
+    # Suffix-based detection for C# project/solution files
+    if filename.endswith(".csproj") or filename.endswith(".sln"):
+        return "csharp"
 
     # Extension-based detection
     ext = Path(file_path).suffix.lower()

@@ -251,6 +251,7 @@ class ParsedFeature:
     # C#-specific fields
     csharp_namespace: str = ""   # "MyApp.Services"
     target_framework: str = ""   # "net8.0"
+    csharp_project_type: str = ""  # "webapi", "grpc", "console", "classlib"
     # Phase 6: CG-PI-2 — union of callers across all target FQNs
     affected_callers: List[str] = field(default_factory=list)
     # Phase 6: CG-PI-3 — True when max blast radius exceeds threshold

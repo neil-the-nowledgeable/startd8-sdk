@@ -113,6 +113,7 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "spring_boot",
     "csharp_namespace",
     "target_framework",
+    "csharp_project_type",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -321,7 +322,8 @@ _PARSE_LANG_SCHEMA: Dict[str, str] = {
     ),
     "csharp": (
         '      "csharp_namespace": "optional C# root namespace e.g. MyApp.Services",\n'
-        '      "target_framework": "optional .NET target framework e.g. net8.0"'
+        '      "target_framework": "optional .NET target framework e.g. net8.0",\n'
+        '      "csharp_project_type": "optional: webapi, grpc, console, or classlib"'
     ),
 }
 
@@ -341,7 +343,8 @@ _PARSE_LANG_GUIDANCE: Dict[str, str] = {
     ),
     "csharp": (
         'csharp_namespace: (C# projects only) the root namespace, inferred from target file paths (e.g. "src/MyApp/Services/OrderService.cs" → "MyApp.Services"). Omit or empty for non-C# projects.\n'
-        'target_framework: (C# projects only) .NET target framework from the plan. Default "net8.0". Omit or empty for non-C# projects.'
+        'target_framework: (C# projects only) .NET target framework from the plan. Default "net8.0". Omit or empty for non-C# projects.\n'
+        'csharp_project_type: (C# projects only) "webapi", "grpc", "console", or "classlib". Default "webapi". Omit for non-C# projects.'
     ),
 }
 
@@ -514,7 +517,7 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "mode": "create or edit",
       "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
       "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
-      "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
+      "api_signatures": ["see api_signatures guidance below for language-specific syntax"],
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
       "negative_scope": ["things explicitly excluded from this feature"],
@@ -540,7 +543,13 @@ Rules for target_files:
 mode: "create" for new files (plan says implement, add, new, create) or "edit" for modifying existing files (plan says update, modify, change, refactor, fix). Default to "create" if unclear.
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
-api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
+api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the syntax of the target language:
+  Python: "def get_ads(request: AdRequest) -> AdResponse", "class AdService(BaseService)", "def AdService.get_ads(request: AdRequest) -> AdResponse"
+  Go: "func GetQuote(items []*pb.CartItem) *pb.Money", "func (s *ShippingService) ShipOrder(ctx context.Context, req *pb.ShipOrderReq) (string, error)", "type ShippingService struct"
+  Java: "public class AdService extends AdServiceGrpc.AdServiceImplBase", "public void getAds(AdRequest request, StreamObserver<AdResponse> responseObserver)"
+  Node.js: "function chargeServiceHandlers(charge)", "async function main()", "class CurrencyConverter", "const convert = (from, to, amount) => Money"
+  C#: "public class CartService : CartServiceBase", "public override async Task<Empty> AddItem(AddItemRequest request, ServerCallContext context)", "public interface ICartStore"
+For gRPC services, model RPC handlers as methods of their Servicer class (e.g. Python: "def EmailService.SendOrderConfirmation(request, context)", Go: "func (s *EmailService) SendOrderConfirmation(ctx context.Context, req *pb.SendRequest) (*pb.SendResponse, error)"). Include ALL signatures mentioned for the feature.
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
@@ -1488,6 +1497,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 node_version=f.get("node_version", ""),
                 csharp_namespace=f.get("csharp_namespace", ""),
                 target_framework=f.get("target_framework", ""),
+                csharp_project_type=f.get("csharp_project_type", ""),
             ))
 
         parsed = ParsedPlan(
