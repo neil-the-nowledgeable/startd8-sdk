@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from .semantic_checks import SemanticIssue, _basename, _stamp_file_path
+from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 # Pattern: function call with err return that's not checked
 _ERR_ASSIGN_RE = re.compile(
@@ -42,12 +42,6 @@ _DOT_IMPORT_RE = re.compile(
     r'^\s*(?:import\s+)?\.\s+"[^"]+"',
 )
 
-# Pattern: Go type declaration
-_GO_TYPE_DECL_RE = re.compile(
-    r'\b(?:func|type|var|const)\s+\w+',
-)
-
-
 def _check_unchecked_errors(source: str) -> List[SemanticIssue]:
     """Flag error values that are assigned but not checked.
 
@@ -58,7 +52,7 @@ def _check_unchecked_errors(source: str) -> List[SemanticIssue]:
     lines = source.splitlines()
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("//"):
+        if _is_comment_line(stripped):
             continue
         if _ERR_ASSIGN_RE.match(stripped):
             # Look ahead for err check within next 3 lines
@@ -91,7 +85,7 @@ def _check_duplicate_function_names(source: str) -> List[SemanticIssue]:
     seen: dict[str, int] = {}
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//"):
+        if _is_comment_line(stripped):
             continue
         m = _FUNC_DECL_RE.match(stripped)
         if m:
@@ -121,7 +115,7 @@ def _check_fmt_println_in_service(source: str) -> List[SemanticIssue]:
 
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//"):
+        if _is_comment_line(stripped):
             continue
         if _FMT_PRINT_RE.search(stripped):
             issues.append(SemanticIssue(
@@ -142,7 +136,7 @@ def _check_dot_imports(source: str) -> List[SemanticIssue]:
     in_import_block = False
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//"):
+        if _is_comment_line(stripped):
             continue
         if stripped == "import (":
             in_import_block = True

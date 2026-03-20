@@ -6,19 +6,18 @@ with text-based fallback when gofmt is not installed.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
+from ...languages._validation_utils import PYTHON_FINGERPRINTS, check_balanced_braces
 from ..models import ElementContext, RepairContext, RepairStepResult
 
 # Go type/function declarations
 _GO_DECL_RE = re.compile(r"\b(?:func|type|var|const)\s+\w+")
-
-# Python fingerprints
-_PYTHON_FINGERPRINTS = (
-    "def ", "import os", "from __future__", "self.", "#!/usr/bin/env python",
-)
 
 
 class GoSyntaxValidateStep:
@@ -44,17 +43,12 @@ class GoSyntaxValidateStep:
 
 def _validate_go_syntax(code: str) -> tuple[bool, str]:
     """Validate Go source via gofmt; fall back to text heuristics."""
-    # Check for Python fingerprints
-    for fp in _PYTHON_FINGERPRINTS:
+    for fp in PYTHON_FINGERPRINTS:
         if fp in code:
             return False, f"Python fingerprint detected: {fp!r}"
 
     # Try gofmt first
     try:
-        import subprocess
-        import tempfile
-        import os
-
         tmp = tempfile.NamedTemporaryFile(suffix=".go", mode="w", delete=False)
         try:
             tmp.write(code)
@@ -74,43 +68,26 @@ def _validate_go_syntax(code: str) -> tuple[bool, str]:
                 pass
     except FileNotFoundError:
         pass  # gofmt not installed — fall through to text validation
-    except Exception:
-        pass  # Any other error — fall through
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # filesystem/timeout error — fall through
 
     # Text-based fallback
     return _text_based_go_validate(code)
 
 
 def _text_based_go_validate(code: str) -> tuple[bool, str]:
-    """Lightweight text-based Go validation (no gofmt dependency).
-
-    Checks:
-    1. Balanced braces
-    2. Contains package declaration
-    3. Contains at least one func/type/var/const declaration
-    """
-    # Check for Python fingerprints
-    for fp in _PYTHON_FINGERPRINTS:
+    """Lightweight text-based Go validation (no gofmt dependency)."""
+    for fp in PYTHON_FINGERPRINTS:
         if fp in code:
             return False, f"Python fingerprint detected: {fp!r}"
 
-    # Balanced braces
-    depth = 0
-    for ch in code:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                return False, "unbalanced braces"
-    if depth != 0:
-        return False, f"unbalanced braces (depth={depth})"
+    ok, msg = check_balanced_braces(code)
+    if not ok:
+        return False, msg
 
-    # Must have package declaration
     if not re.search(r"^\s*package\s+\w+", code, re.MULTILINE):
         return False, "missing package declaration"
 
-    # Must have at least one declaration
     if not _GO_DECL_RE.search(code):
         return False, "no func/type/var/const declaration found"
 

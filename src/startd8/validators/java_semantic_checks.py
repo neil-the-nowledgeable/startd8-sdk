@@ -1,9 +1,14 @@
 """Java semantic validation — regex-based checks for generated Java code.
 
-No external tool dependency.  Three checks:
+No external tool dependency.  Eight checks:
 1. System.out.println/System.err.println in service classes (should use SLF4J)
 2. SQL injection risk via string concatenation
 3. Interface file containing class declarations
+4. Empty catch blocks (swallow exceptions silently)
+5. Raw generic type usage (e.g. ``List`` instead of ``List<String>``)
+6. Missing @Override annotation on well-known override methods
+7. Missing explicit access modifiers on classes/methods
+8. Wildcard imports (``import java.util.*;``)
 
 Known limitation: comment skip only catches ``//`` and ``/*`` at line start.
 Multi-line ``/* ... */`` blocks and mid-line comments may cause false positives.
@@ -14,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from .semantic_checks import SemanticIssue, _basename, _stamp_file_path
+from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|TRUNCATE)\b'
 _SQL_CONCAT_RE = re.compile(rf'"[^"]*\b{_SQL_KW}[^"]*"\s*\+', re.IGNORECASE)
@@ -57,7 +62,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
 
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         # String concatenation with SQL: "SELECT..." + var
         if _SQL_CONCAT_RE.search(stripped):
@@ -109,7 +114,7 @@ def _check_interface_file_contains_class(
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if re.search(
             r'\b(?:public|private|protected)?\s*(?:final\s+|abstract\s+|static\s+)*class\s+\w+',
@@ -165,8 +170,7 @@ def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
     lines = source.splitlines()
     cleaned_lines = []
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(line.strip()):
             cleaned_lines.append("")
         else:
             cleaned_lines.append(line)
@@ -190,7 +194,7 @@ def _check_raw_type_usage(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         m = _RAW_COLLECTION_RE.search(stripped)
         if m:
@@ -217,7 +221,7 @@ def _check_missing_override(source: str) -> List[SemanticIssue]:
     lines = source.splitlines()
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         m = _OVERRIDE_METHOD_RE.search(stripped)
         if m and m.group("name") in _WELL_KNOWN_OVERRIDES:
@@ -249,7 +253,7 @@ def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         # Check class declarations without access modifier
         if _CLASS_NO_MODIFIER_RE.match(stripped):
@@ -277,7 +281,7 @@ def _check_wildcard_imports(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if _WILDCARD_IMPORT_RE.search(stripped):
             issues.append(SemanticIssue(

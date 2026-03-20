@@ -10,14 +10,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from ...languages._validation_utils import PYTHON_FINGERPRINTS, check_balanced_braces
 from ..models import ElementContext, RepairContext, RepairStepResult
 
 _CS_TYPE_DECL_RE = re.compile(
     r"\b(?:class|interface|enum|struct|record)\s+\w+",
-)
-
-_PYTHON_FINGERPRINTS = (
-    "def ", "import os", "from __future__", "self.", "#!/usr/bin/env python",
 )
 
 
@@ -44,8 +41,7 @@ class CSharpSyntaxValidateStep:
 
 def _validate_csharp_syntax(code: str) -> tuple[bool, str]:
     """Validate C# source via tree-sitter; fall back to text heuristics."""
-    # Check for Python fingerprints
-    for fp in _PYTHON_FINGERPRINTS:
+    for fp in PYTHON_FINGERPRINTS:
         if fp in code:
             return False, f"Python fingerprint detected: {fp!r}"
 
@@ -57,16 +53,9 @@ def _validate_csharp_syntax(code: str) -> tuple[bool, str]:
         pass
 
     # Text-based fallback
-    depth = 0
-    for ch in code:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                return False, "unbalanced braces"
-    if depth != 0:
-        return False, f"unbalanced braces (depth={depth})"
+    ok, msg = check_balanced_braces(code)
+    if not ok:
+        return False, msg
 
     if not _CS_TYPE_DECL_RE.search(code):
         return False, "no type declaration found (class/interface/enum/struct/record)"

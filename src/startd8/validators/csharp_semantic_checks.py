@@ -1,10 +1,14 @@
 """C# semantic validation — regex-based checks for generated C# code.
 
-No external tool dependency (no .NET SDK required).  Four checks:
+No external tool dependency (no .NET SDK required).  Eight checks:
 1. Console.WriteLine() in service classes (should use ILogger<T>)
 2. SQL injection risk via string interpolation
 3. Interface file (IFoo.cs) containing class declarations
 4. Missing <Nullable>enable</Nullable> in .csproj
+5. Empty catch blocks (swallow exceptions silently)
+6. Async methods without await expressions
+7. Missing explicit access modifiers on class declarations
+8. Global using static directives (namespace pollution)
 
 Known limitation: comment skip only catches ``//`` and ``/*`` at line start.
 Multi-line ``/* ... */`` blocks and mid-line comments may cause false positives.
@@ -15,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from .semantic_checks import SemanticIssue, _basename, _stamp_file_path
+from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE)\b'
 _SQL_INTERPOLATION_RE = re.compile(rf'\$"[^"]*\b{_SQL_KW}[^"]*\{{', re.IGNORECASE)
@@ -134,7 +138,7 @@ def _check_interface_file_contains_class(
     for i, line in enumerate(source.splitlines(), start=1):
         # Match class declarations (but not within comments)
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if re.search(
             r'\b(?:public|private|protected|internal)?\s*(?:sealed\s+|abstract\s+|static\s+|partial\s+)*class\s+\w+',
@@ -187,10 +191,6 @@ _ASYNC_METHOD_RE = re.compile(
 
 _AWAIT_RE = re.compile(r'\bawait\b')
 
-_USING_DECL_RE = re.compile(r'\busing\s*\(')
-_USING_STMT_RE = re.compile(r'^\s*using\s+var\b')
-_DISPOSE_RE = re.compile(r'\.Dispose\s*\(\s*\)')
-
 _CS_ACCESS_MODIFIER_RE = re.compile(r'\b(?:public|private|protected|internal)\b')
 
 _CS_CLASS_NO_MODIFIER_RE = re.compile(
@@ -204,8 +204,7 @@ def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
     lines = source.splitlines()
     cleaned_lines = []
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(line.strip()):
             cleaned_lines.append("")
         else:
             cleaned_lines.append(line)
@@ -230,7 +229,7 @@ def _check_missing_async_await(source: str) -> List[SemanticIssue]:
     lines = source.splitlines()
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if _ASYNC_METHOD_RE.search(stripped):
             # Look ahead in the method body for an await
@@ -267,7 +266,7 @@ def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if _CS_CLASS_NO_MODIFIER_RE.match(stripped):
             if not _CS_ACCESS_MODIFIER_RE.search(stripped):
@@ -285,7 +284,7 @@ def _check_wildcard_usings(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if re.match(r'^\s*global\s+using\s+static\b', stripped):
             issues.append(SemanticIssue(

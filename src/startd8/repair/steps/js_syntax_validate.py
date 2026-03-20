@@ -6,10 +6,14 @@ with text-based fallback when node is not installed.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
+from ...languages._validation_utils import PYTHON_FINGERPRINTS, check_balanced_braces
 from ..models import ElementContext, RepairContext, RepairStepResult
 
 _JS_KEYWORDS = frozenset({
@@ -18,10 +22,6 @@ _JS_KEYWORDS = frozenset({
     "switch", "case", "break", "continue", "new", "this", "async",
     "await", "try", "catch", "throw",
 })
-
-_PYTHON_FINGERPRINTS = (
-    "def ", "from __future__", "self.", "#!/usr/bin/env python",
-)
 
 
 class JsSyntaxValidateStep:
@@ -47,17 +47,12 @@ class JsSyntaxValidateStep:
 
 def _validate_js_syntax(code: str) -> tuple[bool, str]:
     """Validate JS source via node --check; fall back to text heuristics."""
-    # Check for Python fingerprints
-    for fp in _PYTHON_FINGERPRINTS:
+    for fp in PYTHON_FINGERPRINTS:
         if fp in code:
             return False, f"Python fingerprint detected: {fp!r}"
 
     # Try node --check
     try:
-        import subprocess
-        import tempfile
-        import os
-
         tmp = tempfile.NamedTemporaryFile(suffix=".js", mode="w", delete=False)
         try:
             tmp.write(code)
@@ -77,8 +72,8 @@ def _validate_js_syntax(code: str) -> tuple[bool, str]:
                 pass
     except FileNotFoundError:
         pass  # node not installed — fall through
-    except Exception:
-        pass
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # filesystem/timeout error — fall through
 
     # Text-based fallback
     return _text_based_js_validate(code)
@@ -86,19 +81,10 @@ def _validate_js_syntax(code: str) -> tuple[bool, str]:
 
 def _text_based_js_validate(code: str) -> tuple[bool, str]:
     """Lightweight text-based JS validation."""
-    # Balanced braces
-    depth = 0
-    for ch in code:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                return False, "unbalanced braces"
-    if depth != 0:
-        return False, f"unbalanced braces (depth={depth})"
+    ok, msg = check_balanced_braces(code)
+    if not ok:
+        return False, msg
 
-    # Must contain at least one JS keyword or arrow function
     has_keyword = any(
         re.search(rf'\b{kw}\b', code) for kw in _JS_KEYWORDS
     ) or "=>" in code

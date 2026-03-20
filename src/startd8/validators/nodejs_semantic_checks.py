@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
-from .semantic_checks import SemanticIssue, _basename, _stamp_file_path
+from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _CONSOLE_LOG_RE = re.compile(
     r'\bconsole\s*\.\s*(?:log|warn|error|info|debug)\s*\(',
@@ -25,6 +25,12 @@ _VAR_DECL_RE = re.compile(r'^\s*var\s+\w+')
 _REQUIRE_RE = re.compile(
     r"""(?:require\s*\(\s*['"]([^'"]+)['"]\s*\)|"""
     r"""from\s+['"]([^'"]+)['"]\s*;?)""",
+)
+
+_AWAIT_RE = re.compile(r'\bawait\b')
+
+_ASYNC_CALL_RE = re.compile(
+    r'^\s*\w+\s*\.\s*(?:save|create|update|delete|find|remove|connect|close|send|fetch)\s*\(',
 )
 
 
@@ -42,7 +48,7 @@ def _check_console_log_in_service(
 
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if _CONSOLE_LOG_RE.search(stripped):
             issues.append(SemanticIssue(
@@ -62,7 +68,7 @@ def _check_var_usage(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         if _VAR_DECL_RE.match(stripped):
             issues.append(SemanticIssue(
@@ -80,7 +86,7 @@ def _check_duplicate_requires(source: str) -> List[SemanticIssue]:
     seen: dict[str, int] = {}
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
         m = _REQUIRE_RE.search(stripped)
         if m:
@@ -109,17 +115,13 @@ def _check_unhandled_promises(source: str) -> List[SemanticIssue]:
     issues: List[SemanticIssue] = []
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("//") or stripped.startswith("/*"):
+        if _is_comment_line(stripped):
             continue
-        # Skip lines that already have await
-        if re.search(r'\bawait\b', stripped):
+        if _AWAIT_RE.search(stripped):
             continue
-        # Skip lines that have .catch or .then
         if '.catch(' in stripped or '.then(' in stripped:
             continue
-        # Detect common async patterns without await
-        # Pattern: standalone function call that's known async
-        if re.match(r'^\s*\w+\s*\.\s*(?:save|create|update|delete|find|remove|connect|close|send|fetch)\s*\(', stripped):
+        if _ASYNC_CALL_RE.match(stripped):
             # Only flag if it's a standalone statement (ends with ; or ))
             if stripped.rstrip().endswith(';') or stripped.rstrip().endswith(')'):
                 issues.append(SemanticIssue(

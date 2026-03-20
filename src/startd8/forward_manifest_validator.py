@@ -556,6 +556,35 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
+def _wire_semantic_checks(
+    content: str,
+    result: "DiskComplianceResult",
+    run_checks_fn: str,
+) -> None:
+    """Run a language-specific semantic check function and append issues.
+
+    Args:
+        content: Source code string.
+        result: DiskComplianceResult to append issues to (mutated in place).
+        run_checks_fn: Dotted import path to the ``run_*_semantic_checks``
+            function, e.g. ``"startd8.validators.java_semantic_checks.run_java_semantic_checks"``.
+    """
+    module_path, func_name = run_checks_fn.rsplit(".", 1)
+    try:
+        import importlib
+        mod = importlib.import_module(module_path)
+        run_fn = getattr(mod, func_name)
+    except (ImportError, AttributeError):
+        return
+    for issue in run_fn(content, file_path=result.file_path):
+        result.semantic_issues.append({
+            "category": issue.check,
+            "severity": issue.severity,
+            "message": issue.message,
+            "line": issue.line,
+        })
+
+
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -829,22 +858,10 @@ def _validate_csharp_file(
         result.contract_compliance = min(result.contract_compliance, 0.8)
 
     # C# semantic checks (P0: REQ-KZ-CS-200 wiring into disk validation)
-    try:
-        from startd8.validators.csharp_semantic_checks import (
-            run_csharp_semantic_checks,
-        )
-        cs_issues = run_csharp_semantic_checks(
-            content, file_path=result.file_path,
-        )
-        for issue in cs_issues:
-            result.semantic_issues.append({
-                "category": issue.check,
-                "severity": issue.severity,
-                "message": issue.message,
-                "line": issue.line,
-            })
-    except ImportError:
-        pass  # csharp_semantic_checks not available
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
+    )
 
     return result
 
@@ -1224,22 +1241,10 @@ def _validate_js_file(
                 pass
 
     # Node.js semantic checks
-    try:
-        from startd8.validators.nodejs_semantic_checks import (
-            run_nodejs_semantic_checks,
-        )
-        js_issues = run_nodejs_semantic_checks(
-            content, file_path=result.file_path,
-        )
-        for issue in js_issues:
-            result.semantic_issues.append({
-                "category": issue.check,
-                "severity": issue.severity,
-                "message": issue.message,
-                "line": issue.line,
-            })
-    except ImportError:
-        pass  # nodejs_semantic_checks not available
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.nodejs_semantic_checks.run_nodejs_semantic_checks",
+    )
 
     return result
 
@@ -1361,22 +1366,10 @@ def _validate_go_file(
         result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
 
     # Go semantic checks
-    try:
-        from startd8.validators.go_semantic_checks import (
-            run_go_semantic_checks,
-        )
-        go_issues = run_go_semantic_checks(
-            content, file_path=result.file_path,
-        )
-        for issue in go_issues:
-            result.semantic_issues.append({
-                "category": issue.check,
-                "severity": issue.severity,
-                "message": issue.message,
-                "line": issue.line,
-            })
-    except ImportError:
-        pass  # go_semantic_checks not available
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.go_semantic_checks.run_go_semantic_checks",
+    )
 
     return result
 
@@ -1455,23 +1448,11 @@ def _validate_java_file(
             "message": "missing package declaration",
         })
 
-    # Java semantic checks (same pattern as C# at lines 829-845)
-    try:
-        from startd8.validators.java_semantic_checks import (
-            run_java_semantic_checks,
-        )
-        java_issues = run_java_semantic_checks(
-            content, file_path=result.file_path,
-        )
-        for issue in java_issues:
-            result.semantic_issues.append({
-                "category": issue.check,
-                "severity": issue.severity,
-                "message": issue.message,
-                "line": issue.line,
-            })
-    except ImportError:
-        pass  # java_semantic_checks not available
+    # Java semantic checks
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.java_semantic_checks.run_java_semantic_checks",
+    )
 
     return result
 

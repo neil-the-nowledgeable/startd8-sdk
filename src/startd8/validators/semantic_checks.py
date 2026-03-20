@@ -209,6 +209,16 @@ def _stamp_file_path(
     ]
 
 
+def _is_comment_line(stripped: str) -> bool:
+    """Return True if a stripped line is a single-line comment start.
+
+    Catches ``//`` and ``/*`` at line start.  Does NOT handle mid-line
+    comments or multi-line ``/* ... */`` blocks — known limitation
+    shared by all language-specific semantic check modules.
+    """
+    return stripped.startswith("//") or stripped.startswith("/*")
+
+
 def _basename(file_path: str) -> str:
     """Extract the filename from a path, handling both ``/`` and ``\\``."""
     name = file_path.rsplit("/", 1)[-1]

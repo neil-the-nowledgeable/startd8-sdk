@@ -6,9 +6,11 @@ with text-based fallback (same logic as ``java.py:validate_syntax()``).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
+from ...languages._validation_utils import check_balanced_braces
 from ..models import ElementContext, RepairContext, RepairStepResult
 
 
@@ -60,18 +62,10 @@ def _validate_java_syntax(code: str) -> tuple[bool, str]:
         pass  # Fall through to text-based validation
 
     # Text-based fallback: balanced braces + type declaration
-    depth = 0
-    for ch in code:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                return False, "unbalanced braces"
-    if depth != 0:
-        return False, f"unbalanced braces (depth={depth})"
+    ok, msg = check_balanced_braces(code)
+    if not ok:
+        return False, msg
 
-    import re
     if not re.search(r"\b(?:class|interface|enum|record|@interface)\s+\w+", code):
         return False, "no type declaration found (class/interface/enum/record)"
 
