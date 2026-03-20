@@ -77,6 +77,7 @@ class TestRouteFailures:
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
             "ast_validate", "java_syntax_validate", "go_syntax_validate",
+            "csharp_syntax_validate", "js_syntax_validate",
         ]
 
     def test_canonical_step_order(self):
@@ -92,6 +93,7 @@ class TestRouteFailures:
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
             "ast_validate", "java_syntax_validate", "go_syntax_validate",
+            "csharp_syntax_validate", "js_syntax_validate",
         ]
         assert route.steps == expected_order
 

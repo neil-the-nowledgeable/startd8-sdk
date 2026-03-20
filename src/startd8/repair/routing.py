@@ -21,8 +21,10 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    CSharpSyntaxValidateStep,
     GoSyntaxValidateStep,
     JavaSyntaxValidateStep,
+    JsSyntaxValidateStep,
     SemanticDiscardedReturnFixStep,
     SemanticDuplicateMainFixStep,
     SemanticImportFixStep,
@@ -59,6 +61,8 @@ _CANONICAL_ORDER = [
     "ast_validate",
     "java_syntax_validate",
     "go_syntax_validate",
+    "csharp_syntax_validate",
+    "js_syntax_validate",
 ]
 
 # Routing table: category → (matched_pattern, step_names, confidence)
@@ -78,6 +82,12 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     # Go repair routes
     ("syntax", "go_syntax_error", ["fence_strip", "bracket_balance", "go_syntax_validate"], "HIGH"),
     ("import", "go_import_error", ["fence_strip", "go_syntax_validate"], "MEDIUM"),
+    # C# repair routes
+    ("syntax", "csharp_syntax_error", ["fence_strip", "bracket_balance", "csharp_syntax_validate"], "HIGH"),
+    ("import", "csharp_import_error", ["fence_strip", "csharp_syntax_validate"], "MEDIUM"),
+    # Node.js repair routes
+    ("syntax", "js_syntax_error", ["fence_strip", "bracket_balance", "js_syntax_validate"], "HIGH"),
+    ("import", "js_import_error", ["fence_strip", "js_syntax_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor
@@ -103,6 +113,8 @@ _STEP_FACTORIES: dict[str, type] = {
     "ast_validate": AstValidateStep,
     "java_syntax_validate": JavaSyntaxValidateStep,
     "go_syntax_validate": GoSyntaxValidateStep,
+    "csharp_syntax_validate": CSharpSyntaxValidateStep,
+    "js_syntax_validate": JsSyntaxValidateStep,
 }
 
 

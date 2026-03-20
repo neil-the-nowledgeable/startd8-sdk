@@ -854,7 +854,7 @@ class IntegrationEngine:
             diagnostics = parse_checkpoint_diagnostics(failed_results)
             files_to_repair: Dict[Path, str] = {}
             for gp in gen_paths:
-                if gp.suffix in (".py", ".java", ".go") and gp.exists():
+                if gp.suffix in (".py", ".java", ".go", ".cs", ".js") and gp.exists():
                     files_to_repair[gp] = gp.read_text(encoding="utf-8")
 
             if not files_to_repair:
@@ -961,7 +961,7 @@ class IntegrationEngine:
             diagnostics = parse_checkpoint_diagnostics(failed_checks)
             files_to_repair: Dict[Path, str] = {}
             for ifile in integrated_files:
-                if ifile.suffix in (".py", ".java", ".go") and ifile.exists():
+                if ifile.suffix in (".py", ".java", ".go", ".cs", ".js") and ifile.exists():
                     files_to_repair[ifile] = ifile.read_text(
                         encoding="utf-8",
                     )

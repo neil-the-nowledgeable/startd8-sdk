@@ -177,6 +177,126 @@ def _check_missing_nullable_in_csproj(
     )]
 
 
+_EMPTY_CATCH_RE = re.compile(
+    r'catch\s*(?:\([^)]*\))?\s*\{\s*\}',
+)
+
+_ASYNC_METHOD_RE = re.compile(
+    r'\basync\s+(?:Task|ValueTask|IAsyncEnumerable)(?:<[^>]+>)?\s+\w+\s*\(',
+)
+
+_AWAIT_RE = re.compile(r'\bawait\b')
+
+_USING_DECL_RE = re.compile(r'\busing\s*\(')
+_USING_STMT_RE = re.compile(r'^\s*using\s+var\b')
+_DISPOSE_RE = re.compile(r'\.Dispose\s*\(\s*\)')
+
+_CS_ACCESS_MODIFIER_RE = re.compile(r'\b(?:public|private|protected|internal)\b')
+
+_CS_CLASS_NO_MODIFIER_RE = re.compile(
+    r'^\s*(?:sealed\s+|abstract\s+|static\s+|partial\s+)*class\s+\w+',
+)
+
+
+def _check_empty_catch_blocks(source: str) -> List[SemanticIssue]:
+    """Flag empty catch blocks that swallow exceptions silently."""
+    issues: List[SemanticIssue] = []
+    lines = source.splitlines()
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("//") or stripped.startswith("/*"):
+            cleaned_lines.append("")
+        else:
+            cleaned_lines.append(line)
+    cleaned = "\n".join(cleaned_lines)
+    for m in _EMPTY_CATCH_RE.finditer(cleaned):
+        line_num = cleaned[:m.start()].count('\n') + 1
+        if not any(iss.line == line_num for iss in issues):
+            issues.append(SemanticIssue(
+                check="empty_catch_block",
+                severity="warning",
+                message=(
+                    "Empty catch block — exceptions should be logged or re-thrown"
+                ),
+                line=line_num,
+            ))
+    return issues
+
+
+def _check_missing_async_await(source: str) -> List[SemanticIssue]:
+    """Flag async methods that don't contain any await expressions."""
+    issues: List[SemanticIssue] = []
+    lines = source.splitlines()
+    for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if stripped.startswith("//") or stripped.startswith("/*"):
+            continue
+        if _ASYNC_METHOD_RE.search(stripped):
+            # Look ahead in the method body for an await
+            depth = 0
+            found_await = False
+            started = False
+            for j in range(i - 1, len(lines)):
+                for ch in lines[j]:
+                    if ch == "{":
+                        depth += 1
+                        started = True
+                    elif ch == "}":
+                        depth -= 1
+                if started and depth == 0:
+                    break
+                if _AWAIT_RE.search(lines[j]):
+                    found_await = True
+                    break
+            if not found_await and started:
+                issues.append(SemanticIssue(
+                    check="missing_async_await",
+                    severity="warning",
+                    message=(
+                        "Async method without `await` — "
+                        "consider making synchronous or adding await"
+                    ),
+                    line=i,
+                ))
+    return issues
+
+
+def _check_missing_access_modifiers(source: str) -> List[SemanticIssue]:
+    """Flag class declarations missing explicit access modifiers."""
+    issues: List[SemanticIssue] = []
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("//") or stripped.startswith("/*"):
+            continue
+        if _CS_CLASS_NO_MODIFIER_RE.match(stripped):
+            if not _CS_ACCESS_MODIFIER_RE.search(stripped):
+                issues.append(SemanticIssue(
+                    check="missing_access_modifier",
+                    severity="warning",
+                    message="Class declaration missing explicit access modifier",
+                    line=i,
+                ))
+    return issues
+
+
+def _check_wildcard_usings(source: str) -> List[SemanticIssue]:
+    """Flag global using static directives (namespace pollution)."""
+    issues: List[SemanticIssue] = []
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("//") or stripped.startswith("/*"):
+            continue
+        if re.match(r'^\s*global\s+using\s+static\b', stripped):
+            issues.append(SemanticIssue(
+                check="global_using_static",
+                severity="warning",
+                message="Global using static pollutes namespace — use explicit imports",
+                line=i,
+            ))
+    return issues
+
+
 def run_csharp_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
@@ -201,5 +321,9 @@ def run_csharp_semantic_checks(
     issues.extend(_check_console_writeline(source))
     issues.extend(_check_sql_injection_risk(source))
     issues.extend(_check_interface_file_contains_class(source, file_path))
+    issues.extend(_check_empty_catch_blocks(source))
+    issues.extend(_check_missing_async_await(source))
+    issues.extend(_check_missing_access_modifiers(source))
+    issues.extend(_check_wildcard_usings(source))
 
     return _stamp_file_path(issues, file_path)

@@ -1223,6 +1223,24 @@ def _validate_js_file(
             except OSError:
                 pass
 
+    # Node.js semantic checks
+    try:
+        from startd8.validators.nodejs_semantic_checks import (
+            run_nodejs_semantic_checks,
+        )
+        js_issues = run_nodejs_semantic_checks(
+            content, file_path=result.file_path,
+        )
+        for issue in js_issues:
+            result.semantic_issues.append({
+                "category": issue.check,
+                "severity": issue.severity,
+                "message": issue.message,
+                "line": issue.line,
+            })
+    except ImportError:
+        pass  # nodejs_semantic_checks not available
+
     return result
 
 

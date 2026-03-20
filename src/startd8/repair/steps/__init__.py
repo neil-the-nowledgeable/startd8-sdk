@@ -5,8 +5,10 @@ Each step implements the ``RepairStep`` protocol from ``repair.protocol``.
 
 from .ast_validate import AstValidateStep
 from .bracket_balance import BracketBalanceStep
+from .csharp_syntax_validate import CSharpSyntaxValidateStep
 from .go_syntax_validate import GoSyntaxValidateStep
 from .java_syntax_validate import JavaSyntaxValidateStep
+from .js_syntax_validate import JsSyntaxValidateStep
 from .class_body_dedup import ClassBodyDeduplicationStep
 from .definition_order_fix import DefinitionOrderFixStep
 from .dunder_all_fix import DunderAllFixStep
@@ -27,8 +29,10 @@ from .variable_initialization import VariableInitializationStep
 __all__ = [
     "AstValidateStep",
     "BracketBalanceStep",
+    "CSharpSyntaxValidateStep",
     "GoSyntaxValidateStep",
     "JavaSyntaxValidateStep",
+    "JsSyntaxValidateStep",
     "ClassBodyDeduplicationStep",
     "DefinitionOrderFixStep",
     "DunderAllFixStep",
