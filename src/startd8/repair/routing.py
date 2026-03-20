@@ -21,6 +21,7 @@ from .steps import (
     FenceStripStep,
     FutureImportReorderStep,
     IndentNormalizeStep,
+    JavaSyntaxValidateStep,
     SemanticDiscardedReturnFixStep,
     SemanticDuplicateMainFixStep,
     SemanticImportFixStep,
@@ -55,6 +56,7 @@ _CANONICAL_ORDER = [
     "semantic_discarded_return_fix",
     "semantic_duplicate_main_fix",
     "ast_validate",
+    "java_syntax_validate",
 ]
 
 # Routing table: category → (matched_pattern, step_names, confidence)
@@ -68,6 +70,9 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     ("semantic", "method_resolution", ["semantic_method_resolution_fix", "ast_validate"], "HIGH"),
     ("semantic", "discarded_return", ["semantic_discarded_return_fix", "ast_validate"], "MEDIUM"),
     ("semantic", "duplicate_main_guard", ["semantic_duplicate_main_fix", "ast_validate"], "HIGH"),
+    # Java repair routes
+    ("syntax", "java_syntax_error", ["fence_strip", "bracket_balance", "java_syntax_validate"], "HIGH"),
+    ("import", "java_import_error", ["fence_strip", "java_syntax_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor
@@ -91,6 +96,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "semantic_discarded_return_fix": SemanticDiscardedReturnFixStep,
     "semantic_duplicate_main_fix": SemanticDuplicateMainFixStep,
     "ast_validate": AstValidateStep,
+    "java_syntax_validate": JavaSyntaxValidateStep,
 }
 
 

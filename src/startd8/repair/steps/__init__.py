@@ -5,6 +5,7 @@ Each step implements the ``RepairStep`` protocol from ``repair.protocol``.
 
 from .ast_validate import AstValidateStep
 from .bracket_balance import BracketBalanceStep
+from .java_syntax_validate import JavaSyntaxValidateStep
 from .class_body_dedup import ClassBodyDeduplicationStep
 from .definition_order_fix import DefinitionOrderFixStep
 from .dunder_all_fix import DunderAllFixStep
@@ -25,6 +26,7 @@ from .variable_initialization import VariableInitializationStep
 __all__ = [
     "AstValidateStep",
     "BracketBalanceStep",
+    "JavaSyntaxValidateStep",
     "ClassBodyDeduplicationStep",
     "DefinitionOrderFixStep",
     "DunderAllFixStep",

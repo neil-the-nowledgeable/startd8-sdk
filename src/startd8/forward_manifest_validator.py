@@ -1351,6 +1351,24 @@ def _validate_java_file(
             "message": "missing package declaration",
         })
 
+    # Java semantic checks (same pattern as C# at lines 829-845)
+    try:
+        from startd8.validators.java_semantic_checks import (
+            run_java_semantic_checks,
+        )
+        java_issues = run_java_semantic_checks(
+            content, file_path=result.file_path,
+        )
+        for issue in java_issues:
+            result.semantic_issues.append({
+                "category": issue.check,
+                "severity": issue.severity,
+                "message": issue.message,
+                "line": issue.line,
+            })
+    except ImportError:
+        pass  # java_semantic_checks not available
+
     return result
 
 

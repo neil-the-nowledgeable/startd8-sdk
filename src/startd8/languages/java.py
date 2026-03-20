@@ -191,7 +191,7 @@ class JavaLanguageProfile:
 
     @property
     def repair_enabled(self) -> bool:
-        return False
+        return True
 
     @property
     def docker_base_image(self) -> str:

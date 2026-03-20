@@ -76,7 +76,7 @@ class TestRouteFailures:
             "fence_strip", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
-            "ast_validate",
+            "ast_validate", "java_syntax_validate",
         ]
 
     def test_canonical_step_order(self):
@@ -91,7 +91,7 @@ class TestRouteFailures:
             "fence_strip", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
-            "ast_validate",
+            "ast_validate", "java_syntax_validate",
         ]
         assert route.steps == expected_order
 
