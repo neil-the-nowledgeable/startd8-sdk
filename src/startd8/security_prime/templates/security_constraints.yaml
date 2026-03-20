@@ -1,0 +1,70 @@
+# Security Prime — P1 guidance templates.
+#
+# These supplement the DatabasePatternRegistry's safe_param_syntax with
+# prose explanations and CWE references.  Used by guidance.py when
+# building P1 prompt sections.
+#
+# Structure: domain → language → library → {secure, insecure, reason}
+# The pattern registry provides the regex patterns; this file provides
+# the human-readable explanations for LLM consumption.
+
+injection:
+  csharp:
+    npgsql:
+      secure: |
+        // SECURE: Parameterized query via NpgsqlParameter
+        using var cmd = new NpgsqlCommand(
+            "SELECT quantity FROM carts WHERE user_id = @userId",
+            connection);
+        cmd.Parameters.AddWithValue("@userId", userId);
+      insecure: |
+        // INSECURE: String interpolation — SQL injection vulnerability
+        cmd.CommandText = $"SELECT quantity FROM carts WHERE userId='{userId}'";
+      reason: "CWE-89: User-controlled values interpolated into SQL allow query manipulation."
+    spanner:
+      secure: |
+        // SECURE: SpannerParameterCollection binding
+        cmd.CommandText = "SELECT quantity FROM cart_items WHERE user_id = @userId";
+        cmd.Parameters.Add("userId", SpannerDbType.String, userId);
+      insecure: |
+        // INSECURE: String interpolation — SQL injection vulnerability
+        cmd.CommandText = $"SELECT quantity FROM cart_items WHERE user_id = '{userId}'";
+      reason: "CWE-89: Spanner supports @param binding via SpannerParameterCollection."
+  python:
+    psycopg2:
+      secure: |
+        # SECURE: Parameterized query with %s placeholders
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+      insecure: |
+        # INSECURE: f-string interpolation — SQL injection vulnerability
+        cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+      reason: "CWE-89: psycopg2 supports %s placeholders with tuple parameters."
+  go:
+    database_sql:
+      secure: |
+        // SECURE: Positional parameter binding
+        rows, err := db.Query("SELECT * FROM users WHERE id = $1", userID)
+      insecure: |
+        // INSECURE: fmt.Sprintf — SQL injection vulnerability
+        rows, err := db.Query(fmt.Sprintf("SELECT * FROM users WHERE id = %s", userID))
+      reason: "CWE-89: database/sql supports $N positional parameters."
+  java:
+    jdbc:
+      secure: |
+        // SECURE: PreparedStatement with parameter binding
+        PreparedStatement stmt = conn.prepareStatement("SELECT * FROM users WHERE id = ?");
+        stmt.setString(1, userId);
+      insecure: |
+        // INSECURE: String concatenation — SQL injection vulnerability
+        Statement stmt = conn.createStatement();
+        stmt.executeQuery("SELECT * FROM users WHERE id = '" + userId + "'");
+      reason: "CWE-89: Use PreparedStatement.setString() instead of Statement + concatenation."
+  nodejs:
+    pg:
+      secure: |
+        // SECURE: Parameterized query with $N placeholders
+        const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+      insecure: |
+        // INSECURE: Template literal — SQL injection vulnerability
+        const result = await pool.query(`SELECT * FROM users WHERE id = ${userId}`);
+      reason: "CWE-89: node-postgres supports $N placeholders with array parameters."

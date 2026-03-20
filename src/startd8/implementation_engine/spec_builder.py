@@ -1062,6 +1062,19 @@ def build_spec_prompt(
         )
         prioritized.append((1, "kaizen_hints", kaizen_section))
 
+    # P1: Security guidance — library-specific safe/unsafe patterns (Anzen SP-INJ-020)
+    if context.get("security_sensitive") and context.get("detected_database"):
+        try:
+            from startd8.security_prime.guidance import inject_p1_guidance
+            _sec_guidance = inject_p1_guidance(
+                context["detected_database"],
+                (lang_profile.language_id if lang_profile and hasattr(lang_profile, "language_id") else ""),
+            )
+            if _sec_guidance:
+                prioritized.append((1, "security_guidance", _sec_guidance))
+        except ImportError:
+            pass  # security_prime not available — degrade to P0 constraint only
+
     # P1: Proven exemplar reference (REQ-PEP-101)
     exemplar_section = _build_exemplar_section(context)
     if exemplar_section:

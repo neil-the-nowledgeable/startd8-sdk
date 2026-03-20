@@ -72,7 +72,7 @@ class TestTaskComplexitySignals:
     def test_to_dict_contains_all_fields(self):
         signals = TaskComplexitySignals()
         d = signals.to_dict()
-        assert len(d) == 12
+        assert len(d) == 13  # includes security_sensitive (SP-PL-002)
 
 
 # ── ComplexityRoutingConfig ──────────────────────────────────────────

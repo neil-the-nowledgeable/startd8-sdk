@@ -25,6 +25,7 @@ __all__ = [
     "TOTAL_DRAFT_BUDGET_TOKENS",
     "CHARS_PER_TOKEN",
     "EXEMPLAR_BUDGET_CHARS",
+    "ACCUMULATED_MANIFEST_BUDGET_CHARS",
     "truncate_with_marker",
     "truncate_arch_context",
     "estimate_tokens",
@@ -71,6 +72,15 @@ CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
 
 # Exemplar injection budget (REQ-PEP-101/102)
 EXEMPLAR_BUDGET_CHARS: int = 3_200        # ~800 tokens for exemplar section
+
+# Within-run accumulated manifest budget (Layer 3)
+ACCUMULATED_MANIFEST_BUDGET_CHARS: int = 2_400  # ~600 tokens for upstream contracts
+
+# Security Prime budget constants (Anzen SP-PL-020/021)
+# P0: Hard constraint — never trimmed.  ~50 tokens.
+SECURITY_CONSTRAINT_BUDGET_CHARS: int = 200
+# P1: Library-specific guidance (safe/unsafe examples) — alongside Kaizen hints.
+SECURITY_GUIDANCE_BUDGET_CHARS: int = 1_600     # ~400 tokens for P1 guidance section
 
 # CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
 # files need more prompt headroom for context injection; TRIVIAL tasks need
