@@ -226,6 +226,32 @@ def get_drafter_system_prompt(
         stub_marker=_stub_marker,
     )
 
+    # Anzen SP-INJ-001: P0 security constraint when database framework detected.
+    # Appended after template formatting so it is never trimmed by budget.
+    if language_profile is not None and hasattr(language_profile, "framework_imports"):
+        _db_frameworks = {
+            "npgsql", "psycopg2", "pg", "spanner", "jdbc", "mysql",
+            "sqlite3", "redis", "ef_core", "sqlalchemy",
+        }
+        _detected = [
+            fw for fw in language_profile.framework_imports
+            if fw in _db_frameworks
+        ]
+        if _detected:
+            prompt += (
+                "\n\nSECURITY CONSTRAINT: MUST use parameterized queries for ALL "
+                "external inputs. NEVER use string interpolation or concatenation "
+                "for user-supplied values in SQL/query strings. "
+                "If the reference implementation uses an insecure pattern "
+                "(e.g., string interpolation in SQL), DEVIATE and use the secure "
+                "alternative. Document deviations with: "
+                "// SECURITY: Deviates from reference (CWE-89)."
+            )
+            logger.info(
+                "Drafter P0 security constraint injected (detected: %s)",
+                ", ".join(_detected),
+            )
+
     logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)
 
     return prompt, mode

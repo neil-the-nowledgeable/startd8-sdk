@@ -1151,6 +1151,85 @@ class IntegrationEngine:
         return results, repair_success
 
     # ------------------------------------------------------------------
+    # Anzen gate: security verification (SP-GT-001–004)
+    # ------------------------------------------------------------------
+
+    def _run_anzen_gate(
+        self,
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+        result_metadata: Dict[str, Any],
+    ) -> None:
+        """Run security verification on integrated files via query_prime.
+
+        Uses ``query_prime.security.verify_file()`` for two-pass injection
+        detection, credential leakage, and resource lifecycle checks.
+        Injection and credential findings are hard failures (not advisory).
+
+        Runs AFTER semantic repair so it evaluates repaired code.
+        Runs BEFORE advisory downgrade so findings are never demoted.
+        """
+        try:
+            from startd8.query_prime.security import verify_file
+            from startd8.query_prime.decomposer import detect_database_type
+            from startd8.query_prime.models import SecurityVerdict
+        except ImportError:
+            return  # query_prime not available — skip silently
+
+        gate_results = []
+
+        for fpath in integrated_files:
+            if not fpath.is_file():
+                continue
+            try:
+                source = fpath.read_text(errors="replace")
+            except OSError:
+                continue
+
+            # Auto-detect database type from source content
+            db_type = detect_database_type(source)
+            if db_type is None:
+                continue  # No database surface — skip
+
+            # Resolve language from file extension
+            _ext_to_lang = {
+                ".cs": "csharp", ".py": "python", ".go": "go",
+                ".java": "java", ".js": "nodejs", ".ts": "nodejs",
+            }
+            language = _ext_to_lang.get(fpath.suffix, "")
+            if not language:
+                continue
+
+            sv_result = verify_file(
+                source, str(fpath), db_type, language,
+            )
+            gate_results.append(sv_result)
+
+            if sv_result.verdict == SecurityVerdict.FAIL:
+                logger.error(
+                    "Anzen gate FAIL: %s — %s",
+                    fpath.name,
+                    sv_result.findings[0].message if sv_result.findings else "security violation",
+                    extra={"unit_id": unit.id},
+                )
+            elif sv_result.verdict == SecurityVerdict.WARN:
+                logger.warning(
+                    "Anzen gate WARN: %s — lifecycle issue",
+                    fpath.name,
+                    extra={"unit_id": unit.id},
+                )
+
+        if gate_results:
+            result_metadata["anzen_gate"] = [
+                {
+                    "file": r.file_path,
+                    "verdict": r.verdict.value,
+                    "findings": len(r.findings),
+                }
+                for r in gate_results
+            ]
+
+    # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
     # ------------------------------------------------------------------
 
@@ -2080,6 +2159,11 @@ class IntegrationEngine:
             sem_repair = self._attempt_semantic_repair(integrated_files, unit)
             if sem_repair is not None:
                 result_obj_metadata["semantic_repair"] = sem_repair
+
+            # ── Anzen gate (SP-GT-001–004) — security verification ──
+            # Runs AFTER semantic repair (evaluates repaired code) and
+            # BEFORE advisory downgrade (security findings are never advisory).
+            self._run_anzen_gate(integrated_files, unit, result_obj_metadata)
 
             # Advisory downgrade (only if repair not attempted or failed)
             # R6-S1: When repair succeeds, skip downgrade — results are

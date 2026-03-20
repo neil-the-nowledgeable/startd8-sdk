@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Any, Dict, Iterator, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 
 class ComplexityTier(str, Enum):
@@ -72,6 +72,10 @@ class TaskComplexitySignals:
     # Used for non-Python trivial routing: non-Python files below LOC
     # thresholds route to TRIVIAL/SIMPLE instead of cloud fallback.
     file_extension: str = ".py"
+    # Security-sensitive tasks (database queries, credential handling) are
+    # elevated to minimum MODERATE tier to prevent under-provisioned
+    # generation for code with asymmetric blast radius.  (SP-PL-002)
+    security_sensitive: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging."""
@@ -94,8 +98,10 @@ class ClassificationResult:
     tier: ComplexityTier
     reason: str
     signals: TaskComplexitySignals
+    exemplar_override: Optional[str] = None
 
     def __iter__(self) -> Iterator[Union[ComplexityTier, str]]:
+        """Yield (tier, reason) for backward-compatible tuple unpacking."""
         return iter((self.tier, self.reason))
 
 
