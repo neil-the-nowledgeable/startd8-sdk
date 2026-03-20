@@ -249,6 +249,35 @@ def _extract_function_name(sig_str: str) -> Optional[str]:
     return cleaned[:paren_idx].strip()
 
 
+def _parse_non_python_signatures(
+    lang: str,
+    api_signatures: list[str],
+    target_file: str,
+) -> list[ForwardElementSpec]:
+    """REQ-EE-100: Dispatch to language-specific signature parsers.
+
+    Returns ForwardElementSpec objects for Go, Java, Node.js, and C# signatures.
+    Returns empty list for unsupported languages (Dockerfile, YAML, etc.).
+    """
+    if lang == "go":
+        from startd8.utils.go_signature_parser import parse_go_signatures
+
+        return parse_go_signatures(api_signatures, target_file)
+    elif lang == "java":
+        from startd8.utils.java_signature_parser import parse_java_signatures
+
+        return parse_java_signatures(api_signatures, target_file)
+    elif lang == "nodejs":
+        from startd8.utils.nodejs_signature_parser import parse_nodejs_signatures
+
+        return parse_nodejs_signatures(api_signatures, target_file)
+    elif lang == "csharp":
+        from startd8.utils.csharp_signature_parser import parse_csharp_signatures
+
+        return parse_csharp_signatures(api_signatures, target_file)
+    return []
+
+
 def _parse_class_signature(
     sig_str: str,
 ) -> Optional[tuple[str, list[str]]]:
@@ -618,19 +647,38 @@ class DeterministicExtractor:
         file_elements: dict[str, list[ForwardElementSpec]],
     ) -> list[InterfaceContract]:
         """Parse api_signatures into FUNCTION_NAME contracts + ForwardElementSpecs."""
-        # Skip signature extraction for non-Python files (Dockerfile, .in, .yaml, etc.)
+        # REQ-EE-100: dispatch to language-specific parsers for non-Python files
         if feature.target_files:
             ext = Path(feature.target_files[0]).suffix.lower()
             # Files with no extension (e.g. "Dockerfile") get ext=""
             if ext not in self._PYTHON_EXTENSIONS:
                 if feature.api_signatures:
-                    logger.debug(
-                        "Feature %s targets non-Python file %s; "
-                        "skipping %d api_signature(s)",
-                        feature.feature_id,
-                        feature.target_files[0],
-                        len(feature.api_signatures),
+                    from startd8.micro_prime.lang_detect import detect_language
+
+                    lang = detect_language(feature.target_files[0])
+                    specs = _parse_non_python_signatures(
+                        lang, feature.api_signatures, feature.target_files[0],
                     )
+                    if specs:
+                        for tf in feature.target_files:
+                            file_elements.setdefault(tf, []).extend(specs)
+                        logger.info(
+                            "Feature %s: parsed %d element(s) from %d "
+                            "api_signature(s) (lang=%s)",
+                            feature.feature_id,
+                            len(specs),
+                            len(feature.api_signatures),
+                            lang,
+                        )
+                    else:
+                        logger.debug(
+                            "Feature %s targets %s file %s; "
+                            "no elements parsed from %d api_signature(s)",
+                            feature.feature_id,
+                            lang,
+                            feature.target_files[0],
+                            len(feature.api_signatures),
+                        )
                 return []
 
         contracts: list[InterfaceContract] = []
