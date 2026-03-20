@@ -2,17 +2,21 @@
 
 Maps diagnostic categories to ordered repair step sequences.
 Returns the union of matched steps, deduplicated, in canonical order.
+
+Language-aware routing: when ``language_id`` is provided, only routes
+matching that language (or language-agnostic routes) are selected.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Optional
 
 from .models import Diagnostic, RepairRoute, SemanticDiagnostic
 from .steps import (
     AstValidateStep,
     BracketBalanceStep,
     ClassBodyDeduplicationStep,
+    CSharpSyntaxValidateStep,
     DefinitionOrderFixStep,
     DunderAllFixStep,
     DuplicateRemovalStep,
@@ -20,9 +24,8 @@ from .steps import (
     ExtendedLintFixStep,
     FenceStripStep,
     FutureImportReorderStep,
-    IndentNormalizeStep,
-    CSharpSyntaxValidateStep,
     GoSyntaxValidateStep,
+    IndentNormalizeStep,
     JavaSyntaxValidateStep,
     JsSyntaxValidateStep,
     SemanticDiscardedReturnFixStep,
@@ -65,29 +68,31 @@ _CANONICAL_ORDER = [
     "js_syntax_validate",
 ]
 
-# Routing table: category → (matched_pattern, step_names, confidence)
-_ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
-    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH"),
-    ("import", "missing_import", ["definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "ast_validate"], "HIGH"),
-    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM"),
-    # Semantic repair: per-category routing (REQ-SR-100–400).
-    # The "pattern" field doubles as the semantic_category to match against.
-    ("semantic", "import_resolution", ["semantic_import_fix", "ast_validate"], "HIGH"),
-    ("semantic", "method_resolution", ["semantic_method_resolution_fix", "ast_validate"], "HIGH"),
-    ("semantic", "discarded_return", ["semantic_discarded_return_fix", "ast_validate"], "MEDIUM"),
-    ("semantic", "duplicate_main_guard", ["semantic_duplicate_main_fix", "ast_validate"], "HIGH"),
+# Routing table: (category, pattern, step_names, confidence, language)
+# language=None means the route applies to all languages (or when no
+# language_id is provided for backward compatibility).
+_ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
+    # Python routes (language=None for backward compat — these are the original routes)
+    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "bracket_balance", "class_body_dedup", "ast_validate"], "HIGH", "python"),
+    ("import", "missing_import", ["definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "ast_validate"], "HIGH", "python"),
+    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "class_body_dedup", "definition_order_fix", "import_completion", "variable_initialization", "duplicate_removal", "extended_lint_fix", "dunder_all_fix", "unused_variable_removal", "ast_validate"], "MEDIUM", "python"),
+    # Semantic repair: per-category routing (REQ-SR-100–400) — Python-specific
+    ("semantic", "import_resolution", ["semantic_import_fix", "ast_validate"], "HIGH", "python"),
+    ("semantic", "method_resolution", ["semantic_method_resolution_fix", "ast_validate"], "HIGH", "python"),
+    ("semantic", "discarded_return", ["semantic_discarded_return_fix", "ast_validate"], "MEDIUM", "python"),
+    ("semantic", "duplicate_main_guard", ["semantic_duplicate_main_fix", "ast_validate"], "HIGH", "python"),
     # Java repair routes
-    ("syntax", "java_syntax_error", ["fence_strip", "bracket_balance", "java_syntax_validate"], "HIGH"),
-    ("import", "java_import_error", ["fence_strip", "java_syntax_validate"], "MEDIUM"),
+    ("syntax", "java_syntax_error", ["fence_strip", "bracket_balance", "java_syntax_validate"], "HIGH", "java"),
+    ("import", "java_import_error", ["fence_strip", "java_syntax_validate"], "MEDIUM", "java"),
     # Go repair routes
-    ("syntax", "go_syntax_error", ["fence_strip", "bracket_balance", "go_syntax_validate"], "HIGH"),
-    ("import", "go_import_error", ["fence_strip", "go_syntax_validate"], "MEDIUM"),
+    ("syntax", "go_syntax_error", ["fence_strip", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
+    ("import", "go_import_error", ["fence_strip", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
-    ("syntax", "csharp_syntax_error", ["fence_strip", "bracket_balance", "csharp_syntax_validate"], "HIGH"),
-    ("import", "csharp_import_error", ["fence_strip", "csharp_syntax_validate"], "MEDIUM"),
+    ("syntax", "csharp_syntax_error", ["fence_strip", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
+    ("import", "csharp_import_error", ["fence_strip", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     # Node.js repair routes
-    ("syntax", "js_syntax_error", ["fence_strip", "bracket_balance", "js_syntax_validate"], "HIGH"),
-    ("import", "js_import_error", ["fence_strip", "js_syntax_validate"], "MEDIUM"),
+    ("syntax", "js_syntax_error", ["fence_strip", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
+    ("import", "js_import_error", ["fence_strip", "js_syntax_validate"], "MEDIUM", "nodejs"),
 ]
 
 # Step name → step class constructor
@@ -117,20 +122,64 @@ _STEP_FACTORIES: dict[str, type] = {
     "js_syntax_validate": JsSyntaxValidateStep,
 }
 
+# Map file extension → language_id for auto-detection
+_EXT_TO_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".java": "java",
+    ".go": "go",
+    ".cs": "csharp",
+    ".js": "nodejs",
+    ".mjs": "nodejs",
+    ".cjs": "nodejs",
+    ".ts": "nodejs",
+    ".tsx": "nodejs",
+    ".jsx": "nodejs",
+}
+
+
+def infer_language_from_diagnostics(diagnostics: List[Diagnostic]) -> Optional[str]:
+    """Infer language_id from diagnostic file extensions.
+
+    Returns the language_id if all diagnostics agree on a single language,
+    or None if mixed or unknown.
+    """
+    from pathlib import PurePosixPath
+
+    languages: set[str] = set()
+    for d in diagnostics:
+        if d.file:
+            ext = PurePosixPath(d.file).suffix.lower()
+            lang = _EXT_TO_LANGUAGE.get(ext)
+            if lang:
+                languages.add(lang)
+    if len(languages) == 1:
+        return languages.pop()
+    return None
+
 
 def route_failures(
     diagnostics: List[Diagnostic],
     config: "RepairConfig",
+    language_id: Optional[str] = None,
 ) -> RepairRoute:
     """Route diagnostics to an ordered sequence of repair steps.
 
     Args:
         diagnostics: Parsed checkpoint diagnostics.
         config: Repair pipeline configuration.
+        language_id: Optional language identifier (e.g. "python", "java").
+            When provided, only routes for that language are selected.
+            When None, auto-infers from diagnostic file extensions;
+            if inference fails, falls back to matching all routes
+            (backward-compatible behavior).
 
     Returns:
         RepairRoute with matched patterns, ordered steps, and confidence.
     """
+    # Auto-infer language if not provided
+    if language_id is None:
+        language_id = infer_language_from_diagnostics(diagnostics)
+
     matched_patterns: list[str] = []
     step_names: set[str] = set()
     min_confidence = "HIGH"
@@ -145,12 +194,16 @@ def route_failures(
             if isinstance(d, SemanticDiagnostic) and d.semantic_category:
                 semantic_subcategories.add(d.semantic_category)
 
-    for cat, pattern, steps, confidence in _ROUTING_TABLE:
+    for cat, pattern, steps, confidence, route_lang in _ROUTING_TABLE:
         if cat not in categories or cat not in config.repairable_categories:
             continue
         # Semantic entries use pattern as sub-category discriminator
         if cat == "semantic" and pattern not in semantic_subcategories:
             continue
+        # Language filtering: skip routes that don't match the target language
+        if language_id is not None and route_lang is not None:
+            if route_lang != language_id:
+                continue
         matched_patterns.append(pattern)
         step_names.update(steps)
         if confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 0):

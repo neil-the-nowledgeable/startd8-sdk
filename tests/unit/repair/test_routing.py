@@ -7,7 +7,11 @@ from startd8.repair.models import (
     LintDiagnostic,
     SyntaxDiagnostic,
 )
-from startd8.repair.routing import create_steps_from_route, route_failures
+from startd8.repair.routing import (
+    create_steps_from_route,
+    infer_language_from_diagnostics,
+    route_failures,
+)
 
 
 class TestRouteFailures:
@@ -61,24 +65,29 @@ class TestRouteFailures:
         assert route.steps == []
         assert route.matched_patterns == []
 
-    def test_multiple_diagnostics_merge_and_dedup(self):
+    def test_python_diagnostics_get_python_only_steps(self):
+        """Python files should only get Python routes, not Java/Go/C#/JS steps."""
         diags = [
             SyntaxDiagnostic(category="syntax", file="a.py", message="err", line=1),
             ImportDiagnostic(category="import", file="b.py", message="missing", module="os"),
         ]
         config = RepairConfig()
         route = route_failures(diags, config)
-        # Both patterns matched
+        # Both Python patterns matched
         assert "syntax_error" in route.matched_patterns
         assert "missing_import" in route.matched_patterns
-        # Steps deduplicated and in canonical order
+        # Python steps only — no language-specific validate steps
         assert route.steps == [
             "fence_strip", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
-            "ast_validate", "java_syntax_validate", "go_syntax_validate",
-            "csharp_syntax_validate", "js_syntax_validate",
+            "ast_validate",
         ]
+        # Verify no non-Python steps leaked through
+        assert "java_syntax_validate" not in route.steps
+        assert "go_syntax_validate" not in route.steps
+        assert "csharp_syntax_validate" not in route.steps
+        assert "js_syntax_validate" not in route.steps
 
     def test_canonical_step_order(self):
         """Steps always appear in canonical order regardless of input order."""
@@ -92,8 +101,7 @@ class TestRouteFailures:
             "fence_strip", "future_import_reorder", "indent_normalize",
             "bracket_balance", "class_body_dedup", "definition_order_fix",
             "import_completion", "variable_initialization", "duplicate_removal",
-            "ast_validate", "java_syntax_validate", "go_syntax_validate",
-            "csharp_syntax_validate", "js_syntax_validate",
+            "ast_validate",
         ]
         assert route.steps == expected_order
 
@@ -113,18 +121,100 @@ class TestRouteFailures:
         assert route1.matched_patterns == route2.matched_patterns
 
 
+class TestLanguageAwareRouting:
+    """Language-aware routing selects only matching language routes."""
+
+    def test_java_syntax_route_only_java_steps(self):
+        diags = [Diagnostic(category="syntax", file="Test.java", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config)
+        assert "java_syntax_validate" in route.steps
+        assert "ast_validate" not in route.steps
+        assert "go_syntax_validate" not in route.steps
+
+    def test_go_syntax_route_only_go_steps(self):
+        diags = [Diagnostic(category="syntax", file="main.go", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config)
+        assert "go_syntax_validate" in route.steps
+        assert "ast_validate" not in route.steps
+        assert "java_syntax_validate" not in route.steps
+
+    def test_csharp_syntax_route_only_csharp_steps(self):
+        diags = [Diagnostic(category="syntax", file="Test.cs", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config)
+        assert "csharp_syntax_validate" in route.steps
+        assert "ast_validate" not in route.steps
+
+    def test_js_syntax_route_only_js_steps(self):
+        diags = [Diagnostic(category="syntax", file="app.js", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config)
+        assert "js_syntax_validate" in route.steps
+        assert "ast_validate" not in route.steps
+
+    def test_explicit_language_id_overrides_inference(self):
+        diags = [Diagnostic(category="syntax", file="unknown.txt", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config, language_id="java")
+        assert "java_syntax_validate" in route.steps
+        assert "ast_validate" not in route.steps
+
+    def test_no_language_no_file_ext_matches_all(self):
+        """When language cannot be inferred, all routes match (backward compat)."""
+        diags = [Diagnostic(category="syntax", file="unknown", message="error")]
+        config = RepairConfig(repairable_categories={"syntax"})
+        route = route_failures(diags, config)
+        # All syntax routes match when language is unknown
+        assert "ast_validate" in route.steps
+        assert "java_syntax_validate" in route.steps
+        assert "go_syntax_validate" in route.steps
+
+
+class TestInferLanguageFromDiagnostics:
+    def test_python_files(self):
+        diags = [Diagnostic(category="syntax", file="app.py", message="err")]
+        assert infer_language_from_diagnostics(diags) == "python"
+
+    def test_java_files(self):
+        diags = [Diagnostic(category="syntax", file="Test.java", message="err")]
+        assert infer_language_from_diagnostics(diags) == "java"
+
+    def test_go_files(self):
+        diags = [Diagnostic(category="syntax", file="main.go", message="err")]
+        assert infer_language_from_diagnostics(diags) == "go"
+
+    def test_csharp_files(self):
+        diags = [Diagnostic(category="syntax", file="Service.cs", message="err")]
+        assert infer_language_from_diagnostics(diags) == "csharp"
+
+    def test_js_files(self):
+        diags = [Diagnostic(category="syntax", file="app.js", message="err")]
+        assert infer_language_from_diagnostics(diags) == "nodejs"
+
+    def test_mixed_languages_returns_none(self):
+        diags = [
+            Diagnostic(category="syntax", file="app.py", message="err"),
+            Diagnostic(category="syntax", file="Test.java", message="err"),
+        ]
+        assert infer_language_from_diagnostics(diags) is None
+
+    def test_unknown_extension_returns_none(self):
+        diags = [Diagnostic(category="syntax", file="data.xyz", message="err")]
+        assert infer_language_from_diagnostics(diags) is None
+
+
 class TestStepFactoryCompleteness:
     """Verify all routed steps have factory entries and vice versa."""
 
-    # Steps in _CANONICAL_ORDER that are reserved but not yet implemented.
-    # Remove entries from this set as each step ships (Commits 2–5).
-    _PENDING_STEPS: set[str] = set()  # All semantic steps now have factories
+    _PENDING_STEPS: set[str] = set()
 
     def test_all_routed_steps_have_factories_or_pending(self):
         """Every step in _ROUTING_TABLE has a factory or is in the pending set."""
         from startd8.repair.routing import _ROUTING_TABLE, _STEP_FACTORIES
 
-        for _cat, _pattern, steps, _confidence in _ROUTING_TABLE:
+        for _cat, _pattern, steps, _confidence, _lang in _ROUTING_TABLE:
             for step_name in steps:
                 assert step_name in _STEP_FACTORIES or step_name in self._PENDING_STEPS, (
                     f"Routing references step '{step_name}' but no factory registered and not pending"
