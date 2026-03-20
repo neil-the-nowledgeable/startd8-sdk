@@ -83,6 +83,7 @@ class SeedBuilder:
         self._forward_manifest: Optional[Dict[str, Any]] = None
         self._source_checksum: Optional[str] = None
         self._generation_profile: Optional[str] = None  # REQ-GPC-401
+        self._security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
         self._refine_suggestions: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
@@ -334,6 +335,13 @@ class SeedBuilder:
         self._lane_assignments = lane_assignments
         return self
 
+    def set_security_contract(
+        self, contract: Optional[Dict[str, Any]]
+    ) -> "SeedBuilder":
+        """Set the security contract from onboarding or manifest."""
+        self._security_contract = contract
+        return self
+
     # ------------------------------------------------------------------
     # Read-only access to intermediate state
     # ------------------------------------------------------------------
@@ -419,5 +427,6 @@ class SeedBuilder:
             forward_manifest=self._forward_manifest,
             route=self._route,
             generation_profile=self._generation_profile,
+            security_contract=self._security_contract,
         )
         return seed.to_dict()

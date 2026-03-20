@@ -101,6 +101,15 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             "example_artifacts", {}
         )
 
+        # REQ-ICD-106: extract security contract from seed
+        _security_contract = seed_data.get("security_contract")
+        if _security_contract and isinstance(_security_contract, dict):
+            context["security_contract"] = _security_contract
+            logger.info(
+                "PLAN phase: security contract loaded (%d database(s))",
+                len(_security_contract.get("databases", {})),
+            )
+
         # REQ-PD-002: Forward complexity data from seed to context
         _complexity = seed_data.get("complexity") or {}
         context["complexity_dimensions"] = _complexity.get("dimensions", {})

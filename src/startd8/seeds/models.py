@@ -57,6 +57,7 @@ class ContextSeed:
     forward_manifest: Optional[Dict[str, Any]] = None
     route: Optional[str] = None
     generation_profile: Optional[str] = None  # REQ-GPC-400
+    security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
     capability_coverage_map: Optional[Dict[str, List[str]]] = None  # OI-005
 
     def to_dict(self) -> Dict[str, Any]:
@@ -96,6 +97,8 @@ class ContextSeed:
             d["route"] = self.route
         if self.generation_profile is not None:
             d["generation_profile"] = self.generation_profile
+        if self.security_contract is not None:
+            d["security_contract"] = self.security_contract
         if self.capability_coverage_map is not None:
             d["capability_coverage_map"] = self.capability_coverage_map
         return d
@@ -144,9 +147,10 @@ class SeedTask:
     spring_boot: bool = False  # Java: Spring Boot project indicator
     csharp_namespace: str = ""  # C#: root namespace e.g. "MyApp.Services"
     target_framework: str = ""  # C#: .NET target framework e.g. "net8.0"
-    csharp_project_type: str = ""  # C#: project type e.g. "webapi", "grpc", "console"
     wave_index: Optional[int] = None
     complexity_tier_override: Optional[str] = None
+    security_sensitive: bool = False
+    detected_database: str = ""
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -286,9 +290,10 @@ class SeedTask:
             spring_boot=bool(context.get("spring_boot", False)),
             csharp_namespace=context.get("csharp_namespace", ""),
             target_framework=context.get("target_framework", ""),
-            csharp_project_type=context.get("csharp_project_type", ""),
             wave_index=wave_index,
             complexity_tier_override=complexity_tier_override,
+            security_sensitive=bool(context.get("security_sensitive", False)),
+            detected_database=context.get("detected_database", ""),
         )
         if not task.task_id:
             raise ValueError(

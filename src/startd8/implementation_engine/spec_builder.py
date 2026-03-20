@@ -225,6 +225,47 @@ def build_spec_conventions_section(sem_conv: Any) -> str:
     return f"## Semantic Conventions\n{format_context_value(sem_conv)}"
 
 
+def _build_security_guidance_section(context: Dict[str, Any]) -> str:
+    """Build P1 security guidance from security contract (SP-PL-010)."""
+    contract = context.get("security_contract")
+    if not contract:
+        return ""
+
+    databases = contract.get("databases", {})
+    sensitivity = contract.get("sensitivity", "medium")
+    if not databases:
+        return ""
+
+    lines = ["## Security Constraints"]
+    lines.append(f"- **Data sensitivity**: {sensitivity}")
+    lines.append(
+        "- **ALL database queries MUST use parameterized queries** "
+        "(no string concatenation)"
+    )
+    lines.append(
+        "- **Credentials MUST NOT be hardcoded** — use environment "
+        "variables or secrets managers"
+    )
+    lines.append("")
+    lines.append("### Database-Specific Guidance")
+    for store_id, info in databases.items():
+        db_type = info.get("type", "unknown")
+        lines.append(f"- **{store_id}** ({db_type})")
+        cred = info.get("credential_source")
+        if cred:
+            lines.append(f"  - Credential source: `{cred}`")
+        cl = info.get("client_library")
+        if cl:
+            lines.append(f"  - Client library: `{cl}`")
+        store_sensitivity = info.get("sensitivity", sensitivity)
+        if store_sensitivity == "high":
+            lines.append(
+                "  - HIGH sensitivity — require audit logging for all access"
+            )
+
+    return "\n".join(lines)
+
+
 def _build_exemplar_section(context: Dict[str, Any]) -> str:
     """Build the exemplar reference section (REQ-PEP-101).
 
@@ -559,29 +600,6 @@ def _build_import_conventions_section(context: Dict[str, Any]) -> str:
         f"{bad_examples}\n"
         "```\n"
     )
-
-
-def _build_typescript_guidance_section(context: Dict[str, Any]) -> str:
-    """REQ-PLI-NODE-103: Inject TypeScript conventions when target files include .ts/.tsx.
-
-    Returns empty string when no TypeScript files are targeted.
-    """
-    target_files = context.get("target_files") or []
-    has_typescript = any(f.endswith((".ts", ".tsx")) for f in target_files)
-
-    if not has_typescript:
-        return ""
-
-    lines = [
-        "## TypeScript Conventions",
-        "",
-        "- Use TypeScript interfaces and types for function parameters and return values",
-        "- Prefer `unknown` over `any` for type safety",
-        "- Use type-only imports when possible: `import type { Foo } from './foo'`",
-        "- Export types alongside runtime exports",
-        "- Use strict mode (`strict: true` in tsconfig.json)",
-    ]
-    return "\n".join(lines)
 
 
 def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:
@@ -996,11 +1014,6 @@ def build_spec_prompt(
     if fw_section:
         prioritized.append((1, "framework_imports", fw_section))
 
-    # P1: TypeScript conventions (REQ-PLI-NODE-103)
-    ts_section = _build_typescript_guidance_section(context)
-    if ts_section:
-        prioritized.append((1, "typescript_guidance", ts_section))
-
     # P1: Sibling-file imports (L5+ — project-specific, preferred)
     sibling_section = _build_sibling_imports_section(context)
     if sibling_section:
@@ -1015,6 +1028,11 @@ def build_spec_prompt(
     import_conv_section = _build_import_conventions_section(context)
     if import_conv_section:
         prioritized.append((1, "import_conventions", import_conv_section))
+
+    # P1: Security guidance from security contract (REQ-ICD-106)
+    security_section = _build_security_guidance_section(context)
+    if security_section:
+        prioritized.append((1, "security_guidance", security_section))
 
     # P1: Requirements and protocol guidance
     if requirements_context:

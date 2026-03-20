@@ -112,6 +112,8 @@ _CONTEXT_THREADABLE_FIELDS: frozenset = frozenset({
     "spring_boot",
     "csharp_namespace",
     "target_framework",
+    "security_sensitive",
+    "detected_database",
 })
 
 # JSON Schema for ContextSeed (Item 6 — validation before write)
@@ -407,13 +409,12 @@ _LANG_DETECT_SIGNALS: Dict[str, List[str]] = {
 def _detect_plan_language(plan_text: str) -> Optional[str]:
     """Detect the primary language of a plan from text signals (REQ-PLI-202).
 
-    Scans plan text for language-specific keywords, file extensions,
-    framework mentions, and build file references.  Returns the language
-    with the most signal hits, or ``None`` when tied or no signals found.
+    Scans plan text for language-specific keywords, file extensions, and
+    framework mentions. Returns the dominant language or ``None`` when
+    ambiguous (winner must score at least 2x the runner-up).
 
-    Returns:
-        One of ``"go"``, ``"java"``, ``"nodejs"``, ``"csharp"``,
-        ``"python"``, or ``None``.
+    Python is the default language, so it is never returned as a detection
+    result — the hint is only useful for non-Python languages.
     """
     if not plan_text:
         return None
@@ -425,21 +426,24 @@ def _detect_plan_language(plan_text: str) -> Optional[str]:
         for signal in signals:
             if not signal:
                 continue  # R1: guard against empty signals
-            # Case-insensitive matching throughout
-            count += plan_lower.count(signal.lower())
+            # Case-sensitive signals (e.g. "Go ", "Java ") check original text
+            if signal[0].isupper():
+                count += plan_text.count(signal)
+            else:
+                count += plan_lower.count(signal)
         if count > 0:
             scores[lang] = count
 
     if not scores:
         return None
 
-    # Return language with most signals; None if tied for first place
+    # Require the winner to have at least 2x the runner-up score
     ranked = sorted(scores.items(), key=lambda x: -x[1])
     winner, winner_score = ranked[0]
     if len(ranked) >= 2:
         runner_up_score = ranked[1][1]
-        if winner_score == runner_up_score:
-            return None  # Tied — don't guess
+        if winner_score < 2 * runner_up_score:
+            return None  # Ambiguous — don't guess
     return winner
 
 
@@ -538,13 +542,6 @@ mode: "create" for new files (plan says implement, add, new, create) or "edit" f
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
 api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
-For each api_signature, prefix with the element kind when possible:
-  "[class]" for class/interface/struct/record/enum declarations
-  "[method]" for methods belonging to a class (use DottedName: "ClassName.methodName")
-  "[function]" for standalone functions
-  "[type]" for type aliases or type declarations
-Examples: "[class] public class CartService : CartServiceBase", "[method] CartService.AddItem", "[function] func main()"
-This prefix is optional but improves downstream element classification accuracy.
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
 negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
@@ -946,40 +943,6 @@ def _infer_service_metadata(
             runtime_dependencies=runtime_deps,
         )
         metadata.update(lang_metadata)
-
-    # REQ-PLI-NODE-104: Detect Node.js frameworks from plan text
-    primary_language = metadata.get("primary_language", "")
-    _primary_lang_str = (
-        primary_language if isinstance(primary_language, str)
-        else (primary_language[0] if primary_language else "")
-    )
-    if _primary_lang_str == "nodejs":
-        detected_frameworks: list[str] = []
-        # Scan plan text and feature descriptions for framework keywords
-        scan_text = " ".join(
-            getattr(f, "description", "") + " " + " ".join(getattr(f, "api_signatures", []))
-            for f in features
-        ).lower()
-
-        _NODEJS_FRAMEWORK_SIGNALS = {
-            "express": ["express", "app.get(", "app.use(", "app.post(", "middleware", "router"],
-            "grpc": ["grpc", "protobuf", ".proto", "@grpc/", "grpc-js", "proto-loader"],
-            "react": ["react", "jsx", "usestate", "useeffect", "component", "next.js", "nextjs"],
-            "nestjs": ["nestjs", "@nestjs/", "controller", "@injectable", "@module"],
-            "fastify": ["fastify"],
-            "koa": ["koa"],
-        }
-
-        for framework, keywords in _NODEJS_FRAMEWORK_SIGNALS.items():
-            if any(kw in scan_text for kw in keywords):
-                detected_frameworks.append(framework)
-
-        if detected_frameworks:
-            metadata["detected_frameworks"] = detected_frameworks
-            logger.info(
-                "Node.js framework detection: %s",
-                ", ".join(detected_frameworks),
-            )
 
     return metadata
 
@@ -1445,12 +1408,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         self, plan_text: str, agent: BaseAgent
     ) -> Tuple[Optional[ParsedPlan], StepResult]:
         t0 = time.time()
-
-        # REQ-PLI-202: Pre-PARSE language detection
-        detected_lang = _detect_plan_language(plan_text)
-        if detected_lang:
-            logger.info("Pre-PARSE language detection: %s", detected_lang)
-
         prompt = _build_parse_prompt(plan_text)
         if getattr(self, "_kaizen_config", None) and self._kaizen_config.parse_prompt_suffix:
             prompt += self._kaizen_config.parse_prompt_suffix
@@ -1558,10 +1515,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
-            metadata={
-                "code_extraction_fallback": _code_fallback,
-                "detected_language": detected_lang,
-            },
+            metadata={"code_extraction_fallback": _code_fallback},
         )
 
         return parsed, step
@@ -2658,21 +2612,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                     )
                 ctx["mapping_rationale"] = rationale
 
-            # Anzen: tag security-sensitive tasks at ingestion time so the
-            # seed file is self-describing and prime_contractor doesn't need
-            # to re-detect database surfaces at generation time.
-            try:
-                from startd8.security_prime.enrichment import enrich_security_fields
-                _sec = enrich_security_fields(
-                    feat.description or "", ordered_files,
-                    getattr(feat, "metadata", None),
-                )
-                if _sec["security_sensitive"]:
-                    ctx["security_sensitive"] = True
-                    ctx["detected_database"] = _sec["detected_database"]
-            except ImportError:
-                pass  # security_prime not available
-
             # REQ-PD-003: Build requirements_text from description +
             # acceptance_obligations + source_references so DESIGN has
             # authoritative parameter details without re-deriving.
@@ -3115,6 +3054,36 @@ class PlanIngestionWorkflow(WorkflowBase):
                     )
             if obs:
                 meta["observability"] = obs
+
+        # --- REQ-ICD-106: security spec from manifest ---
+        _security = getattr(spec, "security", None)
+        if _security:
+            sensitivity = getattr(_security, "sensitivity", "medium")
+            data_stores = getattr(_security, "data_stores", [])
+            databases: Dict[str, Any] = {}
+            for store in data_stores:
+                store_id = getattr(store, "id", None)
+                if store_id:
+                    databases[store_id] = {
+                        "type": getattr(store, "type", ""),
+                        "sensitivity": getattr(store, "sensitivity", "medium"),
+                    }
+                    cl = getattr(store, "client_library", None)
+                    if cl:
+                        databases[store_id]["client_library"] = cl
+                    cs = getattr(store, "credential_source", None)
+                    if cs:
+                        databases[store_id]["credential_source"] = cs
+            if databases:
+                meta["security_contract"] = {
+                    "databases": databases,
+                    "sensitivity": str(sensitivity.value) if hasattr(sensitivity, "value") else str(sensitivity),
+                    "source": "manifest",
+                }
+                logger.info(
+                    "Manifest security: %d database(s), sensitivity=%s",
+                    len(databases), sensitivity,
+                )
 
         return meta
 

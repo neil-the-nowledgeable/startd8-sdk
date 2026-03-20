@@ -65,6 +65,9 @@ class SeedTask:
     wave_index: Optional[int] = None
     # REQ-CMR-042: Optional seed override of complexity tier
     complexity_tier_override: Optional[str] = None
+    # REQ-ICD-106: Security fields from security contract
+    security_sensitive: bool = False
+    detected_database: str = ""
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> "SeedTask":
@@ -198,6 +201,8 @@ class SeedTask:
             negative_scope=context.get("negative_scope", []),
             wave_index=wave_index,
             complexity_tier_override=complexity_tier_override,
+            security_sensitive=bool(context.get("security_sensitive", False)),
+            detected_database=context.get("detected_database", ""),
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -417,6 +422,13 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     if _restored:
         logger.info("Restored %d/8 onboarding fields from seed on resume", _restored)
 
+    # REQ-ICD-106: restore security_contract from seed on resume
+    if "security_contract" not in context:
+        _sc = seed_data.get("security_contract")
+        if _sc and isinstance(_sc, dict):
+            context["security_contract"] = _sc
+            logger.info("Restored security_contract from seed on resume")
+
     # IMP-8b: extract structured refine suggestions from onboarding
     if "onboarding_refine_suggestions" not in context:
         _refine_sug = _onboarding.get("refine_suggestions")
@@ -516,6 +528,7 @@ _PCA_CONTEXT_FIELDS = (
     "onboarding_resolved_parameters", "onboarding_output_contracts",
     "onboarding_calibration_hints", "onboarding_open_questions",
     "onboarding_dependency_graph", "onboarding_schema_features",
+    "security_contract",
 )
 
 

@@ -246,6 +246,25 @@ class PhaseEmitter:
             "total_cost": derived.total_cost,
         }
 
+        # REQ-ICD-106: Resolve security contract — onboarding primary, manifest fallback
+        _security_contract: Optional[Dict[str, Any]] = None
+        if onboarding_metadata:
+            _ob_sc = onboarding_metadata.get("security_contract")
+            if _ob_sc and isinstance(_ob_sc, dict):
+                _security_contract = _ob_sc
+                logger.info(
+                    "Security contract loaded from onboarding metadata: %d database(s)",
+                    len(_ob_sc.get("databases", {})),
+                )
+        if _security_contract is None and project_metadata:
+            _pm_sc = project_metadata.get("security_contract")
+            if _pm_sc and isinstance(_pm_sc, dict):
+                _security_contract = _pm_sc
+                logger.info(
+                    "Security contract loaded from manifest metadata: %d database(s)",
+                    len(_pm_sc.get("databases", {})),
+                )
+
         # 11. Seed construction (unified for both routes)
         context_seed_path: Optional[Path] = None
         if parsed_plan is not None:
@@ -263,6 +282,7 @@ class PhaseEmitter:
                 source_checksum_val=source_checksum_val,
                 review_output=review_output,
                 context_files=context_files,
+                security_contract=_security_contract,
             )
 
         # 13. Task tracking
@@ -858,6 +878,7 @@ class PhaseEmitter:
         source_checksum_val: Optional[str],
         review_output: Optional[Dict[str, Any]],
         context_files: Optional[List[str]],
+        security_contract: Optional[Dict[str, Any]] = None,
     ) -> Path:
         """Emit context-seed.json for the given route.
 
@@ -897,6 +918,7 @@ class PhaseEmitter:
             lane_assignments=None,
             project_metadata=project_metadata or None,
             forward_manifest=forward_manifest_dict,
+            security_contract=security_contract,
         )
 
         # OI-005: Build capability coverage map (requirement_id → task_ids)
