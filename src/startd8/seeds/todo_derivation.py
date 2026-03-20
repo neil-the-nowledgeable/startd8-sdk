@@ -113,6 +113,12 @@ def _make_uncomment_task(
         "estimated_loc": 10,
         "mode": "edit",
         "config": {
+            "task_description": (
+                f"Uncomment the commented-out code block adjacent to the TODO "
+                f"at line {entry.line} in {entry.file_path}.\n\n"
+                f"TODO text: {entry.raw_text}\n"
+                f"Rationale: {entry.rationale}"
+            ),
             "context": {
                 "todo_line": entry.line,
                 "todo_text": entry.raw_text,
@@ -164,6 +170,13 @@ def _make_implement_task(
         "estimated_loc": 30,
         "mode": "edit",
         "config": {
+            "task_description": (
+                f"Implement the stub method '{entry.containing_function}' "
+                f"at line {entry.line} in {entry.file_path}.\n\n"
+                f"TODO text: {entry.raw_text}\n"
+                f"Contract fields: {', '.join(entry.contract_fields)}\n"
+                f"Rationale: {entry.rationale}"
+            ),
             "context": {
                 "todo_line": entry.line,
                 "todo_text": entry.raw_text,
@@ -223,6 +236,11 @@ def _make_dependency_task(
         "estimated_loc": 10,
         "mode": "edit",
         "config": {
+            "task_description": (
+                f"Add the following dependencies to {build_path}:\n\n"
+                f"{deps_text}\n\n"
+                f"These are required for OTel instrumentation."
+            ),
             "context": {
                 "dependencies": deps,
                 "source_run_id": source_run_id,
