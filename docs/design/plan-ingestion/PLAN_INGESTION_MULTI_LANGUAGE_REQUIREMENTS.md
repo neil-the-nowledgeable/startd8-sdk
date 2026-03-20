@@ -660,5 +660,21 @@ The Go implementation established patterns that generalize. For each new languag
 | Acyclicity gate | ✅ | ✅ | ✅ | ✅ |
 | Element extraction (post-gen) | ✅ | ✅ | ✅ | ❌ |
 | Per-file syntax validation | ✅ | ✅ | ✅ (javalang) | Partial (node --check) |
+| Security enrichment (Anzen) | ✅ | ✅ | ✅ | ✅ |
 
 **Legend:** ✅ = Implemented, ❌ = Not implemented, Partial = Some support
+
+---
+
+## 9. Anzen Security Enrichment at EMIT (2026-03-20)
+
+**Commit:** `db30fb0`
+
+During task derivation in `_derive_tasks_from_features()`, each feature's description and target files are scanned for database keywords via `security_prime.enrichment.enrich_security_fields()` (which delegates to `query_prime.decomposer.detect_database_type()`). When a database surface is detected:
+
+- `ctx["security_sensitive"] = True` — signals the complexity classifier to enforce a MODERATE floor
+- `ctx["detected_database"] = "postgresql"` (or spanner/redis/mysql/sqlite) — enables spec_builder P1 guidance injection
+
+This makes the seed file self-describing for security: `jq '.tasks[] | select(.config.context.security_sensitive)' prime-context-seed.json` shows security-sensitive tasks before any contractor run. Graceful degradation: `ImportError` on `security_prime` is silently caught; plan ingestion works identically without the package.
+
+See [SECURITY_PRIME_REQUIREMENTS.md](../security-prime/SECURITY_PRIME_REQUIREMENTS.md) for the full Anzen pipeline design.

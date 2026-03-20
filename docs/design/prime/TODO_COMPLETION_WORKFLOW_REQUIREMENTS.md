@@ -152,9 +152,9 @@ These requirements are implemented in **ContextCore** as part of the EXPORT stag
 #### REQ-TCW-000: Dashboard-to-Metrics Derivation
 
 **Priority:** P1
-**Status:** Planned
+**Status:** Implemented (2026-03-18) — revised to protocol-based derivation (REQ-ICD-100 in ContextCore)
 **Implemented in:** ContextCore (`contextcore manifest export`)
-**Source files:** `src/contextcore/utils/onboarding.py` (new section), dashboard artifact templates
+**Source files:** `src/contextcore/utils/instrumentation.py`, `src/contextcore/utils/onboarding.py`
 
 The EXPORT stage MUST derive required metrics from dashboard artifact specifications.
 
@@ -167,7 +167,7 @@ The EXPORT stage MUST derive required metrics from dashboard artifact specificat
 #### REQ-TCW-001: Communication-Graph-to-Traces Derivation
 
 **Priority:** P1
-**Status:** Planned
+**Status:** Implemented (2026-03-18) — REQ-ICD-101 in ContextCore
 **Implemented in:** ContextCore (`contextcore manifest export`)
 
 The EXPORT stage MUST derive required trace spans from the service communication graph and logging configuration.
@@ -181,7 +181,7 @@ The EXPORT stage MUST derive required trace spans from the service communication
 #### REQ-TCW-002: Language-Aware SDK Resolution
 
 **Priority:** P1
-**Status:** Planned
+**Status:** Implemented (2026-03-18) — REQ-ICD-102 + REQ-ICD-104 (language detection) in ContextCore
 **Implemented in:** ContextCore (`contextcore manifest export`) with language hints from plan metadata
 
 The EXPORT stage MUST resolve the OTel SDK dependency coordinates for the target language.
@@ -196,7 +196,7 @@ The EXPORT stage MUST resolve the OTel SDK dependency coordinates for the target
 #### REQ-TCW-003: Instrumentation Contract Emission
 
 **Priority:** P1
-**Status:** Planned
+**Status:** Implemented (2026-03-18) — REQ-ICD-103 in ContextCore (emitted as `instrumentation_hints`)
 **Implemented in:** ContextCore (`contextcore manifest export`)
 
 The EXPORT stage MUST emit the instrumentation contract as a section of `onboarding-metadata.json`.
@@ -217,8 +217,8 @@ These requirements are implemented in **StartD8 SDK** and run after pass-one cod
 #### REQ-TCW-100: TODO Scanner
 
 **Priority:** P1
-**Status:** Planned
-**Source files:** New module: `src/startd8/contractors/todo_scanner.py`
+**Status:** Implemented (2026-03-18) — `src/startd8/validators/todo_scanner.py` (603 lines, 30+ tests)
+**Source files:** `src/startd8/validators/todo_scanner.py`
 
 The pipeline MUST scan generated files for TODO markers and produce a structured inventory.
 
@@ -232,8 +232,8 @@ The pipeline MUST scan generated files for TODO markers and produce a structured
 #### REQ-TCW-101: TODO Classification
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-100
+**Status:** Implemented (2026-03-18) — `classify_todo()` in `todo_scanner.py`
+**Depends on:** REQ-TCW-100 (implemented)
 
 Each detected TODO MUST be classified into Category A (commented-out implementation), Category B (contract-derivable), or Category C (insufficient context).
 
@@ -243,12 +243,13 @@ Each detected TODO MUST be classified into Category A (commented-out implementat
 3. **Category C detection:** Default. TODOs that match neither A nor B.
 4. Classification is recorded in the `TodoInventory` with `category: "A" | "B" | "C"` and `rationale: str`.
 5. Category B classification explicitly records the `instrumentation_contract` fields that apply, forming the `attachment_points` section of the contract.
+6. **Category S annotation (Anzen, implemented 2026-03-19):** TODOs whose surrounding context (±5 lines) contains security vocabulary (`sql`, `query`, `database`, `credential`, `password`, `npgsql`, `spanner`, etc.) are annotated with `security_sensitive: bool = True`. Category S is a modifier, not a replacement — a TODO can be A+S, B+S, or C+S. `C+S` TODOs are excluded from auto-resolution and flagged for mandatory human review. `B+S` TODOs receive dual contract injection (instrumentation + security) via `derive_tasks_from_todos(security_contract=...)`. See [SECURITY_PRIME_REQUIREMENTS.md](../security-prime/SECURITY_PRIME_REQUIREMENTS.md) §10.
 
 #### REQ-TCW-102: Requirement Cross-Reference
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-101
+**Status:** Implemented (2026-03-18) — contract_fields linkage in `classify_todo()`
+**Depends on:** REQ-TCW-101 (implemented)
 
 Each classified TODO MUST be cross-referenced against pipeline-innate requirements and the instrumentation contract.
 
@@ -261,16 +262,17 @@ Each classified TODO MUST be cross-referenced against pipeline-innate requiremen
 #### REQ-TCW-103: TODO Inventory Persistence
 
 **Priority:** P2
-**Status:** Planned
-**Depends on:** REQ-TCW-100
+**Status:** Implemented (2026-03-18) — `TodoInventory.to_json()` + file write in workflow
+**Depends on:** REQ-TCW-100 (implemented)
 
 The TODO inventory MUST be persisted as a pipeline artifact.
 
 **Acceptance criteria:**
 1. Written to `{output_dir}/todo-inventory.json` alongside other pipeline artifacts
 2. Schema includes: `schema_version`, `run_id`, `scan_timestamp`, `source_run_id` (the pass-one run), `instrumentation_contract_checksum`, `todos: List[TodoEntry]`
-3. Each `TodoEntry` includes: `id` (stable hash of file_path + line), `file_path`, `line`, `language`, `raw_text`, `category`, `contract_fields` (what instrumentation contract entries this TODO implements), `matched_requirements`, `status` (`pending` | `planned` | `completed` | `deferred`)
+3. Each `TodoEntry` includes: `id` (stable hash of file_path + line), `file_path`, `line`, `language`, `raw_text`, `category`, `contract_fields` (what instrumentation contract entries this TODO implements), `matched_requirements`, `status` (`pending` | `planned` | `completed` | `deferred`), `security_sensitive` (bool, Anzen Category S), `security_contract_ref` (optional database ID)
 4. Inventory is included in the kaizen index for cross-run tracking
+5. Summary includes `security_todos` count alongside A/B/C counts
 
 ---
 
@@ -279,8 +281,8 @@ The TODO inventory MUST be persisted as a pipeline artifact.
 #### REQ-TCW-200: Completion Plan Generation
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-101, REQ-TCW-102, REQ-TCW-003
+**Status:** Implemented (2026-03-18) — `src/startd8/seeds/todo_derivation.py` (232 lines)
+**Depends on:** REQ-TCW-101 (implemented), REQ-TCW-102 (implemented), REQ-TCW-003 (implemented)
 
 For each Category A and Category B TODO, the workflow MUST generate a completion plan consumable by the Prime Contractor.
 
@@ -295,8 +297,8 @@ For each Category A and Category B TODO, the workflow MUST generate a completion
 #### REQ-TCW-201: Context Composition for Category B
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-200
+**Status:** Implemented (2026-03-18) — `derive_tasks_from_todos()` in `todo_derivation.py`
+**Depends on:** REQ-TCW-200 (implemented)
 
 Category B task specs MUST compose context from the instrumentation contract and pipeline sources.
 
@@ -310,8 +312,8 @@ Category B task specs MUST compose context from the instrumentation contract and
 #### REQ-TCW-202: Dependency Task Generation
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-200
+**Status:** Implemented (2026-03-18) — dependency tasks in `derive_tasks_from_todos()`
+**Depends on:** REQ-TCW-200 (implemented)
 
 When a TODO implementation requires new dependencies, the plan MUST include a dependency-addition task.
 
@@ -327,8 +329,8 @@ When a TODO implementation requires new dependencies, the plan MUST include a de
 #### REQ-TCW-203: Plan Validation
 
 **Priority:** P2
-**Status:** Planned
-**Depends on:** REQ-TCW-200
+**Status:** Implemented (2026-03-18) — max_tasks bound + dependency ordering in workflow
+**Depends on:** REQ-TCW-200 (implemented)
 
 The generated completion plan MUST be validated before execution.
 
@@ -346,8 +348,8 @@ The generated completion plan MUST be validated before execution.
 #### REQ-TCW-300: Execution via Prime Contractor
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-200
+**Status:** Implemented (2026-03-18) — `_execute_plan()` in `todo_completion_workflow.py`
+**Depends on:** REQ-TCW-200 (implemented)
 
 TODO completion tasks MUST be executed using the standard Prime Contractor workflow.
 
@@ -360,8 +362,8 @@ TODO completion tasks MUST be executed using the standard Prime Contractor workf
 #### REQ-TCW-301: Category A Execution (Uncomment)
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-300
+**Status:** Implemented (2026-03-18) — uncomment tasks via Prime Contractor edit mode
+**Depends on:** REQ-TCW-300 (implemented)
 
 Category A tasks MUST uncomment the specified block and validate the result.
 
@@ -374,8 +376,8 @@ Category A tasks MUST uncomment the specified block and validate the result.
 #### REQ-TCW-302: Category B Execution (Implement from Contract)
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-300, REQ-TCW-201
+**Status:** Implemented (2026-03-18) — implement tasks with contract context via Prime Contractor
+**Depends on:** REQ-TCW-300 (implemented), REQ-TCW-201 (implemented)
 
 Category B tasks MUST generate instrumentation code that satisfies the instrumentation contract.
 
@@ -389,8 +391,8 @@ Category B tasks MUST generate instrumentation code that satisfies the instrumen
 #### REQ-TCW-303: Separate Commit Identity
 
 **Priority:** P1
-**Status:** Planned
-**Depends on:** REQ-TCW-300
+**Status:** Implemented (2026-03-18) — output to `{output_dir}/instrumentation/`
+**Depends on:** REQ-TCW-300 (implemented)
 
 Instrumentation output MUST be committed separately from pass-one output.
 
@@ -541,40 +543,36 @@ This is the shift from intentional to deterministic. The human declares "this se
 
 ## Phasing
 
-### Phase 1: Instrumentation Contract Derivation (ContextCore)
+### Phase 1: Instrumentation Contract Derivation (ContextCore) — COMPLETE
 
-**Requirements:** REQ-TCW-000–003
-**Scope:** Extend `contextcore manifest export` to derive and emit `instrumentation_contracts` in `onboarding-metadata.json`
-**Prerequisite for:** Everything else
-**Estimated effort:** Medium (new derivation logic in export, language→SDK mapping table)
+**Requirements:** REQ-TCW-000–003 (implemented as REQ-ICD-100–104 in ContextCore)
+**Status:** Implemented 2026-03-18. Emitted as `instrumentation_hints` (not `instrumentation_contracts`) in `onboarding-metadata.json`. Protocol-based derivation replaced PromQL parsing per implementation findings.
+**Files:** `src/contextcore/utils/instrumentation.py` (273 lines, 25 tests)
 
-### Phase 2: TODO Scanner + Inventory (StartD8 SDK)
+### Phase 2: TODO Scanner + Inventory (StartD8 SDK) — COMPLETE
 
 **Requirements:** REQ-TCW-100–103
-**Scope:** New `todo_scanner.py` module; read-only, can be deployed immediately to collect data
-**Prerequisite for:** Layers 2–3
-**Estimated effort:** Small (pattern matching + classification logic)
+**Status:** Implemented 2026-03-18. `normalize_instrumentation_data()` bridges ContextCore hints → StartD8 contract schema.
+**Files:** `src/startd8/validators/todo_scanner.py` (603 lines, 30+ tests)
 
-### Phase 3: Category A Completion (StartD8 SDK)
+### Phase 3: Category A Completion (StartD8 SDK) — COMPLETE
 
 **Requirements:** REQ-TCW-200 (partial), REQ-TCW-300, REQ-TCW-301, REQ-TCW-303
-**Scope:** Uncomment workflow — lowest risk, highest certainty
-**Prerequisite for:** None (independent of Category B)
-**Estimated effort:** Small (plan generation for uncomment + execution)
+**Status:** Implemented 2026-03-18. Uncomment tasks generated and executable via Prime Contractor.
+**Files:** `src/startd8/seeds/todo_derivation.py`, `src/startd8/workflows/builtin/todo_completion_workflow.py`
 
-### Phase 4: Category B Completion (StartD8 SDK)
+### Phase 4: Category B Completion (StartD8 SDK) — COMPLETE
 
 **Requirements:** REQ-TCW-200 (full), REQ-TCW-201, REQ-TCW-202, REQ-TCW-302
-**Scope:** Context-composition and implementation from instrumentation contract — the high-value path
-**Prerequisite for:** Phase 1 (needs instrumentation contracts from export)
-**Estimated effort:** Medium (context composition + task generation)
+**Status:** Implemented 2026-03-18. Contract context composed into task specs for LLM generation.
+**Files:** `src/startd8/seeds/todo_derivation.py` (232 lines), `src/startd8/workflows/builtin/todo_completion_workflow.py` (277 lines)
 
-### Phase 5: Pipeline Integration + Closed-Loop (Both)
+### Phase 5: Pipeline Integration + Closed-Loop (Both) — PLANNED
 
 **Requirements:** REQ-TCW-400–403
-**Scope:** CLI, pipeline stage, Kaizen integration, contract validation
-**Prerequisite for:** Phases 2–4 complete
-**Estimated effort:** Small (plumbing + validation logic)
+**Status:** Not yet implemented. See implementation plan: `docs/plans/TODO_COMPLETION_PIPELINE_INTEGRATION_PLAN.md`
+**Scope:** CLI integration with `run-prime-contractor.sh`, auto-trigger after pass-one, Kaizen instrumentation coverage metrics, closed-loop contract validation
+**Prerequisite:** Phases 1–4 complete (satisfied)
 
 ---
 
