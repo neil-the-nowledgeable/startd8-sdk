@@ -73,6 +73,20 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
                     contract_path, exc,
                 )
 
+    # Load security contract if provided (REQ-ICD-106)
+    if args.security_contract:
+        sc_path = Path(args.security_contract)
+        if sc_path.exists():
+            try:
+                config["security_contract"] = json.loads(
+                    sc_path.read_text(encoding="utf-8"),
+                )
+            except (json.JSONDecodeError, OSError) as exc:
+                logging.getLogger("run_todo_completion").warning(
+                    "Could not load security contract %s: %s",
+                    sc_path, exc,
+                )
+
     return config
 
 
@@ -129,6 +143,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--instrumentation-contract", default=None,
         help="Path to JSON file with instrumentation contract",
+    )
+    parser.add_argument(
+        "--security-contract", default=None,
+        help="Path to JSON file with security contract (REQ-ICD-106)",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",

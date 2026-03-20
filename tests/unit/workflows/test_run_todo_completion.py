@@ -94,6 +94,35 @@ class TestContractLoading:
         assert "instrumentation_contract" not in config
 
 
+class TestSecurityContractLoading:
+    """Verify security contract loading (REQ-ICD-106)."""
+
+    def test_security_contract_loaded(self, tmp_path: Path):
+        contract = {"databases": {"cartdb": {"type": "spanner"}}, "source": "manifest"}
+        sc_path = tmp_path / "security-contract.json"
+        sc_path.write_text(json.dumps(contract), encoding="utf-8")
+
+        ns = _parse([
+            "--project-root", "/tmp/proj", "--output-dir", "/tmp/out",
+            "--security-contract", str(sc_path),
+        ])
+        config = build_config(ns)
+        assert config["security_contract"] == contract
+
+    def test_missing_security_contract_no_crash(self):
+        ns = _parse([
+            "--project-root", "/tmp/proj", "--output-dir", "/tmp/out",
+            "--security-contract", "/nonexistent/sc.json",
+        ])
+        config = build_config(ns)
+        assert "security_contract" not in config
+
+    def test_no_security_contract_flag(self):
+        ns = _parse(["--project-root", "/tmp/proj", "--output-dir", "/tmp/out"])
+        config = build_config(ns)
+        assert "security_contract" not in config
+
+
 class TestDryRun:
     """Verify --dry-run exits cleanly without invoking the workflow."""
 
