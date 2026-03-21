@@ -5,23 +5,104 @@ Co-locates all budget/size constants and provides deterministic truncation.
 
 Total prompt budget follows the micro_prime pattern: a hard token cap with
 priority-ordered section removal when the prompt exceeds budget.
+
+The :class:`BudgetConfig` dataclass centralises all tuneable budget values.
+Module-level constants are backward-compatible aliases derived from the
+default ``BudgetConfig()`` instance so that existing ``from budget import X``
+usage continues to work unchanged.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# IMP-007: OTel counter for budget trimming events
-try:
-    from opentelemetry import metrics as _otel_metrics
-    _budget_meter = _otel_metrics.get_meter(__name__)
-    _budget_trim_counter = _budget_meter.create_counter(
-        "prompt_budget_trims_total",
-        description="Number of times prompt budget enforcement dropped sections",
-    )
-except ImportError:
-    _budget_trim_counter = None
+
+@dataclass
+class BudgetConfig:
+    """Configurable token/size budget settings.
+
+    Loaded from prime-contractor.json ``"budget"`` section.
+    All values have defaults matching the original hardcoded constants.
+    """
+
+    spec_budget_tokens: int = 4_096
+    draft_budget_tokens: int = 8_192
+    plan_context_max_chars: int = 6_000
+    arch_context_max_chars: int = 4_096
+    spec_context_budget_chars: int = 12_000
+    existing_files_budget_bytes: int = 40 * 1024  # 40 KB
+    exemplar_budget_chars: int = 3_200
+    search_replace_line_threshold: int = 50
+    draft_size_regression_threshold: float = 0.20
+    draft_size_explosion_threshold: float = 3.0
+    draft_size_regression_min_lines: int = 50
+    supplementary_budget_chars: int = 4_000
+    enrichment_budget_chars: int = 8_000
+    chars_per_token: int = 4
+
+    # CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
+    # files need more prompt headroom for context injection; TRIVIAL tasks need
+    # less.  Callers use ``budget_tokens_for_tier()`` to get the adjusted budget.
+    # AC-R4-R2: MODERATE aligned to COMPLEX (1.25 → 1.75) since the default tier
+    # collapsed from MODERATE → COMPLEX (AC-R3-R7).  Tasks formerly classified as
+    # MODERATE now receive COMPLEX budgets to avoid under-budgeted prompts.
+    tier_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        "TRIVIAL": 0.75,
+        "SIMPLE": 1.0,
+        "MODERATE": 1.75,
+        "COMPLEX": 1.75,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible module-level constants
+# ---------------------------------------------------------------------------
+_DEFAULT_BUDGET = BudgetConfig()
+
+# Spec prompt section budgets
+PLAN_CONTEXT_MAX_CHARS: int = _DEFAULT_BUDGET.plan_context_max_chars
+ARCH_CONTEXT_MAX_CHARS: int = _DEFAULT_BUDGET.arch_context_max_chars
+SPEC_CONTEXT_BUDGET_CHARS: int = _DEFAULT_BUDGET.spec_context_budget_chars
+
+# Existing file content budget for draft prompts
+EXISTING_FILES_BUDGET_BYTES: int = _DEFAULT_BUDGET.existing_files_budget_bytes
+
+# Truncation marker appended when text is cut
+TRUNCATION_MARKER: str = "... [truncated; full plan in artifacts]"
+
+# Line threshold for search/replace vs whole-file edit mode
+SEARCH_REPLACE_LINE_THRESHOLD: int = _DEFAULT_BUDGET.search_replace_line_threshold
+
+# Size regression detection for edit-mode drafts:
+# Draft with < THRESHOLD of existing file lines is flagged as catastrophically truncated.
+# Only applies when existing files exceed MIN_LINES (skip for very small files).
+DRAFT_SIZE_REGRESSION_THRESHOLD: float = _DEFAULT_BUDGET.draft_size_regression_threshold
+DRAFT_SIZE_REGRESSION_MIN_LINES: int = _DEFAULT_BUDGET.draft_size_regression_min_lines
+
+# CR-H3: Size explosion detection — upper bound.
+# Draft with > EXPLOSION_THRESHOLD × existing lines is flagged as hallucinated/duplicated.
+# Only applies when existing files exceed MIN_LINES (skip for very small files).
+DRAFT_SIZE_EXPLOSION_THRESHOLD: float = _DEFAULT_BUDGET.draft_size_explosion_threshold
+
+# Supplementary context budgets for optional prompt sections.
+# T1 drafter agents get a smaller budget; T2 reviewer agents get more.
+SUPPLEMENTARY_BUDGET_CHARS: int = _DEFAULT_BUDGET.supplementary_budget_chars
+ENRICHMENT_BUDGET_CHARS: int = _DEFAULT_BUDGET.enrichment_budget_chars
+
+# Total prompt budget (modeled after micro_prime's 1024-token input budget).
+# These are hard caps; sections are dropped by priority when exceeded.
+TOTAL_SPEC_BUDGET_TOKENS: int = _DEFAULT_BUDGET.spec_budget_tokens
+TOTAL_DRAFT_BUDGET_TOKENS: int = _DEFAULT_BUDGET.draft_budget_tokens
+CHARS_PER_TOKEN: int = _DEFAULT_BUDGET.chars_per_token
+
+# Exemplar injection budget (REQ-PEP-101/102)
+EXEMPLAR_BUDGET_CHARS: int = _DEFAULT_BUDGET.exemplar_budget_chars
+
+# Tier multipliers — kept as module-level alias for internal use
+_TIER_BUDGET_MULTIPLIERS: Dict[str, float] = _DEFAULT_BUDGET.tier_multipliers
 
 
 __all__ = [
+    "BudgetConfig",
     "PLAN_CONTEXT_MAX_CHARS",
     "ARCH_CONTEXT_MAX_CHARS",
     "SPEC_CONTEXT_BUDGET_CHARS",
@@ -30,81 +111,19 @@ __all__ = [
     "SEARCH_REPLACE_LINE_THRESHOLD",
     "DRAFT_SIZE_REGRESSION_THRESHOLD",
     "DRAFT_SIZE_REGRESSION_MIN_LINES",
+    "DRAFT_SIZE_EXPLOSION_THRESHOLD",
     "SUPPLEMENTARY_BUDGET_CHARS",
     "ENRICHMENT_BUDGET_CHARS",
     "TOTAL_SPEC_BUDGET_TOKENS",
     "TOTAL_DRAFT_BUDGET_TOKENS",
     "CHARS_PER_TOKEN",
     "EXEMPLAR_BUDGET_CHARS",
-    "ACCUMULATED_MANIFEST_BUDGET_CHARS",
     "truncate_with_marker",
     "truncate_arch_context",
     "estimate_tokens",
     "enforce_prompt_budget",
     "budget_tokens_for_tier",
 ]
-
-
-# Spec prompt section budgets
-PLAN_CONTEXT_MAX_CHARS: int = 6_000
-ARCH_CONTEXT_MAX_CHARS: int = 4_096
-SPEC_CONTEXT_BUDGET_CHARS: int = 12_000
-
-# Existing file content budget for draft prompts
-EXISTING_FILES_BUDGET_BYTES: int = 40 * 1024  # 40 KB
-
-# Truncation marker appended when text is cut
-TRUNCATION_MARKER: str = "... [truncated; full plan in artifacts]"
-
-# Line threshold for search/replace vs whole-file edit mode
-SEARCH_REPLACE_LINE_THRESHOLD: int = 50
-
-# Size regression detection for edit-mode drafts:
-# Draft with < THRESHOLD of existing file lines is flagged as catastrophically truncated.
-# Only applies when existing files exceed MIN_LINES (skip for very small files).
-DRAFT_SIZE_REGRESSION_THRESHOLD: float = 0.20  # 20% of existing
-DRAFT_SIZE_REGRESSION_MIN_LINES: int = 50
-
-# CR-H3: Size explosion detection — upper bound.
-# Draft with > EXPLOSION_THRESHOLD × existing lines is flagged as hallucinated/duplicated.
-# Only applies when existing files exceed MIN_LINES (skip for very small files).
-DRAFT_SIZE_EXPLOSION_THRESHOLD: float = 3.0  # 300% of existing
-
-# Supplementary context budgets for optional prompt sections.
-# T1 drafter agents get a smaller budget; T2 reviewer agents get more.
-SUPPLEMENTARY_BUDGET_CHARS: int = 4_000   # ~1000 tokens — draft prompt (T1)
-ENRICHMENT_BUDGET_CHARS: int = 8_000      # ~2000 tokens — review prompt (T2)
-
-# Total prompt budget (modeled after micro_prime's 1024-token input budget).
-# These are hard caps; sections are dropped by priority when exceeded.
-TOTAL_SPEC_BUDGET_TOKENS: int = 4_096     # Spec prompt (architect agent)
-TOTAL_DRAFT_BUDGET_TOKENS: int = 8_192    # Draft prompt (includes existing files)
-CHARS_PER_TOKEN: int = 4                  # Rough estimate matching micro_prime
-
-# Exemplar injection budget (REQ-PEP-101/102)
-EXEMPLAR_BUDGET_CHARS: int = 3_200        # ~800 tokens for exemplar section
-
-# Within-run accumulated manifest budget (Layer 3)
-ACCUMULATED_MANIFEST_BUDGET_CHARS: int = 2_400  # ~600 tokens for upstream contracts
-
-# Security Prime budget constants (Anzen SP-PL-020/021)
-# P0: Hard constraint — never trimmed.  ~50 tokens.
-SECURITY_CONSTRAINT_BUDGET_CHARS: int = 200
-# P1: Library-specific guidance (safe/unsafe examples) — alongside Kaizen hints.
-SECURITY_GUIDANCE_BUDGET_CHARS: int = 1_600     # ~400 tokens for P1 guidance section
-
-# CR-H2: Tier-aware budget multipliers.  COMPLEX tasks with large existing
-# files need more prompt headroom for context injection; TRIVIAL tasks need
-# less.  Callers use ``budget_tokens_for_tier()`` to get the adjusted budget.
-# AC-R4-R2: MODERATE aligned to COMPLEX (1.25 → 1.75) since the default tier
-# collapsed from MODERATE → COMPLEX (AC-R3-R7).  Tasks formerly classified as
-# MODERATE now receive COMPLEX budgets to avoid under-budgeted prompts.
-_TIER_BUDGET_MULTIPLIERS: Dict[str, float] = {
-    "TRIVIAL": 0.75,
-    "SIMPLE": 1.0,
-    "MODERATE": 1.75,
-    "COMPLEX": 1.75,
-}
 
 
 def budget_tokens_for_tier(
@@ -235,17 +254,12 @@ def enforce_prompt_budget(
     for drop_priority in range(max_priority, 0, -1):
         result_sections = [s for s in result_sections if s[0] < drop_priority]
         candidate = "\n\n".join(text for _, _, text in result_sections if text)
-        dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
         if logger:
+            dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
             logger.info(
                 "Prompt budget: dropping P%d sections (%s), %d→%d tokens",
                 drop_priority, ", ".join(dropped),
                 estimate_tokens(full), estimate_tokens(candidate),
-            )
-        # IMP-007: Track budget trims in OTel for correlation with failures
-        if _budget_trim_counter is not None:
-            _budget_trim_counter.add(
-                1, {"priority_dropped": str(drop_priority)},
             )
         if estimate_tokens(candidate) <= budget_tokens:
             return candidate

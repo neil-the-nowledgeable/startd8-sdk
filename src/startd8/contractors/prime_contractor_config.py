@@ -14,15 +14,7 @@ Config file schema:
         "lead": "anthropic:claude-sonnet-4-5-20250514",
         "drafter": null,
         "tier3": null
-      },
-      "integration": {
-        "size_regression_threshold": 0.60,
-        "min_lines": 50,
-        "element_retention_threshold": 0.80
-      },
-      "quality_gate": { "min_score": 60 },
-      "plan_load_max_bytes": 16384,
-      "file_copy_timeout_s": 30
+      }
     }
 
 All sections are optional. Missing sections use defaults.
@@ -36,25 +28,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from startd8.implementation_engine.budget import BudgetConfig
 from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class IntegrationConfig:
-    """Integration engine settings (was hardcoded in integration_engine.py)."""
-
-    size_regression_threshold: float = 0.60
-    min_lines: int = 50
-    element_retention_threshold: float = 0.80
-
-
-@dataclass
-class QualityGateConfig:
-    """Quality gate settings (was hardcoded in prime_contractor.py)."""
-
-    min_score: int = 60
 
 
 @dataclass
@@ -90,12 +67,12 @@ class PrimeContractorConfig:
 
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     agents: AgentConfig = field(default_factory=AgentConfig)
-    integration: IntegrationConfig = field(default_factory=IntegrationConfig)
-    quality_gate: QualityGateConfig = field(default_factory=QualityGateConfig)
 
-    # Top-level settings (was hardcoded in prime_contractor.py)
-    plan_load_max_bytes: int = 16_384
-    file_copy_timeout_s: int = 30
+    budget: BudgetConfig = field(default_factory=BudgetConfig)
+
+    # Parsed ComplexityRoutingConfig — populated from complexity_routing dict
+    # during _parse_config(). Lazy import to avoid circular deps.
+    complexity_config: Any = None  # Optional[ComplexityRoutingConfig]
 
     # Top-level flags
     micro_prime_enabled: bool = False
@@ -158,8 +135,19 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
     # Complexity routing section
     cr = raw.get("complexity_routing", {})
     if isinstance(cr, dict):
-        config.complexity_routing = cr
         config.complexity_routing_enabled = cr.pop("enabled", False)
+        config.complexity_routing = cr
+        # Parse thresholds into ComplexityRoutingConfig
+        if cr:
+            from startd8.complexity.models import ComplexityRoutingConfig
+
+            cr_fields = {
+                k: v
+                for k, v in cr.items()
+                if k in ComplexityRoutingConfig.__dataclass_fields__
+            }
+            if cr_fields:
+                config.complexity_config = ComplexityRoutingConfig(**cr_fields)
 
     # Repair section
     rp = raw.get("repair", {})
@@ -184,25 +172,67 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
             tier3=ag.get("tier3"),
         )
 
-    # Integration section
-    integ = raw.get("integration", {})
-    if isinstance(integ, dict):
-        config.integration = IntegrationConfig(
-            size_regression_threshold=integ.get("size_regression_threshold", 0.60),
-            min_lines=integ.get("min_lines", 50),
-            element_retention_threshold=integ.get("element_retention_threshold", 0.80),
+    # Budget section — overrides implementation_engine.budget defaults
+    bg = raw.get("budget", {})
+    if isinstance(bg, dict) and bg:
+        defaults = BudgetConfig()
+        tier_raw = bg.get("tier_multipliers")
+        tier_val = (
+            tier_raw
+            if isinstance(tier_raw, dict)
+            else defaults.tier_multipliers
         )
-
-    # Quality gate section
-    qg = raw.get("quality_gate", {})
-    if isinstance(qg, dict):
-        config.quality_gate = QualityGateConfig(
-            min_score=qg.get("min_score", 60),
+        config.budget = BudgetConfig(
+            spec_budget_tokens=bg.get(
+                "spec_budget_tokens", defaults.spec_budget_tokens
+            ),
+            draft_budget_tokens=bg.get(
+                "draft_budget_tokens", defaults.draft_budget_tokens
+            ),
+            plan_context_max_chars=bg.get(
+                "plan_context_max_chars", defaults.plan_context_max_chars
+            ),
+            arch_context_max_chars=bg.get(
+                "arch_context_max_chars", defaults.arch_context_max_chars
+            ),
+            spec_context_budget_chars=bg.get(
+                "spec_context_budget_chars", defaults.spec_context_budget_chars
+            ),
+            existing_files_budget_bytes=bg.get(
+                "existing_files_budget_bytes",
+                defaults.existing_files_budget_bytes,
+            ),
+            exemplar_budget_chars=bg.get(
+                "exemplar_budget_chars", defaults.exemplar_budget_chars
+            ),
+            search_replace_line_threshold=bg.get(
+                "search_replace_line_threshold",
+                defaults.search_replace_line_threshold,
+            ),
+            draft_size_regression_threshold=bg.get(
+                "draft_size_regression_threshold",
+                defaults.draft_size_regression_threshold,
+            ),
+            draft_size_explosion_threshold=bg.get(
+                "draft_size_explosion_threshold",
+                defaults.draft_size_explosion_threshold,
+            ),
+            draft_size_regression_min_lines=bg.get(
+                "draft_size_regression_min_lines",
+                defaults.draft_size_regression_min_lines,
+            ),
+            supplementary_budget_chars=bg.get(
+                "supplementary_budget_chars",
+                defaults.supplementary_budget_chars,
+            ),
+            enrichment_budget_chars=bg.get(
+                "enrichment_budget_chars", defaults.enrichment_budget_chars
+            ),
+            chars_per_token=bg.get(
+                "chars_per_token", defaults.chars_per_token
+            ),
+            tier_multipliers=tier_val,
         )
-
-    # Top-level settings
-    config.plan_load_max_bytes = raw.get("plan_load_max_bytes", 16_384)
-    config.file_copy_timeout_s = raw.get("file_copy_timeout_s", 30)
 
     return config
 
@@ -251,8 +281,26 @@ def apply_cli_overrides(
     # Complexity routing overrides
     if getattr(args, "complexity_routing", False):
         config.complexity_routing_enabled = True
-    if getattr(args, "complexity_loc_simple_max", None) is not None:
-        config.complexity_routing["loc_simple_max"] = args.complexity_loc_simple_max
+
+    # Complexity threshold CLI overrides
+    _complexity_cli_attrs = (
+        "complexity_loc_simple_max",
+        "complexity_loc_complex_min",
+        "complexity_blast_radius_complex_threshold",
+        "complexity_non_python_trivial_loc_max",
+        "complexity_non_python_simple_loc_max",
+    )
+    for cli_attr in _complexity_cli_attrs:
+        cli_val = getattr(args, cli_attr, None)
+        if cli_val is not None:
+            # Sync to raw dict (backward compat)
+            field_name = cli_attr.replace("complexity_", "", 1)
+            config.complexity_routing[field_name] = cli_val
+            # Sync to typed config
+            if config.complexity_config is None:
+                from startd8.complexity.models import ComplexityRoutingConfig
+                config.complexity_config = ComplexityRoutingConfig()
+            setattr(config.complexity_config, field_name, cli_val)
     if getattr(args, "tier3_agent", None):
         config.agents.tier3 = args.tier3_agent
 
@@ -274,13 +322,5 @@ def apply_cli_overrides(
         config.agents.lead = args.lead_agent
     if getattr(args, "drafter_agent", None):
         config.agents.drafter = args.drafter_agent
-
-    # Quality gate overrides
-    if getattr(args, "min_quality_score", None) is not None:
-        config.quality_gate.min_score = args.min_quality_score
-
-    # Plan load cap override
-    if getattr(args, "plan_max_bytes", None) is not None:
-        config.plan_load_max_bytes = args.plan_max_bytes
 
     return config

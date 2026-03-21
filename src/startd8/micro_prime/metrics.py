@@ -26,14 +26,55 @@ logger = get_logger(__name__)
 _LOCAL_COST_PER_M_INPUT = 0.0
 _LOCAL_COST_PER_M_OUTPUT = 0.0
 
-# Cloud model cost estimates for savings calculation (Haiku tier)
-_CLOUD_COST_PER_M_INPUT = 0.80   # $/1M input tokens (Haiku)
-_CLOUD_COST_PER_M_OUTPUT = 4.00  # $/1M output tokens (Haiku)
+# Haiku fallback costs ($/1M tokens) when PricingService is unavailable
+_FALLBACK_CLOUD_INPUT = 0.80
+_FALLBACK_CLOUD_OUTPUT = 4.00
 
 # Baseline token estimates per element for cloud-savings calculation.
 # Represents the average tokens a cloud LLM would use per simple element.
 _BASELINE_INPUT_TOKENS_PER_ELEMENT = 500
 _BASELINE_OUTPUT_TOKENS_PER_ELEMENT = 500
+
+
+def _get_cloud_costs(model_spec: str = "") -> tuple[float, float]:
+    """Get per-1M-token costs for the cloud escalation model.
+
+    Resolves the model spec via ``PricingService`` and returns
+    ``(input_cost_per_million, output_cost_per_million)``.  Falls back to
+    Haiku-tier pricing when the service or model catalog is unavailable.
+
+    Args:
+        model_spec: Agent spec string (``provider:model``).  When empty the
+            default Haiku model from ``model_catalog.Models`` is used.
+
+    Returns:
+        Tuple of (input_cost_per_million, output_cost_per_million).
+    """
+    if not model_spec:
+        try:
+            from startd8.model_catalog import Models
+
+            model_spec = Models.CLAUDE_HAIKU_LATEST
+        except (ImportError, AttributeError):
+            return _FALLBACK_CLOUD_INPUT, _FALLBACK_CLOUD_OUTPUT
+
+    try:
+        from startd8.costs.pricing import PricingService
+
+        pricing = PricingService()
+        # Extract model name from agent_spec (provider:model)
+        parts = model_spec.split(":", 1)
+        model_name = parts[1] if len(parts) == 2 else model_spec
+        model_pricing = pricing.get_pricing(model_name)
+        if model_pricing is not None:
+            return (
+                model_pricing.input_cost_per_million,
+                model_pricing.output_cost_per_million,
+            )
+    except (ImportError, Exception):
+        pass
+
+    return _FALLBACK_CLOUD_INPUT, _FALLBACK_CLOUD_OUTPUT
 
 
 def _tier_label(tier: TierClassification | str) -> str:
@@ -142,12 +183,22 @@ class MetricsCollector:
 def generate_cost_report(
     seed_result: SeedResult,
     config: MicroPrimeConfig,
+    cloud_model_spec: str = "",
 ) -> MicroPrimeCostReport:
     """Generate a cost report from a seed result (REQ-MP-602).
 
     Calculates local processing costs (effectively zero for Ollama) and
     estimated cloud savings compared to sending all elements to cloud.
+
+    Args:
+        seed_result: Completed seed result with element outcomes.
+        config: Engine configuration.
+        cloud_model_spec: Agent spec (``provider:model``) for the cloud
+            escalation model.  When empty, defaults to Haiku pricing via
+            ``PricingService`` lookup.
     """
+    cloud_input_cost, cloud_output_cost = _get_cloud_costs(cloud_model_spec)
+
     tier_counts = {t: 0 for t in TierClassification}
     local_success = 0
     escalated = 0
@@ -192,8 +243,8 @@ def generate_cost_report(
     )
 
     baseline_per_element_usd = (
-        _BASELINE_INPUT_TOKENS_PER_ELEMENT * _CLOUD_COST_PER_M_INPUT / 1_000_000
-        + _BASELINE_OUTPUT_TOKENS_PER_ELEMENT * _CLOUD_COST_PER_M_OUTPUT / 1_000_000
+        _BASELINE_INPUT_TOKENS_PER_ELEMENT * cloud_input_cost / 1_000_000
+        + _BASELINE_OUTPUT_TOKENS_PER_ELEMENT * cloud_output_cost / 1_000_000
     )
     baseline_all_cloud_usd = total * baseline_per_element_usd
     actual_cloud_usd = escalated * baseline_per_element_usd
@@ -231,12 +282,13 @@ def generate_experiment_result(
     config: MicroPrimeConfig,
     run_id: str,
     collector: Optional[MetricsCollector] = None,
+    cloud_model_spec: str = "",
 ) -> dict[str, Any]:
     """Generate a JSON-serializable experiment result (REQ-MP-603).
 
     Returns a dict conforming to the experiment result schema v1.0.0.
     """
-    cost_report = generate_cost_report(seed_result, config)
+    cost_report = generate_cost_report(seed_result, config, cloud_model_spec)
 
     trivial_count = 0
     trivial_passed = 0

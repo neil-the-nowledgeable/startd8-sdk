@@ -214,6 +214,22 @@ def main() -> int:
         "--complexity-loc-simple-max", type=int, default=None,
         help="Override max LOC for SIMPLE tier (default: 150)",
     )
+    parser.add_argument(
+        "--complexity-loc-complex-min", type=int, default=None,
+        help="Override min LOC for COMPLEX tier (default: 500)",
+    )
+    parser.add_argument(
+        "--complexity-blast-radius-complex-threshold", type=int, default=None,
+        help="Override blast radius threshold for COMPLEX tier (default: 5)",
+    )
+    parser.add_argument(
+        "--complexity-non-python-trivial-loc-max", type=int, default=None,
+        help="Override max LOC for non-Python TRIVIAL tier (default: 100)",
+    )
+    parser.add_argument(
+        "--complexity-non-python-simple-loc-max", type=int, default=None,
+        help="Override max LOC for non-Python SIMPLE tier (default: 300)",
+    )
     # Micro Prime local generation (REQ-MP-700)
     parser.add_argument(
         "--micro-prime", action="store_true", default=False,
@@ -496,7 +512,6 @@ def main() -> int:
         cli_mode=args.mode,
         walkthrough=args.walkthrough,
         repair_config=repair_config,
-        prime_config=pc_config,
     )
 
     # Load features from seed
@@ -534,12 +549,8 @@ def main() -> int:
 
     # Complexity routing (REQ-MP-807)
     if pc_config.complexity_routing_enabled:
-        from startd8.complexity import ComplexityRoutingConfig
-        cr_fields = {
-            k: v for k, v in pc_config.complexity_routing.items()
-            if k in ComplexityRoutingConfig.__dataclass_fields__
-        }
-        cr_config = ComplexityRoutingConfig(**cr_fields) if cr_fields else None
+        # Use pre-parsed config from _parse_config() + CLI overrides
+        cr_config = pc_config.complexity_config
         # REQ-MP-700: Route TRIVIAL/SIMPLE through MicroPrime when both enabled
         mp_generator = workflow.code_generator if pc_config.micro_prime_enabled else None
         workflow.enable_complexity_routing(
