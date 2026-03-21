@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..implementation_engine.budget import (
+    EXISTING_FILES_BUDGET_BYTES as _EXISTING_FILES_BUDGET_BYTES,
+)
 from ..logging_config import get_logger
 from .checkpoint import IntegrationCheckpoint
 from .context_resolution import (
@@ -62,11 +65,12 @@ VALID_EXECUTION_MODES: frozenset = VALID_MODES
 #: required to trigger pipeline mode during auto-detection.
 _DETECTION_THRESHOLD: int = 1
 
-# Backward-compat defaults — canonical source is PrimeContractorConfig
-#: Plan document load cap (PC-B5). Use config.plan_load_max_bytes
+#: Plan document load cap (PC-B5). Reduces from 60KB to 16KB for token savings.
 _PLAN_LOAD_MAX_BYTES: int = 16_384
 
-#: CR-C1: Minimum quality score. Use config.quality_gate.min_score
+#: CR-C1: Minimum quality score for accepting generation results from
+#: generators that lack an internal review loop.  Results below this
+#: threshold trigger an error-informed regeneration attempt.
 _MIN_QUALITY_SCORE: int = 60
 
 #: CR-C1: Quality score assumed when a generator does not provide one.
@@ -77,8 +81,7 @@ _MIN_QUALITY_SCORE: int = 60
 _UNSCORED_QUALITY_FALLBACK: Optional[int] = None  # None = skip gate for unscored
 
 #: PC-O1, PC-O3: Budget for existing file content when populating gen_context.
-#: Matches lead_contractor_workflow._EXISTING_FILES_BUDGET_BYTES (40KB).
-_EXISTING_FILES_BUDGET_BYTES: int = 40 * 1024
+#: Single source of truth — imported from implementation_engine.budget.
 
 __all__ = [
     "MODE_STANDALONE",
@@ -462,7 +465,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, prime_config: Optional[Any]=None):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80):
         """
         Initialize the Prime Contractor workflow.
 
@@ -490,12 +493,7 @@ class PrimeContractorWorkflow:
             strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
             walkthrough: If True, persist all LLM prompts without making API calls
             edit_min_pct: Min % of existing lines in edit output (PC-Q3, default: 80)
-            prime_config: Optional PrimeContractorConfig for consolidated settings
         """
-        # Consolidated config (F-AC-02) — import lazily to avoid circular deps
-        from .prime_contractor_config import PrimeContractorConfig
-
-        self._prime_config: PrimeContractorConfig = prime_config or PrimeContractorConfig()
         self.project_root = project_root or Path.cwd()
         self.edit_min_pct = edit_min_pct
         self.dry_run = dry_run
@@ -543,9 +541,6 @@ class PrimeContractorWorkflow:
             check_truncation=self.check_truncation,
             strict_checkpoints=self.strict_checkpoints,
             repair_config=self._repair_config,
-            size_regression_threshold=self._prime_config.integration.size_regression_threshold,
-            min_lines=self._prime_config.integration.min_lines,
-            element_retention_threshold=self._prime_config.integration.element_retention_threshold,
         )
         self._prime_listener = PrimeContractorListener(
             queue=self.queue,
@@ -578,12 +573,6 @@ class PrimeContractorWorkflow:
         self._forward_manifest = None
         # FR-MPA-007: Skeleton sources — populated in load_seed_context()
         self._skeleton_sources: dict[str, str] = {}
-        # Contracts — populated in load_seed_context(); defaulted here so
-        # _build_generation_context() works without seed loading (test paths).
-        self._security_contract: dict[str, Any] | None = None
-        self._observability_contract: dict[str, Any] | None = None
-        self._instrumentation_contract: dict[str, Any] | None = None
-        self._guidance_context: dict[str, Any] | None = None
         # Complexity routing (REQ-MP-807) — off by default, enabled via enable_complexity_routing()
         self._complexity_routing_enabled = False
         self._complexity_config: Optional[Any] = None
@@ -1126,7 +1115,6 @@ class PrimeContractorWorkflow:
         state_dict["execution_mode"] = self.execution_mode
         return state_dict
 
-    # Backward-compat default — canonical source is PrimeContractorConfig.file_copy_timeout_s
     _FILE_COPY_READ_TIMEOUT_S: int = 30
 
     def _handle_file_copy(self, feature: FeatureSpec) -> Optional[GenerationResult]:
@@ -1190,11 +1178,11 @@ class PrimeContractorWorkflow:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_read_file)
             try:
-                source_content = future.result(timeout=self._prime_config.file_copy_timeout_s)
+                source_content = future.result(timeout=self._FILE_COPY_READ_TIMEOUT_S)
             except concurrent.futures.TimeoutError:
                 raise TimeoutError(
                     f"Reading copy source '{source_file}' timed out after "
-                    f"{self._prime_config.file_copy_timeout_s}s"
+                    f"{self._FILE_COPY_READ_TIMEOUT_S}s"
                 )
 
         # Write target into output_dir (consistent with normal generation paths)
@@ -1596,16 +1584,6 @@ class PrimeContractorWorkflow:
         # Wire forward manifest to integration engine for contract violation repair
         self._engine._forward_manifest = self._forward_manifest
 
-        # REQ-ICD-106: Load security contract from seed
-        self._security_contract: dict[str, Any] | None = None
-        _sc = seed_data.get("security_contract")
-        if _sc and isinstance(_sc, dict):
-            self._security_contract = _sc
-            logger.info(
-                "Security contract loaded from seed: %d database(s)",
-                len(_sc.get("databases", {})),
-            )
-
         # FR-MPA-007: Extract pre-rendered skeleton sources from seed artifacts
         # so MicroPrimeCodeGenerator can skip _generate_skeletons() fallback.
         self._skeleton_sources: dict[str, str] = (
@@ -1617,29 +1595,56 @@ class PrimeContractorWorkflow:
                 len(self._skeleton_sources),
             )
 
-        # REQ-TCW-250: Extract instrumentation contract from onboarding metadata
+        # --- Mottainai: Extract all available context from seed ---
+        # These fields are produced by ContextCore export and threaded into
+        # gen_context by _build_generation_context() to avoid re-derivation.
+
+        # REQ-ICD-106: Security contract
+        self._security_contract: dict[str, Any] | None = None
+        _sc = seed_data.get("security_contract")
+        if _sc and isinstance(_sc, dict):
+            self._security_contract = _sc
+            logger.info(
+                "Security contract loaded from seed: %d database(s)",
+                len(_sc.get("databases", {})),
+            )
+
+        # REQ-TCW-250: Instrumentation contract from onboarding
         self._instrumentation_contract: dict[str, Any] | None = None
         _instr_hints = onboarding.get("instrumentation_hints")
         if _instr_hints and isinstance(_instr_hints, dict):
             from startd8.validators.todo_scanner import normalize_instrumentation_data
             self._instrumentation_contract = normalize_instrumentation_data(_instr_hints)
-            _metric_count = len(
-                (self._instrumentation_contract or {}).get("metrics", {}).get("required", [])
-            )
-            logger.info(
-                "Instrumentation contract loaded from seed (%d metric entries)",
-                _metric_count,
-            )
+            _mc = len((self._instrumentation_contract or {}).get("metrics", {}).get("required", []))
+            logger.info("Instrumentation contract loaded from seed (%d metric entries)", _mc)
 
-        # REQ-TCW-251: Extract guidance from onboarding metadata
+        # REQ-TCW-251: Guidance context
         self._guidance_context: dict[str, Any] | None = None
         _guidance = onboarding.get("guidance")
         if _guidance and isinstance(_guidance, dict):
             self._guidance_context = _guidance
-            logger.info(
-                "Guidance context loaded from seed: %d keys",
-                len(_guidance),
-            )
+            logger.info("Guidance context loaded from seed: %d keys", len(_guidance))
+
+        # V2: Resolved artifact parameters (pre-computed by ContextCore)
+        self._resolved_artifact_params: dict[str, Any] | None = None
+        _rap = onboarding.get("resolved_artifact_parameters")
+        if _rap and isinstance(_rap, dict):
+            self._resolved_artifact_params = _rap
+            logger.info("Resolved artifact parameters loaded: %d types", len(_rap))
+
+        # V3: Expected output contracts (depth, tokens, completeness markers)
+        self._expected_output_contracts: dict[str, Any] | None = None
+        _eoc = onboarding.get("expected_output_contracts")
+        if _eoc and isinstance(_eoc, dict):
+            self._expected_output_contracts = _eoc
+            logger.info("Expected output contracts loaded: %d types", len(_eoc))
+
+        # V4: Design calibration hints (per-artifact-type budgets)
+        self._design_calibration_hints: dict[str, Any] | None = None
+        _dch = onboarding.get("design_calibration_hints")
+        if _dch and isinstance(_dch, dict):
+            self._design_calibration_hints = _dch
+            logger.info("Design calibration hints loaded: %d types", len(_dch))
 
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
@@ -1657,8 +1662,8 @@ class PrimeContractorWorkflow:
             else:
                 try:
                     _text = resolved.read_text(encoding="utf-8")
-                    # Cap plan load (PC-B5) to reduce spec prompt tokens
-                    self.plan_document_text = _text[:self._prime_config.plan_load_max_bytes]
+                    # Cap at 16KB (PC-B5) to reduce spec prompt tokens
+                    self.plan_document_text = _text[:_PLAN_LOAD_MAX_BYTES]
                 except OSError as exc:
                     logger.warning(
                         "Could not load plan document %s: %s", plan_doc_path, exc,
@@ -3457,26 +3462,36 @@ class PrimeContractorWorkflow:
         gen_context["language_role"] = language_profile.system_prompt_role
         gen_context["coding_standards"] = language_profile.coding_standards
 
-        # REQ-ICD-106: Thread security contract from seed into gen_context.
-        # Consumed by feature_context first (avoid re-detection — A6 fix);
-        # falls back to seed-level contract.
-        _feat_sec_sensitive = feature.metadata.get("security_sensitive")
-        if _feat_sec_sensitive is not None:
-            gen_context["security_sensitive"] = _feat_sec_sensitive
-            gen_context["detected_database"] = feature.metadata.get(
-                "detected_database", ""
-            )
+        # --- Mottainai: Thread all extracted context into gen_context ---
+        # Each field is injected only if present and not already set by a
+        # higher-priority source (e.g., per-task enrichment from seed).
+
+        # REQ-ICD-106: Security contract
         if self._security_contract and "security_contract" not in gen_context:
             gen_context["security_contract"] = self._security_contract
 
-        # REQ-TCW-250: Thread instrumentation contract — enables LLM to fill
-        # stubs during initial generation rather than leaving them empty.
+        # REQ-TCW-250: Instrumentation contract
         if self._instrumentation_contract and "instrumentation_contract" not in gen_context:
             gen_context["instrumentation_contract"] = self._instrumentation_contract
 
-        # REQ-TCW-251: Thread guidance context — domain-aware steering
+        # REQ-TCW-251: Guidance context
         if self._guidance_context and "guidance" not in gen_context:
             gen_context["guidance"] = self._guidance_context
+
+        # V2: Pre-resolved artifact parameters
+        if self._resolved_artifact_params and "resolved_artifact_parameters" not in gen_context:
+            gen_context["resolved_artifact_parameters"] = self._resolved_artifact_params
+
+        # V3: Expected output contracts
+        if self._expected_output_contracts and "expected_output_contracts" not in gen_context:
+            gen_context["expected_output_contracts"] = self._expected_output_contracts
+
+        # V4: Per-task calibration from design_calibration_hints
+        if self._design_calibration_hints and "implement_max_output_tokens" not in gen_context:
+            _artifact_type = feature.metadata.get("artifact_type", "")
+            _cal = self._design_calibration_hints.get(_artifact_type, {})
+            if isinstance(_cal, dict) and _cal.get("max_tokens"):
+                gen_context["implement_max_output_tokens"] = _cal["max_tokens"]
 
         return gen_context
 
@@ -3836,10 +3851,9 @@ class PrimeContractorWorkflow:
 
         Returns True if quality is acceptable (or unscored), False if rejected.
         """
-        min_score = self._prime_config.quality_gate.min_score
         if not (result.success and result.quality_score is not None):
             return True
-        if result.quality_score >= min_score:
+        if result.quality_score >= _MIN_QUALITY_SCORE:
             return True
 
         logger.warning(
@@ -3847,11 +3861,11 @@ class PrimeContractorWorkflow:
             "marking for regeneration",
             feature.name,
             result.quality_score,
-            min_score,
+            _MIN_QUALITY_SCORE,
             extra={
                 "feature_name": feature.name,
                 "quality_score": result.quality_score,
-                "quality_threshold": min_score,
+                "quality_threshold": _MIN_QUALITY_SCORE,
                 "model": result.model,
             },
         )
@@ -3859,7 +3873,7 @@ class PrimeContractorWorkflow:
         quality_feedback = result.metadata.get("review_feedback", "")
         error_msg = (
             f"Quality score {result.quality_score}/100 below threshold "
-            f"{min_score}."
+            f"{_MIN_QUALITY_SCORE}."
         )
         if quality_feedback:
             error_msg += f" Review feedback: {quality_feedback[:500]}"
