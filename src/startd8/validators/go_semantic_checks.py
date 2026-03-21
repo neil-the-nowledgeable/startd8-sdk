@@ -161,6 +161,63 @@ def _check_dot_imports(source: str) -> List[SemanticIssue]:
     return issues
 
 
+def _check_python_contamination(source: str) -> List[SemanticIssue]:
+    """Flag Python fingerprints in Go source files (REQ-KZ-GO-201)."""
+    _PY_FINGERPRINTS = (
+        "def ", "import os", "from __future__", "print(", "self.",
+        "#!/usr/bin/env python",
+    )
+    issues: List[SemanticIssue] = []
+    for fp in _PY_FINGERPRINTS:
+        if fp in source:
+            issues.append(SemanticIssue(
+                check="python_contamination",
+                severity="error",
+                message=f"Python fingerprint `{fp.strip()}` in Go file — file is non-functional",
+            ))
+            break  # One fingerprint is enough to flag
+    return issues
+
+
+def _check_package_filepath_alignment(
+    source: str,
+    file_path: Optional[str],
+) -> List[SemanticIssue]:
+    """Flag package declarations that don't match the directory name.
+
+    Go convention: the package name matches the directory name
+    (e.g., file at ``cmd/server/main.go`` has ``package main``,
+    file at ``internal/store/redis.go`` has ``package store``).
+    """
+    if not file_path or not file_path.endswith(".go"):
+        return []
+
+    pkg_match = _PACKAGE_RE.search(source)
+    if not pkg_match:
+        return []
+
+    actual_pkg = pkg_match.group(1)
+
+    from pathlib import PurePosixPath
+    parent_dir = PurePosixPath(file_path).parent.name
+    if not parent_dir or parent_dir == ".":
+        return []
+
+    # Go package should match directory name (except _test suffix)
+    expected_pkg = parent_dir.replace("-", "")  # hyphens stripped in Go packages
+    if actual_pkg == expected_pkg or actual_pkg == expected_pkg + "_test":
+        return []
+
+    return [SemanticIssue(
+        check="package_dir_mismatch",
+        severity="warning",
+        message=(
+            f"Package `{actual_pkg}` does not match directory name "
+            f"`{parent_dir}` — Go convention requires package name to match directory"
+        ),
+    )]
+
+
 def run_go_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
@@ -175,9 +232,11 @@ def run_go_semantic_checks(
         List of SemanticIssue objects.
     """
     issues: List[SemanticIssue] = []
+    issues.extend(_check_python_contamination(source))
     issues.extend(_check_unchecked_errors(source))
     issues.extend(_check_duplicate_function_names(source))
     issues.extend(_check_fmt_println_in_service(source))
     issues.extend(_check_dot_imports(source))
+    issues.extend(_check_package_filepath_alignment(source, file_path))
 
     return _stamp_file_path(issues, file_path)

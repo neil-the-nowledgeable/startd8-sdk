@@ -1191,7 +1191,14 @@ class IntegrationEngine:
         except ImportError:
             is_allowlisted = None  # type: ignore[assignment]
 
+        import time as _time
+
         gate_results = []
+        enriched_entries: List[Dict[str, Any]] = []
+        allowlist_hit_tracker: Dict[str, List[str]] = {}
+        checks_that_ran: set = set()
+        findings_by_check_type: Dict[str, int] = {}
+        files_skipped = 0
 
         for fpath in integrated_files:
             if not fpath.is_file():
@@ -1204,6 +1211,7 @@ class IntegrationEngine:
             # Auto-detect database type from source content
             db_type = detect_database_type(source)
             if db_type is None:
+                files_skipped += 1
                 continue  # No database surface — skip
 
             # Resolve language from file extension
@@ -1213,13 +1221,23 @@ class IntegrationEngine:
             }
             language = _ext_to_lang.get(fpath.suffix, "")
             if not language:
+                files_skipped += 1
                 continue
 
+            t0 = _time.monotonic()
             sv_result = verify_file(
                 source, str(fpath), db_type, language,
             )
+            verify_time_ms = (_time.monotonic() - t0) * 1000.0
+
+            # Track checks that ran
+            for _finding in sv_result.findings:
+                checks_that_ran.add(_finding.check_type.value)
+                _ct = _finding.check_type.value
+                findings_by_check_type[_ct] = findings_by_check_type.get(_ct, 0) + 1
 
             # Allowlist suppression: filter out operator-declared false positives
+            was_allowlisted = False
             if allowlist and is_allowlisted is not None and sv_result.findings:
                 unsuppressed = []
                 for finding in sv_result.findings:
@@ -1231,6 +1249,16 @@ class IntegrationEngine:
                             "Anzen allowlist: suppressed %s in %s (%s)",
                             finding.check_type.value, fpath.name, justification,
                         )
+                        was_allowlisted = True
+                        # Track allowlist hit for audit
+                        import fnmatch as _fnmatch
+                        for al_entry in allowlist:
+                            if (al_entry["check_id"] == finding.check_type.value
+                                    and _fnmatch.fnmatch(str(fpath), al_entry["file_pattern"])):
+                                allowlist_hit_tracker.setdefault(
+                                    al_entry["file_pattern"], [],
+                                ).append(str(fpath))
+                                break
                     else:
                         unsuppressed.append(finding)
                 # Recompute verdict with unsuppressed findings only
@@ -1255,18 +1283,46 @@ class IntegrationEngine:
 
             gate_results.append(sv_result)
 
-            # OTel recording
+            # Compute per-file score
             try:
-                from startd8.security_prime.otel import record_gate_result
                 from startd8.security_prime.scorer import compute_security_score
                 score = compute_security_score(
                     sv_result.verdict.value,
                     [f.severity for f in sv_result.findings] if sv_result.findings else None,
                 )
+            except ImportError:
+                score = {"pass": 1.0, "warn": 0.7, "fail": 0.0}.get(
+                    sv_result.verdict.value, 0.5,
+                )
+
+            # Build enriched entry for gate report
+            finding_types: Dict[str, int] = {}
+            finding_severities: List[str] = []
+            for f in sv_result.findings:
+                _fct = f.check_type.value
+                finding_types[_fct] = finding_types.get(_fct, 0) + 1
+                finding_severities.append(f.severity)
+
+            db_str = db_type.value if hasattr(db_type, "value") else str(db_type)
+            enriched_entries.append({
+                "file_path": str(fpath),
+                "verdict": sv_result.verdict.value,
+                "score": score,
+                "findings_count": len(sv_result.findings),
+                "finding_types": finding_types,
+                "finding_severities": finding_severities,
+                "database": db_str,
+                "language": language,
+                "timing_ms": verify_time_ms,
+                "allowlisted": was_allowlisted,
+            })
+
+            # OTel recording
+            try:
+                from startd8.security_prime.otel import record_gate_result
                 record_gate_result(
                     str(fpath), sv_result.verdict.value, score,
-                    db_type.value if hasattr(db_type, "value") else str(db_type),
-                    language, len(sv_result.findings),
+                    db_str, language, len(sv_result.findings),
                 )
             except ImportError:
                 pass
@@ -1299,6 +1355,72 @@ class IntegrationEngine:
             # Query Prime's two-pass detection is authoritative for injection.
             self._anzen_gated_files: set = getattr(self, "_anzen_gated_files", set())
             self._anzen_gated_files.update(r.file_path for r in gate_results)
+
+            # Wire update_security_metrics() (Phase 0: remaining work #5)
+            try:
+                from startd8.security_prime.kaizen import update_security_metrics
+                from startd8.security_prime.scorer import compute_aggregate_score
+
+                per_file_scores = [e["score"] for e in enriched_entries]
+                agg_score = compute_aggregate_score(per_file_scores)
+                injection_count = sum(
+                    e.get("finding_types", {}).get("injection", 0)
+                    for e in enriched_entries
+                )
+                credential_count = sum(
+                    e.get("finding_types", {}).get("credential_leakage", 0)
+                    for e in enriched_entries
+                )
+                violation_files = [
+                    e["file_path"] for e in enriched_entries
+                    if e["verdict"] == "fail"
+                ]
+                output_dir = str(self.project_root) if self.project_root else "."
+                update_security_metrics(
+                    output_dir,
+                    injection_blocked=injection_count,
+                    credential_blocked=credential_count,
+                    aggregate_score=agg_score,
+                    files_checked=len(enriched_entries),
+                    files_skipped=files_skipped,
+                    violation_files=violation_files,
+                )
+            except (ImportError, OSError) as exc:
+                logger.debug("Security metrics update skipped: %s", exc)
+
+            # Build and write gate verdict report (Phase 1)
+            try:
+                from startd8.security_prime.gate_metrics import (
+                    build_gate_verdict_report,
+                    build_owasp_section,
+                    compute_score_distribution,
+                    write_gate_metrics_report,
+                )
+                from startd8.security_prime.allowlist import build_allowlist_metrics
+
+                owasp_section = build_owasp_section(
+                    checks_that_ran, findings_by_check_type,
+                )
+                score_dist = compute_score_distribution(
+                    [e["score"] for e in enriched_entries],
+                )
+                al_metrics = build_allowlist_metrics(
+                    allowlist, allowlist_hit_tracker,
+                )
+
+                import uuid as _uuid
+                run_id = result_metadata.get("run_id", str(_uuid.uuid4())[:8])
+                gate_report = build_gate_verdict_report(
+                    enriched_entries,
+                    run_id,
+                    allowlist_metrics=al_metrics,
+                    owasp_data=owasp_section,
+                    score_distribution=score_dist,
+                )
+                out_dir = str(self.project_root) if self.project_root else "."
+                write_gate_metrics_report(gate_report, out_dir)
+            except (ImportError, OSError) as exc:
+                logger.debug("Gate metrics report skipped: %s", exc)
 
     # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
@@ -1410,6 +1532,40 @@ class IntegrationEngine:
                 except Exception as exc:
                     logger.debug(
                         "Java semantic check failed for %s: %s", fpath, exc,
+                    )
+            elif fpath.suffix == ".go":
+                try:
+                    from startd8.validators.go_semantic_checks import (
+                        run_go_semantic_checks,
+                    )
+                    source = fpath.read_text(encoding="utf-8")
+                    issues = run_go_semantic_checks(source, file_path=str(fpath))
+                    for issue in issues:
+                        logger.warning(
+                            "Go semantic: %s",
+                            issue.message,
+                            extra={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Go semantic check failed for %s: %s", fpath, exc,
+                    )
+            elif fpath.suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
+                try:
+                    from startd8.validators.nodejs_semantic_checks import (
+                        run_nodejs_semantic_checks,
+                    )
+                    source = fpath.read_text(encoding="utf-8")
+                    issues = run_nodejs_semantic_checks(source, file_path=str(fpath))
+                    for issue in issues:
+                        logger.warning(
+                            "Node.js semantic: %s",
+                            issue.message,
+                            extra={"unit_id": unit.id},
+                        )
+                except Exception as exc:
+                    logger.debug(
+                        "Node.js semantic check failed for %s: %s", fpath, exc,
                     )
 
     def _attempt_semantic_repair(

@@ -603,7 +603,9 @@ def _validate_non_python_file(
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
     elif suffix in (".js", ".mjs", ".cjs"):
-        result = _validate_js_file(content, result)
+        result = _validate_js_file(content, result, file_path=str(abs_path))
+    elif suffix == ".go":
+        result = _validate_go_file(content, result, file_path=str(abs_path))
     elif suffix == ".json":
         result = _validate_json_file(content, result)
     elif suffix == ".java":
@@ -1046,6 +1048,7 @@ _JS_KEYWORD_SET = frozenset({
 def _validate_js_file(
     content: str,
     result: DiskComplianceResult,
+    file_path: Optional[str] = None,
 ) -> DiskComplianceResult:
     """Validate JavaScript file via ``node --check`` with text-based fallback (REQ-NODE-200)."""
     if not content.strip():
@@ -1103,6 +1106,20 @@ def _validate_js_file(
                 os.unlink(tmp.name)
             except OSError:
                 pass
+
+    # Node.js semantic checks — feed into disk quality score
+    try:
+        from startd8.validators.nodejs_semantic_checks import (
+            run_nodejs_semantic_checks,
+        )
+        for sem_issue in run_nodejs_semantic_checks(content, file_path=file_path):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": sem_issue.message,
+            })
+    except ImportError:
+        pass
 
     return result
 
@@ -1292,6 +1309,73 @@ def _validate_build_gradle(
             "severity": "info",
             "message": "no dependencies block found",
         })
+
+    return result
+
+
+def _validate_go_file(
+    content: str,
+    result: DiskComplianceResult,
+    file_path: Optional[str] = None,
+) -> DiskComplianceResult:
+    """Validate Go source file structure (REQ-KZ-GO-100).
+
+    Checks: package declaration, balanced braces, Python contamination,
+    and runs Go semantic checks for disk quality scoring.
+    """
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
+    # Python fingerprint guard
+    _py_fingerprints = ("def ", "import os", "from __future__", "self.")
+    for fp in _py_fingerprints:
+        if fp in content:
+            result.ast_valid = False
+            result.contract_compliance = 0.0
+            result.error = f"Python fingerprint in .go file: {fp!r}"
+            return result
+
+    # Package declaration check
+    if not re.search(r'^\s*package\s+\w+', content, re.MULTILINE):
+        result.semantic_issues.append({
+            "category": "go_structure",
+            "severity": "warning",
+            "message": "missing package declaration",
+        })
+        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+
+    # Balanced braces check
+    depth = 0
+    for ch in content:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                result.ast_valid = False
+                result.contract_compliance = 0.5
+                result.error = "unbalanced_braces"
+                return result
+    if depth != 0:
+        result.ast_valid = False
+        result.contract_compliance = 0.5
+        result.error = f"unbalanced_braces (depth={depth})"
+        return result
+
+    # Go semantic checks — feed into disk quality score
+    try:
+        from startd8.validators.go_semantic_checks import run_go_semantic_checks
+        for sem_issue in run_go_semantic_checks(content, file_path=file_path):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": sem_issue.message,
+            })
+    except ImportError:
+        pass
 
     return result
 

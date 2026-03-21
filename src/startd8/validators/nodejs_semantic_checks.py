@@ -136,6 +136,52 @@ def _check_unhandled_promises(source: str) -> List[SemanticIssue]:
     return issues
 
 
+def _check_python_contamination(source: str) -> List[SemanticIssue]:
+    """Flag Python fingerprints in JS/TS source files (REQ-KZ-ND-100)."""
+    _PY_FINGERPRINTS = (
+        "def ", "import os", "from __future__", "self.",
+        "#!/usr/bin/env python",
+    )
+    # "print(" is valid JS, so only flag Python-specific ones
+    issues: List[SemanticIssue] = []
+    for fp in _PY_FINGERPRINTS:
+        if fp in source:
+            issues.append(SemanticIssue(
+                check="python_contamination",
+                severity="error",
+                message=f"Python fingerprint `{fp.strip()}` in JS/TS file — file is non-functional",
+            ))
+            break
+    return issues
+
+
+def _check_module_system_consistency(source: str) -> List[SemanticIssue]:
+    """Flag mixing of CommonJS and ESM syntax in the same file (REQ-KZ-ND-200).
+
+    CJS: require(), module.exports
+    ESM: import/export statements
+    Mixing them causes runtime errors in Node.js.
+    """
+    has_cjs = bool(re.search(r'\brequire\s*\(', source))
+    has_esm_import = bool(re.search(r'^\s*import\s+', source, re.MULTILINE))
+    has_esm_export = bool(re.search(r'^\s*export\s+', source, re.MULTILINE))
+    has_module_exports = bool(re.search(r'\bmodule\.exports\b', source))
+
+    has_cjs_any = has_cjs or has_module_exports
+    has_esm_any = has_esm_import or has_esm_export
+
+    if has_cjs_any and has_esm_any:
+        return [SemanticIssue(
+            check="module_system_mixing",
+            severity="error",
+            message=(
+                "CommonJS (require/module.exports) and ESM (import/export) "
+                "mixed in same file — pick one module system"
+            ),
+        )]
+    return []
+
+
 def run_nodejs_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
@@ -150,9 +196,11 @@ def run_nodejs_semantic_checks(
         List of SemanticIssue objects.
     """
     issues: List[SemanticIssue] = []
+    issues.extend(_check_python_contamination(source))
     issues.extend(_check_console_log_in_service(source, file_path))
     issues.extend(_check_var_usage(source))
     issues.extend(_check_duplicate_requires(source))
     issues.extend(_check_unhandled_promises(source))
+    issues.extend(_check_module_system_consistency(source))
 
     return _stamp_file_path(issues, file_path)
