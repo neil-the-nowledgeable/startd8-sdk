@@ -1,7 +1,7 @@
 # Kaizen for Observability Artifacts — Requirements
 
-> **Version:** 1.0.0
-> **Status:** DRAFT
+> **Version:** 1.1.0
+> **Status:** DRAFT — Layer 7 (validation, repair, semantic checks) added 2026-03-21
 > **Date:** 2026-03-21
 > **Parent:** [KAIZEN_PRIME_REQUIREMENTS.md](../prime/KAIZEN_PRIME_REQUIREMENTS.md) (code generation Kaizen)
 > **Sibling:** [UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md](../UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md) (generation pipeline)
@@ -113,6 +113,11 @@ THIS DOCUMENT (REQ-KZ-OBS-100–600)
 | **Layer 6 — Feedback Loop** | | | |
 | REQ-KZ-OBS-600 | Artifact-specific CAUSE_TO_SUGGESTION entries | startd8-sdk | PLANNED |
 | REQ-KZ-OBS-601 | Observability quality in kaizen-trends.json | cap-dev-pipe | PLANNED |
+| **Layer 7 — First-Class Pipeline Citizenship** | | | |
+| REQ-KZ-OBS-700 | Post-generation validation gate | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-710 | Deterministic repair steps (SLO target, metric name, gridPos) | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-720 | Semantic checks (RED coverage, SLO alignment, alert coverage, transport) | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-730 | Quality score computation (post-write) | startd8-sdk | PLANNED |
 
 ---
 
@@ -316,6 +321,7 @@ alert_score = (structural_validity  x 0.30)
 | `threshold_alignment` | 0.0 – 1.0 | `1.0 - (mismatched_thresholds / total_thresholds)`. Thresholds checked against manifest derivation rules |
 | `label_completeness` | 0.0 – 1.0 | `(present_labels) / (required_labels)`. Required: `severity`, `service`. Optional: `protocol`, `team` |
 | `annotation_quality` | 0.0 – 1.0 | `(present_annotations) / (required_annotations)`. Required: `summary`. Optional: `runbook_url`, `dashboard_url`, `source` |
+| `rule_coverage` | 0.0 – 1.0 | `min(actual_rules, expected_rules) / expected_rules`. Expected = latency + error_rate + availability when manifest has `availability` requirement (i.e., 3). Services with 1/3 expected rules score 0.33. Services without `availability` requirement expect 1 (latency only). |
 
 **Short-circuit:** YAML parse failure → 0.0. No rules → 0.0.
 
@@ -384,11 +390,13 @@ Cross-artifact alignment checks verify that the three artifact types tell a cons
 
 ### REQ-KZ-OBS-403: Manifest Derivation Completeness
 
-**Check:** Every `derivation_rules` entry in the observability manifest MUST trace to at least one used value in at least one artifact.
+**Check:** Every `derivation_rules` entry in the observability manifest MUST trace to at least one correctly-consumed value in at least one artifact.
 
-**Rationale:** Derivation rules that produce values consumed by no artifact indicate either dead rules or missing artifact features.
+**Rationale:** Derivation rules that produce values consumed by no artifact indicate either dead rules or missing artifact features. Rules whose values are consumed but with wrong values (e.g., `availability: 99.9` consumed as `target: 99.0`) indicate generator bugs.
 
-**Output:** List of `unused_derivations` — derivation rules whose output field doesn't appear in any artifact.
+**Output:**
+- `unused_derivations` — rules whose output field doesn't appear in any artifact
+- `consumed_incorrect` — rules whose output field appears but with a mismatched value (cross-referenced with OBS-202a/OBS-201a checks)
 
 ---
 
@@ -479,25 +487,97 @@ The existing `kaizen-trends.json` MUST include observability artifact quality tr
 {
   "observability_trend": {
     "avg_composite_slope": 0.05,
+    "avg_dashboard_slope": 0.03,
+    "avg_alert_slope": 0.01,
+    "avg_slo_slope": 0.08,
     "phantom_services_resolved": true,
+    "phantom_ratio_slope": -0.05,
+    "phantom_services_per_run": [7, 5, 2, 0],
     "red_coverage_improving": true
   }
 }
 ```
 
-**Calculation:** Same `_linear_slope()` function used for code generation success rate, applied to `avg_composite_score` across runs that produced observability artifacts.
+**Calculation:** Same `_linear_slope()` function used for code generation success rate, applied to per-artifact-type scores and composite across runs. `phantom_ratio_slope` tracks `phantom_services_detected / total_services` per run — a negative slope means phantom filtering is improving.
 
 ---
 
-## 9. Traceability Matrix
+## 9. First-Class Pipeline Citizenship — Validation and Repair
 
-| Kaizen Code Phase | Code Generation Equivalent | Observability Artifact Equivalent |
-|---|---|---|
-| Phase A (Registry) | `set_phase_status("implement", "generated")` metadata | `ArtifactResult.derivations` traceability |
-| Phase B (Disk Validation) | `DiskComplianceResult` | `DashboardValidationResult`, `AlertValidationResult`, `SloValidationResult` |
-| Phase C (Feedback) | `CAUSE_TO_SUGGESTION` → kaizen hints | `obs_*` entries in `CAUSE_TO_SUGGESTION` |
-| Phase D (Semantic) | `run_semantic_checks()` — 4 Python / 8 C# checks | REQ-KZ-OBS-200–203 semantic validators |
-| Phase E (Scoring) | `compute_disk_quality_score()` | REQ-KZ-OBS-300–303 per-type + composite scoring |
+### 9.0 Current State
+
+As of run-093, observability artifacts have **zero validation, zero quality gates, zero repair, and zero semantic checks**. The generation pipeline is:
+
+```
+generate_alert_rules() → write YAML → done  (no validation)
+generate_dashboard_spec() → write YAML → done  (no validation)
+generate_slo_definitions() → write YAML → done  (no validation)
+```
+
+Compare with source code, which has: syntax check → lint → semantic checks → repair pipeline (fence strip, AST validate, import fix, lint fix) → contract violation repair → Anzen security gate → quality scoring → postmortem. Observability artifacts get none of this.
+
+### REQ-KZ-OBS-700: Post-Generation Validation Gate
+
+The artifact generator MUST validate each generated artifact immediately after generation and before writing to disk.
+
+| ID | Requirement |
+|----|-------------|
+| OBS-700a | After `generate_dashboard_spec()` returns, run `validate_dashboard()` (REQ-KZ-OBS-100 checklist). If any error-severity check fails, log WARNING and set `status="validation_warning"` in ArtifactResult. |
+| OBS-700b | After `generate_alert_rules()` returns, run `validate_alerts()` (REQ-KZ-OBS-101 checklist). Same error handling. |
+| OBS-700c | After `generate_slo_definitions()` returns, run `validate_slo()` (REQ-KZ-OBS-102 checklist). Same error handling. |
+| OBS-700d | Validation results SHALL be attached to `ArtifactResult` as a `validation` field containing the validation result dataclass. |
+| OBS-700e | Validation SHALL NOT block generation (graduated enforcement: warn-by-default). Artifacts with validation warnings are still written but flagged for postmortem evaluation. |
+| OBS-700f | A `--strict` mode SHALL cause validation failures to set `status="error"` and skip writing the artifact. |
+
+### REQ-KZ-OBS-710: Deterministic Repair Steps
+
+Observability artifacts SHOULD undergo deterministic repair for known failure modes before validation.
+
+| ID | Requirement |
+|----|-------------|
+| OBS-710a | **SLO target repair:** If `spec.target` does not match `manifest.availability`, replace it with the manifest value. This is a deterministic fix — the correct value is known from the manifest. |
+| OBS-710b | **Metric name normalization:** If PromQL metric names use OTel dot notation (`rpc.server.duration`) instead of Prometheus underscore notation (`rpc_server_duration_bucket`), apply automatic conversion via the existing `_otel_to_prom()` function. |
+| OBS-710c | **Missing gridPos injection:** If dashboard panels lack `gridPos`, compute a default grid layout (4-panel 2×2 grid). This is purely cosmetic but improves Grafana rendering. |
+| OBS-710d | **PromQL `_bucket` suffix repair:** If `histogram_quantile()` calls reference a metric without `_bucket` suffix, append it. This is a common LLM generation error. |
+| OBS-710e | Repair steps run BEFORE validation so that repaired artifacts pass the validation gate. |
+| OBS-710f | Each repair step SHALL be idempotent: applying it twice produces the same result. |
+
+### REQ-KZ-OBS-720: Semantic Checks (Pre-Write)
+
+Semantic checks go beyond structural validity to catch functionally wrong artifacts. These run after repair, before write.
+
+| ID | Requirement |
+|----|-------------|
+| OBS-720a | **RED coverage check:** Dashboard panels MUST cover at least 2/3 RED signals (Rate, Errors, Duration). Missing signals logged as WARNING with specific guidance: "Add error rate panel: `sum(rate(rpc_server_duration_count{status_code!=\"OK\"}[5m]))`". |
+| OBS-720b | **SLO target alignment check:** `spec.target` MUST match `manifest.availability`. Mismatch logged as ERROR. |
+| OBS-720c | **Alert coverage check:** Services with `availability` requirement MUST have at least latency + error_rate alerts. Missing alert types logged as WARNING. |
+| OBS-720d | **Transport-metric alignment check:** gRPC services MUST use `rpc_server_*` metrics, HTTP services MUST use `http_server_*`. Mismatch logged as ERROR. |
+| OBS-720e | Semantic check results SHALL be attached to `ArtifactResult.semantic_issues` for postmortem consumption. |
+
+### REQ-KZ-OBS-730: Quality Score Computation (Post-Write)
+
+After artifacts are written, compute per-artifact and per-service scores using the formulas in REQ-KZ-OBS-300–303.
+
+| ID | Requirement |
+|----|-------------|
+| OBS-730a | Scores SHALL be computed by `scripts/generate_observability_artifacts.py` after all artifacts are written. |
+| OBS-730b | Scores SHALL be written to `{output_dir}/observability-quality.json` alongside the artifacts. |
+| OBS-730c | The generation script SHALL print a quality summary: per-service composite score, aggregate score, and top issues. |
+| OBS-730d | `observability-quality.json` SHALL be consumed by the postmortem evaluator (REQ-KZ-OBS-500) to populate `kaizen-metrics.json`. |
+
+---
+
+## 10. Traceability Matrix
+
+| Kaizen Code Phase | Code Generation Equivalent | Observability Artifact Equivalent | Status |
+|---|---|---|---|
+| Phase A (Registry) | `set_phase_status("implement", "generated")` metadata | `ArtifactResult.derivations` traceability | Partial |
+| Phase B (Disk Validation) | `DiskComplianceResult` | `DashboardValidationResult`, `AlertValidationResult`, `SloValidationResult` (REQ-KZ-OBS-700) | **NOT IMPLEMENTED** |
+| Phase C (Feedback) | `CAUSE_TO_SUGGESTION` → kaizen hints | `obs_*` entries in `CAUSE_TO_SUGGESTION` (REQ-KZ-OBS-600) | **NOT IMPLEMENTED** |
+| Phase D (Semantic) | `run_semantic_checks()` — 4 Python / 8 C# checks | REQ-KZ-OBS-720 semantic validators | **NOT IMPLEMENTED** |
+| Phase E (Scoring) | `compute_disk_quality_score()` | REQ-KZ-OBS-730 per-type + composite scoring | **NOT IMPLEMENTED** |
+| Repair | `repair/orchestrator.py` → fence strip, AST, lint, import | REQ-KZ-OBS-710 → SLO target, metric name, gridPos, bucket suffix | **NOT IMPLEMENTED** |
+| Gate | Anzen gate (Security Prime) → PASS/FAIL | REQ-KZ-OBS-700 → validation gate with `--strict` mode | **NOT IMPLEMENTED** |
 
 ---
 
