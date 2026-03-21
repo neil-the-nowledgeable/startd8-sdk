@@ -88,6 +88,7 @@ class ArtifactResult:
     content: str = ""  # YAML content to write
     derivations: List[DerivationTrace] = field(default_factory=list)
     error_message: Optional[str] = None
+    quality: Optional[Dict[str, Any]] = None  # REQ-KZ-OBS-706a: {score, checks_passed, checks_total, issues, repairs_applied}
 
 
 @dataclass
@@ -907,6 +908,100 @@ def generate_slo_definitions(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4.5: Validate-with-autofix (REQ-KZ-OBS-700 + 710)
+# ---------------------------------------------------------------------------
+
+
+def _repair_and_validate(
+    result: ArtifactResult,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Apply autofix repairs, validate, compute score. Modifies result in-place.
+
+    Runs after each generate_*() call, before disk write. Attaches
+    quality dict to ArtifactResult for postmortem consumption.
+    """
+    if result.status != "generated" or not result.content:
+        return result
+
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            validate_dashboard,
+            validate_alerts,
+            validate_slo,
+        )
+    except ImportError:
+        return result  # validators not available — degrade gracefully
+
+    avail = None
+    if business.availability:
+        try:
+            avail = float(business.availability)
+        except (ValueError, TypeError):
+            pass
+
+    vr = None
+
+    if result.artifact_type == "dashboard_spec":
+        vr = validate_dashboard(result.content, result.output_path, autofix=True)
+        # If gridPos was injected, update content with repaired YAML
+        if vr.repairs_applied:
+            try:
+                repaired = yaml.safe_load(result.content)
+                from startd8.validators.observability_artifact_checks import repair_gridpos
+                repaired, _ = repair_gridpos(repaired)
+                result.content = yaml.dump(repaired, default_flow_style=False, sort_keys=False)
+            except Exception:
+                pass
+
+    elif result.artifact_type == "alert_rule":
+        vr = validate_alerts(
+            result.content, result.output_path,
+            manifest_availability=avail,
+        )
+
+    elif result.artifact_type == "slo_definition":
+        vr = validate_slo(
+            result.content, result.output_path,
+            manifest_availability=avail,
+            autofix=True,
+        )
+        # If SLO target was repaired, update content
+        if vr.repairs_applied:
+            try:
+                from startd8.validators.observability_artifact_checks import repair_slo_target
+                repaired = yaml.safe_load(result.content)
+                repaired, _ = repair_slo_target(repaired, avail)
+                result.content = yaml.dump(repaired, default_flow_style=False, sort_keys=False)
+            except Exception:
+                pass
+
+    if vr is not None:
+        result.quality = {
+            "score": round(vr.score, 4),
+            "checks_passed": vr.checks_passed,
+            "checks_total": vr.checks_total,
+            "issues": [
+                {"check": i.check, "severity": i.severity, "message": i.message}
+                for i in vr.issues
+            ],
+            "repairs_applied": vr.repairs_applied,
+        }
+        # Log quality summary
+        if vr.issues:
+            issue_summary = ", ".join(
+                f"{i.check}({i.severity[0]})" for i in vr.issues[:3]
+            )
+            logger.info(
+                "Artifact quality: %s %s score=%.0f%% issues=[%s]",
+                result.artifact_type, result.service_id,
+                vr.score * 100, issue_summary,
+            )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Phase 5: Orchestration + index file
 # ---------------------------------------------------------------------------
 
@@ -940,7 +1035,9 @@ def generate_observability_artifacts(
 
     for service in services:
         try:
-            report.artifacts.append(generate_alert_rules(service, business))
+            result = generate_alert_rules(service, business)
+            result = _repair_and_validate(result, business)
+            report.artifacts.append(result)
         except Exception:
             logger.exception("Alert generation failed for %s", service.service_id)
             report.artifacts.append(
@@ -953,7 +1050,9 @@ def generate_observability_artifacts(
                 )
             )
         try:
-            report.artifacts.append(generate_dashboard_spec(service, business))
+            result = generate_dashboard_spec(service, business)
+            result = _repair_and_validate(result, business)
+            report.artifacts.append(result)
         except Exception:
             logger.exception("Dashboard generation failed for %s", service.service_id)
             report.artifacts.append(
@@ -966,7 +1065,9 @@ def generate_observability_artifacts(
                 )
             )
         try:
-            report.artifacts.append(generate_slo_definitions(service, business))
+            result = generate_slo_definitions(service, business)
+            result = _repair_and_validate(result, business)
+            report.artifacts.append(result)
         except Exception:
             logger.exception("SLO generation failed for %s", service.service_id)
             report.artifacts.append(
@@ -1050,11 +1151,32 @@ def _write_index(
                 "service": a.service_id,
                 "path": a.output_path,
                 "status": a.status,
+                **({"quality_score": a.quality["score"]} if a.quality else {}),
             }
             for a in report.artifacts
         ],
         "derivation_rules": list(seen_rules.values()),
     }
+
+    # Quality summary (REQ-KZ-OBS-730)
+    scored = [a for a in report.artifacts if a.quality]
+    if scored:
+        by_type: Dict[str, List[float]] = {}
+        for a in scored:
+            by_type.setdefault(a.artifact_type, []).append(a.quality["score"])
+        quality_summary: Dict[str, Any] = {}
+        for atype, scores in by_type.items():
+            quality_summary[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
+        all_scores = [a.quality["score"] for a in scored]
+        quality_summary["avg_composite_score"] = round(sum(all_scores) / len(all_scores), 4)
+        quality_summary["artifacts_scored"] = len(scored)
+        quality_summary["total_issues"] = sum(
+            len(a.quality.get("issues", [])) for a in scored
+        )
+        quality_summary["total_repairs"] = sum(
+            len(a.quality.get("repairs_applied", [])) for a in scored
+        )
+        index["quality_summary"] = quality_summary
 
     dest = output_dir / "observability-manifest.yaml"
     dest.parent.mkdir(parents=True, exist_ok=True)
