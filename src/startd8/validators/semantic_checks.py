@@ -29,6 +29,41 @@ class SemanticIssue:
     file_path: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# Shared utilities (used by csharp_semantic_checks, java_semantic_checks, etc.)
+# ---------------------------------------------------------------------------
+
+
+def _basename(file_path: Optional[str]) -> str:
+    """Extract filename from path, or return empty string."""
+    if not file_path:
+        return ""
+    return Path(file_path).name
+
+
+def _is_comment_line(stripped: str) -> bool:
+    """Check if a stripped line is a comment (C-style // or /* or Python #)."""
+    return stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("#")
+
+
+def _stamp_file_path(
+    issues: List[SemanticIssue], file_path: Optional[str],
+) -> List[SemanticIssue]:
+    """Return a copy of issues with file_path set on each."""
+    if not file_path:
+        return issues
+    return [
+        SemanticIssue(
+            check=i.check,
+            severity=i.severity,
+            message=i.message,
+            line=i.line,
+            file_path=file_path,
+        )
+        for i in issues
+    ]
+
+
 def check_duplicate_main_guards(tree: ast.AST) -> List[SemanticIssue]:
     """Flag files with more than one ``if __name__ == "__main__"`` guard."""
     issues: List[SemanticIssue] = []
