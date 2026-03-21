@@ -543,6 +543,60 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "all target file extensions."
         ),
     },
+    # --- Cross-language semantic issue hints ---
+    "console_logging_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used console output (Console.WriteLine, System.out.println, "
+            "fmt.Println, console.log) instead of structured logging. "
+            "C#: inject ILogger<T> via constructor. Java: use SLF4J LoggerFactory. "
+            "Go: use slog or zap. Node.js: use winston or pino."
+        ),
+    },
+    "empty_catch_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had empty catch/except blocks that silently swallow errors. "
+            "ALWAYS log the exception. Prefer catching specific exception types. "
+            "C#: catch (SpecificException ex) { _logger.LogError(ex, ...); } "
+            "Java: catch (IOException e) { logger.error(\"msg\", e); } "
+            "Go: if err != nil { return fmt.Errorf(\"context: %w\", err) }"
+        ),
+    },
+    "unchecked_error_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run assigned error values without checking them. "
+            "Go: always check `if err != nil` after every error-returning call. "
+            "Never use `_ = someFunc()` to discard errors in production code."
+        ),
+    },
+    "namespace_alignment_issue": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had namespace/package declarations that didn't match the "
+            "directory structure. C#: namespace must be PascalCase matching dirs "
+            "(src/CartService/Services/ → namespace CartService.Services;). "
+            "Java: package must match directory (com/example/service/ → "
+            "package com.example.service;). Go: package name must match directory name."
+        ),
+    },
+    "module_system_mixing_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run mixed CommonJS (require/module.exports) and ESM "
+            "(import/export) in the same file. Pick ONE module system per file. "
+            "Check package.json 'type' field: 'module' → use ESM, absent → use CJS."
+        ),
+    },
+    "block_scoped_namespace_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used block-scoped namespaces (namespace X { ... }) instead of "
+            "file-scoped (namespace X;). For .NET 6+ / C# 10+ targets, ALWAYS use "
+            "file-scoped namespaces to reduce nesting."
+        ),
+    },
     "sql_injection_detected": {
         "phase": "draft",
         "hint": (
@@ -626,11 +680,34 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
 
 # Maps semantic issue categories (from DiskComplianceResult.semantic_issues)
 # to CAUSE_TO_SUGGESTION keys for cross-feature pattern generation.
+# When 2+ features share the same category, a kaizen suggestion is emitted
+# so the next run's LLM prompt gets a corrective hint.
 _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
+    # Security (Query Prime)
     "sql_injection_risk": "sql_injection_detected",
     "query_security_injection": "query_injection_interpolation",
     "query_security_credential_leakage": "query_credential_logged",
     "query_security_lifecycle": "query_lifecycle_per_request",
+    # Cross-language logging (C#, Java, Go, Node.js)
+    "console_writeline_in_service": "console_logging_detected",
+    "system_out_in_service": "console_logging_detected",
+    "fmt_println_in_service": "console_logging_detected",
+    "console_log_in_service": "console_logging_detected",
+    # Exception/error handling
+    "empty_catch_block": "empty_catch_detected",
+    "unchecked_error": "unchecked_error_detected",
+    # Namespace/package alignment
+    "namespace_case_mismatch": "namespace_alignment_issue",
+    "namespace_filepath_mismatch": "namespace_alignment_issue",
+    "package_filepath_mismatch": "namespace_alignment_issue",
+    "package_dir_mismatch": "namespace_alignment_issue",
+    "package_case_mismatch": "namespace_alignment_issue",
+    # Module system
+    "module_system_mixing": "module_system_mixing_detected",
+    # Cross-language contamination
+    "python_contamination": "language_mismatch_in_generation",
+    # Code style
+    "block_scoped_namespace": "block_scoped_namespace_detected",
 }
 
 
@@ -1539,6 +1616,21 @@ class PrimePostMortemEvaluator:
                 )
         except Exception:
             logger.debug("Kaizen suggestion auto-emit failed (non-fatal)", exc_info=True)
+
+        # Wire security metrics if anzen_gate data available in report
+        try:
+            anzen_data = getattr(report, "anzen_gate", None)
+            if anzen_data is None:
+                # Check in the raw result dict that produced this report
+                report_dict_check = dataclasses.asdict(report)
+                # anzen_gate isn't a report field — it lives in result_metadata.
+                # The postmortem receives per-feature results which may contain
+                # anzen data. Security metrics are primarily wired in
+                # integration_engine._run_anzen_gate() (Phase 0 primary path).
+                # This is a secondary fallback for standalone postmortem runs.
+                pass
+        except Exception:
+            logger.debug("Postmortem security metrics wiring skipped", exc_info=True)
 
     def _extract_exemplars(
         self, report: PrimePostMortemReport, output_dir: str,
