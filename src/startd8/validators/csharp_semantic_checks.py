@@ -337,5 +337,68 @@ def run_csharp_semantic_checks(
     issues.extend(_check_missing_async_await(source))
     issues.extend(_check_missing_access_modifiers(source))
     issues.extend(_check_wildcard_usings(source))
+    issues.extend(_check_namespace_filepath_alignment(source, file_path))
 
     return _stamp_file_path(issues, file_path)
+
+
+def _check_namespace_filepath_alignment(
+    source: str,
+    file_path: Optional[str],
+) -> List[SemanticIssue]:
+    """Flag namespace declarations that don't match the expected directory structure (REQ-KZ-CS-200i).
+
+    Compares the parsed namespace from the source code against the expected
+    namespace derived from the file path via _derive_namespace(). Catches
+    both case mismatches (cartservice.services vs Cartservice.Services)
+    and structural mismatches (wrong directory nesting).
+    """
+    if not file_path or not file_path.endswith(".cs"):
+        return []
+
+    # Extract namespace from source
+    # Handles both file-scoped (namespace Foo.Bar;) and block-scoped (namespace Foo.Bar {)
+    ns_match = re.search(
+        r'^\s*namespace\s+([\w.]+)\s*[;{]',
+        source,
+        re.MULTILINE,
+    )
+    if not ns_match:
+        return []  # No namespace declaration — caught by structural checks elsewhere
+
+    actual_ns = ns_match.group(1)
+
+    # Derive expected namespace from file path
+    try:
+        from startd8.languages.csharp import _derive_namespace
+        expected_ns = _derive_namespace(file_path)
+    except ImportError:
+        return []
+
+    if not expected_ns:
+        return []  # Can't derive — file is at root level
+
+    # Compare (case-sensitive — C# namespaces are case-sensitive)
+    if actual_ns == expected_ns:
+        return []
+
+    # Determine severity: case-only mismatch is warning, structural is error
+    if actual_ns.lower() == expected_ns.lower():
+        return [SemanticIssue(
+            check="namespace_case_mismatch",
+            severity="warning",
+            message=(
+                f"Namespace case mismatch: declared `{actual_ns}` "
+                f"but directory structure implies `{expected_ns}` — "
+                f"C# convention requires PascalCase namespaces matching directory structure"
+            ),
+        )]
+
+    return [SemanticIssue(
+        check="namespace_filepath_mismatch",
+        severity="warning",
+        message=(
+            f"Namespace `{actual_ns}` does not match expected "
+            f"`{expected_ns}` derived from file path `{file_path}`"
+        ),
+    )]
