@@ -24,8 +24,8 @@ _npgsql = DatabasePattern(
         'new NpgsqlParameter("@name", value)',
     ),
     safe_patterns=(
-        # Parameterized: @param in SQL string + NpgsqlParameter or AddWithValue
-        re.compile(r'@\w+', re.IGNORECASE),
+        # Parameterized: @param inside a SQL string literal (not bare @identifier)
+        re.compile(r'["\'].*@\w+.*["\']'),
         re.compile(r'NpgsqlParameter', re.IGNORECASE),
         re.compile(r'Parameters\.Add', re.IGNORECASE),
         re.compile(r'AddWithValue', re.IGNORECASE),

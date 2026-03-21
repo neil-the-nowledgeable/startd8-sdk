@@ -24,8 +24,8 @@ _spanner_csharp = DatabasePattern(
         'cmd.Parameters.Add("userId", SpannerDbType.String, userId)',
     ),
     safe_patterns=(
-        # @param syntax is SAFE in Spanner — SpannerParameterCollection binds them
-        re.compile(r'@\w+'),
+        # @param inside SQL string literal (not bare C# @identifier)
+        re.compile(r'["\'].*@\w+.*["\']'),
         re.compile(r'SpannerParameter', re.IGNORECASE),
         re.compile(r'SpannerParameterCollection', re.IGNORECASE),
         re.compile(r'Parameters\.Add\s*\(', re.IGNORECASE),
@@ -69,7 +69,8 @@ _spanner_go = DatabasePattern(
         'spanner.Statement{SQL: "SELECT * FROM t WHERE id = @id", Params: map[string]interface{}{"id": id}}',
     ),
     safe_patterns=(
-        re.compile(r'@\w+'),
+        # @param inside Go string literal (not bare identifier)
+        re.compile(r'["`].*@\w+.*["`]'),
         re.compile(r'spanner\.Statement'),
         re.compile(r'Params:\s*map'),
     ),
@@ -104,7 +105,8 @@ _spanner_java = DatabasePattern(
         'Statement.newBuilder("SELECT * FROM t WHERE id = @id").bind("id").to(id).build()',
     ),
     safe_patterns=(
-        re.compile(r'@\w+'),
+        # @param inside Java string literal
+        re.compile(r'".*@\w+.*"'),
         re.compile(r'Statement\.newBuilder'),
         re.compile(r'\.bind\s*\('),
     ),

@@ -59,7 +59,8 @@ _sqlite_csharp = DatabasePattern(
         'cmd.Parameters.AddWithValue("@name", value)',
     ),
     safe_patterns=(
-        re.compile(r'@\w+'),
+        # @param inside SQL string literal (not bare C# @identifier)
+        re.compile(r'["\'].*@\w+.*["\']'),
         re.compile(r'SqliteParameter', re.IGNORECASE),
         re.compile(r'Parameters\.Add', re.IGNORECASE),
         re.compile(r'AddWithValue', re.IGNORECASE),
