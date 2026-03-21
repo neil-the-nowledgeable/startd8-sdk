@@ -1,0 +1,97 @@
+{
+  "_comment": "Prime Contractor configuration — copy to .startd8/prime-contractor.json",
+
+  "micro_prime": {
+    "_comment": "Local-first code generation via Ollama. Set enabled=true to activate.",
+    "enabled": false,
+    "model": "startd8-coder",
+    "provider": "ollama",
+    "temperature": 0.1,
+    "max_tokens": 2048,
+    "input_token_budget": 1024,
+    "templates_enabled": true,
+    "repair_enabled": true,
+    "few_shot_enabled": true,
+    "max_few_shot_examples": 2,
+    "escalation_enabled": true,
+    "local_max_attempts": 2,
+    "cloud_escalation_max_attempts": 3,
+    "cloud_escalation_retry_strategy": "same_prompt",
+    "cloud_escalation_retry_max_chars": 512,
+    "semantic_verification_enabled": true,
+    "semantic_verification_agent_spec": null,
+    "semantic_verification_max_tokens": 256,
+    "semantic_verification_temperature": 0.0,
+    "semantic_verification_prompt_max_chars": 4000,
+    "dry_run": false,
+    "max_simple_imports": 8,
+    "max_simple_params": 4,
+    "class_score_bonus": 1,
+    "simple_threshold": 0,
+    "docstring_length_threshold": 200,
+    "decomposition_enabled": false,
+    "max_sub_elements": 5,
+    "max_helpers_per_function": 4,
+    "decomposition_confidence_threshold": 0.6,
+    "class_decompose_enabled": true,
+    "function_chain_enabled": true,
+    "enable_simple_decomposer": true,
+    "simple_decomposer_confidence_threshold": 0.7,
+    "recursion_enabled": false,
+    "recursion_max_depth": 2,
+    "recursion_max_sub_elements_total": 8,
+    "recursion_max_llm_calls": 3,
+    "recursion_monotonicity": "strict_tier_decrease",
+    "orchestrator_decomp_max_external_deps": 3,
+    "moderate_ollama_whole_enabled": true,
+    "file_ollama_whole_enabled": true,
+    "file_ollama_whole_max_elements": 60,
+    "file_ollama_whole_max_loc": 600,
+    "min_element_fill_rate": 0.5,
+    "element_prompt_mode": "full_function"
+  },
+
+  "complexity_routing": {
+    "_comment": "Complexity classification thresholds for model routing.",
+    "enabled": false,
+    "blast_radius_complex_threshold": 5,
+    "loc_simple_max": 150,
+    "loc_complex_min": 500,
+    "caller_count_complex_threshold": 3,
+    "mro_depth_complex_threshold": 3,
+    "unresolved_calls_complex_threshold": 2,
+    "templates_enabled": true,
+    "simple_relaxed_enabled": true,
+    "simple_relaxed_blast_radius_max": 2,
+    "non_python_trivial_loc_max": 100,
+    "non_python_simple_loc_max": 300
+  },
+
+  "repair": {
+    "_comment": "Post-generation repair pipeline for syntax/import/lint errors.",
+    "enabled": true,
+    "repairable_categories": ["syntax", "import", "lint", "semantic"],
+    "pre_checkpoint_repair": false,
+    "circuit_breaker_threshold": 3,
+    "per_step_timeout_s": 2.0,
+    "total_timeout_s": 5.0,
+    "delta_threshold": 0.5,
+    "staging_retention_hours": 24,
+    "semantic_repair_categories": [],
+    "max_semantic_repairs_per_file": 5,
+    "semantic_repair_circuit_breaker_threshold": 3
+  },
+
+  "validation": {
+    "_comment": "Post-generation validation. null = mode-default.",
+    "enabled": null,
+    "strict": false
+  },
+
+  "agents": {
+    "_comment": "Agent specs as provider:model strings. null = use model catalog default.",
+    "lead": null,
+    "drafter": null,
+    "tier3": null
+  }
+}
