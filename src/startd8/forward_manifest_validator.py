@@ -8,6 +8,7 @@ function signatures).
 """
 
 import ast
+import importlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -556,6 +557,88 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers for non-Python disk validation
+# ---------------------------------------------------------------------------
+
+_STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
+
+_STUB_EXT_TO_LANG: dict[str, str] = {
+    ".java": "java", ".go": "go", ".cs": "csharp",
+    ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
+}
+
+
+def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
+    """Return compiled stub patterns for a file extension, cached."""
+    if suffix in _STUB_PATTERNS_CACHE:
+        return _STUB_PATTERNS_CACHE[suffix]
+
+    patterns: list[re.Pattern[str]] = []
+    lang_id = _STUB_EXT_TO_LANG.get(suffix)
+    if lang_id:
+        try:
+            from startd8.languages.registry import LanguageRegistry
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get(lang_id)
+            if profile:
+                for pat_str in profile.stub_patterns:
+                    try:
+                        patterns.append(re.compile(pat_str))
+                    except re.error:
+                        pass
+        except (ImportError, AttributeError):
+            pass
+    _STUB_PATTERNS_CACHE[suffix] = patterns
+    return patterns
+
+
+def _count_stubs_text(content: str, suffix: str) -> int:
+    """Count stub markers in non-Python source using language-specific patterns.
+
+    Uses the ``stub_patterns`` property from the language profile resolved
+    by file extension.  Returns 0 if no patterns are available.
+    """
+    patterns = _get_stub_patterns(suffix)
+    if not patterns:
+        return 0
+    count = 0
+    for line in content.splitlines():
+        for pat in patterns:
+            if pat.search(line):
+                count += 1
+                break  # one match per line is enough
+    return count
+
+
+def _wire_semantic_checks(
+    content: str,
+    result: "DiskComplianceResult",
+    run_checks_fn: str,
+) -> None:
+    """Run a language-specific semantic check function and append issues.
+
+    Args:
+        content: Source code string.
+        result: DiskComplianceResult to append issues to (mutated in place).
+        run_checks_fn: Dotted import path to the ``run_*_semantic_checks``
+            function, e.g. ``"startd8.validators.java_semantic_checks.run_java_semantic_checks"``.
+    """
+    module_path, func_name = run_checks_fn.rsplit(".", 1)
+    try:
+        mod = importlib.import_module(module_path)
+        run_fn = getattr(mod, func_name)
+    except (ImportError, AttributeError):
+        return
+    for issue in run_fn(content, file_path=result.file_path):
+        result.semantic_issues.append({
+            "category": issue.check,
+            "severity": issue.severity,
+            "message": issue.message,
+            "line": issue.line,
+        })
+
+
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -671,7 +754,7 @@ def _validate_csharp_file(
             has_type = kinds & {"class", "interface", "struct", "record", "enum"}
             # IMP-003: Exempt Program.cs from type-declaration requirement —
             # ASP.NET Core 6+ uses C# 10 top-level statements (no explicit class).
-            is_program_cs = Path(file_path).name.lower() == "program.cs"
+            is_program_cs = Path(result.file_path).name.lower() == "program.cs"
             if not has_type and not parse_result.namespace and not is_program_cs:
                 issues.append({
                     "category": "csharp_structure",
@@ -681,8 +764,16 @@ def _validate_csharp_file(
                 result.contract_compliance = max(
                     0.0, result.contract_compliance - 0.3,
                 )
-            if issues:
-                result.semantic_issues = issues
+            # IMP-006: Wire C# semantic checks into tree-sitter path.
+            # _wire_semantic_checks appends directly to result.semantic_issues.
+            _wire_semantic_checks(
+                content, result,
+                "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
+            )
+            # Merge structural issues (from above) into result
+            for iss in issues:
+                if iss not in result.semantic_issues:
+                    result.semantic_issues.append(iss)
             return result
     except ImportError:
         pass  # Fall through to text-based
@@ -719,6 +810,16 @@ def _validate_csharp_file(
 
     # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
     result.contract_compliance = min(result.contract_compliance, 0.8)
+
+    # C# semantic checks
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
+    )
+
+    # Stub counting (postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".cs")
+
     return result
 
 
@@ -887,6 +988,15 @@ def _validate_go_file(
         result.contract_compliance = 0.5
         result.error = "unbalanced_braces"
         return result
+
+    # Go semantic checks
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.go_semantic_checks.run_go_semantic_checks",
+    )
+
+    # Stub counting (postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".go")
 
     return result
 
@@ -1188,6 +1298,15 @@ def _validate_js_file(
             except OSError:
                 pass
 
+    # Node.js semantic checks
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.nodejs_semantic_checks.run_nodejs_semantic_checks",
+    )
+
+    # Stub counting (postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".js")
+
     return result
 
 
@@ -1317,6 +1436,15 @@ def _validate_java_file(
             "severity": "warning",
             "message": "missing package declaration",
         })
+
+    # Java semantic checks
+    _wire_semantic_checks(
+        content, result,
+        "startd8.validators.java_semantic_checks.run_java_semantic_checks",
+    )
+
+    # Stub counting (postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".java")
 
     return result
 
@@ -1632,6 +1760,34 @@ _KNOWN_NON_IMPORT_PACKAGES = frozenset({
     "pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy",
 })
 
+# IMP-005: Packages that are commonly declared as transitive/runtime deps
+# and should not produce orphan_dependency warnings.  These are packages
+# that frameworks install and use internally but that application code
+# doesn't import directly.
+_KNOWN_TRANSITIVE_PACKAGES = frozenset({
+    # Runtime/profiler agents
+    "rsa", "requests", "pillow",
+    # OTel distro + instrumentation packages (auto-instrumented, not imported)
+    "opentelemetry-distro", "opentelemetry-exporter-otlp",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-exporter-otlp-proto-http",
+    "opentelemetry-instrumentation-grpc",
+    "opentelemetry-instrumentation-flask",
+    "opentelemetry-instrumentation-requests",
+    "opentelemetry-instrumentation-redis",
+    "opentelemetry-instrumentation-sqlalchemy",
+    # Cloud tracing/profiling agents
+    "google-cloud-trace", "google-cloud-profiler",
+    # Test/load generation frameworks (imported via runner, not direct import)
+    "locust", "faker",
+    # Logging formatters (PyPI name != import name; handled by alias map
+    # but also safe to allowlist)
+    "python-json-logger",
+    # LangChain ecosystem (imported via sub-packages, not top-level)
+    "langchain", "langchain-google-genai", "langchain-google-alloydb-pg",
+    "langchain-community",
+})
+
 
 def _validate_requirements_coverage(
     requirements_content: str,
@@ -1658,6 +1814,8 @@ def _validate_requirements_coverage(
         spec = stripped.split("#")[0].strip()
         package = re.split(r"[~=!<>\[;]", spec)[0].strip().lower()
         if not package or package in _KNOWN_NON_IMPORT_PACKAGES:
+            continue
+        if package in _KNOWN_TRANSITIVE_PACKAGES:
             continue
 
         # Map package to expected import name
