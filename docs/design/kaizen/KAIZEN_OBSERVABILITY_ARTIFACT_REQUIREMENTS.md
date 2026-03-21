@@ -1,7 +1,7 @@
 # Kaizen for Observability Artifacts — Requirements
 
-> **Version:** 1.2.0
-> **Status:** DRAFT — Layer 7 (validation, repair, semantic checks) + plan-derived insights (§9b) added 2026-03-21
+> **Version:** 1.3.0
+> **Status:** DRAFT — Layer 7 simplified (validate-with-autofix, v1 pass-rate scoring) + plan-derived insights (§9b) 2026-03-21
 > **Date:** 2026-03-21
 > **Parent:** [KAIZEN_PRIME_REQUIREMENTS.md](../prime/KAIZEN_PRIME_REQUIREMENTS.md) (code generation Kaizen)
 > **Sibling:** [UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md](../UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md) (generation pipeline)
@@ -290,64 +290,43 @@ Semantic checks go beyond structural validity to detect artifacts that parse cor
 
 ## 5. Layer 3 — Quality Scoring (REQ-KZ-OBS-3xx)
 
-Per-artifact-type composite scores. Equivalent to Phase E (`compute_disk_quality_score()`) in code generation.
+Per-artifact-type quality scores. Two tiers: v1 (simple pass rate) and v2 (weighted composite).
 
-### REQ-KZ-OBS-300: Dashboard Quality Score
+### REQ-KZ-OBS-300–302: Quality Scoring — v1 (Simple Pass Rate)
+
+For initial implementation, each artifact type uses the same simple formula:
 
 ```
-dashboard_score = (structural_validity  x 0.25)
-               + (red_coverage          x 0.30)
-               + (manifest_alignment    x 0.25)
-               + (layout_completeness   x 0.10)
-               + (navigation            x 0.10)
+artifact_score = checks_passed / checks_total
 ```
 
-| Component | Score Range | How Computed |
-|-----------|-----------|--------------|
-| `structural_validity` | 0.0 or 1.0 | YAML parses, has title, uid, ≥1 panel with expr |
-| `red_coverage` | 0.0 – 1.0 | `(RED signals present) / 3`. Rate=1, Errors=1, Duration=1. Minimum 2/3 for passing |
-| `manifest_alignment` | 0.0 – 1.0 | Latency threshold matches manifest. Transport-correct metrics. No phantom services |
-| `layout_completeness` | 0.0 or 1.0 | All panels have `gridPos`. 0.0 if any panel lacks positioning |
-| `navigation` | 0.0 or 1.0 | Dashboard has `links` or `dataLinks` to related dashboards. 0.0 if none |
+Where `checks_passed` and `checks_total` come from the validation result (Layer 1 + Layer 2 checks combined). This is sufficient to discriminate between good and bad artifacts, is self-evident to interpret, and requires no weight calibration.
 
 **Short-circuit:** YAML parse failure → 0.0. Phantom service → 0.0.
 
-### REQ-KZ-OBS-301: Alert Quality Score
+### REQ-KZ-OBS-300–302: Quality Scoring — v2 (Weighted Composite, Future)
 
+Once v1 scoring produces data across 10+ runs, calibrate weighted composites:
+
+**Dashboard (v2):**
 ```
-alert_score = (structural_validity  x 0.30)
-            + (threshold_alignment  x 0.30)
-            + (label_completeness   x 0.20)
-            + (annotation_quality   x 0.20)
-```
-
-| Component | Score Range | How Computed |
-|-----------|-----------|--------------|
-| `structural_validity` | 0.0 or 1.0 | YAML parses, ≥1 group with ≥1 rule, each rule has alert name + expr |
-| `threshold_alignment` | 0.0 – 1.0 | `1.0 - (mismatched_thresholds / total_thresholds)`. Thresholds checked against manifest derivation rules |
-| `label_completeness` | 0.0 – 1.0 | `(present_labels) / (required_labels)`. Required: `severity`, `service`. Optional: `protocol`, `team` |
-| `annotation_quality` | 0.0 – 1.0 | `(present_annotations) / (required_annotations)`. Required: `summary`. Optional: `runbook_url`, `dashboard_url`, `source` |
-| `rule_coverage` | 0.0 – 1.0 | `min(actual_rules, expected_rules) / expected_rules`. Expected = latency + error_rate + availability when manifest has `availability` requirement (i.e., 3). Services with 1/3 expected rules score 0.33. Services without `availability` requirement expect 1 (latency only). |
-
-**Short-circuit:** YAML parse failure → 0.0. No rules → 0.0.
-
-### REQ-KZ-OBS-302: SLO Quality Score
-
-```
-slo_score = (structural_validity  x 0.25)
-          + (target_accuracy      x 0.35)
-          + (schema_compliance    x 0.20)
-          + (alert_integration    x 0.20)
+dashboard_score = (structural_validity × 0.25) + (red_coverage × 0.30)
+               + (manifest_alignment × 0.25) + (layout_completeness × 0.10) + (navigation × 0.10)
 ```
 
-| Component | Score Range | How Computed |
-|-----------|-----------|--------------|
-| `structural_validity` | 0.0 or 1.0 | YAML parses, has apiVersion + kind + spec.target + spec.indicator |
-| `target_accuracy` | 0.0 or 1.0 | SLO `target` exactly matches `manifest.spec.requirements.availability` × 100. Mismatch → 0.0 |
-| `schema_compliance` | 0.0 – 1.0 | OpenSLO v1 required fields present: metadata.name, spec.timeWindow, spec.budgetPolicy, spec.indicator.spec.thresholdMetric |
-| `alert_integration` | 0.0 or 1.0 | `spec.alerting` section present with severity label. 0.0 if absent |
+**Alerts (v2):**
+```
+alert_score = (structural_validity × 0.30) + (threshold_alignment × 0.30)
+            + (rule_coverage × 0.20) + (label_completeness × 0.10) + (annotation_quality × 0.10)
+```
 
-**Short-circuit:** YAML parse failure → 0.0. Missing target → 0.0.
+**SLOs (v2):**
+```
+slo_score = (structural_validity × 0.25) + (target_accuracy × 0.35)
+          + (schema_compliance × 0.20) + (alert_integration × 0.20)
+```
+
+**v2 is deferred until v1 pass-rate data from 10+ runs reveals which components need independent weighting.** v1 pass-rate already captures the essential quality signal.
 
 ### REQ-KZ-OBS-303: Per-Service Composite Artifact Score
 
@@ -535,30 +514,25 @@ The artifact generator MUST validate each generated artifact immediately after g
 | OBS-700e | Validation SHALL NOT block generation (graduated enforcement: warn-by-default). Artifacts with validation warnings are still written but flagged for postmortem evaluation. |
 | OBS-700f | A `--strict` mode SHALL cause validation failures to set `status="error"` and skip writing the artifact. |
 
-### REQ-KZ-OBS-710: Deterministic Repair Steps
+### REQ-KZ-OBS-710: Validate-with-Autofix (Combined Repair + Semantic Checks)
 
-Observability artifacts SHOULD undergo deterministic repair for known failure modes before validation.
+Each validation check follows a single pattern: **try to autofix → validate → report**. This replaces the original three-layer approach (repair → validate → semantic check) which created redundant passes over the same data.
 
-| ID | Requirement |
-|----|-------------|
-| OBS-710a | **SLO target repair:** If `spec.target` does not match `manifest.availability`, replace it with the manifest value. This is a deterministic fix — the correct value is known from the manifest. |
-| OBS-710b | **Metric name normalization:** If PromQL metric names use OTel dot notation (`rpc.server.duration`) instead of Prometheus underscore notation (`rpc_server_duration_bucket`), apply automatic conversion via the existing `_otel_to_prom()` function. |
-| OBS-710c | **Missing gridPos injection:** If dashboard panels lack `gridPos`, compute a default grid layout (4-panel 2×2 grid). This is purely cosmetic but improves Grafana rendering. |
-| OBS-710d | **PromQL `_bucket` suffix repair:** If `histogram_quantile()` calls reference a metric without `_bucket` suffix, append it. This is a common LLM generation error. |
-| OBS-710e | Repair steps run BEFORE validation so that repaired artifacts pass the validation gate. |
-| OBS-710f | Each repair step SHALL be idempotent: applying it twice produces the same result. |
+| ID | Check | Autofix? | Severity | Description |
+|----|-------|----------|----------|-------------|
+| OBS-710a | SLO target alignment | Yes (from manifest) | error | If `spec.target` doesn't match `manifest.availability`, autofix to manifest value. Safety net — generator should produce correct value when SDK is properly installed. |
+| OBS-710b | gridPos presence | Yes (inject 2×2 grid) | warning | If dashboard panels lack `gridPos`, inject default layout. Only genuine post-generation repair — generator doesn't produce layout info. |
+| OBS-710c | RED coverage | No (generator must fix) | warning | Dashboard MUST cover ≥2/3 RED signals. Missing signals logged with specific PromQL guidance. |
+| OBS-710d | Alert coverage | No (generator must fix) | warning | Services with `availability` requirement MUST have latency + error_rate alerts. |
+| OBS-710e | Transport-metric alignment | No | error | gRPC → `rpc_server_*`, HTTP → `http_server_*`. |
+| OBS-710f | Metric name format | Yes (via `_prom_name()`) | warning | Convert OTel dot notation to Prometheus underscore. Uses existing function. |
+| OBS-710g | `_bucket` suffix | Yes (append) | warning | `histogram_quantile()` metric references must include `_bucket` suffix. |
 
-### REQ-KZ-OBS-720: Semantic Checks (Pre-Write)
-
-Semantic checks go beyond structural validity to catch functionally wrong artifacts. These run after repair, before write.
-
-| ID | Requirement |
-|----|-------------|
-| OBS-720a | **RED coverage check:** Dashboard panels MUST cover at least 2/3 RED signals (Rate, Errors, Duration). Missing signals logged as WARNING with specific guidance: "Add error rate panel: `sum(rate(rpc_server_duration_count{status_code!=\"OK\"}[5m]))`". |
-| OBS-720b | **SLO target alignment check:** `spec.target` MUST match `manifest.availability`. Mismatch logged as ERROR. |
-| OBS-720c | **Alert coverage check:** Services with `availability` requirement MUST have at least latency + error_rate alerts. Missing alert types logged as WARNING. |
-| OBS-720d | **Transport-metric alignment check:** gRPC services MUST use `rpc_server_*` metrics, HTTP services MUST use `http_server_*`. Mismatch logged as ERROR. |
-| OBS-720e | Semantic check results SHALL be attached to `ArtifactResult.semantic_issues` for postmortem consumption. |
+**Design decisions:**
+- Repair and validation are ONE pass, not three separate layers. Each check: autofix if possible → validate → append to issues list.
+- Autofixes are idempotent. Each logs at INFO with old→new values.
+- Checks the generator CANNOT self-fix (RED coverage, alert coverage) are flagged as issues for the Kaizen feedback loop to address via generator improvements (REQ-KZ-OBS-711).
+- `ArtifactResult` gains ONE field: `quality: Optional[Dict]` containing `{score, checks_passed, checks_total, issues, repairs_applied}`.
 
 ### REQ-KZ-OBS-730: Quality Score Computation (Post-Write)
 
@@ -606,8 +580,8 @@ Before implementing any SDK validation/repair/scoring, the pipeline MUST be fixe
 
 | ID | Requirement |
 |----|-------------|
-| OBS-706a | `ArtifactResult` SHALL gain: `validation: Optional[Dict]` (validation result), `repairs_applied: List[str]` (repair step names that modified content), `quality_score: Optional[float]` (0.0–1.0). |
-| OBS-706b | Repairs that modify content SHALL log at INFO with field changed and old→new values. |
+| OBS-706a | `ArtifactResult` SHALL gain ONE field: `quality: Optional[Dict]` containing `{score: float, checks_passed: int, checks_total: int, issues: List[Dict], repairs_applied: List[str]}`. One field, not three — minimal dataclass change, quality data co-located. |
+| OBS-706b | Autofixes that modify content SHALL log at INFO with field changed and old→new values. |
 
 ### REQ-KZ-OBS-710 (revised): Repair Step Clarifications
 
