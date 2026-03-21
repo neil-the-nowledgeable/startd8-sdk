@@ -96,9 +96,9 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 JAVA_MICROPRIME_ENABLED = True
 
 # Feature flag: when True, .cs files flow through MicroPrime instead of
-# bypassing to file-whole generation.  Default False — file-whole cloud
-# generation until Phase 6 (splicer, decomposer, DFA) is implemented.
-CSHARP_MICROPRIME_ENABLED = False
+# bypassing to file-whole generation.  Enabled: splicer, decomposer,
+# templates, and reserved words are all in place.
+CSHARP_MICROPRIME_ENABLED = True
 
 # REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
 # MicroPrime element generation and use file-whole LLM generation instead.

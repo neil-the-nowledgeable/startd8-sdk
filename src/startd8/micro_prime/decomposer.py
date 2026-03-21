@@ -700,7 +700,8 @@ _GO_RESERVED = frozenset({
     "println", "real", "recover",
 })
 
-# Canonical source: languages/java.py — import to avoid triplication.
+# Canonical source: languages/*.py — import to avoid triplication.
+from startd8.languages.csharp import _CSHARP_RESERVED
 from startd8.languages.java import _JAVA_RESERVED
 
 # Language-keyed reserved word lookup (MP-P2).
@@ -708,6 +709,7 @@ _LANGUAGE_RESERVED: dict[str, frozenset[str]] = {
     "python": _PYTHON_RESERVED,
     "go": _GO_RESERVED,
     "java": _JAVA_RESERVED,
+    "csharp": _CSHARP_RESERVED,
 }
 
 # Responsibility clause separators (deterministic, no LLM).
