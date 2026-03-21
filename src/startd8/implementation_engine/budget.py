@@ -9,6 +9,21 @@ priority-ordered section removal when the prompt exceeds budget.
 
 from typing import Any, Dict, List, Optional
 
+from startd8.logging_config import get_logger
+
+_budget_logger = get_logger(__name__)
+
+# IMP-007: OTel counter for budget trimming events
+try:
+    from opentelemetry import metrics as _otel_metrics
+    _budget_meter = _otel_metrics.get_meter(__name__)
+    _budget_trim_counter = _budget_meter.create_counter(
+        "prompt_budget_trims_total",
+        description="Number of times prompt budget enforcement dropped sections",
+    )
+except ImportError:
+    _budget_trim_counter = None
+
 
 __all__ = [
     "PLAN_CONTEXT_MAX_CHARS",
@@ -224,12 +239,17 @@ def enforce_prompt_budget(
     for drop_priority in range(max_priority, 0, -1):
         result_sections = [s for s in result_sections if s[0] < drop_priority]
         candidate = "\n\n".join(text for _, _, text in result_sections if text)
+        dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
         if logger:
-            dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
             logger.info(
                 "Prompt budget: dropping P%d sections (%s), %d→%d tokens",
                 drop_priority, ", ".join(dropped),
                 estimate_tokens(full), estimate_tokens(candidate),
+            )
+        # IMP-007: Track budget trims in OTel for correlation with failures
+        if _budget_trim_counter is not None:
+            _budget_trim_counter.add(
+                1, {"priority_dropped": str(drop_priority)},
             )
         if estimate_tokens(candidate) <= budget_tokens:
             return candidate
