@@ -10,6 +10,7 @@ See docs/design/UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md for design.
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -165,11 +166,66 @@ def load_onboarding_metadata(path: Path) -> Dict[str, Any]:
     return data
 
 
+_REQ_ID_PATTERN = re.compile(r"^req[a-z]{2,}\d+")
+_RUN_ID_PATTERN = re.compile(r"/run-\d+|^run-\d+")
+
+# Known non-service directory names that may appear in instrumentation_hints
+_NON_SERVICE_NAMES = frozenset({
+    "protos", "proto", "shared", "common", "lib", "libs",
+    "docs", "scripts", "tools", "config", "configs",
+})
+
+
+def _is_non_service_entry(
+    svc_id: str,
+    hint: Dict[str, Any],
+    metadata: Dict[str, Any],
+) -> bool:
+    """Check if an instrumentation_hints entry is not a real runtime service.
+
+    Filters requirement IDs, run IDs, project-level names, and known
+    non-service directories (REQ-KZ-OBS-103).
+    """
+    # Requirement ID pattern (reqcdpobs001..., reqpms002...)
+    if _REQ_ID_PATTERN.match(svc_id):
+        return True
+
+    # Run ID pattern (online-boutique/run-093-...)
+    if _RUN_ID_PATTERN.search(svc_id):
+        return True
+
+    # Project-level name match
+    project_id = metadata.get("project_id", "")
+    if project_id and svc_id == project_id:
+        return True
+    # Also match the project name portion of composite IDs
+    project_name = project_id.split("/")[0] if "/" in str(project_id) else ""
+    if project_name and svc_id == project_name:
+        return True
+
+    # Known non-service directory names
+    if svc_id.lower() in _NON_SERVICE_NAMES:
+        return True
+
+    # Entries ending in common non-service suffixes
+    svc_lower = svc_id.lower()
+    if svc_lower.endswith(("-demo", "-docs", "-guidance", "-overview")):
+        return True
+
+    # Multi-word names that look like document titles, not service IDs
+    # (services are typically single words or hyphenated: cartservice, email-service)
+    if "guidance" in svc_lower or "objectives" in svc_lower:
+        return True
+
+    return False
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
     Returns empty list if instrumentation_hints key is absent (REQ-UOM-070).
     Skips services with no transport field (REQ-UOM-071).
+    Skips non-service entries (REQ-KZ-OBS-103).
     """
     raw_hints = metadata.get("instrumentation_hints")
     if not raw_hints:
@@ -180,7 +236,14 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
         return []
 
     services: List[ServiceHints] = []
+    skipped_non_service = 0
     for svc_id, hint in raw_hints.items():
+        # REQ-KZ-OBS-103: Filter non-service entries
+        if _is_non_service_entry(svc_id, hint, metadata):
+            logger.info("Skipping non-service entry: %s", svc_id)
+            skipped_non_service += 1
+            continue
+
         transport = hint.get("transport")
         if not transport:
             logger.warning("Service %s has no transport field; skipping", svc_id)
@@ -411,6 +474,45 @@ def generate_alert_rules(
                             f"{service.service_id} p99 latency exceeds {latency_raw}"
                         ),
                         "source": "Derived from manifest.spec.requirements.latencyP99",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
+                    },
+                }
+            )
+
+        # Histogram duration metric → error rate alert (derived from _count)
+        # The histogram's _count tracks total requests; with a status filter
+        # we can derive error rate even without a dedicated counter metric.
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and avail_raw
+            and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
+        ):
+            error_filter = _error_filter_for_protocol(service.transport)
+            avail_frac = _parse_availability_to_fraction(avail_raw)
+            error_threshold = round(1.0 - avail_frac, 4)
+            rules.append(
+                {
+                    "alert": _alert_name(service.service_id, "ErrorRateHigh"),
+                    "expr": (
+                        f"(\n"
+                        f'  rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
+                        f'  / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f") > {error_threshold}"
+                    ),
+                    "for": "5m",
+                    "labels": {
+                        "severity": severity,
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                    },
+                    "annotations": {
+                        "summary": (
+                            f"{service.service_id} error rate exceeds "
+                            f"{error_threshold * 100:.1f}%"
+                        ),
+                        "source": "Derived from manifest.spec.requirements.availability",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
                     },
                 }
             )
@@ -439,6 +541,7 @@ def generate_alert_rules(
                             f"{service.service_id} availability below {avail_raw}%"
                         ),
                         "source": "Derived from manifest.spec.requirements.availability",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
                     },
                 }
             )
@@ -744,7 +847,7 @@ def generate_slo_definitions(
             },
             "spec": {
                 "description": f"P99 latency SLO for {service.service_id}",
-                "target": 99.0,
+                "target": float(avail_raw) if avail_raw else 99.0,
                 "timeWindow": {"duration": window, "isRolling": True},
                 "budgetPolicy": "timeslices",
                 "indicator": {
