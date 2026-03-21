@@ -1,7 +1,7 @@
 # Kaizen for Observability Artifacts — Requirements
 
-> **Version:** 1.1.0
-> **Status:** DRAFT — Layer 7 (validation, repair, semantic checks) added 2026-03-21
+> **Version:** 1.2.0
+> **Status:** DRAFT — Layer 7 (validation, repair, semantic checks) + plan-derived insights (§9b) added 2026-03-21
 > **Date:** 2026-03-21
 > **Parent:** [KAIZEN_PRIME_REQUIREMENTS.md](../prime/KAIZEN_PRIME_REQUIREMENTS.md) (code generation Kaizen)
 > **Sibling:** [UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md](../UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md) (generation pipeline)
@@ -118,6 +118,12 @@ THIS DOCUMENT (REQ-KZ-OBS-100–600)
 | REQ-KZ-OBS-710 | Deterministic repair steps (SLO target, metric name, gridPos) | startd8-sdk | PLANNED |
 | REQ-KZ-OBS-720 | Semantic checks (RED coverage, SLO alignment, alert coverage, transport) | startd8-sdk | PLANNED |
 | REQ-KZ-OBS-730 | Quality score computation (post-write) | startd8-sdk | PLANNED |
+| **Layer 7a — Plan-Derived Quick Wins** | | | |
+| REQ-KZ-OBS-700a | Pipeline wiring: pass --manifest to generator | cap-dev-pipe | **P0 — 0 SDK lines, D+→B+ impact** |
+| REQ-KZ-OBS-704 | Manifest path propagation requirement | cap-dev-pipe | PLANNED |
+| REQ-KZ-OBS-705 | Retroactive validation (accept YAML content, not just paths) | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-706 | ArtifactResult extension (validation, repairs_applied, quality_score) | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-711 | Generator alert coverage (latency + error_rate + availability) | startd8-sdk | FUTURE |
 
 ---
 
@@ -564,6 +570,60 @@ After artifacts are written, compute per-artifact and per-service scores using t
 | OBS-730b | Scores SHALL be written to `{output_dir}/observability-quality.json` alongside the artifacts. |
 | OBS-730c | The generation script SHALL print a quality summary: per-service composite score, aggregate score, and top issues. |
 | OBS-730d | `observability-quality.json` SHALL be consumed by the postmortem evaluator (REQ-KZ-OBS-500) to populate `kaizen-metrics.json`. |
+
+---
+
+## 9b. Plan-Derived Requirements (from implementation planning)
+
+These requirements emerged from the implementation plan and address gaps not visible from the requirements alone. See [OBSERVABILITY_ARTIFACT_VALIDATION_PLAN.md](./OBSERVABILITY_ARTIFACT_VALIDATION_PLAN.md) for the full analysis.
+
+### REQ-KZ-OBS-700a: Pipeline Wiring Quick Win (P0)
+
+Before implementing any SDK validation/repair/scoring, the pipeline MUST be fixed to pass the manifest:
+
+| ID | Requirement |
+|----|-------------|
+| OBS-700a-1 | The pipeline script invoking `generate_observability_artifacts.py` MUST pass `--manifest` pointing to `.contextcore.yaml`. Without this, `BusinessContext` falls back to hardcoded defaults (`availability=99`), producing systematically wrong SLO targets. |
+| OBS-700a-2 | The SDK MUST be installed from the latest source on the Python interpreter the pipeline uses (confirmed: system Python 3.14, not venv Python 3.11). |
+
+**Impact:** These two wiring fixes change the observability grade from D+ to B+ with zero SDK code changes. They resolve: phantom service filtering (7/9 → 0/9), SLO target mismatch (99.0 → 99.9), and Security Prime activation.
+
+### REQ-KZ-OBS-704: Manifest Path Propagation
+
+| ID | Requirement |
+|----|-------------|
+| OBS-704a | `generate_observability_artifacts()` SHOULD auto-discover `.contextcore.yaml` when `--manifest` is not explicitly provided, using the same candidate search as plan ingestion: `output_dir / .contextcore.yaml`, `project_root / .contextcore.yaml`, `cwd / .contextcore.yaml`. |
+| OBS-704b | When auto-discovery finds a manifest, log at INFO: "Auto-discovered .contextcore.yaml at {path}". When not found, log WARNING: "No .contextcore.yaml found — using default thresholds (availability=99)". |
+
+### REQ-KZ-OBS-705: Retroactive Validation
+
+| ID | Requirement |
+|----|-------------|
+| OBS-705a | Validators MUST accept YAML content as a string, not only file paths. This enables retroactive scoring of prior run artifacts. |
+| OBS-705b | A standalone script (`scripts/validate_observability_artifacts.py`) SHOULD accept an `--artifacts-dir` argument and produce `observability-quality.json` for any existing artifact directory. |
+
+### REQ-KZ-OBS-706: ArtifactResult Extension
+
+| ID | Requirement |
+|----|-------------|
+| OBS-706a | `ArtifactResult` SHALL gain: `validation: Optional[Dict]` (validation result), `repairs_applied: List[str]` (repair step names that modified content), `quality_score: Optional[float]` (0.0–1.0). |
+| OBS-706b | Repairs that modify content SHALL log at INFO with field changed and old→new values. |
+
+### REQ-KZ-OBS-710 (revised): Repair Step Clarifications
+
+| ID | Revision |
+|----|----------|
+| OBS-710a (revised) | SLO target repair is a SAFETY NET for when `--manifest` is not passed. With REQ-KZ-OBS-704 (auto-discovery), it should rarely fire. |
+| OBS-710b (revised) | Uses the existing `_otel_to_prom()` function in `artifact_generator.py`. No new conversion logic needed. |
+| OBS-710e (revised) | Repair steps run INLINE in the generator loop (not via a separate orchestrator). Each repair that modifies content logs at INFO. |
+
+### REQ-KZ-OBS-711: Generator Alert Coverage (Future)
+
+| ID | Requirement |
+|----|-------------|
+| OBS-711a | The alert generator SHOULD produce at minimum: latency P99 alert + error rate alert + availability alert when the manifest specifies an `availability` requirement. |
+| OBS-711b | This is a generator enhancement, not a repair step. Repair cannot add missing alerts — only fix existing ones. |
+| OBS-711c | Tracked for future implementation after validation/scoring infrastructure is in place. |
 
 ---
 
