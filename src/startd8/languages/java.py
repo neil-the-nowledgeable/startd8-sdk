@@ -415,18 +415,29 @@ class JavaLanguageProfile:
             "- No wildcard imports (`import java.util.*`) — always explicit",
             "- Every import must end with `;`",
             "",
-            "**Java structural rules:**",
-            "- One public class per file, class name must match filename",
+            "**Java structural rules (MANDATORY):**",
+            "- One public class per file, class name MUST match filename",
             "- PascalCase for class names, camelCase for methods and fields",
-            "- Explicit access modifiers on all classes, methods, and fields",
+            "- Explicit access modifiers on ALL classes, methods, and fields",
+            "- Package declaration MUST match directory structure "
+            "(e.g., `src/main/java/com/example/service/` → `package com.example.service;`)",
+            "- Always annotate overridden methods with `@Override`",
             "- Prefer immutability — use `final` where possible",
-            "- Use try-with-resources for AutoCloseable resources",
+            "- Use try-with-resources for ALL AutoCloseable resources "
+            "(NEVER manually close in finally block)",
+            "",
+            "**Exception handling (MANDATORY):**",
+            "- NEVER use empty catch blocks (`catch (Exception e) { }`)",
+            "- Always log the exception: `logger.error(\"message\", e);`",
+            "- Prefer catching specific exceptions over `catch (Exception e)`",
             "",
             "**Java service patterns (CRITICAL):**",
             "- Interface files MUST contain ONLY the interface definition — no implementations",
             "- Implementation classes go in their own files (e.g., RedisCartStore.java implements CartStore)",
-            "- Use SLF4J (LoggerFactory.getLogger()) for ALL logging — never System.out.println()",
-            "- Use PreparedStatement for ALL database access — never String concatenation in SQL",
+            "- Use SLF4J (`LoggerFactory.getLogger(ClassName.class)`) for ALL logging — "
+            "NEVER `System.out.println()`",
+            "- Use `PreparedStatement` for ALL database access — "
+            "NEVER String concatenation in SQL",
         ])
 
         return "\n".join(lines)

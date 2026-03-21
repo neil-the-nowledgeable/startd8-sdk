@@ -293,6 +293,76 @@ def _check_wildcard_imports(source: str) -> List[SemanticIssue]:
     return issues
 
 
+def _check_package_filepath_alignment(
+    source: str,
+    file_path: Optional[str],
+) -> List[SemanticIssue]:
+    """Flag package declarations that don't match the directory structure (REQ-KZ-JV-100.2).
+
+    Java convention: ``src/main/java/com/example/service/Foo.java`` should
+    declare ``package com.example.service;``.  Strips ``src/main/java/``,
+    ``src/test/java/``, ``src/``, and ``java/`` prefixes before comparison.
+    """
+    if not file_path or not file_path.endswith(".java"):
+        return []
+
+    pkg_match = re.search(r'^\s*package\s+([\w.]+)\s*;', source, re.MULTILINE)
+    if not pkg_match:
+        return []  # Missing package caught by structural checks
+
+    actual_pkg = pkg_match.group(1)
+
+    # Derive expected package from file path
+    from pathlib import PurePosixPath
+    parts = list(PurePosixPath(file_path).parent.parts)
+
+    # Strip common non-package directory prefixes
+    _STRIP_PREFIXES = [
+        ("src", "main", "java"),
+        ("src", "test", "java"),
+        ("src", "main"),
+        ("src", "test"),
+        ("src",),
+        ("java",),
+    ]
+    for prefix in _STRIP_PREFIXES:
+        prefix_len = len(prefix)
+        if (
+            len(parts) >= prefix_len
+            and tuple(p.lower() for p in parts[:prefix_len]) == prefix
+        ):
+            parts = parts[prefix_len:]
+            break
+
+    if not parts or parts == ["."]:
+        return []
+
+    expected_pkg = ".".join(parts)
+
+    if actual_pkg == expected_pkg:
+        return []
+
+    # Case-insensitive comparison for case-only mismatch
+    if actual_pkg.lower() == expected_pkg.lower():
+        return [SemanticIssue(
+            check="package_case_mismatch",
+            severity="warning",
+            message=(
+                f"Package case mismatch: declared `{actual_pkg}` "
+                f"but directory structure implies `{expected_pkg}`"
+            ),
+        )]
+
+    return [SemanticIssue(
+        check="package_filepath_mismatch",
+        severity="warning",
+        message=(
+            f"Package `{actual_pkg}` does not match expected "
+            f"`{expected_pkg}` derived from file path `{file_path}`"
+        ),
+    )]
+
+
 def run_java_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
@@ -315,5 +385,6 @@ def run_java_semantic_checks(
     issues.extend(_check_missing_override(source))
     issues.extend(_check_missing_access_modifiers(source))
     issues.extend(_check_wildcard_imports(source))
+    issues.extend(_check_package_filepath_alignment(source, file_path))
 
     return _stamp_file_path(issues, file_path)

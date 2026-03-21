@@ -1234,6 +1234,20 @@ def _validate_java_file(
             "message": "missing package declaration",
         })
 
+    # Java semantic checks — feed into disk quality score (same pattern as C#)
+    try:
+        from startd8.validators.java_semantic_checks import (
+            run_java_semantic_checks,
+        )
+        for sem_issue in run_java_semantic_checks(content):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": sem_issue.message,
+            })
+    except ImportError:
+        pass  # java_semantic_checks not available
+
     return result
 
 
