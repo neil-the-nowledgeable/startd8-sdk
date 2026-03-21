@@ -3926,6 +3926,23 @@ class PlanIngestionWorkflow(WorkflowBase):
                         len(_broken),
                         ", ".join(f"{a}→{b}" for a, b in _broken),
                     )
+                    # Propagate broken edges to per-feature dependencies
+                    # (the cycle breaker mutates dep_graph but features have
+                    # their own dependencies list that gets threaded to tasks)
+                    _broken_set = {(src, dst) for src, dst in _broken}
+                    for _feat in parsed_plan.features:
+                        _fid = _feat.feature_id
+                        _orig_deps = list(getattr(_feat, "dependencies", []))
+                        _cleaned = [
+                            d for d in _orig_deps
+                            if (_fid, d) not in _broken_set
+                        ]
+                        if len(_cleaned) < len(_orig_deps):
+                            _feat.dependencies = _cleaned
+                            logger.debug(
+                                "Feature %s: removed %d circular dep(s)",
+                                _fid, len(_orig_deps) - len(_cleaned),
+                            )
                     if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
                         _parse_span.add_event("acyclicity_gate.cycles_broken", {
                             "cycles_broken": len(_broken),

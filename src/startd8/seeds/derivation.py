@@ -801,6 +801,18 @@ def derive_tasks_from_features(
             len(features),
         )
 
+    # --- Stage 7: Final acyclicity safety net ---
+    # Catches cycles that survived PARSE-phase graph breaking (e.g. when
+    # feature.dependencies wasn't synced with dep_graph mutations).
+    if len(tasks) > 1:
+        final_broken = _break_task_dependency_cycles(tasks)
+        if final_broken:
+            logger.warning(
+                "Final acyclicity gate broke %d cycle(s): %s",
+                len(final_broken),
+                ", ".join(f"{a}->{b}" for a, b in final_broken),
+            )
+
     return tasks
 
 
