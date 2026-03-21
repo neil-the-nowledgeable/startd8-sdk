@@ -672,15 +672,19 @@ class CSharpLanguageProfile:
 def _derive_namespace(file_path: str) -> str:
     """Derive a C# namespace from a file path.
 
-    Converts directory structure to dotted namespace.
+    Converts directory structure to dotted PascalCase namespace (REQ-CS-106).
     Strips directory components named ``src``, ``source``, ``lib`` (common
     in .NET project layouts like ``src/cartservice/src/cartstore/``).
 
+    Each path component is PascalCased: first letter capitalized, rest preserved.
+    This matches C# convention where namespaces use PascalCase.
+
     Examples::
 
-        'src/cartservice/src/cartstore/RedisCartStore.cs' -> 'cartservice.cartstore'
+        'src/cartservice/src/cartstore/RedisCartStore.cs' -> 'Cartservice.Cartstore'
         'src/MyApp/Services/UserService.cs' -> 'MyApp.Services'
         'Services/UserService.cs' -> 'Services'
+        'src/CartService/src/services/CartService.cs' -> 'CartService.Services'
     """
     from pathlib import PurePosixPath
 
@@ -693,4 +697,8 @@ def _derive_namespace(file_path: str) -> str:
     if not parts or parts == (".",):
         return ""
 
-    return ".".join(parts)
+    # PascalCase each component: capitalize first letter, preserve rest
+    def _pascal(s: str) -> str:
+        return s[0].upper() + s[1:] if s else s
+
+    return ".".join(_pascal(p) for p in parts)

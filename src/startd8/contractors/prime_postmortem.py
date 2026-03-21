@@ -1134,6 +1134,17 @@ class PrimePostMortemEvaluator:
                         fpm.verdict = "FAIL:semantic"
                         fpm.success = False
 
+                    # NR-10: Disk quality floor — a file that cannot parse or
+                    # has critical structural defects is not a successful
+                    # generation regardless of requirement_score.
+                    if (
+                        fpm.disk_quality_score is not None
+                        and fpm.disk_quality_score < 0.3
+                        and fpm.verdict not in ("FAIL", "FAIL:semantic")
+                    ):
+                        fpm.verdict = "FAIL:disk_quality"
+                        fpm.success = False
+
                     # Semantic repair dual scoring (DC-3, REQ-SR)
                     pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})
                     per_file_data = (semantic_repair_data or {}).get("per_file", {})
