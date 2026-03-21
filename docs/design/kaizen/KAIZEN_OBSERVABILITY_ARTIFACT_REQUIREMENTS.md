@@ -583,17 +583,17 @@ Before implementing any SDK validation/repair/scoring, the pipeline MUST be fixe
 
 | ID | Requirement |
 |----|-------------|
-| OBS-700a-1 | The pipeline script invoking `generate_observability_artifacts.py` MUST pass `--manifest` pointing to `.contextcore.yaml`. Without this, `BusinessContext` falls back to hardcoded defaults (`availability=99`), producing systematically wrong SLO targets. |
-| OBS-700a-2 | The SDK MUST be installed from the latest source on the Python interpreter the pipeline uses (confirmed: system Python 3.14, not venv Python 3.11). |
+| OBS-700a-1 | The SDK MUST be installed from the latest source on the Python interpreter the pipeline uses. **RESOLVED** (2026-03-21): installed on system Python 3.14. Prior runs used stale SDK missing phantom filtering + Security Prime + correct `load_business_context()`. |
+| OBS-700a-2 | The pipeline script `run-atomic.sh:474` already passes `--manifest` correctly. **VERIFIED** (2026-03-21): `load_business_context()` correctly reads `availability: 99.9` from `.contextcore.yaml` with current code. Run-093's SLO target=99.0 was caused by the stale SDK, not a wiring gap. |
 
-**Impact:** These two wiring fixes change the observability grade from D+ to B+ with zero SDK code changes. They resolve: phantom service filtering (7/9 → 0/9), SLO target mismatch (99.0 → 99.9), and Security Prime activation.
+**Impact:** SDK reinstall alone resolves phantom filtering (7/9 → 0/9), SLO target mismatch (99.0 → 99.9), and Security Prime activation. The next run will produce correct values without any code changes. What remains is building validation/repair/scoring infrastructure (~380 lines).
 
 ### REQ-KZ-OBS-704: Manifest Path Propagation
 
 | ID | Requirement |
 |----|-------------|
-| OBS-704a | `generate_observability_artifacts()` SHOULD auto-discover `.contextcore.yaml` when `--manifest` is not explicitly provided, using the same candidate search as plan ingestion: `output_dir / .contextcore.yaml`, `project_root / .contextcore.yaml`, `cwd / .contextcore.yaml`. |
-| OBS-704b | When auto-discovery finds a manifest, log at INFO: "Auto-discovered .contextcore.yaml at {path}". When not found, log WARNING: "No .contextcore.yaml found — using default thresholds (availability=99)". |
+| OBS-704a | `generate_observability_artifacts()` SHOULD auto-discover `.contextcore.yaml` when `--manifest` is not explicitly provided, as a safety net. Pipeline already passes `--manifest` (verified in `run-atomic.sh:474`), so this is defense-in-depth, not the primary path. |
+| OBS-704b | When auto-discovery finds a manifest, log at INFO. When not found, log WARNING with the default values that will be used. |
 
 ### REQ-KZ-OBS-705: Retroactive Validation
 
@@ -613,7 +613,7 @@ Before implementing any SDK validation/repair/scoring, the pipeline MUST be fixe
 
 | ID | Revision |
 |----|----------|
-| OBS-710a (revised) | SLO target repair is a SAFETY NET for when `--manifest` is not passed. With REQ-KZ-OBS-704 (auto-discovery), it should rarely fire. |
+| OBS-710a (revised) | SLO target repair is a SAFETY NET. With the SDK properly installed AND `--manifest` already passed by `run-atomic.sh`, the target is correct at generation time. Repair catches edge cases where the manifest is unavailable or the value changed between generation and validation. |
 | OBS-710b (revised) | Uses the existing `_otel_to_prom()` function in `artifact_generator.py`. No new conversion logic needed. |
 | OBS-710e (revised) | Repair steps run INLINE in the generator loop (not via a separate orchestrator). Each repair that modifies content logs at INFO. |
 
