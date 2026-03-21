@@ -572,40 +572,64 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     """
     security_contract = context.get("security_contract") or {}
     client_libraries = security_contract.get("client_libraries", [])
-    if not client_libraries:
-        return ""
 
-    lines: List[str] = ["## Database Security Guidance\n"]
-    lines.append("Use ONLY parameterized queries. Never use string interpolation for SQL.\n")
+    if client_libraries:
+        lines: List[str] = ["## Database Security Guidance\n"]
+        lines.append("Use ONLY parameterized queries. Never use string interpolation for SQL.\n")
 
-    matched = False
-    for cl in client_libraries:
-        if not isinstance(cl, str):
-            continue
-        cl_lower = cl.lower()
-        if "npgsql" in cl_lower:
-            lines.append(
-                "  - Use `NpgsqlCommand` with `@param` syntax: "
-                '`cmd.Parameters.AddWithValue("@id", id)`'
-            )
-            matched = True
-        elif "spanner" in cl_lower:
-            lines.append(
-                "  - Use `SpannerCommand` with `SpannerDbType` params: "
-                '`{ "id", SpannerDbType.String, id }`'
-            )
-            matched = True
-        elif "sqlclient" in cl_lower or "microsoft.data" in cl_lower:
-            lines.append(
-                "  - Use `SqlCommand` with `@param` syntax: "
-                '`cmd.Parameters.AddWithValue("@id", id)`'
-            )
-            matched = True
+        matched = False
+        for cl in client_libraries:
+            if not isinstance(cl, str):
+                continue
+            cl_lower = cl.lower()
+            if "npgsql" in cl_lower:
+                lines.append(
+                    "  - Use `NpgsqlCommand` with `@param` syntax: "
+                    '`cmd.Parameters.AddWithValue("@id", id)`'
+                )
+                matched = True
+            elif "spanner" in cl_lower:
+                lines.append(
+                    "  - Use `SpannerCommand` with `SpannerDbType` params: "
+                    '`{ "id", SpannerDbType.String, id }`'
+                )
+                matched = True
+            elif "sqlclient" in cl_lower or "microsoft.data" in cl_lower:
+                lines.append(
+                    "  - Use `SqlCommand` with `@param` syntax: "
+                    '`cmd.Parameters.AddWithValue("@id", id)`'
+                )
+                matched = True
 
-    if not matched:
-        return ""
+        if matched:
+            return "\n".join(lines)
 
-    return "\n".join(lines)
+    # Fallback: detect database surface from task description and target files
+    # even without explicit security_contract (pre-generation Anzen gate).
+    # Prevents design-doc-poisoned SQL patterns from reaching code generation.
+    task_desc = context.get("task_description", "")
+    target_files = context.get("target_files", [])
+    combined = f"{task_desc} {' '.join(target_files)}".lower()
+    _DB_KEYWORDS = (
+        "alloydb", "postgres", "npgsql", "spanner", "mysql", "sqlite",
+        "database", "sql", "query", "cart_store", "cartstore",
+        "repository", "dal", "data_access",
+    )
+    if any(kw in combined for kw in _DB_KEYWORDS):
+        return "\n".join([
+            "## Database Security Guidance (auto-detected)\n",
+            "CRITICAL: Use ONLY parameterized queries for ALL database access.",
+            "NEVER use string interpolation ($\"...\"), string concatenation, "
+            "or String.Format() to build SQL queries.",
+            "",
+            "  - C#: `cmd.Parameters.AddWithValue(\"@id\", id)`",
+            "  - Java: `PreparedStatement` with `?` placeholders",
+            "  - Go: `spanner.Statement{SQL: \"...@param...\", Params: map}`",
+            "  - Python: `cursor.execute(\"...%s...\", (param,))`",
+            "  - Node.js: `client.query(\"...$1...\", [param])`",
+        ])
+
+    return ""
 
 
 def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:

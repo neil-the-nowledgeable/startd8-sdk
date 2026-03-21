@@ -2542,6 +2542,35 @@ class PrimeContractorWorkflow:
             logger.warning("Kaizen config invalid — proceeding without it: %s", exc)
             return None
 
+    def _auto_discover_kaizen_config(self) -> None:
+        """Auto-discover kaizen-suggestions.json from prior run output dir.
+
+        Called during run() when no explicit --kaizen-config was provided.
+        Looks for kaizen-suggestions.json in the output directory (written
+        by the previous run's postmortem auto-emit).  Fail-open: logs and
+        continues if not found or invalid.
+        """
+        if self._kaizen.config is not None:
+            return  # Explicit config already loaded — don't override
+
+        try:
+            output_dir = self._resolve_output_dir()
+        except Exception:
+            return
+
+        suggestions_path = output_dir / "kaizen-suggestions.json"
+        if not suggestions_path.is_file():
+            return
+
+        loaded = self._load_kaizen_config(str(suggestions_path))
+        if loaded:
+            self._kaizen.config = loaded
+            logger.info(
+                "Kaizen auto-discovered from prior run: %s (%d hints)",
+                suggestions_path,
+                len(loaded.get("prompt_hints") or []),
+            )
+
     def _apply_kaizen_hints(self, gen_context: Dict[str, Any]) -> None:
         """Inject kaizen prompt hints from _kaizen_config into gen_context (REQ-KZ-502).
 
@@ -4150,6 +4179,13 @@ class PrimeContractorWorkflow:
         """
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
+
+        # Auto-discover kaizen suggestions from prior run (REQ-KZ-501 auto-wire)
+        try:
+            self._auto_discover_kaizen_config()
+        except Exception:
+            logger.debug("Kaizen auto-discover failed (non-fatal)", exc_info=True)
+
         logger.info(
             'PRIME CONTRACTOR WORKFLOW started — mode=%s, execution=%s, auto_commit=%s, stop_on_failure=%s',
             self.seed_context.execution_mode,

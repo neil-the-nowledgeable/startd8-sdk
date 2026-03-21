@@ -556,12 +556,81 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         ),
         "confidence": 1.0,
     },
+    # --- Query Prime security entries (REQ-KQP-602) ---
+    "query_injection_interpolation": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used string interpolation in SQL queries. "
+            "Use parameterized queries with bind variables: "
+            "@param (SQL Server/Spanner), $N (PostgreSQL), ? (MySQL/SQLite)."
+        ),
+        "confidence": 0.95,
+    },
+    "query_injection_concatenation": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used string concatenation to build SQL. "
+            "Never concatenate user input into query strings. "
+            "Use command parameters or an ORM query builder."
+        ),
+        "confidence": 0.95,
+    },
+    "query_credential_logged": {
+        "phase": "draft",
+        "hint": (
+            "Prior run logged connection strings or credentials. "
+            "Never pass credential variables to Console.Write, logger, or Debug. "
+            "Log only sanitized connection metadata (host, port, database name)."
+        ),
+        "confidence": 0.90,
+    },
+    "query_credential_exposed": {
+        "phase": "draft",
+        "hint": (
+            "Prior run exposed credentials in source code (hardcoded or inline). "
+            "Load credentials from environment variables, secret managers, or config files. "
+            "Never embed passwords or connection strings as string literals."
+        ),
+        "confidence": 0.85,
+    },
+    "query_lifecycle_per_request": {
+        "phase": "draft",
+        "hint": (
+            "Prior run created database connections per-request instead of using "
+            "connection pooling. Use dependency-injected DbContext/connection pools. "
+            "For C#: register DbContext in DI with AddDbContext<T>(). "
+            "For Go: use sql.Open() once at startup, not per handler."
+        ),
+        "confidence": 0.80,
+    },
+    "query_lifecycle_no_dispose": {
+        "phase": "draft",
+        "hint": (
+            "Prior run created database resources without proper disposal. "
+            "C#: wrap in 'using' or 'await using'. Go: defer conn.Close(). "
+            "Python: use 'with' context manager. "
+            "Undisposed connections cause pool exhaustion under load."
+        ),
+        "confidence": 0.80,
+    },
+    "query_t3_insufficient": {
+        "phase": "spec",
+        "hint": (
+            "Prior run required escalation from T3 (Haiku) for queries that "
+            "should be simple. Provide more specific query context in the spec: "
+            "exact table names, column types, and expected parameter bindings."
+        ),
+        "confidence": 0.75,
+    },
 }
 
 # Maps semantic issue categories (from DiskComplianceResult.semantic_issues)
 # to CAUSE_TO_SUGGESTION keys for cross-feature pattern generation.
 _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "sql_injection_risk": "sql_injection_detected",
+    "query_security_injection": "query_injection_interpolation",
+    "query_security_credential_leakage": "query_credential_logged",
+    "query_security_lifecycle": "query_lifecycle_per_request",
 }
 
 
@@ -1447,6 +1516,29 @@ class PrimePostMortemEvaluator:
             lessons_json = json.dumps(lessons_data, indent=2, default=str)
             lessons_path.write_text(lessons_json, encoding="utf-8")
             logger.info("Post-mortem lessons: %s", lessons_path)
+
+        # Auto-emit kaizen suggestions (REQ-KZ-501 auto-emit)
+        # Previously required explicit --emit-suggestions flag on the script.
+        # Now emitted automatically so the next run can auto-discover them.
+        try:
+            suggestions = generate_kaizen_suggestions(report)
+            if suggestions:
+                suggestions_path = out / "kaizen-suggestions.json"
+                suggestions_data = {
+                    "schema_version": "1.0",
+                    "source_run": report.report_id,
+                    "prompt_hints": suggestions,
+                }
+                suggestions_path.write_text(
+                    json.dumps(suggestions_data, indent=2, default=str),
+                    encoding="utf-8",
+                )
+                logger.info(
+                    "Kaizen suggestions auto-emitted: %s (%d hints)",
+                    suggestions_path, len(suggestions),
+                )
+        except Exception:
+            logger.debug("Kaizen suggestion auto-emit failed (non-fatal)", exc_info=True)
 
     def _extract_exemplars(
         self, report: PrimePostMortemReport, output_dir: str,
