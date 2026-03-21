@@ -311,6 +311,19 @@ def run_csharp_semantic_checks(
     """
     issues: List[SemanticIssue] = []
 
+    # .sln wrong-content check: solution file should NOT contain C# code
+    if file_path and file_path.endswith(".sln"):
+        if "namespace " in source or "using System" in source:
+            issues.append(SemanticIssue(
+                check="wrong_file_content",
+                severity="error",
+                message=(
+                    "Solution file contains C# code instead of MSBuild solution format. "
+                    "Expected: 'Microsoft Visual Studio Solution File, Format Version 12.00'"
+                ),
+            ))
+        return _stamp_file_path(issues, file_path)
+
     # .csproj check
     if file_path and file_path.endswith(".csproj"):
         issues.extend(_check_missing_nullable_in_csproj(source, file_path))

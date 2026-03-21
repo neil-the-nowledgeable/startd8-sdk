@@ -1288,6 +1288,11 @@ class IntegrationEngine:
                 }
                 for r in gate_results
             ]
+            # Track files processed by Query Prime so _run_semantic_checks
+            # can suppress duplicate sql_injection_risk findings.
+            # Query Prime's two-pass detection is authoritative for injection.
+            self._anzen_gated_files: set = getattr(self, "_anzen_gated_files", set())
+            self._anzen_gated_files.update(r.file_path for r in gate_results)
 
     # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
@@ -1337,6 +1342,13 @@ class IntegrationEngine:
                     )
                     source = fpath.read_text(encoding="utf-8")
                     issues = run_csharp_semantic_checks(source, file_path=str(fpath))
+                    # Deduplicate: suppress sql_injection_risk findings for files
+                    # already processed by the Anzen gate (Query Prime is authoritative
+                    # for injection detection — its two-pass approach handles
+                    # parameterization suppression that csharp_semantic_checks misses).
+                    anzen_files = getattr(self, "_anzen_gated_files", set())
+                    if anzen_files and str(fpath) in anzen_files:
+                        issues = [i for i in issues if i.check != "sql_injection_risk"]
                     for issue in issues:
                         logger.warning(
                             "C# semantic: %s",

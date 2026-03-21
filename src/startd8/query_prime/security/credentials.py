@@ -15,7 +15,8 @@ from ..models import SecurityCheckType, SecurityFinding
 
 # Credential-bearing variable name patterns
 _CREDENTIAL_NAMES = re.compile(
-    r'\b(?:connectionString|connStr|conn_str|connection_string|'
+    r'_?(?:connectionString|connStr|conn_str|connection_string|'
+    r'databaseString|dbString|db_string|'
     r'password|Password|secret|Secret|credential|Credential|'
     r'apiKey|api_key|ApiKey|'
     r'private_key|privateKey|PrivateKey|'
@@ -57,6 +58,14 @@ _LOG_PATTERNS = {
 
 # Comment patterns
 _LINE_COMMENT = re.compile(r'^\s*(?://|#)')
+
+# Exception info disclosure: interpolating exception objects into
+# throw/raise statements exposes stack traces and potentially
+# connection strings to external callers (gRPC clients, HTTP responses).
+_EXCEPTION_INTERPOLATION = re.compile(
+    r'(?:throw\s+new\s+\w*Exception|raise\s+\w*Error)\s*\([^)]*'
+    r'\{(?:ex|exc|e|error|err)\}',
+)
 
 
 def detect_credential_leakage(
@@ -108,5 +117,43 @@ def detect_credential_leakage(
             file_path=file_path,
             pattern_hash=pattern_hash,
         ))
+
+    # Pass 2: Exception info disclosure — interpolating exception objects
+    # into throw/raise exposes internals to external callers.
+    # Check both single-line and multiline throw patterns.
+    in_throw = False
+    throw_start = 0
+    for line_no, line in enumerate(lines, start=1):
+        if _LINE_COMMENT.match(line):
+            continue
+        stripped = line.strip()
+
+        # Track multiline throw context (within 3 lines of throw/raise)
+        if re.search(r'throw\s+new\s+\w*Exception|raise\s+\w*Error', stripped):
+            in_throw = True
+            throw_start = line_no
+
+        if in_throw and line_no - throw_start > 3:
+            in_throw = False
+
+        # Check for exception interpolation on this line or in throw context
+        has_exc_interp = re.search(r'\{(?:ex|exc|e|error|err)\}', stripped)
+        if has_exc_interp and (in_throw or _EXCEPTION_INTERPOLATION.search(stripped)):
+            pattern_hash = hashlib.sha256(
+                f"exc:{line_no}:{stripped}".encode()
+            ).hexdigest()[:12]
+            findings.append(SecurityFinding(
+                check_type=SecurityCheckType.CREDENTIAL_LEAKAGE,
+                severity="warning",
+                message=(
+                    f"Exception info disclosure: exception object interpolated "
+                    f"into thrown exception on line {line_no} — may expose "
+                    f"stack traces or connection strings to external callers"
+                ),
+                line=line_no,
+                file_path=file_path,
+                pattern_hash=pattern_hash,
+            ))
+            in_throw = False  # Don't double-report same throw
 
     return findings
