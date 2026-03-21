@@ -505,6 +505,10 @@ class MicroPrimeConfig(BaseModel):
     semantic_verification_prompt_max_chars: int = 4000
     semantic_verification_fn: Optional[Any] = Field(default=None, exclude=True)
     dry_run: bool = False
+    # Language filter: when set, only these language IDs flow through MicroPrime.
+    # When empty/None, all languages with registered LanguageProfiles are enabled.
+    # Example: ["python", "go", "java"] — excludes csharp and nodejs.
+    enabled_languages: Optional[list[str]] = None
     # Classifier thresholds
     max_simple_imports: int = 8
     max_simple_params: int = 4

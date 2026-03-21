@@ -12,14 +12,9 @@ class TestJavaMicroPrimeRouting:
         assert _is_non_python_file("src/main/java/com/example/MyClass.java") is False
 
     def test_java_bypass_when_disabled(self):
-        """When JAVA_MICROPRIME_ENABLED=False, .java files bypass MicroPrime."""
-        import startd8.micro_prime.engine as engine_mod
-        original = engine_mod.JAVA_MICROPRIME_ENABLED
-        try:
-            engine_mod.JAVA_MICROPRIME_ENABLED = False
-            assert engine_mod._is_non_python_file("MyClass.java") is True
-        finally:
-            engine_mod.JAVA_MICROPRIME_ENABLED = original
+        """When enabled_languages excludes java, .java files bypass MicroPrime."""
+        from startd8.micro_prime.engine import _is_non_python_file
+        assert _is_non_python_file("MyClass.java", enabled_languages=["python", "go"]) is True
 
     def test_python_still_not_non_python(self):
         from startd8.micro_prime.engine import _is_non_python_file

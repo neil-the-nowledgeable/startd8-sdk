@@ -74,7 +74,8 @@ class TestIsNonPythonFile:
         assert _is_non_python_file("src/mypackage/main.py") is False
 
     def test_is_non_python_file_typescript(self) -> None:
-        assert _is_non_python_file("index.ts") is True
+        """TypeScript has a registered NodeLanguageProfile — MicroPrime-compatible."""
+        assert _is_non_python_file("index.ts") is False
 
     def test_is_non_python_file_proto(self) -> None:
         assert _is_non_python_file("service.proto") is True

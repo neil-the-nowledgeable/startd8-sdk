@@ -91,32 +91,16 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 }
 
 
-# Feature flag: when True, .java files flow through MicroPrime instead of
-# bypassing to file-whole generation.  All 5 phases implemented (23c7af3).
+# MicroPrime-compatible languages: derived from LanguageRegistry at runtime.
+# A language is MicroPrime-compatible if it has a registered LanguageProfile.
+# This replaces the previous hardcoded JAVA_MICROPRIME_ENABLED /
+# CSHARP_MICROPRIME_ENABLED flags.  Override via prime-contractor.json:
+#   { "micro_prime": { "enabled_languages": ["python", "go", "java"] } }
+# Omit enabled_languages to auto-discover from LanguageRegistry (default).
+
+# Backward-compat aliases (read-only; canonical source is LanguageRegistry)
 JAVA_MICROPRIME_ENABLED = True
-
-# Feature flag: when True, .cs files flow through MicroPrime instead of
-# bypassing to file-whole generation.  Enabled — parser, splicer, and
-# language profile are implemented (csharp_parser.py, csharp_splicer.py,
-# languages/csharp.py).
 CSHARP_MICROPRIME_ENABLED = True
-
-# REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
-# MicroPrime element generation and use file-whole LLM generation instead.
-# NOTE: ".go" removed — Go files now flow through MicroPrime (MP-P6).
-# NOTE: ".java" conditionally removed when JAVA_MICROPRIME_ENABLED is True.
-# NOTE: ".cs" conditionally removed when CSHARP_MICROPRIME_ENABLED is True.
-_NON_PYTHON_EXTENSIONS = frozenset({
-    ".html", ".yaml", ".yml", ".json", ".md", ".txt",
-    ".in", ".cfg", ".toml", ".js", ".ts", ".tsx", ".jsx",
-    ".java", ".kt", ".rs", ".rb", ".sh", ".bash", ".zsh",
-    ".css", ".scss", ".less", ".xml", ".proto", ".sql",
-    ".c", ".cpp", ".h", ".hpp",
-    ".gradle", ".kts", ".properties", ".env", ".ini",
-    ".swift", ".m", ".mm", ".cs", ".fs", ".ex", ".exs",
-    ".lua", ".r", ".R", ".pl", ".pm", ".php",
-    ".csproj", ".sln",
-})
 
 # Filenames without a standard extension that are non-Python.
 _NON_PYTHON_FILENAMES = frozenset({
@@ -125,16 +109,65 @@ _NON_PYTHON_FILENAMES = frozenset({
 })
 
 
-def _is_non_python_file(file_path: str) -> bool:
-    """Return True if *file_path* is NOT a Python file (REQ-MLT-100).
+def _get_microprime_extensions(
+    enabled_languages: list[str] | None = None,
+) -> frozenset[str]:
+    """Return file extensions that have MicroPrime-compatible LanguageProfiles.
 
-    Handles edge cases like ``go.mod`` and ``Dockerfile`` which lack
-    standard extensions.  Returns False for ``.py`` and ``.go`` files
-    (both have MicroPrime paths) and True for all other non-Python
-    extensions and unknown extensions.
+    When *enabled_languages* is provided, only extensions belonging to those
+    language IDs are included (config-driven filter).  When ``None``, all
+    registered profiles are included (auto-discovery).
 
-    When ``JAVA_MICROPRIME_ENABLED`` is True, ``.java`` files are treated
-    as MicroPrime-compatible (returns False), enabling element-level generation.
+    Always includes ``.py`` regardless of filter.
+    """
+    cache_key = tuple(sorted(enabled_languages)) if enabled_languages else ()
+    if not hasattr(_get_microprime_extensions, "_caches"):
+        _get_microprime_extensions._caches = {}  # type: ignore[attr-defined]
+    caches = _get_microprime_extensions._caches  # type: ignore[attr-defined]
+    if cache_key in caches:
+        return caches[cache_key]
+
+    extensions: set[str] = {".py"}
+    try:
+        from startd8.languages.registry import LanguageRegistry
+
+        if enabled_languages:
+            # Config-driven: only include specified languages
+            for lang_id in enabled_languages:
+                profile = LanguageRegistry.get(lang_id)
+                if profile:
+                    for ext in profile.source_extensions:
+                        extensions.add(ext)
+        else:
+            # Auto-discover: all registered profiles
+            ext_map = LanguageRegistry.get_extension_map()
+            extensions.update(ext_map.keys())
+    except Exception:
+        # Fallback: hardcoded set if registry unavailable
+        extensions.update({".go", ".java", ".cs"})
+
+    result = frozenset(extensions)
+    caches[cache_key] = result
+    return result
+
+
+def _is_non_python_file(
+    file_path: str,
+    enabled_languages: list[str] | None = None,
+) -> bool:
+    """Return True if *file_path* should bypass MicroPrime element generation.
+
+    A file is MicroPrime-compatible (returns False) if its extension has a
+    registered ``LanguageProfile`` in the ``LanguageRegistry``.  When
+    *enabled_languages* is provided, only those language IDs are considered
+    MicroPrime-compatible (config-driven filter from ``prime-contractor.json``
+    ``micro_prime.enabled_languages``).
+
+    Special cases:
+    - ``Dockerfile``, ``go.mod``, ``Makefile`` etc. always bypass (no
+      element-level generation for these).
+    - Unknown extensions default to True (non-Python) to prevent emitting
+      Python stubs into non-Python files.
     """
     from pathlib import PurePosixPath
 
@@ -143,20 +176,13 @@ def _is_non_python_file(file_path: str) -> bool:
     if p.name in _NON_PYTHON_FILENAMES:
         return True
     suffix = p.suffix.lower()
-    # Extensions with dedicated MicroPrime paths
-    if suffix in (".py", ".go"):
-        return False
-    # Java files optionally flow through MicroPrime
-    if suffix == ".java" and JAVA_MICROPRIME_ENABLED:
-        return False
-    # C# files optionally flow through MicroPrime (REQ-CS-100)
-    if suffix == ".cs" and CSHARP_MICROPRIME_ENABLED:
-        return False
-    if suffix in _NON_PYTHON_EXTENSIONS:
+    if not suffix:
         return True
-    # Unknown extension — treat as non-Python to prevent emitting
-    # Python stubs (e.g. `from __future__ import annotations`) into
-    # files the Python assembler doesn't understand.
+    # Check against LanguageRegistry-derived extension set
+    mp_extensions = _get_microprime_extensions(enabled_languages)
+    if suffix in mp_extensions:
+        return False
+    # No registered profile — bypass MicroPrime
     return True
 
 

@@ -22,15 +22,11 @@ class TestCSharpMicroPrimeRouting:
         from startd8.micro_prime.engine import _is_non_python_file
         assert _is_non_python_file("src/cartservice/CartStore.cs") is False
 
-    def test_cs_files_bypass_when_disabled(self):
-        """When CSHARP_MICROPRIME_ENABLED=False, .cs files bypass MicroPrime."""
-        import startd8.micro_prime.engine as engine_mod
-        original = engine_mod.CSHARP_MICROPRIME_ENABLED
-        try:
-            engine_mod.CSHARP_MICROPRIME_ENABLED = False
-            assert engine_mod._is_non_python_file("ICartStore.cs") is True
-        finally:
-            engine_mod.CSHARP_MICROPRIME_ENABLED = original
+    def test_cs_files_bypass_when_excluded_by_config(self):
+        """When enabled_languages excludes csharp, .cs files bypass MicroPrime."""
+        from startd8.micro_prime.engine import _is_non_python_file
+        # Only python and go enabled — csharp excluded
+        assert _is_non_python_file("ICartStore.cs", enabled_languages=["python", "go"]) is True
 
     def test_cs_interface_routes_through_microprime(self):
         """Simple interface files like ICartStore.cs should route through."""
