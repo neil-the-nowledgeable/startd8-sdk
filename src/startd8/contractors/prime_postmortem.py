@@ -568,6 +568,15 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "Use the database-specific parameter binding API."
         ),
     },
+    "dockerfile_digest": {
+        "phase": "draft",
+        "hint": (
+            "SHA256 digests in Dockerfile FROM statements must be exactly "
+            "64 hexadecimal characters. Do not truncate or fabricate digests. "
+            "If unsure of the exact digest, omit the @sha256: suffix and "
+            "use a tag instead (e.g., python:3.12-slim)."
+        ),
+    },
 }
 
 

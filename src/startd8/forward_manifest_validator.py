@@ -669,7 +669,10 @@ def _validate_csharp_file(
             # Structural checks on parsed tree
             kinds = {e.kind for e in parse_result.elements}
             has_type = kinds & {"class", "interface", "struct", "record", "enum"}
-            if not has_type and not parse_result.namespace:
+            # IMP-003: Exempt Program.cs from type-declaration requirement —
+            # ASP.NET Core 6+ uses C# 10 top-level statements (no explicit class).
+            is_program_cs = Path(file_path).name.lower() == "program.cs"
+            if not has_type and not parse_result.namespace and not is_program_cs:
                 issues.append({
                     "category": "csharp_structure",
                     "severity": "warning",
@@ -2098,13 +2101,23 @@ def _validate_import_resolution(
             continue
 
         if resolution is None:
+            # IMP-002: Intra-package imports (e.g., `emailservice.email_server`
+            # where `emailservice` is a sibling directory) are valid at runtime
+            # but unresolvable by static analysis without package context.
+            # Downgrade to warning instead of error.
+            top_module = full_path.split(".")[0]
+            is_intra_package = (
+                "." in full_path
+                and top_module in sibling_modules
+            )
             issues.append({
                 "category": "import_resolution",
-                "severity": "error",
+                "severity": "warning" if is_intra_package else "error",
                 "message": (
                     f"Unresolvable import: '{full_path}' is not stdlib, "
                     f"not in requirements.in, not a local module, "
                     f"and not a protobuf stub"
+                    + (" (may be intra-package)" if is_intra_package else "")
                 ),
                 "line": line,
                 "symbol": full_path,

@@ -59,6 +59,10 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
         "max_tasks": args.max_tasks,
     }
 
+    # Forward generation profile if provided (IMP-001)
+    if args.generation_profile:
+        config["generation_profile"] = args.generation_profile
+
     # Load instrumentation contract if provided
     if args.instrumentation_contract:
         contract_path = Path(args.instrumentation_contract)
@@ -85,6 +89,26 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
                 logging.getLogger("run_todo_completion").warning(
                     "Could not load security contract %s: %s",
                     sc_path, exc,
+                )
+
+    # Load observability manifest if provided (REQ-OPI-400)
+    if args.observability_manifest:
+        obs_path = Path(args.observability_manifest)
+        if obs_path.exists():
+            try:
+                import yaml
+                config["observability_manifest"] = yaml.safe_load(
+                    obs_path.read_text(encoding="utf-8"),
+                )
+            except ImportError:
+                logging.getLogger("run_todo_completion").warning(
+                    "PyYAML not available — cannot load observability manifest %s",
+                    obs_path,
+                )
+            except (OSError, Exception) as exc:
+                logging.getLogger("run_todo_completion").warning(
+                    "Could not load observability manifest %s: %s",
+                    obs_path, exc,
                 )
 
     return config
@@ -147,6 +171,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--security-contract", default=None,
         help="Path to JSON file with security contract (REQ-ICD-106)",
+    )
+    parser.add_argument(
+        "--observability-manifest", default=None,
+        help="Path to YAML observability manifest for convention metric enrichment (REQ-OPI-400)",
+    )
+    parser.add_argument(
+        "--generation-profile", default=None,
+        help="Generation profile for provenance (e.g., 'source', 'full'). "
+             "Forwarded by the pipeline; recorded in provenance but does not "
+             "override --execute.",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
