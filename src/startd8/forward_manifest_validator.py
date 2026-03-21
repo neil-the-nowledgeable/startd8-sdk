@@ -8,7 +8,6 @@ function signatures).
 """
 
 import ast
-import importlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -557,88 +556,6 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Shared helpers for non-Python disk validation
-# ---------------------------------------------------------------------------
-
-_STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
-
-_STUB_EXT_TO_LANG: dict[str, str] = {
-    ".java": "java", ".go": "go", ".cs": "csharp",
-    ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
-}
-
-
-def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
-    """Return compiled stub patterns for a file extension, cached."""
-    if suffix in _STUB_PATTERNS_CACHE:
-        return _STUB_PATTERNS_CACHE[suffix]
-
-    patterns: list[re.Pattern[str]] = []
-    lang_id = _STUB_EXT_TO_LANG.get(suffix)
-    if lang_id:
-        try:
-            from startd8.languages.registry import LanguageRegistry
-            LanguageRegistry.discover()
-            profile = LanguageRegistry.get(lang_id)
-            if profile:
-                for pat_str in profile.stub_patterns:
-                    try:
-                        patterns.append(re.compile(pat_str))
-                    except re.error:
-                        pass
-        except (ImportError, AttributeError):
-            pass
-    _STUB_PATTERNS_CACHE[suffix] = patterns
-    return patterns
-
-
-def _count_stubs_text(content: str, suffix: str) -> int:
-    """Count stub markers in non-Python source using language-specific patterns.
-
-    Uses the ``stub_patterns`` property from the language profile resolved
-    by file extension.  Returns 0 if no patterns are available.
-    """
-    patterns = _get_stub_patterns(suffix)
-    if not patterns:
-        return 0
-    count = 0
-    for line in content.splitlines():
-        for pat in patterns:
-            if pat.search(line):
-                count += 1
-                break  # one match per line is enough
-    return count
-
-
-def _wire_semantic_checks(
-    content: str,
-    result: "DiskComplianceResult",
-    run_checks_fn: str,
-) -> None:
-    """Run a language-specific semantic check function and append issues.
-
-    Args:
-        content: Source code string.
-        result: DiskComplianceResult to append issues to (mutated in place).
-        run_checks_fn: Dotted import path to the ``run_*_semantic_checks``
-            function, e.g. ``"startd8.validators.java_semantic_checks.run_java_semantic_checks"``.
-    """
-    module_path, func_name = run_checks_fn.rsplit(".", 1)
-    try:
-        mod = importlib.import_module(module_path)
-        run_fn = getattr(mod, func_name)
-    except (ImportError, AttributeError):
-        return
-    for issue in run_fn(content, file_path=result.file_path):
-        result.semantic_issues.append({
-            "category": issue.check,
-            "severity": issue.severity,
-            "message": issue.message,
-            "line": issue.line,
-        })
-
-
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -685,12 +602,10 @@ def _validate_non_python_file(
         result = _validate_html_file(content, result)
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
-    elif suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
+    elif suffix in (".js", ".mjs", ".cjs"):
         result = _validate_js_file(content, result)
     elif suffix == ".json":
         result = _validate_json_file(content, result)
-    elif suffix == ".go":
-        result = _validate_go_file(content, result)
     elif suffix == ".java":
         result = _validate_java_file(content, result)
     elif name in ("build.gradle", "build.gradle.kts"):
@@ -701,14 +616,6 @@ def _validate_non_python_file(
         result = _validate_csproj_file(content, result)
     elif suffix == ".sln":
         result = _validate_sln_file(content, result)
-    elif suffix == ".xml":
-        result = _validate_xml_file(content, result)
-    elif suffix in (".gradle", ".properties"):
-        result = _validate_text_file(content, result)
-    else:
-        # Unknown format — check for empty content only
-        # (Python stub contamination already caught by _detect_language_mismatch above)
-        result = _validate_unknown_file(content, result)
 
     return result
 
@@ -752,10 +659,7 @@ def _validate_csharp_file(
             # Structural checks on parsed tree
             kinds = {e.kind for e in parse_result.elements}
             has_type = kinds & {"class", "interface", "struct", "record", "enum"}
-            # IMP-003: Exempt Program.cs from type-declaration requirement —
-            # ASP.NET Core 6+ uses C# 10 top-level statements (no explicit class).
-            is_program_cs = Path(result.file_path).name.lower() == "program.cs"
-            if not has_type and not parse_result.namespace and not is_program_cs:
+            if not has_type and not parse_result.namespace:
                 issues.append({
                     "category": "csharp_structure",
                     "severity": "warning",
@@ -764,16 +668,10 @@ def _validate_csharp_file(
                 result.contract_compliance = max(
                     0.0, result.contract_compliance - 0.3,
                 )
-            # IMP-006: Wire C# semantic checks into tree-sitter path.
-            # _wire_semantic_checks appends directly to result.semantic_issues.
-            _wire_semantic_checks(
-                content, result,
-                "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
-            )
-            # Merge structural issues (from above) into result
-            for iss in issues:
-                if iss not in result.semantic_issues:
-                    result.semantic_issues.append(iss)
+            # REQ-KZ-CS-500b: file-scoped namespace hint
+            issues.extend(_csharp_namespace_style_issues(content))
+            if issues:
+                result.semantic_issues = issues
             return result
     except ImportError:
         pass  # Fall through to text-based
@@ -808,19 +706,31 @@ def _validate_csharp_file(
         result.error = "no_csharp_keywords"
         return result
 
+    # REQ-KZ-CS-500b: file-scoped namespace hint
+    ns_issues = _csharp_namespace_style_issues(content)
+    if ns_issues:
+        result.semantic_issues.extend(ns_issues)
+
     # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
     result.contract_compliance = min(result.contract_compliance, 0.8)
-
-    # C# semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.csharp_semantic_checks.run_csharp_semantic_checks",
-    )
-
-    # Stub counting (postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".cs")
-
     return result
+
+
+def _csharp_namespace_style_issues(content: str) -> list:
+    """Return info-severity issues for block-scoped namespaces (REQ-KZ-CS-500b)."""
+    block_match = re.search(r"^namespace\s+[\w.]+\s*\{", content, re.MULTILINE)
+    if block_match:
+        line = content[: block_match.start()].count("\n") + 1
+        return [{
+            "category": "block_scoped_namespace",
+            "severity": "info",
+            "message": (
+                "Block-scoped namespace detected — prefer file-scoped "
+                "syntax (`namespace Foo.Bar;`) for net8.0+ targets"
+            ),
+            "line": line,
+        }]
+    return []
 
 
 def _validate_csproj_file(
@@ -940,124 +850,6 @@ def _validate_sln_file(
                 f"{project_count} Project( vs {end_project_count} EndProject"
             ),
         })
-
-    return result
-
-
-def _validate_go_file(
-    content: str,
-    result: DiskComplianceResult,
-) -> DiskComplianceResult:
-    """Validate Go source file — package declaration and balanced braces (KZ-Q4).
-
-    Note: Python stub contamination is already caught by
-    ``_detect_language_mismatch`` in the caller.
-    """
-    if not content.strip():
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = "empty_file"
-        return result
-
-    # Package declaration check
-    has_package = any(
-        line.strip().startswith("package ")
-        for line in content.splitlines()
-        if line.strip() and not line.strip().startswith("//")
-    )
-    if not has_package:
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = "missing_package_declaration"
-        return result
-
-    # Balanced braces check
-    depth = 0
-    for ch in content:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth < 0:
-                result.ast_valid = False
-                result.contract_compliance = 0.5
-                result.error = "unbalanced_braces"
-                return result
-    if depth > 0:
-        result.ast_valid = False
-        result.contract_compliance = 0.5
-        result.error = "unbalanced_braces"
-        return result
-
-    # Go semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.go_semantic_checks.run_go_semantic_checks",
-    )
-
-    # Stub counting (postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".go")
-
-    return result
-
-
-def _validate_xml_file(
-    content: str,
-    result: DiskComplianceResult,
-) -> DiskComplianceResult:
-    """Validate generic XML file — parse check only (KZ-Q4)."""
-    if not content.strip():
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = "empty_file"
-        return result
-
-    try:
-        import xml.etree.ElementTree as ET
-        ET.fromstring(content)
-    except ET.ParseError as exc:
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = f"xml_parse_error: {exc}"
-        return result
-
-    return result
-
-
-def _validate_text_file(
-    content: str,
-    result: DiskComplianceResult,
-) -> DiskComplianceResult:
-    """Validate generic text file — non-empty check only (KZ-Q4).
-
-    Used for ``.gradle`` and ``.properties`` files that don't have a
-    dedicated validator.  Python stub contamination is already caught
-    by ``_detect_language_mismatch`` in the caller.
-    """
-    if not content.strip():
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = "empty_file"
-        return result
-
-    return result
-
-
-def _validate_unknown_file(
-    content: str,
-    result: DiskComplianceResult,
-) -> DiskComplianceResult:
-    """Fallback for unknown file extensions (KZ-Q4).
-
-    Python stub contamination is already caught by
-    ``_detect_language_mismatch`` in the caller.  This only checks
-    for empty content.
-    """
-    if not content.strip():
-        result.ast_valid = False
-        result.contract_compliance = 0.0
-        result.error = "empty_file"
-        return result
 
     return result
 
@@ -1298,15 +1090,6 @@ def _validate_js_file(
             except OSError:
                 pass
 
-    # Node.js semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.nodejs_semantic_checks.run_nodejs_semantic_checks",
-    )
-
-    # Stub counting (postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".js")
-
     return result
 
 
@@ -1436,15 +1219,6 @@ def _validate_java_file(
             "severity": "warning",
             "message": "missing package declaration",
         })
-
-    # Java semantic checks
-    _wire_semantic_checks(
-        content, result,
-        "startd8.validators.java_semantic_checks.run_java_semantic_checks",
-    )
-
-    # Stub counting (postmortem scoring parity)
-    result.stubs_remaining = _count_stubs_text(content, ".java")
 
     return result
 
@@ -1760,34 +1534,6 @@ _KNOWN_NON_IMPORT_PACKAGES = frozenset({
     "pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy",
 })
 
-# IMP-005: Packages that are commonly declared as transitive/runtime deps
-# and should not produce orphan_dependency warnings.  These are packages
-# that frameworks install and use internally but that application code
-# doesn't import directly.
-_KNOWN_TRANSITIVE_PACKAGES = frozenset({
-    # Runtime/profiler agents
-    "rsa", "requests", "pillow",
-    # OTel distro + instrumentation packages (auto-instrumented, not imported)
-    "opentelemetry-distro", "opentelemetry-exporter-otlp",
-    "opentelemetry-exporter-otlp-proto-grpc",
-    "opentelemetry-exporter-otlp-proto-http",
-    "opentelemetry-instrumentation-grpc",
-    "opentelemetry-instrumentation-flask",
-    "opentelemetry-instrumentation-requests",
-    "opentelemetry-instrumentation-redis",
-    "opentelemetry-instrumentation-sqlalchemy",
-    # Cloud tracing/profiling agents
-    "google-cloud-trace", "google-cloud-profiler",
-    # Test/load generation frameworks (imported via runner, not direct import)
-    "locust", "faker",
-    # Logging formatters (PyPI name != import name; handled by alias map
-    # but also safe to allowlist)
-    "python-json-logger",
-    # LangChain ecosystem (imported via sub-packages, not top-level)
-    "langchain", "langchain-google-genai", "langchain-google-alloydb-pg",
-    "langchain-community",
-})
-
 
 def _validate_requirements_coverage(
     requirements_content: str,
@@ -1814,8 +1560,6 @@ def _validate_requirements_coverage(
         spec = stripped.split("#")[0].strip()
         package = re.split(r"[~=!<>\[;]", spec)[0].strip().lower()
         if not package or package in _KNOWN_NON_IMPORT_PACKAGES:
-            continue
-        if package in _KNOWN_TRANSITIVE_PACKAGES:
             continue
 
         # Map package to expected import name
@@ -2259,23 +2003,13 @@ def _validate_import_resolution(
             continue
 
         if resolution is None:
-            # IMP-002: Intra-package imports (e.g., `emailservice.email_server`
-            # where `emailservice` is a sibling directory) are valid at runtime
-            # but unresolvable by static analysis without package context.
-            # Downgrade to warning instead of error.
-            top_module = full_path.split(".")[0]
-            is_intra_package = (
-                "." in full_path
-                and top_module in sibling_modules
-            )
             issues.append({
                 "category": "import_resolution",
-                "severity": "warning" if is_intra_package else "error",
+                "severity": "error",
                 "message": (
                     f"Unresolvable import: '{full_path}' is not stdlib, "
                     f"not in requirements.in, not a local module, "
                     f"and not a protobuf stub"
-                    + (" (may be intra-package)" if is_intra_package else "")
                 ),
                 "line": line,
                 "symbol": full_path,

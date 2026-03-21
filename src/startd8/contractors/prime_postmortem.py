@@ -76,7 +76,6 @@ class RootCause(str, Enum):
     SIZE_REGRESSION = "size_regression"
     GENERATION_ERROR = "generation_error"
     DEPENDENCY_BLOCKED = "dependency_blocked"
-    SECURITY_VIOLATION = "security_violation"
     UNKNOWN = "unknown"
 
 
@@ -421,23 +420,7 @@ def compute_disk_quality_score(compliance: Any) -> float:
             warning_count += 1
     semantic_penalty = max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
 
-    # Security findings penalty (Anzen): security errors are more severe
-    # than semantic issues — each error-severity finding deducts 0.5.
-    security_findings = getattr(compliance, "security_findings", [])
-    security_error_count = 0
-    for sf in (security_findings or []):
-        sev = getattr(sf, "severity", "warning") if not isinstance(sf, dict) else sf.get("severity", "warning")
-        if sev == "error":
-            security_error_count += 1
-    security_penalty = max(0.0, 1.0 - security_error_count * 0.5)
-
     composite = (
-        contract_compliance * 0.35
-        + import_completeness * 0.15
-        + stub_penalty * 0.15
-        + semantic_penalty * 0.15
-        + security_penalty * 0.20
-    ) if security_findings else (
         contract_compliance * 0.4
         + import_completeness * 0.2
         + stub_penalty * 0.2
@@ -560,33 +543,25 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "all target file extensions."
         ),
     },
-    "security_violation": {
+    "sql_injection_detected": {
         "phase": "draft",
         "hint": (
-            "SECURITY: Use parameterized queries for ALL external inputs. "
-            "Never use string interpolation or concatenation in SQL strings. "
-            "Use the database-specific parameter binding API."
+            "Prior run generated SQL queries with string interpolation. "
+            "CRITICAL: Use ONLY parameterized queries. Example:\n"
+            '  BAD:  $"SELECT * FROM cart WHERE user_id = \'{userId}\'"\n'
+            '  GOOD: cmd.CommandText = "SELECT * FROM cart WHERE user_id = @userId";\n'
+            '        cmd.Parameters.AddWithValue("@userId", userId);\n'
+            'For Spanner: new SpannerCommand("SELECT * FROM Cart WHERE UserId = @userId", conn)\n'
+            '             { Parameters = { { "userId", SpannerDbType.String, userId } } }'
         ),
+        "confidence": 1.0,
     },
-    "dockerfile_digest": {
-        "phase": "draft",
-        "hint": (
-            "SHA256 digests in Dockerfile FROM statements must be exactly "
-            "64 hexadecimal characters. Do not truncate or fabricate digests. "
-            "If unsure of the exact digest, omit the @sha256: suffix and "
-            "use a tag instead (e.g., python:3.12-slim)."
-        ),
-    },
-    "import_resolution": {
-        "phase": "draft",
-        "hint": (
-            "Verify all import module paths match the actual file and package "
-            "structure. For protobuf-generated classes, use PascalCase matching "
-            "the .proto message name (e.g., ListRecommendationsRequest). For "
-            "intra-package imports, use the correct dotted path relative to "
-            "the package root."
-        ),
-    },
+}
+
+# Maps semantic issue categories (from DiskComplianceResult.semantic_issues)
+# to CAUSE_TO_SUGGESTION keys for cross-feature pattern generation.
+_SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
+    "sql_injection_risk": "sql_injection_detected",
 }
 
 
@@ -617,6 +592,42 @@ def generate_kaizen_suggestions(report: Any) -> List[Dict[str, Any]]:
             "confidence": "high" if pattern.frequency >= 3 else "medium",
             "auto_applicable": False,
         })
+
+    # Scan per-feature semantic_issues for recurring categories (e.g. sql_injection_risk).
+    # When 2+ features share the same semantic issue category, generate a suggestion
+    # from CAUSE_TO_SUGGESTION if a matching entry exists.
+    semantic_category_features: Dict[str, List[str]] = {}
+    for fpm in getattr(report, "features", []) or []:
+        issue_summary = getattr(fpm, "semantic_issue_summary", {})
+        if callable(issue_summary):
+            issue_summary = issue_summary()  # property returns dict
+        if not isinstance(issue_summary, dict):
+            continue
+        feature_name = getattr(fpm, "feature_name", "unknown")
+        for category in issue_summary:
+            semantic_category_features.setdefault(category, []).append(feature_name)
+
+    for category, affected in semantic_category_features.items():
+        if len(affected) < _CROSS_FEATURE_PATTERN_MIN:
+            continue
+        # Map category to CAUSE_TO_SUGGESTION key (e.g. "sql_injection_risk" -> "sql_injection_detected")
+        suggestion_key = _SEMANTIC_CATEGORY_TO_SUGGESTION.get(category)
+        if not suggestion_key:
+            continue
+        template = CAUSE_TO_SUGGESTION.get(suggestion_key)
+        if not template:
+            continue
+        suggestions.append({
+            "pattern": f"Semantic issue '{category}' found in {len(affected)} features",
+            "pattern_type": suggestion_key,
+            "frequency": len(affected),
+            "suggested_action": template["hint"],
+            "config_key": template.get("confidence", "prompt_hints") if isinstance(template.get("confidence"), str) else "prompt_hints",
+            "phase": template["phase"],
+            "confidence": "high" if len(affected) >= 3 else "medium",
+            "auto_applicable": False,
+        })
+
     return suggestions
 
 
@@ -1123,23 +1134,6 @@ class PrimePostMortemEvaluator:
                         fpm.verdict = "FAIL:semantic"
                         fpm.success = False
 
-                    # Security findings gate (Anzen): promote to SECURITY_VIOLATION
-                    sec_findings = getattr(compliance, "security_findings", []) or []
-                    sec_errors = [
-                        f for f in sec_findings
-                        if getattr(f, "severity", "warning") == "error"
-                    ]
-                    if sec_errors:
-                        fpm.root_cause = RootCause.SECURITY_VIOLATION
-                        fpm.pipeline_stage = PipelineStage.INTEGRATION
-                        if fpm.verdict in ("PASS", "PARTIAL", "PARTIAL:semantic"):
-                            fpm.verdict = "FAIL:security"
-                            fpm.success = False
-                        logger.warning(
-                            "Security violation in %s: %d error findings",
-                            fpm.feature_id, len(sec_errors),
-                        )
-
                     # Semantic repair dual scoring (DC-3, REQ-SR)
                     pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})
                     per_file_data = (semantic_repair_data or {}).get("per_file", {})
@@ -1345,24 +1339,6 @@ class PrimePostMortemEvaluator:
                 affected_features=mismatch_features,
                 frequency=len(mismatch_features),
                 severity="high" if len(mismatch_features) >= 3 else "medium",
-            ))
-
-        # Pattern 5: Security violations (Anzen)
-        security_features: List[str] = []
-        for fpm in features:
-            if fpm.root_cause == RootCause.SECURITY_VIOLATION:
-                security_features.append(fpm.feature_id)
-        if len(security_features) >= 1:
-            patterns.append(CrossFeaturePattern(
-                pattern_type="security_violation",
-                description=(
-                    f"{len(security_features)} feature(s) have security "
-                    f"violations (SQL injection, credential leakage, or "
-                    f"resource lifecycle issues)"
-                ),
-                affected_features=security_features,
-                frequency=len(security_features),
-                severity="critical" if len(security_features) >= 2 else "high",
             ))
 
         return patterns

@@ -96,24 +96,19 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 JAVA_MICROPRIME_ENABLED = True
 
 # Feature flag: when True, .cs files flow through MicroPrime instead of
-# bypassing to file-whole generation.  Enabled: splicer, decomposer,
-# templates, and reserved words are all in place.
+# bypassing to file-whole generation.  Enabled — parser, splicer, and
+# language profile are implemented (csharp_parser.py, csharp_splicer.py,
+# languages/csharp.py).
 CSHARP_MICROPRIME_ENABLED = True
-
-# Feature flag: when True, .js/.ts/.tsx/.jsx files flow through MicroPrime.
-# Enabled: templates and reserved words in place; no splicer (file-whole
-# generation with template fast-path for TRIVIAL elements).
-NODEJS_MICROPRIME_ENABLED = True
 
 # REQ-MLT-100/101: Non-Python file extensions and filenames that must bypass
 # MicroPrime element generation and use file-whole LLM generation instead.
 # NOTE: ".go" removed — Go files now flow through MicroPrime (MP-P6).
 # NOTE: ".java" conditionally removed when JAVA_MICROPRIME_ENABLED is True.
 # NOTE: ".cs" conditionally removed when CSHARP_MICROPRIME_ENABLED is True.
-# NOTE: ".js"/".ts"/".tsx"/".jsx" conditionally removed when NODEJS_MICROPRIME_ENABLED is True.
 _NON_PYTHON_EXTENSIONS = frozenset({
     ".html", ".yaml", ".yml", ".json", ".md", ".txt",
-    ".in", ".cfg", ".toml",
+    ".in", ".cfg", ".toml", ".js", ".ts", ".tsx", ".jsx",
     ".java", ".kt", ".rs", ".rb", ".sh", ".bash", ".zsh",
     ".css", ".scss", ".less", ".xml", ".proto", ".sql",
     ".c", ".cpp", ".h", ".hpp",
@@ -156,9 +151,6 @@ def _is_non_python_file(file_path: str) -> bool:
         return False
     # C# files optionally flow through MicroPrime (REQ-CS-100)
     if suffix == ".cs" and CSHARP_MICROPRIME_ENABLED:
-        return False
-    # Node.js files optionally flow through MicroPrime
-    if suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx") and NODEJS_MICROPRIME_ENABLED:
         return False
     if suffix in _NON_PYTHON_EXTENSIONS:
         return True
@@ -1427,12 +1419,13 @@ def _validate_file_whole_result(
         (syntax error, nested duplicates, skeleton markers).  Callers can use
         the missing list for partial acceptance.
     """
-    # Strip markdown fences if present — pass language hint for multi-block disambiguation
-    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
-    code = extract_code_from_response(generated_code, language=lang_id)
+    # Strip markdown fences if present
+    code = extract_code_from_response(generated_code)
 
     if not code:
         return False, "empty output", []
+
+    lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
 
     # Apply literal coercion for non-Python (MP-P5)
     code = _coerce_literals_for_language(code, lang_id)
@@ -2548,8 +2541,7 @@ class MicroPrimeEngine:
         def _validate_file_whole(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
             # Strip markdown fences first, then reorder forward references —
             # raw LLM output often has ```python fences that prevent ast.parse.
-            _fw_lang = getattr(self._language_profile, "language_id", None)
-            cleaned_code = extract_code_from_response(raw_code, language=_fw_lang) or raw_code
+            cleaned_code = extract_code_from_response(raw_code) or raw_code
             reordered_code = _reorder_forward_references(cleaned_code)
             valid, reason, missing = _validate_file_whole_result(
                 reordered_code, skeleton, file_spec, self._language_profile,
@@ -2619,8 +2611,7 @@ class MicroPrimeEngine:
         if not final_raw:
             return None
 
-        _final_lang = getattr(self._language_profile, "language_id", None)
-        code = extract_code_from_response(final_raw, language=_final_lang)
+        code = extract_code_from_response(final_raw)
 
         # ── Partial acceptance ──
         missing_set: set[str] = set()

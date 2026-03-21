@@ -225,47 +225,6 @@ def build_spec_conventions_section(sem_conv: Any) -> str:
     return f"## Semantic Conventions\n{format_context_value(sem_conv)}"
 
 
-def _build_security_guidance_section(context: Dict[str, Any]) -> str:
-    """Build P1 security guidance from security contract (SP-PL-010)."""
-    contract = context.get("security_contract")
-    if not contract:
-        return ""
-
-    databases = contract.get("databases", {})
-    sensitivity = contract.get("sensitivity", "medium")
-    if not databases:
-        return ""
-
-    lines = ["## Security Constraints"]
-    lines.append(f"- **Data sensitivity**: {sensitivity}")
-    lines.append(
-        "- **ALL database queries MUST use parameterized queries** "
-        "(no string concatenation)"
-    )
-    lines.append(
-        "- **Credentials MUST NOT be hardcoded** — use environment "
-        "variables or secrets managers"
-    )
-    lines.append("")
-    lines.append("### Database-Specific Guidance")
-    for store_id, info in databases.items():
-        db_type = info.get("type", "unknown")
-        lines.append(f"- **{store_id}** ({db_type})")
-        cred = info.get("credential_source")
-        if cred:
-            lines.append(f"  - Credential source: `{cred}`")
-        cl = info.get("client_library")
-        if cl:
-            lines.append(f"  - Client library: `{cl}`")
-        store_sensitivity = info.get("sensitivity", sensitivity)
-        if store_sensitivity == "high":
-            lines.append(
-                "  - HIGH sensitivity — require audit logging for all access"
-            )
-
-    return "\n".join(lines)
-
-
 def _build_exemplar_section(context: Dict[str, Any]) -> str:
     """Build the exemplar reference section (REQ-PEP-101).
 
@@ -600,6 +559,53 @@ def _build_import_conventions_section(context: Dict[str, Any]) -> str:
         f"{bad_examples}\n"
         "```\n"
     )
+
+
+def _build_security_guidance_section(context: Dict[str, Any]) -> str:
+    """Build database security guidance with language-specific parameterized query examples.
+
+    When the context includes a security_contract with client_libraries matching
+    known database libraries (Npgsql, Spanner, SqlClient), inject concrete
+    parameterized query examples for the target language.
+
+    Returns empty string when no database client libraries are detected.
+    """
+    security_contract = context.get("security_contract") or {}
+    client_libraries = security_contract.get("client_libraries", [])
+    if not client_libraries:
+        return ""
+
+    lines: List[str] = ["## Database Security Guidance\n"]
+    lines.append("Use ONLY parameterized queries. Never use string interpolation for SQL.\n")
+
+    matched = False
+    for cl in client_libraries:
+        if not isinstance(cl, str):
+            continue
+        cl_lower = cl.lower()
+        if "npgsql" in cl_lower:
+            lines.append(
+                "  - Use `NpgsqlCommand` with `@param` syntax: "
+                '`cmd.Parameters.AddWithValue("@id", id)`'
+            )
+            matched = True
+        elif "spanner" in cl_lower:
+            lines.append(
+                "  - Use `SpannerCommand` with `SpannerDbType` params: "
+                '`{ "id", SpannerDbType.String, id }`'
+            )
+            matched = True
+        elif "sqlclient" in cl_lower or "microsoft.data" in cl_lower:
+            lines.append(
+                "  - Use `SqlCommand` with `@param` syntax: "
+                '`cmd.Parameters.AddWithValue("@id", id)`'
+            )
+            matched = True
+
+    if not matched:
+        return ""
+
+    return "\n".join(lines)
 
 
 def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) -> str:
@@ -991,13 +997,33 @@ def build_spec_prompt(
         if project_section:
             prioritized.append((0, "project_context", project_section))
 
-    # P1: Kaizen quality hints from prior run analysis
+    # Kaizen quality hints from prior run analysis.
+    # Security-related hints (sql_injection, parameterized queries) are escalated
+    # to P0 so they survive budget enforcement; other hints remain P1.
     if kaizen_hints and isinstance(kaizen_hints, str) and kaizen_hints.strip():
-        kaizen_section = (
-            "## Quality Hints (from prior run analysis)\n\n"
-            f"{kaizen_hints.strip()}"
-        )
-        prioritized.append((1, "kaizen_hints", kaizen_section))
+        security_hints: List[str] = []
+        quality_hints: List[str] = []
+        for hint_line in kaizen_hints.strip().splitlines():
+            stripped = hint_line.strip()
+            if not stripped:
+                continue
+            if "sql_injection" in stripped.lower() or "parameterized" in stripped.lower():
+                security_hints.append(stripped)
+            else:
+                quality_hints.append(stripped)
+
+        if security_hints:
+            sec_section = (
+                "## Security Constraints (from prior run — P0)\n\n"
+                + "\n".join(security_hints)
+            )
+            prioritized.append((0, "kaizen_security", sec_section))
+        if quality_hints:
+            qual_section = (
+                "## Quality Hints (from prior run analysis)\n\n"
+                + "\n".join(quality_hints)
+            )
+            prioritized.append((1, "kaizen_hints", qual_section))
 
     # P1: Proven exemplar reference (REQ-PEP-101)
     exemplar_section = _build_exemplar_section(context)
@@ -1029,16 +1055,16 @@ def build_spec_prompt(
     if import_conv_section:
         prioritized.append((1, "import_conventions", import_conv_section))
 
-    # P1: Security guidance from security contract (REQ-ICD-106)
-    security_section = _build_security_guidance_section(context)
-    if security_section:
-        prioritized.append((1, "security_guidance", security_section))
-
     # P1: Requirements and protocol guidance
     if requirements_context:
         prioritized.append((1, "requirements_ctx", f"## Requirements Context\n{requirements_context}"))
     if protocol_guidance:
         prioritized.append((1, "protocol", f"## Protocol Guidance\n{protocol_guidance}"))
+
+    # P0: Database security guidance with language-specific parameterized query examples
+    security_section = _build_security_guidance_section(context)
+    if security_section:
+        prioritized.append((0, "security_guidance", security_section))
 
     # P2: Anti-pattern guidance for env var handling (REQ-SV2-1400)
     anti_pattern_section = _build_anti_pattern_section(context, task_description)

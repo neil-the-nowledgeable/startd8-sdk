@@ -100,6 +100,37 @@ def check_bare_except_pass(tree: ast.AST) -> List[SemanticIssue]:
     return issues
 
 
+def check_block_scoped_namespace(
+    source: str,
+    file_path: str = "",
+) -> List[SemanticIssue]:
+    """Detect block-scoped namespace in C# file (prefer file-scoped for net8.0+).
+
+    File-scoped syntax (``namespace Foo.Bar;``) reduces nesting by one level
+    and is the preferred style for .NET 6+ / net8.0+ targets per REQ-KZ-CS-500b.
+    """
+    if not file_path.endswith(".cs"):
+        return []
+    import re
+
+    block_match = re.search(r"^namespace\s+[\w.]+\s*\{", source, re.MULTILINE)
+    if block_match:
+        line = source[: block_match.start()].count("\n") + 1
+        return [
+            SemanticIssue(
+                check="block_scoped_namespace",
+                severity="info",
+                message=(
+                    "Block-scoped namespace detected — prefer file-scoped "
+                    "syntax (`namespace Foo.Bar;`) for net8.0+ targets"
+                ),
+                line=line,
+                file_path=file_path,
+            )
+        ]
+    return []
+
+
 def check_phantom_dependencies(
     tree: ast.AST,
     known_packages: Optional[Set[str]] = None,
@@ -182,47 +213,25 @@ def run_semantic_checks(
     issues.extend(check_bare_except_pass(tree))
     issues.extend(check_phantom_dependencies(tree, known_packages))
 
-    return _stamp_file_path(issues, file_path)
+    # Stamp file_path on all issues
+    if file_path:
+        issues = [
+            SemanticIssue(
+                check=i.check,
+                severity=i.severity,
+                message=i.message,
+                line=i.line,
+                file_path=file_path,
+            )
+            for i in issues
+        ]
+
+    return issues
 
 
 # ---------------------------------------------------------------------------
-# Helpers — shared across Python/C#/Java semantic check modules
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-def _stamp_file_path(
-    issues: List[SemanticIssue],
-    file_path: Optional[str],
-) -> List[SemanticIssue]:
-    """Stamp ``file_path`` onto every issue if provided."""
-    if not file_path:
-        return issues
-    return [
-        SemanticIssue(
-            check=i.check,
-            severity=i.severity,
-            message=i.message,
-            line=i.line,
-            file_path=file_path,
-        )
-        for i in issues
-    ]
-
-
-def _is_comment_line(stripped: str) -> bool:
-    """Return True if a stripped line is a single-line comment start.
-
-    Catches ``//`` and ``/*`` at line start.  Does NOT handle mid-line
-    comments or multi-line ``/* ... */`` blocks — known limitation
-    shared by all language-specific semantic check modules.
-    """
-    return stripped.startswith("//") or stripped.startswith("/*")
-
-
-def _basename(file_path: str) -> str:
-    """Extract the filename from a path, handling both ``/`` and ``\\``."""
-    name = file_path.rsplit("/", 1)[-1]
-    return name.rsplit("\\", 1)[-1]
 
 
 def _is_main_guard(node: ast.If) -> bool:

@@ -766,7 +766,7 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
-                # REQ-PLI-CS-404: Deterministic .csproj generation
+                # REQ-CS-103: Deterministic .csproj generation
                 csproj_content = self._try_generate_csproj(
                     file_path, file_spec, context,
                 )
@@ -784,7 +784,7 @@ class MicroPrimeCodeGenerator:
                     )
                     continue
 
-                # REQ-PLI-CS-404: Deterministic .sln generation
+                # REQ-CS-104: Deterministic .sln generation
                 sln_content = self._try_generate_sln(
                     file_path, file_spec, context,
                 )
@@ -799,6 +799,24 @@ class MicroPrimeCodeGenerator:
                         "Micro Prime wrote .sln %s (deterministic, %d lines)",
                         file_path,
                         sln_content.count("\n") + 1,
+                    )
+                    continue
+
+                # Deterministic appsettings.json generation
+                appsettings_content = self._try_generate_appsettings(
+                    file_path, context,
+                )
+                if appsettings_content is not None:
+                    output_path = self._output_dir / file_path
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(appsettings_content, encoding="utf-8")
+                    st.generated_files.append(output_path)
+                    st.written_file_paths.add(file_path)
+                    st.effective_file_count += 1
+                    logger.info(
+                        "Micro Prime wrote appsettings.json %s (deterministic, %d lines)",
+                        file_path,
+                        appsettings_content.count("\n") + 1,
                     )
                     continue
 
@@ -2103,63 +2121,53 @@ class MicroPrimeCodeGenerator:
         file_spec: Any,
         context: Dict[str, Any],
     ) -> Optional[str]:
-        """Try deterministic .csproj generation from seed metadata (REQ-PLI-CS-404).
+        """Try deterministic .csproj generation from seed metadata (REQ-CS-103).
 
-        Returns .csproj content string, or None if the file is not a .csproj
-        or if generation cannot proceed (missing metadata).
+        Returns .csproj XML content string, or None if the file is not a
+        .csproj or if generation cannot proceed.
         """
         if not file_path.endswith(".csproj"):
             return None
 
         try:
-            from startd8.languages.csharp import CSharpLanguageProfile
-        except ImportError:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("csharp")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
             return None
-
-        profile = CSharpLanguageProfile()
-
-        # Extract module path from file_spec or infer from directory
-        module_path = ""
-        if file_spec is not None:
-            meta = getattr(file_spec, "metadata", None) or {}
-            if isinstance(meta, dict):
-                module_path = meta.get("module_path", "")
-
-        if not module_path:
-            parts = Path(file_path).parent.parts
-            if parts:
-                module_path = ".".join(parts)
 
         # Extract dependencies from context
         dependencies: List[str] = []
-        seed_deps = context.get("dependencies") or context.get("runtime_dependencies") or []
+        seed_deps = (
+            context.get("dependencies")
+            or context.get("runtime_dependencies")
+            or []
+        )
         if isinstance(seed_deps, list):
             dependencies = [str(d) for d in seed_deps if d]
 
-        # Extract metadata
+        # Extract metadata (target_framework, sdk_type, protobuf_items)
         metadata: Dict[str, Any] = {}
-        target_framework = context.get("target_framework")
-        if target_framework:
-            metadata["target_framework"] = target_framework
-        sdk_type = context.get("sdk_type")
-        if sdk_type:
-            metadata["sdk_type"] = sdk_type
         svc_meta = context.get("service_metadata")
         if isinstance(svc_meta, dict):
-            if not target_framework:
-                metadata["target_framework"] = svc_meta.get(
-                    "target_framework", "net8.0",
-                )
-            if not sdk_type:
-                metadata["sdk_type"] = svc_meta.get(
-                    "sdk_type", "Microsoft.NET.Sdk.Web",
-                )
+            for key in ("target_framework", "sdk_type", "protobuf_items"):
+                if key in svc_meta:
+                    metadata[key] = svc_meta[key]
 
-        service_name = Path(file_path).stem or "service"
+        if file_spec is not None:
+            spec_meta = getattr(file_spec, "metadata", None) or {}
+            if isinstance(spec_meta, dict):
+                for key in ("target_framework", "sdk_type", "protobuf_items"):
+                    if key in spec_meta and key not in metadata:
+                        metadata[key] = spec_meta[key]
+
         content = profile.generate_dependency_file(
             project_root=self._output_dir,
-            service_name=service_name,
-            module_path=module_path,
+            service_name=Path(file_path).stem or "service",
+            module_path="",
             dependencies=dependencies,
             metadata=metadata or None,
         )
@@ -2171,34 +2179,33 @@ class MicroPrimeCodeGenerator:
         file_spec: Any,
         context: Dict[str, Any],
     ) -> Optional[str]:
-        """Generate .sln file deterministically if metadata is available (REQ-PLI-CS-404).
+        """Try deterministic .sln generation from seed metadata (REQ-CS-104).
 
-        Scans target_files for .csproj entries and generates a Visual Studio
-        solution file referencing them.  Uses uuid5 seeded from project names
-        for reproducible GUIDs.
+        Returns .sln file content string, or None if the file is not a .sln
+        or if generation cannot proceed.
         """
         if not file_path.endswith(".sln"):
             return None
 
-        import uuid
-
         try:
-            from startd8.languages.csharp import CSharpLanguageProfile
-        except ImportError:
+            from startd8.languages.registry import LanguageRegistry
+
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get("csharp")
+            if profile is None:
+                return None
+        except (ImportError, AttributeError):
             return None
 
-        profile = CSharpLanguageProfile()
+        # Build project list from context
+        import uuid
 
-        # Namespace for deterministic GUIDs
-        _SLN_UUID_NAMESPACE = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
-
-        # Derive project entries from context
         projects: List[Dict[str, str]] = []
-        target_files = context.get("target_files") or []
-        for tf in target_files:
-            if isinstance(tf, str) and tf.endswith(".csproj"):
+        all_target = context.get("all_target_files") or []
+        for tf in all_target:
+            if tf.endswith(".csproj"):
                 proj_name = Path(tf).stem
-                proj_guid = "{" + str(uuid.uuid5(_SLN_UUID_NAMESPACE, proj_name)).upper() + "}"
+                proj_guid = "{" + str(uuid.uuid5(uuid.NAMESPACE_DNS, tf)).upper() + "}"
                 projects.append({
                     "name": proj_name,
                     "path": tf,
@@ -2206,10 +2213,58 @@ class MicroPrimeCodeGenerator:
                 })
 
         if not projects:
-            return None  # No .csproj files found
+            return None
 
-        solution_name = context.get("service_name", Path(file_path).stem)
-        return profile.generate_solution_file(solution_name, projects)
+        solution_name = Path(file_path).stem
+        content = profile.generate_solution_file(
+            solution_name=solution_name,
+            projects=projects,
+        )
+        return content
+
+    def _try_generate_appsettings(
+        self,
+        file_path: str,
+        context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Generate appsettings.json for ASP.NET Core projects.
+
+        Returns JSON config string, or None if the file is not appsettings.json.
+        """
+        if Path(file_path).name != "appsettings.json":
+            return None
+
+        config: Dict[str, Any] = {
+            "Logging": {
+                "LogLevel": {
+                    "Default": "Information",
+                    "Microsoft.AspNetCore": "Warning",
+                }
+            },
+            "AllowedHosts": "*",
+        }
+
+        # Add database-specific config from context
+        security_contract = context.get("security_contract")
+        if isinstance(security_contract, dict):
+            databases = security_contract.get("databases")
+            if isinstance(databases, dict):
+                for _db_id, db_info in databases.items():
+                    if not isinstance(db_info, dict):
+                        continue
+                    db_type = str(db_info.get("type", "")).lower()
+                    if "redis" in db_type:
+                        config["Redis"] = {
+                            "ConfigurationString": "redis-cart:6379",
+                        }
+                    elif "spanner" in db_type:
+                        config["Spanner"] = {
+                            "Project": "",
+                            "Instance": "",
+                            "Database": "",
+                        }
+
+        return json.dumps(config, indent=2) + "\n"
 
     def _generate_requirements_in(
         self,
