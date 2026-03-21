@@ -139,8 +139,8 @@ class TestGoProfile:
         p = GoLanguageProfile()
         assert p.lint_command is None
 
-    def test_repair_disabled(self):
-        assert GoLanguageProfile().repair_enabled is False
+    def test_repair_enabled(self):
+        assert GoLanguageProfile().repair_enabled is True
 
     def test_merge_strategy_simple(self):
         assert GoLanguageProfile().merge_strategy_preference == "simple"
@@ -172,8 +172,8 @@ class TestJavaProfile:
     def test_supports_java(self):
         assert JavaLanguageProfile().supports_extension(".java")
 
-    def test_repair_disabled(self):
-        assert JavaLanguageProfile().repair_enabled is False
+    def test_repair_enabled(self):
+        assert JavaLanguageProfile().repair_enabled is True
 
     def test_build_files_include_gradle(self):
         p = JavaLanguageProfile()

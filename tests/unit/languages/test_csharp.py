@@ -19,9 +19,14 @@ import pytest
 class TestCSharpBypass:
     """Verify .cs, .csproj, .sln bypass Python AST parsing."""
 
-    def test_cs_is_non_python_in_engine(self):
-        from startd8.micro_prime.engine import _is_non_python_file
-        assert _is_non_python_file("src/CartService.cs") is True
+    def test_cs_handled_by_microprime_when_enabled(self):
+        """With CSHARP_MICROPRIME_ENABLED=True, .cs is NOT non-Python (MicroPrime handles it)."""
+        from startd8.micro_prime.engine import _is_non_python_file, CSHARP_MICROPRIME_ENABLED
+        # .cs behavior depends on feature flag — when enabled, MicroPrime handles .cs
+        if CSHARP_MICROPRIME_ENABLED:
+            assert _is_non_python_file("src/CartService.cs") is False
+        else:
+            assert _is_non_python_file("src/CartService.cs") is True
 
     def test_csproj_is_non_python_in_engine(self):
         from startd8.micro_prime.engine import _is_non_python_file
@@ -46,9 +51,10 @@ class TestCSharpBypass:
         from startd8.implementation_engine.drafter import _is_config_or_data_file
         assert _is_config_or_data_file("cartservice.sln") is True
 
-    def test_feature_flag_default_off(self):
+    def test_feature_flag_enabled(self):
+        """C# MicroPrime is enabled (was off, now on after language parity work)."""
         from startd8.micro_prime.engine import CSHARP_MICROPRIME_ENABLED
-        assert CSHARP_MICROPRIME_ENABLED is False
+        assert CSHARP_MICROPRIME_ENABLED is True
 
     def test_cs_bypass_with_flag_on(self, monkeypatch):
         """When CSHARP_MICROPRIME_ENABLED is True, .cs files are NOT non-Python."""
@@ -103,8 +109,8 @@ class TestCSharpLanguageProfile:
     def test_merge_strategy_simple(self, profile):
         assert profile.merge_strategy_preference == "simple"
 
-    def test_repair_disabled(self, profile):
-        assert profile.repair_enabled is False
+    def test_repair_enabled(self, profile):
+        assert profile.repair_enabled is True
 
     def test_docker_images(self, profile):
         assert "dotnet" in profile.docker_base_image

@@ -3600,6 +3600,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # AC-R1: Typed config replaces 30+ config.get() calls.
         cfg = PlanIngestionConfig.from_dict(config)
+        self._cfg = cfg  # Store for _phase_emit compat wrapper
 
         # Local aliases for the most-referenced fields (used dozens of times
         # across phase methods that receive them as parameters).

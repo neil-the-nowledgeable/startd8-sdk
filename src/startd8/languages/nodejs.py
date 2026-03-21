@@ -461,7 +461,7 @@ class NodeLanguageProfile:
         lines: list[str] = []
         for line in source.splitlines():
             stripped = line.strip()
-            if re.match(r"^(?:import\s|const\s+\w+\s*=\s*require\(|let\s+\w+\s*=\s*require\(|var\s+\w+\s*=\s*require\()", stripped):
+            if re.match(r"^(?:import\s|(?:const|let|var)\s+(?:\w+|\{[^}]*\})\s*=\s*require\()", stripped):
                 lines.append(stripped)
         return lines
 

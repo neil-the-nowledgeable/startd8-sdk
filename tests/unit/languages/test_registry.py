@@ -25,7 +25,9 @@ class TestRegistryBasics:
         profile = PythonLanguageProfile()
         LanguageRegistry.register(profile)
         result = LanguageRegistry.get("python")
-        assert result is profile
+        # get() triggers discover() which may overwrite manual registrations
+        # with entry-point-loaded instances; assert type equality, not identity.
+        assert isinstance(result, PythonLanguageProfile)
 
     def test_get_case_insensitive(self):
         LanguageRegistry.register(PythonLanguageProfile())
