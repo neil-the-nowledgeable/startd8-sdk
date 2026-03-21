@@ -580,10 +580,11 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
     "import_resolution": {
         "phase": "draft",
         "hint": (
-            "Import protobuf-generated classes with PascalCase matching the "
-            ".proto message name (e.g., ListRecommendationsRequest, not "
-            "listrecommendationsrequest). Use the exact module path from "
-            "the generated *_pb2.py or *_pb2_grpc.py file."
+            "Verify all import module paths match the actual file and package "
+            "structure. For protobuf-generated classes, use PascalCase matching "
+            "the .proto message name (e.g., ListRecommendationsRequest). For "
+            "intra-package imports, use the correct dotted path relative to "
+            "the package root."
         ),
     },
 }

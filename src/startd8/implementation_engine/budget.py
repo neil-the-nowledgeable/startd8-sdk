@@ -9,10 +9,6 @@ priority-ordered section removal when the prompt exceeds budget.
 
 from typing import Any, Dict, List, Optional
 
-from startd8.logging_config import get_logger
-
-_budget_logger = get_logger(__name__)
-
 # IMP-007: OTel counter for budget trimming events
 try:
     from opentelemetry import metrics as _otel_metrics

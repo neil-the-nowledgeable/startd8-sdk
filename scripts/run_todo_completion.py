@@ -105,7 +105,7 @@ def build_config(args: argparse.Namespace) -> dict[str, Any]:
                     "PyYAML not available — cannot load observability manifest %s",
                     obs_path,
                 )
-            except (OSError, Exception) as exc:
+            except Exception as exc:
                 logging.getLogger("run_todo_completion").warning(
                     "Could not load observability manifest %s: %s",
                     obs_path, exc,
