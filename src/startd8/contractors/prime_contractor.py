@@ -62,12 +62,11 @@ VALID_EXECUTION_MODES: frozenset = VALID_MODES
 #: required to trigger pipeline mode during auto-detection.
 _DETECTION_THRESHOLD: int = 1
 
-#: Plan document load cap (PC-B5). Reduces from 60KB to 16KB for token savings.
+# Backward-compat defaults — canonical source is PrimeContractorConfig
+#: Plan document load cap (PC-B5). Use config.plan_load_max_bytes
 _PLAN_LOAD_MAX_BYTES: int = 16_384
 
-#: CR-C1: Minimum quality score for accepting generation results from
-#: generators that lack an internal review loop.  Results below this
-#: threshold trigger an error-informed regeneration attempt.
+#: CR-C1: Minimum quality score. Use config.quality_gate.min_score
 _MIN_QUALITY_SCORE: int = 60
 
 #: CR-C1: Quality score assumed when a generator does not provide one.
@@ -463,7 +462,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, prime_config: Optional[Any]=None):
         """
         Initialize the Prime Contractor workflow.
 
@@ -491,7 +490,12 @@ class PrimeContractorWorkflow:
             strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
             walkthrough: If True, persist all LLM prompts without making API calls
             edit_min_pct: Min % of existing lines in edit output (PC-Q3, default: 80)
+            prime_config: Optional PrimeContractorConfig for consolidated settings
         """
+        # Consolidated config (F-AC-02) — import lazily to avoid circular deps
+        from .prime_contractor_config import PrimeContractorConfig
+
+        self._prime_config: PrimeContractorConfig = prime_config or PrimeContractorConfig()
         self.project_root = project_root or Path.cwd()
         self.edit_min_pct = edit_min_pct
         self.dry_run = dry_run
@@ -539,6 +543,9 @@ class PrimeContractorWorkflow:
             check_truncation=self.check_truncation,
             strict_checkpoints=self.strict_checkpoints,
             repair_config=self._repair_config,
+            size_regression_threshold=self._prime_config.integration.size_regression_threshold,
+            min_lines=self._prime_config.integration.min_lines,
+            element_retention_threshold=self._prime_config.integration.element_retention_threshold,
         )
         self._prime_listener = PrimeContractorListener(
             queue=self.queue,
@@ -1119,6 +1126,7 @@ class PrimeContractorWorkflow:
         state_dict["execution_mode"] = self.execution_mode
         return state_dict
 
+    # Backward-compat default — canonical source is PrimeContractorConfig.file_copy_timeout_s
     _FILE_COPY_READ_TIMEOUT_S: int = 30
 
     def _handle_file_copy(self, feature: FeatureSpec) -> Optional[GenerationResult]:
@@ -1182,11 +1190,11 @@ class PrimeContractorWorkflow:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_read_file)
             try:
-                source_content = future.result(timeout=self._FILE_COPY_READ_TIMEOUT_S)
+                source_content = future.result(timeout=self._prime_config.file_copy_timeout_s)
             except concurrent.futures.TimeoutError:
                 raise TimeoutError(
                     f"Reading copy source '{source_file}' timed out after "
-                    f"{self._FILE_COPY_READ_TIMEOUT_S}s"
+                    f"{self._prime_config.file_copy_timeout_s}s"
                 )
 
         # Write target into output_dir (consistent with normal generation paths)
@@ -1649,8 +1657,8 @@ class PrimeContractorWorkflow:
             else:
                 try:
                     _text = resolved.read_text(encoding="utf-8")
-                    # Cap at 16KB (PC-B5) to reduce spec prompt tokens
-                    self.plan_document_text = _text[:_PLAN_LOAD_MAX_BYTES]
+                    # Cap plan load (PC-B5) to reduce spec prompt tokens
+                    self.plan_document_text = _text[:self._prime_config.plan_load_max_bytes]
                 except OSError as exc:
                     logger.warning(
                         "Could not load plan document %s: %s", plan_doc_path, exc,
@@ -3828,9 +3836,10 @@ class PrimeContractorWorkflow:
 
         Returns True if quality is acceptable (or unscored), False if rejected.
         """
+        min_score = self._prime_config.quality_gate.min_score
         if not (result.success and result.quality_score is not None):
             return True
-        if result.quality_score >= _MIN_QUALITY_SCORE:
+        if result.quality_score >= min_score:
             return True
 
         logger.warning(
@@ -3838,11 +3847,11 @@ class PrimeContractorWorkflow:
             "marking for regeneration",
             feature.name,
             result.quality_score,
-            _MIN_QUALITY_SCORE,
+            min_score,
             extra={
                 "feature_name": feature.name,
                 "quality_score": result.quality_score,
-                "quality_threshold": _MIN_QUALITY_SCORE,
+                "quality_threshold": min_score,
                 "model": result.model,
             },
         )
@@ -3850,7 +3859,7 @@ class PrimeContractorWorkflow:
         quality_feedback = result.metadata.get("review_feedback", "")
         error_msg = (
             f"Quality score {result.quality_score}/100 below threshold "
-            f"{_MIN_QUALITY_SCORE}."
+            f"{min_score}."
         )
         if quality_feedback:
             error_msg += f" Review feedback: {quality_feedback[:500]}"

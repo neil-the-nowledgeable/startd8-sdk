@@ -242,7 +242,8 @@ class CSharpLanguageProfile:
 
     @property
     def repair_enabled(self) -> bool:
-        return False
+        # REQ-KZ-CS-400a/400b: Phase 1-2 repair (fence strip + dotnet format)
+        return True
 
     @property
     def docker_base_image(self) -> str:
@@ -575,13 +576,28 @@ class CSharpLanguageProfile:
             "- No unused using directives",
             "- Every using must end with `;`",
             "",
-            "**C# structural rules:**",
+            "**C# structural rules (MANDATORY):**",
+            "- **PascalCase namespaces** matching directory structure "
+            "(e.g., `src/CartService/Services/` → `namespace CartService.Services;`)",
             "- PascalCase for types, methods, and public members",
             "- camelCase for local variables and private fields (prefix with `_`)",
-            "- Enable nullable reference types (`#nullable enable` or via .csproj)",
+            "- **File-scoped namespaces REQUIRED**: `namespace Foo.Bar;` "
+            "(NEVER block-scoped `namespace Foo.Bar { ... }`)",
+            "- Enable nullable reference types (`<Nullable>enable</Nullable>` in .csproj)",
             "- Prefer async/await for I/O-bound operations",
             "- Use `using` declarations for IDisposable resources",
-            "- Use file-scoped namespaces: `namespace Foo.Bar;` (NOT `namespace Foo.Bar { ... }`)",
+            "",
+            "**Logging (MANDATORY for service classes):**",
+            "- Constructor-inject `ILogger<T>` — do NOT use `Console.WriteLine()`",
+            "- Use `_logger.LogInformation()` for lifecycle events",
+            "- Use `_logger.LogError(ex, \"message\")` for exception handling",
+            "- Use `_logger.LogWarning()` for degraded-but-functional paths",
+            "- Example: `private readonly ILogger<CartService> _logger;`",
+            "",
+            "**Exception handling:**",
+            "- NEVER use empty catch blocks (`catch { }` or `catch (Exception) { }`)",
+            "- Always log the exception or rethrow",
+            "- Prefer `catch (SpecificException ex)` over `catch (Exception ex)`",
         ])
 
         # REQ-CS-601: Dockerfile context for .NET services

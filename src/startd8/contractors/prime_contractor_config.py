@@ -14,7 +14,15 @@ Config file schema:
         "lead": "anthropic:claude-sonnet-4-5-20250514",
         "drafter": null,
         "tier3": null
-      }
+      },
+      "integration": {
+        "size_regression_threshold": 0.60,
+        "min_lines": 50,
+        "element_retention_threshold": 0.80
+      },
+      "quality_gate": { "min_score": 60 },
+      "plan_load_max_bytes": 16384,
+      "file_copy_timeout_s": 30
     }
 
 All sections are optional. Missing sections use defaults.
@@ -31,6 +39,22 @@ from typing import Any, Optional
 from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class IntegrationConfig:
+    """Integration engine settings (was hardcoded in integration_engine.py)."""
+
+    size_regression_threshold: float = 0.60
+    min_lines: int = 50
+    element_retention_threshold: float = 0.80
+
+
+@dataclass
+class QualityGateConfig:
+    """Quality gate settings (was hardcoded in prime_contractor.py)."""
+
+    min_score: int = 60
 
 
 @dataclass
@@ -66,6 +90,12 @@ class PrimeContractorConfig:
 
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     agents: AgentConfig = field(default_factory=AgentConfig)
+    integration: IntegrationConfig = field(default_factory=IntegrationConfig)
+    quality_gate: QualityGateConfig = field(default_factory=QualityGateConfig)
+
+    # Top-level settings (was hardcoded in prime_contractor.py)
+    plan_load_max_bytes: int = 16_384
+    file_copy_timeout_s: int = 30
 
     # Top-level flags
     micro_prime_enabled: bool = False
@@ -154,6 +184,26 @@ def _parse_config(raw: dict[str, Any]) -> PrimeContractorConfig:
             tier3=ag.get("tier3"),
         )
 
+    # Integration section
+    integ = raw.get("integration", {})
+    if isinstance(integ, dict):
+        config.integration = IntegrationConfig(
+            size_regression_threshold=integ.get("size_regression_threshold", 0.60),
+            min_lines=integ.get("min_lines", 50),
+            element_retention_threshold=integ.get("element_retention_threshold", 0.80),
+        )
+
+    # Quality gate section
+    qg = raw.get("quality_gate", {})
+    if isinstance(qg, dict):
+        config.quality_gate = QualityGateConfig(
+            min_score=qg.get("min_score", 60),
+        )
+
+    # Top-level settings
+    config.plan_load_max_bytes = raw.get("plan_load_max_bytes", 16_384)
+    config.file_copy_timeout_s = raw.get("file_copy_timeout_s", 30)
+
     return config
 
 
@@ -224,5 +274,13 @@ def apply_cli_overrides(
         config.agents.lead = args.lead_agent
     if getattr(args, "drafter_agent", None):
         config.agents.drafter = args.drafter_agent
+
+    # Quality gate overrides
+    if getattr(args, "min_quality_score", None) is not None:
+        config.quality_gate.min_score = args.min_quality_score
+
+    # Plan load cap override
+    if getattr(args, "plan_max_bytes", None) is not None:
+        config.plan_load_max_bytes = args.plan_max_bytes
 
     return config

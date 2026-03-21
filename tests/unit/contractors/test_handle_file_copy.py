@@ -30,10 +30,15 @@ class TestHandleFileCopyOutputDir:
         """Build a minimal mock PrimeContractorWorkflow for _handle_file_copy."""
         from startd8.contractors.prime_contractor import PrimeContractorWorkflow
 
+        from startd8.contractors.prime_contractor_config import PrimeContractorConfig
+
         mock = MagicMock(spec=PrimeContractorWorkflow)
         mock.project_root = project_root
         mock.queue = _FakeFeatureQueue()
         mock._FILE_COPY_READ_TIMEOUT_S = 5
+        pc = PrimeContractorConfig()
+        pc.file_copy_timeout_s = 5
+        mock._prime_config = pc
 
         # Wire _resolve_output_dir to return the test output_dir
         mock._resolve_output_dir = MagicMock(return_value=output_dir)

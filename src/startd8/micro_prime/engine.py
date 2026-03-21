@@ -1572,6 +1572,7 @@ class MicroPrimeEngine:
         metrics_collector: Optional metrics collector for observability.
     """
 
+    # Backward-compat defaults — canonical source is MicroPrimeConfig
     _CIRCUIT_BREAKER_THRESHOLD: int = 8   # per-file (raised from 3: run-038 showed 3 is too aggressive for files with many elements)
     _RUN_BREAKER_THRESHOLD: int = 12     # per-run (E1: cross-file systemic failure; raised proportionally)
     _TIER_PRIORITY: dict[TierClassification, int] = {
@@ -1600,6 +1601,9 @@ class MicroPrimeEngine:
             from startd8.languages.python import PythonLanguageProfile
             language_profile = PythonLanguageProfile()
         self._language_profile = language_profile
+        # Circuit breaker thresholds from config (canonical source)
+        self._circuit_breaker_threshold = self._config.circuit_breaker_per_file
+        self._run_breaker_threshold = self._config.circuit_breaker_per_run
         # Circuit breaker state (R3-S2 + E1)
         self._consecutive_failures: int = 0       # per-file, reset between files
         self._run_consecutive_failures: int = 0   # per-run (E1), persists across files
@@ -1656,7 +1660,7 @@ class MicroPrimeEngine:
         """True if either per-file or per-run breaker is tripped (E1)."""
         return (
             self._file_circuit_open
-            or self._run_consecutive_failures >= self._RUN_BREAKER_THRESHOLD
+            or self._run_consecutive_failures >= self._run_breaker_threshold
         )
 
     def _record_local_failure(self) -> None:
@@ -1669,7 +1673,7 @@ class MicroPrimeEngine:
         self._consecutive_failures += 1
         self._run_consecutive_failures += 1
         if (
-            self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
+            self._consecutive_failures >= self._circuit_breaker_threshold
             and not self._file_circuit_open
         ):
             self._file_circuit_open = True
@@ -1677,7 +1681,7 @@ class MicroPrimeEngine:
                 "Circuit breaker tripped (per-file): %d consecutive local failures",
                 self._consecutive_failures,
             )
-        if self._run_consecutive_failures == self._RUN_BREAKER_THRESHOLD:
+        if self._run_consecutive_failures == self._run_breaker_threshold:
             logger.warning(
                 "Circuit breaker tripped (per-run): %d consecutive failures across files",
                 self._run_consecutive_failures,
@@ -1867,7 +1871,7 @@ class MicroPrimeEngine:
                 build_escalation_context(
                     element_name=element.name, file_path=file_path, tier=tier,
                     reason=EscalationReason.CIRCUIT_BREAKER,
-                    detail=f"Circuit breaker tripped after {self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures",
+                    detail=f"Circuit breaker tripped after {self._circuit_breaker_threshold} consecutive failures",
                 ),
                 generation_strategy="circuit_breaker",
             )

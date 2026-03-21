@@ -496,6 +496,7 @@ def main() -> int:
         cli_mode=args.mode,
         walkthrough=args.walkthrough,
         repair_config=repair_config,
+        prime_config=pc_config,
     )
 
     # Load features from seed

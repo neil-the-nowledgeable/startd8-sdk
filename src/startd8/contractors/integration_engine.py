@@ -39,7 +39,7 @@ try:
 except ImportError:
     _HAS_REPAIR = False
 
-# PCA-604: Size regression guard thresholds (configurable).
+# Backward-compat defaults — canonical source is PrimeContractorConfig.integration
 _INTEGRATION_SIZE_REGRESSION_THRESHOLD = 0.60
 _INTEGRATION_MIN_LINES = 50
 
@@ -151,6 +151,9 @@ class IntegrationEngine:
         strict_checkpoints: bool = False,
         repair_config: Optional[Any] = None,
         element_registry: Optional[Any] = None,
+        size_regression_threshold: float = _INTEGRATION_SIZE_REGRESSION_THRESHOLD,
+        min_lines: int = _INTEGRATION_MIN_LINES,
+        element_retention_threshold: float = 0.80,
     ) -> None:
         self.project_root = project_root
         self.merge_strategy = merge_strategy
@@ -163,7 +166,10 @@ class IntegrationEngine:
         self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
         # Phase 4: Manifest-based pre-merge diff
         self.manifest_registry: Any = None
-        self.element_retention_threshold: float = 0.80
+        self.element_retention_threshold: float = element_retention_threshold
+        # Size regression thresholds (from config or module defaults)
+        self._size_regression_threshold: float = size_regression_threshold
+        self._min_lines: int = min_lines
         # Repair pipeline (REQ-RPL-200)
         self._repair_config = repair_config
         # Element registry (ER-008)
@@ -1355,6 +1361,35 @@ class IntegrationEngine:
                             issue.message,
                             extra={"unit_id": unit.id},
                         )
+                    # REQ-KZ-CS-502: Using directive coverage check
+                    if fpath.suffix == ".cs":
+                        try:
+                            from startd8.languages.csharp_splicer import (
+                                check_using_coverage,
+                            )
+                            # Find the nearest .csproj for this .cs file
+                            _csproj = None
+                            for _p in fpath.parent.iterdir():
+                                if _p.suffix == ".csproj":
+                                    _csproj = _p
+                                    break
+                            if _csproj is None:
+                                for _p in fpath.parent.parent.iterdir():
+                                    if _p.suffix == ".csproj":
+                                        _csproj = _p
+                                        break
+                            if _csproj is not None:
+                                _cov = check_using_coverage(
+                                    source, _csproj.read_text(encoding="utf-8"),
+                                )
+                                for _ci in _cov:
+                                    logger.warning(
+                                        "C# using coverage: %s",
+                                        _ci.get("message", str(_ci)),
+                                        extra={"unit_id": unit.id},
+                                    )
+                        except Exception:
+                            pass  # advisory — never block on using coverage
                 except Exception as exc:
                     logger.debug(
                         "C# semantic check failed for %s: %s", fpath, exc,
@@ -1985,12 +2020,12 @@ class IntegrationEngine:
                         _task_trunc_conf = _tf.get("max_confidence", 0.0)
 
                     from ..truncation_detection import CONFIDENCE_IS_TRUNCATED as _CIT
-                    effective_threshold = _INTEGRATION_SIZE_REGRESSION_THRESHOLD  # 0.60
+                    effective_threshold = self._size_regression_threshold  # 0.60
                     if _task_trunc_conf >= _CIT:  # 0.5
                         effective_threshold = 0.70  # AR-818: stricter when truncation detected
 
                     if (
-                        target_lines > _INTEGRATION_MIN_LINES
+                        target_lines > self._min_lines
                         and source_lines / target_lines < effective_threshold
                     ):
                         ratio = source_lines / target_lines

@@ -516,6 +516,9 @@ class MicroPrimeConfig(BaseModel):
     class_score_bonus: int = 1
     simple_threshold: int = 0
     docstring_length_threshold: int = 200
+    # Circuit breaker thresholds (was hardcoded in engine.py)
+    circuit_breaker_per_file: int = Field(default=8, ge=1, le=50)
+    circuit_breaker_per_run: int = Field(default=12, ge=1, le=100)
     # Decomposer settings (REQ-MP-908)
     # FALLBACK — decomposition is the primary source of accidental complexity
     # (decomposer 1,029 + splicer 856 + element repair 1,015 lines).

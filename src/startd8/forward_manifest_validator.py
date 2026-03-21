@@ -670,6 +670,20 @@ def _validate_csharp_file(
                 )
             # REQ-KZ-CS-500b: file-scoped namespace hint
             issues.extend(_csharp_namespace_style_issues(content))
+            # REQ-KZ-CS-200: C# semantic checks (empty catches, Console.WriteLine,
+            # async void, missing access modifiers, etc.) — feed into disk quality score
+            try:
+                from startd8.validators.csharp_semantic_checks import (
+                    run_csharp_semantic_checks,
+                )
+                for sem_issue in run_csharp_semantic_checks(content):
+                    issues.append({
+                        "category": sem_issue.check,
+                        "severity": sem_issue.severity,
+                        "message": sem_issue.message,
+                    })
+            except ImportError:
+                pass  # csharp_semantic_checks not available
             if issues:
                 result.semantic_issues = issues
             return result
