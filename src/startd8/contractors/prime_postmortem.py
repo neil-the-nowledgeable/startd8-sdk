@@ -577,6 +577,15 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "use a tag instead (e.g., python:3.12-slim)."
         ),
     },
+    "import_resolution": {
+        "phase": "draft",
+        "hint": (
+            "Import protobuf-generated classes with PascalCase matching the "
+            ".proto message name (e.g., ListRecommendationsRequest, not "
+            "listrecommendationsrequest). Use the exact module path from "
+            "the generated *_pb2.py or *_pb2_grpc.py file."
+        ),
+    },
 }
 
 
