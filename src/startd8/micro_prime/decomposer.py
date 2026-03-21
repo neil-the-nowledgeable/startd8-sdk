@@ -704,12 +704,26 @@ _GO_RESERVED = frozenset({
 from startd8.languages.csharp import _CSHARP_RESERVED
 from startd8.languages.java import _JAVA_RESERVED
 
+# JavaScript reserved words (ES2023+).
+_JS_RESERVED = frozenset({
+    "abstract", "arguments", "await", "boolean", "break", "byte", "case",
+    "catch", "char", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "double", "else", "enum", "eval", "export", "extends",
+    "false", "final", "finally", "float", "for", "function", "goto", "if",
+    "implements", "import", "in", "instanceof", "int", "interface", "let",
+    "long", "native", "new", "null", "package", "private", "protected",
+    "public", "return", "short", "static", "super", "switch", "synchronized",
+    "this", "throw", "throws", "transient", "true", "try", "typeof", "var",
+    "void", "volatile", "while", "with", "yield",
+})
+
 # Language-keyed reserved word lookup (MP-P2).
 _LANGUAGE_RESERVED: dict[str, frozenset[str]] = {
     "python": _PYTHON_RESERVED,
     "go": _GO_RESERVED,
     "java": _JAVA_RESERVED,
     "csharp": _CSHARP_RESERVED,
+    "nodejs": _JS_RESERVED,
 }
 
 # Responsibility clause separators (deterministic, no LLM).

@@ -547,6 +547,142 @@ _DUNDER_TEMPLATES: dict[str, Callable[[ForwardElementSpec], Optional[str]]] = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Go templates — deterministic code for common Go patterns
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _go_constructor_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go constructor: NewFoo / NewBar."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    return bool(elem.name.startswith("New") and len(elem.name) > 3 and elem.name[3].isupper())
+
+
+def _go_constructor_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    """Render Go constructor: return &StructName{field assignments}."""
+    struct_name = elem.name[3:]  # NewCartStore -> CartStore
+    if not elem.signature:
+        return f"return &{struct_name}{{}}"
+    params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+    if not params:
+        return f"return &{struct_name}{{}}"
+    fields = ", ".join(f"{p.name}: {p.name}" for p in params)
+    return f"return &{struct_name}{{{fields}}}"
+
+
+def _go_stringer_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go String() method (fmt.Stringer interface)."""
+    return elem.name == "String" and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+
+
+def _go_stringer_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    cls = elem.parent_class or "Object"
+    return f'return fmt.Sprintf("{cls}{{}}")'
+
+
+def _go_error_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go Error() method (error interface)."""
+    return elem.name == "Error" and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+
+
+def _go_error_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    cls = elem.parent_class or "error"
+    return f'return fmt.Sprintf("{cls}: %v", e)'
+
+
+def _go_close_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go Close() method (io.Closer interface)."""
+    return elem.name == "Close" and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+
+
+def _go_close_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    return "return nil"
+
+
+def _go_getter_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go getter: GetName / GetID (exported method, no params beyond receiver)."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    name = elem.name
+    return bool(name.startswith("Get") and len(name) > 3 and name[3].isupper())
+
+
+def _go_getter_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    """Render Go getter: return s.fieldName."""
+    name = elem.name
+    field_name = name[3:4].lower() + name[4:]
+    return f"return s.{field_name}"
+
+
+def _go_setter_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go setter: SetName / SetID."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    name = elem.name
+    return bool(name.startswith("Set") and len(name) > 3 and name[3].isupper())
+
+
+def _go_setter_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    """Render Go setter: s.fieldName = value."""
+    name = elem.name
+    field_name = name[3:4].lower() + name[4:]
+    param_name = field_name
+    if elem.signature:
+        params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+        if params:
+            param_name = params[0].name
+    return f"s.{field_name} = {param_name}"
+
+
+def _go_main_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Go main() function."""
+    return elem.name == "main" and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+
+
+def _go_main_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    return 'log.Println("starting server")'
+
+
+GO_TEMPLATES: list[CodeTemplate] = [
+    CodeTemplate(name="go_constructor", match_fn=_go_constructor_match, render_fn=_go_constructor_render),
+    CodeTemplate(name="go_stringer", match_fn=_go_stringer_match, render_fn=_go_stringer_render),
+    CodeTemplate(name="go_error", match_fn=_go_error_match, render_fn=_go_error_render),
+    CodeTemplate(name="go_close", match_fn=_go_close_match, render_fn=_go_close_render),
+    CodeTemplate(name="go_getter", match_fn=_go_getter_match, render_fn=_go_getter_render),
+    CodeTemplate(name="go_setter", match_fn=_go_setter_match, render_fn=_go_setter_render),
+    CodeTemplate(name="go_main", match_fn=_go_main_match, render_fn=_go_main_render),
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Java templates — deterministic code for common Java patterns
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -910,6 +1046,162 @@ CSHARP_TEMPLATES: list[CodeTemplate] = [
     CodeTemplate(name="csharp_tostring", match_fn=_csharp_tostring_match, render_fn=_csharp_tostring_render),
     CodeTemplate(name="csharp_dispose", match_fn=_csharp_dispose_match, render_fn=_csharp_dispose_render),
     CodeTemplate(name="csharp_async_method", match_fn=_csharp_async_method_match, render_fn=_csharp_async_method_render),
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Node.js templates — deterministic code for common JS/TS patterns
+# ═══════════════════════════════════════════════════════════════════════════
+
+# JavaScript reserved words (ES2023+)
+_JS_RESERVED: frozenset[str] = frozenset({
+    "abstract", "arguments", "await", "boolean", "break", "byte", "case",
+    "catch", "char", "class", "const", "continue", "debugger", "default",
+    "delete", "do", "double", "else", "enum", "eval", "export", "extends",
+    "false", "final", "finally", "float", "for", "function", "goto", "if",
+    "implements", "import", "in", "instanceof", "int", "interface", "let",
+    "long", "native", "new", "null", "package", "private", "protected",
+    "public", "return", "short", "static", "super", "switch", "synchronized",
+    "this", "throw", "throws", "transient", "true", "try", "typeof", "var",
+    "void", "volatile", "while", "with", "yield",
+})
+
+
+def _is_js_safe_identifier(name: str) -> bool:
+    """Check that *name* is a valid JavaScript identifier."""
+    return (
+        isinstance(name, str)
+        and name.isidentifier()
+        and name not in _JS_RESERVED
+    )
+
+
+def _js_constructor_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match JS class constructor."""
+    return (
+        elem.name == "constructor"
+        and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+        and bool(elem.parent_class)
+    )
+
+
+def _js_constructor_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    """Render JS constructor: this.field = param assignments."""
+    if not elem.signature:
+        return None
+    params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+    if not params:
+        return "// no-op constructor"
+    lines = []
+    for p in params:
+        if not _is_js_safe_identifier(p.name):
+            return None
+        lines.append(f"this.{p.name} = {p.name};")
+    return "\n".join(lines)
+
+
+def _js_tostring_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    return elem.name == "toString" and elem.kind in (ElementKind.METHOD, ElementKind.FUNCTION)
+
+
+def _js_tostring_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    cls = elem.parent_class or "Object"
+    return f"return `{cls}{{}}`;"
+
+
+def _js_getter_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match JS getter: getName / getItems."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    name = elem.name
+    return bool(name.startswith("get") and len(name) > 3 and name[3].isupper())
+
+
+def _js_getter_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    name = elem.name
+    field = name[3:4].lower() + name[4:]
+    if not _is_js_safe_identifier(field):
+        return None
+    return f"return this.{field};"
+
+
+def _js_setter_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match JS setter: setName / setItems."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    name = elem.name
+    return bool(name.startswith("set") and len(name) > 3 and name[3].isupper())
+
+
+def _js_setter_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    name = elem.name
+    field = name[3:4].lower() + name[4:]
+    if not _is_js_safe_identifier(field):
+        return None
+    param = field
+    if elem.signature:
+        params = [p for p in elem.signature.params if p.name not in ("self", "cls")]
+        if params:
+            param = params[0].name
+    return f"this.{field} = {param};"
+
+
+def _js_async_method_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match async methods (name ends with Async or has async decorator)."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION, ElementKind.ASYNC_METHOD, ElementKind.ASYNC_FUNCTION):
+        return False
+    return bool(
+        elem.kind in (ElementKind.ASYNC_METHOD, ElementKind.ASYNC_FUNCTION)
+        or elem.name.endswith("Async")
+    )
+
+
+def _js_async_method_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    return "throw new Error('not implemented');"
+
+
+def _js_express_handler_match(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> bool:
+    """Match Express route handler (common names)."""
+    if elem.kind not in (ElementKind.METHOD, ElementKind.FUNCTION):
+        return False
+    return elem.name in ("get", "post", "put", "delete", "patch", "handle", "handler")
+
+
+def _js_express_handler_render(
+    elem: ForwardElementSpec, _f: ForwardFileSpec, _c: list[InterfaceContract],
+) -> Optional[str]:
+    return "res.status(200).json({ status: 'ok' });"
+
+
+NODEJS_TEMPLATES: list[CodeTemplate] = [
+    CodeTemplate(name="js_constructor", match_fn=_js_constructor_match, render_fn=_js_constructor_render),
+    CodeTemplate(name="js_tostring", match_fn=_js_tostring_match, render_fn=_js_tostring_render),
+    CodeTemplate(name="js_getter", match_fn=_js_getter_match, render_fn=_js_getter_render),
+    CodeTemplate(name="js_setter", match_fn=_js_setter_match, render_fn=_js_setter_render),
+    CodeTemplate(name="js_async_method", match_fn=_js_async_method_match, render_fn=_js_async_method_render),
+    CodeTemplate(name="js_express_handler", match_fn=_js_express_handler_match, render_fn=_js_express_handler_render),
 ]
 
 
