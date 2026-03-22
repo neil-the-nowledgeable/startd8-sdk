@@ -650,6 +650,52 @@ class BatchPostMortemEvaluator:
 
         return "\n".join(lines)
 
+    def build_security_section(
+        self,
+        output_dir: str,
+        archived_run_dirs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Build batch-level security section from archived run metrics.
+
+        Reads ``kaizen-metrics.json`` security keys from each archived run
+        to track aggregate score trajectory and consecutive injection runs.
+
+        Args:
+            output_dir: Current run output directory.
+            archived_run_dirs: List of archived run directories (oldest first).
+
+        Returns:
+            Dict with aggregate_score_trajectory, consecutive_injection_runs,
+            and latest metrics.
+        """
+        run_dirs = archived_run_dirs or []
+        # Include current run
+        all_dirs = run_dirs + [output_dir]
+
+        scores: List[float] = []
+        consecutive_injection_max = 0
+
+        for rdir in all_dirs:
+            metrics_path = Path(rdir) / "kaizen-metrics.json"
+            if not metrics_path.is_file():
+                continue
+            try:
+                data = json.loads(metrics_path.read_text())
+                sec = data.get("security", {})
+                agg = sec.get("aggregate_score", 1.0)
+                scores.append(agg)
+                consec = sec.get("consecutive_injection_runs", 0)
+                if consec > consecutive_injection_max:
+                    consecutive_injection_max = consec
+            except (json.JSONDecodeError, OSError):
+                continue
+
+        return {
+            "aggregate_score_trajectory": [round(s, 4) for s in scores],
+            "consecutive_injection_runs_max": consecutive_injection_max,
+            "runs_with_security_data": len(scores),
+        }
+
     def write_outputs(
         self, report: BatchPostMortemReport, output_dir: str
     ) -> None:
@@ -660,6 +706,15 @@ class BatchPostMortemEvaluator:
         # JSON report
         report_path = out / "batch-postmortem-report.json"
         report_dict = dataclasses.asdict(report)
+
+        # Add security section if data available
+        try:
+            sec_section = self.build_security_section(output_dir)
+            if sec_section.get("runs_with_security_data", 0) > 0:
+                report_dict["security"] = sec_section
+        except Exception:
+            logger.debug("Batch security section skipped", exc_info=True)
+
         report_json = json.dumps(report_dict, indent=2, default=str)
         report_path.write_text(report_json, encoding="utf-8")
         logger.info("Batch post-mortem report: %s", report_path)

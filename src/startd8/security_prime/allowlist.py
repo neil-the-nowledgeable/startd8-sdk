@@ -45,7 +45,7 @@ def load_allowlist(project_root: str) -> List[Dict[str, str]]:
 
     try:
         data = yaml.safe_load(path.read_text())
-    except Exception as exc:
+    except (yaml.YAMLError, OSError) as exc:
         logger.warning("Failed to parse security_allowlist.yaml: %s", exc)
         return []
 
@@ -93,3 +93,46 @@ def is_allowlisted(
         if fnmatch.fnmatch(file_path, entry["file_pattern"]):
             return entry.get("justification", "allowlisted")
     return None
+
+
+def build_allowlist_metrics(
+    allowlist: List[Dict[str, str]],
+    hit_tracker: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Build allowlist effectiveness metrics for the gate report.
+
+    Args:
+        allowlist: Loaded allowlist entries.
+        hit_tracker: Map of file_pattern → list of matched file paths
+            collected during the gate run.
+
+    Returns:
+        Dict with total_entries, hit/unhit counts and details.
+    """
+    total = len(allowlist)
+    hit_entries: List[Dict[str, Any]] = []
+    unhit_entries: List[Dict[str, str]] = []
+
+    for entry in allowlist:
+        pattern = entry["file_pattern"]
+        matched_files = hit_tracker.get(pattern, [])
+        if matched_files:
+            hit_entries.append({
+                "file_pattern": pattern,
+                "check_id": entry["check_id"],
+                "justification": entry["justification"],
+                "matched_files": list(dict.fromkeys(matched_files)),  # dedupe
+            })
+        else:
+            unhit_entries.append({
+                "file_pattern": pattern,
+                "check_id": entry["check_id"],
+            })
+
+    return {
+        "total_entries": total,
+        "hit_count": len(hit_entries),
+        "unhit_count": len(unhit_entries),
+        "hit_entries": hit_entries,
+        "unhit_entries": unhit_entries,
+    }

@@ -1178,9 +1178,32 @@ class IntegrationEngine:
         try:
             from startd8.query_prime.security import verify_file
             from startd8.query_prime.decomposer import detect_database_type
-            from startd8.query_prime.models import SecurityVerdict
+            from startd8.query_prime.models import SecurityCheckType, SecurityVerdict
         except ImportError:
-            return  # query_prime not available — skip silently
+            # Write gate-skipped sentinel so consumers distinguish
+            # "all clean" from "never ran" (REQ-KSP-499 gap analysis)
+            try:
+                from startd8.security_prime.gate_metrics import write_gate_metrics_report
+                import datetime as _dt
+                skipped_report = {
+                    "schema_version": "1.0.0",
+                    "status": "skipped",
+                    "run_id": result_metadata.get(
+                        "run_id",
+                        f"skipped-{_dt.datetime.now().strftime('%H%M%S')}",
+                    ),
+                    "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    "reason": "query_prime not available",
+                    "files_checked": 0,
+                    "files_skipped": 0,
+                    "files_total": 0,
+                    "security_posture": "SKIPPED",
+                }
+                out_dir = str(self.project_root) if self.project_root else "."
+                write_gate_metrics_report(skipped_report, out_dir)
+            except (ImportError, OSError):
+                pass
+            return
 
         # Load allowlist for false-positive suppression
         allowlist = []
@@ -1191,7 +1214,9 @@ class IntegrationEngine:
         except ImportError:
             is_allowlisted = None  # type: ignore[assignment]
 
+        import fnmatch as _fnmatch
         import time as _time
+        from dataclasses import replace as _dc_replace
 
         gate_results = []
         enriched_entries: List[Dict[str, Any]] = []
@@ -1231,10 +1256,10 @@ class IntegrationEngine:
             verify_time_ms = (_time.monotonic() - t0) * 1000.0
 
             # Track checks that ran
-            for _finding in sv_result.findings:
-                checks_that_ran.add(_finding.check_type.value)
-                _ct = _finding.check_type.value
-                findings_by_check_type[_ct] = findings_by_check_type.get(_ct, 0) + 1
+            for finding_item in sv_result.findings:
+                checks_that_ran.add(finding_item.check_type.value)
+                ct_val = finding_item.check_type.value
+                findings_by_check_type[ct_val] = findings_by_check_type.get(ct_val, 0) + 1
 
             # Allowlist suppression: filter out operator-declared false positives
             was_allowlisted = False
@@ -1251,7 +1276,6 @@ class IntegrationEngine:
                         )
                         was_allowlisted = True
                         # Track allowlist hit for audit
-                        import fnmatch as _fnmatch
                         for al_entry in allowlist:
                             if (al_entry["check_id"] == finding.check_type.value
                                     and _fnmatch.fnmatch(str(fpath), al_entry["file_pattern"])):
@@ -1263,7 +1287,6 @@ class IntegrationEngine:
                         unsuppressed.append(finding)
                 # Recompute verdict with unsuppressed findings only
                 if len(unsuppressed) < len(sv_result.findings):
-                    from startd8.query_prime.models import SecurityCheckType
                     has_hard = any(
                         f.check_type in (SecurityCheckType.INJECTION, SecurityCheckType.CREDENTIAL_LEAKAGE)
                         and f.severity == "error"
@@ -1276,7 +1299,6 @@ class IntegrationEngine:
                     else:
                         new_verdict = SecurityVerdict.PASS
                     # Replace result with filtered version
-                    from dataclasses import replace as _dc_replace
                     sv_result = _dc_replace(
                         sv_result, findings=unsuppressed, verdict=new_verdict,
                     )
@@ -1298,10 +1320,18 @@ class IntegrationEngine:
             # Build enriched entry for gate report
             finding_types: Dict[str, int] = {}
             finding_severities: List[str] = []
+            structured_findings: List[Dict[str, Any]] = []
             for f in sv_result.findings:
                 _fct = f.check_type.value
                 finding_types[_fct] = finding_types.get(_fct, 0) + 1
                 finding_severities.append(f.severity)
+                structured_findings.append({
+                    "check_type": _fct,
+                    "severity": f.severity,
+                    "message": f.message,
+                    "line": f.line,
+                    "pattern_hash": getattr(f, "pattern_hash", ""),
+                })
 
             db_str = db_type.value if hasattr(db_type, "value") else str(db_type)
             enriched_entries.append({
@@ -1311,10 +1341,12 @@ class IntegrationEngine:
                 "findings_count": len(sv_result.findings),
                 "finding_types": finding_types,
                 "finding_severities": finding_severities,
+                "findings": structured_findings,
                 "database": db_str,
                 "language": language,
                 "timing_ms": verify_time_ms,
                 "allowlisted": was_allowlisted,
+                "prompt_security_features": result_metadata.get("prompt_security_features"),
             })
 
             # OTel recording
@@ -1393,7 +1425,9 @@ class IntegrationEngine:
                 from startd8.security_prime.gate_metrics import (
                     build_gate_verdict_report,
                     build_owasp_section,
+                    compute_component_contributions,
                     compute_score_distribution,
+                    compute_threshold_sensitivity,
                     write_gate_metrics_report,
                 )
                 from startd8.security_prime.allowlist import build_allowlist_metrics
@@ -1404,9 +1438,28 @@ class IntegrationEngine:
                 score_dist = compute_score_distribution(
                     [e["score"] for e in enriched_entries],
                 )
+                thresh_sens = compute_threshold_sensitivity(enriched_entries)
+                comp_contribs = compute_component_contributions(enriched_entries)
                 al_metrics = build_allowlist_metrics(
                     allowlist, allowlist_hit_tracker,
                 )
+
+                # Aggregate prompt security features for report
+                psf = result_metadata.get("prompt_security_features")
+                if psf:
+                    from startd8.security_prime.gate_metrics import compute_prompt_effectiveness
+                    security_sensitive_count = sum(
+                        1 for e in enriched_entries
+                        if (e.get("prompt_security_features") or {}).get("security_sensitive")
+                    )
+                    prompt_eff = compute_prompt_effectiveness(
+                        enriched_entries,
+                        security_sensitive_tasks=security_sensitive_count,
+                        p0_injected=psf.get("p0_injected", False),
+                        p1_databases=psf.get("p1_databases"),
+                    )
+                else:
+                    prompt_eff = None
 
                 import uuid as _uuid
                 run_id = result_metadata.get("run_id", str(_uuid.uuid4())[:8])
@@ -1416,6 +1469,9 @@ class IntegrationEngine:
                     allowlist_metrics=al_metrics,
                     owasp_data=owasp_section,
                     score_distribution=score_dist,
+                    threshold_sensitivity=thresh_sens,
+                    component_contributions=comp_contribs,
+                    prompt_effectiveness=prompt_eff,
                 )
                 out_dir = str(self.project_root) if self.project_root else "."
                 write_gate_metrics_report(gate_report, out_dir)

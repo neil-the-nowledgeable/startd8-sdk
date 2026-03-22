@@ -40,6 +40,7 @@ __all__ = [
     "build_constraint_block",
     "extract_spec_constraints",
     "format_context_value",
+    "extract_prompt_security_features",
 ]
 
 logger = get_logger(__name__)
@@ -1226,3 +1227,64 @@ def build_spec(
     )
 
     return spec
+
+
+def extract_prompt_security_features(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract prompt security feature metadata for gate correlation (REQ-KSP-499).
+
+    Returns a dict describing which security features were injected into
+    the spec/draft prompts for this task. This metadata flows through
+    result_metadata to the gate metrics builder for L5 measurement.
+
+    Args:
+        context: The gen_context dict used for prompt building.
+
+    Returns:
+        Dict with p0_injected, p1_databases, kaizen_hint_level,
+        security_sensitive, and detected_database.
+    """
+    security_sensitive = bool(context.get("security_sensitive"))
+    detected_database = context.get("detected_database") or ""
+    security_contract = context.get("security_contract") or {}
+    client_libraries = security_contract.get("client_libraries", [])
+
+    # P0 detection: same heuristic as _build_security_guidance_section
+    _DB_KEYWORDS = (
+        "alloydb", "postgres", "npgsql", "spanner", "mysql", "sqlite",
+        "database", "sql", "query", "cart_store", "cartstore",
+    )
+    desc = str(context.get("task_description", "")).lower()
+    files_str = " ".join(str(f) for f in (context.get("target_files") or [])).lower()
+    combined = desc + " " + files_str
+    p0_from_keywords = any(kw in combined for kw in _DB_KEYWORDS)
+    p0_injected = bool(client_libraries) or p0_from_keywords or security_sensitive
+
+    # P1 databases from security contract
+    p1_databases = []
+    contract_dbs = security_contract.get("databases", [])
+    for db in contract_dbs:
+        db_val = db.value if hasattr(db, "value") else str(db)
+        if db_val not in p1_databases:
+            p1_databases.append(db_val)
+    if detected_database and detected_database not in p1_databases:
+        p1_databases.append(detected_database)
+
+    # Kaizen hint level from kaizen hints content
+    kaizen_hints = context.get("kaizen_hints", "") or ""
+    kaizen_hint_level = "none"
+    if kaizen_hints:
+        lower_hints = kaizen_hints.lower()
+        if "critical" in lower_hints:
+            kaizen_hint_level = "critical"
+        elif "must" in lower_hints or "requirement" in lower_hints:
+            kaizen_hint_level = "requirement"
+        else:
+            kaizen_hint_level = "guidance"
+
+    return {
+        "p0_injected": p0_injected,
+        "p1_databases": p1_databases,
+        "kaizen_hint_level": kaizen_hint_level,
+        "security_sensitive": security_sensitive,
+        "detected_database": detected_database,
+    }
