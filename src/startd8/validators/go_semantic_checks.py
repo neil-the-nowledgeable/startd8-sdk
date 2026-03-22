@@ -1,12 +1,12 @@
 """Go semantic validation — regex-based checks for generated Go code.
 
-No external tool dependency.  Four checks:
+No external tool dependency.  Six checks:
 1. Unchecked errors (err returned but not checked)
 2. Duplicate function names in same file
 3. fmt.Println in non-main packages (should use structured logging)
 4. Wildcard dot-imports (import . "pkg")
-
-Known limitation: comment skip only catches ``//`` at line start.
+5. Python contamination (cross-language fingerprints)
+6. Package/directory name mismatch
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from ..languages._validation_utils import GO_CONTAMINATION_FINGERPRINTS
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 # Pattern: function call with err return that's not checked
@@ -162,20 +163,68 @@ def _check_dot_imports(source: str) -> List[SemanticIssue]:
 
 
 def _check_python_contamination(source: str) -> List[SemanticIssue]:
-    """Flag Python fingerprints in Go source files (REQ-KZ-GO-201)."""
-    _PY_FINGERPRINTS = (
-        "def ", "import os", "from __future__", "print(", "self.",
-        "#!/usr/bin/env python",
-    )
+    """Flag Python fingerprints in Go source files (REQ-KZ-GO-201).
+
+    Uses line-level scanning with context awareness (REQ-KZ-GO-402b):
+    - Skips lines inside backtick-delimited raw string literals.
+    - Skips matches after ``//`` on the same line.
+    - Tracks ``/* ... */`` block comment state.
+    - Reports ALL matching fingerprints (REQ-KZ-GO-402a item 3).
+    """
     issues: List[SemanticIssue] = []
-    for fp in _PY_FINGERPRINTS:
-        if fp in source:
-            issues.append(SemanticIssue(
-                check="python_contamination",
-                severity="error",
-                message=f"Python fingerprint `{fp.strip()}` in Go file — file is non-functional",
-            ))
-            break  # One fingerprint is enough to flag
+    seen: set[str] = set()
+    in_raw_string = False
+    in_block_comment = False
+
+    for i, line in enumerate(source.splitlines(), start=1):
+        # Track block comment state
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+                # Fall through to check code after */ on this line
+                line = line[line.index("*/") + 2:]
+            else:
+                continue
+        if "/*" in line:
+            if "*/" in line:
+                # Single-line block comment — remove it, check remainder
+                start = line.index("/*")
+                end = line.index("*/") + 2
+                line = line[:start] + line[end:]
+            else:
+                in_block_comment = True
+                # Check code before /* on this line
+                line = line[:line.index("/*")]
+
+        # Track backtick raw string state (toggle per backtick)
+        backtick_count = line.count("`")
+        if in_raw_string:
+            if backtick_count % 2 == 1:
+                in_raw_string = False
+            continue
+        if backtick_count % 2 == 1:
+            in_raw_string = True
+            # Still check the part before the backtick
+            check_line = line[:line.index("`")]
+        else:
+            check_line = line
+
+        # Strip inline comments for matching
+        comment_pos = check_line.find("//")
+        check_text = check_line[:comment_pos] if comment_pos >= 0 else check_line
+        stripped = check_text.strip()
+        if not stripped:
+            continue
+
+        for fp in GO_CONTAMINATION_FINGERPRINTS:
+            if fp in stripped and fp not in seen:
+                seen.add(fp)
+                issues.append(SemanticIssue(
+                    check="python_contamination",
+                    severity="error",
+                    message=f"Python fingerprint `{fp.strip()}` in Go file — file is non-functional",
+                    line=i,
+                ))
     return issues
 
 

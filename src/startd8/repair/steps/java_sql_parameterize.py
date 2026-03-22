@@ -27,30 +27,21 @@ from ..models import ElementContext, RepairContext, RepairStepResult
 # SQL keywords that indicate a SQL string (case-insensitive check).
 _SQL_KEYWORDS = ("SELECT ", "INSERT ", "UPDATE ", "DELETE ", "MERGE ")
 
-# Pattern 1: String concatenation with SQL keywords.
-# Matches:  "SELECT ... WHERE col=" + variable
-#           "SELECT ... WHERE col='" + variable + "'"
-# Captures the full statement line(s) containing string concat with SQL.
-_CONCAT_SQL_RE = re.compile(
-    r"""^(\s*)(.+?=\s*"(?:[^"]*(?:"""
-    + "|".join(kw.strip() for kw in _SQL_KEYWORDS)
-    + r""")[^"]*)"(?:\s*\+\s*.+)+)\s*;""",
-    re.MULTILINE | re.IGNORECASE,
-)
+# Joined SQL keyword alternation for reuse in compiled patterns.
+_SQL_KW_ALT = "|".join(kw.strip() for kw in _SQL_KEYWORDS)
 
-# Pattern 2: String.format("SQL...", args)
+# String.format("SQL...", args) — used by _fix_string_format_sql().
 _STRING_FORMAT_SQL_RE = re.compile(
     r"""^(\s*)(.+?=\s*String\.format\(\s*"([^"]*(?:"""
-    + "|".join(kw.strip() for kw in _SQL_KEYWORDS)
+    + _SQL_KW_ALT
     + r""")[^"]*)"\s*,\s*(.+?)\s*\))\s*;""",
     re.MULTILINE | re.IGNORECASE,
 )
 
-# Pattern 3: StringBuilder with SQL keywords.
-# new StringBuilder("SELECT ...").append(var)
+# new StringBuilder("SELECT ...").append(var) — used by _fix_stringbuilder_sql().
 _STRINGBUILDER_SQL_RE = re.compile(
     r"""^(\s*)(.+?=\s*new\s+StringBuilder\(\s*"([^"]*(?:"""
-    + "|".join(kw.strip() for kw in _SQL_KEYWORDS)
+    + _SQL_KW_ALT
     + r""")[^"]*)"\s*\)(?:\.append\([^)]+\))+)\.toString\(\)\s*;""",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -90,7 +81,10 @@ class JavaSqlParameterizeStep:
         if not any(kw in code_upper for kw in _SQL_KEYWORDS):
             return RepairStepResult(step_name=self.name, modified=False, code=code)
 
-        # Skip if already using PreparedStatement predominantly
+        # Heuristic skip: if PreparedStatement usage outnumbers concat/format
+        # patterns, the file is already mostly parameterized.  The '"+' count
+        # can match non-SQL string concatenation, but false-skips are benign
+        # (we'd just leave already-safe code alone).
         if code.count("prepareStatement") > code.count('"+') + code.count("String.format"):
             return RepairStepResult(step_name=self.name, modified=False, code=code)
 
@@ -196,9 +190,12 @@ def _rebuild_sql_with_placeholders(rhs: str, concat_vars: list[str]) -> Optional
 
         SELECT * FROM users WHERE id=?
     """
-    # Tokenise: split into string-literal fragments and `+ expr` fragments.
-    # Strategy: walk the expression, collect string literal content, replace
-    # variable references with ?.
+    # Tokeniser: walks the RHS character-by-character with 4 states:
+    #   '"' → consume string literal content into result_parts
+    #   "'" → consume single-quoted content into result_parts
+    #   '+' → peek ahead: if next token is a string, continue; if identifier
+    #          and in concat_vars, emit '?'; otherwise emit the identifier
+    #   other → skip (whitespace, bare identifiers on LHS)
     result_parts: list[str] = []
     pos = 0
     text = rhs
@@ -212,12 +209,16 @@ def _rebuild_sql_with_placeholders(rhs: str, concat_vars: list[str]) -> Optional
 
         if text[pos] == '"':
             # Consume a string literal
-            end = text.index('"', pos + 1) if '"' in text[pos + 1:] else len(text)
+            end = text.find('"', pos + 1)
+            if end == -1:
+                end = len(text)
             result_parts.append(text[pos + 1:end])
             pos = end + 1
         elif text[pos] == "'":
             # Consume a char/string literal (single-quoted in concat context)
-            end = text.index("'", pos + 1) if "'" in text[pos + 1:] else len(text)
+            end = text.find("'", pos + 1)
+            if end == -1:
+                end = len(text)
             result_parts.append(text[pos + 1:end])
             pos = end + 1
         elif text[pos] == "+":
@@ -326,20 +327,28 @@ def _has_sql_concat(line: str) -> bool:
     return has_sql and has_concat
 
 
-def _extract_sql_string_from_concat(stmt: str) -> Optional[str]:
-    """Extract the base SQL string from a concatenation expression."""
-    # Find the first quoted string containing a SQL keyword.
-    m = re.search(r'"([^"]*(?:' + "|".join(kw.strip() for kw in _SQL_KEYWORDS) + r')[^"]*)"', stmt, re.IGNORECASE)
-    return m.group(0) if m else None
+_INT_SUFFIXES = ("id", "count", "num", "size", "age", "port", "index")
+_DOUBLE_SUFFIXES = ("price", "amount", "total", "rate", "balance")
+_BOOL_SUFFIXES = ("flag", "enabled", "active")
+
+# Pre-compiled pattern matching camelCase or snake_case word boundaries.
+# Matches "userId" → ["user", "Id"], "user_id" → ["user", "id"].
+_CAMEL_SPLIT_RE = re.compile(r"[_.]|(?<=[a-z])(?=[A-Z])")
 
 
 def _infer_setter(var_name: str) -> str:
-    """Infer the PreparedStatement setter method from variable name."""
-    lower = var_name.lower()
-    if any(hint in lower for hint in ("id", "count", "num", "size", "age", "port", "index")):
+    """Infer the PreparedStatement setter method from variable name.
+
+    Uses the last word segment (camelCase or snake_case split) to avoid
+    false positives — e.g., ``provider`` won't match ``id`` but
+    ``providerId`` will.
+    """
+    parts = _CAMEL_SPLIT_RE.split(var_name)
+    tail = parts[-1].lower() if parts else var_name.lower()
+    if tail in _INT_SUFFIXES:
         return "setInt"
-    if any(hint in lower for hint in ("price", "amount", "total", "rate", "balance")):
+    if tail in _DOUBLE_SUFFIXES:
         return "setDouble"
-    if any(hint in lower for hint in ("flag", "enabled", "active", "is_")):
+    if tail in _BOOL_SUFFIXES or var_name.lower().startswith("is_"):
         return "setBoolean"
     return "setString"

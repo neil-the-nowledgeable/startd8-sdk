@@ -217,18 +217,14 @@ def _expand_wildcard_imports(code: str) -> tuple[str, int]:
 
 
 def _find_used_classes(code: str, known_classes: frozenset[str]) -> list[str]:
-    """Return the subset of *known_classes* that appear as identifiers in *code*."""
+    """Return the subset of *known_classes* that appear as identifiers in *code*.
+
+    The wildcard import (``import pkg.*;``) doesn't mention individual class
+    names, so any standalone occurrence of a class name is a genuine usage.
+    """
     used: list[str] = []
     for cls in known_classes:
         pattern = _IDENT_BOUNDARY_TEMPLATE.format(re.escape(cls))
-        # Check that the class name appears outside of import statements.
-        # We search the whole code — the import line itself will match,
-        # but we also need at least one *usage* site.  A class that only
-        # appears in its own import is not "used".
-        matches = list(re.finditer(pattern, code))
-        # Need at least 2 occurrences: one in the import, one in usage.
-        # But since we're replacing the wildcard, 1 occurrence (usage) suffices
-        # because the wildcard import itself won't match the class name.
-        if matches:
+        if re.search(pattern, code):
             used.append(cls)
     return used

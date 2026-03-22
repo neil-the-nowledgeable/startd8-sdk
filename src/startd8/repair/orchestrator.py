@@ -1096,6 +1096,10 @@ def _repair_single_java_file(
         return None
 
     found_count = min(len(repairable), config.max_semantic_repairs_per_file)
+    logger.debug(
+        "Java semantic repair: checking %s (%d issues, %d repairable)",
+        fpath.name, len(issues), found_count,
+    )
 
     # 2. Translate → Route → Repair
     from .semantic_bridge import translate_to_diagnostics

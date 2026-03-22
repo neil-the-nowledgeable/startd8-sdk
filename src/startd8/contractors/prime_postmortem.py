@@ -548,6 +548,40 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "Check package.json 'type' field: 'module' → use ESM, absent → use CJS."
         ),
     },
+    # REQ-KZ-ND-402 Phase 1: Node.js Kaizen hint entries
+    "var_usage_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used `var` declarations. Use `const` for bindings that "
+            "are never reassigned, `let` for loop counters and mutable bindings. "
+            "NEVER use `var` — it has function scope instead of block scope."
+        ),
+    },
+    "duplicate_require_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had duplicate require()/import of the same module. "
+            "Each module should be imported ONCE at the top of the file. "
+            "Consolidate destructured imports: const {a, b} = require('pkg')."
+        ),
+    },
+    "unhandled_promise_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had async operations without error handling. "
+            "Wrap async calls in try/catch blocks. Add "
+            "process.on('unhandledRejection', handler) as a safety net "
+            "in entry points."
+        ),
+    },
+    "python_contamination_detected": {
+        "phase": "spec",
+        "hint": (
+            "Non-JavaScript artifacts (Python syntax) found in JS/TS files. "
+            "Check template-match routing for non-Python trivial tasks. "
+            "Ensure language profile is correctly resolved for all target files."
+        ),
+    },
     "block_scoped_namespace_detected": {
         "phase": "draft",
         "hint": (
@@ -568,6 +602,22 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             '             { Parameters = { { "userId", SpannerDbType.String, userId } } }'
         ),
         "confidence": 1.0,
+    },
+    # --- Go semantic issue hints (REQ-KZ-GO-501) ---
+    "duplicate_definition_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run declared the same function name twice in a single Go file. "
+            "Check for existing definitions before generating new ones. "
+            "Each function name must be unique within a file."
+        ),
+    },
+    "dot_import_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used dot-imports (import . \"pkg\") which pollute the namespace. "
+            "Always use explicit package-qualified access (e.g., fmt.Println, not Println)."
+        ),
     },
     # --- Query Prime security entries (REQ-KQP-602) ---
     "query_injection_interpolation": {
@@ -705,6 +755,9 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     # Exception/error handling
     "empty_catch_block": "empty_catch_detected",
     "unchecked_error": "unchecked_error_detected",
+    # Go code style (REQ-KZ-GO-501)
+    "duplicate_function": "duplicate_definition_detected",
+    "dot_import": "dot_import_detected",
     # Namespace/package alignment
     "namespace_case_mismatch": "namespace_alignment_issue",
     "namespace_filepath_mismatch": "namespace_alignment_issue",
@@ -715,6 +768,10 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "module_system_mixing": "module_system_mixing_detected",
     # Cross-language contamination
     "python_contamination": "language_mismatch_in_generation",
+    # REQ-KZ-ND-402 Phase 0: Node.js semantic checks → suggestion wiring
+    "var_usage": "var_usage_detected",
+    "duplicate_require": "duplicate_require_detected",
+    "unhandled_promise": "unhandled_promise_detected",
     # Code style
     "block_scoped_namespace": "block_scoped_namespace_detected",
     # Observability artifact issues (REQ-KZ-OBS-600)

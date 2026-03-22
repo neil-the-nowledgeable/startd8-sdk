@@ -9,6 +9,18 @@ PYTHON_FINGERPRINTS: tuple[str, ...] = (
     "#!/usr/bin/env python", "#!/usr/bin/python",
 )
 
+# Go-specific contamination fingerprints (REQ-KZ-GO-402a).
+# Superset of PYTHON_FINGERPRINTS plus Go-specific patterns that indicate
+# a Python file was emitted instead of Go.  Single canonical source —
+# imported by go_semantic_checks.py and go_contamination_strip.py.
+GO_CONTAMINATION_FINGERPRINTS: tuple[str, ...] = (
+    "def ", "import os", "from __future__", "print(", "self.",
+    "#!/usr/bin/env python", "#!/usr/bin/python",
+    "class ",       # Python class definition
+    "raise ",       # Python exception raising
+    "if __name__",  # Python main guard
+)
+
 
 def check_balanced_braces(code: str) -> tuple[bool, str]:
     """Check that braces are balanced in source code.
