@@ -29,12 +29,23 @@ _DATABASE_PATTERNS: Dict[str, DatabaseType] = {
     "alloydb": DatabaseType.POSTGRESQL,
     "npgsql": DatabaseType.POSTGRESQL,
     "psycopg": DatabaseType.POSTGRESQL,
+    "asyncpg": DatabaseType.POSTGRESQL,
+    "node-postgres": DatabaseType.POSTGRESQL,
     "spanner": DatabaseType.SPANNER,
     "cloud spanner": DatabaseType.SPANNER,
+    "spannerparameter": DatabaseType.SPANNER,
     "redis": DatabaseType.REDIS,
+    "stackexchange.redis": DatabaseType.REDIS,
+    "ioredis": DatabaseType.REDIS,
     "mysql": DatabaseType.MYSQL,
     "mariadb": DatabaseType.MYSQL,
+    "mysql-connector": DatabaseType.MYSQL,
+    "asyncmy": DatabaseType.MYSQL,
     "sqlite": DatabaseType.SQLITE,
+    "sqlite3": DatabaseType.SQLITE,
+    "sqlalchemy": DatabaseType.POSTGRESQL,  # default; ORM-level — assume PG
+    "sqlclient": DatabaseType.POSTGRESQL,
+    "microsoft.data": DatabaseType.POSTGRESQL,
 }
 
 # Heuristic patterns for detecting operation type from text

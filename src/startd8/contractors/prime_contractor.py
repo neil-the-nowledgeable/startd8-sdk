@@ -2628,7 +2628,9 @@ class PrimeContractorWorkflow:
                 if not isinstance(h, dict):
                     continue
                 phase = h.get("phase", "all")
-                hint_text = h.get("hint", "")
+                # Accept both "hint" (CAUSE_TO_SUGGESTION format) and
+                # "suggested_action" (generate_kaizen_suggestions format)
+                hint_text = h.get("hint", "") or h.get("suggested_action", "")
                 if not hint_text:
                     continue
                 # Deduplicate by content hash
@@ -2645,9 +2647,18 @@ class PrimeContractorWorkflow:
 
             if hints_collected:
                 gen_context["kaizen_hints"] = "\n".join(f"- {h}" for h in hints_collected)
+                # Also populate prior_security_findings for drafter (Issue #20:
+                # drafter reads this field but it was never populated).
+                sec_hints = [
+                    h for h in hints_collected
+                    if any(kw in h.lower() for kw in ("sql", "injection", "parameterized", "credential", "security"))
+                ]
+                if sec_hints:
+                    gen_context["prior_security_findings"] = sec_hints
                 logger.debug(
-                    "Kaizen: injected %d hint(s) into gen_context for '%s'",
+                    "Kaizen: injected %d hint(s) (%d security) into gen_context for '%s'",
                     len(hints_collected),
+                    len(sec_hints),
                     gen_context.get("feature_name", "?"),
                 )
         except Exception as exc:
