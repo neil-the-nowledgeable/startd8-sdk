@@ -196,6 +196,7 @@ class SecurityVerificationResult:
     checks_warned: int = 0
     findings: List[SecurityFinding] = field(default_factory=list)
     verification_timing_ms: Optional[Dict[str, float]] = None
+    false_positives_suppressed: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage."""

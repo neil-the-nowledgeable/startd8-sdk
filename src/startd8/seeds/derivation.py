@@ -595,6 +595,38 @@ def _inject_build_order_dependencies(
     return tasks
 
 
+# ---------------------------------------------------------------------------
+# REQ-QPA-300/301: Security enrichment for seed derivation
+# ---------------------------------------------------------------------------
+
+# Additional keywords that indicate security-sensitive features but may
+# not trigger detect_database_type (which looks for specific DB names).
+_SECURITY_KEYWORDS = frozenset({
+    "credential", "secret", "connection string", "api key", "auth token",
+    "password", "connection pool", "data store",
+})
+
+
+def _detect_database_for_enrichment(text: str) -> Optional[str]:
+    """Detect database type from text using query_prime decomposer.
+
+    Returns the database type value string (e.g. "postgresql") or None.
+    Uses a lazy import to avoid hard dependency on query_prime.
+    """
+    try:
+        from startd8.query_prime.decomposer import detect_database_type
+        db = detect_database_type(text)
+        return db.value if db is not None else None
+    except ImportError:
+        return None
+
+
+def _has_security_keywords(text: str) -> bool:
+    """Check if text contains security-sensitive keywords (REQ-QPA-300)."""
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in _SECURITY_KEYWORDS)
+
+
 def derive_tasks_from_features(
     features: list,
     dependency_graph: Dict[str, List[str]],
@@ -750,6 +782,18 @@ def derive_tasks_from_features(
             _requirements_text = _requirements_text[:2000] + " [truncated]"
         if _requirements_text == feat.description:
             _requirements_text = ""
+
+        # REQ-QPA-300/301: Auto-tag security_sensitive from description
+        # keywords. Uses detect_database_type from query_prime decomposer
+        # to match both description text and target file names.
+        if not ctx.get("security_sensitive"):
+            _enrich_text = (feat.description or "") + " " + " ".join(ordered_files)
+            _detected_db = _detect_database_for_enrichment(_enrich_text)
+            if _detected_db is not None:
+                ctx["security_sensitive"] = True
+                ctx["detected_database"] = _detected_db
+            elif _has_security_keywords(feat.description or ""):
+                ctx["security_sensitive"] = True
 
         tasks.append({
             "task_id": tid,

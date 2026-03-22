@@ -37,10 +37,21 @@ def _load_runs(output_dir: Path) -> list[dict]:
 
     runs = []
     for entry in index.get("runs", []):
-        run_dir = output_dir / entry.get("relative_path", "")
-        metrics_path = run_dir / "kaizen-metrics.json"
+        # REQ-QPA-400: resolve metrics file from index entry fields.
+        # Try absolute metrics_path first (current index format),
+        # then run_dir fallback, then legacy relative_path.
+        metrics_path = Path(entry.get("metrics_path", ""))
         if not metrics_path.is_file():
-            # Try query-security-metrics.json as fallback
+            run_dir = Path(entry.get("run_dir", ""))
+            metrics_path = run_dir / "kaizen-metrics.json"
+        if not metrics_path.is_file():
+            run_dir = Path(entry.get("run_dir", ""))
+            metrics_path = run_dir / "query-security-metrics.json"
+        if not metrics_path.is_file():
+            # Legacy: relative_path (backward compat)
+            run_dir = output_dir / entry.get("relative_path", "")
+            metrics_path = run_dir / "kaizen-metrics.json"
+        if not metrics_path.is_file():
             metrics_path = run_dir / "query-security-metrics.json"
         if not metrics_path.is_file():
             continue
@@ -55,6 +66,29 @@ def _load_runs(output_dir: Path) -> list[dict]:
     return runs
 
 
+def _extract_fp_suppressed(run: dict) -> int:
+    """Extract total false_positives_suppressed from a run's items."""
+    items = run.get("items", [])
+    return sum(item.get("false_positives_suppressed", 0) for item in items)
+
+
+def _extract_fp_rate(run: dict) -> float:
+    """Compute FP suppression rate: suppressed / total findings for this run."""
+    total_items = run.get("total_work_items", 0)
+    if total_items == 0:
+        return 0.0
+    suppressed = _extract_fp_suppressed(run)
+    total_findings = (
+        run.get("injection_total", 0)
+        + run.get("credential_total", 0)
+        + run.get("lifecycle_total", 0)
+        + suppressed
+    )
+    if total_findings == 0:
+        return 0.0
+    return suppressed / total_findings
+
+
 def compute_trends(runs: list[dict]) -> dict:
     """Compute trend slopes across runs."""
     if len(runs) < 2:
@@ -65,6 +99,19 @@ def compute_trends(runs: list[dict]) -> dict:
     costs = [r.get("total_cost_usd", 0.0) for r in runs]
     injections = [float(r.get("injection_total", 0)) for r in runs]
 
+    # REQ-KQP-402: false positive rate trajectory
+    fp_rates = [_extract_fp_rate(r) for r in runs]
+    fp_slope = linear_slope(fp_rates)
+
+    # REQ-KQP-402: alert if FP rate increases >10% between runs
+    if len(fp_rates) >= 2 and (fp_rates[-1] - fp_rates[-2]) > 0.10:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Kaizen KQP-402: FP rate increased >10%% between runs "
+            "(%.2f -> %.2f) — possible framework/binding change",
+            fp_rates[-2], fp_rates[-1],
+        )
+
     return {
         "status": "ok",
         "runs_analyzed": len(runs),
@@ -72,8 +119,10 @@ def compute_trends(runs: list[dict]) -> dict:
         "pass_rate_slope": linear_slope(pass_rates),
         "cost_slope": linear_slope(costs),
         "injection_slope": linear_slope(injections),
+        "fp_rate_slope": fp_slope,
         "latest_score": scores[-1] if scores else None,
         "latest_pass_rate": pass_rates[-1] if pass_rates else None,
+        "latest_fp_rate": fp_rates[-1] if fp_rates else None,
         "interpretation": _interpret(
             linear_slope(scores),
             linear_slope(injections),
@@ -132,6 +181,9 @@ def main() -> None:
         print(f"  Pass rate slope: {trends['pass_rate_slope']:+.4f}")
         print(f"  Cost slope:      {trends['cost_slope']:+.6f}")
         print(f"  Injection slope: {trends['injection_slope']:+.2f}")
+        fp_slope = trends.get('fp_rate_slope')
+        if fp_slope is not None:
+            print(f"  FP rate slope:   {fp_slope:+.4f}")
         print(f"\n  {trends['interpretation']}")
 
     # Write trends file

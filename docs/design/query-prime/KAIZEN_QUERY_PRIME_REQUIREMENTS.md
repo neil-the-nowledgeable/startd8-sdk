@@ -1,7 +1,7 @@
 # Kaizen for Query Prime — Requirements
 
-> **Version:** 1.0.0
-> **Status:** IMPLEMENTED — 17/18 requirements done, 1 planned (KQP-102 timing)
+> **Version:** 1.1.0
+> **Status:** IMPLEMENTED — 18/18 requirements done, all Kaizen components wired into engine runtime
 > **Date:** 2026-03-21
 > **Scope:** Systematic continuous improvement of Query Prime (secure query generation) through run-over-run analysis of security verification outcomes, false positive rates, model tier effectiveness, and credential handling compliance
 > **Design Principle:** [KAIZEN_DESIGN_PRINCIPLE.md](../../design-princples/KAIZEN_DESIGN_PRINCIPLE.md) + [ANZEN_DESIGN_PRINCIPLE.md](../../design-princples/ANZEN_DESIGN_PRINCIPLE.md)
@@ -102,11 +102,11 @@ Without Kaizen, Query Prime is a stateless function: given the same inputs, it m
 | **Layer 1 — Security Verification Metrics** | | | | |
 | REQ-KQP-100 | Per-run verification report | startd8-sdk | **DONE** (`kaizen_metrics.py:build_verification_report`) | KQP-1 |
 | REQ-KQP-101 | Per-work-item verification breakdown | startd8-sdk | **DONE** (per-item details in report) | KQP-1 |
-| REQ-KQP-102 | Verification pipeline timing | startd8-sdk | PLANNED | KQP-1 |
+| REQ-KQP-102 | Verification pipeline timing | startd8-sdk | **DONE** (timing threaded from `verify_file` → report items) | KQP-1 |
 | **Layer 2 — False Positive Tracking** | | | | |
-| REQ-KQP-200 | False positive registry | startd8-sdk | **DONE** (`fp_registry.py`) — not wired (needs production FP data) | KQP-2 |
-| REQ-KQP-201 | Auto-suppression with threshold | startd8-sdk | **DONE** (`fp_registry.py`) — not wired | KQP-2 |
-| REQ-KQP-202 | Suppression audit log | startd8-sdk | **DONE** (`fp_registry.py` logging) — not wired | KQP-2 |
+| REQ-KQP-200 | False positive registry | startd8-sdk | **DONE** (`fp_registry.py` — wired into engine + verify_file) | KQP-2 |
+| REQ-KQP-201 | Auto-suppression with threshold | startd8-sdk | **DONE** (`fp_registry.py` — wired into verify_file) | KQP-2 |
+| REQ-KQP-202 | Suppression audit log | startd8-sdk | **DONE** (`verify_file` logs each suppression at WARNING) | KQP-2 |
 | **Layer 3 — Query Quality Scoring** | | | | |
 | REQ-KQP-300 | Per-query security quality score | startd8-sdk | **DONE** (`kaizen_metrics.py:compute_query_security_score`) | KQP-3 |
 | REQ-KQP-301 | Per-database aggregate score | startd8-sdk | **DONE** (`by_database` in report + kaizen-metrics) | KQP-3 |
@@ -121,7 +121,7 @@ Without Kaizen, Query Prime is a stateless function: given the same inputs, it m
 | REQ-KQP-502 | Security section in postmortem summary | startd8-sdk | **DONE** (SECURITY_VIOLATION root cause + postmortem section) | KQP-5 |
 | **Layer 6 — Feedback Loop** | | | | |
 | REQ-KQP-600 | Injection-history prompt hints | startd8-sdk | **DONE** (`_apply_kaizen_hints` + `prior_security_findings` + escalation) | KQP-6 |
-| REQ-KQP-601 | Framework effectiveness routing adjustment | startd8-sdk | **DONE** (`routing_overrides.py`) — needs 10+ runs to activate | KQP-6 |
+| REQ-KQP-601 | Framework effectiveness routing adjustment | startd8-sdk | **DONE** (`routing_overrides.py` — wired into engine classification) | KQP-6 |
 | REQ-KQP-602 | Security-specific CAUSE_TO_SUGGESTION entries | startd8-sdk | **DONE** (8 entries in `prime_postmortem.py`) | KQP-6 |
 
 ---

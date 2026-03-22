@@ -1,14 +1,18 @@
-"""LLM-backed query generation with security constraints — REQ-QP-500.
+"""LLM-backed query generation with security constraints — REQ-QP-500, REQ-KQP-600.
 
 Generates parameterized query code via LLM with database-specific safe
 pattern examples baked into the system prompt. Every LLM output passes
 through verify_file() — injection or credential leakage findings cause
 rejection and retry/escalation.
+
+Kaizen integration:
+- Accepts ``hints`` from prior-run injection history (REQ-KQP-600)
+- Passes ``fp_registry`` through to verify_file (REQ-KQP-200)
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from startd8.logging_config import get_logger
 
@@ -19,14 +23,25 @@ from .models import (
 from .patterns import DatabasePatternRegistry
 from .security import verify_file
 
+if TYPE_CHECKING:
+    from .fp_registry import FalsePositiveRegistry
+
 logger = get_logger(__name__)
 
 
-def _build_system_prompt(work_item: QueryWorkItem) -> str:
+def _build_system_prompt(
+    work_item: QueryWorkItem,
+    hints: Optional[List[str]] = None,
+) -> str:
     """Build a security-constrained system prompt for query generation.
 
     Injects database-specific safe pattern examples from the pattern
     registry so the LLM knows exactly which parameterization syntax to use.
+
+    Args:
+        work_item: The query work item.
+        hints: Optional Kaizen hints from prior-run failures (REQ-KQP-600).
+            Maximum 3 hints are injected as P1-priority warnings.
     """
     db_pattern = DatabasePatternRegistry.get(
         work_item.database, work_item.target_language,
@@ -57,6 +72,15 @@ def _build_system_prompt(work_item: QueryWorkItem) -> str:
             "disposing them."
         )
 
+    # REQ-KQP-600: Kaizen hints from prior-run injection history
+    kaizen_section = ""
+    if hints:
+        hint_lines = "\n".join(f"  - {h}" for h in hints[:3])
+        kaizen_section = (
+            f"\n\nSECURITY WARNINGS (Kaizen — from prior run failures):\n"
+            f"{hint_lines}"
+        )
+
     return (
         f"You are a database query code generator specializing in secure, "
         f"parameterized queries for {work_item.database.value} databases "
@@ -69,7 +93,8 @@ def _build_system_prompt(work_item: QueryWorkItem) -> str:
         f"4. Use proper resource lifecycle management (connection pooling, dispose)."
         f"{safe_examples}"
         f"{credential_warning}"
-        f"{lifecycle_hint}\n\n"
+        f"{lifecycle_hint}"
+        f"{kaizen_section}\n\n"
         f"Return ONLY the code — no explanations, no markdown fences."
     )
 
@@ -118,21 +143,24 @@ def _build_user_prompt(work_item: QueryWorkItem) -> str:
 def generate_query(
     work_item: QueryWorkItem,
     agent: Any,
+    *,
+    hints: Optional[List[str]] = None,
+    fp_registry: Optional["FalsePositiveRegistry"] = None,
+    no_suppress: bool = False,
 ) -> tuple[str, SecurityVerificationResult, float]:
     """Generate query code via LLM with security verification.
 
     Args:
         work_item: The query work item to generate code for.
         agent: A BaseAgent instance (must have .generate()).
+        hints: Optional Kaizen hints from prior-run failures (REQ-KQP-600).
+        fp_registry: Optional FP registry for suppression (REQ-KQP-200).
+        no_suppress: When True, disables FP suppression (REQ-KQP-201).
 
     Returns:
         Tuple of (code, verification_result, cost_usd).
-
-    Raises:
-        SecurityError: If generated code fails security verification
-            after all retries.
     """
-    system_prompt = _build_system_prompt(work_item)
+    system_prompt = _build_system_prompt(work_item, hints=hints)
     user_prompt = _build_user_prompt(work_item)
 
     result = agent.generate(user_prompt, system_prompt=system_prompt)
@@ -154,12 +182,14 @@ def generate_query(
     # Strip markdown fences if present
     code = _strip_code_fences(code)
 
-    # Verify security
+    # Verify security (with FP suppression when registry provided)
     verification = verify_file(
         code,
         work_item.file_path or f"<generated:{work_item.id}>",
         work_item.database,
         work_item.target_language,
+        fp_registry=fp_registry,
+        no_suppress=no_suppress,
     )
 
     logger.info(

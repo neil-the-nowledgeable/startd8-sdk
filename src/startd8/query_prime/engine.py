@@ -3,16 +3,27 @@
 Supports both deterministic template generation (TRIVIAL tier, $0.00)
 and LLM-backed generation with security verification gate and
 T3→T2→T1 escalation.
+
+Kaizen integration (REQ-KQP-*):
+- Loads FalsePositiveRegistry for FP suppression (REQ-KQP-200)
+- Loads RoutingOverrideStore for tier overrides (REQ-KQP-601)
+- Injects prior-run security hints into generator prompts (REQ-KQP-600)
+- Accumulates results for verification report emission (REQ-KQP-100)
+- Sets prior_injection_failure signal from Kaizen history (REQ-QP-300)
 """
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from startd8.complexity.models import ComplexityTier
 from startd8.logging_config import get_logger
 
 from .classifier import QueryRoutingConfig, classify_query_tier
+from .fp_registry import FalsePositiveRegistry
+from .kaizen_metrics import build_verification_report, compute_query_security_score
 from .models import (
     DatabaseType,
     OperationType,
@@ -23,10 +34,14 @@ from .models import (
     SecurityVerificationResult,
 )
 from .router import QueryRouterConfig, get_agent_spec_for_tier, get_escalation_tier
+from .routing_overrides import RoutingOverrideStore
 from .security import verify_file
 from .templates import generate as template_generate, is_trivial
 
 logger = get_logger(__name__)
+
+# Maximum number of Kaizen security hints injected per prompt (REQ-KQP-600).
+_MAX_KAIZEN_HINTS = 3
 
 
 class QueryPrimeEngine:
@@ -38,15 +53,78 @@ class QueryPrimeEngine:
     - T3→T2→T1 escalation when generation fails verification
     - Security verification of generated and existing code
     - Query signal extraction and classification
+    - Kaizen feedback: FP suppression, routing overrides, hint injection,
+      metrics accumulation (REQ-KQP-100–602)
     """
 
     def __init__(
         self,
         config: Optional[QueryRoutingConfig] = None,
         router_config: Optional[QueryRouterConfig] = None,
+        *,
+        fp_registry: Optional[FalsePositiveRegistry] = None,
+        routing_overrides: Optional[RoutingOverrideStore] = None,
+        kaizen_hints: Optional[List[str]] = None,
+        output_dir: Optional[Path] = None,
+        no_suppress: bool = False,
     ) -> None:
         self._config = config or QueryRoutingConfig()
         self._router_config = router_config or QueryRouterConfig()
+
+        # REQ-KQP-201: audit mode bypasses all FP suppression
+        self._no_suppress = no_suppress
+
+        # Kaizen: FP suppression (REQ-KQP-200)
+        self._fp_registry = fp_registry or FalsePositiveRegistry()
+        self._fp_registry.load()
+
+        # Kaizen: routing overrides (REQ-KQP-601)
+        self._routing_overrides = routing_overrides or RoutingOverrideStore()
+        self._routing_overrides.load()
+
+        # Kaizen: prior-run security hints (REQ-KQP-600)
+        self._kaizen_hints: List[str] = (kaizen_hints or [])[: _MAX_KAIZEN_HINTS]
+
+        # Kaizen: result accumulation for verification report (REQ-KQP-100)
+        self._accumulated_results: List[QueryResult] = []
+
+        # Kaizen: prior-run injection history for signal extraction
+        self._prior_injection_databases: set[str] = set()
+        self._output_dir = output_dir
+        self._load_prior_injection_history()
+
+    # ------------------------------------------------------------------
+    # Kaizen: load prior-run data
+    # ------------------------------------------------------------------
+
+    def _load_prior_injection_history(self) -> None:
+        """Load injection history from prior run's query-security-metrics.json.
+
+        Populates _prior_injection_databases so _extract_signals can set
+        prior_injection_failure for work items targeting those databases.
+        """
+        if self._output_dir is None:
+            return
+        metrics_path = self._output_dir / "query-security-metrics.json"
+        if not metrics_path.is_file():
+            return
+        try:
+            data = json.loads(metrics_path.read_text())
+            if data.get("injection_total", 0) > 0:
+                for db, stats in data.get("by_database", {}).items():
+                    if stats.get("injection_findings", 0) > 0 or stats.get("injection_found", 0) > 0:
+                        self._prior_injection_databases.add(db)
+            if self._prior_injection_databases:
+                logger.info(
+                    "Kaizen: prior injection history loaded for databases: %s",
+                    self._prior_injection_databases,
+                )
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Kaizen: failed to load prior injection history: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def process_work_item(
         self,
@@ -73,6 +151,16 @@ class QueryPrimeEngine:
             operation_type=work_item.operation_type,
         )
         tier = classification.tier
+
+        # Kaizen: apply routing override (REQ-KQP-601)
+        override_tier = self._routing_overrides.get_minimum_tier(work_item.id)
+        if override_tier is not None and override_tier.value > tier.value:
+            logger.info(
+                "Kaizen: work_item=%s tier overridden %s -> %s",
+                work_item.id, tier.value, override_tier.value,
+            )
+            tier = override_tier
+
         logger.info(
             "QueryPrime: work_item=%s tier=%s reason=%s",
             work_item.id, tier.value, classification.reason,
@@ -87,8 +175,10 @@ class QueryPrimeEngine:
                     work_item.file_path or f"<generated:{work_item.id}>",
                     work_item.database,
                     work_item.target_language,
+                    fp_registry=self._fp_registry,
+                    no_suppress=self._no_suppress,
                 )
-                return QueryResult(
+                result = QueryResult(
                     work_item_id=work_item.id,
                     code=code,
                     verification=verification,
@@ -98,9 +188,13 @@ class QueryPrimeEngine:
                     escalations=0,
                     retry_count=0,
                 )
+                self._accumulated_results.append(result)
+                return result
 
         # LLM generation path with escalation
-        return self._generate_with_escalation(work_item, tier, agent=agent)
+        result = self._generate_with_escalation(work_item, tier, agent=agent)
+        self._accumulated_results.append(result)
+        return result
 
     def _generate_with_escalation(
         self,
@@ -146,7 +240,11 @@ class QueryPrimeEngine:
                 total_retries += 1
                 try:
                     code, verification, cost = generate_query(
-                        work_item, current_agent,
+                        work_item,
+                        current_agent,
+                        hints=self._kaizen_hints,
+                        fp_registry=self._fp_registry,
+                        no_suppress=self._no_suppress,
                     )
                     total_cost += cost
                     last_code = code
@@ -243,10 +341,24 @@ class QueryPrimeEngine:
         return verify_file(
             source, file_path, database, language,
             strict_lifecycle=strict_lifecycle,
+            fp_registry=self._fp_registry,
+            no_suppress=self._no_suppress,
         )
 
     def _extract_signals(self, work_item: QueryWorkItem) -> QuerySignals:
-        """Extract classification signals from a query work item."""
+        """Extract classification signals from a query work item.
+
+        Kaizen-bearing: sets prior_injection_failure from prior run history
+        and target_framework_familiarity from accumulated run count.
+        """
+        # Kaizen: prior injection failure from history (REQ-QP-300)
+        db_str = (
+            work_item.database.value
+            if isinstance(work_item.database, DatabaseType)
+            else str(work_item.database)
+        )
+        prior_injection = db_str in self._prior_injection_databases
+
         return QuerySignals(
             table_count=len(work_item.tables),
             join_count=len(work_item.joins),
@@ -257,7 +369,7 @@ class QueryPrimeEngine:
             parameter_count=len(work_item.parameters),
             has_upsert=work_item.operation_type == OperationType.UPSERT,
             target_framework_familiarity=1.0,
-            prior_injection_failure=False,
+            prior_injection_failure=prior_injection,
         )
 
     def process_feature(
@@ -298,3 +410,62 @@ class QueryPrimeEngine:
             results.append(result)
 
         return results
+
+    # ------------------------------------------------------------------
+    # Kaizen: metrics report (REQ-KQP-100, 101, 102)
+    # ------------------------------------------------------------------
+
+    def get_verification_report(self, run_id: str) -> Dict[str, Any]:
+        """Build and return the verification report from accumulated results.
+
+        Args:
+            run_id: Unique run identifier for the report.
+
+        Returns:
+            Dict suitable for JSON serialization as query-security-metrics.json.
+        """
+        return build_verification_report(self._accumulated_results, run_id)
+
+    def save_verification_report(
+        self, run_id: str, output_dir: Optional[Path] = None,
+    ) -> Optional[Path]:
+        """Build and persist query-security-metrics.json (advisory).
+
+        Args:
+            run_id: Unique run identifier.
+            output_dir: Directory to write the report. Falls back to
+                self._output_dir or current directory.
+
+        Returns:
+            Path to the written file, or None if write failed.
+        """
+        report = self.get_verification_report(run_id)
+        target_dir = output_dir or self._output_dir or Path(".")
+        target = target_dir / "query-security-metrics.json"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, indent=2) + "\n")
+            logger.info("Wrote query-security-metrics.json to %s", target)
+            return target
+        except OSError as exc:
+            logger.warning("Advisory: failed to write verification report: %s", exc)
+            return None
+
+    def save_fp_registry(self) -> None:
+        """Persist the false positive registry to disk (advisory)."""
+        self._fp_registry.save()
+
+    @property
+    def accumulated_results(self) -> List[QueryResult]:
+        """Read-only access to accumulated results."""
+        return list(self._accumulated_results)
+
+    @property
+    def fp_registry(self) -> FalsePositiveRegistry:
+        """Read-only access to the false positive registry."""
+        return self._fp_registry
+
+    @property
+    def routing_overrides(self) -> RoutingOverrideStore:
+        """Read-only access to routing overrides."""
+        return self._routing_overrides

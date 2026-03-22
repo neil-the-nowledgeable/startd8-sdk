@@ -8,14 +8,22 @@ from __future__ import annotations
 
 import datetime
 from collections import defaultdict
+
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+
+from startd8.logging_config import get_logger
 
 from .models import (
     QueryResult,
     SecurityCheckType,
     SecurityVerdict,
 )
+
+logger = get_logger(__name__)
+
+# REQ-KQP-302: T3 first_pass_rate threshold for auto-escalation warning.
+_T3_FIRST_PASS_THRESHOLD = 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +195,10 @@ def build_verification_report(
         }
         if r.verification:
             item_dict["verdict"] = r.verification.verdict.value
+            # REQ-KQP-102: verification pipeline timing
+            if r.verification.verification_timing_ms:
+                item_dict["verification_timing_ms"] = r.verification.verification_timing_ms
+            item_dict["false_positives_suppressed"] = r.verification.false_positives_suppressed
         items.append(item_dict)
 
     # Aggregates
@@ -209,6 +221,15 @@ def build_verification_report(
             "first_pass_rate": round(stats.first_pass / stats.count, 4) if stats.count else 0.0,
             "escalation_rate": round(stats.escalated / stats.count, 4) if stats.count else 0.0,
         }
+
+    # REQ-KQP-302: threshold alert for T3 insufficiency
+    t3_stats = tier_summary.get("simple") or tier_summary.get("SIMPLE")
+    if t3_stats and t3_stats["first_pass_rate"] < _T3_FIRST_PASS_THRESHOLD:
+        logger.warning(
+            "Kaizen KQP-302: T3 first_pass_rate (%.2f) below %.2f threshold "
+            "— auto-escalation to T2 is warranted for SIMPLE-tier queries",
+            t3_stats["first_pass_rate"], _T3_FIRST_PASS_THRESHOLD,
+        )
 
     return {
         "run_id": run_id,

@@ -1251,8 +1251,25 @@ class IntegrationEngine:
             # Auto-detect database type from source content
             db_type = detect_database_type(source)
             if db_type is None:
-                files_skipped += 1
-                continue  # No database surface — skip
+                # REQ-QPA-201/202: check seed metadata for security_sensitive
+                # features — gate all files from security-sensitive tasks
+                # even when source doesn't contain direct DB keywords.
+                unit_ctx = getattr(unit, "context", {}) or {}
+                if unit_ctx.get("security_sensitive"):
+                    db_str = unit_ctx.get("detected_database", "")
+                    if db_str:
+                        try:
+                            from startd8.query_prime.models import DatabaseType as _DBT
+                            db_type = _DBT(db_str)
+                        except (ValueError, KeyError):
+                            # Intentional: "unknown" is a valid str fallback;
+                            # verify_file accepts DatabaseType | str.
+                            db_type = "unknown"
+                    else:
+                        db_type = "unknown"  # security_sensitive but no specific DB
+                else:
+                    files_skipped += 1
+                    continue  # No database surface — skip
 
             # Resolve language from file extension
             _ext_to_lang = {
@@ -1578,6 +1595,40 @@ class IntegrationEngine:
 
                 output_dir = str(self.project_root) if self.project_root else "."
                 update_query_security_metrics(output_dir, qp_report)
+
+                # REQ-QPA-100: stash qp_report in result_metadata so the
+                # postmortem script can merge it into pipeline-output
+                # kaizen-metrics.json (the Anzen gate runs before the
+                # postmortem and writes to project_root, not pipeline output).
+                result_metadata["_query_security_report"] = qp_report
+
+                # REQ-QPA-102: write standalone query-security-metrics.json
+                # to project root (pipeline output copy handled by postmortem).
+                import datetime as _datetime
+                import json as _json
+                qp_standalone = {
+                    "schema_version": "1.0.0",
+                    "run_id": run_id,
+                    "timestamp": _datetime.datetime.now(
+                        _datetime.timezone.utc,
+                    ).isoformat(),
+                    **qp_report,
+                }
+                qp_path = Path(output_dir) / "query-security-metrics.json"
+                try:
+                    qp_path.write_text(
+                        _json.dumps(qp_standalone, indent=2, default=str) + "\n",
+                        encoding="utf-8",
+                    )
+                    logger.info(
+                        "Wrote query-security-metrics.json to %s", qp_path,
+                    )
+                except OSError as wexc:
+                    logger.debug(
+                        "Advisory: query-security-metrics.json write failed: %s",
+                        wexc,
+                    )
+
             except (ImportError, OSError) as exc:
                 logger.debug("Query security metrics update skipped: %s", exc)
 

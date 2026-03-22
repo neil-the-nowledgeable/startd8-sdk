@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from startd8.complexity.models import ComplexityTier
 from startd8.logging_config import get_logger
@@ -122,3 +122,81 @@ class RoutingOverrideStore:
 
     def __len__(self) -> int:
         return len(self._overrides)
+
+
+# ---------------------------------------------------------------------------
+# REQ-KQP-601: Auto-escalation from cross-run trend data
+# ---------------------------------------------------------------------------
+
+# Thresholds for auto-escalation (REQ-QP-401 + REQ-KQP-601).
+_MIN_RUNS_FOR_AUTO_ESCALATION = 10
+_T3_ESCALATE_THRESHOLD = 0.6   # Below this → auto-escalate SIMPLE→T2
+_T3_RESTORE_THRESHOLD = 0.8    # Above this → restore default (SIMPLE→T3)
+
+
+def auto_escalate_from_trends(
+    trends: Dict[str, Any],
+    store: RoutingOverrideStore,
+    *,
+    run_count: int = 0,
+) -> List[str]:
+    """Auto-create or remove routing overrides based on cross-run trends.
+
+    After ≥10 runs, inspects by-tier T3 metrics. If T3 first_pass_rate
+    is below the escalation threshold for a database/framework, creates
+    an override to route SIMPLE queries to T2.
+
+    Args:
+        trends: Latest verification report (or aggregated trend data)
+            with ``by_tier`` dict containing ``first_pass_rate``.
+        store: The RoutingOverrideStore to mutate.
+        run_count: Number of archived runs available.
+
+    Returns:
+        List of human-readable actions taken.
+    """
+    if run_count < _MIN_RUNS_FOR_AUTO_ESCALATION:
+        return [f"Skipped: only {run_count} runs (need {_MIN_RUNS_FOR_AUTO_ESCALATION})"]
+
+    actions: List[str] = []
+    by_tier = trends.get("by_tier", {})
+
+    # Check SIMPLE tier (which maps to T3 model).
+    # ComplexityTier.value is lowercase ("simple"), but external data may
+    # use uppercase — check both to avoid str+Enum case mismatch [SDK Leg 13 #60].
+    simple_stats = by_tier.get("simple") or by_tier.get("SIMPLE", {})
+    first_pass = simple_stats.get("first_pass_rate", 1.0)
+
+    if first_pass < _T3_ESCALATE_THRESHOLD:
+        override = RoutingOverride(
+            pattern="QWI-",  # All query work items
+            minimum_tier="MODERATE",
+            reason=(
+                f"Auto-escalation: T3 first_pass_rate={first_pass:.2f} "
+                f"< {_T3_ESCALATE_THRESHOLD} after {run_count} runs"
+            ),
+        )
+        store.add(override)
+        store.save()
+        actions.append(
+            f"ESCALATED: SIMPLE→T2 (first_pass_rate={first_pass:.2f})"
+        )
+        logger.info(
+            "Kaizen KQP-601: auto-escalated SIMPLE→T2 "
+            "(T3 first_pass_rate=%.2f < %.2f, runs=%d)",
+            first_pass, _T3_ESCALATE_THRESHOLD, run_count,
+        )
+    elif first_pass > _T3_RESTORE_THRESHOLD:
+        # Restore default if previously escalated
+        if store.remove("QWI-"):
+            store.save()
+            actions.append(
+                f"RESTORED: SIMPLE→T3 (first_pass_rate={first_pass:.2f})"
+            )
+            logger.info(
+                "Kaizen KQP-601: restored SIMPLE→T3 "
+                "(T3 first_pass_rate=%.2f > %.2f, runs=%d)",
+                first_pass, _T3_RESTORE_THRESHOLD, run_count,
+            )
+
+    return actions

@@ -46,6 +46,17 @@ _DATABASE_PATTERNS: Dict[str, DatabaseType] = {
     "sqlalchemy": DatabaseType.POSTGRESQL,  # default; ORM-level — assume PG
     "sqlclient": DatabaseType.POSTGRESQL,
     "microsoft.data": DatabaseType.POSTGRESQL,
+    # REQ-QPA-200: Go database import patterns
+    "database/sql": DatabaseType.POSTGRESQL,    # Go stdlib DB interface
+    "pgxpool": DatabaseType.POSTGRESQL,         # pgx connection pool
+    "jackc/pgx": DatabaseType.POSTGRESQL,       # pgx driver module path
+    "lib/pq": DatabaseType.POSTGRESQL,          # Older Go PG driver
+    "go-redis": DatabaseType.REDIS,             # Go Redis client
+    "go-sql-driver/mysql": DatabaseType.MYSQL,  # Go MySQL driver
+    "mattn/go-sqlite3": DatabaseType.SQLITE,    # Go SQLite driver
+    # Java / JVM patterns
+    "jdbc": DatabaseType.POSTGRESQL,            # JDBC (default PG)
+    "r2dbc": DatabaseType.POSTGRESQL,           # Reactive DB (default PG)
 }
 
 # Heuristic patterns for detecting operation type from text

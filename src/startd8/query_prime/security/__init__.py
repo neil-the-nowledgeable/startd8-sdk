@@ -1,14 +1,20 @@
-"""Security verification pipeline — REQ-QP-603.
+"""Security verification pipeline — REQ-QP-603, REQ-KQP-200–202.
 
 Executes checks in fixed order: injection -> credential -> lifecycle.
 Injection + credential findings -> hard fail (SecurityVerdict.FAIL).
 Lifecycle findings -> WARN (or FAIL when strict_lifecycle=True).
+
+When a FalsePositiveRegistry is provided, suppressed findings are
+filtered out before verdict computation (injection findings are never
+suppressed — enforced by FalsePositiveRegistry.is_suppressed).
 """
 
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+from startd8.logging_config import get_logger
 
 from ..models import (
     DatabaseType,
@@ -21,6 +27,11 @@ from .credentials import detect_credential_leakage
 from .injection import detect_injection
 from .lifecycle import detect_lifecycle_issues
 
+if TYPE_CHECKING:
+    from ..fp_registry import FalsePositiveRegistry
+
+logger = get_logger(__name__)
+
 
 def verify_file(
     source: str,
@@ -29,6 +40,8 @@ def verify_file(
     language: str,
     *,
     strict_lifecycle: bool = False,
+    fp_registry: Optional["FalsePositiveRegistry"] = None,
+    no_suppress: bool = False,
 ) -> SecurityVerificationResult:
     """Run the full security verification pipeline on a source file.
 
@@ -48,6 +61,9 @@ def verify_file(
         database: Database type for pattern-aware checks.
         language: Programming language.
         strict_lifecycle: When True, lifecycle issues cause FAIL instead of WARN.
+        fp_registry: Optional false positive registry for suppression (REQ-KQP-200).
+        no_suppress: When True, disables all FP suppression for audit runs
+            (REQ-KQP-201).
 
     Returns:
         SecurityVerificationResult with verdict and all findings.
@@ -78,6 +94,24 @@ def verify_file(
     )
     timing["lifecycle_ms"] = round((time.monotonic() - t0) * 1000, 3)
     all_findings.extend(lifecycle_findings)
+
+    # REQ-KQP-200–202: Apply false positive suppression before verdict.
+    # Injection findings are NEVER suppressed (enforced by FPRegistry).
+    # REQ-KQP-201: --no-suppress flag bypasses all suppression for audit runs.
+    suppressed_count = 0
+    if fp_registry is not None and not no_suppress:
+        active_findings: List[SecurityFinding] = []
+        for f in all_findings:
+            if fp_registry.is_suppressed(f):
+                suppressed_count += 1
+                logger.warning(
+                    "Suppressed known false positive: check=%s message=%s "
+                    "pattern_hash=%s",
+                    f.check_type.value, f.message[:80], f.pattern_hash,
+                )
+            else:
+                active_findings.append(f)
+        all_findings = active_findings
 
     # Compute counts
     errors = sum(1 for f in all_findings if f.severity == "error")
@@ -114,4 +148,5 @@ def verify_file(
         checks_warned=1 if warnings > 0 else 0,
         findings=all_findings,
         verification_timing_ms=timing,
+        false_positives_suppressed=suppressed_count,
     )

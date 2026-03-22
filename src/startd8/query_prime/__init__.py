@@ -13,6 +13,16 @@ Public API::
 
     # Standalone verification (no generation)
     verification = verify_file(source, "path.cs", "postgresql", "csharp")
+
+Kaizen API::
+
+    from startd8.query_prime import (
+        FalsePositiveRegistry,
+        RoutingOverrideStore,
+        build_verification_report,
+        compute_query_security_score,
+        QueryScoreWeights,
+    )
 """
 
 from startd8.query_prime.classifier import (
@@ -20,6 +30,12 @@ from startd8.query_prime.classifier import (
     classify_query_tier,
 )
 from startd8.query_prime.engine import QueryPrimeEngine
+from startd8.query_prime.fp_registry import FalsePositiveRegistry
+from startd8.query_prime.kaizen_metrics import (
+    QueryScoreWeights,
+    build_verification_report,
+    compute_query_security_score,
+)
 from startd8.query_prime.models import (
     DatabaseType,
     JoinSpec,
@@ -39,9 +55,14 @@ from startd8.query_prime.models import (
 from startd8.query_prime.decomposer import decompose_feature
 from startd8.query_prime.generator import generate_query
 from startd8.query_prime.router import QueryRouterConfig
+from startd8.query_prime.routing_overrides import (
+    RoutingOverrideStore,
+    auto_escalate_from_trends,
+)
 from startd8.query_prime.security import verify_file
 
 __all__ = [
+    # Engine
     "QueryPrimeEngine",
     "QueryRoutingConfig",
     "QueryRouterConfig",
@@ -49,6 +70,7 @@ __all__ = [
     "decompose_feature",
     "generate_query",
     "verify_file",
+    # Models
     "DatabaseType",
     "OperationType",
     "TransactionBoundary",
@@ -63,4 +85,11 @@ __all__ = [
     "SecurityVerificationResult",
     "SecurityContract",
     "QueryResult",
+    # Kaizen (REQ-KQP-*)
+    "FalsePositiveRegistry",
+    "RoutingOverrideStore",
+    "auto_escalate_from_trends",
+    "build_verification_report",
+    "compute_query_security_score",
+    "QueryScoreWeights",
 ]
