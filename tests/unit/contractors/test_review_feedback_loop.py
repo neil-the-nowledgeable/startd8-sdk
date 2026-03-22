@@ -732,10 +732,198 @@ class TestSpecBuilderRunHints:
 
     def test_run_hints_in_context(self):
         """run_quality_hints should be consumed by spec builder."""
-        # Verify the context key is popped (consumed) by reading
-        # the spec builder code expectations
         context = {"run_quality_hints": "- semantic:phantom_import (3x)"}
-        # The key should be consumed via context.pop() in spec_builder
         val = context.pop("run_quality_hints", None)
         assert val is not None
         assert "phantom_import" in val
+
+
+# ===========================================================================
+# Iteration 3: Upstream Amplification
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-300: SeedTask.quality_hints field
+# ---------------------------------------------------------------------------
+
+
+class TestSeedTaskQualityHints:
+
+    def test_field_exists_with_default(self):
+        from startd8.seeds.models import SeedTask
+        task = SeedTask(
+            task_id="T-1", title="test", task_type="task",
+            story_points=0, priority="medium", labels=[],
+            depends_on=[], description="", target_files=[],
+            estimated_loc=0, feature_id="F-1", domain="general",
+            domain_reasoning="", environment_checks=[],
+            prompt_constraints=[], post_generation_validators=[],
+            available_siblings=[], existing_content_hash=None,
+            design_doc_sections=[], artifact_types_addressed=[],
+            file_scope={},
+        )
+        assert task.quality_hints == []
+
+    def test_from_seed_entry_quality_hints(self):
+        from startd8.seeds.models import SeedTask
+        entry = {
+            "task_id": "T-1",
+            "title": "test",
+            "config": {
+                "context": {
+                    "target_files": ["src/foo.py"],
+                    "estimated_loc": 50,
+                    "feature_id": "F-1",
+                    "quality_hints": [
+                        "Watch for phantom imports",
+                        "Ensure factory returns interface",
+                    ],
+                },
+            },
+            "_enrichment": {},
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert len(task.quality_hints) == 2
+        assert "phantom imports" in task.quality_hints[0]
+
+    def test_from_seed_entry_no_hints(self):
+        from startd8.seeds.models import SeedTask
+        entry = {
+            "task_id": "T-1",
+            "title": "test",
+            "config": {"context": {
+                "target_files": [], "estimated_loc": 0,
+                "feature_id": "F-1",
+            }},
+            "_enrichment": {},
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert task.quality_hints == []
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-310: Distribute kaizen suggestions per-task
+# ---------------------------------------------------------------------------
+
+
+class TestDistributeQualityHints:
+
+    def test_distribute_matched(self):
+        from startd8.seeds.builder import SeedBuilder
+        builder = SeedBuilder.__new__(SeedBuilder)
+        builder._tasks = [
+            {
+                "config": {
+                    "context": {
+                        "target_files": ["src/server.py"],
+                        "quality_hints": [],
+                    },
+                },
+                "_enrichment": {"domain": "backend"},
+            },
+        ]
+        builder._refine_suggestions = [
+            {
+                "hint": "Watch for circular imports",
+                "pattern_type": "phantom_import",
+                "observed_context": "backend server",
+            },
+        ]
+        builder.distribute_quality_hints()
+        hints = builder._tasks[0]["config"]["context"]["quality_hints"]
+        assert "Watch for circular imports" in hints
+
+    def test_distribute_cap_at_3(self):
+        from startd8.seeds.builder import SeedBuilder
+        builder = SeedBuilder.__new__(SeedBuilder)
+        builder._tasks = [
+            {
+                "config": {"context": {"target_files": [], "quality_hints": []}},
+                "_enrichment": {},
+            },
+        ]
+        builder._refine_suggestions = [
+            {"hint": f"Hint {i}", "pattern_type": "", "observed_context": ""}
+            for i in range(10)
+        ]
+        builder.distribute_quality_hints()
+        hints = builder._tasks[0]["config"]["context"]["quality_hints"]
+        assert len(hints) == 3
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-320: Enrichment script
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichmentScript:
+
+    def test_idempotent(self, tmp_path):
+        import sys as _sys
+        _sys.path.insert(
+            0, str(Path(__file__).parents[3] / "scripts"),
+        )
+        from enrich_seed_from_postmortem import enrich_seed
+
+        seed = {
+            "tasks": [{
+                "config": {
+                    "context": {
+                        "target_files": ["src/foo.py"],
+                        "quality_hints": [],
+                    },
+                },
+            }],
+        }
+        suggestions = [
+            {"hint": "Watch imports", "pattern_type": "", "observed_context": ""},
+        ]
+
+        result1 = enrich_seed(dict(seed), list(suggestions))
+        result2 = enrich_seed(result1, list(suggestions))
+
+        hints1 = result1["tasks"][0]["config"]["context"]["quality_hints"]
+        hints2 = result2["tasks"][0]["config"]["context"]["quality_hints"]
+        assert hints1 == hints2  # idempotent
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-330: Context resolution quality_hints threading
+# ---------------------------------------------------------------------------
+
+
+class TestContextResolutionQualityHints:
+
+    def test_quality_hints_threaded(self):
+        """quality_hints from metadata flows to gen_context."""
+        from startd8.contractors.context_resolution import (
+            StandaloneContextStrategy,
+        )
+        gen_context: Dict[str, Any] = {}
+        metadata = {
+            "quality_hints": ["Watch for phantom imports"],
+            "_enrichment": {"prompt_constraints": []},
+        }
+        StandaloneContextStrategy._inject_enrichment(
+            gen_context, metadata,
+        )
+        assert "quality_hints" in gen_context
+        assert gen_context["quality_hints"] == ["Watch for phantom imports"]
+
+    def test_quality_hints_from_enrichment(self):
+        """quality_hints from _enrichment flows to gen_context."""
+        from startd8.contractors.context_resolution import (
+            StandaloneContextStrategy,
+        )
+        gen_context: Dict[str, Any] = {}
+        metadata = {
+            "_enrichment": {
+                "prompt_constraints": [],
+                "quality_hints": ["Ensure factory returns"],
+            },
+        }
+        StandaloneContextStrategy._inject_enrichment(
+            gen_context, metadata,
+        )
+        assert gen_context["quality_hints"] == ["Ensure factory returns"]

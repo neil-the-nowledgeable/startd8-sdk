@@ -1227,6 +1227,17 @@ def build_spec_prompt(
     if trend_warning and isinstance(trend_warning, str):
         prioritized.append((1, "quality_trend", trend_warning))
 
+    # P1.5: Quality guidance from previous runs (REQ-RFL-330)
+    seed_quality_hints = context.pop("quality_hints", None)
+    if seed_quality_hints and isinstance(seed_quality_hints, list):
+        hints_text = "\n".join(f"- {h}" for h in seed_quality_hints if h)
+        if hints_text:
+            prioritized.append((
+                2,
+                "quality_hints",
+                f"## Quality Guidance (From Previous Runs)\n\n{hints_text}",
+            ))
+
     # P2: Architecture and plan context
     obj_section = build_spec_objectives_section(project_obj)
     if obj_section:

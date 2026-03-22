@@ -221,6 +221,8 @@ class ResolvedContext:
     )
     is_pipeline: bool = False
     validation_results: tuple[ValidationResult, ...] = ()
+    # REQ-MSR-200: Fields skipped during sanitization with structured reasons
+    skipped_fields: tuple[dict[str, str], ...] = ()
 
     @property
     def populated_sections(self) -> tuple[PromptSection, ...]:
@@ -912,6 +914,17 @@ class StandaloneContextStrategy(ContextStrategy):
         """
         if not metadata:
             return
+
+        # REQ-RFL-330: Thread quality_hints from seed to spec context
+        quality_hints = metadata.get("quality_hints")
+        if not quality_hints:
+            # Also check _enrichment for hints set during ingestion
+            quality_hints = metadata.get("_enrichment", {}).get(
+                "quality_hints",
+            )
+        if quality_hints and isinstance(quality_hints, list):
+            gen_context["quality_hints"] = quality_hints
+
         meta_enrichment = metadata.get("_enrichment", {})
         if not isinstance(meta_enrichment, dict) or not meta_enrichment:
             return
@@ -1179,19 +1192,20 @@ class PipelineContextStrategy(ContextStrategy):
             raw_context=MappingProxyType(sanitized),
             is_pipeline=True,
             validation_results=tuple(validation_results),
+            skipped_fields=tuple(skipped_fields),
         )
 
     def _sanitize_context(
         self, ctx: dict[str, Any]
-    ) -> tuple[dict[str, Any], list[str]]:
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         """Apply security validations to all context values, recursively.
 
         Returns (sanitized_dict, skipped_fields). In strict mode, violations
         raise immediately. In lenient mode, offending fields are omitted and
-        logged.
+        logged with structured reason.
         """
         sanitized: dict[str, Any] = {}
-        skipped: list[str] = []
+        skipped: list[dict[str, str]] = []
 
         for key, value in ctx.items():
             try:
@@ -1205,6 +1219,7 @@ class PipelineContextStrategy(ContextStrategy):
             ) as exc:
                 if self._sanitization_mode == SanitizationMode.STRICT:
                     raise
+                reason = str(exc)
                 logger.warning(
                     "Sanitization: skipping field '%s': %s",
                     key,
@@ -1212,10 +1227,11 @@ class PipelineContextStrategy(ContextStrategy):
                     extra={
                         "event": "sanitization_field_skipped",
                         "field": key,
-                        "reason": str(exc),
+                        "reason": reason,
                     },
                 )
-                skipped.append(key)
+                # REQ-MSR-200: Persist structured skip reason
+                skipped.append({"field": key, "reason": reason[:200]})
 
         return sanitized, skipped
 

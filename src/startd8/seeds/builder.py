@@ -372,6 +372,65 @@ class SeedBuilder:
         warnings.extend(validate_seed_field_coverage(seed_dict))
         return warnings
 
+    def distribute_quality_hints(
+        self,
+        suggestions: Optional[List[Dict[str, Any]]] = None,
+    ) -> "SeedBuilder":
+        """Distribute kaizen suggestions to per-task quality_hints (REQ-RFL-310).
+
+        Matches suggestions to tasks by pattern affinity (domain/target_file
+        overlap).  Unmatched suggestions are injected into ALL tasks as
+        run-level hints.  Capped at 3 quality hints per task.
+
+        Args:
+            suggestions: Kaizen suggestions (from postmortem or refine).
+                Falls back to self._refine_suggestions if not provided.
+        """
+        source = suggestions if suggestions is not None else self._refine_suggestions
+        if not source or not self._tasks:
+            return self
+
+        for task in self._tasks:
+            config = task.get("config", {})
+            context = config.get("context", {})
+            hints = list(context.get("quality_hints", []))
+            target_files = context.get("target_files", [])
+            domain = task.get("_enrichment", {}).get("domain", "")
+
+            matched: List[str] = []
+            unmatched: List[str] = []
+
+            for suggestion in source:
+                hint_text = suggestion.get("hint", "")
+                if not hint_text:
+                    continue
+                pattern = suggestion.get("pattern_type", "")
+                phase = suggestion.get("phase", "")
+                # Match by domain or file overlap
+                observed = suggestion.get("observed_context", "")
+                if (
+                    (domain and domain in observed)
+                    or any(
+                        tf in observed
+                        for tf in target_files
+                        if isinstance(tf, str) and tf
+                    )
+                    or (pattern and pattern in str(context))
+                ):
+                    matched.append(hint_text)
+                else:
+                    unmatched.append(hint_text)
+
+            # Matched suggestions take priority
+            all_hints = matched + unmatched
+            for h in all_hints:
+                if h not in hints and len(hints) < 3:
+                    hints.append(h)
+
+            context["quality_hints"] = hints
+
+        return self
+
     def build(self) -> Dict[str, Any]:
         """Build and return the seed dict."""
         return self._to_dict()
