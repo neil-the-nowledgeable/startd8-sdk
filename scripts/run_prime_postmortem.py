@@ -511,6 +511,113 @@ def _collect_todo_metrics(output_dir: Path, report: object) -> dict:
         return {}
 
 
+def _merge_query_security_from_project_root(
+    metrics: dict, output_dir: Path,
+) -> None:
+    """REQ-QPA-100: Merge query_security from project-root kaizen-metrics.json.
+
+    The Anzen gate writes ``query_security`` into the project-root
+    kaizen-metrics.json via ``update_query_security_metrics()``.  The
+    pipeline-output copy is built fresh by the postmortem and does NOT
+    include this section.  This function reads the project-root copy and
+    merges the ``query_security`` key if present.
+    """
+    # Walk up from output_dir to find project root (has .startd8/ or .git/)
+    candidate = output_dir
+    for _ in range(10):
+        root_marker = candidate / "kaizen-metrics.json"
+        if root_marker.is_file() and root_marker != output_dir / "kaizen-metrics.json":
+            try:
+                root_data = json.loads(root_marker.read_text(encoding="utf-8"))
+                qs = root_data.get("query_security")
+                if qs:
+                    metrics["query_security"] = qs
+                    return
+            except (json.JSONDecodeError, OSError):
+                pass
+        candidate = candidate.parent
+        if candidate == candidate.parent:
+            break
+
+    # Fallback: check .startd8/kaizen-metrics.json or project root
+    # by looking for .contextcore.yaml or pyproject.toml
+    for marker in (".contextcore.yaml", "pyproject.toml", ".git"):
+        candidate = output_dir
+        for _ in range(10):
+            if (candidate / marker).exists():
+                km = candidate / "kaizen-metrics.json"
+                if km.is_file():
+                    try:
+                        root_data = json.loads(km.read_text(encoding="utf-8"))
+                        qs = root_data.get("query_security")
+                        if qs:
+                            metrics["query_security"] = qs
+                            return
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                break
+            candidate = candidate.parent
+            if candidate == candidate.parent:
+                break
+
+
+def _merge_observability_quality(metrics: dict, output_dir: Path) -> None:
+    """REQ-KZ-OBS-500: Merge observability artifact quality into kaizen-metrics.
+
+    Observability artifacts are generated earlier in the pipeline (before
+    the postmortem runs), writing quality data to observability-quality.json.
+    This function finds that file and merges the ``observability_artifacts``
+    section into the metrics dict before it's written to kaizen-metrics.json.
+    """
+    candidates = [
+        output_dir / "observability-quality.json",
+        output_dir.parent / "observability" / "observability-quality.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                obs = data.get("observability_artifacts")
+                if obs:
+                    metrics["observability_artifacts"] = obs
+                    return
+            except (json.JSONDecodeError, OSError):
+                continue
+
+
+def _copy_security_artifacts_to_pipeline_output(output_dir: Path) -> None:
+    """REQ-QPA-101/102: Copy security gate artifacts to pipeline output.
+
+    The Anzen gate writes ``security-gate-metrics.json`` and
+    ``query-security-metrics.json`` to the project root.  Copy them to
+    the pipeline output directory so trend scripts can find them.
+    """
+    import shutil
+
+    # Find project root
+    candidate = output_dir
+    project_root = None
+    for _ in range(10):
+        if (candidate / ".contextcore.yaml").exists() or (candidate / "pyproject.toml").exists():
+            project_root = candidate
+            break
+        candidate = candidate.parent
+        if candidate == candidate.parent:
+            break
+
+    if project_root is None:
+        return
+
+    for filename in ("security-gate-metrics.json", "query-security-metrics.json"):
+        src = project_root / filename
+        dst = output_dir / filename
+        if src.is_file() and not dst.exists():
+            try:
+                shutil.copy2(str(src), str(dst))
+            except OSError:
+                pass
+
+
 def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = None) -> None:
     """Extract standardized Kaizen metrics from post-mortem report (REQ-KZ-300)."""
     run_id = run_id or _resolve_run_id(output_dir)
@@ -613,12 +720,25 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
     if todo_metrics:
         metrics.update(todo_metrics)
 
+    # REQ-QPA-100: Merge query_security from project-root kaizen-metrics.json
+    # (written by Anzen gate via update_query_security_metrics) into the
+    # pipeline-output copy so cross-run trend scripts can find it.
+    _merge_query_security_from_project_root(metrics, output_dir)
+
+    # REQ-KZ-OBS-500: Merge observability artifact quality into metrics
+    # (obs artifacts are generated earlier in the pipeline, before this
+    # script runs; the data lives in observability-quality.json)
+    _merge_observability_quality(metrics, output_dir)
+
     metrics_path = output_dir / "kaizen-metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, default=str),
         encoding="utf-8",
     )
     print(f"  Kaizen metrics: {metrics_path}")
+
+    # REQ-QPA-101/102: Copy security gate artifacts to pipeline output
+    _copy_security_artifacts_to_pipeline_output(output_dir)
 
 
 # ---------------------------------------------------------------------------
