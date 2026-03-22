@@ -32,7 +32,12 @@ __all__ = [
 
 
 class ContractorRoute(str, Enum):
-    """Target contractor format for the transformed plan."""
+    """Target contractor format for the transformed plan.
+
+    Deprecated: always PRIME. The artisan route is not production-ready.
+    Retained for backward compatibility with existing seed files on disk
+    and telemetry (seed unification REQ-SU-102).
+    """
     PRIME = "prime"
     ARTISAN = "artisan"
 
@@ -88,7 +93,7 @@ class PlanIngestionConfig:
 
     # Routing & complexity
     complexity_threshold: int = 40
-    force_route: Optional[str] = "prime"  # AC-R3 default
+    force_route: Optional[str] = "prime"  # Deprecated: always "prime" (REQ-SU-102)
 
     # Review
     review_rounds: int = 2

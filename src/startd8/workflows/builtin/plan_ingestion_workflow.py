@@ -1622,22 +1622,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 error=f"Failed to parse assessment JSON: {exc}",
             )
 
-        # Determine route from composite score.
-        # NOTE: Complexity routing is EXPERIMENTAL. The Artisan workflow is not
-        # production-ready, so all plans currently route to PRIME regardless of
-        # score. The threshold/margin logic is retained for future use and for
-        # Kaizen telemetry (route_margin tracking).
+        # Composite score retained for quality telemetry (Kaizen seed
+        # fitness scoring). Route is always PRIME (REQ-SU-102).
         composite = _safe_int(data.get("composite"), 50)
-        if force_route:
-            route = ContractorRoute(force_route)
-        else:
-            route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
-            llm_route = data.get("route", "").lower()
-            if llm_route and llm_route != route.value:
-                logger.debug(
-                    "LLM suggested route '%s' but composite %d with threshold %d → '%s'",
-                    llm_route, composite, threshold, route.value,
-                )
+        route = ContractorRoute.PRIME
 
         score = ComplexityScore(
             feature_count=_safe_int(data.get("feature_count"), 0),
@@ -1692,25 +1680,14 @@ class PlanIngestionWorkflow(WorkflowBase):
             for f in parsed_plan.features
         )
 
-        if route == ContractorRoute.PRIME:
-            prompt = _fmt_prompt(
-                "transform_prime",
-                title=parsed_plan.title,
-                goals=", ".join(parsed_plan.goals),
-                features=features_text,
-                dependency_graph=json.dumps(parsed_plan.dependency_graph),
-            )
-            out_filename = "plan-ingestion-tasks.yaml"
-        else:
-            prompt = _fmt_prompt(
-                "transform_artisan",
-                title=parsed_plan.title,
-                goals=", ".join(parsed_plan.goals),
-                features=features_text,
-                mentioned_files=", ".join(parsed_plan.mentioned_files),
-                dependency_graph=json.dumps(parsed_plan.dependency_graph),
-            )
-            out_filename = "PLAN-ingested.md"
+        prompt = _fmt_prompt(
+            "transform_prime",
+            title=parsed_plan.title,
+            goals=", ".join(parsed_plan.goals),
+            features=features_text,
+            dependency_graph=json.dumps(parsed_plan.dependency_graph),
+        )
+        out_filename = "plan-ingestion-tasks.yaml"
 
         # Import guidance: downstream code generators benefit from explicit
         # import requirements in task descriptions.  This default suffix is
@@ -4134,26 +4111,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             # the composite score is artificially low and quality metrics
             # are inflated.  Override routing to artisan unless the user
             # explicitly forced a route.
-            if _heuristic_degraded and not force_route:
-                complexity = _dataclass_replace(complexity, route=ContractorRoute.ARTISAN)
-                state.complexity = complexity
-                state.route = ContractorRoute.ARTISAN
-                steps.append(
-                    StepResult(
-                        step_name="assess:heuristic-degradation-override",
-                        output=(
-                            "Heuristic parse produced single fallback feature — "
-                            "routing forced to artisan to prevent under-orchestration"
-                        ),
-                    )
-                )
-                if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
-                    _assess_span.add_event("decision.route_override", {
-                        "reason": "heuristic_degradation",
-                        "original_route": complexity.route.value,
-                        "forced_route": "artisan",
-                    })
-
             low_quality_reasons: List[str] = []
             if (
                 translation_quality["requirements_coverage_percent"]
@@ -4174,7 +4131,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     f"conflict_count={translation_quality['conflict_count']}"
                 )
 
-            if not force_route and low_quality_reasons:
+            if low_quality_reasons:
                 details = ", ".join(low_quality_reasons)
                 if low_quality_policy == "fail":
                     if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
@@ -4185,28 +4142,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     return _fail(
                         "Translation quality gate failed: "
                         + details
-                        + ". Either improve mappings or use low_quality_policy=bias_artisan."
+                        + ". Improve mappings or set low_quality_policy to 'warn'."
                     )
-                complexity = _dataclass_replace(complexity, route=ContractorRoute.ARTISAN)
-                state.complexity = complexity
-                state.route = ContractorRoute.ARTISAN
-                steps.append(
-                    StepResult(
-                        step_name="assess:quality-override",
-                        output=(
-                            "Low translation quality detected; routing forced to artisan. "
-                            + details
-                        ),
-                    )
+                logger.warning(
+                    "Low translation quality detected (advisory): %s", details,
                 )
-                if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
-                    _assess_span.add_event("decision.route_override", {
-                        "reason": "low_translation_quality",
-                        "policy": low_quality_policy,
-                        "details": details,
-                        "original_route": complexity.route.value,
-                        "forced_route": "artisan",
-                    })
 
             logger.debug(
                 "Complexity: %d → route=%s (threshold=%d)",
@@ -4252,11 +4192,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan, route, transformer, output_dir,
             )
             if transform_step.error and enable_heuristic_parse_fallback:
-                out_filename = (
-                    "plan-ingestion-tasks.yaml"
-                    if route == ContractorRoute.PRIME
-                    else "PLAN-ingested.md"
-                )
+                out_filename = "plan-ingestion-tasks.yaml"
                 doc_path = output_dir / out_filename
                 output_dir.mkdir(parents=True, exist_ok=True)
                 atomic_write(doc_path, _heuristic_transform_content(parsed_plan, route))
@@ -4309,52 +4245,51 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if _kz and _kz.refine_rounds_override is not None:
                     review_rounds = _kz.refine_rounds_override
 
-                if route == ContractorRoute.PRIME:
-                    # Give the reviewer the plan markdown as context
-                    _plan_str = str(plan_path)
-                    if _plan_str not in _refine_context:
-                        _refine_context.append(_plan_str)
+                # Give the reviewer the plan markdown as context
+                _plan_str = str(plan_path)
+                if _plan_str not in _refine_context:
+                    _refine_context.append(_plan_str)
 
-                    if not _refine_scope:
-                        _refine_scope = (
-                            "Enrich task descriptions for code generation. "
-                            "For each task, cross-reference the plan markdown "
-                            "and requirements to add: (1) a fenced code example "
-                            "showing the primary class/function signature, "
-                            "(2) negative scope — what the task should NOT do "
-                            "(extract exclusions from the plan's Dependencies, "
-                            "Notes, and Out-of-Scope sections; also infer "
-                            "boundaries from sibling tasks to prevent overlap), "
-                            "(3) error handling patterns from the implementation "
-                            "contract, (4) requirements references (REQ-xxx IDs). "
-                            "Prioritize tasks with thin descriptions."
-                        )
+                if not _refine_scope:
+                    _refine_scope = (
+                        "Enrich task descriptions for code generation. "
+                        "For each task, cross-reference the plan markdown "
+                        "and requirements to add: (1) a fenced code example "
+                        "showing the primary class/function signature, "
+                        "(2) negative scope — what the task should NOT do "
+                        "(extract exclusions from the plan's Dependencies, "
+                        "Notes, and Out-of-Scope sections; also infer "
+                        "boundaries from sibling tasks to prevent overlap), "
+                        "(3) error handling patterns from the implementation "
+                        "contract, (4) requirements references (REQ-xxx IDs). "
+                        "Prioritize tasks with thin descriptions."
+                    )
 
-                    # Custom review profile focused on enrichment rather
-                    # than architectural critique.
-                    _refine_profile = {
-                        "persona": (
-                            "senior software engineer preparing task specifications "
-                            "for an AI code generator"
-                        ),
-                        "focus": (
-                            "enriching task descriptions with concrete code examples, "
-                            "explicit negative scope boundaries, error handling "
-                            "patterns, and requirements traceability references"
-                        ),
-                        "areas": [
-                            "completeness", "clarity", "testability",
-                            "architecture", "security", "maintainability",
-                            "scalability",
-                        ],
-                    }
+                # Custom review profile focused on enrichment rather
+                # than architectural critique.
+                _refine_profile = {
+                    "persona": (
+                        "senior software engineer preparing task specifications "
+                        "for an AI code generator"
+                    ),
+                    "focus": (
+                        "enriching task descriptions with concrete code examples, "
+                        "explicit negative scope boundaries, error handling "
+                        "patterns, and requirements traceability references"
+                    ),
+                    "areas": [
+                        "completeness", "clarity", "testability",
+                        "architecture", "security", "maintainability",
+                        "scalability",
+                    ],
+                }
 
-                    # Default to triage+apply so enrichment suggestions
-                    # are integrated into the YAML before EMIT reads it.
-                    if _refine_apply is None:
-                        _refine_apply = True
-                    if _refine_triage is None:
-                        _refine_triage = True
+                # Default to triage+apply so enrichment suggestions
+                # are integrated into the YAML before EMIT reads it.
+                if _refine_apply is None:
+                    _refine_apply = True
+                if _refine_triage is None:
+                    _refine_triage = True
 
                 # Apply kaizen overrides after defaults are set
                 if _kz:

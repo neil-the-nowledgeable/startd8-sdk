@@ -362,10 +362,9 @@ def _heuristic_assess_complexity(
              + ambiguity) / 7
         )
 
-    if force_route:
-        route = ContractorRoute(force_route)
-    else:
-        route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
+    # Route is always PRIME (REQ-SU-102). Composite score retained for
+    # quality telemetry only.
+    route = ContractorRoute.PRIME
 
     # Phase 6: CG-PI-2,3,4 — feature-level annotations
     if manifest_registry is not None:
@@ -431,47 +430,36 @@ def _heuristic_assess_complexity(
 
 
 def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute) -> str:
-    """Deterministic fallback transform output."""
+    """Deterministic fallback transform — always produces YAML task list."""
     import yaml
 
-    if route == ContractorRoute.PRIME:
-        tasks = []
-        fid_to_tid = {
-            f.feature_id: f"PI-{idx:03d}"
-            for idx, f in enumerate(parsed_plan.features, start=1)
-        }
-        for idx, f in enumerate(parsed_plan.features, start=1):
-            deps = [
-                fid_to_tid[dep]
-                for dep in f.dependencies
-                if dep in fid_to_tid
-            ]
-            tasks.append(
-                {
-                    "task_id": f"PI-{idx:03d}",
-                    "title": f.name,
-                    "task_type": "task",
-                    "priority": "medium",
-                    "story_points": 3,
-                    "labels": list(f.labels) or ["implementation"],
-                    "depends_on": deps,
-                    "config": {
-                        "task_description": f.description or f.name,
-                        "context": {"feature_id": f.feature_id, "target_files": list(f.target_files)},
-                    },
-                }
-            )
-        return yaml.safe_dump({"tasks": tasks}, sort_keys=False)
-
-    lines = [f"# {parsed_plan.title}", "", "## Overview"]
-    if parsed_plan.goals:
-        lines.extend([f"- {g}" for g in parsed_plan.goals])
-    else:
-        lines.append("Generated via heuristic fallback transform.")
-    lines.extend(["", "## Phase Breakdown"])
-    for f in parsed_plan.features:
-        lines.extend([f"### {f.feature_id}: {f.name}", f.description or f.name, ""])
-    return "\n".join(lines).strip() + "\n"
+    tasks = []
+    fid_to_tid = {
+        f.feature_id: f"PI-{idx:03d}"
+        for idx, f in enumerate(parsed_plan.features, start=1)
+    }
+    for idx, f in enumerate(parsed_plan.features, start=1):
+        deps = [
+            fid_to_tid[dep]
+            for dep in f.dependencies
+            if dep in fid_to_tid
+        ]
+        tasks.append(
+            {
+                "task_id": f"PI-{idx:03d}",
+                "title": f.name,
+                "task_type": "task",
+                "priority": "medium",
+                "story_points": 3,
+                "labels": list(f.labels) or ["implementation"],
+                "depends_on": deps,
+                "config": {
+                    "task_description": f.description or f.name,
+                    "context": {"feature_id": f.feature_id, "target_files": list(f.target_files)},
+                },
+            }
+        )
+    return yaml.safe_dump({"tasks": tasks}, sort_keys=False)
 
 
 def _infer_file_role(file_path: str) -> str:

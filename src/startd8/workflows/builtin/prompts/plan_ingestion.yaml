@@ -151,33 +151,3 @@ prompts:
       5. **Negative scope** — "This task should NOT: ..." listing explicit exclusions
 
       Do NOT produce single-line descriptions. A one-sentence summary is insufficient for code generation.
-
-  transform_artisan:
-    description: >
-      Converts parsed plan to structured markdown plan document for ArtisanContractor workflow.
-    template: |
-      You are a plan document generator for the ArtisanContractor workflow.
-
-      Convert the following parsed plan into a structured markdown plan document.
-
-      The document must have these sections:
-      1. **Overview** — title, goals, scope
-      2. **Data Models** — key data structures
-      3. **Architecture** — component diagram, file layout
-      4. **Phase Breakdown** — implementation phases with deliverables
-      5. **Cost Model** — estimated token usage per phase
-      6. **Risk Register** — risks and mitigations
-      7. **Verification** — test strategy, acceptance criteria
-      8. **Dependencies** — external deps, inter-feature deps
-
-      <plan>
-      Title: {title}
-      Goals: {goals}
-      Features:
-      {features}
-      Mentioned files: {mentioned_files}
-      Dependency graph: {dependency_graph}
-      </plan>
-
-      Generate a complete, well-structured markdown document.
-      Use ## for top-level sections, ### for subsections.
