@@ -318,6 +318,43 @@ The `JavaLanguageProfile` has `repair_enabled = False`. This section documents t
 
 Without auto-import repair, Java files with missing imports fail compilation but cannot be auto-fixed. This makes the feedback loop (REQ-KZ-JV-500) the primary mechanism for reducing import errors: rather than repairing after generation, the system steers the LLM to produce correct imports upfront via Kaizen hints.
 
+### REQ-KZ-JV-402: Java Semantic-to-Repair Bridge Convention
+
+**Status:** Phase 1 (advisory-only; `sql_injection_risk` flows through shared bridge)
+**Depends on:** REQ-KZ-JV-400, REQ-KZ-CS-402a (multi-language dispatch pattern)
+
+Wire Java semantic check results into the repair pipeline, following the pattern established by C#'s REQ-KZ-CS-402a/b/c. Java's `java_semantic_checks.py` produces 9 categories; each is classified as **repairable** (routed to a repair step) or **advisory-only** (surfaced as Kaizen hints in postmortem).
+
+#### REQ-KZ-JV-402a: Multi-Language Dispatch
+
+Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS` in `repair/orchestrator.py` when at least one Java-specific repair step exists (Phase 2+). `sql_injection_risk` already flows through the shared `_REPAIRABLE_CATEGORIES` entry added for C#.
+
+#### REQ-KZ-JV-402b: Category Registration
+
+| Category | Severity | Classification | Rationale |
+|---|---|---|---|
+| `sql_injection_risk` | error | **Repairable** | Already in `_REPAIRABLE_CATEGORIES` (shared with C#). No Java-specific step yet — Phase 3 adds PreparedStatement conversion. |
+| `wildcard_import` | warning | **Potentially repairable** | `google-java-format --fix-imports-only` can replace wildcards. Phase 2 target. |
+| `system_out_in_service` | warning | Advisory | Requires logging framework config knowledge. |
+| `interface_file_contains_class` | warning | Advisory | Requires file splitting + import graph updates. |
+| `empty_catch_block` | warning | Advisory | Correct fix depends on exception semantics. |
+| `raw_type_usage` | warning | Advisory | Generic inference requires type-checker context. |
+| `missing_override` | warning | Advisory | Requires class hierarchy resolution. |
+| `missing_access_modifier` | warning | Advisory | Correct modifier depends on intended API surface. |
+| `package_filepath_mismatch` | warning | Advisory | Fix has downstream ripple effects. |
+
+#### REQ-KZ-JV-402c: Compliance Results Collection
+
+**Status:** IMPLEMENTED (2026-03-22). Java semantic results stored in `compliance_results`.
+
+#### REQ-KZ-JV-402d: Phased Repair Step Plan
+
+**Phase 1 (current):** All categories advisory-only. `sql_injection_risk` flows through shared bridge but no Java-specific repair step fires.
+
+**Phase 2:** `JavaImportSortStep` wrapping `google-java-format --fix-imports-only`. Register `wildcard_import` as repairable. Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS`.
+
+**Phase 3:** `JavaSqlParameterizeStep` — deterministic rewrite of `"SELECT..." + var` to `PreparedStatement` with `?` placeholders and `setString()`/`setInt()` calls.
+
 ---
 
 ## 6. Feedback Loop Hints

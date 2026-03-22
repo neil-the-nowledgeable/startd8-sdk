@@ -362,6 +362,48 @@ Repairs execute in this order (consistent with the parent repair pipeline):
 
 If re-validation fails after all repair steps, the file is marked as `repair_failed` and the original (pre-repair) version is preserved alongside the attempted repair for diagnostic comparison.
 
+### REQ-KZ-ND-402: Node.js Semantic-to-Repair Bridge Convention
+
+**Status:** Phase 1 (advisory-only; no Node.js semantic repair steps yet)
+**Depends on:** REQ-KZ-ND-400, REQ-KZ-ND-300
+**Analogous to:** REQ-KZ-CS-402a/b/c
+
+The Node.js semantic checks module (`nodejs_semantic_checks.py`) produces 6 categorized findings. This requirement defines which are auto-repairable, which remain advisory-only, and the phased rollout plan.
+
+**Invariant:** A category MUST NOT appear in `_REPAIRABLE_CATEGORIES` until a deterministic repair step exists.
+
+#### REQ-KZ-ND-402a: Multi-Language Dispatch
+
+Add `.js`, `.jsx`, `.ts`, `.tsx` to `_SEMANTIC_REPAIR_EXTENSIONS` when Phase 2 repair steps exist. Phase 1: JS/TS files are NOT dispatched to semantic repair.
+
+#### REQ-KZ-ND-402b: Category Registration
+
+| Category | Severity | Classification | Rationale |
+|---|---|---|---|
+| `var_usage` | warning | **Repairable** | Regex `s/\bvar\b/const/` or `eslint --fix` with `no-var` rule. Deterministic. |
+| `duplicate_require` | warning | **Repairable** | Remove duplicate `require()`/`import` lines keeping first occurrence. |
+| `python_contamination` | error | **Repairable** | Line removal of Python fingerprints. Shared pattern with other profiles. |
+| `console_log_in_service` | warning | Advisory | Replacement requires project-specific logger knowledge (winston/pino/bunyan). |
+| `unhandled_promise` | warning | Advisory | `try/catch` wrapping requires understanding error propagation scope. |
+| `module_system_mixing` | error | Advisory | CJS↔ESM conversion involves package.json `"type"` field + consumer compat. |
+
+#### REQ-KZ-ND-402c: Compliance Results Collection
+
+**Status:** IMPLEMENTED (2026-03-22). Node.js semantic results stored in `compliance_results`.
+
+#### REQ-KZ-ND-402d: Phased Repair Step Plan
+
+**Phase 1 (current):** All 6 categories advisory-only. Visible in postmortem/Kaizen scoring.
+
+**Phase 2:** Three deterministic text-based steps (no external tool dependency):
+1. **`var_to_const`** — Regex `s/\bvar\s+/const /g`. Downstream `node --check` catches incorrect `const` for reassigned vars.
+2. **`dedup_require`** — Track seen specifiers, remove duplicate `require()`/`import` lines.
+3. **`contamination_strip_js`** — Remove Python fingerprint lines. Reuse pattern list from cross-language contamination strip.
+
+Register `var_usage`, `duplicate_require`, `python_contamination` as repairable. Add JS/TS extensions to `_SEMANTIC_REPAIR_EXTENSIONS`.
+
+**Phase 3:** `eslint --fix` integration as composite step. Falls back to Phase 2 text-based steps if `eslint` unavailable. Potentially promotes additional categories as ESLint auto-fix coverage expands.
+
 ---
 
 ## 6. Feedback Loop Hints

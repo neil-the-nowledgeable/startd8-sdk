@@ -327,6 +327,43 @@ func main() {
 
 **Note:** The Python repair pipeline already has `fence_strip` in `repair/steps/`. The Go implementation should reuse the same logic or share a language-agnostic fence strip utility.
 
+### REQ-KZ-GO-403: Go Semantic-to-Repair Bridge Convention
+
+**Status:** Phase 1 (advisory-only; no Go repair steps yet)
+**Depends on:** REQ-KZ-GO-400, REQ-KZ-GO-401, REQ-KZ-GO-402
+**Analogous to:** REQ-KZ-CS-402a/b/c
+
+Go semantic checks (`go_semantic_checks.py`) produce 6 diagnostic categories. This requirement defines how they integrate with the repair pipeline. Go lacks a Python-hosted AST layer, so deterministic repairs are limited to text-based transformations.
+
+#### REQ-KZ-GO-403a: Multi-Language Dispatch
+
+Add `".go"` to `_SEMANTIC_REPAIR_EXTENSIONS` when Phase 2 repair steps exist. Phase 1: `.go` is NOT dispatched to semantic repair.
+
+#### REQ-KZ-GO-403b: Category Registration
+
+| Category | Severity | Phase 1 | Phase 2 | Rationale |
+|---|---|---|---|---|
+| `unchecked_error` | warning | Advisory | Advisory | Requires AST transformation for `if err != nil` blocks. |
+| `duplicate_function` | warning | Advisory | Advisory | Requires human decision on which definition to keep. |
+| `fmt_println_in_service` | warning | Advisory | Advisory | Requires import rewrite (`fmt` → `log`) + function replacement. |
+| `dot_import` | warning | Advisory | **Repairable** | Text replacement: `import . "pkg"` → `import "pkg"` + `goimports -w`. |
+| `python_contamination` | error | Advisory | **Repairable** | Line removal of Python artifacts + `gofmt -w` validation. |
+| `package_dir_mismatch` | warning | Advisory | Advisory | Requires file/package rename with downstream effects. |
+
+#### REQ-KZ-GO-403c: Compliance Results Collection
+
+**Status:** IMPLEMENTED (2026-03-22). Go semantic results stored in `compliance_results`.
+
+#### REQ-KZ-GO-403d: Phased Repair Step Plan
+
+**Phase 1 (current):** All 6 categories advisory-only. Visible in postmortem/Kaizen. No repair dispatch for `.go` files.
+
+**Phase 2:** Two deterministic text-based steps:
+1. **`go_dot_import_cleanup`** — Regex `import . "pkg"` → `import "pkg"`, then `goimports -w` to qualify symbols. Rollback if `goimports` exits non-zero.
+2. **`go_python_contamination_strip`** — Remove Python fingerprint lines, then `gofmt -w` to verify file still parses. Rollback on failure.
+
+Phase 2 activation: register both steps in `routing.py`, add `dot_import` and `python_contamination` to `_REPAIRABLE_CATEGORIES`, add `".go"` to `_SEMANTIC_REPAIR_EXTENSIONS`.
+
 ---
 
 ## 6. Feedback Loop Hints
