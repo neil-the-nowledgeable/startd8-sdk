@@ -2587,17 +2587,23 @@ class PrimeContractorWorkflow:
             return
 
         # Search candidates in priority order.
-        # Walk up from output_dir looking for sibling run-* directories.
+        # Walk up from output_dir looking for sibling run directories.
         # Handles multiple nesting depths:
         #   - Flat:   output_dir = .../run-093/                 (runs are siblings)
         #   - Nested: output_dir = .../run-095/plan-ingestion/  (runs are at grandparent)
         #   - Deep:   output_dir = .../run-099/plan-ingestion/generated/ (runs at great-grandparent)
         candidates: list[Path] = []
 
-        # 1. Current output dir (same-dir re-run picks up prior suggestions)
-        candidates.append(output_dir / "kaizen-suggestions.json")
+        # Identify the current run's root directory so we can exclude
+        # our own files (which don't exist at run start but may exist
+        # on re-runs or if the postmortem already wrote them).
+        current_run_root = output_dir
+        for _p in [output_dir] + list(output_dir.parents):
+            if _p.name.startswith("run-"):
+                current_run_root = _p
+                break
 
-        # 2. Walk up to 3 ancestor levels looking for sibling run directories
+        # Walk up to 4 ancestor levels looking for sibling run directories
         seen_ancestors: set = set()
         ancestor = output_dir
         for _depth in range(4):
@@ -2613,16 +2619,21 @@ class PrimeContractorWorkflow:
             for sibling in siblings:
                 if not sibling.is_dir() or sibling == output_dir:
                     continue
-                # Skip if sibling is an ancestor of output_dir (don't re-enter our own tree)
+                # Skip anything inside the current run's tree
+                if sibling == current_run_root:
+                    continue
                 try:
-                    output_dir.relative_to(sibling)
-                    continue  # sibling is an ancestor — skip
+                    sibling.relative_to(current_run_root)
+                    continue
+                except ValueError:
+                    pass
+                try:
+                    current_run_root.relative_to(sibling)
+                    continue  # sibling is an ancestor of current run — skip
                 except ValueError:
                     pass
                 candidates.append(sibling / "kaizen-suggestions.json")
                 candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
-            # Also check the ancestor dir itself (flat layout)
-            candidates.append(ancestor / "kaizen-suggestions.json")
 
         for path in candidates:
             if not path.is_file():
