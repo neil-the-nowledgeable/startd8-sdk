@@ -136,6 +136,31 @@ def main() -> int:
             score_str = f" score={a.quality['score']:.0%}" if a.quality else ""
             print(f"  {marker} {a.output_path} ({a.status}{score_str})")
 
+    # REQ-OPI-500: Dashboard spec → /dbrd-cr8r handoff details
+    dashboards = [
+        a for a in report.artifacts
+        if a.artifact_type == "dashboard_spec" and a.status == "generated"
+    ]
+    if dashboards and not args.dry_run:
+        print(f"\n  ┌─────────────────────────────────────────────────────────┐")
+        print(f"  │  Dashboard Specs Ready for Grafana Compilation          │")
+        print(f"  ├─────────────────────────────────────────────────────────┤")
+        for d in dashboards:
+            spec_path = output / d.output_path
+            score_str = f" (quality: {d.quality['score']:.0%})" if d.quality else ""
+            print(f"  │  {d.service_id}{score_str}")
+            print(f"  │    spec: {spec_path}")
+        print(f"  ├─────────────────────────────────────────────────────────┤")
+        print(f"  │  To compile to Grafana JSON:                            │")
+        print(f"  │    /dbrd-cr8r --spec <path>                             │")
+        print(f"  │                                                         │")
+        print(f"  │  To compile + provision to Grafana:                     │")
+        print(f"  │    /dbrd-cr8r --spec <path> --provision                 │")
+        print(f"  │                                                         │")
+        print(f"  │  Pipeline: DashboardSpec YAML → Jsonnet → Grafana JSON  │")
+        print(f"  │  Requires: jsonnet toolchain (go-jsonnet or jsonnet)     │")
+        print(f"  └─────────────────────────────────────────────────────────┘")
+
     # Best-effort provenance append
     if not args.dry_run and generated > 0:
         provenance_path = onboarding.parent / "run-provenance.json"
@@ -148,7 +173,11 @@ def _write_quality_to_kaizen_metrics(
     output_dir: Path,
     scored_artifacts: list,
 ) -> None:
-    """Append observability_artifacts section to kaizen-metrics.json (REQ-KZ-OBS-500)."""
+    """Append observability_artifacts section to kaizen-metrics.json (REQ-KZ-OBS-500).
+
+    Includes per-type averages, per-service triplet evaluation (REQ-KZ-OBS-501),
+    and cross-artifact consistency issues (REQ-KZ-OBS-400–403).
+    """
     # Find kaizen-metrics.json — look in parent dirs (plan-ingestion level)
     candidates = [
         output_dir.parent / "kaizen-metrics.json",
@@ -188,6 +217,74 @@ def _write_quality_to_kaizen_metrics(
 
     all_scores = [a.quality["score"] for a in scored_artifacts]
     obs_section["avg_composite_score"] = round(sum(all_scores) / len(all_scores), 4)
+
+    # Per-service triplet evaluation (REQ-KZ-OBS-501)
+    services: dict = {}
+    for a in scored_artifacts:
+        svc = services.setdefault(a.service_id, {})
+        svc[a.artifact_type] = a.quality["score"]
+        svc.setdefault("issues", []).extend(a.quality.get("issues", []))
+        svc["content_" + a.artifact_type] = getattr(a, "content", "")
+
+    service_evaluations = []
+    for svc_id, svc_data in services.items():
+        dash_score = svc_data.get("dashboard_spec", 0.0)
+        alert_score = svc_data.get("alert_rule", 0.0)
+        slo_score = svc_data.get("slo_definition", 0.0)
+
+        try:
+            from startd8.validators.observability_artifact_checks import (
+                compute_service_composite,
+            )
+            composite = compute_service_composite(dash_score, alert_score, slo_score)
+        except ImportError:
+            composite = (dash_score * 0.35) + (alert_score * 0.35) + (slo_score * 0.30)
+
+        eval_entry = {
+            "service_id": svc_id,
+            "dashboard_score": round(dash_score, 4),
+            "alert_score": round(alert_score, 4),
+            "slo_score": round(slo_score, 4),
+            "composite_score": round(composite, 4),
+            "issues": svc_data.get("issues", []),
+        }
+
+        # Cross-artifact consistency (REQ-KZ-OBS-400–403)
+        try:
+            from startd8.validators.observability_artifact_checks import (
+                validate_cross_artifact_consistency,
+            )
+            cross = validate_cross_artifact_consistency(
+                dashboard_content=svc_data.get("content_dashboard_spec"),
+                alert_content=svc_data.get("content_alert_rule"),
+                slo_content=svc_data.get("content_slo_definition"),
+                service_id=svc_id,
+            )
+            eval_entry["cross_artifact_issues"] = cross.to_dict()
+        except ImportError:
+            eval_entry["cross_artifact_issues"] = {}
+
+        service_evaluations.append(eval_entry)
+
+    obs_section["services_evaluated"] = len(services)
+    complete = sum(
+        1 for s in services.values()
+        if all(k in s for k in ("dashboard_spec", "alert_rule", "slo_definition"))
+    )
+    obs_section["services_with_complete_triplet"] = complete
+    obs_section["service_evaluations"] = service_evaluations
+
+    # Aggregate cross-artifact issues
+    cross_totals = {
+        "unvisualized_alerts": 0,
+        "unalerted_slos": 0,
+        "misaligned_thresholds": 0,
+        "unused_derivations": 0,
+    }
+    for ev in service_evaluations:
+        for key in cross_totals:
+            cross_totals[key] += ev.get("cross_artifact_issues", {}).get(key, 0)
+    obs_section["cross_artifact_issues"] = cross_totals
 
     existing["observability_artifacts"] = obs_section
 
