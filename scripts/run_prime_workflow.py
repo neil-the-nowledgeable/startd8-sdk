@@ -598,8 +598,33 @@ def main() -> int:
         workflow._kaizen.config = workflow._load_kaizen_config(args.kaizen_config)
 
     # Wire TODO completion (REQ-TCW-400)
+    # Activated by any of:
+    #   --todo-completion CLI flag
+    #   ENABLE_TODO_COMPLETION=true (explicit)
+    #   ENABLE_INSTRUMENTATION=true (pipeline mode — also triggers v2 subprocess,
+    #     but v3 in-band runs first so it pre-empts the deprecated path)
+    #   ENABLE_INSTRUMENTATION=auto + generation_profile in {source, full}
     _todo_env = os.environ.get("ENABLE_TODO_COMPLETION", "").lower()
-    if _todo_env == "true" or getattr(args, "todo_completion", False):
+    _instr_env = os.environ.get("ENABLE_INSTRUMENTATION", "").lower()
+    _todo_enabled = (
+        getattr(args, "todo_completion", False)
+        or _todo_env == "true"
+        or _instr_env == "true"
+    )
+    if not _todo_enabled and _instr_env == "auto":
+        # Auto mode: enable if generation profile implies instrumentation
+        _profile = os.environ.get("GENERATION_PROFILE", "").lower()
+        if not _profile:
+            # Try to read from seed
+            try:
+                import json as _json
+                _seed_data = _json.loads(Path(args.seed).read_text(encoding="utf-8"))
+                _profile = _seed_data.get("generation_profile", "").lower()
+            except (OSError, ValueError, AttributeError):
+                pass
+        if _profile in ("source", "full"):
+            _todo_enabled = True
+    if _todo_enabled:
         workflow.enable_todo_completion()
 
     # ------------------------------------------------------------------

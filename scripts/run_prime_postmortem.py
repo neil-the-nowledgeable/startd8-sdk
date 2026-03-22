@@ -453,6 +453,64 @@ def _resolve_pipeline_base(output_dir: Path) -> Path:
     return output_dir.parent
 
 
+def _collect_todo_metrics(output_dir: Path, report: object) -> dict:
+    """Collect TODO completion metrics for kaizen-metrics.json (REQ-TCW-401).
+
+    Reads the instrumentation inventory and result files produced by the
+    TODO completion workflow (v2 subprocess or v3 in-band) and returns
+    metrics for inclusion in kaizen-metrics.json.
+    """
+    instr_dir = output_dir / "instrumentation"
+    inventory_path = instr_dir / "todo-inventory.json"
+    result_path = instr_dir / "instrumentation-result.json"
+
+    if not inventory_path.exists():
+        return {}
+
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        summary = inventory.get("summary", {})
+        total = summary.get("total", 0)
+
+        metrics: dict = {
+            "todo_count": total,
+            "todo_count_a": summary.get("A", 0),
+            "todo_count_b": summary.get("B", 0),
+            "todo_count_c": summary.get("C", 0),
+            "todo_security_count": summary.get("security_todos", 0),
+        }
+
+        if result_path.exists():
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            completed = result.get("todo_completed", 0)
+            metrics["todo_completed"] = completed
+            metrics["todo_deferred"] = result.get("todo_deferred", total)
+            metrics["todo_completion_rate"] = (
+                round(completed / total * 100, 2) if total > 0 else 0.0
+            )
+            metrics["todo_executed"] = result.get("executed", False)
+        else:
+            metrics["todo_completed"] = 0
+            metrics["todo_deferred"] = total
+            metrics["todo_completion_rate"] = 0.0
+
+        # Also count TODOs detected in per-feature postmortem data
+        feature_todo_total = 0
+        for fpm in getattr(report, "features", []):
+            feature_todo_total += (
+                getattr(fpm, "todo_count_a", 0)
+                + getattr(fpm, "todo_count_b", 0)
+                + getattr(fpm, "todo_count_c", 0)
+            )
+        if feature_todo_total > 0:
+            metrics["todo_count_from_postmortem"] = feature_todo_total
+
+        return metrics
+    except (json.JSONDecodeError, OSError, TypeError) as exc:
+        print(f"  [kaizen] Warning: failed to collect TODO metrics: {exc}")
+        return {}
+
+
 def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = None) -> None:
     """Extract standardized Kaizen metrics from post-mortem report (REQ-KZ-300)."""
     run_id = run_id or _resolve_run_id(output_dir)
@@ -549,6 +607,11 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
         repair_summary["total_repairs"] = total_repairs
         repair_summary["features_repaired"] = features_repaired
         metrics["semantic_repair_summary"] = repair_summary
+
+    # REQ-TCW-401: TODO completion metrics
+    todo_metrics = _collect_todo_metrics(output_dir, report)
+    if todo_metrics:
+        metrics.update(todo_metrics)
 
     metrics_path = output_dir / "kaizen-metrics.json"
     metrics_path.write_text(
