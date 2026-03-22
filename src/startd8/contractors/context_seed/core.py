@@ -3105,6 +3105,10 @@ class Test{class_name}:
                     # made.  Historical cost tracked in metadata["resumed_cost"].
                     total_cost = 0.0
                     truncation_flags = saved.get("truncation_flags", {})
+                    # Restore downstream_map from cache (mirrors legacy path Fix 1)
+                    _cached_dm = saved.get("downstream_map", {})
+                    if isinstance(_cached_dm, dict) and _cached_dm:
+                        downstream_map = _cached_dm
                     logger.info(
                         "IMPLEMENT inner loop: resumed %d tasks from cache ($%.4f)",
                         len(cached_results), resumed_cost,
