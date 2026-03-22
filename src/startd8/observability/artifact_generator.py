@@ -204,8 +204,10 @@ def _is_non_service_entry(
     if project_name and svc_id == project_name:
         return True
 
-    # Known non-service directory names
-    if svc_id.lower() in _NON_SERVICE_NAMES:
+    # Known non-service directory names — check both exact match and as
+    # path segments so compound IDs like "online-boutique/protos" are caught.
+    svc_parts = {p.lower() for p in svc_id.replace("\\", "/").split("/")}
+    if svc_parts & _NON_SERVICE_NAMES:
         return True
 
     # Entries ending in common non-service suffixes
@@ -349,8 +351,12 @@ def _parse_duration_to_seconds(value: str) -> float:
 
 
 def _parse_availability_to_fraction(value: str) -> float:
-    """Parse '99.9' → 0.999, '99.95' → 0.9995."""
-    return float(value.strip()) / 100.0
+    """Parse '99.9' → 0.999, '99.95' → 0.9995.
+
+    Rounds to 6 decimal places to avoid IEEE 754 artifacts like
+    0.9990000000000001 in generated YAML/PromQL.
+    """
+    return round(float(value.strip()) / 100.0, 6)
 
 
 def _prom_name(otel_name: str) -> str:
@@ -596,9 +602,17 @@ def _alert_name(service_id: str, suffix: str) -> str:
 
 
 def _error_filter_for_protocol(transport: str) -> str:
-    """Return the PromQL label filter for error responses by protocol."""
+    """Return the PromQL label filter for error responses by protocol.
+
+    gRPC codes per OTel semantic conventions (server-side failures only):
+    - Unavailable (14): service not reachable
+    - Internal (13): unhandled server error
+    - Unimplemented (12): method not supported
+    - DataLoss (15): unrecoverable data loss
+    Unknown (2) is excluded — it is ambiguous and often client-side.
+    """
     if transport == "grpc":
-        return 'grpc_code=~"Unavailable|Internal"'
+        return 'grpc_code=~"Unavailable|Internal|Unimplemented|DataLoss"'
     # HTTP
     return 'status=~"5.."'
 
@@ -652,6 +666,22 @@ def generate_dashboard_spec(
                 ]
 
         panels.append(panel)
+
+        # Add p50 and p95 quantile panels for duration histograms
+        # (p99 is the primary panel above; p50/p95 support incident response)
+        if "duration" in metric.name and metric.type == "histogram":
+            for quantile, label in [(0.50, "p50"), (0.95, "p95")]:
+                q_query = (
+                    f"histogram_quantile({quantile}, "
+                    f'rate({prom}_bucket{{service="{service.service_id}"}}[$__rate_interval]))'
+                )
+                panels.append({
+                    "type": "histogram",
+                    "title": f"{_panel_title(metric.name)} ({label})",
+                    "expr": q_query,
+                    "unit": unit,
+                    "group": group,
+                })
 
     # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
     _ensure_red_coverage(panels, service, business, derivations)
@@ -764,32 +794,23 @@ def _ensure_red_coverage(
         return  # Already have full RED coverage
 
     # Determine metric prefix from transport
+    error_filter = _error_filter_for_protocol(service.transport)
     if service.transport == "grpc":
         duration_metric = "rpc_server_duration"
-        # gRPC uses duration_count for both rate and error detection
-        rate_expr = (
-            f'sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}"}}[$__rate_interval]))'
-        )
-        error_expr = (
-            f'sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}",'
-            f'grpc_code=~"Unavailable|Internal|Unknown"}}[$__rate_interval]))\n'
-            f'/ sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}"}}[$__rate_interval]))'
-        )
     else:
         duration_metric = "http_server_duration"
-        rate_expr = (
-            f'sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}"}}[$__rate_interval]))'
-        )
-        error_expr = (
-            f'sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}",status=~"5.."}}[$__rate_interval]))\n'
-            f'/ sum(rate({duration_metric}_count'
-            f'{{service="{service.service_id}"}}[$__rate_interval]))'
-        )
+
+    rate_expr = (
+        f'sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+    )
+    error_expr = (
+        f'sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}",'
+        f'{error_filter}}}[$__rate_interval]))\n'
+        f'/ sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+    )
 
     if not has_rate:
         panels.append({
@@ -812,7 +833,7 @@ def _ensure_red_coverage(
         if business.availability:
             try:
                 avail = float(business.availability)
-                error_budget = round(1.0 - (avail / 100.0), 4)
+                error_budget = round(1.0 - round(avail / 100.0, 6), 6)
                 error_panel["thresholds"] = [
                     {"value": None, "color": "green"},
                     {"value": error_budget, "color": "red"},
@@ -820,6 +841,33 @@ def _ensure_red_coverage(
             except (ValueError, TypeError):
                 pass
         panels.append(error_panel)
+
+    # Availability gauge — shows current availability vs SLO target
+    if business.availability:
+        try:
+            avail_target = round(float(business.availability) / 100.0, 6)
+            avail_gauge_expr = (
+                f"1 - (\n"
+                f"  sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}",'
+                f'{_error_filter_for_protocol(service.transport)}}}[1h]))\n'
+                f"  / sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}"}}[1h]))\n'
+                f")"
+            )
+            panels.append({
+                "type": "gauge",
+                "title": "Availability (1h)",
+                "expr": avail_gauge_expr,
+                "unit": "percentunit",
+                "group": "Availability",
+                "thresholds": [
+                    {"value": None, "color": "red"},
+                    {"value": avail_target, "color": "green"},
+                ],
+            })
+        except (ValueError, TypeError):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -849,6 +897,23 @@ def generate_slo_definitions(
         if m.type == "counter" and not counter_metric:
             counter_metric = m
 
+    # Fallback: derive counter from histogram duration metric's _count suffix.
+    # OTel histograms always have a _count companion that tracks total
+    # requests — the alert generator already uses this (e.g.
+    # rpc_server_duration_count).  When onboarding metadata only reports
+    # histogram types (common for gRPC/HTTP convention metrics), synthesize
+    # a counter reference so the availability SLO can be generated.
+    if counter_metric is None and histogram_metric is not None:
+        counter_metric = ConventionMetric(
+            name=histogram_metric.name,
+            type="counter",
+            source=histogram_metric.source,
+        )
+        logger.info(
+            "Derived counter metric from histogram %s for %s availability SLO",
+            histogram_metric.name, service.service_id,
+        )
+
     avail_raw, _ = _resolve_threshold("availability", business, derivations)
     latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
     severity = _severity_for(business, derivations)
@@ -866,6 +931,11 @@ def generate_slo_definitions(
     # Availability SLO
     if counter_metric and avail_raw:
         prom = _prom_name(counter_metric.name)
+        # When the counter was derived from a histogram, the Prometheus name
+        # needs a _count suffix (e.g. rpc_server_duration_count) — same
+        # pattern the alert generator uses for error rate and availability.
+        if "duration" in counter_metric.name and not prom.endswith("_count"):
+            prom = f"{prom}_count"
         error_filter = _error_filter_for_protocol(service.transport)
         avail_target = float(avail_raw)
 
@@ -925,6 +995,12 @@ def generate_slo_definitions(
             },
         }
         documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+    elif avail_raw and not counter_metric:
+        logger.warning(
+            "Skipping availability SLO for %s: no counter metric available "
+            "(no explicit counter AND no histogram to derive from)",
+            service.service_id,
+        )
 
     # Latency SLO
     if histogram_metric and latency_raw:
@@ -944,9 +1020,9 @@ def generate_slo_definitions(
             },
             "spec": {
                 "description": f"P99 latency SLO for {service.service_id}",
-                "target": float(avail_raw) if avail_raw else 99.0,
+                "target": round(float(avail_raw), 2) if avail_raw else 99.0,
                 "timeWindow": {"duration": window, "isRolling": True},
-                "budgetPolicy": "timeslices",
+                "budgetPolicy": "occurrences",
                 "indicator": {
                     "metadata": {
                         "name": f"{service.service_id}-latency-sli",

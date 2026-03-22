@@ -614,6 +614,7 @@ class CrossArtifactResult:
     misaligned_thresholds: List[str] = field(default_factory=list)
     unused_derivations: List[str] = field(default_factory=list)
     consumed_incorrect: List[str] = field(default_factory=list)
+    missing_availability_slos: List[str] = field(default_factory=list)
 
     @property
     def total_issues(self) -> int:
@@ -623,6 +624,7 @@ class CrossArtifactResult:
             + len(self.misaligned_thresholds)
             + len(self.unused_derivations)
             + len(self.consumed_incorrect)
+            + len(self.missing_availability_slos)
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -631,6 +633,7 @@ class CrossArtifactResult:
             "unalerted_slos": len(self.unalerted_slos),
             "misaligned_thresholds": len(self.misaligned_thresholds),
             "unused_derivations": len(self.unused_derivations),
+            "missing_availability_slos": len(self.missing_availability_slos),
         }
 
 
@@ -639,14 +642,18 @@ def validate_cross_artifact_consistency(
     alert_content: Optional[str],
     slo_content: Optional[str],
     service_id: str = "",
+    manifest_availability: Optional[float] = None,
 ) -> CrossArtifactResult:
-    """Check consistency across a service's artifact triplet (REQ-KZ-OBS-400–402).
+    """Check consistency across a service's artifact triplet (REQ-KZ-OBS-400–402, OBS-202d).
 
     Args:
         dashboard_content: Dashboard spec YAML string (or None if missing).
         alert_content: Alert rules YAML string (or None if missing).
         slo_content: SLO definition YAML string (or None if missing).
         service_id: Service identifier for logging.
+        manifest_availability: Availability requirement from manifest (e.g. 99.9).
+            When set and the SLO content lacks an availability (ratio-based) SLO,
+            an OBS-202d warning is emitted.
 
     Returns:
         CrossArtifactResult with any alignment issues found.
@@ -723,6 +730,30 @@ def validate_cross_artifact_consistency(
                                     )
                         except (ValueError, TypeError):
                             pass
+
+    # OBS-202d: Missing availability SLO — services with an availability
+    # requirement SHOULD have a ratio-based availability SLO in addition
+    # to a latency threshold SLO.
+    if manifest_availability is not None and slo_content:
+        slo_data = slo if slo else _safe_yaml_load(slo_content)
+        has_availability_slo = False
+        if slo_data and isinstance(slo_data, dict):
+            # Check for ratioMetric (availability) vs thresholdMetric (latency)
+            spec = slo_data.get("spec", {})
+            indicator = spec.get("indicator", {})
+            if isinstance(indicator, dict):
+                ind_spec = indicator.get("spec", {})
+                if ind_spec.get("ratioMetric"):
+                    has_availability_slo = True
+            # Also check metadata.name for "availability" pattern
+            name = slo_data.get("metadata", {}).get("name", "")
+            if "availability" in name.lower():
+                has_availability_slo = True
+        if not has_availability_slo:
+            result.missing_availability_slos.append(
+                f"{service_id}: manifest requires {manifest_availability}% availability "
+                f"but only latency SLO generated (OBS-202d)"
+            )
 
     return result
 

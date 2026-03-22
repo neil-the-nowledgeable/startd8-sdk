@@ -582,3 +582,161 @@ class TestEvaluateObservabilityArtifacts:
         assert len(r.per_service) >= 2
         # Should have cross-artifact issues (latency-only dashboards)
         assert sum(r.cross_artifact_issues.values()) >= 0
+
+
+# ---------------------------------------------------------------------------
+# Derivation Completeness (REQ-KZ-OBS-403) — integration tests with real data
+# ---------------------------------------------------------------------------
+
+
+class TestDerivationCompletenessIntegration:
+    """Tests for validate_derivation_completeness with production-like data."""
+
+    def test_all_rules_consumed(self):
+        """All derivation rules trace to values in artifacts."""
+        from startd8.validators.observability_artifact_checks import (
+            validate_derivation_completeness,
+        )
+        rules = [
+            {
+                "field": "alert_severity",
+                "source": "manifest.spec.business.criticality",
+                "transformation": "high → critical",
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+            {
+                "field": "latency_p99",
+                "source": "manifest.spec.requirements.latency_p99",
+                "transformation": "500ms",
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+            {
+                "field": "availability",
+                "source": "manifest.spec.requirements.availability",
+                "transformation": "99.9",
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+            {
+                "field": "slo_window",
+                "source": "manifest.strategy.objectives[].keyResults[].window",
+                "transformation": "30d",
+                "tier": "default",
+                "applied_to": ["cartservice"],
+            },
+            {
+                "field": "dashboard_placement",
+                "source": "manifest.spec.observability.dashboardPlacement",
+                "transformation": "standard",
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+        ]
+        artifacts = [
+            {
+                "artifact_type": "alert_rule",
+                "service_id": "cartservice",
+                "content": VALID_ALERT,
+            },
+            {
+                "artifact_type": "dashboard_spec",
+                "service_id": "cartservice",
+                "content": VALID_DASHBOARD,
+            },
+            {
+                "artifact_type": "slo_definition",
+                "service_id": "cartservice",
+                "content": VALID_SLO,
+            },
+        ]
+        unused, incorrect = validate_derivation_completeness(rules, artifacts)
+        assert unused == [], f"Expected no unused derivations, got: {unused}"
+        assert incorrect == [], f"Expected no incorrect consumptions, got: {incorrect}"
+
+    def test_unused_rule_detected(self):
+        """A derivation rule not consumed by any artifact is flagged."""
+        from startd8.validators.observability_artifact_checks import (
+            validate_derivation_completeness,
+        )
+        rules = [
+            {
+                "field": "custom_threshold",
+                "source": "manifest.spec.requirements.custom",
+                "transformation": "42ms",
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+        ]
+        artifacts = [
+            {
+                "artifact_type": "alert_rule",
+                "service_id": "cartservice",
+                "content": VALID_ALERT,
+            },
+        ]
+        unused, incorrect = validate_derivation_completeness(rules, artifacts)
+        assert len(unused) == 1
+        assert "custom_threshold" in unused[0]
+
+    def test_incorrect_severity_detected(self):
+        """A severity derivation consumed with wrong value is flagged."""
+        from startd8.validators.observability_artifact_checks import (
+            validate_derivation_completeness,
+        )
+        rules = [
+            {
+                "field": "alert_severity",
+                "source": "manifest.spec.business.criticality",
+                "transformation": "high → warning",  # expects "warning"
+                "tier": "manifest",
+                "applied_to": ["cartservice"],
+            },
+        ]
+        # VALID_ALERT has severity: critical, but rule says "warning"
+        artifacts = [
+            {
+                "artifact_type": "alert_rule",
+                "service_id": "cartservice",
+                "content": VALID_ALERT,
+            },
+        ]
+        unused, incorrect = validate_derivation_completeness(rules, artifacts)
+        assert len(incorrect) == 1
+        assert "warning" in incorrect[0]
+        assert "critical" in incorrect[0]
+
+    def test_service_scoping(self):
+        """Rules scoped to service A don't check service B artifacts."""
+        from startd8.validators.observability_artifact_checks import (
+            validate_derivation_completeness,
+        )
+        rules = [
+            {
+                "field": "latency_p99",
+                "source": "manifest",
+                "transformation": "500ms",
+                "tier": "manifest",
+                "applied_to": ["emailservice"],  # NOT cartservice
+            },
+        ]
+        # Artifact is for cartservice — rule shouldn't match
+        artifacts = [
+            {
+                "artifact_type": "alert_rule",
+                "service_id": "cartservice",
+                "content": VALID_ALERT,
+            },
+        ]
+        unused, _ = validate_derivation_completeness(rules, artifacts)
+        assert len(unused) == 1, "Rule scoped to emailservice should be unused for cartservice"
+
+    def test_empty_inputs(self):
+        """No rules or artifacts produces no findings."""
+        from startd8.validators.observability_artifact_checks import (
+            validate_derivation_completeness,
+        )
+        unused, incorrect = validate_derivation_completeness([], [])
+        assert unused == []
+        assert incorrect == []

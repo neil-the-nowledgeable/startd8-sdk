@@ -727,11 +727,17 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
 }
 
 
-def generate_kaizen_suggestions(report: Any) -> List[Dict[str, Any]]:
+def generate_kaizen_suggestions(
+    report: Any,
+    output_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Generate structured improvement suggestions from a post-mortem report.
 
     Args:
         report: PrimePostMortemReport instance.
+        output_dir: Run output directory.  When provided, observability
+            artifact quality data is scanned to generate ``obs_*``
+            suggestions that close the feedback loop (REQ-KZ-OBS-600).
 
     Returns:
         List of suggestion dicts with pattern, hint, phase, confidence.
@@ -790,7 +796,104 @@ def generate_kaizen_suggestions(report: Any) -> List[Dict[str, Any]]:
             "auto_applicable": False,
         })
 
+    # --- Observability artifact feedback loop (REQ-KZ-OBS-600) ---
+    # Scan observability-quality.json for issues that map to obs_* suggestions.
+    # These issues live outside the code-generation postmortem report, so they
+    # need a separate scan path.
+    if output_dir:
+        obs_data = _load_observability_quality(output_dir)
+        if obs_data:
+            _append_obs_suggestions(obs_data, suggestions)
+
     return suggestions
+
+
+def _load_observability_quality(output_dir: str) -> Optional[Dict[str, Any]]:
+    """Load observability_artifacts data from available quality files."""
+    out = Path(output_dir)
+    candidates = [
+        out / "kaizen-metrics.json",
+        out / "observability-quality.json",
+        out.parent / "observability" / "observability-quality.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                obs = data.get("observability_artifacts")
+                if obs:
+                    return obs
+            except (json.JSONDecodeError, OSError):
+                continue
+    return None
+
+
+def _append_obs_suggestions(
+    obs: Dict[str, Any],
+    suggestions: List[Dict[str, Any]],
+) -> None:
+    """Scan observability quality data and append obs_* suggestions.
+
+    Examines per-service evaluations for issues that map to
+    CAUSE_TO_SUGGESTION obs_* entries.  Each issue category that
+    affects 1+ services generates a suggestion (threshold=1 since
+    observability artifacts are per-service, not per-feature).
+    """
+    # Collect issue categories across services
+    category_services: Dict[str, List[str]] = {}
+    for svc_eval in obs.get("service_evaluations", []):
+        svc_id = svc_eval.get("service_id", "unknown")
+        for issue in svc_eval.get("issues", []):
+            check = issue.get("check", "") if isinstance(issue, dict) else ""
+            cat = _obs_check_to_category(check)
+            if cat:
+                category_services.setdefault(cat, []).append(svc_id)
+
+        # Detect missing artifact types (score == 0 means missing)
+        if svc_eval.get("slo_score", 1.0) == 0.0:
+            category_services.setdefault(
+                "obs_missing_availability_slo", []
+            ).append(svc_id)
+
+    # Cross-artifact issues
+    cross = obs.get("cross_artifact_issues", {})
+    if cross.get("unvisualized_alerts", 0) > 0:
+        category_services.setdefault("obs_missing_red_panels", []).append("cross-artifact")
+    if cross.get("misaligned_thresholds", 0) > 0:
+        category_services.setdefault("obs_threshold_mismatch", []).append("cross-artifact")
+
+    # Emit suggestions for each observed category
+    seen_types = {s.get("pattern_type") for s in suggestions}
+    for cat, services in category_services.items():
+        if cat in seen_types:
+            continue  # already have this suggestion from code-gen scan
+        suggestion_key = _SEMANTIC_CATEGORY_TO_SUGGESTION.get(cat, cat)
+        template = CAUSE_TO_SUGGESTION.get(suggestion_key)
+        if not template:
+            continue
+        suggestions.append({
+            "pattern": f"Observability issue '{cat}' in {len(services)} service(s): {', '.join(services[:5])}",
+            "pattern_type": suggestion_key,
+            "frequency": len(services),
+            "suggested_action": template["hint"],
+            "config_key": "prompt_hints",
+            "phase": template["phase"],
+            "confidence": "high" if len(services) >= 2 else "medium",
+            "auto_applicable": False,
+        })
+
+
+def _obs_check_to_category(check_id: str) -> Optional[str]:
+    """Map an OBS-xxx check ID to an obs_* CAUSE_TO_SUGGESTION category."""
+    _MAP = {
+        "OBS-103": "obs_phantom_service",
+        "OBS-200a": "obs_missing_red_panels",
+        "OBS-200c": "obs_phantom_service",
+        "OBS-202a": "obs_slo_target_mismatch",
+        "OBS-202d": "obs_missing_availability_slo",
+        "OBS-203b": "obs_transport_metric_mismatch",
+    }
+    return _MAP.get(check_id)
 
 
 class PrimePostMortemEvaluator:
@@ -1643,7 +1746,7 @@ class PrimePostMortemEvaluator:
         # Previously required explicit --emit-suggestions flag on the script.
         # Now emitted automatically so the next run can auto-discover them.
         try:
-            suggestions = generate_kaizen_suggestions(report)
+            suggestions = generate_kaizen_suggestions(report, output_dir=output_dir)
             if suggestions:
                 suggestions_path = out / "kaizen-suggestions.json"
                 suggestions_data = {
@@ -1732,19 +1835,57 @@ class PrimePostMortemEvaluator:
         """Render observability artifacts markdown section (REQ-KZ-OBS-502).
 
         Reads ``observability_artifacts`` from ``kaizen-metrics.json`` in
-        *output_dir* and returns a markdown section string.  Returns ``None``
-        when the key is absent or the file does not exist.
+        *output_dir*.  Falls back to sibling ``observability-quality.json``
+        or ``../observability/observability-quality.json`` when the key is
+        absent (pipeline timing: obs artifacts may be generated before
+        kaizen-metrics.json exists).  Returns ``None`` when no data found.
         """
-        metrics_path = Path(output_dir) / "kaizen-metrics.json"
-        if not metrics_path.is_file():
-            return None
+        obs = None
+        out = Path(output_dir)
 
-        try:
-            data = json.loads(metrics_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
+        # Primary: kaizen-metrics.json in output_dir
+        metrics_path = out / "kaizen-metrics.json"
+        if metrics_path.is_file():
+            try:
+                data = json.loads(metrics_path.read_text(encoding="utf-8"))
+                obs = data.get("observability_artifacts")
+            except (json.JSONDecodeError, OSError):
+                pass
 
-        obs = data.get("observability_artifacts")
+        # Fallback: observability-quality.json (written by artifact generator
+        # when kaizen-metrics.json doesn't exist yet)
+        if not obs:
+            for candidate in [
+                out / "observability-quality.json",
+                out.parent / "observability" / "observability-quality.json",
+            ]:
+                if candidate.is_file():
+                    try:
+                        data = json.loads(candidate.read_text(encoding="utf-8"))
+                        obs = data.get("observability_artifacts")
+                        if obs:
+                            # Merge into kaizen-metrics.json so downstream
+                            # consumers (batch_postmortem, trends) see it.
+                            if metrics_path.is_file():
+                                try:
+                                    existing = json.loads(
+                                        metrics_path.read_text(encoding="utf-8")
+                                    )
+                                    existing["observability_artifacts"] = obs
+                                    metrics_path.write_text(
+                                        json.dumps(existing, indent=2, default=str) + "\n",
+                                        encoding="utf-8",
+                                    )
+                                    logger.info(
+                                        "Merged observability_artifacts into %s",
+                                        metrics_path,
+                                    )
+                                except (json.JSONDecodeError, OSError):
+                                    pass
+                            break
+                    except (json.JSONDecodeError, OSError):
+                        continue
+
         if not obs:
             return None
 
