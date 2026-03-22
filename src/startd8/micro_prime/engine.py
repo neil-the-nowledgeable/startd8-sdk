@@ -186,6 +186,29 @@ def _is_non_python_file(
     return True
 
 
+def _language_id_from_path(file_path: str) -> str:
+    """Resolve a file path to a language_id using LanguageRegistry.
+
+    Returns ``"python"`` for unknown extensions or when the registry
+    is unavailable.
+    """
+    from pathlib import PurePosixPath
+
+    ext = PurePosixPath(file_path).suffix.lower()
+    if not ext or ext == ".py":
+        return "python"
+    try:
+        from startd8.languages.registry import LanguageRegistry
+        # get_extension_map() returns Dict[str, str] (ext → language_id)
+        ext_map = LanguageRegistry.get_extension_map()
+        lang_id = ext_map.get(ext)
+        if lang_id is not None:
+            return lang_id
+    except Exception:
+        pass
+    return "python"
+
+
 def _attempt_splice_violation_repair(
     spliced_code: str,
     violations: list[SpliceViolation],
@@ -1594,6 +1617,8 @@ class MicroPrimeEngine:
         self._templates = template_registry or TemplateRegistry(
             enabled=self._config.templates_enabled,
         )
+        # REQ-MP-1200: Per-language template registry cache (polyglot TRIVIAL)
+        self._template_registries: dict[str, TemplateRegistry] = {}
         self._metrics = metrics_collector or MetricsCollector()
         self._completed: list[dict[str, Any]] = []
         # Language profile (MP-P1): defaults to PythonLanguageProfile
@@ -3518,6 +3543,17 @@ class MicroPrimeEngine:
 
         return None
 
+    def _get_registry_for_language(self, language_id: str) -> TemplateRegistry:
+        """Get or create a TemplateRegistry for the given language."""
+        if language_id == "python":
+            return self._templates
+        if language_id not in self._template_registries:
+            self._template_registries[language_id] = TemplateRegistry(
+                enabled=self._config.templates_enabled,
+                language_id=language_id,
+            )
+        return self._template_registries[language_id]
+
     def _handle_trivial(
         self,
         element: ForwardElementSpec,
@@ -3528,12 +3564,15 @@ class MicroPrimeEngine:
         reasoning: str = "",
     ) -> ElementResult:
         """Handle TRIVIAL tier: use template registry."""
-        # REQ-MLT-100: Non-Python files bypass element generation entirely.
-        if _is_non_python_file(file_path):
+        # REQ-MP-1200: Polyglot TRIVIAL — try language-specific templates
+        # before falling back to escalation. Replaces blanket NON_PYTHON_BYPASS.
+        language_id = _language_id_from_path(file_path)
+
+        if not TemplateRegistry.has_templates_for(language_id):
+            # No templates for this language (HTML, Dockerfile, etc.) — escalate
             logger.info(
-                "Non-Python file %s bypassing MicroPrime element generation "
-                "(TRIVIAL tier, element=%s)",
-                file_path, element.name,
+                "No templates for language %s (file %s) — bypassing TRIVIAL",
+                language_id, file_path,
             )
             return ElementResult.make_escalation(
                 element.name, file_path, TierClassification.TRIVIAL, reasoning,
@@ -3541,26 +3580,44 @@ class MicroPrimeEngine:
                     element_name=element.name, file_path=file_path,
                     tier=TierClassification.TRIVIAL,
                     reason=EscalationReason.NON_PYTHON_BYPASS,
-                    detail=f"Non-Python file {file_path} — skipping element generation",
+                    detail=f"No templates for language {language_id}",
                 ),
                 generation_strategy="non_python_bypass",
             )
 
-        match = self._templates.match(element, file_spec, contracts)
+        registry = self._get_registry_for_language(language_id)
+        match = registry.match(element, file_spec, contracts)
         if match is None:
-            # Template failed — escalate to SIMPLE
-            return self._handle_simple(element, file_spec, skeleton, [], file_path, reasoning)
+            if language_id == "python":
+                # Python: fall through to SIMPLE (existing behavior)
+                return self._handle_simple(element, file_spec, skeleton, [], file_path, reasoning)
+            # Non-Python: escalate with NO_TEMPLATE_MATCH
+            logger.info(
+                "No template match for %s in language %s — escalating",
+                element.name, language_id,
+            )
+            return ElementResult.make_escalation(
+                element.name, file_path, TierClassification.TRIVIAL, reasoning,
+                build_escalation_context(
+                    element_name=element.name, file_path=file_path,
+                    tier=TierClassification.TRIVIAL,
+                    reason=EscalationReason.NO_TEMPLATE_MATCH,
+                    detail=f"No template matched for {element.name} in {language_id}",
+                ),
+                generation_strategy="no_template_match",
+            )
 
         body = match.code
 
-        # Structural verification of template output
-        struct_ok, struct_reason = _structural_verify(body, element)
-        if not struct_ok:
-            logger.info(
-                "Template output failed structural verify for %s: %s — escalating to SIMPLE",
-                element.name, struct_reason,
-            )
-            return self._handle_simple(element, file_spec, skeleton, contracts, file_path, reasoning)
+        # Structural verification — Python only (_structural_verify uses ast.parse)
+        if language_id == "python":
+            struct_ok, struct_reason = _structural_verify(body, element)
+            if not struct_ok:
+                logger.info(
+                    "Template output failed structural verify for %s: %s — escalating to SIMPLE",
+                    element.name, struct_reason,
+                )
+                return self._handle_simple(element, file_spec, skeleton, contracts, file_path, reasoning)
 
         # Record as completed for few-shot (REQ-MP-704)
         self._completed.append({

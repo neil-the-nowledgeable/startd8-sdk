@@ -1283,6 +1283,7 @@ def try_template_match_with_name(
     file_spec: ForwardFileSpec,
     contracts: list[InterfaceContract],
     extra_templates: Optional[list[CodeTemplate]] = None,
+    language_id: str = "python",
 ) -> Optional[TemplateMatch]:
     """Try to match and render a template; return TemplateMatch or None."""
     # Name sanitization guard (R5-S7): reject elements with unsafe names
@@ -1304,7 +1305,10 @@ def try_template_match_with_name(
                 template.name, element.name,
             )
             continue
-        if not _validate_ast(body, element):
+        # REQ-MP-1200: AST validation is Python-only. Non-Python templates
+        # are deterministic and pre-tested — skip ast.parse() which would
+        # reject valid Go/Java/C#/JS output.
+        if language_id == "python" and not _validate_ast(body, element):
             logger.warning(
                 "Template output for %s failed AST validation, skipping",
                 element.name,
@@ -1317,6 +1321,17 @@ def try_template_match_with_name(
 # Templates that require explicit opt-in via the relaxed allowlist (R1-S7).
 # These are not included in the default TEMPLATES list.
 RELAXED_TEMPLATES: list[CodeTemplate] = []
+
+# REQ-MP-1200: Polyglot template dispatch map — declarative tier registry
+# pattern (Leg 10 #37). Maps language_id → template list. Unknown languages
+# fall back to Python templates.
+_LANGUAGE_TEMPLATES: dict[str, list[CodeTemplate]] = {
+    "python": TEMPLATES,
+    "java": JAVA_TEMPLATES,
+    "go": GO_TEMPLATES,
+    "csharp": CSHARP_TEMPLATES,
+    "nodejs": NODEJS_TEMPLATES,
+}
 
 
 class TemplateRegistry:
@@ -1359,9 +1374,7 @@ class TemplateRegistry:
 
     def _active_templates(self) -> list[CodeTemplate]:
         """Return the list of active templates (standard + language + allowlisted relaxed)."""
-        base = TEMPLATES
-        if self._language_id == "java":
-            base = JAVA_TEMPLATES
+        base = _LANGUAGE_TEMPLATES.get(self._language_id, TEMPLATES)
         result = list(base)
         if self._relaxed_allowlist:
             result.extend(
@@ -1369,6 +1382,11 @@ class TemplateRegistry:
                 if t.name in self._relaxed_allowlist
             )
         return result
+
+    @staticmethod
+    def has_templates_for(language_id: str) -> bool:
+        """Return True if the given language has template definitions."""
+        return language_id in _LANGUAGE_TEMPLATES
 
     def match(
         self,
@@ -1397,6 +1415,7 @@ class TemplateRegistry:
         return try_template_match_with_name(
             element, file_spec, contracts,
             extra_templates=self._active_templates(),
+            language_id=self._language_id,
         )
 
     def is_trivial(
@@ -1415,6 +1434,7 @@ class TemplateRegistry:
         return try_template_match_with_name(
             element, file_spec, contracts,
             extra_templates=self._active_templates(),
+            language_id=self._language_id,
         ) is not None
 
 

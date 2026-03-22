@@ -955,3 +955,52 @@ class TestRelaxedAllowlist:
         # With relaxed allowlist set to something, standard still works
         registry2 = TemplateRegistry(relaxed_allowlist=frozenset({"foo"}))
         assert registry2.is_trivial(init_element) is True
+
+
+# ---------------------------------------------------------------------------
+# REQ-MP-1200: Polyglot template registry dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestPolyglotTemplateRegistry:
+    """Verify _LANGUAGE_TEMPLATES dispatch and has_templates_for()."""
+
+    def test_go_registry_uses_go_templates(self):
+        from startd8.micro_prime.templates import GO_TEMPLATES
+        registry = TemplateRegistry(language_id="go")
+        active = registry._active_templates()
+        assert active is not GO_TEMPLATES  # list copy, not identity
+        assert len(active) == len(GO_TEMPLATES)
+
+    def test_csharp_registry_uses_csharp_templates(self):
+        from startd8.micro_prime.templates import CSHARP_TEMPLATES
+        registry = TemplateRegistry(language_id="csharp")
+        assert len(registry._active_templates()) == len(CSHARP_TEMPLATES)
+
+    def test_nodejs_registry_uses_nodejs_templates(self):
+        from startd8.micro_prime.templates import NODEJS_TEMPLATES
+        registry = TemplateRegistry(language_id="nodejs")
+        assert len(registry._active_templates()) == len(NODEJS_TEMPLATES)
+
+    def test_java_registry_uses_java_templates(self):
+        from startd8.micro_prime.templates import JAVA_TEMPLATES
+        registry = TemplateRegistry(language_id="java")
+        assert len(registry._active_templates()) == len(JAVA_TEMPLATES)
+
+    def test_python_registry_uses_python_templates(self):
+        from startd8.micro_prime.templates import TEMPLATES
+        registry = TemplateRegistry(language_id="python")
+        assert len(registry._active_templates()) == len(TEMPLATES)
+
+    def test_unknown_language_falls_back_to_python(self):
+        from startd8.micro_prime.templates import TEMPLATES
+        registry = TemplateRegistry(language_id="rust")
+        assert len(registry._active_templates()) == len(TEMPLATES)
+
+    def test_has_templates_for_known_languages(self):
+        for lang in ("python", "go", "java", "csharp", "nodejs"):
+            assert TemplateRegistry.has_templates_for(lang), f"{lang} should have templates"
+
+    def test_has_templates_for_unknown_language(self):
+        assert not TemplateRegistry.has_templates_for("rust")
+        assert not TemplateRegistry.has_templates_for("haskell")
