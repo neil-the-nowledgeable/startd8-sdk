@@ -16,6 +16,7 @@ from .steps import (
     AstValidateStep,
     BracketBalanceStep,
     ClassBodyDeduplicationStep,
+    CSharpConventionFixStep,
     CSharpSyntaxValidateStep,
     DefinitionOrderFixStep,
     DunderAllFixStep,
@@ -90,8 +91,9 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     ("syntax", "go_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
     ("import", "go_import_error", ["fence_strip", "todo_uncomment", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
-    ("syntax", "csharp_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
-    ("import", "csharp_import_error", ["fence_strip", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("syntax", "csharp_syntax_error", ["fence_strip", "csharp_convention_fix", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
+    ("import", "csharp_import_error", ["fence_strip", "csharp_convention_fix", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("convention", "csharp_convention_error", ["csharp_convention_fix", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     # Node.js repair routes
     ("syntax", "js_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
     ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
@@ -121,6 +123,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "ast_validate": AstValidateStep,
     "java_syntax_validate": JavaSyntaxValidateStep,
     "go_syntax_validate": GoSyntaxValidateStep,
+    "csharp_convention_fix": CSharpConventionFixStep,
     "csharp_syntax_validate": CSharpSyntaxValidateStep,
     "js_syntax_validate": JsSyntaxValidateStep,
 }

@@ -5,6 +5,7 @@ Each step implements the ``RepairStep`` protocol from ``repair.protocol``.
 
 from .ast_validate import AstValidateStep
 from .bracket_balance import BracketBalanceStep
+from .csharp_convention_fix import CSharpConventionFixStep
 from .csharp_syntax_validate import CSharpSyntaxValidateStep
 from .go_syntax_validate import GoSyntaxValidateStep
 from .java_syntax_validate import JavaSyntaxValidateStep
@@ -30,6 +31,7 @@ from .variable_initialization import VariableInitializationStep
 __all__ = [
     "AstValidateStep",
     "BracketBalanceStep",
+    "CSharpConventionFixStep",
     "CSharpSyntaxValidateStep",
     "GoSyntaxValidateStep",
     "JavaSyntaxValidateStep",
