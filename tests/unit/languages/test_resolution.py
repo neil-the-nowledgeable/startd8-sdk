@@ -69,3 +69,55 @@ class TestResolveLanguage:
     def test_custom_default(self):
         profile = resolve_language([], default_id="go")
         assert profile.language_id == "go"
+
+    # --- Build file resolution (go.mod, package.json, etc.) ---
+
+    def test_go_mod_resolves_to_go(self):
+        """go.mod should resolve to Go, not fall back to Python."""
+        profile = resolve_language(["src/shippingservice/go.mod"])
+        assert profile.language_id == "go"
+
+    def test_package_json_resolves_to_nodejs(self):
+        profile = resolve_language(["src/currencyservice/package.json"])
+        assert profile.language_id == "nodejs"
+
+    def test_build_gradle_resolves_to_java(self):
+        profile = resolve_language(["src/adservice/build.gradle"])
+        assert profile.language_id == "java"
+
+    def test_dockerfile_in_service_dir_resolves_to_go(self):
+        """Dockerfile in a *service directory should infer Go."""
+        profile = resolve_language(["src/shippingservice/Dockerfile"])
+        assert profile.language_id == "go"
+
+    def test_go_mod_with_go_files(self):
+        """go.mod + .go files should still resolve to Go."""
+        profile = resolve_language([
+            "src/frontend/go.mod",
+            "src/frontend/main.go",
+        ])
+        assert profile.language_id == "go"
+
+    # --- Language-neutral file inference from siblings ---
+
+    def test_html_with_go_sibling_resolves_to_go(self):
+        """HTML template alongside .go files in same dir → Go."""
+        profile = resolve_language([
+            "src/frontend/templates/home.html",
+            "src/frontend/templates/header.go",
+        ])
+        # .go sibling wins
+        assert profile.language_id == "go"
+
+    def test_standalone_html_defaults_to_python(self):
+        """Lone HTML file with no context → Python default."""
+        profile = resolve_language(["templates/home.html"])
+        assert profile.language_id == "python"
+
+    def test_dockerfile_in_frontend_service_resolves_to_go(self):
+        """Dockerfile in a non-'service'-named Go dir with Go sibling."""
+        profile = resolve_language([
+            "src/frontend/Dockerfile",
+            "src/frontend/main.go",
+        ])
+        assert profile.language_id == "go"

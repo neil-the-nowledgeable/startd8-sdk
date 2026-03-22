@@ -25,9 +25,11 @@ _ERR_CHECK_RE = re.compile(
     r'if\s+err\s*!=\s*nil',
 )
 
-# Pattern: func declaration
+# Pattern: func declaration — captures optional receiver type and function name.
+# Go methods like ``func (p PlaceOrderPayload) Validate()`` are distinct from
+# top-level functions and from methods on other receiver types.
 _FUNC_DECL_RE = re.compile(
-    r'^\s*func\s+(?:\([^)]*\)\s+)?(?P<name>\w+)\s*\(',
+    r'^\s*func\s+(?:\(\s*\w+\s+\*?(?P<receiver>\w+)\s*\)\s+)?(?P<name>\w+)\s*\(',
 )
 
 # Pattern: fmt.Println/Printf/Print
@@ -81,28 +83,41 @@ def _check_unchecked_errors(source: str) -> List[SemanticIssue]:
 
 
 def _check_duplicate_function_names(source: str) -> List[SemanticIssue]:
-    """Flag duplicate function declarations in the same file."""
+    """Flag duplicate function declarations in the same file.
+
+    Methods on different receiver types (e.g., ``func (a Foo) Validate()``
+    and ``func (b Bar) Validate()``) are NOT duplicates in Go — they are
+    distinct method sets.  Only functions with the same (receiver, name)
+    pair are flagged.
+    """
     issues: List[SemanticIssue] = []
-    seen: dict[str, int] = {}
+    # Key: (receiver_type_or_empty, func_name) → first line number
+    seen: dict[tuple[str, str], int] = {}
     for i, line in enumerate(source.splitlines(), start=1):
         stripped = line.strip()
         if _is_comment_line(stripped):
             continue
         m = _FUNC_DECL_RE.match(stripped)
         if m:
+            receiver = m.group("receiver") or ""
             name = m.group("name")
-            if name in seen:
+            key = (receiver, name)
+            if key in seen:
+                if receiver:
+                    label = f"({receiver}).{name}"
+                else:
+                    label = name
                 issues.append(SemanticIssue(
                     check="duplicate_function",
                     severity="warning",
                     message=(
-                        f"Duplicate function `{name}` "
-                        f"(first at line {seen[name]}, again at line {i})"
+                        f"Duplicate function `{label}` "
+                        f"(first at line {seen[key]}, again at line {i})"
                     ),
                     line=i,
                 ))
             else:
-                seen[name] = i
+                seen[key] = i
     return issues
 
 
@@ -247,6 +262,11 @@ def _check_package_filepath_alignment(
 
     actual_pkg = pkg_match.group(1)
 
+    # "package main" is required for Go executables regardless of directory name.
+    # Only library packages must match their directory name.
+    if actual_pkg == "main":
+        return []
+
     from pathlib import PurePosixPath
     parent_dir = PurePosixPath(file_path).parent.name
     if not parent_dir or parent_dir == ".":
@@ -267,11 +287,137 @@ def _check_package_filepath_alignment(
     )]
 
 
+# Known valid Go version range — update when new Go releases ship.
+_GO_VERSION_RANGE = (1, 18, 1, 24)  # min_major.min_minor .. max_major.max_minor
+
+_GO_DIRECTIVE_RE = re.compile(r'^\s*go\s+(\d+)\.(\d+)')
+_TOOLCHAIN_RE = re.compile(r'^\s*toolchain\s+go(\d+)\.(\d+)')
+_MODULE_RE = re.compile(r'^\s*module\s+\S+')
+
+
+def _check_go_mod_validity(source: str) -> List[SemanticIssue]:
+    """Validate go.mod structure and Go version range (REQ-KZ-GO-102).
+
+    Checks:
+    - ``module`` directive is present.
+    - ``go <version>`` directive is present and within known valid range.
+    - ``toolchain`` directive version (if present) is within known range.
+    - No Python contamination artifacts.
+    """
+    issues: List[SemanticIssue] = []
+    lines = source.splitlines()
+
+    has_module = False
+    has_go_directive = False
+
+    for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        if _MODULE_RE.match(stripped):
+            has_module = True
+
+        go_m = _GO_DIRECTIVE_RE.match(stripped)
+        if go_m:
+            has_go_directive = True
+            major, minor = int(go_m.group(1)), int(go_m.group(2))
+            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
+            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
+                issues.append(SemanticIssue(
+                    check="invalid_go_version",
+                    severity="error",
+                    message=(
+                        f"Go version `{major}.{minor}` is outside known valid "
+                        f"range ({min_maj}.{min_min}–{max_maj}.{max_min}) — "
+                        f"verify this is a released Go version"
+                    ),
+                    line=i,
+                ))
+
+        tc_m = _TOOLCHAIN_RE.match(stripped)
+        if tc_m:
+            major, minor = int(tc_m.group(1)), int(tc_m.group(2))
+            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
+            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
+                issues.append(SemanticIssue(
+                    check="invalid_go_version",
+                    severity="error",
+                    message=(
+                        f"Toolchain version `go{major}.{minor}` is outside known valid "
+                        f"range ({min_maj}.{min_min}–{max_maj}.{max_min})"
+                    ),
+                    line=i,
+                ))
+
+    if not has_module:
+        issues.append(SemanticIssue(
+            check="invalid_go_mod",
+            severity="error",
+            message="go.mod missing `module` directive",
+            line=1,
+        ))
+
+    if not has_go_directive:
+        issues.append(SemanticIssue(
+            check="invalid_go_mod",
+            severity="error",
+            message="go.mod missing `go <version>` directive",
+            line=1,
+        ))
+
+    # Check contamination in go.mod (same fingerprints as .go files)
+    for fp in GO_CONTAMINATION_FINGERPRINTS:
+        if fp in source:
+            issues.append(SemanticIssue(
+                check="python_contamination",
+                severity="error",
+                message=f"Python fingerprint `{fp.strip()}` in go.mod — file is non-functional",
+            ))
+            break  # One contamination finding is sufficient for go.mod
+
+    return issues
+
+
+def _check_dockerfile_go_version(source: str) -> List[SemanticIssue]:
+    """Validate Go version in Dockerfile FROM directives.
+
+    Flags ``golang:X.Y`` base images where X.Y is outside the known valid range.
+    """
+    issues: List[SemanticIssue] = []
+    docker_go_re = re.compile(r'golang:(\d+)\.(\d+)')
+
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.upper().startswith("FROM"):
+            continue
+        m = docker_go_re.search(stripped)
+        if m:
+            major, minor = int(m.group(1)), int(m.group(2))
+            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
+            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
+                issues.append(SemanticIssue(
+                    check="invalid_go_version",
+                    severity="error",
+                    message=(
+                        f"Dockerfile Go image version `{major}.{minor}` is outside "
+                        f"known valid range ({min_maj}.{min_min}–{max_maj}.{max_min})"
+                    ),
+                    line=i,
+                ))
+    return issues
+
+
 def run_go_semantic_checks(
     source: str,
     file_path: Optional[str] = None,
 ) -> List[SemanticIssue]:
     """Run all Go semantic checks on source code.
+
+    Dispatches to file-type-specific checks based on ``file_path``:
+    - ``go.mod`` → :func:`_check_go_mod_validity`
+    - ``Dockerfile*`` → :func:`_check_dockerfile_go_version`
+    - ``*.go`` or unknown → full Go source checks
 
     Args:
         source: Go source code string.
@@ -281,6 +427,23 @@ def run_go_semantic_checks(
         List of SemanticIssue objects.
     """
     issues: List[SemanticIssue] = []
+
+    # Dispatch to file-type-specific checks
+    fname = ""
+    if file_path:
+        from pathlib import PurePosixPath
+        fname = PurePosixPath(file_path).name
+
+    if fname == "go.mod":
+        issues.extend(_check_go_mod_validity(source))
+        return _stamp_file_path(issues, file_path)
+
+    if fname.startswith("Dockerfile"):
+        issues.extend(_check_dockerfile_go_version(source))
+        issues.extend(_check_python_contamination(source))
+        return _stamp_file_path(issues, file_path)
+
+    # Standard Go source file checks
     issues.extend(_check_python_contamination(source))
     issues.extend(_check_unchecked_errors(source))
     issues.extend(_check_duplicate_function_names(source))
@@ -289,3 +452,53 @@ def run_go_semantic_checks(
     issues.extend(_check_package_filepath_alignment(source, file_path))
 
     return _stamp_file_path(issues, file_path)
+
+
+def check_go_version_consistency(
+    go_mod_source: str,
+    dockerfile_source: str,
+    *,
+    go_mod_path: str = "go.mod",
+    dockerfile_path: str = "Dockerfile",
+) -> List[SemanticIssue]:
+    """Cross-check Go version between go.mod and Dockerfile.
+
+    Verifies that the ``go X.Y`` directive in go.mod matches the
+    ``golang:X.Y`` base image in the Dockerfile.  Returns issues
+    when the versions disagree.
+
+    This is a service-level check — call it when both files are
+    available for the same service.
+    """
+    issues: List[SemanticIssue] = []
+
+    # Extract go.mod version
+    mod_version = None
+    for line in go_mod_source.splitlines():
+        m = _GO_DIRECTIVE_RE.match(line.strip())
+        if m:
+            mod_version = f"{m.group(1)}.{m.group(2)}"
+            break
+
+    # Extract Dockerfile golang version
+    docker_go_re = re.compile(r'golang:(\d+\.\d+)')
+    docker_version = None
+    for line in dockerfile_source.splitlines():
+        if line.strip().upper().startswith("FROM"):
+            m = docker_go_re.search(line)
+            if m:
+                docker_version = m.group(1)
+                break
+
+    if mod_version and docker_version and mod_version != docker_version:
+        issues.append(SemanticIssue(
+            check="go_version_mismatch",
+            severity="warning",
+            message=(
+                f"Go version mismatch: go.mod has `go {mod_version}` but "
+                f"Dockerfile uses `golang:{docker_version}` — these should match"
+            ),
+            file_path=go_mod_path,
+        ))
+
+    return issues

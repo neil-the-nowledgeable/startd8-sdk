@@ -13,10 +13,18 @@ from startd8.languages._validation_utils import (
 
 class TestFingerprintConsolidation:
 
-    def test_go_superset_of_python(self):
-        """GO_CONTAMINATION_FINGERPRINTS is a superset of PYTHON_FINGERPRINTS."""
+    def test_go_superset_of_python_minus_exclusions(self):
+        """GO_CONTAMINATION_FINGERPRINTS covers PYTHON_FINGERPRINTS minus
+        intentional exclusions.
+
+        ``print(`` is excluded from Go because it false-positives on Go's
+        builtin ``print()``/``println()`` and on ``fmt.Fprint(``.  Python
+        ``print()`` contamination always co-occurs with stronger signals.
+        """
+        # Patterns intentionally excluded from Go fingerprints
+        go_exclusions = {"print("}
         go_set = set(GO_CONTAMINATION_FINGERPRINTS)
-        py_set = set(PYTHON_FINGERPRINTS)
+        py_set = set(PYTHON_FINGERPRINTS) - go_exclusions
         missing = py_set - go_set
         assert not missing, (
             f"GO_CONTAMINATION_FINGERPRINTS missing patterns from "

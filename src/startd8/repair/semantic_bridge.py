@@ -25,9 +25,10 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
     "sql_injection_risk",
     # REQ-KZ-JV-402e Phase 2: Java wildcard import expansion
     "wildcard_import",
-    # REQ-KZ-GO-403d Phase 2: Go semantic repair
+    # REQ-KZ-GO-403d Phase 2+3: Go semantic repair
     "dot_import",
     "python_contamination",
+    "unchecked_error",
     # REQ-KZ-ND-402d Phase 2: Node.js semantic repair
     "var_usage",
     "duplicate_require",

@@ -31,6 +31,7 @@ from .steps import (
     GoDotImportCleanupStep,
     GoPythonContaminationStripStep,
     GoSyntaxValidateStep,
+    GoUncheckedErrorFixStep,
     IndentNormalizeStep,
     JavaImportSortStep,
     JavaSqlParameterizeStep,
@@ -82,6 +83,7 @@ _CANONICAL_ORDER = [
     "java_syntax_validate",
     "go_contamination_strip",
     "go_dot_import_cleanup",
+    "go_unchecked_error_fix",
     "go_syntax_validate",
     "csharp_syntax_validate",
     # Node.js repair steps (REQ-KZ-ND-402d Phase 2 + Phase 3)
@@ -118,6 +120,7 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     # Go semantic repair routes (REQ-KZ-GO-403d Phase 2)
     ("semantic", "python_contamination", ["go_contamination_strip", "go_syntax_validate"], "HIGH", "go"),
     ("semantic", "dot_import", ["go_dot_import_cleanup", "go_syntax_validate"], "MEDIUM", "go"),
+    ("semantic", "unchecked_error", ["go_unchecked_error_fix", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
     ("syntax", "csharp_syntax_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
     ("import", "csharp_import_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
@@ -161,6 +164,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "java_syntax_validate": JavaSyntaxValidateStep,
     "go_contamination_strip": GoPythonContaminationStripStep,
     "go_dot_import_cleanup": GoDotImportCleanupStep,
+    "go_unchecked_error_fix": GoUncheckedErrorFixStep,
     "go_syntax_validate": GoSyntaxValidateStep,
     "csharp_convention_fix": CSharpConventionFixStep,
     "sql_parameterize": SqlParameterizeStep,

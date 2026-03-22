@@ -10,6 +10,7 @@ from .csharp_syntax_validate import CSharpSyntaxValidateStep
 from .go_contamination_strip import GoPythonContaminationStripStep
 from .go_dot_import_cleanup import GoDotImportCleanupStep
 from .go_syntax_validate import GoSyntaxValidateStep
+from .go_unchecked_error import GoUncheckedErrorFixStep
 from .java_import_sort import JavaImportSortStep
 from .java_sql_parameterize import JavaSqlParameterizeStep
 from .java_syntax_validate import JavaSyntaxValidateStep
@@ -46,6 +47,7 @@ __all__ = [
     "GoPythonContaminationStripStep",
     "GoDotImportCleanupStep",
     "GoSyntaxValidateStep",
+    "GoUncheckedErrorFixStep",
     "JavaImportSortStep",
     "JavaSqlParameterizeStep",
     "JavaSyntaxValidateStep",

@@ -13,8 +13,13 @@ PYTHON_FINGERPRINTS: tuple[str, ...] = (
 # Superset of PYTHON_FINGERPRINTS plus Go-specific patterns that indicate
 # a Python file was emitted instead of Go.  Single canonical source —
 # imported by go_semantic_checks.py and go_contamination_strip.py.
+#
+# NOTE: "print(" was removed — it false-positives on Go's builtin print()
+# and println(), and also matches substrings like fmt.Fprint(.  Python
+# print() contamination always co-occurs with stronger signals (def, from
+# __future__, import os) so removing it does not reduce detection power.
 GO_CONTAMINATION_FINGERPRINTS: tuple[str, ...] = (
-    "def ", "import os", "from __future__", "print(", "self.",
+    "def ", "import os", "from __future__", "self.",
     "#!/usr/bin/env python", "#!/usr/bin/python",
     "class ",       # Python class definition
     "raise ",       # Python exception raising

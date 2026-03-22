@@ -265,11 +265,12 @@ class TestGoBridgeWiring:
             {"category": "unchecked_error", "severity": "warning", "message": "err", "line": 5},
         ]
         diags = translate_to_diagnostics(issues, "main.go")
-        # Only repairable categories are translated
-        assert len(diags) == 2
+        # All three categories are now repairable (Phase 2 + Phase 3)
+        assert len(diags) == 3
         categories = {d.semantic_category for d in diags if isinstance(d, SemanticDiagnostic)}
         assert "dot_import" in categories
         assert "python_contamination" in categories
+        assert "unchecked_error" in categories
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────
