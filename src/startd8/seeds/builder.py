@@ -85,6 +85,8 @@ class SeedBuilder:
         self._generation_profile: Optional[str] = None  # REQ-GPC-401
         self._security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
         self._authoring_mode: Optional[str] = None  # REQ-SU-300
+        self._plan_risk_register: Optional[list] = None  # REQ-SU-500
+        self._plan_verification_criteria: Optional[list] = None  # REQ-SU-500
         self._refine_suggestions: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
@@ -132,6 +134,12 @@ class SeedBuilder:
                 f"authoring_mode must be one of {self._VALID_AUTHORING_MODES}, got {mode!r}"
             )
         self._authoring_mode = mode
+        return self
+
+    def set_plan_sections(self, sections: Dict[str, Any]) -> "SeedBuilder":
+        """Set plan-extracted risk register and verification criteria (REQ-SU-500)."""
+        self._plan_risk_register = sections.get("plan_risk_register")
+        self._plan_verification_criteria = sections.get("plan_verification_criteria")
         return self
 
     def derive_tasks(
@@ -508,5 +516,7 @@ class SeedBuilder:
             generation_profile=self._generation_profile,
             security_contract=self._security_contract,
             authoring_mode=self._authoring_mode,
+            plan_risk_register=self._plan_risk_register,
+            plan_verification_criteria=self._plan_verification_criteria,
         )
         return seed.to_dict()

@@ -59,6 +59,8 @@ class ContextSeed:
     generation_profile: Optional[str] = None  # REQ-GPC-400
     security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
     capability_coverage_map: Optional[Dict[str, List[str]]] = None  # OI-005
+    plan_risk_register: Optional[List[Dict[str, Any]]] = None  # REQ-SU-500
+    plan_verification_criteria: Optional[List[str]] = None  # REQ-SU-500
     authoring_mode: Optional[str] = None  # REQ-SU-300: "pipeline", "designed", or "hybrid"
 
     # Optional fields serialized only when non-None (used by to_dict loop).
@@ -68,7 +70,8 @@ class ContextSeed:
         "service_communication_graph", "wave_metadata", "lane_assignments",
         "project_metadata", "forward_manifest", "route",
         "generation_profile", "security_contract",
-        "capability_coverage_map", "authoring_mode",
+        "capability_coverage_map", "plan_risk_register",
+        "plan_verification_criteria", "authoring_mode",
     )
 
     def to_dict(self) -> Dict[str, Any]:
