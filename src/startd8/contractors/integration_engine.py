@@ -1180,6 +1180,12 @@ class IntegrationEngine:
             from startd8.query_prime.decomposer import detect_database_type
             from startd8.query_prime.models import SecurityCheckType, SecurityVerdict
         except ImportError:
+            logger.warning(
+                "Anzen security gate SKIPPED — query_prime module not available. "
+                "Install startd8[security] to enable SQL injection, credential "
+                "leakage, and resource lifecycle checks.",
+            )
+            result_metadata["anzen_gate"] = [{"status": "skipped", "reason": "query_prime not available"}]
             # Write gate-skipped sentinel so consumers distinguish
             # "all clean" from "never ran" (REQ-KSP-499 gap analysis)
             try:
