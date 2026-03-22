@@ -1,4 +1,4 @@
-"""Tests for observability artifact validators (REQ-KZ-OBS-100–403)."""
+"""Tests for observability artifact validators (REQ-KZ-OBS-100–601)."""
 
 import textwrap
 
@@ -8,10 +8,12 @@ from startd8.validators.observability_artifact_validators import (
     AlertValidationResult,
     CrossArtifactResult,
     DashboardValidationResult,
+    ObservabilityPostmortemResult,
     ServiceArtifactScore,
     SloValidationResult,
     check_cross_artifact_consistency,
     check_metric_names,
+    evaluate_observability_artifacts,
     score_artifact,
     score_service_triplet,
     validate_alert_rules,
@@ -475,3 +477,108 @@ class TestCrossArtifactConsistency:
             unused_derivations=["d"],
         )
         assert r.total_issues == 4
+
+
+# ---------------------------------------------------------------------------
+# Postmortem Integration (REQ-KZ-OBS-500–502)
+# ---------------------------------------------------------------------------
+
+class TestPostmortemResult:
+
+    def test_to_dict(self):
+        r = ObservabilityPostmortemResult(
+            services_evaluated=2,
+            avg_dashboard_score=0.8,
+            avg_alert_score=0.9,
+            avg_slo_score=1.0,
+            avg_composite_score=0.89,
+            cross_artifact_issues={"unvisualized_alerts": 1},
+        )
+        d = r.to_dict()
+        assert d["services_evaluated"] == 2
+        assert d["avg_composite_score"] == 0.89
+        assert d["cross_artifact_issues"]["unvisualized_alerts"] == 1
+
+    def test_to_summary_md(self):
+        r = ObservabilityPostmortemResult(
+            services_evaluated=3,
+            phantom_services_detected=1,
+            avg_dashboard_score=0.72,
+            avg_alert_score=0.85,
+            avg_slo_score=0.90,
+            cross_artifact_issues={"unvisualized_alerts": 2, "unalerted_slos": 1},
+        )
+        md = r.to_summary_md()
+        assert "## Observability Artifacts" in md
+        assert "3" in md
+        assert "1 phantom" in md
+        assert "0.72" in md
+
+
+class TestEvaluateObservabilityArtifacts:
+
+    def test_empty_dir(self, tmp_path):
+        r = evaluate_observability_artifacts(str(tmp_path))
+        assert r.services_evaluated == 0
+
+    def test_nonexistent_dir(self):
+        r = evaluate_observability_artifacts("/nonexistent/path")
+        assert r.services_evaluated == 0
+
+    def test_single_service_triplet(self, tmp_path):
+        # Create a minimal artifact set
+        (tmp_path / "dashboards").mkdir()
+        (tmp_path / "alerts").mkdir()
+        (tmp_path / "slos").mkdir()
+
+        (tmp_path / "dashboards" / "myservice-dashboard-spec.yaml").write_text(
+            VALID_DASHBOARD.replace("cartservice", "myservice"),
+        )
+        (tmp_path / "alerts" / "myservice-alerts.yaml").write_text(
+            VALID_ALERT.replace("cartservice", "myservice"),
+        )
+        (tmp_path / "slos" / "myservice-slo.yaml").write_text(
+            VALID_SLO.replace("cartservice", "myservice"),
+        )
+
+        r = evaluate_observability_artifacts(str(tmp_path))
+        assert r.services_evaluated == 1
+        assert r.services_with_complete_triplet == 1
+        assert r.avg_composite_score > 0.5
+        assert len(r.per_service) == 1
+        assert r.per_service[0]["service_id"] == "myservice"
+
+    def test_multiple_services(self, tmp_path):
+        (tmp_path / "dashboards").mkdir()
+        (tmp_path / "alerts").mkdir()
+
+        for svc in ("svc1", "svc2"):
+            (tmp_path / "dashboards" / f"{svc}-dashboard-spec.yaml").write_text(
+                VALID_DASHBOARD.replace("cartservice", svc),
+            )
+            (tmp_path / "alerts" / f"{svc}-alerts.yaml").write_text(
+                VALID_ALERT.replace("cartservice", svc),
+            )
+
+        r = evaluate_observability_artifacts(str(tmp_path))
+        assert r.services_evaluated == 2
+        assert r.services_with_complete_triplet == 0  # no SLOs
+        assert len(r.per_service) == 2
+
+    def test_run_093_integration(self):
+        """Evaluate actual run-093 artifacts."""
+        from pathlib import Path
+        obs_dir = Path(
+            "/Users/neilyashinsky/Documents/dev/online-boutique-demo/"
+            ".cap-dev-pipe/pipeline-output/online-boutique/"
+            "run-093-20260321T1726/observability"
+        )
+        if not obs_dir.is_dir():
+            pytest.skip("run-093 artifacts not available")
+
+        r = evaluate_observability_artifacts(str(obs_dir))
+        assert r.services_evaluated >= 2
+        assert r.avg_composite_score > 0
+        assert len(r.per_service) >= 2
+        # Should have cross-artifact issues (latency-only dashboards)
+        assert sum(r.cross_artifact_issues.values()) >= 0

@@ -33,6 +33,8 @@ __all__ = [
     "check_cross_artifact_consistency",
     "score_artifact",
     "score_service_triplet",
+    "ObservabilityPostmortemResult",
+    "evaluate_observability_artifacts",
 ]
 
 
@@ -762,5 +764,195 @@ def check_cross_artifact_consistency(
                     "OBS-403", "info",
                     f"Derivation '{field_name}={value}' not consumed by any artifact",
                 ))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# REQ-KZ-OBS-500–502: Postmortem Evaluation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ObservabilityPostmortemResult:
+    """Aggregate observability artifact quality for kaizen-metrics.json."""
+
+    services_evaluated: int = 0
+    services_with_complete_triplet: int = 0
+    phantom_services_detected: int = 0
+    avg_dashboard_score: float = 0.0
+    avg_alert_score: float = 0.0
+    avg_slo_score: float = 0.0
+    avg_composite_score: float = 0.0
+    cross_artifact_issues: Dict[str, int] = field(default_factory=dict)
+    per_service: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "services_evaluated": self.services_evaluated,
+            "services_with_complete_triplet": self.services_with_complete_triplet,
+            "phantom_services_detected": self.phantom_services_detected,
+            "avg_dashboard_score": round(self.avg_dashboard_score, 4),
+            "avg_alert_score": round(self.avg_alert_score, 4),
+            "avg_slo_score": round(self.avg_slo_score, 4),
+            "avg_composite_score": round(self.avg_composite_score, 4),
+            "cross_artifact_issues": self.cross_artifact_issues,
+            "per_service": self.per_service,
+        }
+
+    def to_summary_md(self) -> str:
+        """Render markdown section for postmortem summary (REQ-KZ-OBS-502)."""
+        lines = [
+            "## Observability Artifacts",
+            "",
+            f"- Services evaluated: {self.services_evaluated}"
+            f" ({self.phantom_services_detected} phantom skipped)"
+            if self.phantom_services_detected
+            else f"- Services evaluated: {self.services_evaluated}",
+            f"- Average dashboard score: {self.avg_dashboard_score:.2f}",
+            f"- Average alert score: {self.avg_alert_score:.2f}",
+            f"- Average SLO score: {self.avg_slo_score:.2f}",
+            f"- Cross-artifact issues: {sum(self.cross_artifact_issues.values())}",
+        ]
+        return "\n".join(lines)
+
+
+def evaluate_observability_artifacts(
+    obs_dir: str,
+    *,
+    manifest_derivations: Optional[List[Dict[str, Any]]] = None,
+) -> ObservabilityPostmortemResult:
+    """Evaluate all observability artifacts in a directory (REQ-KZ-OBS-500–502).
+
+    Walks the observability output directory, validates each artifact,
+    scores per-service triplets, and runs cross-artifact checks.
+
+    Args:
+        obs_dir: Path to the observability artifacts directory
+            (containing alerts/, dashboards/, slos/ subdirectories).
+        manifest_derivations: Optional derivation_rules from the manifest.
+
+    Returns:
+        ObservabilityPostmortemResult with aggregate scores and per-service detail.
+    """
+    from pathlib import Path
+
+    result = ObservabilityPostmortemResult()
+    obs_path = Path(obs_dir)
+
+    if not obs_path.is_dir():
+        logger.warning("Observability directory not found: %s", obs_dir)
+        return result
+
+    # Collect artifact files per service
+    services: Dict[str, Dict[str, str]] = {}  # {svc: {type: content}}
+
+    for subdir, artifact_type in [
+        ("dashboards", "dashboard"),
+        ("alerts", "alert"),
+        ("slos", "slo"),
+    ]:
+        artifact_dir = obs_path / subdir
+        if not artifact_dir.is_dir():
+            continue
+        for f in sorted(artifact_dir.glob("*.yaml")):
+            # Derive service from filename: cartservice-dashboard-spec.yaml → cartservice
+            name = f.stem
+            for suffix in ("-dashboard-spec", "-alerts", "-slo"):
+                if name.endswith(suffix):
+                    name = name[: -len(suffix)]
+                    break
+            services.setdefault(name, {})[artifact_type] = f.read_text(encoding="utf-8")
+
+    result.services_evaluated = len(services)
+
+    # Validate and score each service
+    dashboard_scores: List[float] = []
+    alert_scores: List[float] = []
+    slo_scores: List[float] = []
+    all_cross = CrossArtifactResult()
+
+    for svc_id, artifacts in sorted(services.items()):
+        d_content = artifacts.get("dashboard", "")
+        a_content = artifacts.get("alert", "")
+        s_content = artifacts.get("slo", "")
+
+        d_result = validate_dashboard_spec(d_content, service_id=svc_id) if d_content else None
+        a_result = validate_alert_rules(a_content, service_id=svc_id) if a_content else None
+        s_result = validate_slo_definition(s_content, service_id=svc_id) if s_content else None
+
+        triplet = score_service_triplet(
+            dashboard=d_result, alert=a_result, slo=s_result, service_id=svc_id,
+        )
+
+        if triplet.has_dashboard:
+            dashboard_scores.append(triplet.dashboard_score)
+        if triplet.has_alert:
+            alert_scores.append(triplet.alert_score)
+        if triplet.has_slo:
+            slo_scores.append(triplet.slo_score)
+
+        has_all = triplet.has_dashboard and triplet.has_alert and triplet.has_slo
+        if has_all:
+            result.services_with_complete_triplet += 1
+
+        # Cross-artifact checks per service
+        cross = check_cross_artifact_consistency(
+            dashboard_content=d_content,
+            alert_content=a_content,
+            slo_content=s_content,
+            manifest_derivations=manifest_derivations,
+        )
+        all_cross.unvisualized_alerts.extend(cross.unvisualized_alerts)
+        all_cross.unalerted_slos.extend(cross.unalerted_slos)
+        all_cross.misaligned_thresholds.extend(cross.misaligned_thresholds)
+        all_cross.unused_derivations.extend(cross.unused_derivations)
+
+        # Collect all issues for this service
+        svc_issues: List[Dict[str, Any]] = []
+        if d_result:
+            svc_issues.extend(d_result.issues)
+        if a_result:
+            svc_issues.extend(a_result.issues)
+        if s_result:
+            svc_issues.extend(s_result.issues)
+
+        result.per_service.append({
+            "service_id": svc_id,
+            "dashboard_score": triplet.dashboard_score,
+            "alert_score": triplet.alert_score,
+            "slo_score": triplet.slo_score,
+            "composite_score": triplet.composite_score,
+            "issues": svc_issues,
+            "cross_artifact_issues": cross.issues,
+        })
+
+    # Averages
+    result.avg_dashboard_score = (
+        sum(dashboard_scores) / len(dashboard_scores) if dashboard_scores else 0.0
+    )
+    result.avg_alert_score = (
+        sum(alert_scores) / len(alert_scores) if alert_scores else 0.0
+    )
+    result.avg_slo_score = (
+        sum(slo_scores) / len(slo_scores) if slo_scores else 0.0
+    )
+    composites = [s["composite_score"] for s in result.per_service]
+    result.avg_composite_score = (
+        sum(composites) / len(composites) if composites else 0.0
+    )
+
+    result.cross_artifact_issues = {
+        "unvisualized_alerts": len(all_cross.unvisualized_alerts),
+        "unalerted_slos": len(all_cross.unalerted_slos),
+        "misaligned_thresholds": len(all_cross.misaligned_thresholds),
+        "unused_derivations": len(all_cross.unused_derivations),
+    }
+
+    logger.info(
+        "Observability artifact evaluation: %d services, avg composite %.2f, %d cross-artifact issues",
+        result.services_evaluated,
+        result.avg_composite_score,
+        sum(result.cross_artifact_issues.values()),
+    )
 
     return result
