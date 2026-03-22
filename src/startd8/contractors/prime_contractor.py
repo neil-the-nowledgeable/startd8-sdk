@@ -2581,20 +2581,35 @@ class PrimeContractorWorkflow:
         # 1. Current output dir
         candidates.append(output_dir / "kaizen-suggestions.json")
 
-        # 2. Sibling run directories (e.g., run-093-.../plan-ingestion/)
-        #    sorted descending so most recent run is checked first
+        # 2. Sibling directories at parent level
+        #    Handles flat layout: output_dir = .../run-093/
+        #    Siblings are other run dirs at the same level.
         parent = output_dir.parent
         if parent.is_dir():
             siblings = sorted(parent.iterdir(), reverse=True)
             for sibling in siblings:
                 if sibling == output_dir or not sibling.is_dir():
                     continue
-                # Check both flat and plan-ingestion subdir layouts
                 candidates.append(sibling / "kaizen-suggestions.json")
                 candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
 
-        # 3. Parent dir (flat layout)
+        # 3. Grandparent level — handles nested layout where
+        #    output_dir = .../run-095/plan-ingestion/ and sibling runs
+        #    are at .../run-094/, .../run-093/, etc.
+        grandparent = parent.parent
+        if grandparent.is_dir() and grandparent != parent:
+            gp_siblings = sorted(grandparent.iterdir(), reverse=True)
+            for sibling in gp_siblings:
+                if sibling == parent or not sibling.is_dir():
+                    continue
+                # Check flat and plan-ingestion subdir layouts
+                candidates.append(sibling / "kaizen-suggestions.json")
+                candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
+
+        # 4. Parent and grandparent dir (flat layout fallback)
         candidates.append(parent / "kaizen-suggestions.json")
+        if grandparent != parent:
+            candidates.append(grandparent / "kaizen-suggestions.json")
 
         for path in candidates:
             if not path.is_file():

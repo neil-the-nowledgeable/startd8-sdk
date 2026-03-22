@@ -2571,6 +2571,22 @@ class PlanIngestionWorkflow(WorkflowBase):
                         else _val
                     )
 
+            # Anzen: tag security-sensitive tasks at ingestion time so the
+            # seed file is self-describing and prime_contractor gets
+            # security_sensitive + detected_database in gen_context.
+            if "security_sensitive" not in ctx:
+                try:
+                    from startd8.security_prime.enrichment import enrich_security_fields
+                    _sec = enrich_security_fields(
+                        feat.description or "", ordered_files,
+                        getattr(feat, "metadata", None),
+                    )
+                    if _sec["security_sensitive"]:
+                        ctx["security_sensitive"] = True
+                        ctx["detected_database"] = _sec["detected_database"]
+                except ImportError:
+                    pass  # security_prime not available
+
             # Mottainai Phase 2.2: infer artifact types from target file
             # patterns when the PARSE phase didn't produce them, so
             # downstream injections keyed on artifact_types have something
