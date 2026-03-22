@@ -1118,8 +1118,6 @@ def build_spec_prompt(
     requirements_context = context.pop("requirements_context", None)
     protocol_guidance = context.pop("protocol_guidance", None)
     scope_boundary = context.pop("scope_boundary", None)
-    manifest_obj = context.pop("manifest", None)
-    raw_manifest = context.pop("forward_manifest", None)
 
     # --- Build prioritized sections (P0=never drop, P3=drop first) ---
     target_files = context.get("target_files")
@@ -1226,6 +1224,27 @@ def build_spec_prompt(
     trend_warning = context.pop("quality_trend_warning", None)
     if trend_warning and isinstance(trend_warning, str):
         prioritized.append((1, "quality_trend", trend_warning))
+
+    # P1: Repair effectiveness calibration (REQ-RFL-270)
+    # Warn about error categories that auto-repair can't reliably fix.
+    try:
+        from startd8.repair.orchestrator import get_step_effectiveness_summary
+        _effectiveness = get_step_effectiveness_summary()
+        _low_eff = [
+            name for name, data in _effectiveness.items()
+            if data["attempts"] >= 5 and data["success_rate"] < 0.2
+        ]
+        if _low_eff:
+            prioritized.append((
+                1,
+                "repair_calibration",
+                "## Repair Reliability Warning\n\n"
+                "Auto-repair is unreliable for: "
+                + ", ".join(_low_eff)
+                + ". Ensure generated code avoids these error categories.",
+            ))
+    except ImportError:
+        pass  # Repair module not available
 
     # P1.5: Quality guidance from previous runs (REQ-RFL-330)
     seed_quality_hints = context.pop("quality_hints", None)
