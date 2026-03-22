@@ -299,4 +299,4 @@ class TestDeriveServiceMetadata:
             target_files=["src/cartservice/src/services/CartService.cs"],
         )]
         meta = profile.derive_service_metadata(features)
-        assert meta.get("csharp_namespace") == "cartservice.services"
+        assert meta.get("csharp_namespace") == "Cartservice.Services"

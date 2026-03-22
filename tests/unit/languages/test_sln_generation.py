@@ -141,7 +141,7 @@ class TestSlnRouting:
     def test_sln_with_csproj_generates_content(self, tmp_path):
         gen = self._make_gen(tmp_path)
         context = {
-            "target_files": [
+            "all_target_files": [
                 "src/CartService/CartService.csproj",
                 "src/CartService/CartStore.cs",
             ],
@@ -156,7 +156,7 @@ class TestSlnRouting:
         """GUIDs should be deterministic (uuid5-based) and reproducible."""
         gen = self._make_gen(tmp_path)
         context = {
-            "target_files": ["src/Api/Api.csproj"],
+            "all_target_files": ["src/Api/Api.csproj"],
         }
         result1 = gen._try_generate_sln("App.sln", None, context)
         result2 = gen._try_generate_sln("App.sln", None, context)
@@ -165,7 +165,7 @@ class TestSlnRouting:
     def test_sln_multi_csproj(self, tmp_path):
         gen = self._make_gen(tmp_path)
         context = {
-            "target_files": [
+            "all_target_files": [
                 "src/Api/Api.csproj",
                 "src/Core/Core.csproj",
                 "src/Tests/Tests.csproj",

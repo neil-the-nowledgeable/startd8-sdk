@@ -200,19 +200,19 @@ class TestNamespaceDerivation:
         from startd8.languages.csharp import _derive_namespace
         assert _derive_namespace(
             "src/cartservice/src/cartstore/RedisCartStore.cs"
-        ) == "cartservice.cartstore"
+        ) == "Cartservice.Cartstore"
 
     def test_cartservice_services(self):
         from startd8.languages.csharp import _derive_namespace
         assert _derive_namespace(
             "src/cartservice/src/services/CartService.cs"
-        ) == "cartservice.services"
+        ) == "Cartservice.Services"
 
     def test_root_level_file(self):
         from startd8.languages.csharp import _derive_namespace
         assert _derive_namespace(
             "src/cartservice/src/Program.cs"
-        ) == "cartservice"
+        ) == "Cartservice"
 
     def test_no_src_prefix(self):
         from startd8.languages.csharp import _derive_namespace
@@ -225,8 +225,8 @@ class TestNamespaceDerivation:
     def test_multiple_src_dirs(self):
         from startd8.languages.csharp import _derive_namespace
         ns = _derive_namespace("src/myapp/src/models/User.cs")
-        assert ns == "myapp.models"
-        assert "src" not in ns
+        assert ns == "Myapp.Models"
+        assert "src" not in ns.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ class TestProjectContextSection:
         section = profile.build_project_context_section({
             "target_files": ["src/cartservice/src/cartstore/RedisCartStore.cs"],
         })
-        assert "cartservice.cartstore" in section
+        assert "Cartservice.Cartstore" in section
 
     def test_uses_service_metadata_fallback(self, profile):
         section = profile.build_project_context_section({
