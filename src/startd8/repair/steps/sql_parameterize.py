@@ -97,8 +97,12 @@ def _parameterize_sql(code: str) -> tuple[str, int]:
     while i < len(lines):
         line = lines[i]
 
-        # Detect CommandText assignment (may have $" on this line or next)
-        if ".CommandText" in line:
+        # Detect SQL assignment via CommandText or CreateCommand($"...")
+        _is_sql_site = (
+            ".CommandText" in line
+            or ("CreateCommand(" in line and ("$\"" in line or line.strip().endswith("(")))
+        )
+        if _is_sql_site:
             # Collect the full statement (may span multiple lines via + or =\n)
             stmt_lines = [line]
             j = i + 1
@@ -117,11 +121,19 @@ def _parameterize_sql(code: str) -> tuple[str, int]:
                 vars_found = _INTERPOLATED_QUOTED_VAR.findall(full_stmt)
                 bare_vars = _INTERPOLATED_BARE_VAR.findall(full_stmt)
 
-                # Deduplicate while preserving order
+                # Deduplicate while preserving order.
+                # Skip: underscore-prefixed (_tableName), table-name-like vars
+                # (tableName, table_name, TableName) — these are identifiers,
+                # not user input, and can't be parameterized in SQL.
+                _TABLE_NAME_PATTERNS = {"tablename", "table_name", "schemaname", "schema_name"}
                 seen: set[str] = set()
                 all_vars: list[str] = []
                 for v in vars_found + bare_vars:
-                    if v not in seen and not v.startswith("_"):
+                    if (
+                        v not in seen
+                        and not v.startswith("_")
+                        and v.lower() not in _TABLE_NAME_PATTERNS
+                    ):
                         seen.add(v)
                         all_vars.append(v)
 
@@ -132,13 +144,20 @@ def _parameterize_sql(code: str) -> tuple[str, int]:
                         new_stmt = new_stmt.replace(f"'{{{var}}}'", f"@{var}")
                         new_stmt = new_stmt.replace(f"{{{var}}}", f"@{var}")
 
-                    # Change $" to " (no longer interpolated)
-                    new_stmt = new_stmt.replace('$"', '"')
+                    # Remove $" only if no remaining interpolations
+                    # (table names like {tableName} may still need interpolation)
+                    if "{" not in new_stmt.split("=", 1)[-1]:
+                        new_stmt = new_stmt.replace('$"', '"')
 
                     result_lines.append(new_stmt)
 
                     # Determine the cmd variable name
-                    cmd_var_match = re.match(r'\s*(\w+)\.CommandText', full_stmt)
+                    cmd_var_match = (
+                        re.match(r'\s*(\w+)\.CommandText', full_stmt)
+                        or re.search(r'var\s+(\w+)\s*=\s*\w+\.CreateCommand', full_stmt)
+                        or re.search(r'using\s+var\s+(\w+)\s*=', full_stmt)
+                        or re.search(r'using\s*\(\s*var\s+(\w+)\s*=', full_stmt)
+                    )
                     cmd_var = cmd_var_match.group(1) if cmd_var_match else "cmd"
 
                     # Insert Parameters.AddWithValue lines after the statement

@@ -34,7 +34,8 @@ class TestParameterizeSql:
         assert "@userId" in result
         assert "@productId" in result
         assert "@newQty" in result
-        assert "$\"" not in result  # interpolation removed
+        # $" kept because {_tableName} still needs interpolation
+        assert "{_tableName}" in result
 
     def test_delete_with_single_var(self):
         code = '    cmd.CommandText = $"DELETE FROM {_tableName} WHERE userId=\'{userId}\'\";\n'
