@@ -245,6 +245,48 @@ Detect non-C# code patterns in `.cs` files.
 
 **Implementation:** Already partially implemented in `validate_csharp_syntax()`. This requirement extends the check to produce structured `semantic_issues` entries rather than just a boolean validation failure.
 
+#### REQ-KZ-CS-200i: Spanner Parameterized Query Exemption
+
+**Priority:** P1
+**Status:** Not implemented
+**Source:** Run-095/099 SpannerCartStore (3 false-positive `sql_injection_risk` errors)
+
+The `sql_injection_risk` check MUST exempt SQL strings that use Spanner's `SpannerParameterCollection` for parameterization.
+
+**Problem:** The regex-based `_check_sql_injection_risk()` flags `$"SELECT ... FROM {TableName}"` as SQL injection when `TableName` is a static readonly field interpolated into the query. In SpannerCartStore, the actual user-input parameters (`userId`, `productId`) are properly parameterized via `SpannerParameterCollection`, but the check sees the `$"` interpolation and flags the entire query.
+
+**Acceptance criteria:**
+1. When a SQL string contains `$"...{var}..."` interpolation, check whether a `SpannerParameterCollection` is used in the same statement (within 10 lines). If so, the interpolated variables that are NOT in the parameter collection are likely table/column names (safe to interpolate), and the check should be suppressed.
+2. Alternatively: if the file contains `using Google.Cloud.Spanner.Data;` AND the method body contains `SpannerParameterCollection`, downgrade `sql_injection_risk` from `error` to `info` with message "SQL interpolation detected but Spanner parameterized query pattern also present — verify manually."
+3. Static readonly fields (`public static readonly string TableName`) used in SQL interpolation should not trigger `sql_injection_risk` — they are compile-time constants, not user input.
+
+**Implementation approach:**
+- In `_check_sql_injection_risk()`, before flagging a line, scan ±10 lines for `SpannerParameterCollection`, `SpannerParameter`, or `AddWithValue`. If found, suppress or downgrade.
+- Check whether the interpolated variable is declared as `static readonly` or `const` elsewhere in the file. If so, suppress.
+
+#### REQ-KZ-CS-200j: `using var` Dispose Pattern Recognition
+
+**Priority:** P1
+**Status:** Not implemented
+**Source:** Run-095/099 SpannerCartStore (4 false-positive `query_security_lifecycle` warnings)
+
+The `query_security_lifecycle` check MUST recognize C# 8+ `using var` declarations as valid dispose patterns.
+
+**Problem:** The lifecycle check flags `new SpannerConnection(databaseString)` as "resource creation without dispose pattern" even when the assignment is `using var connection = new SpannerConnection(...)`. The regex does not recognize the C# 8+ `using var` declaration form — it only matches the older `using (var x = new Type(...)) { }` block form.
+
+**Acceptance criteria:**
+1. The lifecycle check recognizes ALL valid C# dispose patterns:
+   - `using var x = new Type(...)` — C# 8+ declaration (line-scoped)
+   - `using (var x = new Type(...)) { ... }` — traditional block form
+   - `await using var x = new Type(...)` — async C# 8+ declaration
+   - `await using (var x = new Type(...)) { ... }` — async block form
+2. When any of these patterns is present on the same line as the `new Type()` call, the lifecycle check is suppressed for that line.
+3. The check should also recognize `using var x = Type.Create(...)` (factory method pattern used by `NpgsqlDataSource.Create()`).
+
+**Implementation approach:**
+- In `_check_resource_lifecycle()`, before flagging a `new TypeName(` pattern, check whether the line starts with `using var`, `await using var`, `using (var`, or `await using (var`. If so, the resource is properly managed — suppress.
+- Regex: `^\s*(await\s+)?using\s+(var|\(var)\s+\w+\s*=` on the same line as the flagged pattern.
+
 ---
 
 ## 4. Quality Scoring
@@ -446,6 +488,32 @@ When ASP.NET Core or gRPC frameworks are detected:
 - "Register services in `Program.cs` using `builder.Services.AddScoped<IService, ServiceImpl>();`"
 - "Use constructor injection, not `HttpContext.RequestServices.GetService<T>()`"
 - "For gRPC services, override the generated base class methods and inject dependencies via constructor"
+
+#### REQ-KZ-CS-500e: Language-Specific Reviewer Quality Rules
+
+**Priority:** P1
+**Status:** Implemented (2026-03-22) — `_build_language_review_rules()` in `reviewer.py`
+**Source:** Run-095/099 — reviewer scored Console.WriteLine code 99/100, praising it as "matching reference"
+
+The reviewer system prompt MUST include language-specific quality rules that override reference implementation patterns. These rules are injected into the system prompt during the iterative draft-review cycle, so the reviewer catches quality issues BEFORE validation or repair.
+
+**Problem:** The reviewer evaluates code against the spec, and when the spec says "use Console.WriteLine (matches reference)", the reviewer validates it as correct. The reviewer has no independent quality standard for logging, SQL injection, or other cross-cutting concerns. By the time semantic checks run post-generation, the code has already passed the draft-review cycle.
+
+**Solution:** Inject language-specific quality rules into the reviewer system prompt via `_build_language_review_rules(context)`. The rules explicitly state "Even if the reference implementation uses Console.WriteLine, flag it as MAJOR."
+
+**Acceptance criteria:**
+1. When the context contains a `language_profile` with `language_id == "csharp"`, the reviewer system prompt includes C# quality rules
+2. C# rules flag: Console.Write/Console.WriteLine in services (MAJOR), string interpolation in SQL (MAJOR), missing ILogger<T> DI (MAJOR), block-scoped namespace (MINOR), bare catch without logging (MINOR)
+3. Rules explicitly state "Even if the reference implementation uses X" to override spec-poisoning
+4. Rules are injected for Go (fmt.Println), Java (System.out.println), Python (print()) with equivalent guidance
+5. When no language profile or target files are available, no rules are injected (backward compatible)
+6. Fallback: infer language from target file extensions when language_profile is unavailable
+
+**Implementation files:**
+- `src/startd8/implementation_engine/reviewer.py` — `_LANGUAGE_REVIEW_RULES` dict + `_build_language_review_rules()` function (IMPLEMENTED)
+- `src/startd8/implementation_engine/prompts/contractor_prompts.yaml` — review_system template unchanged (rules appended at runtime)
+
+**Expected impact:** On the next C# run, the reviewer should flag Console.WriteLine as MAJOR, score the draft lower (e.g., 80 instead of 99), and the iterative cycle will produce a second draft that uses ILogger<T>. This addresses the issue at generation time rather than requiring post-generation repair.
 
 #### REQ-KZ-CS-500d: Testing Hints
 

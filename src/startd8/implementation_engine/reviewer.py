@@ -351,6 +351,91 @@ def _get_review_system_prompt() -> str:
         return ""
 
 
+# Language-specific review rules injected into the system prompt.
+# These override reference implementation patterns that the reviewer
+# would otherwise accept as correct.
+_LANGUAGE_REVIEW_RULES: Dict[str, str] = {
+    "csharp": (
+        "## C# Quality Rules (enforce as MAJOR issues)\n"
+        "- Console.Write/Console.WriteLine in service classes: MAJOR. "
+        "Use ILogger<T> injected via constructor DI instead. "
+        "Even if the reference implementation uses Console.WriteLine, flag it.\n"
+        "- String interpolation in SQL queries ($\"SELECT ... '{var}'\"): MAJOR. "
+        "Use parameterized queries (cmd.Parameters.AddWithValue). "
+        "Even if the spec says \"intentional\" or \"matches reference\", flag it.\n"
+        "- Block-scoped namespace (namespace X { }): MINOR for net8.0+ targets. "
+        "Prefer file-scoped (namespace X;).\n"
+        "- Missing ILogger<T> constructor injection in any service class: MAJOR.\n"
+        "- Bare `catch { return false; }` without logging: MINOR."
+    ),
+    "go": (
+        "## Go Quality Rules (enforce as MAJOR issues)\n"
+        "- fmt.Println/fmt.Printf in service code: MAJOR. "
+        "Use slog or zap structured logger instead.\n"
+        "- String formatting in SQL queries (fmt.Sprintf with %s/%v): MAJOR. "
+        "Use parameterized queries.\n"
+        "- Empty function bodies with only a TODO comment: MAJOR."
+    ),
+    "java": (
+        "## Java Quality Rules (enforce as MAJOR issues)\n"
+        "- System.out.println in service code: MAJOR. "
+        "Use SLF4J LoggerFactory instead.\n"
+        "- String concatenation in SQL queries: MAJOR. "
+        "Use PreparedStatement with ? placeholders.\n"
+        "- Empty catch blocks: MAJOR."
+    ),
+    "python": (
+        "## Python Quality Rules (enforce as MAJOR issues)\n"
+        "- print() in service/library code: MAJOR. "
+        "Use logging.getLogger(__name__) instead.\n"
+        "- f-string in SQL queries: MAJOR. "
+        "Use parameterized queries (cursor.execute(sql, params)).\n"
+        "- Bare except: MAJOR. Catch specific exceptions."
+    ),
+}
+
+
+def _build_language_review_rules(context: Optional[Dict[str, Any]]) -> str:
+    """Build language-specific review rules from the pipeline context.
+
+    Extracts the language_id from the context's language_profile and
+    returns the corresponding review rules. Returns empty string if
+    no language profile or no rules for the detected language.
+    """
+    if not context:
+        return ""
+
+    # Try language_profile object first
+    lang_profile = context.get("language_profile")
+    lang_id = ""
+    if lang_profile and hasattr(lang_profile, "language_id"):
+        lang_id = lang_profile.language_id
+    elif isinstance(lang_profile, str):
+        lang_id = lang_profile
+
+    if not lang_id:
+        # Fallback: infer from target files
+        target_files = context.get("target_files", [])
+        target_file = context.get("target_file", "")
+        all_files = target_files + ([target_file] if target_file else [])
+        for f in all_files:
+            fl = f.lower()
+            if fl.endswith(".cs") or fl.endswith(".csproj"):
+                lang_id = "csharp"
+                break
+            elif fl.endswith(".go"):
+                lang_id = "go"
+                break
+            elif fl.endswith(".java"):
+                lang_id = "java"
+                break
+            elif fl.endswith(".py"):
+                lang_id = "python"
+                break
+
+    return _LANGUAGE_REVIEW_RULES.get(lang_id, "")
+
+
 # ---------------------------------------------------------------------------
 # Main review entry point
 # ---------------------------------------------------------------------------
@@ -484,6 +569,14 @@ def review_draft(
         prompt = prompt + "\n\n" + constraint_section
 
     sys_prompt = _get_review_system_prompt()
+
+    # REQ-KZ-CS-500c: Inject language-specific review criteria into system prompt.
+    # The language profile's coding_standards contain rules like "use ILogger<T>
+    # instead of Console.WriteLine" that the reviewer should enforce as MAJOR issues.
+    _lang_review_rules = _build_language_review_rules(context)
+    if _lang_review_rules:
+        sys_prompt = (sys_prompt + "\n\n" + _lang_review_rules) if sys_prompt else _lang_review_rules
+
     if sys_prompt:
         response_text, response_time_ms, token_usage = agent.generate(
             prompt, system_prompt=sys_prompt,
