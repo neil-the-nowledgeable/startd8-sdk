@@ -676,6 +676,56 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         ),
         "confidence": 0.75,
     },
+    # --- Observability artifact hints (REQ-KZ-OBS-600) ---
+    "obs_phantom_service": {
+        "phase": "artifact_gen",
+        "hint": (
+            "Service '{service}' is not a runtime service — add to non-service "
+            "skip list. Phantom services produce valid YAML that would create "
+            "empty dashboards and never-firing alerts."
+        ),
+    },
+    "obs_missing_red_panels": {
+        "phase": "artifact_gen",
+        "hint": (
+            "Dashboard for '{service}' is missing RED method panels. "
+            "Add error rate and request rate panels alongside latency. "
+            "RED coverage requires Rate (request count), Errors (error ratio), "
+            "and Duration (latency histogram) panels."
+        ),
+    },
+    "obs_slo_target_mismatch": {
+        "phase": "artifact_gen",
+        "hint": (
+            "SLO target {actual} does not match manifest availability {expected}. "
+            "Use manifest value. Ensure load_business_context() reads availability "
+            "from .contextcore.yaml correctly."
+        ),
+    },
+    "obs_threshold_mismatch": {
+        "phase": "artifact_gen",
+        "hint": (
+            "Alert/dashboard threshold {actual} does not match manifest "
+            "latency_p99 {expected}. Derivation rules must flow through to "
+            "all artifact types consistently."
+        ),
+    },
+    "obs_missing_availability_slo": {
+        "phase": "artifact_gen",
+        "hint": (
+            "Service '{service}' has availability requirement but no "
+            "availability (ratio-based) SLO. Add an availability SLO alongside "
+            "the latency SLO when manifest.spec.requirements.availability is set."
+        ),
+    },
+    "obs_transport_metric_mismatch": {
+        "phase": "artifact_gen",
+        "hint": (
+            "Service '{service}' uses {transport} but metrics reference wrong "
+            "protocol family. gRPC services MUST use rpc_server_* metrics; "
+            "HTTP services MUST use http_server_* metrics."
+        ),
+    },
 }
 
 # Maps semantic issue categories (from DiskComplianceResult.semantic_issues)
@@ -708,6 +758,13 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "python_contamination": "language_mismatch_in_generation",
     # Code style
     "block_scoped_namespace": "block_scoped_namespace_detected",
+    # Observability artifact issues (REQ-KZ-OBS-600)
+    "obs_phantom_service": "obs_phantom_service",
+    "obs_missing_red_coverage": "obs_missing_red_panels",
+    "obs_slo_target_mismatch": "obs_slo_target_mismatch",
+    "obs_threshold_mismatch": "obs_threshold_mismatch",
+    "obs_missing_availability_slo": "obs_missing_availability_slo",
+    "obs_transport_metric_mismatch": "obs_transport_metric_mismatch",
 }
 
 
@@ -915,6 +972,7 @@ class PrimePostMortemEvaluator:
                 report.features, project_root, forward_manifest,
                 seed_by_id=seed_by_id,
                 semantic_repair_data=aggregated_repair if aggregated_repair else None,
+                history_by_id=history_by_id,
             )
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
@@ -1156,6 +1214,7 @@ class PrimePostMortemEvaluator:
         *,
         seed_by_id: Optional[Dict[str, Dict]] = None,
         semantic_repair_data: Optional[Dict[str, Any]] = None,
+        history_by_id: Optional[Dict[str, Dict]] = None,
     ) -> None:
         """Evaluate disk compliance and compute quality scores for each feature.
 
@@ -1262,6 +1321,29 @@ class PrimePostMortemEvaluator:
 
                     # Compute disk quality score
                     fpm.disk_quality_score = compute_disk_quality_score(compliance)
+
+                    # Merge Anzen gate findings into semantic_issues so the
+                    # Kaizen feedback loop can see security findings (Issues #1-4
+                    # from security pipeline audit).
+                    _hist = (history_by_id or {}).get(fpm.feature_id, {})
+                    anzen_data = _hist.get("anzen_gate") or []
+                    for ag_entry in anzen_data:
+                        if not isinstance(ag_entry, dict):
+                            continue
+                        ag_file = ag_entry.get("file_path", "")
+                        if not ag_file or not effective_file.endswith(
+                            Path(ag_file).name
+                        ):
+                            continue
+                        for finding in ag_entry.get("findings", []):
+                            if not isinstance(finding, dict):
+                                continue
+                            compliance.semantic_issues.append({
+                                "category": f"query_security_{finding.get('check_type', 'unknown')}",
+                                "severity": finding.get("severity", "error"),
+                                "message": finding.get("message", ""),
+                                "line": finding.get("line"),
+                            })
 
                     # Count error-severity semantic issues for Kaizen label.
                     sem_issues = getattr(compliance, "semantic_issues", []) or []
@@ -1583,6 +1665,10 @@ class PrimePostMortemEvaluator:
         # Markdown summary
         md_path = out / "prime-postmortem-summary.md"
         md_content = self._render_markdown(report)
+        # Append observability artifacts section if available (REQ-KZ-OBS-502)
+        obs_section = self._render_observability_section(output_dir)
+        if obs_section:
+            md_content += obs_section
         md_path.write_text(md_content, encoding="utf-8")
         logger.info("Post-mortem summary: %s", md_path)
 
@@ -1682,6 +1768,47 @@ class PrimePostMortemEvaluator:
 
         if inventory.entries:
             inventory.save(Path(output_dir) / "todo-inventory.json")
+
+    def _render_observability_section(self, output_dir: str) -> Optional[str]:
+        """Render observability artifacts markdown section (REQ-KZ-OBS-502).
+
+        Reads ``observability_artifacts`` from ``kaizen-metrics.json`` in
+        *output_dir* and returns a markdown section string.  Returns ``None``
+        when the key is absent or the file does not exist.
+        """
+        metrics_path = Path(output_dir) / "kaizen-metrics.json"
+        if not metrics_path.is_file():
+            return None
+
+        try:
+            data = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+        obs = data.get("observability_artifacts")
+        if not obs:
+            return None
+
+        cross_issues = obs.get("cross_artifact_issues", {})
+        cross_total = sum(
+            int(v) for v in cross_issues.values() if isinstance(v, (int, float))
+        )
+
+        lines = [
+            "",
+            "## Observability Artifacts",
+            "",
+            f"- Services evaluated: {obs.get('services_evaluated', 0)}"
+            f" ({obs.get('services_with_complete_triplet', 0)} complete triplets)",
+            f"- Average dashboard score: {obs.get('avg_dashboard_spec_score', 0):.0%}",
+            f"- Average alert score: {obs.get('avg_alert_rule_score', 0):.0%}",
+            f"- Average SLO score: {obs.get('avg_slo_definition_score', 0):.0%}",
+            f"- Composite score: {obs.get('avg_composite_score', 0):.0%}",
+            f"- Cross-artifact issues: {cross_total}",
+            f"- Repairs applied: {obs.get('total_repairs', 0)}",
+            "",
+        ]
+        return "\n".join(lines)
 
     def _render_markdown(self, report: PrimePostMortemReport) -> str:
         """Render the report as markdown."""

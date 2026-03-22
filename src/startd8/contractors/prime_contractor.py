@@ -4153,6 +4153,10 @@ class PrimeContractorWorkflow:
             sem_repair = result.metadata.get("semantic_repair")
             if sem_repair and sem_repair.get("issues_found", 0) > 0:
                 history_entry["semantic_repair"] = sem_repair
+            # Thread Anzen gate findings for postmortem → Kaizen feedback loop
+            anzen_data = result.metadata.get("anzen_gate")
+            if anzen_data:
+                history_entry["anzen_gate"] = anzen_data
             self.integration_history.append(history_entry)
             if self.on_feature_complete:
                 self.on_feature_complete(feature)

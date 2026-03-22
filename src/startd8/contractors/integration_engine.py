@@ -1374,19 +1374,43 @@ class IntegrationEngine:
                 )
 
         if gate_results:
-            result_metadata["anzen_gate"] = [
-                {
-                    "file": r.file_path,
-                    "verdict": r.verdict.value,
-                    "findings": len(r.findings),
-                }
-                for r in gate_results
-            ]
+            result_metadata["anzen_gate"] = enriched_entries
             # Track files processed by Query Prime so _run_semantic_checks
             # can suppress duplicate sql_injection_risk findings.
             # Query Prime's two-pass detection is authoritative for injection.
             self._anzen_gated_files: set = getattr(self, "_anzen_gated_files", set())
             self._anzen_gated_files.update(r.file_path for r in gate_results)
+
+            # Bridge Anzen findings into semantic_issues for postmortem/Kaizen
+            # visibility (CRITICAL: without this, security findings are orphaned
+            # from the Kaizen feedback loop — see Issues #1-4 in security audit).
+            try:
+                from startd8.forward_manifest_validator import validate_disk_compliance
+                for entry in enriched_entries:
+                    if not entry.get("findings"):
+                        continue
+                    fpath_str = entry["file_path"]
+                    for finding in entry["findings"]:
+                        # Convert to semantic issue format (category prefix
+                        # "query_security_" enables _SEMANTIC_CATEGORY_TO_SUGGESTION
+                        # mapping in prime_postmortem.py).
+                        check_type = finding.get("check_type", "unknown")
+                        category = f"query_security_{check_type}"
+                        issue_dict = {
+                            "category": category,
+                            "severity": finding.get("severity", "error"),
+                            "message": finding.get("message", ""),
+                            "line": finding.get("line"),
+                        }
+                        # Append to the unit's accumulated semantic issues
+                        # (populated by _run_semantic_checks which ran first).
+                        if not hasattr(unit, "_anzen_semantic_issues"):
+                            unit._anzen_semantic_issues = []
+                        unit._anzen_semantic_issues.append(
+                            (fpath_str, issue_dict),
+                        )
+            except Exception:
+                logger.debug("Anzen→semantic bridge failed (non-fatal)", exc_info=True)
 
             # Wire update_security_metrics() (Phase 0: remaining work #5)
             try:
