@@ -34,6 +34,7 @@ from .steps import (
     SemanticImportFixStep,
     SemanticMethodFixStep,
     SemanticMethodResolutionFixStep,
+    SqlParameterizeStep,
     TodoUncommentStep,
     UnusedVariableRemovalStep,
     VariableInitializationStep,
@@ -64,6 +65,8 @@ _CANONICAL_ORDER = [
     "semantic_method_resolution_fix",
     "semantic_discarded_return_fix",
     "semantic_duplicate_main_fix",
+    "csharp_convention_fix",
+    "sql_parameterize",
     "ast_validate",
     "java_syntax_validate",
     "go_syntax_validate",
@@ -91,9 +94,10 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     ("syntax", "go_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
     ("import", "go_import_error", ["fence_strip", "todo_uncomment", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
-    ("syntax", "csharp_syntax_error", ["fence_strip", "csharp_convention_fix", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
-    ("import", "csharp_import_error", ["fence_strip", "csharp_convention_fix", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
-    ("convention", "csharp_convention_error", ["csharp_convention_fix", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("syntax", "csharp_syntax_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
+    ("import", "csharp_import_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("convention", "csharp_convention_error", ["csharp_convention_fix", "sql_parameterize", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    ("security", "csharp_sql_injection", ["sql_parameterize", "csharp_syntax_validate"], "HIGH", "csharp"),
     # Node.js repair routes
     ("syntax", "js_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
     ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
@@ -124,6 +128,7 @@ _STEP_FACTORIES: dict[str, type] = {
     "java_syntax_validate": JavaSyntaxValidateStep,
     "go_syntax_validate": GoSyntaxValidateStep,
     "csharp_convention_fix": CSharpConventionFixStep,
+    "sql_parameterize": SqlParameterizeStep,
     "csharp_syntax_validate": CSharpSyntaxValidateStep,
     "js_syntax_validate": JsSyntaxValidateStep,
 }

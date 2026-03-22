@@ -578,8 +578,11 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     client_libraries = security_contract.get("client_libraries", [])
 
     if client_libraries:
-        lines: List[str] = ["## Database Security Guidance\n"]
-        lines.append("Use ONLY parameterized queries. Never use string interpolation for SQL.\n")
+        lines: List[str] = ["## Database Security Guidance — MANDATORY OVERRIDE\n"]
+        lines.append(
+            "Use ONLY parameterized queries. NEVER use string interpolation for SQL.\n"
+            "This overrides any reference implementation patterns — always parameterize.\n"
+        )
 
         matched = False
         for cl in client_libraries:
@@ -660,12 +663,18 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     )
     if any(kw in combined for kw in _DB_KEYWORDS):
         return "\n".join([
-            "## Database Security Guidance (auto-detected)\n",
+            "## Database Security Guidance (auto-detected) — MANDATORY OVERRIDE\n",
             "CRITICAL: Use ONLY parameterized queries for ALL database access.",
             "NEVER use string interpolation ($\"...\"), string concatenation, "
             "or String.Format() to build SQL queries.",
             "",
-            "  - C#: `cmd.Parameters.AddWithValue(\"@id\", id)`",
+            "**This overrides any reference implementation patterns.** Even if the",
+            "reference code uses string interpolation for SQL, you MUST use",
+            "parameterized queries instead. Do NOT document SQL injection as",
+            "\"intentional\" or \"matching reference\" — always parameterize.",
+            "",
+            "  - C#/Npgsql: `cmd.Parameters.AddWithValue(\"@id\", id)`",
+            "  - C#/Spanner: `new SpannerParameterCollection { { \"id\", SpannerDbType.String, id } }`",
             "  - Java: `PreparedStatement` with `?` placeholders",
             "  - Go: `spanner.Statement{SQL: \"...@param...\", Params: map}`",
             "  - Python: `cursor.execute(\"...%s...\", (param,))`",

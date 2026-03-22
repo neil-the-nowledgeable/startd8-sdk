@@ -24,6 +24,7 @@ from .semantic_duplicate_main_fix import SemanticDuplicateMainFixStep
 from .semantic_import_fix import SemanticImportFixStep
 from .semantic_method_fix import SemanticMethodFixStep
 from .semantic_method_resolution_fix import SemanticMethodResolutionFixStep
+from .sql_parameterize import SqlParameterizeStep
 from .todo_uncomment import TodoUncommentStep
 from .unused_variable_removal import UnusedVariableRemovalStep
 from .variable_initialization import VariableInitializationStep
@@ -51,6 +52,7 @@ __all__ = [
     "SemanticImportFixStep",
     "SemanticMethodFixStep",
     "SemanticMethodResolutionFixStep",
+    "SqlParameterizeStep",
     "TodoUncommentStep",
     "UnusedVariableRemovalStep",
     "VariableInitializationStep",
