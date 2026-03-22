@@ -2575,41 +2575,43 @@ class PrimeContractorWorkflow:
         except Exception:
             return
 
-        # Search candidates in priority order
+        # Search candidates in priority order.
+        # Walk up from output_dir looking for sibling run-* directories.
+        # Handles multiple nesting depths:
+        #   - Flat:   output_dir = .../run-093/                 (runs are siblings)
+        #   - Nested: output_dir = .../run-095/plan-ingestion/  (runs are at grandparent)
+        #   - Deep:   output_dir = .../run-099/plan-ingestion/generated/ (runs at great-grandparent)
         candidates: list[Path] = []
 
-        # 1. Current output dir
+        # 1. Current output dir (same-dir re-run picks up prior suggestions)
         candidates.append(output_dir / "kaizen-suggestions.json")
 
-        # 2. Sibling directories at parent level
-        #    Handles flat layout: output_dir = .../run-093/
-        #    Siblings are other run dirs at the same level.
-        parent = output_dir.parent
-        if parent.is_dir():
-            siblings = sorted(parent.iterdir(), reverse=True)
+        # 2. Walk up to 3 ancestor levels looking for sibling run directories
+        seen_ancestors: set = set()
+        ancestor = output_dir
+        for _depth in range(4):
+            ancestor = ancestor.parent
+            if not ancestor.is_dir() or ancestor in seen_ancestors:
+                break
+            seen_ancestors.add(ancestor)
+            # Check siblings at this level — sorted descending (newest first)
+            try:
+                siblings = sorted(ancestor.iterdir(), reverse=True)
+            except OSError:
+                continue
             for sibling in siblings:
-                if sibling == output_dir or not sibling.is_dir():
+                if not sibling.is_dir() or sibling == output_dir:
                     continue
+                # Skip if sibling is an ancestor of output_dir (don't re-enter our own tree)
+                try:
+                    output_dir.relative_to(sibling)
+                    continue  # sibling is an ancestor — skip
+                except ValueError:
+                    pass
                 candidates.append(sibling / "kaizen-suggestions.json")
                 candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
-
-        # 3. Grandparent level — handles nested layout where
-        #    output_dir = .../run-095/plan-ingestion/ and sibling runs
-        #    are at .../run-094/, .../run-093/, etc.
-        grandparent = parent.parent
-        if grandparent.is_dir() and grandparent != parent:
-            gp_siblings = sorted(grandparent.iterdir(), reverse=True)
-            for sibling in gp_siblings:
-                if sibling == parent or not sibling.is_dir():
-                    continue
-                # Check flat and plan-ingestion subdir layouts
-                candidates.append(sibling / "kaizen-suggestions.json")
-                candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
-
-        # 4. Parent and grandparent dir (flat layout fallback)
-        candidates.append(parent / "kaizen-suggestions.json")
-        if grandparent != parent:
-            candidates.append(grandparent / "kaizen-suggestions.json")
+            # Also check the ancestor dir itself (flat layout)
+            candidates.append(ancestor / "kaizen-suggestions.json")
 
         for path in candidates:
             if not path.is_file():
