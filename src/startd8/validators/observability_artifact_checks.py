@@ -458,7 +458,42 @@ def validate_slo(
     service_id: str = "",
     transport: Optional[str] = None,
 ) -> SloValidationResult:
-    """Validate OpenSLO v1 YAML against OBS-102 + OBS-202 checklists."""
+    """Validate OpenSLO v1 YAML against OBS-102 + OBS-202 checklists.
+
+    Supports multi-document YAML (``---`` separators) — each document is
+    validated independently and results are merged.  This is common when
+    a service has both availability and latency SLOs in one file.
+    """
+    # Multi-document support: split, validate each, merge results.
+    try:
+        docs = list(yaml.safe_load_all(content))
+    except yaml.YAMLError:
+        docs = []
+
+    slo_docs = [d for d in docs if isinstance(d, dict)]
+
+    if len(slo_docs) > 1:
+        merged = SloValidationResult(file_path=file_path)
+        for doc in slo_docs:
+            doc_yaml = yaml.dump(doc, default_flow_style=False, sort_keys=False)
+            sub = validate_slo(
+                doc_yaml, file_path,
+                manifest_availability=manifest_availability,
+                autofix=autofix,
+                service_id=service_id,
+                transport=transport,
+            )
+            merged.yaml_valid = merged.yaml_valid or sub.yaml_valid
+            merged.checks_passed += sub.checks_passed
+            merged.checks_total += sub.checks_total
+            merged.issues.extend(sub.issues)
+            merged.repairs_applied.extend(sub.repairs_applied)
+            if sub.target_value is not None:
+                merged.target_value = sub.target_value
+            if sub.target_matches_manifest:
+                merged.target_matches_manifest = True
+        return merged
+
     result = SloValidationResult(file_path=file_path)
     issues = result.issues
     passed = 0
