@@ -1,6 +1,6 @@
 # Onboarding Portal Artifact — Requirements
 
-> **Version:** 0.2.0
+> **Version:** 0.3.0
 > **Status:** DRAFT
 > **Date:** 2026-03-21
 > **Parent:** [UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md](../UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md) (pipeline context)
@@ -135,9 +135,20 @@ The generated portal MUST include the following sections, derived from pipeline 
 
 | ID | Requirement |
 |----|-------------|
-| OBP-105a | **v0 quick win:** A minimal portal with ONLY the service inventory section (~50 lines) can ship first to validate the HTML template, design tokens, phantom filtering, and pipeline wiring. Additional sections are additive. |
+| OBP-105a | **v0 quick win:** A minimal portal with ONLY the service inventory section (~80 lines in a separate `portal.py` module) can ship first to validate the HTML template, design tokens, phantom filtering, and pipeline wiring. Additional sections are purely additive — each renderer returns a string or empty string. |
 | OBP-105b | Empty data SHALL render as readable placeholders, not blank space. `convention_metrics=0` shows "—" not "0 metrics". Empty `calls_to` shows "No inter-service dependencies detected". Missing `kaizen-metrics.json` shows "Quality metrics unavailable (run postmortem to generate)". |
 | OBP-105c | `objectives` from onboarding metadata (plan-level intent with `metricKey`, `target`, `unit`) SHALL be the PRIMARY source for availability/latency targets — not parsed SLO YAML artifacts. The objectives are already structured, human-readable, and present in every run. SLO artifacts are the implementation; objectives are the intent. |
+
+### REQ-OBP-106: Accidental Complexity Prevention
+
+Implementation planning identified three patterns of accidental complexity in `artifact_generator.py` that the portal implementation would worsen if not addressed:
+
+| ID | Requirement |
+|----|-------------|
+| OBP-106a | **Separate module:** Portal HTML rendering SHALL live in `observability/portal.py`, NOT in `artifact_generator.py`. HTML template rendering with CSS design tokens is a different concern from YAML artifact generation. `artifact_generator.py` is already ~1100 lines. |
+| OBP-106b | **Orchestrator loop refactor:** The 3 copy-pasted try/except blocks in `generate_observability_artifacts()` (lines 1036–1081) SHOULD be extracted into a `_generate_one()` helper + `_GENERATORS` dispatch list before adding the portal. Adding a 4th copy-paste block is unacceptable accidental complexity. |
+| OBP-106c | **Validator dispatch refactor:** The 3-branch elif chain in `_repair_and_validate()` SHOULD be replaced with a `_VALIDATORS` dispatch dict so adding portal (and future artifact types) is a 1-line dict entry, not another elif branch. |
+| OBP-106d | **Refactor-first delivery:** Phase 0 SHALL refactor AC-1 and AC-2 (orchestrator loop + validator dispatch) BEFORE adding any portal code. This is a refactor-only phase — zero new functionality, existing tests pass unchanged, net line reduction. |
 
 ---
 
@@ -192,29 +203,42 @@ Per service:
 
 ## 5. Phased Delivery
 
-### Phase 0: v0 Quick Win — Service Inventory Only (~50 lines)
-- `generate_portal()` with ONLY project overview + service inventory table
-- Validates: HTML template, design tokens, phantom filtering, `--portal` flag, `ArtifactResult` wiring
-- Ships the smallest useful artifact first — additive sections follow
+### Phase 0: Refactor Existing Accidental Complexity (~-30 lines net)
 
-### Phase 1: Full Content Sections (~100 lines)
-- Add: Project Objectives (from `objectives` key — plan-level intent)
-- Add: Alert Inventory (from generated alert YAML — names, severity, thresholds)
-- Add: Dashboard Links (relative paths to sibling `dashboards/` dir)
-- Add: Run Provenance (from `run-provenance.json`)
-- Empty data renders as readable placeholders, not blank space
+Before adding portal code, distill three patterns of accidental complexity in `artifact_generator.py`:
 
-### Phase 2: Communication Graph + Quality (~80 lines)
-- Communication graph table from `service_communication_graph.services`
-- "No inter-service dependencies detected" when no edges exist
-- Quality section from `observability-manifest.yaml` `quality_summary` (already computed)
-- Security section from `kaizen-metrics.json` `security` (when present)
+1. **Copy-pasted try/except blocks** (lines 1036–1081): 3 identical blocks for alerts/dashboards/SLOs. Extract `_generate_one()` helper + `_GENERATORS` loop. Adding portal as a 4th copy-paste would make this worse.
+2. **Growing elif chain in `_repair_and_validate()`**: 3 branches (dashboard/alert/slo). Replace with dispatch dict `_VALIDATORS = {artifact_type: validator_fn}`. Adding portal is a 1-line dict entry, not another elif.
+3. **Portal HTML rendering belongs in its own module**: `artifact_generator.py` generates YAML. HTML template rendering (CSS design tokens, responsive layout) is a different concern → `observability/portal.py`.
 
-### Phase 3: Validation (~30 lines)
-- `validate_portal()` in `observability_artifact_checks.py`
-- Wire into `_repair_and_validate()` for `artifact_type="portal"`
+**This is a refactor-only phase.** Zero new functionality. Existing tests pass unchanged. Net line reduction.
 
-**Total: ~260 lines across 2 files. Phase 0 ships a useful artifact in ~50 lines.**
+### Phase 1: Portal Module — v0 Service Inventory (~80 lines)
+
+New file `observability/portal.py` with:
+- `generate_portal()` — project overview + filtered service inventory only
+- `_render_html_shell()` — harbor tour design tokens, responsive CSS
+- `_render_service_inventory()` — filtered service table
+- Ships the smallest useful artifact first — validates template + wiring
+
+### Phase 2: Full Content Sections (~100 lines)
+
+Add section renderers to `portal.py`:
+- `_render_objectives()` — from `metadata["objectives"]` (plan-level intent)
+- `_render_alert_inventory()` — from generated alert artifacts in report
+- `_render_dashboard_links()` — relative `../dashboards/` links
+- `_render_communication_graph()` — HTML table, "no dependencies" when empty
+- `_render_provenance()` — from run-provenance.json
+
+### Phase 3: Quality + Security + Validation (~80 lines)
+
+- `_render_quality_section()` — reads `quality_summary` from manifest (already computed)
+- `_render_security_section()` — reads `security` from kaizen-metrics.json
+- `validate_portal()` in `observability_artifact_checks.py` (~20 lines)
+- Add `"portal"` to `_VALIDATORS` dispatch dict (~1 line)
+- Add `--portal` flag to generation script (~5 lines)
+
+**Total: ~260 lines new across `portal.py` + `observability_artifact_checks.py`, ~-30 lines refactored in `artifact_generator.py`. Phase 0 delivers net line reduction before any new code.**
 
 ---
 

@@ -1,66 +1,109 @@
 # Onboarding Portal — Implementation Plan
 
-> **Version:** 1.0.0
+> **Version:** 2.0.0
 > **Date:** 2026-03-21
-> **Requirements:** [ONBOARDING_PORTAL_REQUIREMENTS.md](./ONBOARDING_PORTAL_REQUIREMENTS.md) v0.1.0
-> **Estimated:** ~280 lines across 4 phases
+> **Requirements:** [ONBOARDING_PORTAL_REQUIREMENTS.md](./ONBOARDING_PORTAL_REQUIREMENTS.md) v0.2.0
+> **Estimated:** ~260 lines across 4 phases
+> **Accidental Complexity Audit:** 3 items identified in existing code, distilled during implementation
 
 ---
 
-## Data Available
+## Accidental Complexity in Existing Code
 
-From `onboarding-metadata.json` (41 fields, confirmed in run-093):
+The plan touches `artifact_generator.py` (~1100 lines). Before adding portal code, three patterns of accidental complexity should be addressed:
 
-| Data | Source Key | Portal Section |
-|------|-----------|----------------|
-| Project ID | `project_id` | Project Overview |
-| Services (9 entries, 2 real) | `instrumentation_hints` | Service Inventory |
-| Transport per service | `instrumentation_hints.{svc}.transport` | Service Inventory |
-| Language per service | `service_communication_graph.services.{svc}.language` | Service Inventory |
-| Service calls graph | `service_communication_graph.services` | Communication Graph |
-| Objectives + key results | `objectives` (3 items with availability/latency targets) | SLO Summary |
-| Derivation rules | `derivation_rules` | Operational Context |
-| Generation profile | `generation_profile` | Run Provenance |
-| Generated timestamp | `generated_at` | Run Provenance |
+### AC-1: Copy-Pasted Try/Except Blocks in Orchestrator
 
-From generated artifacts:
-- `slos/{svc}-slo.yaml` → SLO targets, windows, indicators
-- `alerts/{svc}-alerts.yaml` → Alert names, severities, thresholds
-- `dashboards/{svc}-dashboard-spec.yaml` → Dashboard UIDs for linking
+Lines 1036–1081 repeat the EXACT same pattern 3 times:
 
-From `kaizen-metrics.json` (when present):
-- `security` → Security Prime scores
-- `observability_artifacts` → Artifact quality scores
-- `success_rate`, `total_cost_usd` → Pipeline quality
-
-From `run-provenance.json` (when present):
-- Run ID, start time, duration, environment
-
----
-
-## Design Tokens (from harbor tour exemplars)
-
-```css
---bg: #0f1117;        --surface: #1a1d27;    --surface-2: #232736;
---border: #2e3346;    --text: #e2e4ea;       --text-muted: #8b8fa4;
---accent: #6c8cff;    --accent-dim: #3d5299;
---green: #4ade80;     --amber: #fbbf24;      --red: #f87171;
---cyan: #22d3ee;      --purple: #a78bfa;
+```python
+try:
+    result = generate_X(service, business)
+    result = _repair_and_validate(result, business)
+    report.artifacts.append(result)
+except Exception:
+    logger.exception("X generation failed for %s", service.service_id)
+    report.artifacts.append(ArtifactResult(..., status="error"))
 ```
 
-Single-file, dark theme, responsive, Inter font. No JavaScript frameworks.
+Adding a 4th copy for the portal would make this worse.
+
+**Distill:** Extract a `_generate_one()` helper:
+
+```python
+def _generate_one(gen_fn, service, business, artifact_type, output_prefix):
+    try:
+        result = gen_fn(service, business)
+        return _repair_and_validate(result, business)
+    except Exception:
+        logger.exception("%s generation failed for %s", artifact_type, service.service_id)
+        return ArtifactResult(
+            artifact_type=artifact_type, service_id=service.service_id,
+            output_path=f"{output_prefix}/{service.service_id}-{output_prefix}.yaml",
+            status="error", error_message="Generation raised exception",
+        )
+```
+
+Then the loop becomes:
+
+```python
+_GENERATORS = [
+    (generate_alert_rules, "alert_rule", "alerts"),
+    (generate_dashboard_spec, "dashboard_spec", "dashboards"),
+    (generate_slo_definitions, "slo_definition", "slos"),
+]
+
+for service in services:
+    for gen_fn, artifact_type, prefix in _GENERATORS:
+        report.artifacts.append(_generate_one(gen_fn, service, business, artifact_type, prefix))
+```
+
+**Lines saved:** ~30. More importantly, adding the portal doesn't add another copy-paste block.
+
+### AC-2: Growing elif Chain in `_repair_and_validate()`
+
+Currently 3 branches (dashboard, alert, slo). Adding portal makes 4. Each branch has a different import + call + optional content update pattern.
+
+**Distill:** The validation result attachment (lines 979–999) is IDENTICAL for all branches. Only the validator call differs. Extract a dispatch dict:
+
+```python
+_VALIDATORS = {
+    "dashboard_spec": lambda content, path, avail: validate_dashboard(content, path, autofix=True),
+    "alert_rule": lambda content, path, avail: validate_alerts(content, path, manifest_availability=avail),
+    "slo_definition": lambda content, path, avail: validate_slo(content, path, manifest_availability=avail, autofix=True),
+    "portal": lambda content, path, avail: validate_portal(content, path),
+}
+```
+
+Then `_repair_and_validate()` becomes ~15 lines instead of ~50.
+
+**Lines saved:** ~35, and adding new artifact types is a 1-line dict entry.
+
+### AC-3: Portal HTML Rendering in a YAML Generator Module
+
+`artifact_generator.py` generates YAML artifacts. Adding 150 lines of HTML template rendering (with CSS design tokens) is a different concern.
+
+**Distill:** Put portal rendering in its own module: `observability/portal.py`. The orchestrator calls it; the HTML rendering lives separately. This keeps `artifact_generator.py` focused on YAML.
 
 ---
 
-## Phase 1: Portal Generator (~150 lines)
+## Phase 0: Refactor — Distill Accidental Complexity (~-30 lines net)
 
-### What Ships
+Before adding portal code, refactor the orchestrator:
 
-A `generate_portal()` function in `artifact_generator.py` that produces a self-contained HTML file from pipeline data.
+1. Extract `_generate_one()` helper (AC-1)
+2. Replace 3 copy-pasted try/except blocks with `_GENERATORS` loop
+3. Simplify `_repair_and_validate()` dispatch (AC-2)
 
-### Implementation
+**This is a refactor-only phase.** Zero new functionality. All existing tests pass unchanged. Net reduction in lines.
 
-Add to `artifact_generator.py`:
+**Done when:** `generate_observability_artifacts()` orchestrator loop is ~10 lines instead of ~45.
+
+---
+
+## Phase 1: Portal Module — Service Inventory (~80 lines)
+
+### File: `src/startd8/observability/portal.py` (NEW)
 
 ```python
 def generate_portal(
@@ -68,141 +111,105 @@ def generate_portal(
     services: List[ServiceHints],
     report: GenerationReport,
     metadata: Dict[str, Any],
-    kaizen_path: Optional[Path] = None,
-    provenance_path: Optional[Path] = None,
 ) -> ArtifactResult:
-    """Generate an onboarding portal HTML from pipeline context (REQ-OBP-100)."""
+    """Generate onboarding portal HTML from pipeline context (REQ-OBP-100)."""
 ```
 
-The function builds HTML using f-strings (no template engine dependency). Sections:
+v0 quick win (OBP-105a): ONLY project overview + service inventory. ~80 lines:
+- `_render_html_shell()` — doctype, CSS design tokens (copy from harbor tour), nav
+- `_render_project_overview()` — project ID, criticality badge, timestamp
+- `_render_service_inventory()` — filtered service table: ID, transport, language
+- `_render_placeholder()` — "Section available in future version" for unimplemented sections
 
-1. **Header** — project name, criticality badge, generated timestamp
-2. **Service Inventory** — table: service ID, transport badge, language, metric count
-3. **SLO Summary** — table: service, target, window, indicator type (from generated SLO artifacts in `report.artifacts`)
-4. **Alert Inventory** — table: service, alert name, severity badge, threshold (from generated alert artifacts)
-5. **Run Provenance** — run ID, timestamp, pipeline version, duration
+Services are FILTERED using the same `_is_non_service_entry()` from `artifact_generator.py`.
 
-### Wiring
-
-In `generate_observability_artifacts()`, after the per-service loop and before `_write_artifacts()`:
-
-```python
-# Portal generation (REQ-OBP-103a)
-if not skip_portal:
-    portal_result = generate_portal(business, services, report, metadata, ...)
-    portal_result = _repair_and_validate(portal_result, business)
-    report.artifacts.append(portal_result)
-```
-
-### Output
-
-`portal/{project_id}-portal.html` — single HTML file, ~5–15KB depending on service count.
-
-### Done When
-
-Portal HTML generated for run-093 data shows: project overview, 2 real services (after phantom filtering), SLO targets, alert inventory, run provenance.
+**Done when:** `portal/test-portal.html` opens in browser showing 2 real services (not 9).
 
 ---
 
-## Phase 2: Communication Graph (~50 lines)
+## Phase 2: Content Sections (~100 lines)
 
-### What Ships
+Add to `portal.py`:
 
-A `_render_communication_graph()` helper that turns the `service_communication_graph` dict into an HTML table showing service-to-service dependencies.
+- `_render_objectives()` — from `metadata["objectives"]` (plan-level intent with key results). Primary SLO source per OBP-105c.
+- `_render_alert_inventory()` — from `report.artifacts` where `artifact_type="alert_rule"`. Parse YAML content for rule names + severity.
+- `_render_dashboard_links()` — relative `../dashboards/{svc}-dashboard-spec.yaml` links
+- `_render_communication_graph()` — HTML table from `service_communication_graph.services`. "No inter-service dependencies detected" when no edges.
+- `_render_provenance()` — run ID, timestamp, duration from `run-provenance.json`
 
-### Implementation
+Each renderer returns an HTML string or empty string (graceful degradation). Main function assembles non-empty sections.
 
-```python
-def _render_communication_graph(scg: Dict[str, Any]) -> str:
-    """Render service communication graph as HTML table."""
-    services = scg.get("services", {})
-    rows = []
-    for svc_id, svc in services.items():
-        calls = svc.get("calls_to", [])
-        called_by = svc.get("called_by", [])
-        lang = svc.get("language", "—")
-        rows.append(f"<tr><td>{svc_id}</td><td>{lang}</td>"
-                     f"<td>{', '.join(calls) or '—'}</td>"
-                     f"<td>{', '.join(called_by) or '—'}</td></tr>")
-    ...
-```
-
-For v1: HTML table. No SVG, no JavaScript. The graph structure in run-093 has `calls_to` and `called_by` per service — a table is the natural representation.
-
-### Done When
-
-Portal includes a "Service Dependencies" section with a table showing who calls whom.
+**Done when:** Portal shows objectives, alerts, dashboard links, communication table (or placeholder), provenance.
 
 ---
 
 ## Phase 3: Quality + Security Sections (~50 lines)
 
-### What Ships
+Add to `portal.py`:
 
-Read `kaizen-metrics.json` (when present) and render:
-- **Quality Metrics**: success rate, cost per feature, assembly delta
-- **Security Posture**: aggregate security score, injection/credential blocked counts
-- **Artifact Quality**: avg dashboard/alert/SLO scores from `observability_artifacts` section
+- `_render_quality_section()` — reads `quality_summary` from `observability-manifest.yaml` (already computed by Phase 2 validation). Does NOT re-compute.
+- `_render_security_section()` — reads `security` from `kaizen-metrics.json`. Shows aggregate score, injection blocked, credential blocked.
 
-### Implementation
+Both return empty string when data unavailable.
 
-```python
-def _render_quality_section(kaizen_path: Optional[Path]) -> str:
-    """Render quality + security metrics from kaizen-metrics.json."""
-    if not kaizen_path or not kaizen_path.is_file():
-        return ""  # Section omitted when no metrics available
-    ...
-```
-
-### Done When
-
-Portal shows quality metrics when `kaizen-metrics.json` exists, omits the section gracefully when it doesn't.
+**Done when:** Portal shows quality scores when metrics exist, omits gracefully when they don't.
 
 ---
 
-## Phase 4: Portal Validation (~30 lines)
+## Phase 4: Validation + Wiring (~30 lines)
 
-### What Ships
+### In `validators/observability_artifact_checks.py`:
 
-Add `validate_portal()` to `observability_artifact_checks.py`. Checks:
-- HTML content is non-empty
-- Contains expected section anchors (project-overview, service-inventory, etc.)
-- Service count in HTML matches `instrumentation_hints` service count (post-phantom-filtering)
+```python
+def validate_portal(content: str, file_path: str = "") -> PortalValidationResult:
+    """Validate portal HTML — checks section anchors and service count."""
+```
 
-### Wiring
+Checks: HTML non-empty, contains `id="project-overview"`, `id="service-inventory"`, service count matches filtered `instrumentation_hints`.
 
-In `_repair_and_validate()`, add `elif result.artifact_type == "portal":` branch.
+### In `artifact_generator.py`:
 
-### Done When
+Add `"portal"` entry to the `_VALIDATORS` dispatch dict (from AC-2 refactor).
 
-Portal quality score appears in `observability-manifest.yaml` alongside dashboard/alert/SLO scores.
+### In `generate_observability_artifacts()`:
+
+After the per-service artifact loop, before `_write_artifacts()`:
+
+```python
+if portal_enabled:
+    from startd8.observability.portal import generate_portal
+    portal_result = generate_portal(business, services, report, metadata)
+    portal_result = _repair_and_validate(portal_result, business)
+    report.artifacts.append(portal_result)
+```
+
+### In `scripts/generate_observability_artifacts.py`:
+
+Add `--portal` flag (opt-in for v1 per OBP-103d).
+
+**Done when:** `--portal` flag generates portal, quality score appears in manifest.
 
 ---
 
 ## File Changes
 
-| Phase | File | Change |
-|-------|------|--------|
-| 1 | `observability/artifact_generator.py` | Add `generate_portal()` + wire into orchestrator |
-| 1 | `scripts/generate_observability_artifacts.py` | Add `--skip-portal` flag |
-| 2 | `observability/artifact_generator.py` | Add `_render_communication_graph()` |
-| 3 | `observability/artifact_generator.py` | Add `_render_quality_section()` |
-| 4 | `validators/observability_artifact_checks.py` | Add `validate_portal()` |
-| 4 | `observability/artifact_generator.py` | Add portal branch in `_repair_and_validate()` |
-
-**Total: ~280 lines across 2 files.**
+| Phase | File | Change | Lines |
+|-------|------|--------|-------|
+| 0 | `artifact_generator.py` | Extract `_generate_one()`, simplify orchestrator loop + `_repair_and_validate()` dispatch | ~-30 net |
+| 1 | `observability/portal.py` (NEW) | `generate_portal()` + service inventory renderer | ~80 |
+| 2 | `observability/portal.py` | Add 5 content section renderers | ~100 |
+| 3 | `observability/portal.py` | Add quality + security renderers | ~50 |
+| 4 | `validators/observability_artifact_checks.py` | Add `validate_portal()` | ~20 |
+| 4 | `artifact_generator.py` | Add portal to dispatch dict + orchestrator call | ~10 |
+| 4 | `scripts/generate_observability_artifacts.py` | Add `--portal` flag | ~5 |
+| **Total** | | | **~235 new + ~30 refactored** |
 
 ---
 
-## Quick Win: Generate Portal for Run-093 Retroactively
+## Key Design Decisions
 
-Before wiring into the pipeline, the portal generator can be tested standalone:
-
-```python
-from startd8.observability.artifact_generator import generate_portal
-html = generate_portal(business, services, report, metadata)
-Path("portal-test.html").write_text(html.content)
-# Open in browser → visual validation
-```
-
-This validates the HTML template before any pipeline integration.
+1. **Separate `portal.py` module** — HTML rendering doesn't belong in a YAML generator. Clean separation of concerns.
+2. **Phase 0 refactor FIRST** — Distill existing accidental complexity before adding new code. The portal benefits from the cleaner orchestrator.
+3. **v0 quick win = service inventory only** — 80 lines validates the entire template + wiring chain. Additional sections are purely additive.
+4. **Each section renderer returns a string** — Composable, independently testable, gracefully degradable (empty string = section omitted).
+5. **Opt-in for v1** — `--portal` flag, not `--skip-portal`. Flip after 5+ successful runs.
