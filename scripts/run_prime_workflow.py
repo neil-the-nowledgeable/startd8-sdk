@@ -332,6 +332,11 @@ def main() -> int:
         ),
     )
 
+    parser.add_argument(
+        "--progress", action="store_true",
+        help="Show Rich live progress display (requires terminal + Rich)",
+    )
+
     args = parser.parse_args()
 
     # Conflict detection for validation flags
@@ -526,6 +531,15 @@ def main() -> int:
     logger.info("Loading features from seed: %s", seed_path)
     added = workflow.queue.add_features_from_seed(seed_path)
     logger.info("Loaded %d features from seed", len(added))
+
+    # Feature O11y: wire real-time progress observer
+    from startd8.contractors.feature_o11y import FeatureObserver
+
+    _feature_observer = FeatureObserver(
+        total_features=len(added),
+        progress=getattr(args, "progress", False),
+    )
+    workflow.on_feature_complete = _feature_observer.on_feature_complete
 
     # Load seed context into the workflow (replaces ad-hoc attribute stashing).
     # Re-read required: seed_path may have changed to an enriched version
@@ -724,6 +738,7 @@ def main() -> int:
         return 1
 
     # Print results
+    _feature_observer.print_summary()
     print_results(result)
 
     # Walkthrough postmortem

@@ -324,6 +324,19 @@ class FeatureQueue:
                 # For uncomment tasks, preserve full context for the shortcut
                 if task_type == "uncomment" and context:
                     meta["_todo_context"] = context
+            # REQ-MSR-210: Preserve seed task metadata through queue boundary
+            # so postmortem can correlate priority/effort with quality/cost.
+            seed_meta: Dict[str, Any] = {}
+            for _sm_field in (
+                "priority", "effort_estimate", "acceptance_criteria",
+                "labels", "created_at",
+            ):
+                _sm_val = task.get(_sm_field)
+                if _sm_val is not None:
+                    seed_meta[_sm_field] = _sm_val
+            if seed_meta:
+                meta["seed_metadata"] = seed_meta
+
             if meta:
                 spec.metadata.update(meta)
             added.append(spec)

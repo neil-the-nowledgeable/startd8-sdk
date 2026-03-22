@@ -218,7 +218,7 @@ def enforce_prompt_budget(
     sections: List[tuple],
     budget_tokens: int,
     logger: Optional[Any] = None,
-) -> str:
+) -> "str | tuple[str, dict]":
     """Assemble prompt sections within a token budget.
 
     Follows the micro_prime pattern: priority-ordered section removal.
@@ -237,15 +237,28 @@ def enforce_prompt_budget(
         logger: Optional logger for truncation warnings.
 
     Returns:
-        Assembled prompt string within budget.
+        Tuple of (assembled_prompt, budget_decision) where budget_decision
+        is a dict with ``tokens_before``, ``tokens_after``,
+        ``sections_dropped``, ``sections_truncated``, ``all_sections``.
     """
+    # REQ-MSR-110: Track budget decisions for postmortem analysis
+    budget_decision: dict = {
+        "tokens_before": 0,
+        "tokens_after": 0,
+        "sections_dropped": [],
+        "sections_truncated": [],
+        "all_sections": [lbl for _, lbl, _ in sections],
+    }
+
     # Sort by priority (stable — preserves order within same priority)
     ordered = sorted(sections, key=lambda s: s[0])
 
     # Try all sections first
     full = "\n\n".join(text for _, _, text in ordered if text)
+    budget_decision["tokens_before"] = estimate_tokens(full)
     if estimate_tokens(full) <= budget_tokens:
-        return full
+        budget_decision["tokens_after"] = budget_decision["tokens_before"]
+        return full, budget_decision
 
     # Progressive removal: drop highest priority number first
     max_priority = max(p for p, _, _ in ordered)
@@ -254,18 +267,23 @@ def enforce_prompt_budget(
     for drop_priority in range(max_priority, 0, -1):
         result_sections = [s for s in result_sections if s[0] < drop_priority]
         candidate = "\n\n".join(text for _, _, text in result_sections if text)
+        dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
         if logger:
-            dropped = [lbl for p, lbl, _ in ordered if p >= drop_priority]
             logger.info(
                 "Prompt budget: dropping P%d sections (%s), %d→%d tokens",
                 drop_priority, ", ".join(dropped),
                 estimate_tokens(full), estimate_tokens(candidate),
             )
         if estimate_tokens(candidate) <= budget_tokens:
-            return candidate
+            budget_decision["sections_dropped"] = dropped
+            budget_decision["tokens_after"] = estimate_tokens(candidate)
+            return candidate, budget_decision
 
     # Emergency: P0 only, hard-truncate
     p0_text = "\n\n".join(text for p, _, text in ordered if p == 0 and text)
+    budget_decision["sections_dropped"] = [
+        lbl for p, lbl, _ in ordered if p > 0
+    ]
     budget_chars = budget_tokens * CHARS_PER_TOKEN
     if len(p0_text) > budget_chars:
         if logger:
@@ -273,5 +291,9 @@ def enforce_prompt_budget(
                 "Prompt budget: P0 sections exceed budget (%d > %d tokens), truncating",
                 estimate_tokens(p0_text), budget_tokens,
             )
-        return truncate_with_marker(p0_text, budget_chars)
-    return p0_text
+        result = truncate_with_marker(p0_text, budget_chars)
+        budget_decision["sections_truncated"].append("P0_emergency")
+        budget_decision["tokens_after"] = estimate_tokens(result)
+        return result, budget_decision
+    budget_decision["tokens_after"] = estimate_tokens(p0_text)
+    return p0_text, budget_decision
