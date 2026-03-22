@@ -1261,6 +1261,19 @@ class IntegrationEngine:
             )
             verify_time_ms = (_time.monotonic() - t0) * 1000.0
 
+            # REQ-KQP-102: Per-step timing threshold alert
+            step_timing = sv_result.verification_timing_ms or {}
+            det_total = sum(step_timing.values())
+            if det_total > 500.0:
+                logger.warning(
+                    "Anzen verification slow: %s took %.0fms (injection=%.0f, "
+                    "credential=%.0f, lifecycle=%.0f) — pattern module may need optimization",
+                    fpath.name, det_total,
+                    step_timing.get("injection_ms", 0),
+                    step_timing.get("credential_ms", 0),
+                    step_timing.get("lifecycle_ms", 0),
+                )
+
             # Track checks that ran
             for finding_item in sv_result.findings:
                 checks_that_ran.add(finding_item.check_type.value)
@@ -1351,6 +1364,7 @@ class IntegrationEngine:
                 "database": db_str,
                 "language": language,
                 "timing_ms": verify_time_ms,
+                "step_timing_ms": sv_result.verification_timing_ms or {},
                 "allowlisted": was_allowlisted,
                 "prompt_security_features": result_metadata.get("prompt_security_features"),
             })
