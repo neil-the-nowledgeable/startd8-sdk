@@ -246,9 +246,17 @@ class PhaseEmitter:
             "total_cost": derived.total_cost,
         }
 
-        # REQ-ICD-106: Resolve security contract — onboarding primary, manifest fallback
+        # REQ-ICD-106: Resolve security contract — config primary, onboarding fallback, manifest tertiary
         _security_contract: Optional[Dict[str, Any]] = None
-        if onboarding_metadata:
+        # Source 1: Pipeline config (from resolve-provenance.py)
+        if cfg.security_contract and isinstance(cfg.security_contract, dict):
+            _security_contract = cfg.security_contract
+            logger.info(
+                "Security contract loaded from pipeline config: %d database(s)",
+                len(cfg.security_contract.get("databases", {})),
+            )
+        # Source 2: Onboarding metadata
+        if _security_contract is None and onboarding_metadata:
             _ob_sc = onboarding_metadata.get("security_contract")
             if _ob_sc and isinstance(_ob_sc, dict):
                 _security_contract = _ob_sc
@@ -256,6 +264,7 @@ class PhaseEmitter:
                     "Security contract loaded from onboarding metadata: %d database(s)",
                     len(_ob_sc.get("databases", {})),
                 )
+        # Source 3: Project metadata / manifest
         if _security_contract is None and project_metadata:
             _pm_sc = project_metadata.get("security_contract")
             if _pm_sc and isinstance(_pm_sc, dict):
@@ -263,6 +272,54 @@ class PhaseEmitter:
                 logger.info(
                     "Security contract loaded from manifest metadata: %d database(s)",
                     len(_pm_sc.get("databases", {})),
+                )
+
+        # REQ-OPI-200: Per-task observability enrichment from config hints
+        _obs_lookup: Dict[str, Dict[str, Any]] = {}
+        if cfg.observability_hints and isinstance(cfg.observability_hints, dict):
+            for svc_id, svc_hints in cfg.observability_hints.items():
+                if isinstance(svc_hints, dict):
+                    _obs_lookup[svc_id.lower().replace("-", "")] = svc_hints
+            if _obs_lookup:
+                logger.info(
+                    "Observability hints loaded: %d services for per-task enrichment",
+                    len(_obs_lookup),
+                )
+
+        # Enrich tasks with per-service observability context
+        if _obs_lookup and tasks:
+            _enriched = 0
+            for task in tasks:
+                ctx = (task.get("config") or {}).get("context") or {}
+                # Infer service name from target files
+                _target_files = ctx.get("target_files") or task.get("target_files", [])
+                _svc_name = ""
+                for tf in _target_files:
+                    parts = Path(tf).parts
+                    for p in parts:
+                        _norm = p.lower().replace("-", "")
+                        if _norm in _obs_lookup:
+                            _svc_name = _norm
+                            break
+                    if _svc_name:
+                        break
+
+                if _svc_name and _svc_name in _obs_lookup:
+                    hints = _obs_lookup[_svc_name]
+                    ctx["convention_metrics"] = (
+                        hints.get("metrics", {}).get("convention_based", [])
+                    )
+                    ctx["transport"] = hints.get("transport", "")
+                    ctx["language"] = hints.get("language", "")
+                    _sdk = hints.get("sdk")
+                    if _sdk:
+                        ctx["sdk_packages"] = _sdk
+                    _enriched += 1
+
+            if _enriched:
+                logger.info(
+                    "Enriched %d/%d tasks with observability context (convention_metrics, transport)",
+                    _enriched, len(tasks),
                 )
 
         # 11. Seed construction (unified for both routes)

@@ -131,6 +131,12 @@ class PlanIngestionConfig:
     install_to_contextcore: bool = False
     emit_ndjson_events: bool = True
 
+    # Observability (REQ-OPI-101, Mottainai V1-V5)
+    observability_hints: Optional[Dict[str, Any]] = None
+    observability_manifest_path: Optional[str] = None
+    security_contract: Optional[Dict[str, Any]] = None
+    generation_profile: Optional[str] = None
+
     # Misc
     project_root: Optional[str] = None
     contextcore_yaml: Optional[str] = None
@@ -206,6 +212,10 @@ class PlanIngestionConfig:
             sprint_id=config.get("sprint_id"),
             install_to_contextcore=config.get("install_to_contextcore", False),
             emit_ndjson_events=config.get("emit_ndjson_events", True),
+            observability_hints=config.get("observability_hints"),
+            observability_manifest_path=config.get("observability_manifest_path"),
+            security_contract=config.get("security_contract"),
+            generation_profile=config.get("generation_profile"),
             project_root=config.get("project_root"),
             contextcore_yaml=config.get("contextcore_yaml"),
             force_regenerate=config.get("force_regenerate", False),

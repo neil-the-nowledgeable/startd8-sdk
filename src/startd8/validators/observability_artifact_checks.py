@@ -24,12 +24,18 @@ __all__ = [
     "DashboardValidationResult",
     "AlertValidationResult",
     "SloValidationResult",
+    "CrossArtifactResult",
     "validate_dashboard",
     "validate_alerts",
     "validate_slo",
+    "validate_cross_artifact_consistency",
     "repair_gridpos",
     "repair_slo_target",
     "compute_service_composite",
+    "has_rate_panel",
+    "has_error_panel",
+    "has_duration_panel",
+    "get_all_panel_exprs",
 ]
 
 
@@ -283,11 +289,11 @@ def validate_dashboard(
         passed += 1
     else:
         missing = []
-        if not _has_rate_panel(panels):
+        if not has_rate_panel(panels):
             missing.append("Rate")
-        if not _has_error_panel(panels):
+        if not has_error_panel(panels):
             missing.append("Errors")
-        if not _has_duration_panel(panels):
+        if not has_duration_panel(panels):
             missing.append("Duration")
         issues.append(ObservabilityIssue(
             "OBS-200a", "warning",
@@ -549,6 +555,150 @@ def compute_service_composite(
 
 
 # ---------------------------------------------------------------------------
+# Cross-artifact consistency checks (REQ-KZ-OBS-400–403)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CrossArtifactResult:
+    """Results from cross-artifact consistency validation."""
+
+    unvisualized_alerts: List[str] = field(default_factory=list)
+    unalerted_slos: List[str] = field(default_factory=list)
+    misaligned_thresholds: List[str] = field(default_factory=list)
+    unused_derivations: List[str] = field(default_factory=list)
+    consumed_incorrect: List[str] = field(default_factory=list)
+
+    @property
+    def total_issues(self) -> int:
+        return (
+            len(self.unvisualized_alerts)
+            + len(self.unalerted_slos)
+            + len(self.misaligned_thresholds)
+            + len(self.unused_derivations)
+            + len(self.consumed_incorrect)
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "unvisualized_alerts": len(self.unvisualized_alerts),
+            "unalerted_slos": len(self.unalerted_slos),
+            "misaligned_thresholds": len(self.misaligned_thresholds),
+            "unused_derivations": len(self.unused_derivations),
+        }
+
+
+def validate_cross_artifact_consistency(
+    dashboard_content: Optional[str],
+    alert_content: Optional[str],
+    slo_content: Optional[str],
+    service_id: str = "",
+) -> CrossArtifactResult:
+    """Check consistency across a service's artifact triplet (REQ-KZ-OBS-400–402).
+
+    Args:
+        dashboard_content: Dashboard spec YAML string (or None if missing).
+        alert_content: Alert rules YAML string (or None if missing).
+        slo_content: SLO definition YAML string (or None if missing).
+        service_id: Service identifier for logging.
+
+    Returns:
+        CrossArtifactResult with any alignment issues found.
+    """
+    result = CrossArtifactResult()
+
+    # Parse all available artifacts
+    dashboard = _safe_yaml_load(dashboard_content) if dashboard_content else None
+    alerts = _safe_yaml_load(alert_content) if alert_content else None
+    slo = _safe_yaml_load(slo_content) if slo_content else None
+
+    # Extract metrics from each artifact type
+    dashboard_metrics = set()
+    if dashboard and isinstance(dashboard, dict):
+        for expr in get_all_panel_exprs(dashboard.get("panels", [])):
+            dashboard_metrics.update(_extract_metric_names(expr))
+
+    alert_metrics = set()
+    alert_rules = []
+    if alerts and isinstance(alerts, dict):
+        for g in alerts.get("groups", []):
+            if isinstance(g, dict):
+                for rule in g.get("rules", []):
+                    alert_rules.append(rule)
+                    expr = rule.get("expr", "")
+                    alert_metrics.update(_extract_metric_names(str(expr)))
+
+    slo_metrics = set()
+    if slo and isinstance(slo, dict):
+        spec = slo.get("spec", {})
+        indicator = spec.get("indicator", {})
+        if isinstance(indicator, dict):
+            ind_spec = indicator.get("spec", {})
+            tm = ind_spec.get("thresholdMetric", {})
+            if isinstance(tm, dict):
+                ms = tm.get("metricSource", {})
+                if isinstance(ms, dict):
+                    q = ms.get("spec", {}).get("query", "")
+                    slo_metrics.update(_extract_metric_names(str(q)))
+
+    # OBS-400: Dashboard ↔ Alert — alert metrics should appear in dashboard
+    if dashboard_metrics and alert_metrics:
+        for metric in alert_metrics:
+            if metric not in dashboard_metrics:
+                result.unvisualized_alerts.append(
+                    f"{service_id}: alert metric '{metric}' not in any dashboard panel"
+                )
+
+    # OBS-401: Alert ↔ SLO — SLO indicator metrics should have alerts
+    if alert_metrics and slo_metrics:
+        for metric in slo_metrics:
+            if metric not in alert_metrics:
+                result.unalerted_slos.append(
+                    f"{service_id}: SLO indicator metric '{metric}' has no corresponding alert"
+                )
+
+    # OBS-402: Dashboard ↔ SLO — threshold alignment
+    if dashboard and slo:
+        slo_target = slo.get("spec", {}).get("target")
+        if slo_target is not None:
+            panels = dashboard.get("panels", []) if isinstance(dashboard, dict) else []
+            for panel in panels:
+                thresholds = panel.get("thresholds", [])
+                for t in thresholds:
+                    if isinstance(t, dict) and t.get("value") is not None:
+                        try:
+                            panel_threshold = float(t["value"])
+                            # Check if this looks like an availability threshold
+                            if 90.0 <= panel_threshold <= 100.0:
+                                if abs(panel_threshold - float(slo_target)) > 0.01:
+                                    result.misaligned_thresholds.append(
+                                        f"{service_id}: panel threshold {panel_threshold} "
+                                        f"vs SLO target {slo_target}"
+                                    )
+                        except (ValueError, TypeError):
+                            pass
+
+    return result
+
+
+def _extract_metric_names(expr: str) -> List[str]:
+    """Extract Prometheus metric names from a PromQL expression."""
+    # Match metric_name{...} or metric_name[...] or bare metric_name in functions
+    return re.findall(r'([a-z_][a-z0-9_]*(?:_bucket|_total|_count|_sum)?)\s*[{\[\(]', expr)
+
+
+def _safe_yaml_load(content: Optional[str]) -> Optional[Dict]:
+    """Safe YAML load returning None on failure."""
+    if not content:
+        return None
+    try:
+        data = yaml.safe_load(content)
+        return data if isinstance(data, dict) else None
+    except yaml.YAMLError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # RED coverage helpers
 # ---------------------------------------------------------------------------
 
@@ -563,7 +713,7 @@ def _panel_has_expr(panel: Dict[str, Any]) -> bool:
     return False
 
 
-def _get_all_exprs(panels: List[Dict[str, Any]]) -> List[str]:
+def get_all_panel_exprs(panels: List[Dict[str, Any]]) -> List[str]:
     """Extract all PromQL expressions from panels."""
     exprs = []
     for p in panels:
@@ -575,17 +725,17 @@ def _get_all_exprs(panels: List[Dict[str, Any]]) -> List[str]:
     return exprs
 
 
-def _has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_rate_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for a request rate panel (R in RED)."""
-    for expr in _get_all_exprs(panels):
+    for expr in get_all_panel_exprs(panels):
         if "rate(" in expr and "_count" in expr and "status" not in expr.lower():
             return True
     return False
 
 
-def _has_error_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for an error rate panel (E in RED)."""
-    for expr in _get_all_exprs(panels):
+    for expr in get_all_panel_exprs(panels):
         e = expr.lower()
         if ("error" in e or "status_code" in e or "status_code!=" in e
                 or 'status_code!="ok"' in e or "status!=" in e):
@@ -593,9 +743,9 @@ def _has_error_panel(panels: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
+def has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
     """Check for a latency/duration panel (D in RED)."""
-    for expr in _get_all_exprs(panels):
+    for expr in get_all_panel_exprs(panels):
         if "histogram_quantile" in expr or "duration" in expr.lower():
             return True
     return False
@@ -604,10 +754,10 @@ def _has_duration_panel(panels: List[Dict[str, Any]]) -> bool:
 def _compute_red_coverage(panels: List[Dict[str, Any]]) -> float:
     """Compute RED method coverage as fraction (0.0–1.0)."""
     signals = 0
-    if _has_rate_panel(panels):
+    if has_rate_panel(panels):
         signals += 1
-    if _has_error_panel(panels):
+    if has_error_panel(panels):
         signals += 1
-    if _has_duration_panel(panels):
+    if has_duration_panel(panels):
         signals += 1
     return signals / 3.0

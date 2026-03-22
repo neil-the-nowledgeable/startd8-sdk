@@ -518,17 +518,23 @@ def generate_alert_rules(
                 }
             )
 
-        # Counter/request metrics → availability alert
-        if metric.type == "counter" and avail_raw:
-            avail_frac = _parse_availability_to_fraction(avail_raw)
+        # Histogram duration metric → availability alert (derived from _count)
+        # Success ratio = 1 - (error_count / total_count); alert when below target.
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and avail_raw
+            and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
+        ):
             error_filter = _error_filter_for_protocol(service.transport)
+            avail_frac = _parse_availability_to_fraction(avail_raw)
             rules.append(
                 {
                     "alert": _alert_name(service.service_id, "AvailabilityLow"),
                     "expr": (
                         f"(\n"
-                        f'  1 - rate({prom}{{service="{service.service_id}",{error_filter}}}[5m])\n'
-                        f'    / rate({prom}{{service="{service.service_id}"}}[5m])\n'
+                        f'  1 - rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
+                        f'    / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
                         f") < {avail_frac}"
                     ),
                     "for": "5m",
@@ -647,6 +653,9 @@ def generate_dashboard_spec(
 
         panels.append(panel)
 
+    # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
+    _ensure_red_coverage(panels, service, business, derivations)
+
     if not panels:
         return ArtifactResult(
             artifact_type="dashboard_spec",
@@ -724,6 +733,93 @@ def _panel_group(metric_name: str) -> str:
     if "request" in name_lower:
         return "Throughput"
     return "General"
+
+
+def _ensure_red_coverage(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    business: BusinessContext,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
+
+    Inspects existing panels to determine which RED signals are present,
+    then adds synthetic panels for any that are missing. Panels are derived
+    from the service's transport type (gRPC vs HTTP).
+    """
+    # Shared RED detection — single source of truth with the validator
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            has_rate_panel, has_error_panel,
+        )
+        has_rate = has_rate_panel(panels)
+        has_error = has_error_panel(panels)
+    except ImportError:
+        # Fallback inline detection if validator not available
+        exprs = [str(p.get("expr", "")).lower() for p in panels]
+        has_rate = any("rate(" in e and "_count" in e and "status" not in e for e in exprs)
+        has_error = any("error" in e or "status_code" in e for e in exprs)
+
+    if has_rate and has_error:
+        return  # Already have full RED coverage
+
+    # Determine metric prefix from transport
+    if service.transport == "grpc":
+        duration_metric = "rpc_server_duration"
+        # gRPC uses duration_count for both rate and error detection
+        rate_expr = (
+            f'sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        )
+        error_expr = (
+            f'sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}",'
+            f'grpc_code=~"Unavailable|Internal|Unknown"}}[$__rate_interval]))\n'
+            f'/ sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        )
+    else:
+        duration_metric = "http_server_duration"
+        rate_expr = (
+            f'sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        )
+        error_expr = (
+            f'sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}",status=~"5.."}}[$__rate_interval]))\n'
+            f'/ sum(rate({duration_metric}_count'
+            f'{{service="{service.service_id}"}}[$__rate_interval]))'
+        )
+
+    if not has_rate:
+        panels.append({
+            "type": "timeseries",
+            "title": "Request Rate",
+            "expr": rate_expr,
+            "unit": "reqps",
+            "group": "Throughput",
+        })
+
+    if not has_error:
+        error_panel: Dict[str, Any] = {
+            "type": "timeseries",
+            "title": "Error Rate",
+            "expr": error_expr,
+            "unit": "percentunit",
+            "group": "Errors",
+        }
+        # Add error budget threshold from availability requirement
+        if business.availability:
+            try:
+                avail = float(business.availability)
+                error_budget = round(1.0 - (avail / 100.0), 4)
+                error_panel["thresholds"] = [
+                    {"value": None, "color": "green"},
+                    {"value": error_budget, "color": "red"},
+                ]
+            except (ValueError, TypeError):
+                pass
+        panels.append(error_panel)
 
 
 # ---------------------------------------------------------------------------
@@ -1001,6 +1097,28 @@ def _repair_and_validate(
     return result
 
 
+def _generate_one(
+    gen_fn: Any,
+    service: ServiceHints,
+    business: BusinessContext,
+    artifact_type: str,
+    output_prefix: str,
+) -> ArtifactResult:
+    """Generate, validate, and score a single artifact. Catches exceptions."""
+    try:
+        result = gen_fn(service, business)
+        return _repair_and_validate(result, business)
+    except Exception:
+        logger.exception("%s generation failed for %s", artifact_type, service.service_id)
+        return ArtifactResult(
+            artifact_type=artifact_type,
+            service_id=service.service_id,
+            output_path=f"{output_prefix}/{service.service_id}-{output_prefix}.yaml",
+            status="error",
+            error_message="Generation raised exception",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: Orchestration + index file
 # ---------------------------------------------------------------------------
@@ -1033,51 +1151,17 @@ def generate_observability_artifacts(
         logger.warning("No services found; producing zero artifacts")
         return report
 
+    # Per-service artifact generators — adding a new type is a tuple, not a code block
+    _GENERATORS = [
+        (generate_alert_rules, "alert_rule", "alerts"),
+        (generate_dashboard_spec, "dashboard_spec", "dashboards"),
+        (generate_slo_definitions, "slo_definition", "slos"),
+    ]
+
     for service in services:
-        try:
-            result = generate_alert_rules(service, business)
-            result = _repair_and_validate(result, business)
-            report.artifacts.append(result)
-        except Exception:
-            logger.exception("Alert generation failed for %s", service.service_id)
+        for gen_fn, artifact_type, output_prefix in _GENERATORS:
             report.artifacts.append(
-                ArtifactResult(
-                    artifact_type="alert_rule",
-                    service_id=service.service_id,
-                    output_path=f"alerts/{service.service_id}-alerts.yaml",
-                    status="error",
-                    error_message="Generation raised exception",
-                )
-            )
-        try:
-            result = generate_dashboard_spec(service, business)
-            result = _repair_and_validate(result, business)
-            report.artifacts.append(result)
-        except Exception:
-            logger.exception("Dashboard generation failed for %s", service.service_id)
-            report.artifacts.append(
-                ArtifactResult(
-                    artifact_type="dashboard_spec",
-                    service_id=service.service_id,
-                    output_path=f"dashboards/{service.service_id}-dashboard-spec.yaml",
-                    status="error",
-                    error_message="Generation raised exception",
-                )
-            )
-        try:
-            result = generate_slo_definitions(service, business)
-            result = _repair_and_validate(result, business)
-            report.artifacts.append(result)
-        except Exception:
-            logger.exception("SLO generation failed for %s", service.service_id)
-            report.artifacts.append(
-                ArtifactResult(
-                    artifact_type="slo_definition",
-                    service_id=service.service_id,
-                    output_path=f"slos/{service.service_id}-slo.yaml",
-                    status="error",
-                    error_message="Generation raised exception",
-                )
+                _generate_one(gen_fn, service, business, artifact_type, output_prefix)
             )
 
     report.services_processed = len(services)
@@ -1088,6 +1172,7 @@ def generate_observability_artifacts(
     if not dry_run:
         _write_artifacts(report.artifacts, output_dir)
         _write_index(report, business, onboarding_metadata_path, output_dir)
+        _write_quality_report(report.artifacts, output_dir)
 
     return report
 
@@ -1185,6 +1270,89 @@ def _write_index(
     body = yaml.dump(index, default_flow_style=False, sort_keys=False)
     dest.write_text(header + body)
     logger.info("Wrote index: %s", dest)
+
+
+def _write_quality_report(
+    artifacts: List[ArtifactResult],
+    output_dir: Path,
+) -> None:
+    """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
+
+    Produces a per-service breakdown of quality scores, issues, and repairs
+    alongside the aggregate summary.  Uses ``compute_service_composite`` from
+    ``startd8.validators.observability_artifact_checks`` when available;
+    otherwise falls back to a simple average.
+    """
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            compute_service_composite,
+        )
+    except ImportError:  # pragma: no cover
+        compute_service_composite = None  # type: ignore[assignment]
+
+    scored = [a for a in artifacts if a.quality and a.status == "generated"]
+    if not scored:
+        return
+
+    # ---- per-service breakdown ----
+    services: Dict[str, Dict[str, Any]] = {}
+    for a in scored:
+        svc = services.setdefault(a.service_id, {})
+        svc[a.artifact_type] = {
+            "score": a.quality["score"],
+            "checks_passed": a.quality.get("checks_passed", 0),
+            "checks_total": a.quality.get("checks_total", 0),
+            "issues": a.quality.get("issues", []),
+            "repairs_applied": a.quality.get("repairs_applied", []),
+        }
+
+    # compute per-service composite
+    for svc_id, svc_data in services.items():
+        dash_score = svc_data.get("dashboard_spec", {}).get("score", 0.0)
+        alert_score = svc_data.get("alert_rule", {}).get("score", 0.0)
+        slo_score = svc_data.get("slo_definition", {}).get("score", 0.0)
+        if compute_service_composite is not None:
+            composite = compute_service_composite(dash_score, alert_score, slo_score)
+        else:
+            present = [
+                s
+                for s in (dash_score, alert_score, slo_score)
+                if s > 0.0
+            ]
+            composite = sum(present) / len(present) if present else 0.0
+        svc_data["composite_score"] = round(composite, 4)
+
+    # ---- aggregate ----
+    by_type: Dict[str, List[float]] = {}
+    total_issues = 0
+    total_repairs = 0
+    for a in scored:
+        by_type.setdefault(a.artifact_type, []).append(a.quality["score"])
+        total_issues += len(a.quality.get("issues", []))
+        total_repairs += len(a.quality.get("repairs_applied", []))
+
+    aggregate: Dict[str, Any] = {}
+    for atype, scores in by_type.items():
+        aggregate[f"avg_{atype}_score"] = round(sum(scores) / len(scores), 4)
+
+    composites = [s["composite_score"] for s in services.values()]
+    aggregate["avg_composite_score"] = (
+        round(sum(composites) / len(composites), 4) if composites else 0.0
+    )
+    aggregate["total_issues"] = total_issues
+    aggregate["total_repairs"] = total_repairs
+
+    report: Dict[str, Any] = {
+        "schema_version": "1.0",
+        "generated_at": _utc_now_iso(),
+        "services": services,
+        "aggregate": aggregate,
+    }
+
+    dest = output_dir / "observability-quality.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(report, indent=2) + "\n")
+    logger.info("Wrote quality report: %s", dest)
 
 
 # ---------------------------------------------------------------------------
