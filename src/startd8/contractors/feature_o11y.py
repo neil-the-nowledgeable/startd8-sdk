@@ -75,6 +75,7 @@ class FeatureObserver:
         self._signals: list[FeatureSignal] = []
         self._start_time = time.monotonic()
         self._feature_start: float = 0.0
+        self._last_complete: float = 0.0
         self._cumulative_cost: float = 0.0
 
         # T2: Rich progress (lazy init)
@@ -104,7 +105,7 @@ class FeatureObserver:
         # If on_feature_start was called, use that. Otherwise measure since
         # last completion (or workflow start).
         ref = self._feature_start if self._feature_start else (
-            self._last_complete if hasattr(self, "_last_complete") else self._start_time
+            self._last_complete if self._last_complete > 0 else self._start_time
         )
         elapsed = now - ref
         self._last_complete = now
@@ -124,7 +125,7 @@ class FeatureObserver:
     def _print_status_line(self, signal: FeatureSignal) -> None:
         """Print a single-line feature status update."""
         n = len(self._signals)
-        total = self.total_features or "?"
+        total = self.total_features if self.total_features > 0 else "?"
         icon = _ICONS[signal.success]
 
         # Build status fragments
@@ -196,7 +197,7 @@ class FeatureObserver:
             )
             self._rich_progress.start()
         except ImportError:
-            logger.warning("Rich not available — falling back to T1 status lines")
+            logger.debug("Rich not available — falling back to T1 status lines")
             self._use_rich = False
             self._rich_progress = None
 
@@ -278,7 +279,7 @@ class FeatureObserver:
             name=getattr(feature, "name", str(getattr(feature, "id", "?"))),
             feature_id=str(getattr(feature, "id", "")),
             success=success,
-            cost_usd=cost or 0.0,
+            cost_usd=cost if cost is not None else 0.0,
             review_score=review.get("score"),
             review_verdict=review.get("verdict"),
             disk_quality_score=meta.get("disk_quality_score"),

@@ -1232,7 +1232,7 @@ def build_spec_prompt(
         _effectiveness = get_step_effectiveness_summary()
         _low_eff = [
             name for name, data in _effectiveness.items()
-            if data["attempts"] >= 5 and data["success_rate"] < 0.2
+            if data.get("attempts", 0) >= 5 and data.get("success_rate", 1.0) < 0.2
         ]
         if _low_eff:
             prioritized.append((
@@ -1243,8 +1243,8 @@ def build_spec_prompt(
                 + ", ".join(_low_eff)
                 + ". Ensure generated code avoids these error categories.",
             ))
-    except ImportError:
-        pass  # Repair module not available
+    except ImportError as exc:
+        logger.debug("Repair calibration skipped: %s", exc)
 
     # P1.5: Quality guidance from previous runs (REQ-RFL-330)
     seed_quality_hints = context.pop("quality_hints", None)

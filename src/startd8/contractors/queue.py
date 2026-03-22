@@ -327,13 +327,13 @@ class FeatureQueue:
             # REQ-MSR-210: Preserve seed task metadata through queue boundary
             # so postmortem can correlate priority/effort with quality/cost.
             seed_meta: Dict[str, Any] = {}
-            for _sm_field in (
+            for field_name in (
                 "priority", "effort_estimate", "acceptance_criteria",
                 "labels", "created_at",
             ):
-                _sm_val = task.get(_sm_field)
-                if _sm_val is not None:
-                    seed_meta[_sm_field] = _sm_val
+                val = task.get(field_name)
+                if val is not None:
+                    seed_meta[field_name] = val
             if seed_meta:
                 meta["seed_metadata"] = seed_meta
 

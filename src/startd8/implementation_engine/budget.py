@@ -250,6 +250,9 @@ def enforce_prompt_budget(
         "all_sections": [lbl for _, lbl, _ in sections],
     }
 
+    if not sections:
+        return "", budget_decision
+
     # Sort by priority (stable — preserves order within same priority)
     ordered = sorted(sections, key=lambda s: s[0])
 
