@@ -113,7 +113,7 @@ class PrimeReviewAdapter:
         """
         from startd8.seeds.models import SeedTask
 
-        meta = feature.metadata or {} if hasattr(feature, "metadata") else {}
+        meta = (feature.metadata or {}) if hasattr(feature, "metadata") else {}
         enrichment = meta.get("_enrichment", {})
         seed_meta = meta.get("seed_metadata", {})
         return SeedTask(
@@ -131,7 +131,10 @@ class PrimeReviewAdapter:
             domain=enrichment.get("domain", meta.get("domain", "general")),
             domain_reasoning="",
             environment_checks=[],
-            prompt_constraints=enrichment.get("prompt_constraints", []),
+            prompt_constraints=(
+                enrichment.get("prompt_constraints")
+                or meta.get("prompt_constraints", [])
+            ),
             post_generation_validators=[],
             available_siblings=[],
             existing_content_hash=None,
@@ -210,11 +213,13 @@ def classify_review_issues(issues: List[str]) -> List[Dict[str, str]]:
     """
     classified: List[Dict[str, str]] = []
     for text in issues:
-        text_lower = text.lower()
+        # Guard against non-string items from LLM JSON type drift [SDK Leg 10 #31]
+        text_str = str(text) if not isinstance(text, str) else text
+        text_lower = text_str.lower()
         category = "other"
         for cat, keywords in _ISSUE_CATEGORY_KEYWORDS.items():
             if any(kw in text_lower for kw in keywords):
                 category = cat
                 break
-        classified.append({"category": category, "text": text})
+        classified.append({"category": category, "text": text_str})
     return classified

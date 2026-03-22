@@ -60,6 +60,8 @@ class RunQualityAccumulator:
 
         # Semantic categories from compliance
         compliance = integration_metadata.get("disk_compliance", {})
+        if not isinstance(compliance, dict):
+            compliance = {}
         for _file, data in compliance.items():
             for issue in data.get("semantic_issues", []):
                 cat = issue.get("category", "unknown")

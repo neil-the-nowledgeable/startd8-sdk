@@ -4395,6 +4395,12 @@ class PrimeContractorWorkflow:
 
         Returns True if re-draft was attempted and produced a better
         result, False otherwise.
+
+        WARNING: ``develop_feature()`` overwrites generated files on disk.
+        If re-draft integration fails or scores worse, the original disk
+        files are already replaced.  The score comparison (Mottainai) uses
+        metadata scores, not disk content.  A future iteration could
+        snapshot original files before re-draft for true rollback.
         """
         disk_score = integration_metadata.get("disk_quality_score", 1.0)
 
@@ -4472,7 +4478,7 @@ class PrimeContractorWorkflow:
                         "quality_gate.accepted_version", "original",
                     )
             except Exception:
-                pass
+                logger.debug("OTel quality gate attrs failed", exc_info=True)
             return False
 
         logger.info(
@@ -4490,7 +4496,7 @@ class PrimeContractorWorkflow:
                 _span.set_attribute("quality_gate.post_score", new_score)
                 _span.set_attribute("quality_gate.accepted_version", "redraft")
         except Exception:
-            pass
+            logger.debug("OTel quality gate attrs failed", exc_info=True)
 
         return True
 
@@ -4679,7 +4685,7 @@ class PrimeContractorWorkflow:
                             _rev.get("cost") or 0.0,
                         )
             except Exception:
-                pass  # OTel is advisory — never block integration
+                logger.debug("OTel feedback loop attrs failed", exc_info=True)
 
             if self.on_feature_complete:
                 self.on_feature_complete(feature)

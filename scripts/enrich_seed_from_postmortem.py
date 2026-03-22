@@ -24,7 +24,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 def _load_suggestions(path: Path) -> list:
     """Load kaizen suggestions from postmortem or kaizen-suggestions.json."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        print(
+            f"ERROR: cannot parse {path}: {exc}",
+            file=sys.stderr,
+        )
+        return []
     # kaizen-suggestions.json is a list directly
     if isinstance(data, list):
         return data

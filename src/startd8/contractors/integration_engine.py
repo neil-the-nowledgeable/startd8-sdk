@@ -2678,7 +2678,10 @@ class IntegrationEngine:
                     if scores:
                         result_obj_metadata["disk_quality_score"] = min(scores)
                 except Exception:
-                    pass  # advisory — never block integration
+                    logger.debug(
+                        "Disk quality score computation failed",
+                        exc_info=True,
+                    )
 
             # ── Anzen gate (SP-GT-001–004) — security verification ──
             # Runs AFTER semantic repair (evaluates repaired code) and

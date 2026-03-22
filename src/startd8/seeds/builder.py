@@ -405,7 +405,6 @@ class SeedBuilder:
                 if not hint_text:
                     continue
                 pattern = suggestion.get("pattern_type", "")
-                phase = suggestion.get("phase", "")
                 # Match by domain or file overlap
                 observed = suggestion.get("observed_context", "")
                 if (
