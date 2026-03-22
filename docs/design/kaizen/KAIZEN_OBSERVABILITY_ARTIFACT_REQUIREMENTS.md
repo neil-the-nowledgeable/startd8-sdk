@@ -87,43 +87,43 @@ THIS DOCUMENT (REQ-KZ-OBS-100–600)
 | Req ID | Description | Impl Home | Status |
 |--------|-------------|-----------|--------|
 | **Layer 1 — Disk Validation** | | | |
-| REQ-KZ-OBS-100 | Dashboard spec structural validation | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-101 | Alert rule structural validation | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-102 | SLO definition structural validation | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-103 | Non-service entry detection | startd8-sdk | PARTIAL (Fix 2) |
+| REQ-KZ-OBS-100 | Dashboard spec structural validation | startd8-sdk | **DONE** (observability_artifact_checks.py) |
+| REQ-KZ-OBS-101 | Alert rule structural validation | startd8-sdk | **DONE** (observability_artifact_checks.py) |
+| REQ-KZ-OBS-102 | SLO definition structural validation | startd8-sdk | **DONE** (observability_artifact_checks.py) |
+| REQ-KZ-OBS-103 | Non-service entry detection | startd8-sdk | **DONE** (artifact_generator.py phantom filter) |
 | **Layer 2 — Semantic Validators** | | | |
-| REQ-KZ-OBS-200 | Dashboard completeness checks | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-201 | Alert threshold alignment checks | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-202 | SLO target alignment checks | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-203 | Metric name validity checks | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-200 | Dashboard completeness checks | startd8-sdk | **DONE** (RED coverage in validate_dashboard) |
+| REQ-KZ-OBS-201 | Alert threshold alignment checks | startd8-sdk | **DONE** (validate_alerts coverage check) |
+| REQ-KZ-OBS-202 | SLO target alignment checks | startd8-sdk | **DONE** (validate_slo target check) |
+| REQ-KZ-OBS-203 | Metric name validity checks | startd8-sdk | **DONE** (validate_metric_names: naming, transport, _bucket) |
 | **Layer 3 — Quality Scoring** | | | |
-| REQ-KZ-OBS-300 | Dashboard quality score formula | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-301 | Alert quality score formula | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-302 | SLO quality score formula | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-303 | Per-service composite artifact score | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-300 | Dashboard quality score formula | startd8-sdk | **DONE** (v1 pass-rate in DashboardValidationResult.score) |
+| REQ-KZ-OBS-301 | Alert quality score formula | startd8-sdk | **DONE** (v1 pass-rate in AlertValidationResult.score) |
+| REQ-KZ-OBS-302 | SLO quality score formula | startd8-sdk | **DONE** (v1 pass-rate in SloValidationResult.score) |
+| REQ-KZ-OBS-303 | Per-service composite artifact score | startd8-sdk | **DONE** (compute_service_composite) |
 | **Layer 4 — Cross-Artifact Consistency** | | | |
-| REQ-KZ-OBS-400 | Dashboard ↔ Alert alignment check | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-401 | Alert ↔ SLO alignment check | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-402 | Dashboard ↔ SLO alignment check | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-403 | Manifest derivation completeness check | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-400 | Dashboard ↔ Alert alignment check | startd8-sdk | **DONE** (validate_cross_artifact_consistency) |
+| REQ-KZ-OBS-401 | Alert ↔ SLO alignment check | startd8-sdk | **DONE** (validate_cross_artifact_consistency) |
+| REQ-KZ-OBS-402 | Dashboard ↔ SLO alignment check | startd8-sdk | **DONE** (validate_cross_artifact_consistency) |
+| REQ-KZ-OBS-403 | Manifest derivation completeness check | startd8-sdk | **DONE** (validate_derivation_completeness) |
 | **Layer 5 — Postmortem Integration** | | | |
-| REQ-KZ-OBS-500 | Artifact scores in kaizen-metrics.json | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-501 | Per-service artifact triplet evaluation | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-502 | Observability quality in postmortem summary | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-500 | Artifact scores in kaizen-metrics.json | startd8-sdk | **DONE** (_write_quality_to_kaizen_metrics) |
+| REQ-KZ-OBS-501 | Per-service artifact triplet evaluation | startd8-sdk | **DONE** (service_evaluations in kaizen-metrics) |
+| REQ-KZ-OBS-502 | Observability quality in postmortem summary | startd8-sdk | **DONE** (render_postmortem_summary obs section) |
 | **Layer 6 — Feedback Loop** | | | |
-| REQ-KZ-OBS-600 | Artifact-specific CAUSE_TO_SUGGESTION entries | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-601 | Observability quality in kaizen-trends.json | cap-dev-pipe | PLANNED |
+| REQ-KZ-OBS-600 | Artifact-specific CAUSE_TO_SUGGESTION entries | startd8-sdk | **DONE** (6 obs_ entries in CAUSE_TO_SUGGESTION) |
+| REQ-KZ-OBS-601 | Observability quality in kaizen-trends.json | cap-dev-pipe | **DONE** (build_observability_section in batch_postmortem) |
 | **Layer 7 — First-Class Pipeline Citizenship** | | | |
-| REQ-KZ-OBS-700 | Post-generation validation gate | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-710 | Deterministic repair steps (SLO target, metric name, gridPos) | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-720 | Semantic checks (RED coverage, SLO alignment, alert coverage, transport) | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-730 | Quality score computation (post-write) | startd8-sdk | PLANNED |
+| REQ-KZ-OBS-700 | Post-generation validation gate | startd8-sdk | **DONE** (_repair_and_validate in artifact_generator) |
+| REQ-KZ-OBS-710 | Deterministic repair steps (SLO target, metric name, gridPos) | startd8-sdk | **DONE** (repair_gridpos, repair_slo_target, _repair_bucket_suffix) |
+| REQ-KZ-OBS-720 | Semantic checks (RED coverage, SLO alignment, alert coverage, transport) | startd8-sdk | **DONE** (validate_dashboard/alerts/slo semantic checks) |
+| REQ-KZ-OBS-730 | Quality score computation (post-write) | startd8-sdk | **DONE** (quality_summary in index + observability-quality.json) |
 | **Layer 7a — Plan-Derived Quick Wins** | | | |
-| REQ-KZ-OBS-700a | Pipeline wiring: pass --manifest to generator | cap-dev-pipe | **P0 — 0 SDK lines, D+→B+ impact** |
-| REQ-KZ-OBS-704 | Manifest path propagation requirement | cap-dev-pipe | PLANNED |
-| REQ-KZ-OBS-705 | Retroactive validation (accept YAML content, not just paths) | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-706 | ArtifactResult extension (validation, repairs_applied, quality_score) | startd8-sdk | PLANNED |
-| REQ-KZ-OBS-711 | Generator alert coverage (latency + error_rate + availability) | startd8-sdk | FUTURE |
+| REQ-KZ-OBS-700a | Pipeline wiring: pass --manifest to generator | cap-dev-pipe | **RESOLVED** (2026-03-21, SDK reinstall) |
+| REQ-KZ-OBS-704 | Manifest path propagation requirement | cap-dev-pipe | **VERIFIED** (run-atomic.sh:474) |
+| REQ-KZ-OBS-705 | Retroactive validation (accept YAML content, not just paths) | startd8-sdk | **DONE** (validators accept string content) |
+| REQ-KZ-OBS-706 | ArtifactResult extension (validation, repairs_applied, quality_score) | startd8-sdk | **DONE** (quality: Optional[Dict] field) |
+| REQ-KZ-OBS-711 | Generator alert coverage (latency + error_rate + availability) | startd8-sdk | **DONE** (3-alert generation + RED panel synthesis) |
 
 ---
 
@@ -605,13 +605,13 @@ Before implementing any SDK validation/repair/scoring, the pipeline MUST be fixe
 
 | Kaizen Code Phase | Code Generation Equivalent | Observability Artifact Equivalent | Status |
 |---|---|---|---|
-| Phase A (Registry) | `set_phase_status("implement", "generated")` metadata | `ArtifactResult.derivations` traceability | Partial |
-| Phase B (Disk Validation) | `DiskComplianceResult` | `DashboardValidationResult`, `AlertValidationResult`, `SloValidationResult` (REQ-KZ-OBS-700) | **NOT IMPLEMENTED** |
-| Phase C (Feedback) | `CAUSE_TO_SUGGESTION` → kaizen hints | `obs_*` entries in `CAUSE_TO_SUGGESTION` (REQ-KZ-OBS-600) | **NOT IMPLEMENTED** |
-| Phase D (Semantic) | `run_semantic_checks()` — 4 Python / 8 C# checks | REQ-KZ-OBS-720 semantic validators | **NOT IMPLEMENTED** |
-| Phase E (Scoring) | `compute_disk_quality_score()` | REQ-KZ-OBS-730 per-type + composite scoring | **NOT IMPLEMENTED** |
-| Repair | `repair/orchestrator.py` → fence strip, AST, lint, import | REQ-KZ-OBS-710 → SLO target, metric name, gridPos, bucket suffix | **NOT IMPLEMENTED** |
-| Gate | Anzen gate (Security Prime) → PASS/FAIL | REQ-KZ-OBS-700 → validation gate with `--strict` mode | **NOT IMPLEMENTED** |
+| Phase A (Registry) | `set_phase_status("implement", "generated")` metadata | `ArtifactResult.derivations` traceability | **DONE** |
+| Phase B (Disk Validation) | `DiskComplianceResult` | `DashboardValidationResult`, `AlertValidationResult`, `SloValidationResult` (REQ-KZ-OBS-700) | **DONE** |
+| Phase C (Feedback) | `CAUSE_TO_SUGGESTION` → kaizen hints | `obs_*` entries in `CAUSE_TO_SUGGESTION` (REQ-KZ-OBS-600) | **DONE** (6 entries) |
+| Phase D (Semantic) | `run_semantic_checks()` — 4 Python / 8 C# checks | REQ-KZ-OBS-720 semantic validators (RED coverage, SLO alignment, alert coverage) | **DONE** |
+| Phase E (Scoring) | `compute_disk_quality_score()` | REQ-KZ-OBS-730 per-type + composite scoring | **DONE** (v1 pass-rate) |
+| Repair | `repair/orchestrator.py` → fence strip, AST, lint, import | REQ-KZ-OBS-710 → SLO target, gridPos, bucket suffix | **DONE** |
+| Gate | Anzen gate (Security Prime) → PASS/FAIL | REQ-KZ-OBS-700 → validation gate (warn-by-default) | **DONE** (--strict PLANNED) |
 
 ---
 

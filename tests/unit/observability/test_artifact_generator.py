@@ -327,14 +327,22 @@ class TestGenerateDashboardSpec:
         body = result.content.split("\n\n", 1)[1]
         parsed = yaml.safe_load(body)
         assert parsed["title"] == "checkout-api Observability"
-        assert len(parsed["panels"]) == len(GRPC_METRICS)
+        # GRPC_METRICS panels + synthesized Rate + Error panels
+        assert len(parsed["panels"]) >= len(GRPC_METRICS)
+        titles = [p["title"] for p in parsed["panels"]]
+        assert "Request Rate" in titles
+        assert "Error Rate" in titles
 
     def test_http_service(self, http_service, business):
         result = generate_dashboard_spec(http_service, business)
         assert result.status == "generated"
         body = result.content.split("\n\n", 1)[1]
         parsed = yaml.safe_load(body)
-        assert len(parsed["panels"]) == len(HTTP_METRICS)
+        # HTTP_METRICS panels + synthesized Rate + Error panels
+        assert len(parsed["panels"]) >= len(HTTP_METRICS)
+        titles = [p["title"] for p in parsed["panels"]]
+        assert "Request Rate" in titles
+        assert "Error Rate" in titles
 
     def test_panel_types(self, grpc_service, business):
         result = generate_dashboard_spec(grpc_service, business)
@@ -366,10 +374,17 @@ class TestGenerateDashboardSpec:
         parsed = yaml.safe_load(body)
         assert "overview" in parsed["tags"]
 
-    def test_no_metrics(self, business):
+    def test_no_convention_metrics_still_generates_red(self, business):
+        """Services with no convention metrics still get synthesized RED panels."""
         svc = ServiceHints(service_id="empty", transport="http", convention_metrics=[])
         result = generate_dashboard_spec(svc, business)
-        assert result.status == "skipped"
+        # RED panels are synthesized even without convention metrics
+        assert result.status == "generated"
+        body = result.content.split("\n\n", 1)[1]
+        parsed = yaml.safe_load(body)
+        titles = [p["title"] for p in parsed["panels"]]
+        assert "Request Rate" in titles
+        assert "Error Rate" in titles
 
 
 # ---------------------------------------------------------------------------

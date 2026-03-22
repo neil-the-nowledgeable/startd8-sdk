@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from startd8.logging_config import get_logger
+from startd8.utils.trend_math import linear_slope as _linear_slope
 
 logger = get_logger(__name__)
 
@@ -696,6 +697,95 @@ class BatchPostMortemEvaluator:
             "runs_with_security_data": len(scores),
         }
 
+    def build_observability_section(
+        self,
+        output_dir: str,
+        archived_run_dirs: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Build batch-level observability artifact section (REQ-KZ-OBS-601).
+
+        Reads ``kaizen-metrics.json`` observability_artifacts keys from each
+        archived run to track per-type score trajectories and phantom ratios.
+
+        Args:
+            output_dir: Current run output directory.
+            archived_run_dirs: List of archived run directories (oldest first).
+
+        Returns:
+            Dict with per-type score trajectories, composite slope, and
+            phantom service tracking.
+        """
+        run_dirs = (archived_run_dirs or []) + [output_dir]
+
+        composite_scores: List[float] = []
+        dashboard_scores: List[float] = []
+        alert_scores: List[float] = []
+        slo_scores: List[float] = []
+        phantom_ratios: List[float] = []
+
+        for rdir in run_dirs:
+            metrics_path = Path(rdir) / "kaizen-metrics.json"
+            if not metrics_path.is_file():
+                continue
+            try:
+                data = json.loads(metrics_path.read_text())
+                obs = data.get("observability_artifacts")
+                if not obs:
+                    continue
+                composite_scores.append(obs.get("avg_composite_score", 0.0))
+                dashboard_scores.append(obs.get("avg_dashboard_spec_score", 0.0))
+                alert_scores.append(obs.get("avg_alert_rule_score", 0.0))
+                slo_scores.append(obs.get("avg_slo_definition_score", 0.0))
+                # Phantom ratio: phantom_detected / services_evaluated
+                evaluated = obs.get("services_evaluated", 0)
+                phantom = obs.get("phantom_services_detected", 0)
+                if evaluated > 0:
+                    phantom_ratios.append(phantom / evaluated)
+                else:
+                    phantom_ratios.append(0.0)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+        result: Dict[str, Any] = {
+            "runs_with_observability_data": len(composite_scores),
+        }
+
+        if len(composite_scores) >= 2:
+            result["avg_composite_slope"] = round(
+                _linear_slope(composite_scores) or 0.0, 4
+            )
+            result["avg_dashboard_slope"] = round(
+                _linear_slope(dashboard_scores) or 0.0, 4
+            )
+            result["avg_alert_slope"] = round(
+                _linear_slope(alert_scores) or 0.0, 4
+            )
+            result["avg_slo_slope"] = round(
+                _linear_slope(slo_scores) or 0.0, 4
+            )
+        if phantom_ratios:
+            result["phantom_ratio_slope"] = round(
+                (_linear_slope(phantom_ratios) or 0.0), 4
+            ) if len(phantom_ratios) >= 2 else 0.0
+            result["phantom_services_per_run"] = [
+                round(r, 4) for r in phantom_ratios
+            ]
+            result["phantom_services_resolved"] = (
+                len(phantom_ratios) >= 2
+                and phantom_ratios[-1] == 0.0
+                and any(r > 0 for r in phantom_ratios[:-1])
+            )
+        if composite_scores:
+            result["red_coverage_improving"] = (
+                len(dashboard_scores) >= 2
+                and dashboard_scores[-1] > dashboard_scores[0]
+            )
+            result["composite_trajectory"] = [
+                round(s, 4) for s in composite_scores
+            ]
+
+        return result
+
     def write_outputs(
         self, report: BatchPostMortemReport, output_dir: str
     ) -> None:
@@ -714,6 +804,14 @@ class BatchPostMortemEvaluator:
                 report_dict["security"] = sec_section
         except Exception:
             logger.debug("Batch security section skipped", exc_info=True)
+
+        # Add observability section if data available (REQ-KZ-OBS-601)
+        try:
+            obs_section = self.build_observability_section(output_dir)
+            if obs_section.get("runs_with_observability_data", 0) > 0:
+                report_dict["observability_trend"] = obs_section
+        except Exception:
+            logger.debug("Batch observability section skipped", exc_info=True)
 
         report_json = json.dumps(report_dict, indent=2, default=str)
         report_path.write_text(report_json, encoding="utf-8")

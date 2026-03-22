@@ -29,6 +29,8 @@ __all__ = [
     "validate_alerts",
     "validate_slo",
     "validate_cross_artifact_consistency",
+    "validate_metric_names",
+    "validate_derivation_completeness",
     "repair_gridpos",
     "repair_slo_target",
     "compute_service_composite",
@@ -174,6 +176,8 @@ def validate_dashboard(
     file_path: str = "",
     *,
     autofix: bool = True,
+    service_id: str = "",
+    transport: Optional[str] = None,
 ) -> DashboardValidationResult:
     """Validate a dashboard spec YAML against the OBS-100 + OBS-200 checklists."""
     result = DashboardValidationResult(file_path=file_path)
@@ -300,6 +304,17 @@ def validate_dashboard(
             f"RED coverage {red:.0%} — missing: {', '.join(missing)}",
         ))
 
+    # OBS-203: Metric name validity
+    all_exprs = get_all_panel_exprs(panels)
+    metric_issues = validate_metric_names(all_exprs, service_id=service_id, transport=transport)
+    for mi in metric_issues:
+        total += 1
+        issues.append(mi)
+    if not metric_issues:
+        # All metric checks passed — count as 1 aggregate check
+        total += 1
+        passed += 1
+
     result.checks_passed = passed
     result.checks_total = total
     return result
@@ -315,6 +330,8 @@ def validate_alerts(
     file_path: str = "",
     *,
     manifest_availability: Optional[float] = None,
+    service_id: str = "",
+    transport: Optional[str] = None,
 ) -> AlertValidationResult:
     """Validate Prometheus alert rule YAML against OBS-101 + OBS-201 checklists."""
     result = AlertValidationResult(file_path=file_path)
@@ -412,6 +429,16 @@ def validate_alerts(
             f"Alert coverage: {len(rules)}/{expected} expected rules (rule_coverage={result.rule_coverage:.2f})",
         ))
 
+    # OBS-203: Metric name validity
+    alert_exprs = [str(r.get("expr", "")) for r in rules if r.get("expr")]
+    metric_issues = validate_metric_names(alert_exprs, service_id=service_id, transport=transport)
+    for mi in metric_issues:
+        total += 1
+        issues.append(mi)
+    if not metric_issues:
+        total += 1
+        passed += 1
+
     result.checks_passed = passed
     result.checks_total = total
     return result
@@ -428,6 +455,8 @@ def validate_slo(
     *,
     manifest_availability: Optional[float] = None,
     autofix: bool = True,
+    service_id: str = "",
+    transport: Optional[str] = None,
 ) -> SloValidationResult:
     """Validate OpenSLO v1 YAML against OBS-102 + OBS-202 checklists."""
     result = SloValidationResult(file_path=file_path)
@@ -534,6 +563,23 @@ def validate_slo(
         passed += 1  # can't check — pass by default
     else:
         issues.append(ObservabilityIssue("OBS-202a", "error", "No target to check against manifest"))
+
+    # OBS-203: Metric name validity (check SLO indicator query)
+    slo_exprs: List[str] = []
+    tm = ind_spec.get("thresholdMetric", {})
+    if isinstance(tm, dict):
+        ms = tm.get("metricSource", {})
+        if isinstance(ms, dict):
+            q = ms.get("spec", {}).get("query", "")
+            if q:
+                slo_exprs.append(str(q))
+    metric_issues = validate_metric_names(slo_exprs, service_id=service_id, transport=transport)
+    for mi in metric_issues:
+        total += 1
+        issues.append(mi)
+    if not metric_issues:
+        total += 1
+        passed += 1
 
     result.checks_passed = passed
     result.checks_total = total
@@ -696,6 +742,180 @@ def _safe_yaml_load(content: Optional[str]) -> Optional[Dict]:
         return data if isinstance(data, dict) else None
     except yaml.YAMLError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Metric name validity checks (REQ-KZ-OBS-203)
+# ---------------------------------------------------------------------------
+
+# OTel dot-notation → Prometheus underscore mapping
+_PROM_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
+_DOT_METRIC_RE = re.compile(r'[a-z]+\.[a-z]+\.[a-z]')
+
+# Transport → expected metric prefix
+_TRANSPORT_METRIC_PREFIX: Dict[str, str] = {
+    "grpc": "rpc_server_",
+    "http": "http_server_",
+}
+
+
+def validate_metric_names(
+    exprs: List[str],
+    service_id: str = "",
+    transport: Optional[str] = None,
+) -> List[ObservabilityIssue]:
+    """Validate metric names in PromQL expressions (REQ-KZ-OBS-203a/b/c).
+
+    Checks:
+      OBS-203a: Prometheus naming convention (lowercase + underscores)
+      OBS-203b: Transport-metric alignment (gRPC→rpc_server_*, HTTP→http_server_*)
+      OBS-203c: _bucket suffix in histogram_quantile() calls
+
+    Args:
+        exprs: List of PromQL expression strings.
+        service_id: Service identifier for messages.
+        transport: Service transport type ("grpc" or "http").
+
+    Returns:
+        List of ObservabilityIssue for any violations found.
+    """
+    issues: List[ObservabilityIssue] = []
+
+    for expr in exprs:
+        metrics = _extract_metric_names(expr)
+
+        for metric in metrics:
+            # OBS-203a: Prometheus naming convention
+            if _DOT_METRIC_RE.search(metric):
+                issues.append(ObservabilityIssue(
+                    "OBS-203a", "warning",
+                    f"Metric '{metric}' uses dot notation; "
+                    f"Prometheus convention requires underscores "
+                    f"(e.g., '{metric.replace('.', '_')}')",
+                ))
+
+            # OBS-203b: Transport-metric alignment
+            if transport:
+                expected_prefix = _TRANSPORT_METRIC_PREFIX.get(transport)
+                if expected_prefix:
+                    # Only check server-side metrics (skip generic ones like 'rate', 'sum')
+                    if ("server" in metric or "client" in metric) and \
+                            not metric.startswith(expected_prefix):
+                        issues.append(ObservabilityIssue(
+                            "OBS-203b", "error",
+                            f"Service '{service_id}' uses {transport} but "
+                            f"metric '{metric}' doesn't match expected prefix "
+                            f"'{expected_prefix}*'",
+                        ))
+
+        # OBS-203c: _bucket suffix in histogram_quantile()
+        hq_matches = re.findall(
+            r'histogram_quantile\([^,]+,\s*(?:rate|increase)\((\w+)\{',
+            expr,
+        )
+        for metric in hq_matches:
+            if not metric.endswith("_bucket"):
+                issues.append(ObservabilityIssue(
+                    "OBS-203c", "warning",
+                    f"histogram_quantile() references '{metric}' "
+                    f"without _bucket suffix (should be '{metric}_bucket')",
+                ))
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Manifest derivation completeness (REQ-KZ-OBS-403)
+# ---------------------------------------------------------------------------
+
+
+def validate_derivation_completeness(
+    derivation_rules: List[Dict[str, Any]],
+    artifacts: List[Dict[str, Any]],
+) -> Tuple[List[str], List[str]]:
+    """Check every derivation rule traces to a consumed value (REQ-KZ-OBS-403).
+
+    Args:
+        derivation_rules: List of derivation rule dicts from observability-manifest.yaml.
+            Each has: field, source, transformation, tier, applied_to.
+        artifacts: List of artifact dicts with at least 'content' (YAML string),
+            'artifact_type', 'service_id'.
+
+    Returns:
+        Tuple of (unused_derivations, consumed_incorrect).
+        unused_derivations: rules whose output field doesn't appear in any artifact.
+        consumed_incorrect: rules whose value appears but with a mismatched value.
+    """
+    unused: List[str] = []
+    incorrect: List[str] = []
+
+    # Build a map of derivation field → expected value
+    for rule in derivation_rules:
+        rule_field = rule.get("field", "")
+        rule_value = str(rule.get("transformation", ""))
+        applied_to = rule.get("applied_to", [])
+
+        if not rule_field or not rule_value:
+            continue
+
+        # Check if this derivation is consumed by any artifact
+        consumed = False
+        for artifact in artifacts:
+            content = artifact.get("content", "")
+            svc = artifact.get("service_id", "")
+            if applied_to and svc not in applied_to:
+                continue
+
+            if not content:
+                continue
+
+            # Check consumption based on field type
+            if rule_field == "alert_severity":
+                # Should appear as severity label in alerts
+                if "severity:" in content:
+                    consumed = True
+                    # Check value: "high → critical" means severity should be "critical"
+                    expected_sev = rule_value.split("→")[-1].strip() if "→" in rule_value else rule_value
+                    if f"severity: {expected_sev}" not in content:
+                        # Check YAML-parsed value
+                        data = _safe_yaml_load(content)
+                        if data:
+                            for g in data.get("groups", [{}]):
+                                for r in (g.get("rules", []) if isinstance(g, dict) else []):
+                                    actual = r.get("labels", {}).get("severity", "")
+                                    if actual and actual != expected_sev:
+                                        incorrect.append(
+                                            f"Rule '{rule_field}': expected severity "
+                                            f"'{expected_sev}' but found '{actual}' "
+                                            f"in {svc}"
+                                        )
+
+            elif rule_field == "latency_p99":
+                # Should appear as threshold in alerts/dashboards
+                if rule_value.replace("ms", "") in content or rule_value in content:
+                    consumed = True
+
+            elif rule_field == "availability":
+                # Should appear as SLO target or error budget
+                if rule_value in content:
+                    consumed = True
+
+            elif rule_field == "slo_window":
+                # Should appear as timeWindow duration
+                if rule_value in content:
+                    consumed = True
+
+            elif rule_field == "dashboard_placement":
+                # Consumed as tag/metadata — just check presence
+                consumed = True  # Always consumed by generation logic
+
+        if not consumed:
+            unused.append(
+                f"Derivation '{rule_field}' ({rule_value}) not consumed by "
+                f"any artifact for services: {applied_to}"
+            )
+
+    return unused, incorrect
 
 
 # ---------------------------------------------------------------------------

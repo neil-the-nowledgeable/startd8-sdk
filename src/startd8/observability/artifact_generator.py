@@ -1011,6 +1011,7 @@ def generate_slo_definitions(
 def _repair_and_validate(
     result: ArtifactResult,
     business: BusinessContext,
+    transport: Optional[str] = None,
 ) -> ArtifactResult:
     """Apply autofix repairs, validate, compute score. Modifies result in-place.
 
@@ -1039,7 +1040,10 @@ def _repair_and_validate(
     vr = None
 
     if result.artifact_type == "dashboard_spec":
-        vr = validate_dashboard(result.content, result.output_path, autofix=True)
+        vr = validate_dashboard(
+            result.content, result.output_path, autofix=True,
+            service_id=result.service_id, transport=transport,
+        )
         # If gridPos was injected, update content with repaired YAML
         if vr.repairs_applied:
             try:
@@ -1054,6 +1058,7 @@ def _repair_and_validate(
         vr = validate_alerts(
             result.content, result.output_path,
             manifest_availability=avail,
+            service_id=result.service_id, transport=transport,
         )
 
     elif result.artifact_type == "slo_definition":
@@ -1061,6 +1066,7 @@ def _repair_and_validate(
             result.content, result.output_path,
             manifest_availability=avail,
             autofix=True,
+            service_id=result.service_id, transport=transport,
         )
         # If SLO target was repaired, update content
         if vr.repairs_applied:
@@ -1107,7 +1113,7 @@ def _generate_one(
     """Generate, validate, and score a single artifact. Catches exceptions."""
     try:
         result = gen_fn(service, business)
-        return _repair_and_validate(result, business)
+        return _repair_and_validate(result, business, transport=service.transport)
     except Exception:
         logger.exception("%s generation failed for %s", artifact_type, service.service_id)
         return ArtifactResult(
