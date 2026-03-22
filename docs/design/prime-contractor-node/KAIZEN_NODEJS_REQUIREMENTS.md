@@ -750,3 +750,15 @@ Tests are grouped by implementation status. **[NOW]** tests validate existing co
 | VI-1 | The language-agnostic scoring formula already handles Node.js semantic issues via severity-weighted `semantic_penalty`. The 6-component formula adds marginal precision but requires significant infrastructure (language dispatch, component extraction from semantic_issues, new DiskComplianceResult fields). | Defer Node.js-specific scoring to after the language dispatch mechanism is built for ALL languages (Java/Go/C# will also benefit). Don't build it for Node.js alone. |
 | VI-2 | The 5 PLANNED semantic checks (callback_hell, unused_requires, missing_exports, any_overuse, Go contamination) are all independently implementable. But they share no dependencies with the repair pipeline (Phase 2). | Implement PLANNED checks independently from repair steps. They're detection-only and immediately improve Kaizen signal quality. Consider prioritizing `check_unused_requires()` — it's the most common LLM defect in JS generation. |
 | VI-3 | `shebang_strip` is categorized as a "Planned Repair Step" but it's simpler than any Phase 2 step and has zero dependencies. It's blocked only by the Phase 2 label. | Promote to "Quick Win" — implement independently of Phase 2 phasing. |
+
+---
+
+## 11. Phase 4 Requirements
+
+The following items deferred from Phases 0–3 are specified in [NODEJS_PHASE4_REQUIREMENTS.md](NODEJS_PHASE4_REQUIREMENTS.md):
+
+| Requirement | Area | Priority | Scope |
+|-------------|------|----------|-------|
+| REQ-KZ-ND-700 | 5 PLANNED semantic checks + Go contamination | P1–P5 | Detection-only, feeds Kaizen scoring |
+| REQ-KZ-ND-800 | Language-aware quality scoring dispatch | HIGH | Cross-cutting — benefits all 4 non-Python languages |
+| REQ-KZ-ND-900 | Prettier repair step | LOW | Formalizes existing best-effort prettier run with rollback safety |
