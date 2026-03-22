@@ -3,6 +3,9 @@
 REQ-RFL-120: Reviews Prime Contractor output using the existing Artisan
 review infrastructure (~100 lines of adapter, zero modification to
 ReviewPhaseHandler).
+
+REQ-RFL-210: Heuristic review issue classification (keyword-based,
+zero additional API calls).
 """
 
 from __future__ import annotations
@@ -165,3 +168,46 @@ class PrimeReviewAdapter:
         if repair:
             results["repair_summary"] = repair
         return results
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-210: Heuristic review issue classification
+# ---------------------------------------------------------------------------
+
+_ISSUE_CATEGORY_KEYWORDS: Dict[str, List[str]] = {
+    "syntax": ["syntax", "parse", "indentation", "bracket", "parenthes"],
+    "semantics": [
+        "import", "undefined", "unused", "unreachable", "dead code",
+        "stub", "circular", "phantom",
+    ],
+    "design": [
+        "architecture", "coupling", "cohesion", "separation",
+        "factory", "interface", "abstract",
+    ],
+    "naming": ["naming", "convention", "camelCase", "snake_case"],
+    "testing": ["test", "coverage", "assertion", "mock"],
+    "performance": [
+        "performance", "complexity", "O(n", "inefficient", "memory",
+    ],
+    "security": [
+        "security", "injection", "sanitiz", "credential", "auth",
+    ],
+}
+
+
+def classify_review_issues(issues: List[str]) -> List[Dict[str, str]]:
+    """Classify review issues by keyword matching (REQ-RFL-210).
+
+    Zero LLM calls — pure heuristic. Returns list of
+    ``{"category": str, "text": str}`` dicts.
+    """
+    classified: List[Dict[str, str]] = []
+    for text in issues:
+        text_lower = text.lower()
+        category = "other"
+        for cat, keywords in _ISSUE_CATEGORY_KEYWORDS.items():
+            if any(kw in text_lower for kw in keywords):
+                category = cat
+                break
+        classified.append({"category": category, "text": text})
+    return classified

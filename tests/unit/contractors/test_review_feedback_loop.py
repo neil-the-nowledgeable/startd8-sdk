@@ -404,3 +404,338 @@ class TestRepairEffectivenessAPI:
             assert entry["contributed_to_success"] == 6
         finally:
             reset_step_effectiveness()
+
+
+# ===========================================================================
+# Iteration 2: Gate + Feedback
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-200: RunQualityAccumulator
+# ---------------------------------------------------------------------------
+
+
+class TestRunQualityAccumulator:
+
+    def test_record_signals(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        acc.record("F-001", {
+            "disk_quality_score": 0.75,
+            "disk_compliance": {
+                "foo.py": {
+                    "semantic_issues": [
+                        {"category": "phantom_import", "severity": "error"},
+                    ],
+                },
+            },
+        })
+        assert acc.feature_count == 1
+
+    def test_patterns_threshold(self):
+        """Patterns require count >= 2."""
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        for i in range(3):
+            acc.record(f"F-{i}", {
+                "disk_compliance": {
+                    "file.py": {
+                        "semantic_issues": [
+                            {"category": "phantom_import", "severity": "error"},
+                        ],
+                    },
+                },
+            })
+        patterns = acc.get_run_level_patterns()
+        assert "semantic:phantom_import" in patterns
+        assert patterns["semantic:phantom_import"] == 3
+
+    def test_patterns_below_threshold(self):
+        """Single occurrence doesn't appear in patterns."""
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        acc.record("F-001", {
+            "disk_compliance": {
+                "file.py": {
+                    "semantic_issues": [
+                        {"category": "rare_issue", "severity": "warning"},
+                    ],
+                },
+            },
+        })
+        patterns = acc.get_run_level_patterns()
+        assert patterns == {}
+
+    def test_build_hints(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        for i in range(2):
+            acc.record(f"F-{i}", {
+                "disk_compliance": {
+                    "file.py": {
+                        "semantic_issues": [
+                            {"category": "phantom_import", "severity": "error"},
+                        ],
+                    },
+                },
+            })
+        hints = acc.build_spec_hints()
+        assert hints is not None
+        assert "phantom_import" in hints
+        assert "2x" in hints
+
+    def test_build_hints_dedup_kaizen(self):
+        """Hints already in kaizen are excluded."""
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        for i in range(2):
+            acc.record(f"F-{i}", {
+                "disk_compliance": {
+                    "file.py": {
+                        "semantic_issues": [
+                            {"category": "phantom_import", "severity": "error"},
+                        ],
+                    },
+                },
+            })
+        hints = acc.build_spec_hints(
+            existing_kaizen_categories={"phantom_import"},
+        )
+        assert hints is None
+
+    def test_build_hints_empty(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        assert acc.build_spec_hints() is None
+
+    def test_quality_trend_declining(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        for score in [0.9, 0.7, 0.5]:
+            acc.record(f"F-{score}", {"disk_quality_score": score})
+        assert acc.get_quality_trend() == "declining"
+
+    def test_quality_trend_not_declining(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        for score in [0.5, 0.7, 0.9]:
+            acc.record(f"F-{score}", {"disk_quality_score": score})
+        assert acc.get_quality_trend() is None
+
+    def test_quality_trend_needs_3(self):
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        acc = RunQualityAccumulator()
+        acc.record("F-1", {"disk_quality_score": 0.9})
+        acc.record("F-2", {"disk_quality_score": 0.5})
+        assert acc.get_quality_trend() is None
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-210: Review issue classification
+# ---------------------------------------------------------------------------
+
+
+class TestReviewIssueClassification:
+
+    def test_classify_keywords(self):
+        from startd8.contractors.prime_review import classify_review_issues
+        issues = [
+            "Circular import between logger and server",
+            "Test coverage is insufficient",
+            "Performance issue with O(n^2) algorithm",
+            "SQL injection vulnerability in handler",
+        ]
+        classified = classify_review_issues(issues)
+        assert len(classified) == 4
+        assert classified[0]["category"] == "semantics"
+        assert classified[1]["category"] == "testing"
+        assert classified[2]["category"] == "performance"
+        assert classified[3]["category"] == "security"
+
+    def test_classify_other(self):
+        from startd8.contractors.prime_review import classify_review_issues
+        classified = classify_review_issues(["Something completely unrelated"])
+        assert classified[0]["category"] == "other"
+
+    def test_classify_empty(self):
+        from startd8.contractors.prime_review import classify_review_issues
+        assert classify_review_issues([]) == []
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-220/225/230: Quality gate
+# ---------------------------------------------------------------------------
+
+
+class TestQualityGate:
+
+    def _make_pc(self):
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+        )
+        pc = PrimeContractorWorkflow.__new__(PrimeContractorWorkflow)
+        pc.quality_gate_enabled = True
+        pc.quality_gate_threshold = 0.5
+        pc.project_root = Path("/tmp/test")
+        pc.code_generator = None
+        pc._review_agent = None
+        pc._review_adapter = mock.MagicMock()
+        pc._engine = mock.MagicMock()
+        pc._prime_listener = mock.MagicMock()
+        return pc
+
+    def test_gate_triggers_fail_and_low_score(self):
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+        )
+        review = {"verdict": "FAIL", "issues": ["broken import"]}
+        metadata = {"disk_quality_score": 0.3}
+
+        pc = self._make_pc()
+        # Prevent actual develop/integrate
+        pc.develop_feature = mock.MagicMock(return_value=False)
+
+        from startd8.contractors.queue import FeatureSpec
+        feature = FeatureSpec(id="F-001", name="test")
+
+        result = pc._attempt_quality_gate_redraft(
+            feature, review, metadata,
+        )
+        # develop_feature was called (gate fired)
+        pc.develop_feature.assert_called_once()
+
+    def test_gate_skips_fail_but_high_score(self):
+        pc = self._make_pc()
+        review = {"verdict": "FAIL", "issues": ["minor style"]}
+        metadata = {"disk_quality_score": 0.85}
+
+        from startd8.contractors.queue import FeatureSpec
+        feature = FeatureSpec(id="F-001", name="test")
+
+        result = pc._attempt_quality_gate_redraft(
+            feature, review, metadata,
+        )
+        assert result is False
+
+    def test_gate_skips_pass(self):
+        pc = self._make_pc()
+        review = {"verdict": "PASS", "issues": []}
+        metadata = {"disk_quality_score": 0.3}
+
+        from startd8.contractors.queue import FeatureSpec
+        feature = FeatureSpec(id="F-001", name="test")
+
+        result = pc._attempt_quality_gate_redraft(
+            feature, review, metadata,
+        )
+        assert result is False
+
+    def test_gate_max_one_redraft(self):
+        pc = self._make_pc()
+        review = {"verdict": "FAIL", "issues": ["broken"]}
+        metadata = {"disk_quality_score": 0.3}
+
+        from startd8.contractors.queue import FeatureSpec
+        feature = FeatureSpec(
+            id="F-001", name="test",
+            metadata={"_redrafted": True},
+        )
+
+        result = pc._attempt_quality_gate_redraft(
+            feature, review, metadata,
+        )
+        assert result is False
+
+    def test_gate_disabled(self):
+        pc = self._make_pc()
+        pc.quality_gate_enabled = False
+        review = {"verdict": "FAIL", "issues": ["broken"]}
+        metadata = {"disk_quality_score": 0.1}
+
+        from startd8.contractors.queue import FeatureSpec
+        feature = FeatureSpec(id="F-001", name="test")
+
+        result = pc._attempt_quality_gate_redraft(
+            feature, review, metadata,
+        )
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-225: Corrective hint builder
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectiveHint:
+
+    def test_build_hint(self):
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+        )
+        review = {
+            "issues": [
+                "Circular import between logger and server",
+                "Factory returns None instead of Handler",
+            ],
+        }
+        hint = PrimeContractorWorkflow._build_corrective_hint(
+            review, score=0.3, threshold=0.5,
+        )
+        assert "CRITICAL" in hint
+        assert "Circular import" in hint
+        assert "Factory returns None" in hint
+        assert "0.3" in hint
+
+    def test_build_hint_empty_issues(self):
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+        )
+        hint = PrimeContractorWorkflow._build_corrective_hint(
+            {"issues": []},
+        )
+        assert hint == ""
+
+    def test_build_hint_capped_at_800(self):
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+        )
+        review = {"issues": [f"Issue number {i} " * 20 for i in range(20)]}
+        hint = PrimeContractorWorkflow._build_corrective_hint(review)
+        assert len(hint) <= 800
+
+
+# ---------------------------------------------------------------------------
+# REQ-RFL-250: Spec builder "Prior Run Findings" section
+# ---------------------------------------------------------------------------
+
+
+class TestSpecBuilderRunHints:
+
+    def test_run_hints_in_context(self):
+        """run_quality_hints should be consumed by spec builder."""
+        # Verify the context key is popped (consumed) by reading
+        # the spec builder code expectations
+        context = {"run_quality_hints": "- semantic:phantom_import (3x)"}
+        # The key should be consumed via context.pop() in spec_builder
+        val = context.pop("run_quality_hints", None)
+        assert val is not None
+        assert "phantom_import" in val

@@ -465,7 +465,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, review_enabled: bool=True, review_agent: Optional[str]=None):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, review_enabled: bool=True, review_agent: Optional[str]=None, quality_gate_enabled: bool=True, quality_gate_threshold: float=0.5):
         """
         Initialize the Prime Contractor workflow.
 
@@ -495,6 +495,8 @@ class PrimeContractorWorkflow:
             edit_min_pct: Min % of existing lines in edit output (PC-Q3, default: 80)
             review_enabled: If True, run LLM review after integration (REQ-RFL-125)
             review_agent: Agent spec for review (default: lead_agent)
+            quality_gate_enabled: If True, re-draft on FAIL + low score (REQ-RFL-220)
+            quality_gate_threshold: Disk quality score below which gate fires (default: 0.5)
         """
         self.project_root = project_root or Path.cwd()
         self.edit_min_pct = edit_min_pct
@@ -528,6 +530,9 @@ class PrimeContractorWorkflow:
         self.review_enabled = review_enabled
         self._review_agent = review_agent
         self._review_adapter: Any = None  # Lazy init (PrimeReviewAdapter)
+        self.quality_gate_enabled = quality_gate_enabled
+        self.quality_gate_threshold = quality_gate_threshold
+        self._quality_accumulator: Any = None  # RunQualityAccumulator, created per run()
         self.files_modified_this_session: Dict[str, List[str]] = {}
         self.max_lines_per_feature = max_lines_per_feature
         self.max_tokens_per_feature = max_tokens_per_feature
@@ -3779,6 +3784,24 @@ class PrimeContractorWorkflow:
             if isinstance(_cal, dict) and _cal.get("max_tokens"):
                 gen_context["implement_max_output_tokens"] = _cal["max_tokens"]
 
+        # REQ-RFL-240: Inject within-run quality hints from accumulator
+        if self._quality_accumulator is not None:
+            existing_kaizen = set(
+                gen_context.get("kaizen_categories", []),
+            )
+            hints = self._quality_accumulator.build_spec_hints(
+                existing_kaizen_categories=existing_kaizen,
+            )
+            if hints:
+                gen_context["run_quality_hints"] = hints
+            trend = self._quality_accumulator.get_quality_trend()
+            if trend == "declining":
+                gen_context["quality_trend_warning"] = (
+                    "Quality declining: last 3 features show decreasing "
+                    "disk quality scores. Pay extra attention to imports, "
+                    "stubs, and contract compliance."
+                )
+
         return gen_context
 
     def _apply_language_profile_to_engine(self) -> None:
@@ -4334,6 +4357,119 @@ class PrimeContractorWorkflow:
             )
             return None
 
+    @staticmethod
+    def _build_corrective_hint(
+        review: Dict[str, Any],
+        score: Optional[float] = None,
+        threshold: float = 0.5,
+    ) -> str:
+        """Build corrective hint from review issues (REQ-RFL-225).
+
+        Extracts BLOCKING and MAJOR issues from the review and formats
+        them as a P0 corrective hint for re-draft.  Capped at 800 chars.
+        """
+        issues = review.get("issues", [])
+        if not issues:
+            return ""
+
+        lines = ["CRITICAL: Previous generation was reviewed and rejected."]
+        lines.append("Fix these specific issues:")
+        for issue_text in issues[:8]:  # Cap number of issues
+            lines.append(f"- {issue_text}")
+        if score is not None:
+            lines.append(
+                f"Your score was {score}. Target: {threshold}.",
+            )
+        hint = "\n".join(lines)
+        if len(hint) > 800:
+            hint = hint[:797] + "..."
+        return hint
+
+    def _attempt_quality_gate_redraft(
+        self,
+        feature: FeatureSpec,
+        review: Dict[str, Any],
+        integration_metadata: Dict[str, Any],
+    ) -> bool:
+        """Quality gate: re-draft if FAIL + low score (REQ-RFL-220).
+
+        Returns True if re-draft was attempted and produced a better
+        result, False otherwise.
+        """
+        disk_score = integration_metadata.get("disk_quality_score", 1.0)
+
+        if (
+            not self.quality_gate_enabled
+            or review.get("verdict") != "FAIL"
+            or disk_score >= self.quality_gate_threshold
+        ):
+            return False
+
+        # Max 1 re-draft per feature
+        if (feature.metadata or {}).get("_redrafted"):
+            return False
+
+        logger.warning(
+            "Quality gate: %s FAIL (score %.2f < %.2f) — re-drafting",
+            feature.name, disk_score, self.quality_gate_threshold,
+            extra={"feature_name": feature.name},
+        )
+
+        corrective = self._build_corrective_hint(
+            review, score=disk_score, threshold=self.quality_gate_threshold,
+        )
+        if not corrective:
+            return False
+
+        if feature.metadata is None:
+            feature.metadata = {}
+        feature.metadata["_redrafted"] = True
+        feature.metadata["corrective_hint"] = corrective
+        original_score = disk_score
+
+        # Re-draft: reset status, inject hint, regenerate
+        feature.status = FeatureStatus.PENDING
+        feature.error_message = corrective
+
+        if not self.develop_feature(feature, prior_error=corrective):
+            logger.info(
+                "Re-draft failed for %s — keeping original",
+                feature.name,
+                extra={"feature_name": feature.name},
+            )
+            return False
+
+        # Re-integrate
+        redraft_result = self._engine.integrate(
+            FeatureSpecUnit(feature),
+            attempt=feature.integration_attempts + 1,
+            listener=self._prime_listener,
+        )
+        if not redraft_result.success:
+            logger.info(
+                "Re-draft integration failed for %s — keeping original",
+                feature.name,
+                extra={"feature_name": feature.name},
+            )
+            return False
+
+        # Accept better version (Mottainai — REQ-RFL-230)
+        new_score = redraft_result.metadata.get("disk_quality_score", 0)
+        if new_score <= original_score:
+            logger.info(
+                "Re-draft scored %.2f <= original %.2f — keeping original",
+                new_score, original_score,
+                extra={"feature_name": feature.name},
+            )
+            return False
+
+        logger.info(
+            "Re-draft improved %s: %.2f → %.2f",
+            feature.name, original_score, new_score,
+            extra={"feature_name": feature.name},
+        )
+        return True
+
     def integrate_feature(self, feature: FeatureSpec) -> bool:
         """
         Integrate a single feature immediately.
@@ -4427,10 +4563,22 @@ class PrimeContractorWorkflow:
                 history_entry["anzen_gate"] = anzen_data
             self.integration_history.append(history_entry)
 
-            # REQ-RFL-125: Per-feature review (I1 — log-only, no gate)
+            # REQ-RFL-125: Per-feature review
             if self.review_enabled and not self.walkthrough:
                 review = self._review_feature(feature, result.metadata)
                 if review:
+                    # Classify issues for accumulator (REQ-RFL-210)
+                    if review.get("issues"):
+                        try:
+                            from startd8.contractors.prime_review import (
+                                classify_review_issues,
+                            )
+                            review["classified_issues"] = (
+                                classify_review_issues(review["issues"])
+                            )
+                        except Exception:
+                            pass
+
                     if feature.metadata is None:
                         feature.metadata = {}
                     feature.metadata["review"] = review
@@ -4442,6 +4590,23 @@ class PrimeContractorWorkflow:
                         review.get("verdict"),
                         extra={"feature_name": feature.name},
                     )
+
+                    # REQ-RFL-220: Quality gate — re-draft on FAIL + low score
+                    self._attempt_quality_gate_redraft(
+                        feature, review, result.metadata,
+                    )
+
+            # REQ-RFL-240: Feed signals to accumulator for next feature
+            if self._quality_accumulator is not None:
+                self._quality_accumulator.record(
+                    feature.id,
+                    result.metadata,
+                    review_result=(
+                        self.review_results.get(feature.id)
+                        if self.review_enabled
+                        else None
+                    ),
+                )
 
             if self.on_feature_complete:
                 self.on_feature_complete(feature)
@@ -4499,6 +4664,12 @@ class PrimeContractorWorkflow:
         """
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
+
+        # REQ-RFL-200: Within-run quality accumulator (reset per run)
+        from startd8.contractors.run_quality_accumulator import (
+            RunQualityAccumulator,
+        )
+        self._quality_accumulator = RunQualityAccumulator()
 
         # Auto-discover kaizen suggestions from prior run (REQ-KZ-501 auto-wire)
         try:

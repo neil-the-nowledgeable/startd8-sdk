@@ -1213,6 +1213,20 @@ def build_spec_prompt(
     if anti_pattern_section:
         prioritized.append((2, "anti_patterns", anti_pattern_section))
 
+    # P2: Within-run quality findings from accumulator (REQ-RFL-250)
+    run_hints = context.pop("run_quality_hints", None)
+    if run_hints and isinstance(run_hints, str) and run_hints.strip():
+        prioritized.append((
+            2,
+            "run_quality_hints",
+            f"## Prior Integration Findings (This Run)\n\n{run_hints.strip()}",
+        ))
+
+    # P1: Quality trend warning (REQ-RFL-260)
+    trend_warning = context.pop("quality_trend_warning", None)
+    if trend_warning and isinstance(trend_warning, str):
+        prioritized.append((1, "quality_trend", trend_warning))
+
     # P2: Architecture and plan context
     obj_section = build_spec_objectives_section(project_obj)
     if obj_section:
@@ -1243,9 +1257,15 @@ def build_spec_prompt(
             "```"
         )))
 
-    context_sections = enforce_prompt_budget(
+    _budget_result = enforce_prompt_budget(
         prioritized, TOTAL_SPEC_BUDGET_TOKENS, logger=logger,
     )
+    # REQ-MSR-110: Unpack budget decision for downstream analysis
+    if isinstance(_budget_result, tuple):
+        context_sections, _budget_decision = _budget_result
+        context["_budget_decision"] = _budget_decision
+    else:
+        context_sections = _budget_result
 
     template = get_template(selected_key)
 
