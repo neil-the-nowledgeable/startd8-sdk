@@ -1,10 +1,11 @@
 # Deterministic Observability & TODO Completion — Requirements
 
-**Version:** 2.0.0
+**Version:** 3.0.0
 **Created:** 2026-03-18
+**Revised:** 2026-03-21 — v3: Eliminated separate workflow; TODO tasks are now first-class Prime Contractor seed tasks dispatched through existing complexity routing and shortcut infrastructure.
 **Status:** Draft
 **Depends on:** `PRIME_CONTRACTOR_REQUIREMENTS.md` (REQ-PC-001–014), `PRIME_EXECUTION_MODES_REQUIREMENTS.md` (REQ-PEM-000–012), Pipeline-Innate Requirements (REQ-CDP-OBS-001–007), ContextCore EXPORT stage
-**Source:** Run-068/069 Java adservice analysis — observability stubs present but unimplemented; pipeline already produces all context needed to implement them
+**Source:** Run-068/069 Java adservice analysis — observability stubs present but unimplemented; pipeline already produces all context needed to implement them. Run-079/084/094 execution analysis — separate workflow had 0% completion rate due to API mismatch, LLM overwrite of uncomment tasks, and first-failure abort.
 **Scope:** Cross-system — ContextCore (Stages 0–4) and StartD8 SDK (Stages 5–6)
 
 ---
@@ -276,184 +277,174 @@ The TODO inventory MUST be persisted as a pipeline artifact.
 
 ---
 
-### Layer 2: Instrumentation Task Planning (REQ-TCW-200–203)
+### Layer 2: Seed Injection (REQ-TCW-200–203)
 
-#### REQ-TCW-200: Completion Plan Generation
+TODO tasks are injected directly into the primary Prime Contractor seed. There is no separate workflow or second PrimeContractorWorkflow instance.
+
+#### REQ-TCW-200: TODO Task Derivation into Primary Seed
 
 **Priority:** P1
-**Status:** Implemented (2026-03-18) — `src/startd8/seeds/todo_derivation.py` (232 lines)
+**Status:** Partially implemented — `derive_tasks_from_todos()` exists but writes a separate seed
 **Depends on:** REQ-TCW-101 (implemented), REQ-TCW-102 (implemented), REQ-TCW-003 (implemented)
+**Supersedes:** v2 REQ-TCW-200 (separate completion plan generation)
 
-For each Category A and Category B TODO, the workflow MUST generate a completion plan consumable by the Prime Contractor.
+For each Category A and Category B TODO, the pipeline MUST derive seed tasks and append them to the primary `prime-context-seed.json`.
 
 **Acceptance criteria:**
-1. Category A TODOs produce `uncomment` tasks: target file, line range of commented-out block, validation method (syntax check, build check)
-2. Category B TODOs produce `implement` tasks: target file, method signature, behavioral specification derived from the `instrumentation_contract`, required dependency additions
-3. Dependency-addition tasks are generated before implementation tasks (e.g., add OTel SDK to `build.gradle` before implementing `initStats()`)
-4. Tasks are dependency-ordered: dependencies → implementations → configuration changes
-5. Plan is written as a standard Prime Contractor seed JSON, compatible with `run-prime-contractor.sh`
-6. Each task carries its `instrumentation_contract` context in `gen_context` — the LLM receives the exact metrics, traces, and SDK packages it must use
+1. Category A TODOs produce tasks with `task_type: "uncomment"` and `mode: "edit"`. The task's `config.context` includes `todo_line`, `language`, `context_lines`, and `comment_block` (structured line range + content)
+2. Category B TODOs produce tasks with `task_type: "implement"` and `mode: "edit"`. No per-task `instrumentation_contract` duplication — the contract is already loaded globally by `load_seed_context()` and injected by `_thread_supplemental_context()`
+3. Dependency-addition tasks have `task_type: "dependency"` and `mode: "edit"`
+4. Tasks are dependency-ordered: dependencies → uncomment → implement
+5. Tasks are appended to the existing seed's `tasks` array (not a separate file), with `TODO-` prefix IDs to distinguish them from structural tasks
+6. C+S TODOs (security-sensitive, insufficient context) are excluded and logged for human review
 
-#### REQ-TCW-201: Context Composition for Category B
+#### REQ-TCW-201: Queue Metadata Threading
 
 **Priority:** P1
-**Status:** Implemented (2026-03-18) — `derive_tasks_from_todos()` in `todo_derivation.py`
-**Depends on:** REQ-TCW-200 (implemented)
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-201 (per-task context composition)
 
-Category B task specs MUST compose context from the instrumentation contract and pipeline sources.
+The `FeatureQueue.add_features_from_seed()` MUST preserve `task_type` through the queue boundary so `develop_feature()` can dispatch on it.
 
 **Acceptance criteria:**
-1. **Metrics tasks** (`initStats`-like): spec includes the exact metric names, types, labels from `instrumentation_contract.metrics.required`; the SDK package coordinates from `metrics.sdk`; the OTLP exporter endpoint from `spec.observability`; and the metrics interval from the manifest
-2. **Tracing tasks** (`initTracing`-like): spec includes the span name patterns, required attributes, propagation format from `instrumentation_contract.traces.required`; the SDK and interceptor packages from `traces.sdk`; the exporter endpoint
-3. **Logging tasks** (if applicable): spec includes the trace context field names from `instrumentation_contract.logging.trace_context_fields` that must be populated when the tracing SDK is active
-4. **Server wiring**: spec includes guidance on where to attach interceptors — derived from the existing server initialization code in the generated file (e.g., `ServerBuilder.forPort(port).addService(...)` → add `.intercept(...)` for OTel gRPC interceptor)
-5. All context is assembled into the task's `gen_context` dict following standard Prime Contractor structure
+1. `task_type` from the seed task is stored in `FeatureSpec.metadata["task_type"]`
+2. For `task_type: "uncomment"`, the full `config.context` (including `comment_block`, `todo_line`, `language`) is preserved in `FeatureSpec.metadata`
+3. No changes to the `FeatureSpec` dataclass — all TODO-specific data flows through the existing `metadata: Dict[str, Any]` field
 
 #### REQ-TCW-202: Dependency Task Generation
 
 **Priority:** P1
 **Status:** Implemented (2026-03-18) — dependency tasks in `derive_tasks_from_todos()`
-**Depends on:** REQ-TCW-200 (implemented)
 
-When a TODO implementation requires new dependencies, the plan MUST include a dependency-addition task.
+When a TODO implementation requires new dependencies, the seed MUST include a dependency-addition task. (Unchanged from v2 — dependency tasks are regular edit-mode tasks.)
 
 **Acceptance criteria:**
 1. Dependencies are sourced from `instrumentation_contract.dependencies.add`
-2. For Java/Gradle: generates a task to add dependencies to `build.gradle` using the existing `${grpcVersion}` variable pattern where applicable
-3. For Go: generates a task to add dependencies to `go.mod`
-4. For Node.js: generates a task to add dependencies to `package.json`
-5. For Python: generates a task to add dependencies to `requirements.txt` or `pyproject.toml`
-6. Dependency tasks are edit-mode (modify existing file, not replace)
-7. Version resolution: `"latest_stable"` in the contract is resolved to a specific version at plan time using the language profile's version resolution capability, or left as a range for the LLM to resolve
+2. Language-appropriate build file targeting (build.gradle, go.mod, package.json, requirements.txt)
+3. Dependency tasks are edit-mode and ordered before the implementation tasks that need them
 
-#### REQ-TCW-203: Plan Validation
+#### REQ-TCW-203: Scan Trigger Point
 
-**Priority:** P2
-**Status:** Implemented (2026-03-18) — max_tasks bound + dependency ordering in workflow
-**Depends on:** REQ-TCW-200 (implemented)
+**Priority:** P1
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-203 (plan validation)
 
-The generated completion plan MUST be validated before execution.
+The TODO scan + derivation MUST run after pass-one generation completes and before postmortem.
 
 **Acceptance criteria:**
-1. All target files referenced in the plan exist on disk
-2. All dependency tasks precede their dependent implementation tasks in the queue
-3. No task targets a file that is also targeted by another task in the same plan (conflict detection) — except dependency + implementation pairs targeting the same build file, which are allowed in order
-4. The instrumentation contract checksum matches the one recorded in the TODO inventory (no stale contract)
-5. Plan size is bounded: if the plan exceeds a configurable task limit (default: 20), it is split into prioritized batches with Category A tasks first
+1. After `PrimeContractorWorkflow.run()` completes its primary task queue, the workflow calls `scan_directory()` on the `generated/` output
+2. If TODOs are found, `derive_tasks_from_todos()` produces tasks that are added to the queue via `add_features_from_seed()`
+3. The workflow then processes the TODO tasks through the same `develop_feature()` dispatch loop
+4. If no TODOs are found, no additional tasks are created (graceful no-op)
+5. The TODO inventory is persisted to `{output_dir}/instrumentation/todo-inventory.json` regardless of whether tasks were derived
+6. Max task limit (default: 20) applies — excess TODO tasks are logged and deferred
 
 ---
 
-### Layer 3: Execution (REQ-TCW-300–303)
+### Layer 3: Execution via Prime Contractor Dispatch (REQ-TCW-300–303)
 
-#### REQ-TCW-300: Execution via Prime Contractor
+TODO tasks execute through the existing `develop_feature()` 9-phase pipeline. Category A tasks use a zero-cost shortcut modeled on `_try_copy_shortcut()`. Category B tasks use the normal complexity-routed LLM generation path. No separate workflow class or execution method.
 
-**Priority:** P1
-**Status:** Implemented (2026-03-18) — `_execute_plan()` in `todo_completion_workflow.py`
-**Depends on:** REQ-TCW-200 (implemented)
-
-TODO completion tasks MUST be executed using the standard Prime Contractor workflow.
-
-**Acceptance criteria:**
-1. The completion plan seed is passed to `PrimeContractorWorkflow` via the same entry point as any other prime run
-2. All tasks run in edit mode — the target files already exist from pass one
-3. The run is tagged with `source: "instrumentation"` and `parent_run_id: "{pass_one_run_id}"` for traceability
-4. Postmortem evaluation runs on the completion results using the standard Kaizen pipeline
-
-#### REQ-TCW-301: Category A Execution (Uncomment)
+#### REQ-TCW-300: Uncomment Shortcut in develop_feature()
 
 **Priority:** P1
-**Status:** Implemented (2026-03-18) — uncomment tasks via Prime Contractor edit mode
-**Depends on:** REQ-TCW-300 (implemented)
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-300 (separate `_execute_plan()`), v2 REQ-TCW-301 (uncomment via LLM)
 
-Category A tasks MUST uncomment the specified block and validate the result.
+Category A tasks MUST be handled by a deterministic shortcut in `develop_feature()`, bypassing LLM generation entirely.
 
 **Acceptance criteria:**
-1. The task's spec prompt identifies the exact line range to uncomment
-2. The drafter produces the uncommented version of the block
-3. Post-generation validation: language-appropriate syntax check on the modified file
-4. If uncommenting introduces a dependency not present in the build file, a warning is emitted and the dependency task (REQ-TCW-202) must have already run
+1. A new Phase 0.5 `_try_uncomment_shortcut(feature)` runs between Phase 0 (copy shortcut) and Phase 1 (preflight) in `develop_feature()`
+2. It checks `feature.metadata.get("task_type") == "uncomment"` — returns `None` (not applicable) for all other tasks
+3. When matched, it reads the target file, calls `uncomment_block()` from `todo_scanner.py`, writes the result, marks the feature as `GENERATED`, and returns `True`
+4. Cost is $0.00 — no LLM calls, no spec/draft/review cycle
+5. On failure (file not found, write error), it marks the feature as failed and returns `False` — same error contract as `_try_copy_shortcut()`
+6. Per-task error isolation: a failed uncomment does NOT block independent subsequent tasks (existing Prime Contractor behavior)
+7. The existing `TodoUncommentStep` in the repair pipeline remains as a fallback for LLM-generated code that contains commented-out blocks (different use case — repair runs on LLM output, this shortcut runs instead of LLM)
 
-#### REQ-TCW-302: Category B Execution (Implement from Contract)
+#### REQ-TCW-301: Category B via Normal Generation Path
 
 **Priority:** P1
-**Status:** Implemented (2026-03-18) — implement tasks with contract context via Prime Contractor
-**Depends on:** REQ-TCW-300 (implemented), REQ-TCW-201 (implemented)
+**Status:** Partially implemented — instrumentation contract injection exists, task_type threading does not
+**Supersedes:** v2 REQ-TCW-302 (separate Category B execution)
 
-Category B tasks MUST generate instrumentation code that satisfies the instrumentation contract.
+Category B tasks MUST execute through the standard `develop_feature()` path with instrumentation contract context.
 
 **Acceptance criteria:**
-1. The task's spec prompt includes: method signature, the specific `instrumentation_contract` entries to implement, SDK package coordinates, server wiring guidance
-2. The drafter generates the method body implementation
-3. The generated code replaces the TODO stub (empty method body → functional implementation)
-4. Post-generation validation: syntax check, import resolution, stub detection (the implemented method should have zero stubs remaining)
-5. **Contract validation (advisory):** if the generated code references metric names or span attributes, they SHOULD match the `instrumentation_contract` entries. Mismatches are logged as warnings, not failures (LLM output is not fully deterministic).
+1. Category B tasks pass through Phase 0 (copy shortcut → `None`), Phase 0.5 (uncomment shortcut → `None`, because `task_type != "uncomment"`), and proceed to Phase 1+ normally
+2. The instrumentation contract is already injected into `gen_context` by `_thread_supplemental_context()` at line 3534 — no additional wiring needed for the global contract
+3. Per-task contract fields from `config.context.contract_fields` are preserved in `FeatureSpec.metadata` and available to the generation context via `_build_generation_context()` which reads `feature.metadata`
+4. Complexity routing classifies these tasks based on their actual signals (estimated LOC, target file count, etc.) — no hardcoded tier override
+5. The repair pipeline (including `TodoUncommentStep`) runs on the LLM output as usual
 
-#### REQ-TCW-303: Separate Commit Identity
+#### REQ-TCW-302: Instrumentation Contract Global Injection
 
 **Priority:** P1
-**Status:** Implemented (2026-03-18) — output to `{output_dir}/instrumentation/`
-**Depends on:** REQ-TCW-300 (implemented)
+**Status:** Implemented (2026-03-18) — `load_seed_context()` line 1613 + `_thread_supplemental_context()` line 3534
 
-Instrumentation output MUST be committed separately from pass-one output.
+The Prime Contractor MUST load the instrumentation contract from the seed's onboarding metadata and inject it into every task's generation context.
 
 **Acceptance criteria:**
-1. Completion results are written to `{output_dir}/instrumentation/` (separate from `generated/`)
-2. If auto-commit is enabled, the commit message follows: `feat(instrumentation): implement observability for {service_name} from {pass_one_run_id}`
-3. The commit does not include any pass-one files that were not modified by the instrumentation workflow
-4. The TODO inventory is updated with `status: completed` for each successfully implemented TODO
+1. `load_seed_context()` reads `onboarding.instrumentation_hints`, normalizes via `normalize_instrumentation_data()`, stores as `self._instrumentation_contract`
+2. `_thread_supplemental_context()` injects `instrumentation_contract` into `gen_context` for every task (not just TODO tasks) — already implemented
+3. Per-task `config.context.instrumentation_contract` overrides take precedence (already handled by the `not in gen_context` guard)
+4. This means Category B TODO tasks automatically receive the full contract without any per-task assembly in `todo_derivation.py`
+
+#### REQ-TCW-303: Inventory Update on Completion
+
+**Priority:** P2
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-303 (separate commit identity)
+
+After TODO tasks execute, the TODO inventory MUST be updated with completion status.
+
+**Acceptance criteria:**
+1. After the TODO task batch completes, the workflow re-reads the inventory file and updates `status` for each entry: `completed` (task passed), `failed` (task failed), `deferred` (task not attempted due to max_tasks limit)
+2. Updated inventory is written back to `{output_dir}/instrumentation/todo-inventory.json`
+3. Separate commit identity is NOT required — TODO tasks produce output in the same `generated/` directory as structural tasks (they modify the same files)
 
 ---
 
-### Layer 4: Pipeline Integration (REQ-TCW-400–403)
+### Layer 4: Pipeline Integration (REQ-TCW-400–402)
 
-#### REQ-TCW-400: CLI Integration
-
-**Priority:** P2
-**Status:** Planned
-
-**Acceptance criteria:**
-1. `run-prime-contractor.sh --instrumentation --provenance {run-provenance.json}` triggers the workflow
-2. `--instrumentation --scan-only` produces the TODO inventory without executing (dry run)
-3. `--instrumentation --category A` limits to Category A only (conservative mode)
-4. `--instrumentation --category A,B` executes both categories (full mode, default)
-
-#### REQ-TCW-401: Pipeline Stage Integration
+#### REQ-TCW-400: Opt-In Activation
 
 **Priority:** P2
-**Status:** Planned
+**Status:** Not implemented
 
 **Acceptance criteria:**
-1. Opt-in via `pipeline.env`: `ENABLE_INSTRUMENTATION=true`
-2. When enabled, runs automatically after the primary Prime Contractor stage completes with `verdict: PASS`
-3. Does not run if the primary stage fails
-4. Stage produces its own provenance entry in the run chain
+1. `PrimeContractorWorkflow` accepts a `enable_todo_completion: bool` config flag (default: `False`)
+2. When enabled, the post-generation TODO scan + task injection runs automatically
+3. The flag is surfaced in `pipeline.env` as `ENABLE_TODO_COMPLETION=true` and in CLI as `--todo-completion`
+4. `--todo-completion --scan-only` produces the inventory without executing tasks (dry run mode)
 
-#### REQ-TCW-402: Kaizen Integration
+#### REQ-TCW-401: Kaizen Integration
 
 **Priority:** P2
-**Status:** Planned
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-402
 
 **Acceptance criteria:**
-1. `kaizen-metrics.json` includes: `todo_count`, `todo_completed`, `todo_deferred`, `todo_completion_rate`, `instrumentation_coverage` (percentage of `instrumentation_contract` entries satisfied by generated code)
-2. Cross-run trends track instrumentation coverage alongside success rate and cost
-3. Instrumentation contract satisfaction becomes a Kaizen quality dimension
+1. `kaizen-metrics.json` includes: `todo_count`, `todo_completed`, `todo_deferred`, `todo_completion_rate`
+2. If instrumentation contract is present: `instrumentation_coverage` (percentage of contract entries satisfied by generated code, computed by `instrumentation_coverage.py`)
+3. Cross-run trends track `todo_completion_rate` alongside success rate and cost
 
-#### REQ-TCW-403: Closed-Loop Validation (Future)
+#### REQ-TCW-402: Closed-Loop Validation (Future)
 
 **Priority:** P3
-**Status:** Planned
+**Status:** Not implemented
+**Supersedes:** v2 REQ-TCW-403
 
 The pipeline SHOULD validate that generated instrumentation satisfies the external observability contracts.
 
 **Acceptance criteria:**
 1. For each `metrics.required` entry in the instrumentation contract, verify that the generated code contains a reference to that metric name (grep-level validation)
-2. For each dashboard panel PromQL query, verify that every metric name referenced in the query appears in either `metrics.required` or the generated code
-3. Mismatches are reported as `instrumentation_gaps` in the postmortem — the dashboard expects a metric that the service doesn't emit
-4. This enables a future quality loop: if the dashboard evolves (new panels), the instrumentation contract updates, and the next generation pass fills the new gaps
+2. Mismatches are reported as `instrumentation_gaps` in the postmortem
+3. This enables a future quality loop: dashboard evolves → contract updates → next generation fills gaps
 
 ---
 
-## Data Flow
+## Data Flow (v3 — Single-Pass Integration)
 
 ```
 ContextCore                              StartD8 SDK
@@ -461,68 +452,55 @@ ContextCore                              StartD8 SDK
 
 Stage 0: CREATE
   .contextcore.yaml
-  ├── spec.observability.metricsInterval
-  ├── spec.observability.alertChannels
-  ├── spec.requirements.availability
-  └── spec.targets[].services
+  └── spec.observability + spec.targets
           │
           ▼
 Stage 4: EXPORT
   onboarding-metadata.json
-  ├── semantic_conventions.metrics     ──┐
-  ├── derivation_rules                   ├──→ NEW: instrumentation_contracts
-  ├── service_metadata.transport         │    ├── metrics.required (from dashboards)
-  ├── dashboard artifact spec      ──────┤    ├── traces.required (from comm graph)
-  ├── alerting rule artifact spec  ──────┘    ├── dependencies.add (from lang profile)
-  └── service_communication_graph             └── logging.trace_context_fields
-          │
-          ════════════════════════════════════════════
-          │
-          ▼
-Stage 5: PLAN-INGESTION
-  prime-context-seed.json
-  ├── Tier 1 tasks (structural — from plan)
-  │   ├── PI-001: AdService.java (with TODO stubs)
-  │   ├── PI-002: AdServiceClient.java
-  │   └── PI-003–007: configs, Dockerfile
-  └── instrumentation_contracts (forwarded from export)
+  ├── instrumentation_hints ──────────────────────────────┐
+  ├── dashboard/alerting artifact specs                   │
+  └── service_communication_graph                         │
+          │                                               │
+          ════════════════════════════════════════════     │
+          │                                               │
+          ▼                                               │
+Stage 5: PLAN-INGESTION                                   │
+  prime-context-seed.json                                 │
+  ├── PI-001–007: structural tasks                        │
+  └── onboarding.instrumentation_hints ───────────────────┘
           │
           ▼
-Stage 6: CONTRACTOR (Pass One)
-  generated/
-  ├── AdService.java ──→ initStats() empty, initTracing() empty
-  ├── build.gradle ──→ profiler commented out
-  └── Dockerfile ──→ profiler download commented out
+Stage 6: CONTRACTOR — Primary Queue
+  PrimeContractorWorkflow.run()
+  ├── load_seed_context() ──→ self._instrumentation_contract
+  ├── develop_feature(PI-001) ... develop_feature(PI-007)
+  │   └── _thread_supplemental_context() injects contract
+  │
+  ├── generated/
+  │   ├── AdService.java ──→ initStats() empty, initTracing() empty
+  │   ├── build.gradle ──→ profiler commented out
+  │   └── Dockerfile ──→ profiler download commented out
+  │
+  ├── ═══ POST-GENERATION TODO SCAN (REQ-TCW-203) ═══
+  │   scan_directory(generated/) → todo-inventory.json
+  │   derive_tasks_from_todos() → TODO-001–005 appended to queue
+  │
+  ├── develop_feature(TODO-001: uncomment profiler JVM)
+  │   └── Phase 0.5: _try_uncomment_shortcut() → $0.00
+  ├── develop_feature(TODO-002: uncomment profiler wget)
+  │   └── Phase 0.5: _try_uncomment_shortcut() → $0.00
+  ├── develop_feature(TODO-003: add OTel deps)
+  │   └── Phase 5+7: complexity router → LLM edit
+  ├── develop_feature(TODO-004: implement initStats)
+  │   └── Phase 5+7: complexity router → LLM edit (contract in gen_context)
+  └── develop_feature(TODO-005: implement initTracing)
+      └── Phase 5+7: complexity router → LLM edit (contract in gen_context)
           │
           ▼
-TODO Scanner (REQ-TCW-100)
-  todo-inventory.json
-  ├── TODO-1: initStats()      → Category B (contract: metrics.required)
-  ├── TODO-2: initTracing()    → Category B (contract: traces.required)
-  ├── TODO-3: profiler JVM     → Category A (uncomment)
-  └── TODO-4: profiler wget    → Category A (uncomment)
-          │
-          ▼
-Completion Plan (REQ-TCW-200)
-  instrumentation-seed.json
-  ├── Task 1: add OTel deps to build.gradle
-  ├── Task 2: uncomment profiler JVM flags
-  ├── Task 3: uncomment profiler download
-  ├── Task 4: implement initStats() ← contract: metrics.required
-  └── Task 5: implement initTracing() ← contract: traces.required
-          │
-          ▼
-Stage 6: CONTRACTOR (Instrumentation Pass)
-  instrumentation/
-  ├── build.gradle (OTel deps + profiler)
-  ├── Dockerfile (profiler download)
-  └── AdService.java (OTel MeterProvider + TracerProvider + gRPC interceptors)
-          │
-          ▼
-Postmortem + Closed-Loop Validation
-  ├── todo-inventory.json (status: completed)
-  ├── kaizen-metrics.json (instrumentation_coverage: 100%)
-  └── instrumentation_gaps: [] (dashboard metrics ⊆ emitted metrics)
+Postmortem (single run)
+  ├── todo-inventory.json (status: completed/failed)
+  ├── kaizen-metrics.json (todo_completion_rate, instrumentation_coverage)
+  └── prime-postmortem-report.json (includes TODO tasks in feature list)
 ```
 
 ---
@@ -533,11 +511,60 @@ When this is fully implemented, the pipeline guarantees:
 
 1. **If a service has an SLO, it has a dashboard.** (Already true — REQ-CDP-OBS-002)
 2. **If it has a dashboard, it has alerting rules.** (Already true — REQ-CDP-OBS-003)
-3. **If it has a dashboard, its code emits the metrics the dashboard queries.** (NEW — REQ-TCW-000 + REQ-TCW-302)
-4. **If it has RPCs, its code propagates trace context.** (NEW — REQ-TCW-001 + REQ-TCW-302)
+3. **If it has a dashboard, its code emits the metrics the dashboard queries.** (NEW — REQ-TCW-000 + REQ-TCW-301)
+4. **If it has RPCs, its code propagates trace context.** (NEW — REQ-TCW-001 + REQ-TCW-301)
 5. **If its logging config has trace fields, the tracing SDK populates them.** (NEW — REQ-TCW-001)
 
 This is the shift from intentional to deterministic. The human declares "this service has 99.9% availability SLO" in the manifest. Everything downstream — the dashboard, the alerts, the metrics emission, the trace propagation, the log correlation — is derived. The TODO stubs were always just a placeholder for this derivation chain. Now the chain is complete.
+
+---
+
+## v3 Architectural Rationale
+
+### Why v2 failed (runs 079, 084, 092–094)
+
+The v2 architecture ran TODO completion as a **separate workflow** (`TodoCompletionWorkflow`) that instantiated a **second `PrimeContractorWorkflow`** with its own queue, state file, and code generator. This produced three independent failure modes:
+
+1. **API mismatch (run-079):** `_execute_plan()` passed `agents` kwarg that `PrimeContractorWorkflow.run()` doesn't accept → `TypeError`, 0% execution
+2. **LLM overwrite (run-084):** Category A "uncomment" tasks were sent through the full LLM spec→draft→review cycle. The LLM rewrote the entire file instead of removing comment markers → `F821 Undefined name`, 0% pass rate
+3. **First-failure abort (run-084):** After TODO-001 failed, TODO-002 through TODO-008 stayed at `pending` — no per-task error isolation in the separate workflow's execution loop
+
+### Why v3 eliminates these failures
+
+1. **No second workflow instance.** TODO tasks are appended to the primary queue and processed by the same `PrimeContractorWorkflow.run()` loop that already handles structural tasks. No API mismatch possible.
+2. **Uncomment shortcut bypasses LLM.** Category A tasks hit `_try_uncomment_shortcut()` (Phase 0.5) which calls `uncomment_block()` deterministically — same pattern as `_try_copy_shortcut()`. The LLM never sees these tasks.
+3. **Per-task isolation is inherited.** `develop_feature()` already wraps each task in try/except with `queue.fail_feature()`. Failed TODOs don't block others.
+
+### What existing infrastructure is reused
+
+| Existing capability | Location | Reuse for TODO |
+|---|---|---|
+| `_try_copy_shortcut()` | `prime_contractor.py:3314` | Architectural pattern for `_try_uncomment_shortcut()` |
+| `_thread_supplemental_context()` | `prime_contractor.py:3534` | Already injects `instrumentation_contract` into gen_context |
+| `load_seed_context()` | `prime_contractor.py:1613` | Already loads `instrumentation_hints` from onboarding |
+| `TodoUncommentStep` | `repair/steps/todo_uncomment.py` | Repair fallback for LLM-generated commented-out code |
+| `uncomment_block()` | `validators/todo_scanner.py` | Core uncomment function, shared with shortcut |
+| `add_features_from_seed()` | `queue.py:228` | Queue boundary for injecting TODO tasks |
+| Per-task error isolation | `develop_feature()` try/except | Inherited — no custom error handling needed |
+| Complexity routing | `_route_complexity()` | Category B tasks routed by actual signals, not hardcoded |
+
+### What is deleted
+
+| File | Lines | Reason |
+|---|---|---|
+| `TodoCompletionWorkflow` class | 454 | Replaced by in-band dispatch in `develop_feature()` |
+| `_execute_plan()` method | 138 | No separate execution — Prime Contractor handles all tasks |
+| `scripts/run_todo_completion.py` | 249 | Replaced by `--todo-completion` flag on existing pipeline |
+| Separate `instrumentation-seed.json` | — | TODO tasks live in primary seed |
+
+### What is kept
+
+| File | Lines | Reason |
+|---|---|---|
+| `validators/todo_scanner.py` | 723 | Detection + classification engine — solid, well-tested |
+| `seeds/todo_derivation.py` | 322 | Task derivation — updated to append to existing seed |
+| `repair/steps/todo_uncomment.py` | 39 | Repair fallback (different use case from shortcut) |
+| `validators/instrumentation_coverage.py` | 234 | Kaizen metrics |
 
 ---
 
@@ -553,26 +580,24 @@ This is the shift from intentional to deterministic. The human declares "this se
 
 **Requirements:** REQ-TCW-100–103
 **Status:** Implemented 2026-03-18. `normalize_instrumentation_data()` bridges ContextCore hints → StartD8 contract schema.
-**Files:** `src/startd8/validators/todo_scanner.py` (603 lines, 30+ tests)
+**Files:** `src/startd8/validators/todo_scanner.py` (723 lines, 30+ tests)
 
-### Phase 3: Category A Completion (StartD8 SDK) — COMPLETE
+### Phase 3: Prime Contractor Integration (StartD8 SDK) — IN PROGRESS
 
-**Requirements:** REQ-TCW-200 (partial), REQ-TCW-300, REQ-TCW-301, REQ-TCW-303
-**Status:** Implemented 2026-03-18. Uncomment tasks generated and executable via Prime Contractor.
-**Files:** `src/startd8/seeds/todo_derivation.py`, `src/startd8/workflows/builtin/todo_completion_workflow.py`
+**Requirements:** REQ-TCW-200, REQ-TCW-201, REQ-TCW-300, REQ-TCW-301, REQ-TCW-303
+**Status:** Implementing. See plan: `docs/plans/todo-completion-v3-integration.md`
+**Scope:** Queue metadata threading, uncomment shortcut, post-generation scan trigger, inventory update
+**Files modified:**
+- `src/startd8/contractors/queue.py` — thread `task_type` into metadata
+- `src/startd8/contractors/prime_contractor.py` — `_try_uncomment_shortcut()`, post-generation scan hook
+- `src/startd8/seeds/todo_derivation.py` — updated to return tasks (not write separate seed)
 
-### Phase 4: Category B Completion (StartD8 SDK) — COMPLETE
+### Phase 4: Pipeline Integration + Kaizen (Both) — PLANNED
 
-**Requirements:** REQ-TCW-200 (full), REQ-TCW-201, REQ-TCW-202, REQ-TCW-302
-**Status:** Implemented 2026-03-18. Contract context composed into task specs for LLM generation.
-**Files:** `src/startd8/seeds/todo_derivation.py` (232 lines), `src/startd8/workflows/builtin/todo_completion_workflow.py` (277 lines)
-
-### Phase 5: Pipeline Integration + Closed-Loop (Both) — PLANNED
-
-**Requirements:** REQ-TCW-400–403
-**Status:** Not yet implemented. See implementation plan: `docs/plans/TODO_COMPLETION_PIPELINE_INTEGRATION_PLAN.md`
-**Scope:** CLI integration with `run-prime-contractor.sh`, auto-trigger after pass-one, Kaizen instrumentation coverage metrics, closed-loop contract validation
-**Prerequisite:** Phases 1–4 complete (satisfied)
+**Requirements:** REQ-TCW-400–402
+**Status:** Not yet implemented.
+**Scope:** Opt-in flag, Kaizen metrics emission, closed-loop validation
+**Prerequisite:** Phase 3 complete
 
 ---
 
@@ -584,4 +609,7 @@ This is the shift from intentional to deterministic. The human declares "this se
 | OTel SDK version drift — generated code may reference outdated SDK APIs | Medium | Low | Use `"latest_stable"` with language profile version resolution; advisory compilation where toolchain available |
 | Category B implementation quality — LLM may produce incorrect SDK initialization | Medium | High | Instrumentation contract provides exact specification; post-generation stub detection catches incomplete implementations; advisory syntax check |
 | Over-instrumentation — contract derives metrics the service doesn't meaningfully emit | Low | Low | Contract is derived from dashboards that humans designed; if the dashboard asks for it, the service should emit it |
-| Instrumentation contract staleness — export runs before code generation, contract may not reflect generated code structure | Low | Medium | Attachment points are computed after pass-one generation (REQ-TCW-101), not at export time (REQ-TCW-003 criterion 3) |
+| Queue ordering — TODO tasks appended after structural tasks may execute before their target files exist | Low | High | TODO scan runs after pass-one generation completes; target files verified before task creation (REQ-TCW-203 AC4) |
+| ~~Instrumentation contract staleness~~ | ~~Low~~ | ~~Medium~~ | ~~v2 risk~~ — eliminated in v3 because TODO scan runs after generation, not before; attachment points derived from actual generated files |
+| ~~API mismatch between workflows~~ | ~~High~~ | ~~Critical~~ | ~~v2 risk~~ — eliminated in v3 because there is only one PrimeContractorWorkflow instance |
+| ~~LLM overwrite of uncomment tasks~~ | ~~High~~ | ~~Critical~~ | ~~v2 risk~~ — eliminated in v3 because uncomment tasks bypass LLM entirely via Phase 0.5 shortcut |

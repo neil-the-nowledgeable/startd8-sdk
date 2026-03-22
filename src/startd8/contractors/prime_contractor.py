@@ -594,6 +594,13 @@ class PrimeContractorWorkflow:
         self._resume_mode: Optional[str] = None
         if resume:
             self._load_state_if_resuming(cli_mode=cli_mode, force_mode=force_mode)
+        # REQ-TCW-400: TODO completion — off by default, enabled via enable_todo_completion()
+        self._enable_todo_completion: bool = False
+
+    def enable_todo_completion(self) -> None:
+        """Enable post-generation TODO scan and task injection (REQ-TCW-400)."""
+        self._enable_todo_completion = True
+        logger.info("TODO completion enabled — will scan generated output for TODOs")
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -3188,6 +3195,11 @@ class PrimeContractorWorkflow:
         if copy_result is not None:
             return copy_result
 
+        # Phase 0.5: Uncomment shortcut (REQ-TCW-300)
+        uncomment_result = self._try_uncomment_shortcut(feature)
+        if uncomment_result is not None:
+            return uncomment_result
+
         if self.dry_run:
             logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
             simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
@@ -3367,6 +3379,186 @@ class PrimeContractorWorkflow:
                 return False
         # REQ-MP-1003: Detect copy-and-modify tasks — inject predecessor as reference.
         self._inject_copy_and_modify_context(feature)
+        return None
+
+    def _try_uncomment_shortcut(self, feature: FeatureSpec) -> Optional[bool]:
+        """Phase 0.5: Deterministic uncomment for Category A TODO tasks (REQ-TCW-300).
+
+        Returns True (success), False (failure), or None (not an uncomment task).
+        Follows the same contract as ``_try_copy_shortcut``.
+        """
+        if feature.metadata.get("task_type") != "uncomment":
+            return None
+
+        from startd8.validators.todo_scanner import uncomment_block, _detect_language
+
+        target_files = feature.target_files or []
+        if not target_files:
+            logger.warning("Uncomment task '%s' has no target files", feature.name)
+            self.queue.fail_feature(feature.id, "No target files for uncomment")
+            return False
+
+        try:
+            modified_files: list[str] = []
+            for tf in target_files:
+                file_path = Path(tf)
+                if not file_path.is_absolute():
+                    file_path = self.project_root / tf
+                if not file_path.is_file():
+                    logger.warning("Uncomment target not found: %s", file_path)
+                    continue
+
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                language = _detect_language(str(file_path))
+                result, count = uncomment_block(content, language=language)
+                if count > 0:
+                    file_path.write_text(result, encoding="utf-8")
+                    modified_files.append(str(file_path))
+                    logger.info(
+                        "Uncommented %d block(s) in %s (cost=$0.00)",
+                        count, file_path,
+                    )
+
+            if not modified_files:
+                logger.info(
+                    "Uncomment shortcut for '%s': no commented-out blocks found in %d file(s)",
+                    feature.name, len(target_files),
+                )
+            feature.generated_files = modified_files if modified_files else [str(f) for f in target_files]
+            feature.status = FeatureStatus.GENERATED
+            self._save_queue_state_with_mode()
+            logger.info(
+                "Uncomment shortcut completed for '%s': %d file(s) modified, cost=$0.00",
+                feature.name, len(modified_files),
+            )
+            return True
+
+        except (OSError, ValueError) as exc:
+            logger.error(
+                "Uncomment failed for '%s': %s", feature.name, exc,
+                exc_info=True,
+            )
+            self.queue.fail_feature(feature.id, f"Uncomment failed: {exc}")
+            return False
+
+    def _run_todo_scan_and_inject(
+        self,
+        max_cost_usd: Optional[float] = None,
+    ) -> tuple[int, int]:
+        """Scan generated output for TODOs, derive tasks, inject and execute (REQ-TCW-203).
+
+        Returns:
+            (succeeded, failed) counts for the injected TODO tasks.
+        """
+        generated_dir = self._resolve_generated_dir()
+        if not generated_dir or not generated_dir.is_dir():
+            return 0, 0
+
+        try:
+            from startd8.validators.todo_scanner import scan_directory
+            from startd8.seeds.todo_derivation import derive_tasks_from_todos
+
+            inventory = scan_directory(
+                str(generated_dir),
+                instrumentation_contract=self._instrumentation_contract,
+            )
+
+            # Filter to actionable categories
+            inventory.entries = [
+                e for e in inventory.entries if e.category in {"A", "B"}
+            ]
+            inventory.compute_summary()
+
+            # Persist inventory regardless of whether tasks are derived
+            instr_dir = self._resolve_output_dir() / "instrumentation"
+            instr_dir.mkdir(parents=True, exist_ok=True)
+            inventory.save(instr_dir / "todo-inventory.json")
+
+            if not inventory.entries:
+                logger.info("TODO scan: no actionable TODOs in %s", generated_dir)
+                return 0, 0
+
+            logger.info(
+                "TODO scan: %d entries (A=%d, B=%d)",
+                inventory.summary.get("total", 0),
+                inventory.summary.get("A", 0),
+                inventory.summary.get("B", 0),
+            )
+
+            tasks = derive_tasks_from_todos(
+                inventory,
+                instrumentation_contract=self._instrumentation_contract,
+                source_run_id=getattr(self, "_run_id", ""),
+            )
+
+            if not tasks:
+                return 0, 0
+
+            # Enforce max limit
+            max_todo_tasks = 20
+            if len(tasks) > max_todo_tasks:
+                logger.warning(
+                    "TODO scan produced %d tasks, limiting to %d",
+                    len(tasks), max_todo_tasks,
+                )
+                tasks = tasks[:max_todo_tasks]
+
+            # Write seed and inject into queue
+            seed = {"schema_version": "1.0.0", "source": "todo-scan", "tasks": tasks}
+            seed_path = instr_dir / "instrumentation-seed.json"
+            seed_path.write_text(
+                json.dumps(seed, indent=2, default=str), encoding="utf-8",
+            )
+
+            added = self.queue.add_features_from_seed(str(seed_path))
+            logger.info("Injected %d TODO tasks into queue", len(added))
+
+            # Process the injected tasks
+            succeeded = 0
+            failed = 0
+            for spec in added:
+                if max_cost_usd is not None and self.total_cost_usd >= max_cost_usd:
+                    logger.warning("Cost limit reached during TODO processing")
+                    break
+                feature = self.queue.get_feature(spec.id)
+                if feature is None:
+                    continue
+                reset_circuit_breaker()
+                if self.process_feature(feature):
+                    succeeded += 1
+                else:
+                    failed += 1
+                    self.integration_history.append({
+                        "feature_name": feature.name,
+                        "feature_id": feature.id,
+                        "success": False,
+                        "cost_usd": getattr(feature, "_cost_usd", 0.0),
+                        "error": feature.error_message,
+                        "generation_metadata": (feature.metadata or {}).get(
+                            "_generation_result_metadata", {},
+                        ),
+                        "timestamp": datetime.now().isoformat(),
+                    })
+
+            self._save_queue_state_with_mode()
+            logger.info(
+                "TODO completion: %d/%d succeeded",
+                succeeded, succeeded + failed,
+            )
+            return succeeded, failed
+
+        except Exception as exc:
+            logger.error("TODO scan failed (non-fatal): %s", exc, exc_info=True)
+            return 0, 0
+
+    def _resolve_generated_dir(self) -> Optional[Path]:
+        """Resolve the generated output directory."""
+        try:
+            generated = self._resolve_output_dir() / "generated"
+            if generated.is_dir():
+                return generated
+        except (OSError, AttributeError):
+            pass
         return None
 
     def _log_element_registry_availability(self, feature: FeatureSpec) -> None:
@@ -4303,6 +4495,15 @@ class PrimeContractorWorkflow:
                     break
         # Save final state with execution_mode
         self._save_queue_state_with_mode()
+
+        # REQ-TCW-203: Post-generation TODO scan + task injection
+        if self._enable_todo_completion and not self.dry_run:
+            todo_succeeded, todo_failed = self._run_todo_scan_and_inject(
+                max_cost_usd=max_cost_usd,
+            )
+            features_processed += todo_succeeded + todo_failed
+            features_succeeded += todo_succeeded
+            features_failed += todo_failed
 
         logger.info(
             'WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out',

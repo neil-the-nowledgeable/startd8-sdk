@@ -255,9 +255,12 @@ class TestTodoCompletionWorkflow:
 
 
 # ---------------------------------------------------------------------------
-# Test: _execute_plan error isolation (REQ-TCW-307)
+# Test: _execute_plan error isolation (REQ-TCW-307) — DEPRECATED
+# v3 moved execution to PrimeContractorWorkflow._try_uncomment_shortcut()
+# See tests/unit/contractors/test_todo_v3_integration.py
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason="v3: _execute_plan removed — see test_todo_v3_integration.py")
 class TestExecutePlanErrorIsolation:
     """REQ-TCW-307: per-task error isolation."""
 
@@ -327,9 +330,12 @@ class TestExecutePlanErrorIsolation:
 
 
 # ---------------------------------------------------------------------------
-# Test: task-type dispatch (REQ-TCW-305)
+# Test: task-type dispatch (REQ-TCW-305) — DEPRECATED
+# v3 moved dispatch to PrimeContractorWorkflow._try_uncomment_shortcut()
+# See tests/unit/contractors/test_todo_v3_integration.py
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skip(reason="v3: _execute_plan removed — see test_todo_v3_integration.py")
 class TestTaskTypeDispatch:
     """REQ-TCW-305: uncomment tasks use deterministic path."""
 

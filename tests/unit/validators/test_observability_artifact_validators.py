@@ -1,4 +1,4 @@
-"""Tests for observability artifact validators (REQ-KZ-OBS-100–102)."""
+"""Tests for observability artifact validators (REQ-KZ-OBS-100–403)."""
 
 import textwrap
 
@@ -6,8 +6,14 @@ import pytest
 
 from startd8.validators.observability_artifact_validators import (
     AlertValidationResult,
+    CrossArtifactResult,
     DashboardValidationResult,
+    ServiceArtifactScore,
     SloValidationResult,
+    check_cross_artifact_consistency,
+    check_metric_names,
+    score_artifact,
+    score_service_triplet,
     validate_alert_rules,
     validate_dashboard_spec,
     validate_slo_definition,
@@ -328,3 +334,144 @@ class TestRunArtifactValidation:
         r = validate_slo_definition(content, service_id="cartservice")
         assert r.yaml_valid
         assert r.has_indicator
+
+
+# ---------------------------------------------------------------------------
+# Metric Name Validity (REQ-KZ-OBS-203)
+# ---------------------------------------------------------------------------
+
+class TestMetricNameChecks:
+
+    def test_valid_grpc_metric(self):
+        expr = 'histogram_quantile(0.99, rate(rpc_server_duration_bucket{service="x"}[5m]))'
+        issues = check_metric_names(expr, transport="grpc")
+        assert len(issues) == 0
+
+    def test_transport_mismatch_grpc_gets_http(self):
+        expr = 'rate(http_server_duration_bucket{service="x"}[5m])'
+        issues = check_metric_names(expr, transport="grpc")
+        assert any(i["check"] == "OBS-203b" for i in issues)
+
+    def test_transport_mismatch_http_gets_grpc(self):
+        expr = 'rate(rpc_server_duration_bucket{service="x"}[5m])'
+        issues = check_metric_names(expr, transport="http")
+        assert any(i["check"] == "OBS-203b" for i in issues)
+
+    def test_histogram_quantile_without_bucket(self):
+        expr = 'histogram_quantile(0.99, rate(rpc_server_duration_count{service="x"}[5m]))'
+        issues = check_metric_names(expr, transport="grpc")
+        assert any(i["check"] == "OBS-203c" for i in issues)
+
+    def test_no_transport_skips_alignment(self):
+        expr = 'rate(rpc_server_duration_bucket{service="x"}[5m])'
+        issues = check_metric_names(expr)
+        assert len(issues) == 0
+
+
+# ---------------------------------------------------------------------------
+# Quality Scoring (REQ-KZ-OBS-300–303)
+# ---------------------------------------------------------------------------
+
+class TestQualityScoring:
+
+    def test_score_valid_dashboard(self):
+        r = validate_dashboard_spec(VALID_DASHBOARD)
+        score = score_artifact(r)
+        assert 0.7 <= score <= 1.0  # gridPos warning reduces from perfect
+
+    def test_score_invalid_yaml(self):
+        r = validate_dashboard_spec("{{bad")
+        assert score_artifact(r) == 0.0
+
+    def test_score_perfect_slo(self):
+        r = validate_slo_definition(VALID_SLO)
+        assert score_artifact(r) == 1.0
+
+    def test_service_triplet_composite(self):
+        d = validate_dashboard_spec(VALID_DASHBOARD)
+        a = validate_alert_rules(VALID_ALERT)
+        s = validate_slo_definition(VALID_SLO)
+        triplet = score_service_triplet(
+            dashboard=d, alert=a, slo=s, service_id="test",
+        )
+        assert triplet.has_dashboard
+        assert triplet.has_alert
+        assert triplet.has_slo
+        assert triplet.composite_score > 0.5
+
+    def test_missing_artifact_scores_zero(self):
+        a = validate_alert_rules(VALID_ALERT)
+        triplet = score_service_triplet(alert=a, service_id="test")
+        assert not triplet.has_dashboard
+        assert triplet.dashboard_score == 0.0
+        assert triplet.composite_score < triplet.alert_score
+
+
+# ---------------------------------------------------------------------------
+# Cross-Artifact Consistency (REQ-KZ-OBS-400–403)
+# ---------------------------------------------------------------------------
+
+class TestCrossArtifactConsistency:
+
+    def test_unvisualized_alert_metric(self):
+        dashboard = "panels:\n- expr: rate(rpc_server_duration_bucket[5m])\n"
+        alert = "expr: rate(rpc_server_errors_total[5m]) > 0.01\n"
+        r = check_cross_artifact_consistency(
+            dashboard_content=dashboard, alert_content=alert,
+        )
+        assert "rpc_server_errors_total" in r.unvisualized_alerts
+
+    def test_aligned_metrics_no_issues(self):
+        content = "expr: rate(rpc_server_duration_bucket[5m])\n"
+        r = check_cross_artifact_consistency(
+            dashboard_content=content, alert_content=content,
+        )
+        assert len(r.unvisualized_alerts) == 0
+
+    def test_unalerted_slo(self):
+        alert = "expr: rate(rpc_server_duration_bucket[5m]) > 0.5\n"
+        slo = "query: rate(rpc_server_errors_total[5m])\n"
+        r = check_cross_artifact_consistency(
+            alert_content=alert, slo_content=slo,
+        )
+        assert "rpc_server_errors_total" in r.unalerted_slos
+
+    def test_threshold_mismatch(self):
+        dashboard = "expr: histogram_quantile(0.99, rate(x[5m])) > 0.5\n"
+        slo = "threshold: 0.3\n"
+        r = check_cross_artifact_consistency(
+            dashboard_content=dashboard, slo_content=slo,
+        )
+        assert len(r.misaligned_thresholds) > 0
+
+    def test_threshold_alignment_no_issue(self):
+        dashboard = "expr: x > 0.5\n"
+        slo = "threshold: 0.5\n"
+        r = check_cross_artifact_consistency(
+            dashboard_content=dashboard, slo_content=slo,
+        )
+        assert len(r.misaligned_thresholds) == 0
+
+    def test_unused_derivation(self):
+        derivations = [{"field": "latency_p99", "transformation": "500ms"}]
+        r = check_cross_artifact_consistency(
+            dashboard_content="expr: up\n",
+            manifest_derivations=derivations,
+        )
+        assert "latency_p99" in r.unused_derivations
+
+    def test_consumed_derivation(self):
+        derivations = [{"field": "latency_p99", "transformation": "0.5"}]
+        r = check_cross_artifact_consistency(
+            dashboard_content="expr: x > 0.5\n",
+            manifest_derivations=derivations,
+        )
+        assert "latency_p99" not in r.unused_derivations
+
+    def test_total_issues_property(self):
+        r = CrossArtifactResult(
+            unvisualized_alerts=["a"],
+            unalerted_slos=["b", "c"],
+            unused_derivations=["d"],
+        )
+        assert r.total_issues == 4

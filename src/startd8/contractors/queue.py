@@ -317,6 +317,13 @@ class FeatureQueue:
                 meta["design_doc_sections"] = design_sections
             if estimated_loc is not None:
                 meta["estimated_loc"] = estimated_loc
+            # REQ-TCW-201: Preserve task_type for dispatch in develop_feature()
+            task_type = task.get("task_type")
+            if task_type:
+                meta["task_type"] = task_type
+                # For uncomment tasks, preserve full context for the shortcut
+                if task_type == "uncomment" and context:
+                    meta["_todo_context"] = context
             if meta:
                 spec.metadata.update(meta)
             added.append(spec)

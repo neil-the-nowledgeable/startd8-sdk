@@ -1,8 +1,9 @@
-"""Observability artifact validators (REQ-KZ-OBS-100–102).
+"""Observability artifact validators (REQ-KZ-OBS-100–403).
 
-Structural validation for generated dashboard specs, alert rules, and
-SLO definitions.  Each validator produces a typed result with per-check
-pass/fail, issue list, and summary counts.
+Layer 1 (100–102): Structural validation per artifact type.
+Layer 2 (203): Metric name semantic checks.
+Layer 3 (300–303): Quality scoring (v1 pass rate).
+Layer 4 (400–403): Cross-artifact consistency checks.
 
 No external tool dependency — all checks are YAML structural analysis.
 """
@@ -23,9 +24,15 @@ __all__ = [
     "DashboardValidationResult",
     "AlertValidationResult",
     "SloValidationResult",
+    "CrossArtifactResult",
+    "ServiceArtifactScore",
     "validate_dashboard_spec",
     "validate_alert_rules",
     "validate_slo_definition",
+    "check_metric_names",
+    "check_cross_artifact_consistency",
+    "score_artifact",
+    "score_service_triplet",
 ]
 
 
@@ -520,4 +527,240 @@ def validate_slo_definition(
 
     result.checks_passed = passed
     result.checks_total = total
+    return result
+
+
+# ---------------------------------------------------------------------------
+# REQ-KZ-OBS-203: Metric Name Validity Checks
+# ---------------------------------------------------------------------------
+
+_GRPC_METRIC_PREFIX = "rpc_server_"
+_HTTP_METRIC_PREFIX = "http_server_"
+
+
+def _extract_metric_names(expr: str) -> List[str]:
+    """Extract metric names from a PromQL expression."""
+    return re.findall(r"\b([a-z_][a-z0-9_]*(?:_bucket|_count|_total)?)\s*[{\[(]", expr)
+
+
+def check_metric_names(
+    expr: str,
+    *,
+    transport: str = "",
+) -> List[Dict[str, Any]]:
+    """Check metric names in a PromQL expression (REQ-KZ-OBS-203).
+
+    Args:
+        expr: PromQL expression string.
+        transport: Expected transport protocol ('grpc' or 'http').
+
+    Returns:
+        List of issues found.
+    """
+    issues: List[Dict[str, Any]] = []
+    metrics = _extract_metric_names(expr)
+
+    for metric in metrics:
+        # OBS-203a: dots instead of underscores
+        if "." in metric:
+            issues.append(_issue(
+                "OBS-203a", "warning",
+                f"Metric '{metric}' uses dots instead of underscores",
+            ))
+
+        # OBS-203b: Transport-metric alignment
+        if transport == "grpc" and metric.startswith(_HTTP_METRIC_PREFIX):
+            issues.append(_issue(
+                "OBS-203b", "error",
+                f"gRPC service uses HTTP metric '{metric}'",
+            ))
+        elif transport == "http" and metric.startswith(_GRPC_METRIC_PREFIX):
+            issues.append(_issue(
+                "OBS-203b", "error",
+                f"HTTP service uses gRPC metric '{metric}'",
+            ))
+
+    # OBS-203c: histogram_quantile must reference _bucket
+    if "histogram_quantile" in expr and "_bucket" not in expr:
+        issues.append(_issue(
+            "OBS-203c", "warning",
+            "histogram_quantile() should reference _bucket suffix metric",
+        ))
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# REQ-KZ-OBS-300–303: Quality Scoring (v1 — pass rate)
+# ---------------------------------------------------------------------------
+
+def score_artifact(
+    result: "DashboardValidationResult | AlertValidationResult | SloValidationResult",
+) -> float:
+    """Compute v1 quality score: checks_passed / checks_total.
+
+    Short-circuits to 0.0 if YAML parse failed.
+    """
+    if not result.yaml_valid:
+        return 0.0
+    if result.checks_total == 0:
+        return 0.0
+    return round(result.checks_passed / result.checks_total, 4)
+
+
+@dataclass
+class ServiceArtifactScore:
+    """Per-service composite score across the artifact triplet (REQ-KZ-OBS-303)."""
+
+    service_id: str = ""
+    dashboard_score: float = 0.0
+    alert_score: float = 0.0
+    slo_score: float = 0.0
+    composite_score: float = 0.0
+    has_dashboard: bool = False
+    has_alert: bool = False
+    has_slo: bool = False
+
+    def compute_composite(self) -> float:
+        """Weighted composite: dashboard 0.35 + alert 0.35 + slo 0.30."""
+        self.composite_score = round(
+            (self.dashboard_score * 0.35)
+            + (self.alert_score * 0.35)
+            + (self.slo_score * 0.30),
+            4,
+        )
+        return self.composite_score
+
+
+def score_service_triplet(
+    *,
+    dashboard: Optional[DashboardValidationResult] = None,
+    alert: Optional[AlertValidationResult] = None,
+    slo: Optional[SloValidationResult] = None,
+    service_id: str = "",
+) -> ServiceArtifactScore:
+    """Score a service's artifact triplet (REQ-KZ-OBS-303)."""
+    result = ServiceArtifactScore(service_id=service_id)
+
+    if dashboard is not None:
+        result.has_dashboard = True
+        result.dashboard_score = score_artifact(dashboard)
+
+    if alert is not None:
+        result.has_alert = True
+        result.alert_score = score_artifact(alert)
+
+    if slo is not None:
+        result.has_slo = True
+        result.slo_score = score_artifact(slo)
+
+    result.compute_composite()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# REQ-KZ-OBS-400–403: Cross-Artifact Consistency
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CrossArtifactResult:
+    """Cross-artifact consistency check results (REQ-KZ-OBS-400–403)."""
+
+    unvisualized_alerts: List[str] = field(default_factory=list)
+    unalerted_slos: List[str] = field(default_factory=list)
+    misaligned_thresholds: List[Dict[str, Any]] = field(default_factory=list)
+    unused_derivations: List[str] = field(default_factory=list)
+    issues: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def total_issues(self) -> int:
+        return (
+            len(self.unvisualized_alerts)
+            + len(self.unalerted_slos)
+            + len(self.misaligned_thresholds)
+            + len(self.unused_derivations)
+        )
+
+
+def _extract_metrics_from_yaml(content: str) -> set:
+    """Extract all metric base names referenced in YAML PromQL expressions."""
+    metrics: set = set()
+    for match in re.finditer(r"\b([a-z_][a-z0-9_]*(?:_bucket|_count|_total))\b", content):
+        metrics.add(match.group(1))
+    return metrics
+
+
+def check_cross_artifact_consistency(
+    *,
+    dashboard_content: str = "",
+    alert_content: str = "",
+    slo_content: str = "",
+    manifest_derivations: Optional[List[Dict[str, Any]]] = None,
+) -> CrossArtifactResult:
+    """Check consistency across dashboard, alert, and SLO artifacts.
+
+    Args:
+        dashboard_content: Raw YAML of dashboard spec.
+        alert_content: Raw YAML of alert rules.
+        slo_content: Raw YAML of SLO definition.
+        manifest_derivations: derivation_rules from observability-manifest.yaml.
+
+    Returns:
+        CrossArtifactResult with per-check issue lists.
+    """
+    result = CrossArtifactResult()
+    dashboard_metrics = _extract_metrics_from_yaml(dashboard_content) if dashboard_content else set()
+    alert_metrics = _extract_metrics_from_yaml(alert_content) if alert_content else set()
+    slo_metrics = _extract_metrics_from_yaml(slo_content) if slo_content else set()
+
+    # OBS-400: Dashboard ↔ Alert — alert metrics should be visualized
+    for metric in sorted(alert_metrics):
+        if metric not in dashboard_metrics and dashboard_content:
+            result.unvisualized_alerts.append(metric)
+            result.issues.append(_issue(
+                "OBS-400", "warning",
+                f"Alert metric '{metric}' not visualized in dashboard",
+            ))
+
+    # OBS-401: Alert ↔ SLO — SLO metrics should have alerts
+    for metric in sorted(slo_metrics):
+        if metric not in alert_metrics and alert_content:
+            result.unalerted_slos.append(metric)
+            result.issues.append(_issue(
+                "OBS-401", "warning",
+                f"SLO metric '{metric}' has no corresponding alert",
+            ))
+
+    # OBS-402: threshold alignment (dashboard vs SLO)
+    dashboard_thresholds = set(re.findall(r">\s*([\d.]+)", dashboard_content))
+    slo_thresholds = set(re.findall(r"threshold:\s*([\d.]+)", slo_content))
+    if dashboard_thresholds and slo_thresholds:
+        for dt in dashboard_thresholds:
+            for st in slo_thresholds:
+                try:
+                    d, s = float(dt), float(st)
+                    if d != s and 0.1 * s <= d <= 10 * s:
+                        result.misaligned_thresholds.append({
+                            "dashboard": d, "slo": s,
+                        })
+                        result.issues.append(_issue(
+                            "OBS-402", "warning",
+                            f"Dashboard threshold {d} != SLO threshold {s}",
+                        ))
+                except ValueError:
+                    pass
+
+    # OBS-403: derivation rule completeness
+    if manifest_derivations:
+        all_content = dashboard_content + alert_content + slo_content
+        for rule in manifest_derivations:
+            field_name = rule.get("field", "")
+            value = str(rule.get("transformation", ""))
+            if field_name and value and value not in all_content:
+                result.unused_derivations.append(field_name)
+                result.issues.append(_issue(
+                    "OBS-403", "info",
+                    f"Derivation '{field_name}={value}' not consumed by any artifact",
+                ))
+
     return result
