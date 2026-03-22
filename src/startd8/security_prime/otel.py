@@ -11,9 +11,11 @@ from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Lazy tracer/meter — initialized on first use to avoid import-time side effects
+# Lazy tracer/meter/instruments — initialized on first use to avoid import-time side effects
 _tracer: Optional[Any] = None
 _meter: Optional[Any] = None
+_score_histogram: Optional[Any] = None
+_verdict_counter: Optional[Any] = None
 
 
 def _get_tracer() -> Any:
@@ -79,22 +81,24 @@ def record_gate_result(
                         },
                     )
         except Exception as exc:
-            logger.debug("OTel span recording failed: %s", exc)
+            logger.warning("OTel span recording failed: %s", exc)
 
-    # Metrics (SP-OBS-003)
+    # Metrics (SP-OBS-003) — instruments cached as module singletons (R1)
+    global _score_histogram, _verdict_counter
     meter = _get_meter()
     if meter is not None:
         try:
-            score_histogram = meter.create_histogram(
-                "security_prime.score",
-                description="Security score per file",
-            )
-            score_histogram.record(score, {"database": database, "language": language})
-
-            verdict_counter = meter.create_counter(
-                "security_prime.gate_verdicts",
-                description="Gate verdict counts",
-            )
-            verdict_counter.add(1, {"verdict": verdict, "database": database})
+            if _score_histogram is None:
+                _score_histogram = meter.create_histogram(
+                    "security_prime.score",
+                    description="Security score per file",
+                )
+            if _verdict_counter is None:
+                _verdict_counter = meter.create_counter(
+                    "security_prime.gate_verdicts",
+                    description="Gate verdict counts",
+                )
+            _score_histogram.record(score, {"database": database, "language": language})
+            _verdict_counter.add(1, {"verdict": verdict, "database": database})
         except Exception as exc:
-            logger.debug("OTel metric recording failed: %s", exc)
+            logger.warning("OTel metric recording failed: %s", exc)

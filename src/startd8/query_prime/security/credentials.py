@@ -66,6 +66,9 @@ _EXCEPTION_INTERPOLATION = re.compile(
     r'(?:throw\s+new\s+\w*Exception|raise\s+\w*Error)\s*\([^)]*'
     r'\{(?:ex|exc|e|error|err)\}',
 )
+# Pre-compiled patterns for hot-loop use in Pass 2 (R2, R3)
+_THROW_RE = re.compile(r'throw\s+new\s+\w*Exception|raise\s+\w*Error')
+_EXC_INTERP_RE = re.compile(r'\{(?:ex|exc|e|error|err)\}')
 
 
 def detect_credential_leakage(
@@ -129,7 +132,7 @@ def detect_credential_leakage(
         stripped = line.strip()
 
         # Track multiline throw context (within 3 lines of throw/raise)
-        if re.search(r'throw\s+new\s+\w*Exception|raise\s+\w*Error', stripped):
+        if _THROW_RE.search(stripped):
             in_throw = True
             throw_start = line_no
 
@@ -137,7 +140,7 @@ def detect_credential_leakage(
             in_throw = False
 
         # Check for exception interpolation on this line or in throw context
-        has_exc_interp = re.search(r'\{(?:ex|exc|e|error|err)\}', stripped)
+        has_exc_interp = _EXC_INTERP_RE.search(stripped)
         if has_exc_interp and (in_throw or _EXCEPTION_INTERPOLATION.search(stripped)):
             pattern_hash = hashlib.sha256(
                 f"exc:{line_no}:{stripped}".encode()

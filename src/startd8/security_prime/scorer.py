@@ -26,6 +26,9 @@ _SEVERITY_PENALTY = {
 # Diminishing returns multiplier for additional findings beyond the worst
 _DIMINISHING_RATE = 0.3
 
+# Simple verdict → score mapping (SP-SCR-001)
+_VERDICT_SCORE = {"pass": 1.0, "warn": 0.7, "fail": 0.0}
+
 
 @dataclass
 class SecurityScoreResult:
@@ -62,7 +65,7 @@ def compute_security_score(
 
     # If no detailed severities, use simple mapping
     if not finding_severities:
-        return {"warn": 0.7, "fail": 0.0}.get(verdict_value, 0.5)
+        return _VERDICT_SCORE.get(verdict_value, 0.5)
 
     # Max-severity-weighted with diminishing returns
     penalties = [_SEVERITY_PENALTY.get(s, 0.05) for s in finding_severities]
