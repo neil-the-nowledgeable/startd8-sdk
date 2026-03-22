@@ -8,6 +8,7 @@ and context.
 import ast
 import json
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,8 @@ __all__ = [
     "extract_spec_constraints",
     "format_context_value",
     "extract_prompt_security_features",
+    "_sanitize_csharp_code_examples",
+    "_detect_sql_interpolation_in_examples",
 ]
 
 logger = get_logger(__name__)
@@ -605,6 +608,43 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
         if matched:
             return "\n".join(lines)
 
+    # REQ-PI-CS-201: detected_databases fallback with database-specific examples
+    detected_databases = context.get("detected_databases")
+    if detected_databases and isinstance(detected_databases, list):
+        db_lines: List[str] = [
+            "## Database Security Guidance (from detected databases)\n",
+            "Use ONLY parameterized queries. NEVER use string interpolation "
+            "(`$\"...\"`) or string concatenation to build SQL.\n",
+        ]
+        _DB_EXAMPLES: Dict[str, str] = {
+            "postgresql": (
+                "  - **PostgreSQL/AlloyDB (Npgsql)**: "
+                '`cmd.Parameters.AddWithValue("@id", id)`'
+            ),
+            "alloydb": (
+                "  - **AlloyDB (Npgsql)**: "
+                '`cmd.Parameters.AddWithValue("@id", id)`'
+            ),
+            "spanner": (
+                "  - **Cloud Spanner**: Use `SpannerParameterCollection` — "
+                '`new SpannerParameter("id", SpannerDbType.String, id)`'
+            ),
+            "sqlserver": (
+                "  - **SQL Server**: "
+                '`cmd.Parameters.AddWithValue("@id", id)`'
+            ),
+        }
+        added = False
+        for db in detected_databases:
+            db_lower = db.lower()
+            for key, example in _DB_EXAMPLES.items():
+                if key in db_lower:
+                    db_lines.append(example)
+                    added = True
+                    break
+        if added:
+            return "\n".join(db_lines)
+
     # Fallback: detect database surface from task description and target files
     # even without explicit security_contract (pre-generation Anzen gate).
     # Prevents design-doc-poisoned SQL patterns from reaching code generation.
@@ -686,6 +726,59 @@ def _build_anti_pattern_section(context: Dict[str, Any], task_description: str) 
         "  ```\n"
         "- Do NOT write `os.environ.get(\"KEY\")` as a bare statement.\n"
         "- Do NOT write `os.path.join(...)` or `os.path.exists(...)` without using the return value.\n"
+    )
+
+
+def _sanitize_csharp_code_examples(text: str) -> str:
+    """REQ-PI-CS-100: Transform Console.WriteLine → ILogger in C# code examples.
+
+    The LLM follows code examples more strongly than structural rules.
+    Transforming problematic patterns before the LLM sees them prevents
+    Console.WriteLine from propagating into generated code.
+    """
+    # Console.Error.WriteLine(...) → _logger.LogError(...)
+    text = re.sub(
+        r'Console\.Error\.WriteLine\s*\(([^)]*)\)',
+        r'_logger.LogError(\1)',
+        text,
+    )
+    # Console.WriteLine(...) → _logger.LogInformation(...)
+    text = re.sub(
+        r'Console\.WriteLine\s*\(([^)]*)\)',
+        r'_logger.LogInformation(\1)',
+        text,
+    )
+    return text
+
+
+def _detect_sql_interpolation_in_examples(text: str) -> str:
+    """REQ-PI-CS-200: Detect SQL string interpolation in design doc examples.
+
+    Scans for SQL keywords combined with C# string interpolation ($"...").
+    Returns a WARNING block to append to design_document, or empty string.
+    """
+    _SQL_KW = re.compile(
+        r'\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|MERGE)\b',
+        re.IGNORECASE,
+    )
+    # C# interpolated string: $"..."
+    _INTERPOLATION = re.compile(r'\$"[^"]*\{[^}]+\}[^"]*"')
+
+    flagged_lines: list[str] = []
+    for line in text.splitlines():
+        if _SQL_KW.search(line) and _INTERPOLATION.search(line):
+            flagged_lines.append(line.strip())
+
+    if not flagged_lines:
+        return ""
+
+    return (
+        "\n\n## ⚠ WARNING: SQL Injection Risk in Design Examples\n\n"
+        "The design document above contains string-interpolated SQL.\n"
+        "**DO NOT copy these patterns.** Use parameterized queries instead.\n\n"
+        "Flagged lines:\n"
+        + "\n".join(f"  - `{line}`" for line in flagged_lines[:5])
+        + "\n"
     )
 
 
@@ -839,6 +932,15 @@ def build_spec_prompt(
 
     # --- Design document forwarding (Mottainai Rule 2) ---
     design_document = context.pop("design_document", None) or ""
+
+    # --- REQ-PI-CS-100/200: C# design document sanitization ---
+    lang_profile = context.get("language_profile")
+    _lang_id = getattr(lang_profile, "language_id", "") if lang_profile else ""
+    if _lang_id == "csharp" and design_document:
+        design_document = _sanitize_csharp_code_examples(design_document)
+        sql_warning = _detect_sql_interpolation_in_examples(design_document)
+        if sql_warning:
+            design_document = design_document + sql_warning
 
     # --- FR-MPA-005: Pre-assembly scope narrowing ---
     # When element tiers are available, narrow the spec to unfilled elements only.

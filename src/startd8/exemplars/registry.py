@@ -64,14 +64,18 @@ class ExemplarRegistry:
         """
         exact = [
             e for e in self._exemplars
-            if e.fingerprint.matches_exact(fingerprint) and e.maturity >= 1
+            if e.fingerprint.matches_exact(fingerprint)
+            and e.maturity >= 1
+            and e.scores.semantic_error_count == 0
         ]
         if exact:
             return self._rank(exact)
 
         partial = [
             e for e in self._exemplars
-            if e.fingerprint.matches_partial(fingerprint) and e.maturity >= 1
+            if e.fingerprint.matches_partial(fingerprint)
+            and e.maturity >= 1
+            and e.scores.semantic_error_count == 0
         ]
         if partial:
             return self._rank(partial)

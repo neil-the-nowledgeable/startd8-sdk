@@ -104,6 +104,50 @@ class TestGetImportPreamble:
         assert "opentelemetry" in result.lower()
 
 
+class TestPreambleNote:
+    """REQ-PI-CS-101: preamble_note rendering in get_import_preamble."""
+
+    def test_preamble_note_rendered_after_imports(self):
+        """When a framework config has preamble_note, it appears in the output."""
+        from startd8.languages.csharp import CSharpLanguageProfile
+        profile = CSharpLanguageProfile()
+        frameworks = detect_frameworks(
+            dependencies=["Grpc.AspNetCore 2.76.0"],
+            language_profile=profile,
+        )
+        preamble = get_import_preamble(
+            frameworks,
+            dependencies=["Grpc.AspNetCore 2.76.0"],
+            language_profile=profile,
+        )
+        # preamble_note contains ILogger pattern
+        assert "ILogger<T>" in preamble or "ILogger<MyService>" in preamble
+
+    def test_no_preamble_note_no_extra_block(self):
+        """Python frameworks have no preamble_note — output stays unchanged."""
+        preamble = get_import_preamble(["flask"])
+        # Count code blocks — should be exactly 1 (the imports block)
+        assert preamble.count("```python") == 1
+        assert "ILogger" not in preamble
+
+    def test_aspnet_core_preamble_note(self):
+        """ASP.NET Core framework includes ILogger preamble_note."""
+        from startd8.languages.csharp import CSharpLanguageProfile
+        profile = CSharpLanguageProfile()
+        frameworks = detect_frameworks(
+            task_description="ASP.NET Core web API",
+            language_profile=profile,
+        )
+        assert "aspnet_core" in frameworks
+        preamble = get_import_preamble(
+            frameworks,
+            language_profile=profile,
+        )
+        assert "ILogger" in preamble
+        # Should have two csharp code blocks: imports + preamble_note
+        assert preamble.count("```csharp") >= 2
+
+
 class TestFrameworkImportsInSpecPrompt:
     def test_preamble_injected_into_spec(self):
         """Integration test: framework imports appear in assembled spec prompt."""

@@ -279,6 +279,48 @@ class TestProjectContextSection:
         assert "cartservice.services" in section
         assert "net10.0" in section
 
+    def test_contains_non_negotiable_ilogger(self, profile):
+        """REQ-PI-CS-101: Output contains NON-NEGOTIABLE ILogger requirement."""
+        section = profile.build_project_context_section({})
+        assert "NON-NEGOTIABLE" in section
+        assert "ILogger<T>" in section or "ILogger" in section
+
+    def test_contains_minimum_catch_block(self, profile):
+        """REQ-PI-CS-301: Output contains minimum catch block example with _logger.LogError."""
+        section = profile.build_project_context_section({})
+        assert "_logger.LogError" in section
+        assert "REQ-PI-CS-301" in section
+
+    def test_ping_task_includes_health_template(self, profile):
+        """REQ-PI-CS-300: task_description containing 'ping' triggers HealthCheck template."""
+        section = profile.build_project_context_section({
+            "task_description": "Implement the Ping/health check method",
+        })
+        assert "Ping/HealthCheck structural template" in section
+        assert "REQ-PI-CS-300" in section
+        assert "Health check failed" in section
+
+    def test_health_keyword_triggers_template(self, profile):
+        """REQ-PI-CS-300: 'health' keyword also triggers the template."""
+        section = profile.build_project_context_section({
+            "task_description": "Add health endpoint",
+        })
+        assert "Ping/HealthCheck structural template" in section
+
+    def test_no_health_keywords_no_template(self, profile):
+        """When no health-related keywords, Ping template is absent."""
+        section = profile.build_project_context_section({
+            "task_description": "Implement user authentication service",
+        })
+        assert "Ping/HealthCheck structural template" not in section
+
+    def test_cartstore_keyword_triggers_template(self, profile):
+        """REQ-PI-CS-300: 'cartstore' keyword triggers HealthCheck template."""
+        section = profile.build_project_context_section({
+            "feature_name": "CartStore Redis implementation",
+        })
+        assert "Ping/HealthCheck structural template" in section
+
 
 # ---------------------------------------------------------------------------
 # Dependency version stripping

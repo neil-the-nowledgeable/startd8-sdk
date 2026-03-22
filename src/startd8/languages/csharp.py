@@ -123,8 +123,14 @@ class CSharpLanguageProfile:
                     "using Microsoft.AspNetCore.Builder;",
                     "using Microsoft.AspNetCore.Hosting;",
                     "using Microsoft.Extensions.DependencyInjection;",
+                    "using Microsoft.Extensions.Logging;",
                 ],
                 "conditional": {},
+                "preamble_note": (
+                    "// Every service class MUST inject ILogger<T>:\n"
+                    "// private readonly ILogger<MyService> _logger;\n"
+                    "// public MyService(ILogger<MyService> logger) => _logger = logger;"
+                ),
             },
             "ef_core": {
                 "detect": [
@@ -146,8 +152,14 @@ class CSharpLanguageProfile:
                 "imports": [
                     "using Grpc.Core;",
                     "using Google.Protobuf;",
+                    "using Microsoft.Extensions.Logging;",
                 ],
                 "conditional": {},
+                "preamble_note": (
+                    "// Every service class MUST inject ILogger<T>:\n"
+                    "// private readonly ILogger<MyService> _logger;\n"
+                    "// public MyService(ILogger<MyService> logger) => _logger = logger;"
+                ),
             },
             "serilog": {
                 "detect": ["serilog", "log.information", "log.error"],
@@ -594,11 +606,51 @@ class CSharpLanguageProfile:
             "- Use `_logger.LogWarning()` for degraded-but-functional paths",
             "- Example: `private readonly ILogger<CartService> _logger;`",
             "",
+            "**ILogger<T> is NON-NEGOTIABLE for service classes (REQ-PI-CS-101):**",
+            "- Every class inheriting a base/interface or registered in DI",
+            "  MUST accept `ILogger<{ClassName}>` as a constructor parameter",
+            "- Code review will REJECT any service class without `ILogger<T>`",
+            "",
             "**Exception handling:**",
             "- NEVER use empty catch blocks (`catch { }` or `catch (Exception) { }`)",
             "- Always log the exception or rethrow",
             "- Prefer `catch (SpecificException ex)` over `catch (Exception ex)`",
+            "",
+            "**Minimum catch block (REQ-PI-CS-301) — copy this pattern:**",
+            "```csharp",
+            "catch (Exception ex)",
+            "{",
+            '    _logger.LogError(ex, "Operation failed");',
+            "    throw;  // or: return false; for health checks",
+            "}",
+            "```",
         ])
+
+        # REQ-PI-CS-300: Ping/HealthCheck structural template
+        task_desc = context.get("task_description", "")
+        feature_name = context.get("feature_name", "")
+        _health_text = f"{task_desc} {feature_name}".lower()
+        if any(kw in _health_text for kw in ("ping", "health", "cartstore", "cart_store")):
+            lines.extend([
+                "",
+                "**Ping/HealthCheck structural template (REQ-PI-CS-300) — use this shape:**",
+                "```csharp",
+                "public async Task<bool> Ping()",
+                "{",
+                "    try",
+                "    {",
+                "        // MUST actually test the connection (e.g. SELECT 1)",
+                "        await connection.OpenAsync();",
+                "        return true;",
+                "    }",
+                "    catch (Exception ex)",
+                "    {",
+                '        _logger.LogWarning(ex, "Health check failed");',
+                "        return false;",
+                "    }",
+                "}",
+                "```",
+            ])
 
         # REQ-CS-601: Dockerfile context for .NET services
         has_dockerfile = any(

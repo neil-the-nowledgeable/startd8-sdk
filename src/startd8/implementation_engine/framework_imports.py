@@ -242,6 +242,14 @@ def get_import_preamble(
                     lines.append(imp)
 
         lines.append("```")
+
+        # Render preamble_note (e.g. ILogger injection pattern for C#)
+        preamble_note = config.get("preamble_note")
+        if preamble_note:
+            lines.append(f"```{fence_lang}")
+            lines.append(preamble_note)
+            lines.append("```")
+
         lines.append("")
 
     return "\n".join(lines)

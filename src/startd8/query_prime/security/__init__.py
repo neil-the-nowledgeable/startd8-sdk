@@ -7,7 +7,8 @@ Lifecycle findings -> WARN (or FAIL when strict_lifecycle=True).
 
 from __future__ import annotations
 
-from typing import List
+import time
+from typing import Dict, List, Optional
 
 from ..models import (
     DatabaseType,
@@ -52,23 +53,30 @@ def verify_file(
         SecurityVerificationResult with verdict and all findings.
     """
     all_findings: List[SecurityFinding] = []
+    timing: Dict[str, float] = {}
 
     # Phase 1: Injection
+    t0 = time.monotonic()
     injection_findings = detect_injection(
         source, database, language, file_path=file_path,
     )
+    timing["injection_ms"] = round((time.monotonic() - t0) * 1000, 3)
     all_findings.extend(injection_findings)
 
     # Phase 2: Credentials
+    t0 = time.monotonic()
     credential_findings = detect_credential_leakage(
         source, language, file_path=file_path,
     )
+    timing["credential_ms"] = round((time.monotonic() - t0) * 1000, 3)
     all_findings.extend(credential_findings)
 
     # Phase 3: Lifecycle
+    t0 = time.monotonic()
     lifecycle_findings = detect_lifecycle_issues(
         source, database, language, file_path=file_path,
     )
+    timing["lifecycle_ms"] = round((time.monotonic() - t0) * 1000, 3)
     all_findings.extend(lifecycle_findings)
 
     # Compute counts
@@ -105,4 +113,5 @@ def verify_file(
         checks_failed=1 if errors > 0 else 0,
         checks_warned=1 if warnings > 0 else 0,
         findings=all_findings,
+        verification_timing_ms=timing,
     )

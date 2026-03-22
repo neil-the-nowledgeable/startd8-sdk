@@ -138,6 +138,54 @@ def update_security_metrics(
         logger.warning("Failed to write security metrics: %s", exc)
 
 
+def update_query_security_metrics(
+    output_dir: str,
+    report: Dict[str, Any],
+) -> None:
+    """Write query-security metrics into kaizen-metrics.json (ADDITIVE).
+
+    The ``query_security`` key is written alongside the existing ``security``
+    key — both are preserved.  Downstream consumers (Grafana, trend scripts)
+    use both keys.
+
+    Args:
+        output_dir: Directory containing kaizen-metrics.json.
+        report: Verification report dict from
+            ``query_prime.kaizen_metrics.build_verification_report()``.
+    """
+    metrics_path = Path(output_dir) / "kaizen-metrics.json"
+
+    existing: Dict[str, Any] = {}
+    if metrics_path.is_file():
+        try:
+            existing = json.loads(metrics_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    existing["query_security"] = {
+        "mean_score": report.get("mean_score", 0.0),
+        "pass_rate": report.get("pass_rate", 0.0),
+        "total_work_items": report.get("total_work_items", 0),
+        "total_cost_usd": report.get("total_cost_usd", 0.0),
+        "injection_total": report.get("injection_total", 0),
+        "credential_total": report.get("credential_total", 0),
+        "lifecycle_total": report.get("lifecycle_total", 0),
+        "by_database": report.get("by_database", {}),
+        "by_tier": report.get("by_tier", {}),
+    }
+
+    try:
+        metrics_path.write_text(json.dumps(existing, indent=2) + "\n")
+        logger.info(
+            "Query security metrics updated: mean_score=%.2f pass_rate=%.2f items=%d",
+            existing["query_security"]["mean_score"],
+            existing["query_security"]["pass_rate"],
+            existing["query_security"]["total_work_items"],
+        )
+    except OSError as exc:
+        logger.warning("Failed to write query security metrics: %s", exc)
+
+
 def _default_metrics() -> Dict[str, Any]:
     """Default security metrics for first run."""
     return {

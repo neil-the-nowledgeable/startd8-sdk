@@ -33,6 +33,7 @@ def _make_entry(
     req_score: float = 1.0,
     dq_score: float = 1.0,
     cost: float = 0.10,
+    semantic_error_count: int = 0,
     timestamp: str = "2026-03-18T00:00:00Z",
 ) -> ExemplarEntry:
     fp = ConfigFingerprint(language, file_type, transport, archetype)
@@ -50,6 +51,7 @@ def _make_entry(
             requirement_score=req_score,
             disk_quality_score=dq_score,
             cost_usd=cost,
+            semantic_error_count=semantic_error_count,
         ),
         agent_specs={"lead": "anthropic:claude-sonnet-4-20250514", "drafter": "anthropic:claude-sonnet-4-20250514"},
         code_summary="package main\n\nfunc main() {}",
@@ -324,6 +326,60 @@ class TestConfigFingerprint:
         fp = ConfigFingerprint.compute("tests/test_server.py")
         assert fp.file_type == "test"
         assert fp.archetype == "unit_test"
+
+
+class TestSemanticErrorQualityGate:
+    """REQ-PI-CS-400: Exemplars with semantic_error_count != 0 excluded from matches."""
+
+    def test_clean_entry_returned(self):
+        reg = ExemplarRegistry()
+        entry = _make_entry(semantic_error_count=0)
+        reg.add(entry)
+
+        fp = ConfigFingerprint("java", "source", "grpc", "grpc_server")
+        result = reg.find_best_match(fp)
+        assert result is not None
+        assert result.id == entry.id
+
+    def test_errored_entry_excluded(self):
+        reg = ExemplarRegistry()
+        entry = _make_entry(semantic_error_count=5)
+        reg.add(entry)
+
+        fp = ConfigFingerprint("java", "source", "grpc", "grpc_server")
+        result = reg.find_best_match(fp)
+        assert result is None  # Only candidate has errors
+
+    def test_clean_preferred_over_errored_with_higher_maturity(self):
+        """A clean entry should be returned even if the errored entry has higher maturity."""
+        reg = ExemplarRegistry()
+
+        errored = _make_entry(
+            maturity=3, run_id="run-err", dq_score=1.0,
+            semantic_error_count=2,
+        )
+        clean = _make_entry(
+            maturity=1, run_id="run-clean", dq_score=0.8,
+            semantic_error_count=0,
+        )
+
+        reg.add(errored)
+        reg.add(clean)
+
+        fp = ConfigFingerprint("java", "source", "grpc", "grpc_server")
+        result = reg.find_best_match(fp)
+        assert result is not None
+        assert result.source_run_id == "run-clean"
+
+    def test_partial_match_also_filters_errors(self):
+        reg = ExemplarRegistry()
+        entry = _make_entry(transport="grpc", semantic_error_count=1)
+        reg.add(entry)
+
+        # Search with different transport → partial match path
+        fp = ConfigFingerprint("java", "source", "http", "grpc_server")
+        result = reg.find_best_match(fp)
+        assert result is None
 
 
 class TestExemplarEntry:
