@@ -313,7 +313,7 @@ class TestTodoInventory:
         ]
         inv = TodoInventory(entries=entries)
         inv.compute_summary()
-        assert inv.summary == {"A": 1, "B": 1, "C": 1, "total": 3}
+        assert inv.summary == {"A": 1, "B": 1, "C": 1, "total": 3, "security_todos": 0}
 
     def test_save_and_load(self, tmp_path):
         entries = [

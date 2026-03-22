@@ -270,7 +270,8 @@ class TestPerStepTimeout:
 
         config = RepairConfig(per_step_timeout_s=0.5, total_timeout_s=10.0)
         ctx = RepairContext(config=config)
-        repaired, results = _run_steps(
+        # _run_steps returns (code, results, syntax_valid, modified)
+        repaired, results, _syntax, _modified = _run_steps(
             "x = 1\n", [SlowStep()], ctx, Path("foo.py"), None, config,
         )
 
