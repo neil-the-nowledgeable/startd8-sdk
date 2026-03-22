@@ -1,6 +1,6 @@
 # Onboarding Portal Artifact — Requirements
 
-> **Version:** 0.1.0
+> **Version:** 0.2.0
 > **Status:** DRAFT
 > **Date:** 2026-03-21
 > **Parent:** [UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md](../UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md) (pipeline context)
@@ -82,50 +82,62 @@ The generated portal MUST include the following sections, derived from pipeline 
 | Section | Source | Content |
 |---------|--------|---------|
 | **Project Overview** | `.contextcore.yaml` `spec.project` | Name, description, criticality, owner, repository |
-| **Service Inventory** | `onboarding-metadata.json` `instrumentation_hints` | Service ID, transport (gRPC/HTTP), language, detected databases |
-| **Service Communication Graph** | `onboarding-metadata.json` `service_communication_graph` | Visual or tabular representation of service-to-service calls |
-| **SLO Summary** | Generated SLO artifacts | Per-service: availability target, latency P99, time window |
-| **Alert Inventory** | Generated alert artifacts | Per-service: alert names, severity, thresholds |
-| **Dashboard Links** | Generated dashboard specs | Per-service: link to dashboard (Grafana URL or file path) |
-| **Security Posture** | `kaizen-metrics.json` `security` section | Aggregate security score, injection blocked, credential blocked |
-| **Quality Metrics** | `kaizen-metrics.json` | Success rate, cost per feature, assembly delta |
-| **Run Provenance** | `run-provenance.json` | Run ID, timestamp, pipeline version, duration |
+| **Service Inventory** | `instrumentation_hints` (FILTERED — uses `_is_non_service_entry()` to exclude phantoms) | Service ID, transport badge, language, databases |
+| **Project Objectives** | `objectives` (richer than SLO artifacts — plan-level intent with key results) | Objective description, availability/latency targets |
+| **Service Communication Graph** | `service_communication_graph.services` | Calls/called-by table (omitted when no edges detected) |
+| **Alert Inventory** | Generated alert artifacts (from sibling `alerts/` dir) | Per-service: alert names, severity, thresholds |
+| **Dashboard Links** | Generated dashboard specs (relative `../dashboards/` links) | Per-service: clickable link to YAML spec |
+| **Security Posture** | `kaizen-metrics.json` `security` section (when present) | Aggregate security score, injection blocked |
+| **Quality Metrics** | `observability-manifest.yaml` `quality_summary` (from Phase 2 validation) | Avg artifact scores, composite, repair count |
+| **Run Provenance** | `run-provenance.json` (when present) | Run ID, timestamp, duration |
 
 ### REQ-OBP-101: Portal Generation from Pipeline Context
 
 | ID | Requirement |
 |----|-------------|
-| OBP-101a | The portal generator SHALL accept `onboarding-metadata.json`, optional `kaizen-metrics.json`, optional `run-provenance.json`, and the generated observability artifact directory as inputs. |
+| OBP-101a | The portal generator SHALL accept `onboarding-metadata.json`, optional `kaizen-metrics.json`, optional `run-provenance.json`, optional `observability-manifest.yaml`, and the generated observability artifact directory as inputs. |
 | OBP-101b | The portal SHALL be generated deterministically ($0.00 — no LLM calls). All content is derived from structured pipeline data. |
-| OBP-101c | Missing optional inputs SHALL degrade gracefully — the portal omits the corresponding section rather than failing. |
+| OBP-101c | Missing optional inputs SHALL degrade gracefully — the portal omits the corresponding section rather than failing. Each section is independently renderable. |
 | OBP-101d | The portal SHALL include a "Generated at" timestamp and "Pipeline version" for staleness detection. |
+| OBP-101e | The portal SHALL use the FILTERED service list — same `_is_non_service_entry()` phantom filtering as the artifact generator. Run-093 had 9 entries (7 phantoms); the portal must show only the 2 real services. |
+| OBP-101f | The portal SHALL read `objectives` from onboarding metadata for plan-level intent (availability targets, key results). These are higher-level and more readable than parsing OpenSLO YAML artifacts. |
+| OBP-101g | The portal SHALL consume `quality_summary` from `observability-manifest.yaml` (already computed by Phase 2 validation) rather than re-computing from individual artifacts. |
 
 ### REQ-OBP-102: Static HTML Output
 
 | ID | Requirement |
 |----|-------------|
 | OBP-102a | The portal SHALL be a single self-contained HTML file (inline CSS, no external dependencies). |
-| OBP-102b | The HTML SHALL use a dark theme consistent with the existing `harbor-tour-*.html` exemplars. |
+| OBP-102b | The HTML SHALL use the harbor tour design tokens: `--bg: #0f1117`, `--surface: #1a1d27`, `--accent: #6c8cff`, etc. (copy from `harbor-tour-prime-contractor.html`). |
 | OBP-102c | The HTML SHALL be responsive (readable on desktop and mobile). |
-| OBP-102d | Each section SHALL be navigable via a sidebar or top-level anchor links. |
-| OBP-102e | The service communication graph SHOULD be rendered as an SVG or CSS grid (no JavaScript framework required). |
+| OBP-102d | Each section SHALL be navigable via anchor links. |
+| OBP-102e | The service communication graph SHALL be rendered as an HTML table (not SVG — simpler, no dependency). When no edges exist in the graph (run-093: all `calls_to` and `called_by` are empty), display "No inter-service dependencies detected" instead of an empty table. |
+| OBP-102f | Dashboard and alert artifact links SHALL use relative paths (`../dashboards/{svc}-dashboard-spec.yaml`) since portal sits in a sibling directory. |
 
 ### REQ-OBP-103: Integration with Artifact Generator
 
 | ID | Requirement |
 |----|-------------|
-| OBP-103a | `generate_observability_artifacts()` SHALL call `generate_portal()` as a fourth artifact type after dashboards, alerts, and SLOs. |
+| OBP-103a | `generate_observability_artifacts()` SHALL call `generate_portal()` AFTER dashboards, alerts, and SLOs (the portal is a summary view of all other outputs). The function signature differs from the per-service generators: `generate_portal(business, services, report, metadata)` takes the full report, not a single ServiceHints. |
 | OBP-103b | The portal result SHALL be an `ArtifactResult` with `artifact_type="portal"`, enabling quality validation via the same `_repair_and_validate()` pipeline. |
 | OBP-103c | The portal SHALL be written to `portal/{project_id}-portal.html` in the output directory. |
-| OBP-103d | The portal generation can be skipped via `--skip-portal` flag (opt-out, not opt-in). |
+| OBP-103d | Portal generation SHALL be opt-in for v1 (`--portal` flag) and switch to opt-out (`--skip-portal`) after validation across 5+ runs. New artifacts appearing unexpectedly in established pipelines is disruptive. |
 
 ### REQ-OBP-104: Portal Validation (Kaizen)
 
 | ID | Requirement |
 |----|-------------|
-| OBP-104a | Portal validation SHALL check: HTML parseable, all required sections present, service count matches instrumentation_hints count, SLO/alert sections populated when artifacts exist. |
+| OBP-104a | Portal validation SHALL check: HTML content non-empty, contains expected section anchors, service count matches filtered `instrumentation_hints` count, objective section populated when `objectives` data exists. |
 | OBP-104b | Portal quality score: `checks_passed / checks_total` (same v1 pass-rate formula as other artifact types). |
-| OBP-104c | Portal score SHALL be included in the per-service composite and the `observability_artifacts` section of `kaizen-metrics.json`. |
+| OBP-104c | Portal score SHALL be included in the `observability_artifacts` section of `kaizen-metrics.json`. |
+
+### REQ-OBP-105: Plan-Derived Quick Wins
+
+| ID | Requirement |
+|----|-------------|
+| OBP-105a | **v0 quick win:** A minimal portal with ONLY the service inventory section (~50 lines) can ship first to validate the HTML template, design tokens, phantom filtering, and pipeline wiring. Additional sections are additive. |
+| OBP-105b | Empty data SHALL render as readable placeholders, not blank space. `convention_metrics=0` shows "—" not "0 metrics". Empty `calls_to` shows "No inter-service dependencies detected". Missing `kaizen-metrics.json` shows "Quality metrics unavailable (run postmortem to generate)". |
+| OBP-105c | `objectives` from onboarding metadata (plan-level intent with `metricKey`, `target`, `unit`) SHALL be the PRIMARY source for availability/latency targets — not parsed SLO YAML artifacts. The objectives are already structured, human-readable, and present in every run. SLO artifacts are the implementation; objectives are the intent. |
 
 ---
 
@@ -180,26 +192,29 @@ Per service:
 
 ## 5. Phased Delivery
 
-### Phase 1: Generator (~150 lines)
-- `generate_portal()` function in `artifact_generator.py`
-- Static HTML template with f-string rendering
-- Sections: Project Overview, Service Inventory, SLO Summary, Alert Inventory, Run Provenance
-- Dark theme matching existing harbor tour exemplars
+### Phase 0: v0 Quick Win — Service Inventory Only (~50 lines)
+- `generate_portal()` with ONLY project overview + service inventory table
+- Validates: HTML template, design tokens, phantom filtering, `--portal` flag, `ArtifactResult` wiring
+- Ships the smallest useful artifact first — additive sections follow
 
-### Phase 2: Communication Graph (~50 lines)
-- Parse `service_communication_graph` from onboarding metadata
-- Render as CSS grid or simple table (no SVG dependency)
+### Phase 1: Full Content Sections (~100 lines)
+- Add: Project Objectives (from `objectives` key — plan-level intent)
+- Add: Alert Inventory (from generated alert YAML — names, severity, thresholds)
+- Add: Dashboard Links (relative paths to sibling `dashboards/` dir)
+- Add: Run Provenance (from `run-provenance.json`)
+- Empty data renders as readable placeholders, not blank space
 
-### Phase 3: Quality + Security Sections (~50 lines)
-- Read `kaizen-metrics.json` for quality metrics
-- Read `kaizen-metrics.json` `security` section for security posture
-- Read `observability_artifacts` section for artifact quality scores
+### Phase 2: Communication Graph + Quality (~80 lines)
+- Communication graph table from `service_communication_graph.services`
+- "No inter-service dependencies detected" when no edges exist
+- Quality section from `observability-manifest.yaml` `quality_summary` (already computed)
+- Security section from `kaizen-metrics.json` `security` (when present)
 
-### Phase 4: Validation (~30 lines)
-- Add portal checks to `observability_artifact_checks.py`
+### Phase 3: Validation (~30 lines)
+- `validate_portal()` in `observability_artifact_checks.py`
 - Wire into `_repair_and_validate()` for `artifact_type="portal"`
 
-**Total: ~280 lines across 2 files.**
+**Total: ~260 lines across 2 files. Phase 0 ships a useful artifact in ~50 lines.**
 
 ---
 
