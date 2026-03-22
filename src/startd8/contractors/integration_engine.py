@@ -1739,6 +1739,25 @@ class IntegrationEngine:
                             issue.message,
                             extra={"unit_id": unit.id},
                         )
+                    if issues:
+                        try:
+                            rel = str(fpath.relative_to(self.project_root))
+                        except ValueError:
+                            rel = str(fpath)
+                        compliance_results[rel] = {
+                            "ast_valid": True,
+                            "stubs_remaining": 0,
+                            "duplicate_definitions": 0,
+                            "import_completeness": 1.0,
+                            "contract_compliance": 1.0,
+                            "semantic_issues": [
+                                {"category": si.check,
+                                 "severity": si.severity,
+                                 "message": str(si.message)[:200],
+                                 "line": getattr(si, "line", 0)}
+                                for si in issues
+                            ],
+                        }
                 except Exception as exc:
                     logger.debug(
                         "Java semantic check failed for %s: %s", fpath, exc,
@@ -1756,6 +1775,25 @@ class IntegrationEngine:
                             issue.message,
                             extra={"unit_id": unit.id},
                         )
+                    if issues:
+                        try:
+                            rel = str(fpath.relative_to(self.project_root))
+                        except ValueError:
+                            rel = str(fpath)
+                        compliance_results[rel] = {
+                            "ast_valid": True,
+                            "stubs_remaining": 0,
+                            "duplicate_definitions": 0,
+                            "import_completeness": 1.0,
+                            "contract_compliance": 1.0,
+                            "semantic_issues": [
+                                {"category": si.check,
+                                 "severity": si.severity,
+                                 "message": str(si.message)[:200],
+                                 "line": getattr(si, "line", 0)}
+                                for si in issues
+                            ],
+                        }
                 except Exception as exc:
                     logger.debug(
                         "Go semantic check failed for %s: %s", fpath, exc,
@@ -1773,6 +1811,25 @@ class IntegrationEngine:
                             issue.message,
                             extra={"unit_id": unit.id},
                         )
+                    if issues:
+                        try:
+                            rel = str(fpath.relative_to(self.project_root))
+                        except ValueError:
+                            rel = str(fpath)
+                        compliance_results[rel] = {
+                            "ast_valid": True,
+                            "stubs_remaining": 0,
+                            "duplicate_definitions": 0,
+                            "import_completeness": 1.0,
+                            "contract_compliance": 1.0,
+                            "semantic_issues": [
+                                {"category": si.check,
+                                 "severity": si.severity,
+                                 "message": str(si.message)[:200],
+                                 "line": getattr(si, "line", 0)}
+                                for si in issues
+                            ],
+                        }
                 except Exception as exc:
                     logger.debug(
                         "Node.js semantic check failed for %s: %s", fpath, exc,
