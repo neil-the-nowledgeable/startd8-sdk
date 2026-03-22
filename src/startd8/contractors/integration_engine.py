@@ -1508,6 +1508,56 @@ class IntegrationEngine:
             except (ImportError, OSError) as exc:
                 logger.debug("Gate metrics report skipped: %s", exc)
 
+            # Query Prime Kaizen: write query_security metrics (REQ-KQP-100/500)
+            try:
+                from startd8.security_prime.kaizen import update_query_security_metrics
+
+                # Build report from gate results — shape matches
+                # query_prime.kaizen_metrics.build_verification_report() output
+                qp_by_db: dict = {}
+                for entry in enriched_entries:
+                    db = entry.get("database", "unknown")
+                    qp_by_db.setdefault(db, {"count": 0, "mean_score": 0.0, "scores": []})
+                    qp_by_db[db]["count"] += 1
+                    qp_by_db[db]["scores"].append(entry.get("score", 0.0))
+
+                for db_data in qp_by_db.values():
+                    s = db_data.pop("scores")
+                    db_data["mean_score"] = round(sum(s) / len(s), 4) if s else 0.0
+
+                injection_total = sum(
+                    e.get("finding_types", {}).get("injection", 0)
+                    for e in enriched_entries
+                )
+                credential_total = sum(
+                    e.get("finding_types", {}).get("credential_leakage", 0)
+                    for e in enriched_entries
+                )
+                lifecycle_total = sum(
+                    e.get("finding_types", {}).get("lifecycle", 0)
+                    for e in enriched_entries
+                )
+                all_scores = [e.get("score", 0.0) for e in enriched_entries]
+                mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+                pass_count = sum(1 for s in all_scores if s >= 0.8)
+
+                qp_report = {
+                    "mean_score": round(mean_score, 4),
+                    "pass_rate": round(pass_count / len(all_scores), 4) if all_scores else 0.0,
+                    "total_work_items": len(enriched_entries),
+                    "total_cost_usd": 0.0,
+                    "injection_total": injection_total,
+                    "credential_total": credential_total,
+                    "lifecycle_total": lifecycle_total,
+                    "by_database": qp_by_db,
+                    "by_tier": {},
+                }
+
+                output_dir = str(self.project_root) if self.project_root else "."
+                update_query_security_metrics(output_dir, qp_report)
+            except (ImportError, OSError) as exc:
+                logger.debug("Query security metrics update skipped: %s", exc)
+
     # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
     # ------------------------------------------------------------------
