@@ -7,9 +7,17 @@ from .ast_validate import AstValidateStep
 from .bracket_balance import BracketBalanceStep
 from .csharp_convention_fix import CSharpConventionFixStep
 from .csharp_syntax_validate import CSharpSyntaxValidateStep
+from .go_contamination_strip import GoPythonContaminationStripStep
+from .go_dot_import_cleanup import GoDotImportCleanupStep
 from .go_syntax_validate import GoSyntaxValidateStep
+from .java_import_sort import JavaImportSortStep
+from .java_sql_parameterize import JavaSqlParameterizeStep
 from .java_syntax_validate import JavaSyntaxValidateStep
 from .js_syntax_validate import JsSyntaxValidateStep
+from .contamination_strip_js import ContaminationStripJsStep
+from .dedup_require import DedupRequireStep
+from .shebang_strip import ShebangStripStep
+from .var_to_const import VarToConstStep
 from .class_body_dedup import ClassBodyDeduplicationStep
 from .definition_order_fix import DefinitionOrderFixStep
 from .dunder_all_fix import DunderAllFixStep
@@ -34,9 +42,17 @@ __all__ = [
     "BracketBalanceStep",
     "CSharpConventionFixStep",
     "CSharpSyntaxValidateStep",
+    "GoPythonContaminationStripStep",
+    "GoDotImportCleanupStep",
     "GoSyntaxValidateStep",
+    "JavaImportSortStep",
+    "JavaSqlParameterizeStep",
     "JavaSyntaxValidateStep",
     "JsSyntaxValidateStep",
+    "ContaminationStripJsStep",
+    "DedupRequireStep",
+    "ShebangStripStep",
+    "VarToConstStep",
     "ClassBodyDeduplicationStep",
     "DefinitionOrderFixStep",
     "DunderAllFixStep",

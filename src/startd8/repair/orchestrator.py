@@ -1050,7 +1050,239 @@ def _repair_single_csharp_file(
     return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
 
 
-_SEMANTIC_REPAIR_EXTENSIONS: frozenset[str] = frozenset({".py", ".cs"})
+def _repair_single_java_file(
+    fpath: Path,
+    config: RepairConfig,
+    project_root: Path,
+) -> Optional[Dict[str, object]]:
+    """Detect, repair, and verify semantic issues in a single Java file (REQ-KZ-JV-402e).
+
+    Uses ``run_java_semantic_checks()`` for detection and the standard
+    repair routing/step infrastructure for repair.
+
+    Returns:
+        Dict with ``found``, ``repaired``, ``pre_score``, ``categories``
+        on success.  None if no repairable issues found.
+    """
+    try:
+        source = fpath.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Cannot read %s for Java semantic repair: %s", fpath, exc)
+        return None
+
+    # 1. Detect — use Java semantic checks
+    try:
+        from startd8.validators.java_semantic_checks import run_java_semantic_checks
+    except ImportError:
+        logger.debug("java_semantic_checks not available; skipping Java repair")
+        return None
+
+    issues = run_java_semantic_checks(source, file_path=str(fpath))
+    if not issues:
+        return None
+
+    # Convert SemanticIssue objects to dicts for the bridge
+    issue_dicts = [
+        {"category": si.check, "severity": si.severity,
+         "message": str(si.message)[:200], "line": getattr(si, "line", 0)}
+        for si in issues
+    ]
+
+    repairable = [
+        d for d in issue_dicts
+        if d.get("category", "") in config.semantic_repair_categories
+    ]
+    if not repairable:
+        return None
+
+    found_count = min(len(repairable), config.max_semantic_repairs_per_file)
+
+    # 2. Translate → Route → Repair
+    from .semantic_bridge import translate_to_diagnostics
+    from .routing import route_failures, create_steps_from_route
+
+    diagnostics = translate_to_diagnostics(
+        repairable[:config.max_semantic_repairs_per_file], str(fpath),
+    )
+    # Ensure "security" is in repairable_categories for the routing table
+    augmented_categories = config.repairable_categories | frozenset({"security"})
+    repair_config = RepairConfig(
+        repair_enabled=config.repair_enabled,
+        repairable_categories=augmented_categories,
+        semantic_repair_categories=config.semantic_repair_categories,
+        max_semantic_repairs_per_file=config.max_semantic_repairs_per_file,
+        semantic_repair_circuit_breaker_threshold=config.semantic_repair_circuit_breaker_threshold,
+        per_step_timeout_s=config.per_step_timeout_s,
+        total_timeout_s=config.total_timeout_s,
+    )
+    route = route_failures(diagnostics, repair_config, language_id="java")
+    if not route.steps:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    steps = create_steps_from_route(route)
+    if not steps:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    context = RepairContext(
+        diagnostics=diagnostics,
+        config=repair_config,
+        project_root=project_root,
+    )
+
+    # Apply steps
+    repaired_code = source
+    for step in steps:
+        result = step(repaired_code, context, fpath)
+        if result.modified:
+            repaired_code = result.code
+
+    if repaired_code == source:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    # 3. Verify — re-run Java semantic checks on repaired code
+    fpath.write_text(repaired_code, encoding="utf-8")
+    post_issues = run_java_semantic_checks(repaired_code, file_path=str(fpath))
+    post_repairable = [
+        si for si in post_issues
+        if si.check in config.semantic_repair_categories
+    ]
+
+    repaired_count = found_count - len(post_repairable)
+    if repaired_count > 0:
+        logger.info(
+            "Java semantic repair: %s — %d/%d issues repaired",
+            fpath.name, repaired_count, found_count,
+        )
+        return {
+            "found": found_count,
+            "repaired": repaired_count,
+            "remaining": len(post_repairable),
+            "pre_score": None,
+            "categories": list({d.category for d in diagnostics}),
+        }
+
+    # Rollback — repair didn't reduce issues
+    fpath.write_text(source, encoding="utf-8")
+    logger.debug("Java semantic repair rollback: %s — no issues resolved", fpath.name)
+    return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+
+def _repair_single_go_file(
+    fpath: Path,
+    config: RepairConfig,
+    project_root: Path,
+) -> Optional[Dict[str, object]]:
+    """Detect, repair, and verify semantic issues in a single Go file (REQ-KZ-GO-403d).
+
+    Uses ``run_go_semantic_checks()`` for detection and the standard
+    repair routing/step infrastructure for repair.
+
+    Returns:
+        Dict with ``found``, ``repaired``, ``pre_score``, ``categories``
+        on success.  None if no repairable issues found.
+    """
+    try:
+        source = fpath.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Cannot read %s for Go semantic repair: %s", fpath, exc)
+        return None
+
+    # 1. Detect — use Go semantic checks
+    try:
+        from startd8.validators.go_semantic_checks import run_go_semantic_checks
+    except ImportError:
+        logger.debug("go_semantic_checks not available; skipping Go repair")
+        return None
+
+    issues = run_go_semantic_checks(source, file_path=str(fpath))
+    if not issues:
+        return None
+
+    # Convert SemanticIssue objects to dicts for the bridge
+    issue_dicts = [
+        {"category": si.check, "severity": si.severity,
+         "message": str(si.message)[:200], "line": getattr(si, "line", 0)}
+        for si in issues
+    ]
+
+    repairable = [
+        d for d in issue_dicts
+        if d.get("category", "") in config.semantic_repair_categories
+    ]
+    if not repairable:
+        return None
+
+    found_count = min(len(repairable), config.max_semantic_repairs_per_file)
+
+    # 2. Translate → Route → Repair
+    from .semantic_bridge import translate_to_diagnostics
+    from .routing import route_failures, create_steps_from_route
+
+    diagnostics = translate_to_diagnostics(
+        repairable[:config.max_semantic_repairs_per_file], str(fpath),
+    )
+    repair_config = RepairConfig(
+        repair_enabled=config.repair_enabled,
+        repairable_categories=config.repairable_categories,
+        semantic_repair_categories=config.semantic_repair_categories,
+        max_semantic_repairs_per_file=config.max_semantic_repairs_per_file,
+        semantic_repair_circuit_breaker_threshold=config.semantic_repair_circuit_breaker_threshold,
+        per_step_timeout_s=config.per_step_timeout_s,
+        total_timeout_s=config.total_timeout_s,
+    )
+    route = route_failures(diagnostics, repair_config, language_id="go")
+    if not route.steps:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    steps = create_steps_from_route(route)
+    if not steps:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    context = RepairContext(
+        diagnostics=diagnostics,
+        config=repair_config,
+        project_root=project_root,
+    )
+
+    # Apply steps
+    repaired_code = source
+    for step in steps:
+        result = step(repaired_code, context, fpath)
+        if result.modified:
+            repaired_code = result.code
+
+    if repaired_code == source:
+        return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+    # 3. Verify — re-run Go semantic checks on repaired code
+    fpath.write_text(repaired_code, encoding="utf-8")
+    post_issues = run_go_semantic_checks(repaired_code, file_path=str(fpath))
+    post_repairable = [
+        si for si in post_issues
+        if si.check in config.semantic_repair_categories
+    ]
+
+    repaired_count = found_count - len(post_repairable)
+    if repaired_count > 0:
+        logger.info(
+            "Go semantic repair: %s — %d/%d issues repaired",
+            fpath.name, repaired_count, found_count,
+        )
+        return {
+            "found": found_count,
+            "repaired": repaired_count,
+            "remaining": len(post_repairable),
+            "pre_score": None,
+            "categories": list({d.category for d in diagnostics}),
+        }
+
+    # Rollback — repair didn't reduce issues
+    fpath.write_text(source, encoding="utf-8")
+    logger.debug("Go semantic repair rollback: %s — no issues resolved", fpath.name)
+    return {"found": found_count, "repaired": 0, "pre_score": None, "categories": []}
+
+
+_SEMANTIC_REPAIR_EXTENSIONS: frozenset[str] = frozenset({".py", ".cs", ".java", ".go"})
 
 
 def run_semantic_repair(
@@ -1106,6 +1338,14 @@ def run_semantic_repair(
         try:
             if fpath.suffix == ".cs":
                 file_result = _repair_single_csharp_file(
+                    fpath, config, project_root,
+                )
+            elif fpath.suffix == ".java":
+                file_result = _repair_single_java_file(
+                    fpath, config, project_root,
+                )
+            elif fpath.suffix == ".go":
+                file_result = _repair_single_go_file(
                     fpath, config, project_root,
                 )
             else:

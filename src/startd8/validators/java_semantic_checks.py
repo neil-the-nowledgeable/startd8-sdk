@@ -1,6 +1,6 @@
 """Java semantic validation — regex-based checks for generated Java code.
 
-No external tool dependency.  Eight checks:
+No external tool dependency.  Nine checks (10 category strings):
 1. System.out.println/System.err.println in service classes (should use SLF4J)
 2. SQL injection risk via string concatenation
 3. Interface file containing class declarations

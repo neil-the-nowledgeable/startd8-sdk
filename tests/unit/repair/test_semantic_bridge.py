@@ -96,3 +96,48 @@ class TestTranslateToDiagnostics:
     def test_empty_list(self):
         result = translate_to_diagnostics([], "test.py")
         assert result == []
+
+    # --- Java-specific cases (REQ-KZ-JV-402e) ---
+
+    def test_sql_injection_risk_java_routes_as_security(self):
+        """REQ-KZ-JV-402e: Java sql_injection_risk also maps to category='security'."""
+        issues = [
+            {"category": "sql_injection_risk", "severity": "error",
+             "message": "SQL injection risk", "line": 42},
+        ]
+        result = translate_to_diagnostics(issues, "UserDao.java")
+        assert len(result) == 1
+        d = result[0]
+        assert d.category == "security"
+        assert d.file == "UserDao.java"
+
+    def test_wildcard_import_routes_as_semantic(self):
+        """REQ-KZ-JV-402e Phase 2: wildcard_import is repairable and routes as semantic."""
+        issues = [
+            {"category": "wildcard_import", "severity": "warning",
+             "message": "Wildcard import", "line": 3},
+        ]
+        result = translate_to_diagnostics(issues, "Foo.java")
+        assert len(result) == 1
+        d = result[0]
+        assert d.category == "semantic"
+        assert d.semantic_category == "wildcard_import"
+
+    def test_wildcard_import_in_repairable_categories(self):
+        """wildcard_import must be in _REPAIRABLE_CATEGORIES."""
+        assert "wildcard_import" in _REPAIRABLE_CATEGORIES
+
+    def test_java_advisory_categories_not_translated(self):
+        """Advisory-only Java categories should not produce diagnostics."""
+        advisory_cats = [
+            "system_out_in_service", "interface_file_contains_class",
+            "empty_catch_block", "raw_type_usage", "missing_override",
+            "missing_access_modifier", "package_filepath_mismatch",
+            "package_case_mismatch",
+        ]
+        issues = [
+            {"category": cat, "severity": "warning", "message": "m", "line": 1}
+            for cat in advisory_cats
+        ]
+        result = translate_to_diagnostics(issues, "Foo.java")
+        assert len(result) == 0

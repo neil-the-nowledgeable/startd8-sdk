@@ -23,6 +23,14 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
     "duplicate_main_guard",
     # REQ-KZ-CS-402b: C# SQL injection → sql_parameterize step
     "sql_injection_risk",
+    # REQ-KZ-JV-402e Phase 2: Java wildcard import expansion
+    "wildcard_import",
+    # REQ-KZ-GO-403d Phase 2: Go semantic repair
+    "dot_import",
+    "python_contamination",
+    # REQ-KZ-ND-402d Phase 2: Node.js semantic repair
+    "var_usage",
+    "duplicate_require",
 })
 
 # REQ-KZ-CS-402b: Categories that route through a non-"semantic" routing

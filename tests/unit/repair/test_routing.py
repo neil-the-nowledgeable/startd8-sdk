@@ -253,3 +253,58 @@ class TestCreateStepsFromRoute:
         route = RepairRoute(steps=["nonexistent_step"])
         steps = create_steps_from_route(route)
         assert len(steps) == 0
+
+
+class TestJavaSemanticRouting:
+    """REQ-KZ-JV-402e: Java semantic repair routing."""
+
+    def test_java_sql_injection_route(self):
+        """Security diagnostic with language_id=java matches java_sql_injection route."""
+        diags = [Diagnostic(category="security", file="UserDao.java", message="SQL injection")]
+        config = RepairConfig(repairable_categories=frozenset({"syntax", "import", "lint", "semantic", "security"}))
+        route = route_failures(diags, config, language_id="java")
+        assert "java_sql_injection" in route.matched_patterns
+        assert "java_sql_parameterize" in route.steps
+        assert "java_syntax_validate" in route.steps
+        assert route.confidence == "HIGH"
+
+    def test_java_sql_injection_does_not_match_csharp(self):
+        """Security diagnostic with language_id=csharp should NOT match java route."""
+        diags = [Diagnostic(category="security", file="Store.cs", message="SQL injection")]
+        config = RepairConfig(repairable_categories=frozenset({"syntax", "import", "lint", "semantic", "security"}))
+        route = route_failures(diags, config, language_id="csharp")
+        assert "java_sql_injection" not in route.matched_patterns
+        assert "csharp_sql_injection" in route.matched_patterns
+
+    def test_java_wildcard_import_route(self):
+        """Semantic diagnostic with wildcard_import subcategory routes for Java."""
+        from startd8.repair.models import SemanticDiagnostic
+        diags = [SemanticDiagnostic(
+            category="semantic", file="Foo.java", message="wildcard",
+            semantic_category="wildcard_import", severity="warning",
+        )]
+        config = RepairConfig(repairable_categories=frozenset({"syntax", "import", "lint", "semantic"}))
+        route = route_failures(diags, config, language_id="java")
+        assert "wildcard_import" in route.matched_patterns
+        assert "java_import_sort" in route.steps
+        assert "java_syntax_validate" in route.steps
+
+    def test_java_wildcard_import_does_not_match_python(self):
+        """wildcard_import route is Java-only — should not match for Python."""
+        from startd8.repair.models import SemanticDiagnostic
+        diags = [SemanticDiagnostic(
+            category="semantic", file="foo.py", message="wildcard",
+            semantic_category="wildcard_import", severity="warning",
+        )]
+        config = RepairConfig(repairable_categories=frozenset({"syntax", "import", "lint", "semantic"}))
+        route = route_failures(diags, config, language_id="python")
+        assert "wildcard_import" not in route.matched_patterns
+        assert "java_import_sort" not in route.steps
+
+    def test_java_semantic_steps_in_canonical_order(self):
+        """java_import_sort and java_sql_parameterize appear in canonical order."""
+        from startd8.repair.routing import _CANONICAL_ORDER
+        assert "java_import_sort" in _CANONICAL_ORDER
+        assert "java_sql_parameterize" in _CANONICAL_ORDER
+        # import_sort before sql_parameterize
+        assert _CANONICAL_ORDER.index("java_import_sort") < _CANONICAL_ORDER.index("java_sql_parameterize")

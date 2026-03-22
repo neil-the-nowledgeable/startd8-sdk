@@ -323,18 +323,39 @@ Without auto-import repair, Java files with missing imports fail compilation but
 **Status:** Phase 1 (advisory-only; `sql_injection_risk` flows through shared bridge)
 **Depends on:** REQ-KZ-JV-400, REQ-KZ-CS-402a (multi-language dispatch pattern)
 
-Wire Java semantic check results into the repair pipeline, following the pattern established by C#'s REQ-KZ-CS-402a/b/c. Java's `java_semantic_checks.py` produces 9 categories; each is classified as **repairable** (routed to a repair step) or **advisory-only** (surfaced as Kaizen hints in postmortem).
+Wire Java semantic check results into the repair pipeline, following the pattern established by C#'s REQ-KZ-CS-402a/b/c. Java's `java_semantic_checks.py` has 9 check functions producing 10 distinct category strings; each is classified as **repairable** (routed to a repair step) or **advisory-only** (surfaced as Kaizen hints in postmortem).
+
+> **Note:** The module docstring in `java_semantic_checks.py` previously said "Eight checks" — corrected to "Nine checks (10 category strings)" as part of this requirement validation.
 
 #### REQ-KZ-JV-402a: Multi-Language Dispatch
 
-Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS` in `repair/orchestrator.py` when at least one Java-specific repair step exists (Phase 2+). `sql_injection_risk` already flows through the shared `_REPAIRABLE_CATEGORIES` entry added for C#.
+Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS` in `repair/orchestrator.py` and add `_repair_single_java_file()` dispatch function when at least one Java-specific repair step exists (Phase 2+). Pattern: `_repair_single_csharp_file()` in the same module.
+
+`sql_injection_risk` already flows through the shared `_REPAIRABLE_CATEGORIES` entry added for C#.
+
+#### REQ-KZ-JV-402a.1: Language-Aware Bridge Dispatch (NEW)
+
+The semantic bridge (`semantic_bridge.py`) currently maps `sql_injection_risk` → `"csharp_sql_injection"` unconditionally via `_CATEGORY_TO_PATTERN`. This is **language-agnostic** — there is no dispatch logic based on file extension. To support Java SQL repair alongside C# SQL repair, the bridge MUST be extended with language-aware pattern resolution.
+
+**Design options (choose one during implementation):**
+1. **Composite key**: Change `_CATEGORY_TO_PATTERN` to `dict[tuple[str, str], str]` keyed by `(category, language_id)` — e.g., `("sql_injection_risk", "java") → "java_sql_injection"`.
+2. **Language-agnostic pattern name**: Use a single pattern name like `"sql_injection"` and let the routing table discriminate by `language_id` column.
+3. **Per-language override dict**: `_CATEGORY_TO_PATTERN_OVERRIDES: dict[str, dict[str, str]]` keyed by language_id, falling back to the base `_CATEGORY_TO_PATTERN`.
+
+Option 2 is simplest but requires renaming the existing `"csharp_sql_injection"` routing entry. Option 3 is most backward-compatible.
+
+**Acceptance criteria:**
+- Java `.java` files with `sql_injection_risk` produce `Diagnostic(category="security", pattern="java_sql_injection")` (or equivalent).
+- C# `.cs` files continue to produce `Diagnostic(category="security", pattern="csharp_sql_injection")` (no regression).
 
 #### REQ-KZ-JV-402b: Category Registration
+
+9 check functions produce 10 distinct category strings. `_check_package_filepath_alignment()` emits both `package_filepath_mismatch` and `package_case_mismatch`.
 
 | Category | Severity | Classification | Rationale |
 |---|---|---|---|
 | `sql_injection_risk` | error | **Repairable** | Already in `_REPAIRABLE_CATEGORIES` (shared with C#). No Java-specific step yet — Phase 3 adds PreparedStatement conversion. |
-| `wildcard_import` | warning | **Potentially repairable** | `google-java-format --fix-imports-only` can replace wildcards. Phase 2 target. |
+| `wildcard_import` | warning | **Potentially repairable** | `google-java-format --fix-imports-only` removes unused imports and sorts remaining, but does **not** expand `*` wildcards to explicit imports. Phase 2 repair step must implement wildcard expansion independently (AST-based or regex-based). |
 | `system_out_in_service` | warning | Advisory | Requires logging framework config knowledge. |
 | `interface_file_contains_class` | warning | Advisory | Requires file splitting + import graph updates. |
 | `empty_catch_block` | warning | Advisory | Correct fix depends on exception semantics. |
@@ -342,18 +363,42 @@ Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS` in `repair/orchestrator.py` when at
 | `missing_override` | warning | Advisory | Requires class hierarchy resolution. |
 | `missing_access_modifier` | warning | Advisory | Correct modifier depends on intended API surface. |
 | `package_filepath_mismatch` | warning | Advisory | Fix has downstream ripple effects. |
+| `package_case_mismatch` | warning | Advisory | Case variant of package-path mismatch. Emitted by same check function as `package_filepath_mismatch`. |
 
 #### REQ-KZ-JV-402c: Compliance Results Collection
 
-**Status:** IMPLEMENTED (2026-03-22). Java semantic results stored in `compliance_results`.
+**Status:** IMPLEMENTED (2026-03-22). Java semantic results stored in `compliance_results` in `integration_engine.py:_run_semantic_checks()`.
 
-#### REQ-KZ-JV-402d: Phased Repair Step Plan
+#### REQ-KZ-JV-402d: RepairConfig Opt-In (NEW)
 
-**Phase 1 (current):** All categories advisory-only. `sql_injection_risk` flows through shared bridge but no Java-specific repair step fires.
+`RepairConfig.semantic_repair_categories` defaults to `frozenset()` (empty). The orchestrator skips repair when this set is empty (line 1084 of `orchestrator.py`). Each phase MUST document which categories to add to this set; otherwise new routes silently fail to activate.
 
-**Phase 2:** `JavaImportSortStep` wrapping `google-java-format --fix-imports-only`. Register `wildcard_import` as repairable. Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS`.
+**Acceptance criteria:**
+- Phase 2 adds `"wildcard_import"` to `semantic_repair_categories` default.
+- Phase 3 adds `"sql_injection_risk"` to `semantic_repair_categories` default (or documents explicit opt-in via config).
 
-**Phase 3:** `JavaSqlParameterizeStep` — deterministic rewrite of `"SELECT..." + var` to `PreparedStatement` with `?` placeholders and `setString()`/`setInt()` calls.
+#### REQ-KZ-JV-402e: Phased Repair Step Plan
+
+**Phase 1 (current):** All categories advisory-only. `sql_injection_risk` flows through shared bridge but no Java-specific repair step fires. The routing table has no `language_id="java"` entry for `"security"` category. This phase establishes wiring and placeholder routing only — no actual repairs are performed on Java files.
+
+**Phase 1 deliverables:**
+- Add `("security", "java_sql_injection", ["java_syntax_validate"], "HIGH", "java")` **placeholder route** in `routing.py`. This routes to syntax validation only; the actual parameterize step is added in Phase 3.
+- Implement language-aware bridge dispatch (REQ-KZ-JV-402a.1) so Java files produce `java_sql_injection` pattern instead of `csharp_sql_injection`.
+- Unit test confirming Java `.java` files with `sql_injection_risk` produce correct `Diagnostic` objects and match the Java routing entry.
+
+**Phase 2:** `JavaImportSortStep` in `repair/steps/java_import_sort.py`. This step implements wildcard expansion via regex-based import rewriting (not `google-java-format`, which only sorts/removes unused imports without expanding wildcards).
+- Register `wildcard_import` in `_REPAIRABLE_CATEGORIES`.
+- Add route `("semantic", "wildcard_import", ["java_import_sort", "java_syntax_validate"], "MEDIUM", "java")`.
+- Add `.java` to `_SEMANTIC_REPAIR_EXTENSIONS`.
+- Add `_repair_single_java_file()` dispatch function in `orchestrator.py`.
+- Add `"wildcard_import"` to `RepairConfig.semantic_repair_categories` default.
+- Add `"java_import_sort"` to `_CANONICAL_ORDER` and `_STEP_FACTORIES` in `routing.py`.
+
+**Phase 3:** `JavaSqlParameterizeStep` in `repair/steps/java_sql_parameterize.py` — deterministic rewrite of `"SELECT..." + var` to `PreparedStatement` with `?` placeholders and `setString()`/`setInt()` calls.
+- Update Phase 1 placeholder route: `java_sql_injection` → `["java_sql_parameterize", "java_syntax_validate"]`.
+- Add `"sql_injection_risk"` to `RepairConfig.semantic_repair_categories` default.
+- Add `"java_sql_parameterize"` to `_CANONICAL_ORDER` and `_STEP_FACTORIES` in `routing.py`.
+- Test patterns: string concatenation (`+`), `String.format()`, `StringBuilder.append()`.
 
 ---
 
@@ -489,6 +534,9 @@ The `JavaLanguageProfile.framework_imports` provides detection and dependency ma
 | REQ-KZ-JV-301 | — | Not implemented (root cause taxonomy) |
 | REQ-KZ-JV-302 | — | Not implemented (boilerplate detection) |
 | REQ-KZ-JV-400 | `repair_enabled = False` | Documented; no repair pipeline |
+| REQ-KZ-JV-402a.1 | `semantic_bridge.py` `_CATEGORY_TO_PATTERN` | Not implemented (language-aware dispatch) |
+| REQ-KZ-JV-402c | `integration_engine.py` `_run_semantic_checks()` | Implemented |
+| REQ-KZ-JV-402d | `repair/config.py` `RepairConfig.semantic_repair_categories` | Not implemented (opt-in defaults) |
 | REQ-KZ-JV-500 | — | Not implemented (hint library) |
 | REQ-KZ-JV-600.1 | All properties | Implemented |
 | REQ-KZ-JV-600.2 | `framework_imports` | Implemented |

@@ -16,8 +16,10 @@ from .steps import (
     AstValidateStep,
     BracketBalanceStep,
     ClassBodyDeduplicationStep,
+    ContaminationStripJsStep,
     CSharpConventionFixStep,
     CSharpSyntaxValidateStep,
+    DedupRequireStep,
     DefinitionOrderFixStep,
     DunderAllFixStep,
     DuplicateRemovalStep,
@@ -25,8 +27,12 @@ from .steps import (
     ExtendedLintFixStep,
     FenceStripStep,
     FutureImportReorderStep,
+    GoDotImportCleanupStep,
+    GoPythonContaminationStripStep,
     GoSyntaxValidateStep,
     IndentNormalizeStep,
+    JavaImportSortStep,
+    JavaSqlParameterizeStep,
     JavaSyntaxValidateStep,
     JsSyntaxValidateStep,
     SemanticDiscardedReturnFixStep,
@@ -34,9 +40,11 @@ from .steps import (
     SemanticImportFixStep,
     SemanticMethodFixStep,
     SemanticMethodResolutionFixStep,
+    ShebangStripStep,
     SqlParameterizeStep,
     TodoUncommentStep,
     UnusedVariableRemovalStep,
+    VarToConstStep,
     VariableInitializationStep,
 )
 
@@ -67,10 +75,19 @@ _CANONICAL_ORDER = [
     "semantic_duplicate_main_fix",
     "csharp_convention_fix",
     "sql_parameterize",
+    "java_import_sort",
+    "java_sql_parameterize",
     "ast_validate",
     "java_syntax_validate",
+    "go_contamination_strip",
+    "go_dot_import_cleanup",
     "go_syntax_validate",
     "csharp_syntax_validate",
+    # Node.js text-based repair steps (REQ-KZ-ND-402d Phase 2)
+    "shebang_strip",
+    "contamination_strip_js",
+    "var_to_const",
+    "dedup_require",
     "js_syntax_validate",
 ]
 
@@ -90,17 +107,27 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     # Java repair routes
     ("syntax", "java_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "java_syntax_validate"], "HIGH", "java"),
     ("import", "java_import_error", ["fence_strip", "todo_uncomment", "java_syntax_validate"], "MEDIUM", "java"),
+    # REQ-KZ-JV-402e: Java semantic repair routes
+    ("security", "java_sql_injection", ["java_sql_parameterize", "java_syntax_validate"], "HIGH", "java"),
+    ("semantic", "wildcard_import", ["java_import_sort", "java_syntax_validate"], "MEDIUM", "java"),
     # Go repair routes
     ("syntax", "go_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "go_syntax_validate"], "HIGH", "go"),
     ("import", "go_import_error", ["fence_strip", "todo_uncomment", "go_syntax_validate"], "MEDIUM", "go"),
+    # Go semantic repair routes (REQ-KZ-GO-403d Phase 2)
+    ("semantic", "python_contamination", ["go_contamination_strip", "go_syntax_validate"], "HIGH", "go"),
+    ("semantic", "dot_import", ["go_dot_import_cleanup", "go_syntax_validate"], "MEDIUM", "go"),
     # C# repair routes
     ("syntax", "csharp_syntax_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "bracket_balance", "csharp_syntax_validate"], "HIGH", "csharp"),
     ("import", "csharp_import_error", ["fence_strip", "csharp_convention_fix", "sql_parameterize", "todo_uncomment", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     ("convention", "csharp_convention_error", ["csharp_convention_fix", "sql_parameterize", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     ("security", "csharp_sql_injection", ["sql_parameterize", "csharp_syntax_validate"], "HIGH", "csharp"),
     # Node.js repair routes
-    ("syntax", "js_syntax_error", ["fence_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
+    ("syntax", "js_syntax_error", ["fence_strip", "shebang_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
     ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    # REQ-KZ-ND-402d Phase 2: Node.js semantic repair routes
+    ("semantic", "var_usage", ["var_to_const", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    ("semantic", "duplicate_require", ["dedup_require", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    ("semantic", "python_contamination", ["contamination_strip_js", "js_syntax_validate"], "HIGH", "nodejs"),
 ]
 
 # Step name → step class constructor
@@ -125,12 +152,21 @@ _STEP_FACTORIES: dict[str, type] = {
     "semantic_discarded_return_fix": SemanticDiscardedReturnFixStep,
     "semantic_duplicate_main_fix": SemanticDuplicateMainFixStep,
     "ast_validate": AstValidateStep,
+    "java_import_sort": JavaImportSortStep,
+    "java_sql_parameterize": JavaSqlParameterizeStep,
     "java_syntax_validate": JavaSyntaxValidateStep,
+    "go_contamination_strip": GoPythonContaminationStripStep,
+    "go_dot_import_cleanup": GoDotImportCleanupStep,
     "go_syntax_validate": GoSyntaxValidateStep,
     "csharp_convention_fix": CSharpConventionFixStep,
     "sql_parameterize": SqlParameterizeStep,
     "csharp_syntax_validate": CSharpSyntaxValidateStep,
     "js_syntax_validate": JsSyntaxValidateStep,
+    # REQ-KZ-ND-402d: Node.js semantic repair steps
+    "shebang_strip": ShebangStripStep,
+    "contamination_strip_js": ContaminationStripJsStep,
+    "var_to_const": VarToConstStep,
+    "dedup_require": DedupRequireStep,
 }
 
 # Map file extension → language_id for auto-detection
