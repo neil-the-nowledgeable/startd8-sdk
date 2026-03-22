@@ -927,3 +927,130 @@ class TestContextResolutionQualityHints:
             gen_context, metadata,
         )
         assert gen_context["quality_hints"] == ["Ensure factory returns"]
+
+
+# ===========================================================================
+# REQ-RFL-500: OTel Attributes for Feedback Loop Observability
+# ===========================================================================
+
+
+class TestOTelAttributes:
+    """Verify OTel attributes are set on spans when tracing is available."""
+
+    def _mock_span(self):
+        span = mock.MagicMock()
+        span.is_recording.return_value = True
+        return span
+
+    def test_integration_attributes_set(self):
+        """Integration span gets disk_quality_score, semantic count, repair steps."""
+        from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+        from startd8.contractors.queue import FeatureSpec
+
+        pc = PrimeContractorWorkflow.__new__(PrimeContractorWorkflow)
+        pc.review_enabled = False
+        pc.walkthrough = False
+        pc.review_results = {}
+        pc._quality_accumulator = None
+        pc.on_feature_complete = None
+        pc.queue = mock.MagicMock()
+        pc.project_root = Path("/tmp")
+        pc._engine = mock.MagicMock()
+        pc._prime_listener = mock.MagicMock()
+        pc._current_enrichment = None
+        pc.dry_run = False
+        pc.integration_history = []
+
+        # Mock integration result
+        result_mock = mock.MagicMock()
+        result_mock.success = True
+        result_mock.integrated_files = []
+        result_mock.metadata = {
+            "disk_quality_score": 0.75,
+            "disk_compliance": {
+                "foo.py": {
+                    "semantic_issues": [
+                        {"category": "phantom", "severity": "error"},
+                    ],
+                },
+            },
+            "repair_summaries": [
+                {"steps_applied": ["fence_strip", "ast_validate"]},
+            ],
+        }
+        result_mock.checkpoint_results = []
+        pc._engine.integrate.return_value = result_mock
+
+        span = self._mock_span()
+        with mock.patch(
+            "startd8.contractors.prime_contractor._trace"
+        ) as mock_trace:
+            mock_trace.get_current_span.return_value = span
+            feature = FeatureSpec(id="F-001", name="test")
+            pc.integrate_feature(feature)
+
+        # Verify integration attributes
+        calls = {c[0][0]: c[0][1] for c in span.set_attribute.call_args_list}
+        assert calls.get("integration.disk_quality_score") == 0.75
+        assert calls.get("integration.semantic_issue_count") == 1
+        assert calls.get("integration.repair_steps_applied") == 2
+
+    def test_review_attributes_set(self):
+        """Review span gets score, verdict, issue_count, cost."""
+        from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+        from startd8.contractors.queue import FeatureSpec
+
+        pc = PrimeContractorWorkflow.__new__(PrimeContractorWorkflow)
+        pc.review_enabled = True
+        pc.walkthrough = False
+        pc.quality_gate_enabled = False
+        pc.quality_gate_threshold = 0.5
+        pc.review_results = {}
+        pc._quality_accumulator = None
+        pc.on_feature_complete = None
+        pc.queue = mock.MagicMock()
+        pc.project_root = Path("/tmp")
+        pc._engine = mock.MagicMock()
+        pc._prime_listener = mock.MagicMock()
+        pc._current_enrichment = None
+        pc.dry_run = False
+        pc.integration_history = []
+        pc._review_agent = None
+        pc._review_adapter = mock.MagicMock()
+        pc._review_adapter.review_feature.return_value = {
+            "score": 72,
+            "verdict": "PASS",
+            "issues": ["minor style issue"],
+            "cost": 0.003,
+        }
+        pc.code_generator = None
+
+        result_mock = mock.MagicMock()
+        result_mock.success = True
+        result_mock.integrated_files = []
+        result_mock.metadata = {}
+        result_mock.checkpoint_results = []
+        pc._engine.integrate.return_value = result_mock
+
+        span = self._mock_span()
+        with mock.patch(
+            "startd8.contractors.prime_contractor._trace"
+        ) as mock_trace:
+            mock_trace.get_current_span.return_value = span
+            feature = FeatureSpec(id="F-002", name="test2")
+            pc.integrate_feature(feature)
+
+        calls = {c[0][0]: c[0][1] for c in span.set_attribute.call_args_list}
+        assert calls.get("review.score") == 72
+        assert calls.get("review.verdict") == "PASS"
+        assert calls.get("review.issue_count") == 1
+        assert calls.get("review.cost_usd") == 0.003
+
+    def test_corrective_hint_builder_static(self):
+        """_build_corrective_hint is a static method — verify it works."""
+        from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+        hint = PrimeContractorWorkflow._build_corrective_hint(
+            {"issues": ["broken import"]}, score=0.3, threshold=0.5,
+        )
+        assert "CRITICAL" in hint
+        assert "0.3" in hint

@@ -4461,6 +4461,18 @@ class PrimeContractorWorkflow:
                 new_score, original_score,
                 extra={"feature_name": feature.name},
             )
+            # REQ-RFL-500: Quality gate OTel — original kept
+            try:
+                _span = _trace.get_current_span()
+                if _span and _span.is_recording():
+                    _span.set_attribute("quality_gate.triggered", True)
+                    _span.set_attribute("quality_gate.pre_score", original_score)
+                    _span.set_attribute("quality_gate.post_score", new_score)
+                    _span.set_attribute(
+                        "quality_gate.accepted_version", "original",
+                    )
+            except Exception:
+                pass
             return False
 
         logger.info(
@@ -4468,6 +4480,18 @@ class PrimeContractorWorkflow:
             feature.name, original_score, new_score,
             extra={"feature_name": feature.name},
         )
+
+        # REQ-RFL-500: Quality gate OTel attributes
+        try:
+            _span = _trace.get_current_span()
+            if _span and _span.is_recording():
+                _span.set_attribute("quality_gate.triggered", True)
+                _span.set_attribute("quality_gate.pre_score", original_score)
+                _span.set_attribute("quality_gate.post_score", new_score)
+                _span.set_attribute("quality_gate.accepted_version", "redraft")
+        except Exception:
+            pass
+
         return True
 
     def integrate_feature(self, feature: FeatureSpec) -> bool:
@@ -4607,6 +4631,55 @@ class PrimeContractorWorkflow:
                         else None
                     ),
                 )
+
+            # REQ-RFL-500: OTel attributes for feedback loop observability
+            try:
+                _span = _trace.get_current_span()
+                if _span and _span.is_recording():
+                    # Integration attributes
+                    _dqs = result.metadata.get("disk_quality_score")
+                    if _dqs is not None:
+                        _span.set_attribute(
+                            "integration.disk_quality_score", _dqs,
+                        )
+                    _compliance = result.metadata.get("disk_compliance", {})
+                    _sem_count = sum(
+                        len(v.get("semantic_issues", []))
+                        for v in _compliance.values()
+                    )
+                    _span.set_attribute(
+                        "integration.semantic_issue_count", _sem_count,
+                    )
+                    _repair_steps = sum(
+                        len(s.get("steps_applied", []))
+                        for s in result.metadata.get(
+                            "repair_summaries", [],
+                        )
+                    )
+                    _span.set_attribute(
+                        "integration.repair_steps_applied", _repair_steps,
+                    )
+                    # Review attributes
+                    _rev = self.review_results.get(feature.id)
+                    if _rev:
+                        _span.set_attribute(
+                            "review.score",
+                            _rev.get("score") or 0,
+                        )
+                        _span.set_attribute(
+                            "review.verdict",
+                            _rev.get("verdict", ""),
+                        )
+                        _span.set_attribute(
+                            "review.issue_count",
+                            len(_rev.get("issues", [])),
+                        )
+                        _span.set_attribute(
+                            "review.cost_usd",
+                            _rev.get("cost") or 0.0,
+                        )
+            except Exception:
+                pass  # OTel is advisory — never block integration
 
             if self.on_feature_complete:
                 self.on_feature_complete(feature)

@@ -73,6 +73,7 @@ class PrimeReviewAdapter:
                 "verdict": "SKIP",
                 "issues": [],
                 "suggestions": [],
+                "classified_issues": [],
                 "reason": "no generated code found",
             }
 
@@ -88,6 +89,9 @@ class PrimeReviewAdapter:
                 generated_code=generated_code,
                 test_results=test_results,
             )
+            # REQ-RFL-210: Classify issues for accumulator pattern detection
+            raw_issues = review.get("issues", [])
+            review["classified_issues"] = classify_review_issues(raw_issues)
             return review
         except Exception:
             logger.warning(
@@ -98,6 +102,7 @@ class PrimeReviewAdapter:
                 "verdict": "ERROR",
                 "issues": [],
                 "suggestions": [],
+                "classified_issues": [],
             }
 
     def _feature_to_seed_task(self, feature: Any) -> Any:
@@ -109,27 +114,29 @@ class PrimeReviewAdapter:
         from startd8.seeds.models import SeedTask
 
         meta = feature.metadata or {} if hasattr(feature, "metadata") else {}
+        enrichment = meta.get("_enrichment", {})
+        seed_meta = meta.get("seed_metadata", {})
         return SeedTask(
             task_id=str(feature.id),
             title=feature.name,
-            task_type="task",
+            task_type=meta.get("task_type", "task"),
             story_points=0,
-            priority="medium",
-            labels=[],
-            depends_on=[],
+            priority=seed_meta.get("priority", "medium"),
+            labels=seed_meta.get("labels", []),
+            depends_on=list(feature.dependencies) if hasattr(feature, "dependencies") else [],
             description=feature.description or "",
             target_files=list(feature.target_files) if feature.target_files else [],
-            estimated_loc=0,
+            estimated_loc=meta.get("estimated_loc", 0) or 0,
             feature_id=str(feature.id),
-            domain=meta.get("domain", "general"),
+            domain=enrichment.get("domain", meta.get("domain", "general")),
             domain_reasoning="",
             environment_checks=[],
-            prompt_constraints=meta.get("prompt_constraints", []),
+            prompt_constraints=enrichment.get("prompt_constraints", []),
             post_generation_validators=[],
             available_siblings=[],
             existing_content_hash=None,
-            design_doc_sections=[],
-            artifact_types_addressed=[],
+            design_doc_sections=meta.get("design_doc_sections", []),
+            artifact_types_addressed=meta.get("artifact_types_addressed", []),
             file_scope={},
         )
 

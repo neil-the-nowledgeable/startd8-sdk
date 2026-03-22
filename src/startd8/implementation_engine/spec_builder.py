@@ -1238,6 +1238,21 @@ def build_spec_prompt(
                 f"## Quality Guidance (From Previous Runs)\n\n{hints_text}",
             ))
 
+    # REQ-RFL-500: OTel attributes for spec quality hints
+    try:
+        from opentelemetry import trace as _spec_trace
+        _spec_span = _spec_trace.get_current_span()
+        if _spec_span and _spec_span.is_recording():
+            _spec_span.set_attribute(
+                "spec.run_quality_hints.present", run_hints is not None,
+            )
+            _spec_span.set_attribute(
+                "spec.quality_hints.count",
+                len(seed_quality_hints) if seed_quality_hints else 0,
+            )
+    except Exception:
+        pass  # OTel is advisory
+
     # P2: Architecture and plan context
     obj_section = build_spec_objectives_section(project_obj)
     if obj_section:
