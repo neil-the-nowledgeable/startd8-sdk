@@ -28,8 +28,8 @@ Read REQ-KZ-ND-402 (Section 5, after REQ-KZ-ND-400) and validate against the cod
    - `duplicate_require`: Is "keep first occurrence" always correct? What if the second `require()` has a different destructuring pattern (`const {a} = require('x')` then `const {b} = require('x')`)?
    - `python_contamination`: Same concern as Go — could fingerprints match in string literals?
 3. **Compliance results wiring** — Confirm REQ-KZ-ND-402c (IMPLEMENTED) by reading the Node.js block in `integration_engine.py:_run_semantic_checks()`. Verify all 6 extensions (`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`) are covered.
-4. **Extension registration scope** — Adding 6 extensions to `_SEMANTIC_REPAIR_EXTENSIONS` is broader than other languages (C# adds 1, Go adds 1, Java adds 1). Verify the orchestrator handles all 6 correctly and doesn't have extension-specific logic that would break.
-5. **ESLint fallback chain (Phase 3)** — The requirement says "falls back to Phase 2 text-based steps if eslint unavailable." Verify this fallback pattern is supported by the repair step architecture. Can a single route invoke `eslint_fix` with fallback to `var_to_const`? Or does this need two separate routes?
+4. **Extension dispatch verification** — All 6 Node.js extensions are already mapped in `_EXT_TO_LANGUAGE` (`routing.py`). Verify the generic `run_file_repair()` → `route_failures()` path dispatches correctly for Node.js when semantic routing entries exist. Confirm no extension-specific logic in the orchestrator would break.
+5. **ESLint fallback chain (Phase 3)** — The requirement says "falls back to Phase 2 text-based steps if eslint unavailable." This fallback should be implemented _within_ the `EslintAutoFixStep.__call__()` method (check `shutil.which("eslint")`, fall back to text-based logic internally). The routing table does NOT need two separate routes — a single `("semantic", ...)` route invokes the composite step.
 6. **TypeScript considerations** — `var_to_const` on `.ts` files: does `tsc --noEmit` catch `const` reassignment errors that `node --check` would miss? Is the verification step language-aware?
 
 ### Part 2: Create Implementation Plan
@@ -38,8 +38,8 @@ Produce a phased implementation plan for REQ-KZ-ND-402.
 
 **Phase 1 deliverables (advisory-only — current state):**
 - Confirm all 6 categories appear in postmortem reports
-- Verify Kaizen suggestions for `console_log_in_service` in `CAUSE_TO_SUGGESTION` (the audit found this mapping exists)
-- Add missing mappings for: `var_usage`, `duplicate_require`, `unhandled_promise`, `module_system_mixing`, `python_contamination`
+- Verify existing Kaizen suggestions: `console_logging_detected` (cross-language, includes Node.js winston/pino guidance) and `module_system_mixing_detected` (Node.js-specific) already exist in `CAUSE_TO_SUGGESTION`
+- Add missing mappings for: `var_usage`, `duplicate_require`, `unhandled_promise`, `python_contamination` (4 categories — `module_system_mixing` is already mapped as `module_system_mixing_detected`)
 - Test: postmortem on a `.js` file with `var x = 1;` → verify `var_usage` appears in metrics
 
 **Phase 2 deliverables:**
@@ -67,9 +67,9 @@ Produce a phased implementation plan for REQ-KZ-ND-402.
    - `("semantic", "python_contamination", ["contamination_strip_js", "js_syntax_validate"], "HIGH", "nodejs")`
 
 5. **Bridge updates:**
-   - Add `"var_usage"`, `"duplicate_require"`, `"python_contamination"` to `_REPAIRABLE_CATEGORIES`
-   - Add `.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx` to `_SEMANTIC_REPAIR_EXTENSIONS`
-   - Add `_repair_single_nodejs_file()` to orchestrator (or generalize dispatch)
+   - Add `"var_usage"`, `"duplicate_require"`, `"python_contamination"` to `_REPAIRABLE_CATEGORIES` in `semantic_bridge.py`
+   - No extension registration needed — `_EXT_TO_LANGUAGE` in `routing.py` already maps all 6 Node.js extensions to `"nodejs"`
+   - No orchestrator changes needed — `run_file_repair()` is generic and dispatches via `route_failures()` which uses `_EXT_TO_LANGUAGE` for language inference
 
 6. **Tests:**
    - Unit: `var x = 1;` → `const x = 1;`, `for (var i...)` → `for (let i...)`
@@ -97,7 +97,7 @@ Produce a phased implementation plan for REQ-KZ-ND-402.
 | `src/startd8/languages/nodejs.py` | `repair_enabled`, `post_generation_cleanup()`, `stub_patterns` |
 | `src/startd8/repair/semantic_bridge.py` | `_REPAIRABLE_CATEGORIES`, `translate_to_diagnostics()` |
 | `src/startd8/repair/routing.py` | `_ROUTING_TABLE`, `_STEP_FACTORIES`, extension → language mapping |
-| `src/startd8/repair/orchestrator.py` | `_SEMANTIC_REPAIR_EXTENSIONS`, `_repair_single_csharp_file()` (reference) |
+| `src/startd8/repair/orchestrator.py` | Generic `run_file_repair()` — dispatches all languages via `route_failures()` |
 | `src/startd8/repair/staging.py` | Atomic staging for rollback support |
 | `src/startd8/repair/steps/sql_parameterize.py` | Reference repair step pattern |
 | `src/startd8/contractors/integration_engine.py` | Node.js block in `_run_semantic_checks()` |

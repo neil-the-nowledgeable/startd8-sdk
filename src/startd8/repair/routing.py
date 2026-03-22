@@ -20,6 +20,7 @@ from .steps import (
     CSharpConventionFixStep,
     CSharpSyntaxValidateStep,
     DedupRequireStep,
+    EslintAutoFixStep,
     DefinitionOrderFixStep,
     DunderAllFixStep,
     DuplicateRemovalStep,
@@ -83,9 +84,10 @@ _CANONICAL_ORDER = [
     "go_dot_import_cleanup",
     "go_syntax_validate",
     "csharp_syntax_validate",
-    # Node.js text-based repair steps (REQ-KZ-ND-402d Phase 2)
+    # Node.js repair steps (REQ-KZ-ND-402d Phase 2 + Phase 3)
     "shebang_strip",
     "contamination_strip_js",
+    "eslint_autofix",
     "var_to_const",
     "dedup_require",
     "js_syntax_validate",
@@ -124,9 +126,11 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     # Node.js repair routes
     ("syntax", "js_syntax_error", ["fence_strip", "shebang_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
     ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
-    # REQ-KZ-ND-402d Phase 2: Node.js semantic repair routes
-    ("semantic", "var_usage", ["var_to_const", "js_syntax_validate"], "MEDIUM", "nodejs"),
-    ("semantic", "duplicate_require", ["dedup_require", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    # REQ-KZ-ND-402d Phase 3: Node.js semantic repair routes
+    # eslint_autofix is primary for var_usage/duplicate_require — internally
+    # falls back to Phase 2 text-based steps when ESLint is unavailable.
+    ("semantic", "var_usage", ["eslint_autofix", "js_syntax_validate"], "MEDIUM", "nodejs"),
+    ("semantic", "duplicate_require", ["eslint_autofix", "js_syntax_validate"], "MEDIUM", "nodejs"),
     ("semantic", "python_contamination", ["contamination_strip_js", "js_syntax_validate"], "HIGH", "nodejs"),
 ]
 
@@ -165,6 +169,7 @@ _STEP_FACTORIES: dict[str, type] = {
     # REQ-KZ-ND-402d: Node.js semantic repair steps
     "shebang_strip": ShebangStripStep,
     "contamination_strip_js": ContaminationStripJsStep,
+    "eslint_autofix": EslintAutoFixStep,
     "var_to_const": VarToConstStep,
     "dedup_require": DedupRequireStep,
 }

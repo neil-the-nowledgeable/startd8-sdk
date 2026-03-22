@@ -16,6 +16,7 @@ from .java_syntax_validate import JavaSyntaxValidateStep
 from .js_syntax_validate import JsSyntaxValidateStep
 from .contamination_strip_js import ContaminationStripJsStep
 from .dedup_require import DedupRequireStep
+from .eslint_autofix import EslintAutoFixStep
 from .shebang_strip import ShebangStripStep
 from .var_to_const import VarToConstStep
 from .class_body_dedup import ClassBodyDeduplicationStep
@@ -51,6 +52,7 @@ __all__ = [
     "JsSyntaxValidateStep",
     "ContaminationStripJsStep",
     "DedupRequireStep",
+    "EslintAutoFixStep",
     "ShebangStripStep",
     "VarToConstStep",
     "ClassBodyDeduplicationStep",

@@ -1,8 +1,9 @@
 # Kaizen for Prime Contractor — Node.js Language Requirements
 
-> **Version:** 1.0.0
-> **Status:** DRAFT
-> **Date:** 2026-03-18
+> **Version:** 1.1.0
+> **Status:** DRAFT (post-plan-review)
+> **Date:** 2026-03-22
+> **Prior version:** 1.0.0 (2026-03-18)
 > **Parent:** [KAIZEN_PRIME_REQUIREMENTS.md](../prime/KAIZEN_PRIME_REQUIREMENTS.md)
 > **Language Profile:** `NodeLanguageProfile` (`src/startd8/languages/nodejs.py`)
 > **Scope:** Node.js/TypeScript-specific quality measurement, validation, and feedback for the Kaizen system
@@ -138,7 +139,27 @@ The following tools are used for Node.js validation. Tools are categorized as **
 
 Semantic validators detect issues that pass syntax checks but indicate broken or low-quality code. Each validator populates the `semantic_issues` list in `DiskComplianceResult` with structured entries (severity, category, message, line number).
 
-#### `check_module_system_consistency(code: str, file_ext: str, package_type: str) -> list[SemanticIssue]`
+**Implementation status:** 6 of 11 checks are implemented in `validators/nodejs_semantic_checks.py`. The remaining 5 are specified below but not yet implemented — they are marked **[PLANNED]** and deferred to a future phase. Tests, scoring entries, and root cause mappings for **[PLANNED]** checks should NOT be implemented until the check itself exists.
+
+| Status | Check | Category | Kaizen Suggestion Wired? |
+|--------|-------|----------|--------------------------|
+| IMPLEMENTED | `_check_console_log_in_service()` | `console_log_in_service` | YES → `console_logging_detected` |
+| IMPLEMENTED | `_check_var_usage()` | `var_usage` | **NO — needs mapping** |
+| IMPLEMENTED | `_check_duplicate_requires()` | `duplicate_require` | **NO — needs mapping** |
+| IMPLEMENTED | `_check_unhandled_promises()` | `unhandled_promise` | **NO — needs mapping** |
+| IMPLEMENTED | `_check_python_contamination()` | `python_contamination` | YES → `language_mismatch_in_generation` |
+| IMPLEMENTED | `_check_module_system_consistency()` | `module_system_mixing` | YES → `module_system_mixing_detected` |
+| PLANNED | `check_callback_hell()` | `callback_hell` | No (deferred) |
+| PLANNED | `check_unused_requires()` | `unused_import` | No (deferred) |
+| PLANNED | `check_missing_exports()` | `missing_exports` | No (deferred) |
+| PLANNED | `check_typescript_any_overuse()` | `any_type_overuse` | No (deferred) |
+| PLANNED | `check_cross_language_contamination()` (Go support) | `cross_language_contamination` | No (deferred) |
+
+**Quick win — 3 missing suggestion mappings:** The 3 implemented checks without Kaizen suggestion wiring (`var_usage`, `duplicate_require`, `unhandled_promise`) need entries added to `_SEMANTIC_CATEGORY_TO_SUGGESTION` in `prime_postmortem.py`. This is a pure dictionary edit — no new logic required.
+
+**Known bug — `self.` false positive (CRITICAL):** `_check_python_contamination()` uses `if fp in source` (whole-file substring match). The fingerprint `"self."` matches inside string literals (e.g., `"help yourself."`) and comments, producing false CRITICAL scores (0.0) on clean JS files. This corrupts all downstream Kaizen metrics. **Fix:** Change to line-by-line matching with line-start anchor (`^\s*self\.`), consistent with the repair step design in REQ-KZ-ND-402d. This is a one-line fix with high data quality impact.
+
+#### `check_module_system_consistency(code: str, file_ext: str, package_type: str) -> list[SemanticIssue]` **[IMPLEMENTED]**
 
 Detects mixing of CommonJS and ESM syntax within a single file.
 
@@ -163,9 +184,9 @@ Detects mixing of CommonJS and ESM syntax within a single file.
 - `require()` inside `try/catch` for optional dependency loading is acceptable
 - Dynamic `import()` expressions are valid in both CJS and ESM
 
-#### `check_missing_error_handling(code: str) -> list[SemanticIssue]`
+#### `check_missing_error_handling(code: str) -> list[SemanticIssue]` **[PLANNED]**
 
-Detects async operations without error handling.
+Detects async operations without error handling. (Note: a simplified version exists as `_check_unhandled_promises()` in the current implementation, covering a subset of these patterns.)
 
 **Detection patterns:**
 - `async function` or `async (` without any `try` block in the function body: emit `UNHANDLED_PROMISE_REJECTION` (severity: MEDIUM)
@@ -176,7 +197,7 @@ Detects async operations without error handling.
 - Top-level `process.on('unhandledRejection', ...)` in the same file satisfies the global handler requirement
 - Functions that only `await` synchronous-looking operations (e.g., `await delay(100)`) are exempt
 
-#### `check_callback_hell(code: str) -> list[SemanticIssue]`
+#### `check_callback_hell(code: str) -> list[SemanticIssue]` **[PLANNED]**
 
 Detects deeply nested callback patterns that should use `async`/`await`.
 
@@ -194,7 +215,7 @@ fs.readFile('a', (err, data) => {
 });
 ```
 
-#### `check_console_log_in_production(code: str, file_path: str) -> list[SemanticIssue]`
+#### `check_console_log_in_production(code: str, file_path: str) -> list[SemanticIssue]` **[IMPLEMENTED as `_check_console_log_in_service()`]**
 
 Detects `console.log()` / `console.warn()` / `console.error()` in production code that should use a structured logger.
 
@@ -204,7 +225,7 @@ Detects `console.log()` / `console.warn()` / `console.error()` in production cod
 - Exempt: files named `*.test.js`, `*.spec.js`, `*.test.ts`, `*.spec.ts`
 - Exempt: `console.error()` in catch blocks (acceptable fallback)
 
-#### `check_unused_requires(code: str) -> list[SemanticIssue]`
+#### `check_unused_requires(code: str) -> list[SemanticIssue]` **[PLANNED]**
 
 Detects `require()` or `import` statements whose bindings are never referenced in the rest of the file.
 
@@ -218,7 +239,7 @@ Detects `require()` or `import` statements whose bindings are never referenced i
 - Side-effect imports: `require('dotenv').config()`, `import './polyfill'` (no binding)
 - Imports used only in type annotations (TypeScript): `import type { X }` is exempt
 
-#### `check_missing_exports(code: str, file_path: str) -> list[SemanticIssue]`
+#### `check_missing_exports(code: str, file_path: str) -> list[SemanticIssue]` **[PLANNED]**
 
 Detects modules that define functions or classes but export nothing.
 
@@ -231,7 +252,7 @@ Detects modules that define functions or classes but export nothing.
 - Files that are purely configuration (e.g., `jest.config.js`, `.eslintrc.js`)
 - Test files
 
-#### `check_typescript_any_overuse(code: str) -> list[SemanticIssue]`
+#### `check_typescript_any_overuse(code: str) -> list[SemanticIssue]` **[PLANNED]**
 
 Detects excessive use of the `any` type annotation in TypeScript files.
 
@@ -245,9 +266,9 @@ Detects excessive use of the `any` type annotation in TypeScript files.
 - Files explicitly named `*.d.ts` (declaration files) are exempt
 - Generic constraint `<T = any>` as a default is acceptable (1 occurrence per generic)
 
-#### `check_cross_language_contamination(code: str, file_ext: str) -> list[SemanticIssue]`
+#### `check_cross_language_contamination(code: str, file_ext: str) -> list[SemanticIssue]` **[PARTIAL — Python only; Go detection PLANNED]**
 
-Detects Python or Go code artifacts in Node.js files.
+Detects Python or Go code artifacts in Node.js files. The current implementation (`_check_python_contamination()`) covers Python fingerprints only. Go detection patterns below are specified but not yet implemented.
 
 **Detection patterns:**
 
@@ -268,7 +289,14 @@ Emit `CROSS_LANGUAGE_CONTAMINATION` with the detected source language.
 
 ### REQ-KZ-ND-300: Node.js Quality Score Formula
 
-The Node.js quality score follows the same composite structure as the parent Kaizen system but with Node.js-specific component weights:
+**Implementation status:** NOT YET IMPLEMENTED. The current `compute_disk_quality_score()` in `forward_manifest_validator.py` uses a language-agnostic 4-component formula. The Node.js-specific formula below requires a **language dispatch mechanism** that does not yet exist. Until that dispatch is built, Node.js files are scored using the generic formula, which handles semantic issues via severity-weighted `semantic_penalty` (errors × 0.3, warnings × 0.1). This provides reasonable quality signal without the Node.js-specific weighting.
+
+**Dependency:** Implementing this formula requires:
+1. A `language_id` parameter on `compute_disk_quality_score()` (or a language-aware subclass)
+2. Component extraction from `semantic_issues` by category (module_consistency, error_handling, contamination)
+3. These components don't exist as first-class fields in `DiskComplianceResult` — they must be derived
+
+**Target formula** (deferred until language dispatch exists):
 
 ```
 quality_score = (syntax_check × 0.25)
@@ -279,7 +307,15 @@ quality_score = (syntax_check × 0.25)
              + (convention_compliance × 0.10)
 ```
 
-#### Component Definitions
+**Current formula** (language-agnostic, used today):
+```
+composite = (contract_compliance × 0.4)
+          + (import_completeness × 0.2)
+          + (stub_penalty × 0.2)
+          + (semantic_penalty × 0.2)
+```
+
+#### Component Definitions (target — not yet implemented)
 
 | Component | Value Range | Calculation |
 |-----------|------------|-------------|
@@ -329,15 +365,27 @@ The Kaizen system categorizes Node.js defects using these root cause codes. Each
 
 Node.js repair operates at the file-whole level (no AST-based splicing). The `NodeLanguageProfile` has `repair_enabled = True`, meaning the existing repair pipeline activates for Node.js files but with a limited set of deterministic steps.
 
-#### Available Repair Steps
+#### Implemented Repair Steps
 
-| Step | Tool | Deterministic? | What It Fixes |
-|------|------|---------------|---------------|
-| `fence_strip` | Regex | Yes | Removes markdown code fences (`` ```javascript ... ``` ``) from LLM output that wasn't properly extracted |
-| `prettier_format` | `prettier --write {file}` | Yes | Normalizes formatting (indentation, semicolons, trailing commas per config) |
-| `eslint_autofix` | `eslint --fix {file}` | Mostly | Auto-fixable lint issues (unused imports, missing semicolons, `==` to `===`) |
-| `shebang_strip` | Regex | Yes | Removes accidental `#!/usr/bin/env python3` shebang from Node.js files |
-| `contamination_strip` | Regex | Yes | Removes Python preamble lines (`from __future__`, `import os`) from files that are otherwise valid JS |
+| Step | Tool | Registered in `_STEP_FACTORIES`? | What It Fixes |
+|------|------|----------------------------------|---------------|
+| `fence_strip` | Regex | YES | Removes markdown code fences (`` ```javascript ... ``` ``) from LLM output that wasn't properly extracted |
+| `js_syntax_validate` | `node --check` | YES | Validates JavaScript syntax after repair; verification step in all Node.js repair routes |
+
+These are the only Node.js-applicable steps currently registered in the repair pipeline. `fence_strip` is language-agnostic and applies to all languages.
+
+#### Planned Repair Steps (Not Yet Implemented)
+
+| Step | Tool | Phase | Depends On | What It Fixes |
+|------|------|-------|-----------|---------------|
+| `shebang_strip` | Regex | **Quick win** | Nothing — independent | Removes accidental `#!/usr/bin/env python3` shebang from Node.js files. ~15 lines of code; no dependencies. |
+| `contamination_strip_js` | Regex | Phase 2 (REQ-KZ-ND-402d) | Nothing — independent | Removes Python preamble lines (`from __future__`, `import os`) from otherwise valid JS. Named `contamination_strip_js` (not `contamination_strip`) to avoid collision with any future generic step. |
+| `var_to_const` | Regex | Phase 2 (REQ-KZ-ND-402d) | Nothing — independent | Replaces `var` with `const` (or `let` in for-loops) |
+| `dedup_require` | Regex | Phase 2 (REQ-KZ-ND-402d) | Nothing — independent | Removes duplicate `require()`/`import` of the same module |
+| `prettier_format` | `prettier --write {file}` | Phase 3 | External tool | Normalizes formatting (indentation, semicolons, trailing commas per config) |
+| `eslint_autofix` | `eslint --fix {file}` | Phase 3 (REQ-KZ-ND-402d) | External tool | Auto-fixable lint issues (unused imports, missing semicolons, `==` to `===`). Falls back to Phase 2 text-based steps if `eslint` unavailable. |
+
+**Quick win — `shebang_strip`:** This is the simplest possible repair step (~15 lines). It has no dependencies, no external tools, and immediately improves contamination scores for files that received a Python shebang line. It should be implemented before or alongside Phase 2.
 
 #### Missing Repair Capabilities (Not Implemented)
 
@@ -351,14 +399,14 @@ Node.js repair operates at the file-whole level (no AST-based splicing). The `No
 
 #### Repair Ordering
 
-Repairs execute in this order (consistent with the parent repair pipeline):
+Repair steps execute in the order defined by `_CANONICAL_ORDER` in `repair/routing.py` — this is the single source of truth for step ordering across all languages. This requirements document does NOT define a separate ordering. When adding new Node.js steps, insert them at the appropriate position in `_CANONICAL_ORDER` (text-based transformations before syntax validation).
 
-1. `fence_strip` — Extract code from markdown fences
-2. `contamination_strip` — Remove cross-language artifacts
-3. `shebang_strip` — Remove incorrect shebang lines
-4. `prettier_format` — Normalize formatting (if `prettier` available)
-5. `eslint_autofix` — Fix lint issues (if `eslint` available)
-6. Re-validate with `node --check` (or `tsc --noEmit` for TS)
+**Current `_CANONICAL_ORDER` positions relevant to Node.js:**
+- `fence_strip` (position 1 — all languages)
+- *New Node.js steps would be inserted here (after text transformations, before validation)*
+- `js_syntax_validate` (final position — verification)
+
+**Invariant:** `js_syntax_validate` MUST be the last step in any Node.js repair route. It runs `node --check` (or `tsc --noEmit` for TS) and serves as the verification gate.
 
 If re-validation fails after all repair steps, the file is marked as `repair_failed` and the original (pre-repair) version is preserved alongside the attempted repair for diagnostic comparison.
 
@@ -374,7 +422,7 @@ The Node.js semantic checks module (`nodejs_semantic_checks.py`) produces 6 cate
 
 #### REQ-KZ-ND-402a: Multi-Language Dispatch
 
-Add `.js`, `.jsx`, `.ts`, `.tsx` to `_SEMANTIC_REPAIR_EXTENSIONS` when Phase 2 repair steps exist. Phase 1: JS/TS files are NOT dispatched to semantic repair.
+All 6 Node.js extensions (`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`) are already mapped to `"nodejs"` in `_EXT_TO_LANGUAGE` (`repair/routing.py`). No extension registration change is needed — the repair pipeline dispatches via the generic `run_file_repair()` → `route_failures()` path, which uses `_EXT_TO_LANGUAGE` for language inference. Phase 1: no semantic repair routes exist for `"nodejs"`, so Node.js files pass through without semantic repair. Phase 2: adding `("semantic", ...)` routing entries with `language="nodejs"` activates dispatch automatically.
 
 #### REQ-KZ-ND-402b: Category Registration
 
@@ -396,11 +444,11 @@ Add `.js`, `.jsx`, `.ts`, `.tsx` to `_SEMANTIC_REPAIR_EXTENSIONS` when Phase 2 r
 **Phase 1 (current):** All 6 categories advisory-only. Visible in postmortem/Kaizen scoring.
 
 **Phase 2:** Three deterministic text-based steps (no external tool dependency):
-1. **`var_to_const`** — Regex `s/\bvar\s+/const /g`. Downstream `node --check` catches incorrect `const` for reassigned vars.
-2. **`dedup_require`** — Track seen specifiers, remove duplicate `require()`/`import` lines.
-3. **`contamination_strip_js`** — Remove Python fingerprint lines. Reuse pattern list from cross-language contamination strip.
+1. **`var_to_const`** — Line-by-line regex with for-loop detection: `for\s*\(\s*var\b` → `for (let`, all other `var` → `const`. Downstream `node --check` catches incorrect `const` for reassigned vars (the step accepts over-constification as safe because `node --check` will reject it, causing rollback to the pre-repair version). **Edge case:** `var` inside string literals or template literals is not rewritten because the regex requires `^\s*var\s+` (line-start anchor).
+2. **`dedup_require`** — Track seen module specifiers, remove duplicate `require()`/`import` lines (keep first occurrence). **Out-of-scope for Phase 2:** Different destructuring from the same module (`const {a} = require('x')` + `const {b} = require('x')`) should be _merged_, not deduplicated — this requires AST-level understanding and is deferred to Phase 3 (ESLint `no-duplicate-imports` handles it). Phase 2 skips lines where the specifier matches but the destructuring pattern differs.
+3. **`contamination_strip_js`** — Remove Python fingerprint lines. Reuse pattern list from `nodejs_semantic_checks.py:_check_python_contamination()`. **Edge case:** `self.` can appear in JS string literals (e.g., `"help yourself."`) — the step matches only lines where the fingerprint appears as a statement (line-start anchor or preceded by whitespace only), not inside string literals.
 
-Register `var_usage`, `duplicate_require`, `python_contamination` as repairable. Add JS/TS extensions to `_SEMANTIC_REPAIR_EXTENSIONS`.
+Register `var_usage`, `duplicate_require`, `python_contamination` in `_REPAIRABLE_CATEGORIES` (`semantic_bridge.py`). Add `("semantic", ...)` routing entries with `language="nodejs"` to `_ROUTING_TABLE` (`routing.py`). No extension registration needed — `_EXT_TO_LANGUAGE` already covers all 6 extensions.
 
 **Phase 3:** `eslint --fix` integration as composite step. Falls back to Phase 2 text-based steps if `eslint` unavailable. Potentially promotes additional categories as ESLint auto-fix coverage expands.
 
@@ -411,6 +459,14 @@ Register `var_usage`, `duplicate_require`, `python_contamination` as repairable.
 ### REQ-KZ-ND-500: Node.js-Specific Kaizen Hints
 
 When the Kaizen system generates improvement suggestions (per parent REQ-KZ-500/501), Node.js-specific hints use these templates. Hints are injected into the LLM prompt context for subsequent runs.
+
+**Cross-feature threshold:** Kaizen suggestions are only generated when **2 or more features** in the same run share the same semantic issue category (`_CROSS_FEATURE_PATTERN_MIN` in `prime_postmortem.py`). A single-feature run with `var_usage` in every file will generate ZERO suggestions because the threshold is per-feature, not per-file. This is intentional (avoids noise from one-off issues) but means single-feature test runs will not exercise the suggestion pipeline. Integration tests must use multi-feature seed tasks.
+
+**Wiring requirement:** Each hint below requires TWO entries to be active:
+1. A `CAUSE_TO_SUGGESTION` entry (hint text + phase) — provides the suggestion content
+2. A `_SEMANTIC_CATEGORY_TO_SUGGESTION` entry (check category → suggestion key) — routes semantic issues to the correct suggestion
+
+Missing either entry causes silent failure — the check fires, the issue is recorded, but no Kaizen suggestion is generated.
 
 #### Module System Hints
 
@@ -565,15 +621,15 @@ For tasks with Dockerfile targets, `build_project_context_section()` injects Doc
 
 ### Requirements to Existing SDK Module Mapping
 
-| Node.js Requirement | SDK Module | Integration Point |
-|---------------------|-----------|-------------------|
-| REQ-KZ-ND-100 | `forward_manifest_validator.py` | `_validate_non_python_file()` dispatch |
-| REQ-KZ-ND-200 | New: `kaizen/validators/nodejs.py` | Semantic validator functions |
-| REQ-KZ-ND-300 | `kaizen/metrics.py` (TBD) | `compute_disk_quality_score()` language dispatch |
-| REQ-KZ-ND-301 | `kaizen/metrics.py` (TBD) | Root cause enum extension |
-| REQ-KZ-ND-400 | `repair/orchestrator.py` | Repair step registry extension |
-| REQ-KZ-ND-500 | `kaizen/suggestions.py` (TBD) | Hint template registry |
-| REQ-KZ-ND-600 | `languages/nodejs.py` | Already implemented (profile methods) |
+| Node.js Requirement | SDK Module | Integration Point | Status |
+|---------------------|-----------|-------------------|--------|
+| REQ-KZ-ND-100 | `forward_manifest_validator.py` | `_validate_non_python_file()` dispatch | Implemented |
+| REQ-KZ-ND-200 | `validators/nodejs_semantic_checks.py` | `run_nodejs_semantic_checks()` — 6 checks | Implemented (6/11 checks) |
+| REQ-KZ-ND-300 | `forward_manifest_validator.py` | `compute_disk_quality_score()` — language-agnostic; Node.js-specific weights deferred | Generic only |
+| REQ-KZ-ND-301 | `contractors/prime_postmortem.py` | `_SEMANTIC_CATEGORY_TO_SUGGESTION` — 3/6 Node.js checks mapped | Partial |
+| REQ-KZ-ND-400 | `repair/routing.py`, `repair/steps/` | `_STEP_FACTORIES`, `_ROUTING_TABLE` — 2 Node.js routes (syntax, import) | Partial |
+| REQ-KZ-ND-500 | `contractors/prime_postmortem.py` | `CAUSE_TO_SUGGESTION` + `_SEMANTIC_CATEGORY_TO_SUGGESTION` — 2 entries exist | Partial |
+| REQ-KZ-ND-600 | `languages/nodejs.py` | Already implemented (profile methods) | Implemented |
 
 ---
 
@@ -581,37 +637,68 @@ For tasks with Dockerfile targets, `build_project_context_section()` injects Doc
 
 ### Unit Tests
 
+Tests are grouped by implementation status. **[NOW]** tests validate existing code. **[PHASE 2]** tests should be written alongside Phase 2 repair steps. **[DEFERRED]** tests depend on PLANNED checks that don't exist yet — do not implement until the check exists.
+
+#### [NOW] — Tests for implemented functionality
+
 | Test | Requirement | Description |
 |------|------------|-------------|
 | `test_nodejs_syntax_validation_pass` | REQ-KZ-ND-100 | Valid JS file passes `node --check` |
 | `test_nodejs_syntax_validation_fail` | REQ-KZ-ND-100 | JS file with syntax error scores 0.0 |
-| `test_module_consistency_pure_esm` | REQ-KZ-ND-100, REQ-KZ-ND-200 | Pure ESM file scores 1.0 for module consistency |
-| `test_module_consistency_pure_cjs` | REQ-KZ-ND-100, REQ-KZ-ND-200 | Pure CJS file scores 1.0 for module consistency |
+| `test_module_consistency_pure_esm` | REQ-KZ-ND-100, 200 | Pure ESM file scores 1.0 for module consistency |
+| `test_module_consistency_pure_cjs` | REQ-KZ-ND-100, 200 | Pure CJS file scores 1.0 for module consistency |
 | `test_module_consistency_mixed` | REQ-KZ-ND-200 | File with both `require()` and `import` flagged as MODULE_SYSTEM_MISMATCH |
 | `test_module_mismatch_mjs_with_require` | REQ-KZ-ND-200 | `.mjs` file with `require()` flagged CRITICAL |
 | `test_cross_language_contamination_python` | REQ-KZ-ND-200 | JS file with `from __future__ import annotations` detected |
-| `test_cross_language_contamination_go` | REQ-KZ-ND-200 | JS file with `package main` detected |
-| `test_missing_error_handling` | REQ-KZ-ND-200 | Async function without try/catch flagged |
-| `test_callback_hell_detection` | REQ-KZ-ND-200 | 4-level nested callbacks flagged |
 | `test_console_log_exemption_test_files` | REQ-KZ-ND-200 | `console.log` in test files not flagged |
-| `test_unused_require_detection` | REQ-KZ-ND-200 | `const x = require('y')` with no reference to `x` flagged |
-| `test_missing_exports_detection` | REQ-KZ-ND-200 | File with functions but no exports flagged |
-| `test_missing_exports_entry_point_exempt` | REQ-KZ-ND-200 | `index.js` with no exports not flagged |
-| `test_typescript_any_overuse` | REQ-KZ-ND-200 | `.ts` file with 5 `any` annotations flagged |
-| `test_typescript_any_dts_exempt` | REQ-KZ-ND-200 | `.d.ts` file with `any` not flagged |
-| `test_quality_score_perfect` | REQ-KZ-ND-300 | Clean file scores 1.0 |
-| `test_quality_score_contaminated` | REQ-KZ-ND-300 | Contaminated file scores ~0.0 |
-| `test_quality_score_mixed_modules` | REQ-KZ-ND-300 | Mixed-module file loses 0.20 (module_consistency = 0.0) |
-| `test_root_cause_classification` | REQ-KZ-ND-301 | Each defect type maps to correct root cause code |
+| `test_var_usage_detected` | REQ-KZ-ND-200 | `var x = 1;` flagged as `var_usage` |
+| `test_duplicate_require_detected` | REQ-KZ-ND-200 | Duplicate `require('express')` flagged as `duplicate_require` |
+| `test_unhandled_promise_detected` | REQ-KZ-ND-200 | Async call without `await` flagged as `unhandled_promise` |
+| `test_contamination_self_false_positive` | REQ-KZ-ND-200 | **Bug regression:** `"help yourself."` in string must NOT trigger `python_contamination` |
 | `test_fence_strip_repair` | REQ-KZ-ND-400 | Markdown fences removed from JS output |
-| `test_contamination_strip_repair` | REQ-KZ-ND-400 | Python preamble lines removed |
-| `test_prettier_repair_invocation` | REQ-KZ-ND-400 | `prettier --write` called when available |
-| `test_repair_ordering` | REQ-KZ-ND-400 | Repairs execute in specified order |
-| `test_hint_module_system` | REQ-KZ-ND-500 | MODULE_SYSTEM_MISMATCH triggers correct hint text |
-| `test_hint_error_handling` | REQ-KZ-ND-500 | UNHANDLED_PROMISE_REJECTION triggers correct hint text |
-| `test_hint_contamination` | REQ-KZ-ND-500 | CROSS_LANGUAGE_CONTAMINATION triggers correct hint text |
+| `test_hint_module_system` | REQ-KZ-ND-500 | MODULE_SYSTEM_MISMATCH triggers correct hint via `_SEMANTIC_CATEGORY_TO_SUGGESTION` |
+| `test_hint_contamination` | REQ-KZ-ND-500 | `python_contamination` routes to `language_mismatch_in_generation` suggestion |
+| `test_hint_console_logging` | REQ-KZ-ND-500 | `console_log_in_service` routes to `console_logging_detected` suggestion |
+| `test_quality_score_perfect` | REQ-KZ-ND-300 | Clean file scores 1.0 (generic formula) |
+| `test_quality_score_contaminated` | REQ-KZ-ND-300 | File with `python_contamination` (error severity) gets penalty via `semantic_penalty` |
 | `test_module_system_decision_tree` | REQ-KZ-ND-600 | Module system resolved via priority chain |
 | `test_package_json_generation` | REQ-KZ-ND-600 | `generate_dependency_file()` produces valid JSON |
+
+#### [PHASE 2] — Tests for Phase 2 repair steps
+
+| Test | Requirement | Description |
+|------|------------|-------------|
+| `test_var_to_const_basic` | REQ-KZ-ND-402d | `var x = 1;` → `const x = 1;` |
+| `test_var_to_let_for_loop` | REQ-KZ-ND-402d | `for (var i = 0; ...)` → `for (let i = 0; ...)` |
+| `test_dedup_require_identical` | REQ-KZ-ND-402d | Duplicate `require('express')` → first kept, second removed |
+| `test_dedup_require_different_destructuring` | REQ-KZ-ND-402d | `{a} = require('x')` + `{b} = require('x')` → both kept (skip) |
+| `test_contamination_strip_js` | REQ-KZ-ND-402d | `def main():` in `.js` file → line removed |
+| `test_shebang_strip` | REQ-KZ-ND-400 | `#!/usr/bin/env python3` removed from JS file |
+| `test_repair_route_var_usage` | REQ-KZ-ND-402d | `var_usage` routes to `["var_to_const", "js_syntax_validate"]` |
+| `test_bridge_translates_nodejs_categories` | REQ-KZ-ND-402d | `semantic_issues=[{"category":"var_usage"}]` → produces `SemanticDiagnostic` |
+| `test_bridge_skips_advisory_categories` | REQ-KZ-ND-402d | `unhandled_promise` → empty (not repairable) |
+| `test_hint_var_usage` | REQ-KZ-ND-500 | `var_usage` routes to suggestion via `_SEMANTIC_CATEGORY_TO_SUGGESTION` |
+| `test_hint_duplicate_require` | REQ-KZ-ND-500 | `duplicate_require` routes to suggestion |
+| `test_hint_unhandled_promise` | REQ-KZ-ND-500 | `unhandled_promise` routes to suggestion |
+
+#### [DEFERRED] — Tests blocked on PLANNED checks
+
+| Test | Requirement | Blocked By |
+|------|------------|------------|
+| `test_cross_language_contamination_go` | REQ-KZ-ND-200 | Go detection not implemented |
+| `test_missing_error_handling` | REQ-KZ-ND-200 | `check_missing_error_handling()` not implemented |
+| `test_callback_hell_detection` | REQ-KZ-ND-200 | `check_callback_hell()` not implemented |
+| `test_unused_require_detection` | REQ-KZ-ND-200 | `check_unused_requires()` not implemented |
+| `test_missing_exports_detection` | REQ-KZ-ND-200 | `check_missing_exports()` not implemented |
+| `test_missing_exports_entry_point_exempt` | REQ-KZ-ND-200 | `check_missing_exports()` not implemented |
+| `test_typescript_any_overuse` | REQ-KZ-ND-200 | `check_typescript_any_overuse()` not implemented |
+| `test_typescript_any_dts_exempt` | REQ-KZ-ND-200 | `check_typescript_any_overuse()` not implemented |
+| `test_quality_score_mixed_modules` | REQ-KZ-ND-300 | Node.js-specific scoring weights not implemented |
+| `test_root_cause_classification` | REQ-KZ-ND-301 | Depends on all checks being implemented |
+| `test_contamination_strip_repair` | REQ-KZ-ND-400 | `contamination_strip_js` step not implemented |
+| `test_prettier_repair_invocation` | REQ-KZ-ND-400 | `prettier_format` step not implemented |
+| `test_repair_ordering` | REQ-KZ-ND-400 | Ordering defined by `_CANONICAL_ORDER`, not this doc |
+| `test_hint_error_handling` | REQ-KZ-ND-500 | `check_missing_error_handling()` not implemented |
 
 ### Integration Tests
 
@@ -627,3 +714,39 @@ For tasks with Dockerfile targets, `build_project_context_section()` injects Doc
 | Test | Requirements | Description |
 |------|-------------|-------------|
 | `test_prime_nodejs_online_boutique_subset` | All | Run Prime Contractor against 3 Node.js features from Online Boutique plan → verify no CROSS_LANGUAGE_CONTAMINATION, no MODULE_SYSTEM_MISMATCH, quality score > 0.7 |
+
+---
+
+## 10. Plan-Derived Insights
+
+> Added 2026-03-22 after implementation planning exposed gaps between requirements and codebase reality. These insights improve requirements robustness and identify quick wins.
+
+### Quick Wins (immediate value, minimal cost)
+
+| # | What | Cost | Value | Files |
+|---|------|------|-------|-------|
+| QW-1 | **Fix `self.` detection bug** — `_check_python_contamination()` uses `if fp in source` (whole-file substring). `"self."` matches in `"help yourself."`. Change to line-by-line with `^\s*self\.` anchor. | ~5 min, 1 file | Prevents false CRITICAL (0.0) scores on clean JS files. Corrupts ALL downstream Kaizen metrics when triggered. | `validators/nodejs_semantic_checks.py` |
+| QW-2 | **Wire 3 missing suggestion mappings** — `var_usage`, `duplicate_require`, `unhandled_promise` have no entries in `_SEMANTIC_CATEGORY_TO_SUGGESTION`. Checks fire, issues are recorded, but no Kaizen hint is ever generated. | ~10 min, 1 file | Makes 3 existing checks actionable in the feedback loop. Currently invisible to Kaizen. | `contractors/prime_postmortem.py` |
+| QW-3 | **Add `shebang_strip` step** — Remove `#!/usr/bin/env python3` from JS files. ~15 lines of regex code. No dependencies, no external tools. | ~15 min, 3 files | Immediately fixes contamination score for files that received a Python shebang. Independent of Phase 2. | `repair/steps/shebang_strip.py`, `repair/steps/__init__.py`, `repair/routing.py` |
+| QW-4 | **Add `def ` line-start anchor** — `"def "` in the contamination check matches as a substring anywhere in the file. If a JS comment says `"// define the default behavior"`, it won't match (the space after "def" saves it). But `"def main():"` on its own line WILL correctly match. Low risk, but adding `^\s*def\s+` would be more robust. | ~5 min, 1 file | Marginally reduces false positive risk for `def ` fingerprint. | `validators/nodejs_semantic_checks.py` |
+
+### Structural Insights (prevent implementer confusion)
+
+| # | Finding | Impact | Resolution |
+|---|---------|--------|------------|
+| SI-1 | **REQ-KZ-ND-200 listed 8 check functions but only 6 exist.** The doc read as if all were implemented. An implementer would try to wire non-existent functions into scoring/repair. | Wasted debugging time | Added `[IMPLEMENTED]` / `[PLANNED]` status markers to each check. Added summary table at section top. |
+| SI-2 | **REQ-KZ-ND-400 listed 5 "Available Repair Steps" — only 1 (`fence_strip`) exists.** The word "Available" implies implemented. | False assumptions about infrastructure | Split into "Implemented" and "Planned" tables. |
+| SI-3 | **REQ-KZ-ND-300 quality formula is aspirational.** It specifies Node.js-specific 6-component weights, but `compute_disk_quality_score()` is a 4-component language-agnostic function. No language dispatch mechanism exists. | Implementer hits a wall | Added implementation status note, documented the dependency (language dispatch), and showed both current and target formulas. |
+| SI-4 | **Repair ordering defined a parallel system.** REQ-KZ-ND-400 specified its own step ordering, but the pipeline uses `_CANONICAL_ORDER` in `routing.py`. The requirements ordering would be ignored. | Confusion about authority | Replaced requirements-defined ordering with reference to `_CANONICAL_ORDER` as the single source of truth. |
+| SI-5 | **`contamination_strip` vs `contamination_strip_js` naming collision.** REQ-KZ-ND-400 said "contamination_strip" was available, REQ-KZ-ND-402d said Phase 2 adds "contamination_strip_js". Same step, two names. | Naming confusion | Standardized on `contamination_strip_js` (language-suffixed, consistent with `js_syntax_validate`). |
+| SI-6 | **Traceability matrix pointed to non-existent modules.** `kaizen/validators/nodejs.py`, `kaizen/metrics.py`, `kaizen/suggestions.py` don't exist — the Kaizen system landed in existing modules instead. | Wrong file paths for implementers | Fixed all 3 paths to actual module locations. |
+| SI-7 | **Cross-feature threshold invisible.** Kaizen suggestions only fire when 2+ features share the same semantic issue category (`_CROSS_FEATURE_PATTERN_MIN`). Single-feature test runs produce ZERO suggestions regardless of wiring quality. | Implementer thinks wiring is broken | Added threshold note to REQ-KZ-ND-500. Integration tests must use multi-feature seeds. |
+| SI-8 | **Verification strategy mixed implementable and deferred tests.** All 29 tests were listed at the same priority level. An implementer would try to write tests for non-existent checks and fail. | Wasted effort, false test failures | Split into `[NOW]`, `[PHASE 2]`, and `[DEFERRED]` groups with explicit blockers. |
+
+### Value Improvements (reduce wasted work)
+
+| # | Observation | Recommendation |
+|---|-------------|----------------|
+| VI-1 | The language-agnostic scoring formula already handles Node.js semantic issues via severity-weighted `semantic_penalty`. The 6-component formula adds marginal precision but requires significant infrastructure (language dispatch, component extraction from semantic_issues, new DiskComplianceResult fields). | Defer Node.js-specific scoring to after the language dispatch mechanism is built for ALL languages (Java/Go/C# will also benefit). Don't build it for Node.js alone. |
+| VI-2 | The 5 PLANNED semantic checks (callback_hell, unused_requires, missing_exports, any_overuse, Go contamination) are all independently implementable. But they share no dependencies with the repair pipeline (Phase 2). | Implement PLANNED checks independently from repair steps. They're detection-only and immediately improve Kaizen signal quality. Consider prioritizing `check_unused_requires()` — it's the most common LLM defect in JS generation. |
+| VI-3 | `shebang_strip` is categorized as a "Planned Repair Step" but it's simpler than any Phase 2 step and has zero dependencies. It's blocked only by the Phase 2 label. | Promote to "Quick Win" — implement independently of Phase 2 phasing. |

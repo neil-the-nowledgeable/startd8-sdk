@@ -1,10 +1,12 @@
 """Node.js semantic validation — regex-based checks for generated JavaScript code.
 
-No external tool dependency.  Four checks:
+No external tool dependency.  Six checks:
 1. console.log in non-entry modules (should use structured logging)
 2. var declarations (should use const/let)
 3. Unhandled promise (async call without await or .catch)
 4. Duplicate require/import of same module
+5. Python contamination fingerprints
+6. CommonJS/ESM module system mixing
 
 Known limitation: comment skip only catches ``//`` and ``/*`` at line start.
 """
@@ -136,22 +138,56 @@ def _check_unhandled_promises(source: str) -> List[SemanticIssue]:
     return issues
 
 
+_PY_FINGERPRINTS = (
+    "def ", "import os", "from __future__",
+    "#!/usr/bin/env python",
+)
+
+# "self." requires a line-start anchor to avoid false positives
+# in string literals like "help yourself." (QW-1).
+_SELF_DOT_RE = re.compile(r'^\s*self\.')
+
+
 def _check_python_contamination(source: str) -> List[SemanticIssue]:
-    """Flag Python fingerprints in JS/TS source files (REQ-KZ-ND-100)."""
-    _PY_FINGERPRINTS = (
-        "def ", "import os", "from __future__", "self.",
-        "#!/usr/bin/env python",
-    )
-    # "print(" is valid JS, so only flag Python-specific ones
+    """Flag Python fingerprints in JS/TS source files (REQ-KZ-ND-100).
+
+    Line-by-line matching prevents false positives from fingerprints
+    appearing inside string literals or comments.
+    """
     issues: List[SemanticIssue] = []
-    for fp in _PY_FINGERPRINTS:
-        if fp in source:
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        # Check shebang BEFORE comment skip — _is_comment_line treats #
+        # as a comment, but Python shebangs in JS files are contamination
+        if stripped.startswith("#!/usr/bin/env python") or stripped.startswith("#!/usr/bin/python"):
             issues.append(SemanticIssue(
                 check="python_contamination",
                 severity="error",
-                message=f"Python fingerprint `{fp.strip()}` in JS/TS file — file is non-functional",
+                message="Python fingerprint `#!/usr/bin/env python` in JS/TS file — file is non-functional",
+                line=i,
             ))
-            break
+            return issues
+        if _is_comment_line(stripped):
+            continue
+        # Check self. with line-start anchor (avoids "yourself." FP)
+        if _SELF_DOT_RE.match(line):
+            issues.append(SemanticIssue(
+                check="python_contamination",
+                severity="error",
+                message="Python fingerprint `self.` in JS/TS file — file is non-functional",
+                line=i,
+            ))
+            return issues
+        # Check other fingerprints at statement level
+        for fp in _PY_FINGERPRINTS:
+            if stripped.startswith(fp) or (fp == "def " and re.match(r'^\s*def\s+\w+\s*\(', line)):
+                issues.append(SemanticIssue(
+                    check="python_contamination",
+                    severity="error",
+                    message=f"Python fingerprint `{fp.strip()}` in JS/TS file — file is non-functional",
+                    line=i,
+                ))
+                return issues
     return issues
 
 

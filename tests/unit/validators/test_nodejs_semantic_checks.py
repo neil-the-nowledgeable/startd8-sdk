@@ -5,6 +5,7 @@ import pytest
 from startd8.validators.nodejs_semantic_checks import (
     _check_console_log_in_service,
     _check_duplicate_requires,
+    _check_python_contamination,
     _check_unhandled_promises,
     _check_var_usage,
     run_nodejs_semantic_checks,
@@ -134,6 +135,58 @@ class TestCheckUnhandledPromises:
     def test_non_async_function_no_issue(self):
         source = "list.push(item);"
         issues = _check_unhandled_promises(source)
+        assert len(issues) == 0
+
+
+class TestCheckPythonContamination:
+    """Tests for _check_python_contamination, including QW-1 self. false positive fix."""
+
+    def test_detects_from_future(self):
+        source = "from __future__ import annotations\nconst x = 1;\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 1
+        assert issues[0].check == "python_contamination"
+
+    def test_detects_def_at_line_start(self):
+        source = "def main():\n  pass\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 1
+
+    def test_detects_self_at_statement_level(self):
+        source = "self.name = 'test'\nconst x = 1;\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 1
+
+    def test_self_in_string_no_false_positive(self):
+        """QW-1 regression: 'yourself.' in a string must not trigger contamination."""
+        source = 'console.log("help yourself.");\n'
+        issues = _check_python_contamination(source)
+        assert len(issues) == 0
+
+    def test_self_in_method_call_no_false_positive(self):
+        """self. inside a string argument should not trigger."""
+        source = 'const msg = "Express yourself freely";\n'
+        issues = _check_python_contamination(source)
+        assert len(issues) == 0
+
+    def test_import_os_at_line_start(self):
+        source = "import os\nconst x = 1;\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 1
+
+    def test_python_shebang(self):
+        source = "#!/usr/bin/env python3\nconst x = 1;\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 1
+
+    def test_clean_js_no_issues(self):
+        source = "const express = require('express');\nconst app = express();\n"
+        issues = _check_python_contamination(source)
+        assert len(issues) == 0
+
+    def test_comment_with_def_no_issue(self):
+        source = "// def main() — Python version\nconst x = 1;\n"
+        issues = _check_python_contamination(source)
         assert len(issues) == 0
 
 
