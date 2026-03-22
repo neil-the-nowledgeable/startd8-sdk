@@ -178,8 +178,11 @@ def _write_quality_to_kaizen_metrics(
     Includes per-type averages, per-service triplet evaluation (REQ-KZ-OBS-501),
     and cross-artifact consistency issues (REQ-KZ-OBS-400–403).
     """
-    # Find kaizen-metrics.json — look in parent dirs (plan-ingestion level)
+    # Find kaizen-metrics.json — look in sibling and parent dirs.
+    # Standard pipeline layout: run-NNN/plan-ingestion/kaizen-metrics.json
+    # Observability output:     run-NNN/observability/
     candidates = [
+        output_dir.parent / "plan-ingestion" / "kaizen-metrics.json",
         output_dir.parent / "kaizen-metrics.json",
         output_dir.parent.parent / "kaizen-metrics.json",
         output_dir / "kaizen-metrics.json",
