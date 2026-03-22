@@ -2704,6 +2704,13 @@ class PlanIngestionWorkflow(WorkflowBase):
         # becomes two sub-tasks after Gate 2a.  Filter the __init__.py one.
         tasks = PlanIngestionWorkflow._filter_trivial_test_init_tasks(tasks)
 
+        # ── Gate 2c: deduplicate tasks by normalized target file ────────
+        # The LLM may emit the same file with different path formats
+        # (e.g., "Program.cs" and "src/cartservice/src/Program.cs").
+        # Gate 2a splits both into sub-tasks, creating duplicates.
+        # Dedup by filename (basename), keeping the longer (more specific) path.
+        tasks = PlanIngestionWorkflow._dedup_tasks_by_target_file(tasks)
+
         if not tasks and features:
             logger.warning(
                 "Zero tasks derived from %d features — all features may have been "
@@ -2908,6 +2915,76 @@ class PlanIngestionWorkflow(WorkflowBase):
                     d for d in task.get("depends_on", [])
                     if d not in filtered_ids
                 ]
+        return result
+
+    @staticmethod
+    def _dedup_tasks_by_target_file(
+        tasks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Gate 2c: Deduplicate tasks targeting the same file (different paths).
+
+        The LLM may emit the same file with different path formats (e.g.,
+        ``Program.cs`` and ``src/cartservice/src/Program.cs``).  Gate 2a
+        splits both into sub-tasks, creating duplicates that generate the
+        same output file twice.
+
+        Dedup strategy: group tasks by (parent_feature_base, basename),
+        keep the task with the longest (most specific) path.  This
+        preserves the path that includes directory structure.
+        """
+        from pathlib import PurePosixPath
+
+        # Build a map: (feature_base, basename) → list of (task, path_len)
+        seen: Dict[tuple, List[tuple]] = {}
+        for task in tasks:
+            tid = task["task_id"]
+            tf = task.get("config", {}).get("context", {}).get("target_files", [])
+            if not tf:
+                # Tasks without target_files pass through (e.g., Dockerfile)
+                title = task.get("title", "")
+                basename = PurePosixPath(title.rsplit("—", 1)[-1].strip()).name if "—" in title else ""
+                key = (tid[:6], basename or tid)  # approximate grouping
+            else:
+                basename = PurePosixPath(tf[0]).name
+                # Extract parent feature base (PI-001 from PI-001a)
+                import re
+                base_match = re.match(r"(PI-\d+)", tid)
+                feature_base = base_match.group(1) if base_match else tid
+                key = (feature_base, basename)
+
+            path_len = len(tf[0]) if tf else 0
+            seen.setdefault(key, []).append((task, path_len))
+
+        result: List[Dict[str, Any]] = []
+        filtered_ids: set[str] = set()
+        for key, candidates in seen.items():
+            if len(candidates) == 1:
+                result.append(candidates[0][0])
+            else:
+                # Keep the candidate with the longest path (most specific)
+                candidates.sort(key=lambda x: x[1], reverse=True)
+                result.append(candidates[0][0])
+                for dup_task, _ in candidates[1:]:
+                    filtered_ids.add(dup_task["task_id"])
+                    logger.info(
+                        "Gate 2c: dedup — removing %s (duplicate of %s targeting %s)",
+                        dup_task["task_id"],
+                        candidates[0][0]["task_id"],
+                        key[1],
+                    )
+
+        # Clean up dangling dependency references
+        if filtered_ids:
+            for task in result:
+                task["depends_on"] = [
+                    d for d in task.get("depends_on", [])
+                    if d not in filtered_ids
+                ]
+            logger.info(
+                "Gate 2c: removed %d duplicate tasks (%d → %d)",
+                len(filtered_ids), len(tasks), len(result),
+            )
+
         return result
 
     # ------------------------------------------------------------------
