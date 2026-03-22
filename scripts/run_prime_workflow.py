@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -323,6 +324,13 @@ def main() -> int:
             "Hints in the config are injected into LLM prompts to improve successive runs."
         ),
     )
+    parser.add_argument(
+        "--todo-completion", action="store_true",
+        help=(
+            "Enable post-generation TODO scan and task completion (REQ-TCW-400). "
+            "Also activatable via ENABLE_TODO_COMPLETION=true env var."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -588,6 +596,11 @@ def main() -> int:
     # Wire Kaizen config hint injection (REQ-KZ-502)
     if args.kaizen_config:
         workflow._kaizen.config = workflow._load_kaizen_config(args.kaizen_config)
+
+    # Wire TODO completion (REQ-TCW-400)
+    _todo_env = os.environ.get("ENABLE_TODO_COMPLETION", "").lower()
+    if _todo_env == "true" or getattr(args, "todo_completion", False):
+        workflow.enable_todo_completion()
 
     # ------------------------------------------------------------------
     # Reset failed/blocked features for retry (F-AC-03 simplified)
