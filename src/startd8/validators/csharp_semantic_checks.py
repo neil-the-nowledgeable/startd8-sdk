@@ -37,6 +37,19 @@ _SQL_QUOTED_VAR_RE = re.compile(
     r"""\$"[^"]*'\{[^}]+\}'[^"]*" """.strip(), re.IGNORECASE,
 )
 
+# REQ-KZ-CS-200i: Spanner parameterized query suppression patterns.
+# When SpannerParameterCollection or SpannerParameter is used nearby,
+# table-name interpolation (static readonly fields) is safe.
+_SPANNER_PARAM_RE = re.compile(
+    r'SpannerParameterCollection|SpannerParameter|SpannerDbType\.\w+|'
+    r'Parameters\.Add\s*\(',
+    re.IGNORECASE,
+)
+# Static readonly or const fields are compile-time constants — safe to interpolate.
+_STATIC_CONST_RE = re.compile(
+    r'(?:static\s+readonly|const)\s+string\s+\w+\s*=',
+)
+
 
 def _check_console_writeline(source: str) -> List[SemanticIssue]:
     """Flag Console.Write/Console.WriteLine in service classes."""
@@ -62,13 +75,68 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
     - $"SELECT ... {variable}"
     - $"INSERT INTO ... {variable}"
     - "DELETE FROM " + variable
+
+    Suppresses when Spanner parameterized query patterns are nearby
+    (REQ-KZ-CS-200i) or when the interpolated variable is a static
+    readonly / const field (compile-time constant, not user input).
     """
     issues: List[SemanticIssue] = []
+    lines = source.splitlines()
 
-    for i, line in enumerate(source.splitlines(), start=1):
+    # Pre-scan: does the file use Spanner parameterized queries?
+    has_spanner_params = bool(_SPANNER_PARAM_RE.search(source))
+
+    # Pre-scan: collect names of static readonly / const string fields.
+    const_names: set[str] = set()
+    for raw_line in lines:
+        m = _STATIC_CONST_RE.search(raw_line)
+        if m:
+            # Extract the field name: "static readonly string TableName = ..."
+            after = raw_line[m.end():].strip().rstrip(";").strip('"').strip("'")
+            name_match = re.search(r'(\w+)\s*=', raw_line[m.start():])
+            if name_match:
+                const_names.add(name_match.group(1))
+
+    for i, line in enumerate(lines, start=1):
         stripped = line.strip()
-        # String interpolation with SQL DML keyword: $"SELECT...{..."
+
+        # --- Determine which regex matched ---
+        matched_pattern: Optional[str] = None
         if _SQL_INTERPOLATION_RE.search(stripped):
+            matched_pattern = "interpolation"
+        elif _SQL_CONCAT_RE.search(stripped):
+            matched_pattern = "concatenation"
+        elif _SQL_CLAUSE_INTERPOLATION_RE.search(stripped):
+            matched_pattern = "clause"
+        elif _SQL_QUOTED_VAR_RE.search(stripped):
+            matched_pattern = "quoted"
+        else:
+            continue
+
+        # --- REQ-KZ-CS-200i: Spanner parameterized query exemption ---
+        if has_spanner_params and matched_pattern in ("interpolation", "clause"):
+            # Check ±10 lines for SpannerParameterCollection usage
+            context_start = max(0, i - 11)
+            context_end = min(len(lines), i + 10)
+            context_text = "\n".join(lines[context_start:context_end])
+            if _SPANNER_PARAM_RE.search(context_text):
+                # Check if ALL interpolated vars are const/static readonly
+                interp_vars = re.findall(r'\{(\w+)', stripped)
+                if interp_vars and all(v in const_names for v in interp_vars):
+                    continue  # All variables are constants — safe
+                # Even if not all const, Spanner params nearby means the
+                # user-input variables are parameterized — suppress
+                if _SPANNER_PARAM_RE.search(context_text):
+                    continue
+
+        # Check if all interpolated variables are static readonly / const
+        if matched_pattern in ("interpolation", "clause"):
+            interp_vars = re.findall(r'\{(\w+)', stripped)
+            if interp_vars and all(v in const_names for v in interp_vars):
+                continue  # Only constants interpolated — not user input
+
+        # --- Emit finding ---
+        if matched_pattern == "interpolation":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
                 severity="error",
@@ -78,8 +146,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
                 ),
                 line=i,
             ))
-        # String concatenation with SQL: "SELECT..." + var
-        elif _SQL_CONCAT_RE.search(stripped):
+        elif matched_pattern == "concatenation":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
                 severity="error",
@@ -89,8 +156,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
                 ),
                 line=i,
             ))
-        # Multi-line SQL: WHERE/SET/VALUES clause with interpolated variable
-        elif _SQL_CLAUSE_INTERPOLATION_RE.search(stripped):
+        elif matched_pattern == "clause":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
                 severity="error",
@@ -100,8 +166,7 @@ def _check_sql_injection_risk(source: str) -> List[SemanticIssue]:
                 ),
                 line=i,
             ))
-        # Quoted variable in SQL: $"...'{userId}'..." — always suspicious
-        elif _SQL_QUOTED_VAR_RE.search(stripped):
+        elif matched_pattern == "quoted":
             issues.append(SemanticIssue(
                 check="sql_injection_risk",
                 severity="error",

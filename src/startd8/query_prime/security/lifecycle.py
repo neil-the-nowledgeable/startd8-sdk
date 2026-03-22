@@ -18,10 +18,14 @@ from ..patterns import DatabasePatternRegistry
 _LINE_COMMENT = re.compile(r'^\s*(?://|#)')
 
 # Scope-limiting patterns: using/with/defer indicate proper lifecycle
+# REQ-KZ-CS-200j: C# 8+ `using var` and `await using var` declarations
+# are valid dispose patterns (line-scoped, not block-scoped).
 _SCOPE_PATTERNS = {
     "csharp": (
-        re.compile(r'\busing\s*\('),
-        re.compile(r'\bawait\s+using\b'),
+        re.compile(r'\busing\s*\('),                         # using (var x = ...)
+        re.compile(r'\bawait\s+using\b'),                    # await using (var x = ...) or await using var x = ...
+        re.compile(r'\busing\s+var\b'),                      # using var x = ...  (C# 8+)
+        re.compile(r'\bawait\s+using\s+var\b'),              # await using var x = ...  (C# 8+)
     ),
     "python": (
         re.compile(r'\bwith\b'),

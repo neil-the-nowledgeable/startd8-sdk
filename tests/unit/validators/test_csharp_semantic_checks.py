@@ -324,3 +324,77 @@ class TestRunCsharpSemanticChecks:
         source = '_logger.LogInformation("Processing order");\nvar items = await GetItems();'
         issues = run_csharp_semantic_checks(source, file_path="OrderService.cs")
         assert len(issues) == 0
+
+
+# ---------------------------------------------------------------------------
+# REQ-KZ-CS-200i: Spanner parameterized query exemption
+# ---------------------------------------------------------------------------
+
+class TestSpannerParameterizedQueryExemption:
+    """Spanner uses SpannerParameterCollection for user-input params.
+    Table name interpolation via static readonly fields is safe."""
+
+    def test_spanner_table_name_interpolation_suppressed(self):
+        """Static readonly TableName interpolated into SQL with Spanner params nearby."""
+        source = (
+            'private static readonly string TableName = "CartItems";\n'
+            '\n'
+            'using var cmd = connection.CreateSelectCommand(\n'
+            '    $"SELECT quantity FROM {TableName} WHERE userId = @userId");\n'
+            'cmd.Parameters.Add("userId", SpannerDbType.String, userId);\n'
+        )
+        issues = _check_sql_injection_risk(source)
+        assert len(issues) == 0, f"Expected 0 issues (static readonly + Spanner params), got {issues}"
+
+    def test_spanner_user_input_still_flagged_without_params(self):
+        """User input interpolated WITHOUT Spanner parameterization is still flagged."""
+        source = '$"SELECT * FROM carts WHERE userId = {userId}"'
+        issues = _check_sql_injection_risk(source)
+        assert len(issues) == 1
+        assert issues[0].check == "sql_injection_risk"
+
+    def test_spanner_mixed_const_and_user_input(self):
+        """Const table name + user input variable without params — must flag."""
+        source = (
+            'private static readonly string TableName = "CartItems";\n'
+            '\n'
+            '$"SELECT * FROM {TableName} WHERE userId = {userId}"\n'
+        )
+        issues = _check_sql_injection_risk(source)
+        # userId is NOT a const — should flag even though TableName is
+        assert len(issues) >= 1
+
+    def test_spanner_full_method_pattern(self):
+        """Full SpannerCartStore method: table name const + SpannerParameterCollection."""
+        source = '''\
+private static readonly string TableName = "CartItems";
+
+public async Task AddItemAsync(string userId, string productId, int quantity)
+{
+    using var cmd = connection.CreateSelectCommand(
+        $"SELECT quantity FROM {TableName} WHERE userId = @userId AND productId = @productId");
+    cmd.Parameters.Add("userId", SpannerDbType.String, userId);
+    cmd.Parameters.Add("productId", SpannerDbType.String, productId);
+    cmd.Transaction = transaction;
+}
+'''
+        issues = _check_sql_injection_risk(source)
+        assert len(issues) == 0, f"Expected 0 (Spanner parameterized), got {issues}"
+
+    def test_const_field_interpolation_suppressed(self):
+        """const string fields are compile-time constants — safe to interpolate."""
+        source = (
+            'const string Schema = "dbo";\n'
+            '$"SELECT * FROM {Schema}.Users WHERE id = @id"\n'
+        )
+        issues = _check_sql_injection_risk(source)
+        assert len(issues) == 0
+
+    def test_alloydb_user_input_still_flagged(self):
+        """AlloyDB with actual user input interpolation — must still flag."""
+        source = (
+            '$"SELECT quantity FROM {tableName} '
+            "WHERE userid='{userId}' AND productid='{productId}'\""
+        )
+        issues = _check_sql_injection_risk(source)
+        assert len(issues) >= 1

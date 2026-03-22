@@ -49,6 +49,8 @@ _spanner_csharp = DatabasePattern(
     dispose_patterns=(
         re.compile(r'\busing\s*\('),
         re.compile(r'\bawait\s+using\b'),
+        re.compile(r'\busing\s+var\b'),              # C# 8+ declaration form
+        re.compile(r'\bawait\s+using\s+var\b'),       # C# 8+ async declaration form
         re.compile(r'\.Dispose\s*\('),
         re.compile(r'\.Close\s*\('),
     ),

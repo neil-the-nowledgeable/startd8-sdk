@@ -74,3 +74,65 @@ def query(db_path):
         """Unknown database returns no findings."""
         findings = detect_lifecycle_issues("code", "oracle", "ruby")
         assert findings == []
+
+    # -------------------------------------------------------------------
+    # REQ-KZ-CS-200j: C# 8+ `using var` recognition
+    # -------------------------------------------------------------------
+
+    def test_using_var_declaration_suppresses_lifecycle(self):
+        """C# 8+ `using var` is a valid dispose pattern — no warning."""
+        source = '''
+public async Task GetCartAsync(string userId)
+{
+    using var connection = new SpannerConnection(databaseString);
+    using var cmd = connection.CreateSelectCommand("SELECT ...");
+    var reader = await cmd.ExecuteReaderAsync();
+}
+'''
+        findings = detect_lifecycle_issues(source, DatabaseType.SPANNER, "csharp")
+        assert len(findings) == 0, (
+            f"Expected 0 findings (using var suppresses), got {findings}"
+        )
+
+    def test_await_using_var_declaration_suppresses_lifecycle(self):
+        """C# 8+ `await using var` is a valid async dispose pattern."""
+        source = '''
+public async Task AddItemAsync(string userId, string item)
+{
+    await using var dataSource = NpgsqlDataSource.Create(connectionString);
+    await using var cmd = dataSource.CreateCommand("INSERT INTO t VALUES (@id)");
+    cmd.Parameters.AddWithValue("@id", item);
+    await cmd.ExecuteNonQueryAsync();
+}
+'''
+        findings = detect_lifecycle_issues(source, DatabaseType.POSTGRESQL, "csharp")
+        assert len(findings) == 0, (
+            f"Expected 0 findings (await using var suppresses), got {findings}"
+        )
+
+    def test_bare_new_without_using_var_still_flags(self):
+        """New resource without any using pattern must still flag."""
+        source = '''
+public bool Ping()
+{
+    var conn = new NpgsqlConnection(connectionString);
+    conn.Open();
+    return true;
+}
+'''
+        findings = detect_lifecycle_issues(source, DatabaseType.POSTGRESQL, "csharp")
+        assert len(findings) >= 1
+        assert findings[0].check_type == SecurityCheckType.LIFECYCLE
+
+    def test_spanner_using_var_suppresses(self):
+        """Spanner connection with using var should not flag."""
+        source = '''
+public bool Ping()
+{
+    using var connection = new SpannerConnection(databaseString);
+    connection.Open();
+    return true;
+}
+'''
+        findings = detect_lifecycle_issues(source, DatabaseType.SPANNER, "csharp")
+        assert len(findings) == 0
