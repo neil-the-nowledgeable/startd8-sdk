@@ -2533,10 +2533,17 @@ class PrimeContractorWorkflow:
                     path, config.get("schema_version"),
                 )
                 return None
+            # Accept both "prompt_hints" (new format) and "suggestions" (legacy script format)
+            if "suggestions" in config and "prompt_hints" not in config:
+                config["prompt_hints"] = config.pop("suggestions")
             if "prompt_hints" in config and not isinstance(config["prompt_hints"], list):
                 logger.warning("Kaizen config prompt_hints must be a list — ignoring: %s", path)
                 return None
-            logger.info("Kaizen config loaded: %s (%d hints)", path, len(config.get("prompt_hints") or []))
+            hints = config.get("prompt_hints") or []
+            if not hints:
+                logger.debug("Kaizen config has 0 hints — skipping: %s", path)
+                return None
+            logger.info("Kaizen config loaded: %s (%d hints)", path, len(hints))
             return config
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("Kaizen config invalid — proceeding without it: %s", exc)
@@ -2546,9 +2553,12 @@ class PrimeContractorWorkflow:
         """Auto-discover kaizen-suggestions.json from prior run output dir.
 
         Called during run() when no explicit --kaizen-config was provided.
-        Looks for kaizen-suggestions.json in the output directory (written
-        by the previous run's postmortem auto-emit).  Fail-open: logs and
-        continues if not found or invalid.
+        Search order:
+        1. Current output dir (same-dir re-run)
+        2. Sibling run directories sorted by name descending (most recent first)
+        3. Parent of output dir (flat layout)
+
+        Fail-open: logs and continues if not found or invalid.
         """
         if self._kaizen.config is not None:
             return  # Explicit config already loaded — don't override
@@ -2558,18 +2568,39 @@ class PrimeContractorWorkflow:
         except Exception:
             return
 
-        suggestions_path = output_dir / "kaizen-suggestions.json"
-        if not suggestions_path.is_file():
-            return
+        # Search candidates in priority order
+        candidates: list[Path] = []
 
-        loaded = self._load_kaizen_config(str(suggestions_path))
-        if loaded:
-            self._kaizen.config = loaded
-            logger.info(
-                "Kaizen auto-discovered from prior run: %s (%d hints)",
-                suggestions_path,
-                len(loaded.get("prompt_hints") or []),
-            )
+        # 1. Current output dir
+        candidates.append(output_dir / "kaizen-suggestions.json")
+
+        # 2. Sibling run directories (e.g., run-093-.../plan-ingestion/)
+        #    sorted descending so most recent run is checked first
+        parent = output_dir.parent
+        if parent.is_dir():
+            siblings = sorted(parent.iterdir(), reverse=True)
+            for sibling in siblings:
+                if sibling == output_dir or not sibling.is_dir():
+                    continue
+                # Check both flat and plan-ingestion subdir layouts
+                candidates.append(sibling / "kaizen-suggestions.json")
+                candidates.append(sibling / "plan-ingestion" / "kaizen-suggestions.json")
+
+        # 3. Parent dir (flat layout)
+        candidates.append(parent / "kaizen-suggestions.json")
+
+        for path in candidates:
+            if not path.is_file():
+                continue
+            loaded = self._load_kaizen_config(str(path))
+            if loaded:
+                self._kaizen.config = loaded
+                logger.info(
+                    "Kaizen auto-discovered from prior run: %s (%d hints)",
+                    path,
+                    len(loaded.get("prompt_hints") or []),
+                )
+                return
 
     def _apply_kaizen_hints(self, gen_context: Dict[str, Any]) -> None:
         """Inject kaizen prompt hints from _kaizen_config into gen_context (REQ-KZ-502).

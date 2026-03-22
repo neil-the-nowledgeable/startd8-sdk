@@ -609,8 +609,10 @@ def _build_security_guidance_section(context: Dict[str, Any]) -> str:
     # even without explicit security_contract (pre-generation Anzen gate).
     # Prevents design-doc-poisoned SQL patterns from reaching code generation.
     task_desc = context.get("task_description", "")
+    feature_name = context.get("feature_name", "")
     target_files = context.get("target_files", [])
-    combined = f"{task_desc} {' '.join(target_files)}".lower()
+    target_file = context.get("target_file", "")
+    combined = f"{task_desc} {feature_name} {target_file} {' '.join(target_files)}".lower()
     _DB_KEYWORDS = (
         "alloydb", "postgres", "npgsql", "spanner", "mysql", "sqlite",
         "database", "sql", "query", "cart_store", "cartstore",
@@ -1087,7 +1089,11 @@ def build_spec_prompt(
         prioritized.append((1, "protocol", f"## Protocol Guidance\n{protocol_guidance}"))
 
     # P0: Database security guidance with language-specific parameterized query examples
-    security_section = _build_security_guidance_section(context)
+    # Inject task_description into context for auto-detection (it's a separate
+    # function argument, not in the context dict by default).
+    _sec_ctx = dict(context)
+    _sec_ctx.setdefault("task_description", task_description)
+    security_section = _build_security_guidance_section(_sec_ctx)
     if security_section:
         prioritized.append((0, "security_guidance", security_section))
 
@@ -1254,8 +1260,10 @@ def extract_prompt_security_features(context: Dict[str, Any]) -> Dict[str, Any]:
         "database", "sql", "query", "cart_store", "cartstore",
     )
     desc = str(context.get("task_description", "")).lower()
+    fname = str(context.get("feature_name", "")).lower()
+    tfile = str(context.get("target_file", "")).lower()
     files_str = " ".join(str(f) for f in (context.get("target_files") or [])).lower()
-    combined = desc + " " + files_str
+    combined = f"{desc} {fname} {tfile} {files_str}"
     p0_from_keywords = any(kw in combined for kw in _DB_KEYWORDS)
     p0_injected = bool(client_libraries) or p0_from_keywords or security_sensitive
 
