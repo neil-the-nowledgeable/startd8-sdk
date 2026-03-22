@@ -465,7 +465,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None, edit_min_pct: int=80, review_enabled: bool=True, review_agent: Optional[str]=None):
         """
         Initialize the Prime Contractor workflow.
 
@@ -493,6 +493,8 @@ class PrimeContractorWorkflow:
             strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
             walkthrough: If True, persist all LLM prompts without making API calls
             edit_min_pct: Min % of existing lines in edit output (PC-Q3, default: 80)
+            review_enabled: If True, run LLM review after integration (REQ-RFL-125)
+            review_agent: Agent spec for review (default: lead_agent)
         """
         self.project_root = project_root or Path.cwd()
         self.edit_min_pct = edit_min_pct
@@ -522,6 +524,10 @@ class PrimeContractorWorkflow:
         # merge strategy re-selection when target language changes.
         self._language_profile = None
         self.integration_history: List[Dict] = []
+        self.review_results: Dict[str, Dict[str, Any]] = {}
+        self.review_enabled = review_enabled
+        self._review_agent = review_agent
+        self._review_adapter: Any = None  # Lazy init (PrimeReviewAdapter)
         self.files_modified_this_session: Dict[str, List[str]] = {}
         self.max_lines_per_feature = max_lines_per_feature
         self.max_tokens_per_feature = max_tokens_per_feature
@@ -4297,6 +4303,37 @@ class PrimeContractorWorkflow:
             logger.debug("Domain enrichment failed for '%s': %s", feature.name, exc)
             return None
 
+    def _review_feature(
+        self,
+        feature: FeatureSpec,
+        integration_metadata: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Run LLM review on a completed feature (REQ-RFL-125).
+
+        Graceful degradation: returns None on any failure so review
+        never blocks feature completion.
+        """
+        try:
+            if self._review_adapter is None:
+                from startd8.contractors.prime_review import PrimeReviewAdapter
+                self._review_adapter = PrimeReviewAdapter(
+                    review_agent=self._review_agent,
+                    lead_agent=getattr(
+                        self.code_generator, "lead_agent", None,
+                    ),
+                )
+            return self._review_adapter.review_feature(
+                feature, self.project_root, integration_metadata,
+            )
+        except Exception:
+            logger.warning(
+                "Review failed for %s — continuing without review",
+                feature.name,
+                exc_info=True,
+                extra={"feature_name": feature.name},
+            )
+            return None
+
     def integrate_feature(self, feature: FeatureSpec) -> bool:
         """
         Integrate a single feature immediately.
@@ -4332,12 +4369,23 @@ class PrimeContractorWorkflow:
                     code, self._current_enrichment,
                 )
                 if not domain_result.passed:
+                    _dv_issues = []
                     for iss in domain_result.issues:
                         logger.warning(
                             'Feature %s: post-gen %s: %s (line %s)',
                             feature.name, iss.validator, iss.message, iss.line,
                             extra={'feature_name': feature.name},
                         )
+                        _dv_issues.append(str(iss.message)[:200])
+                    # REQ-MSR-340: Persist domain validation issues
+                    feature.metadata["domain_validation"] = {
+                        "passed": False,
+                        "issues": _dv_issues[:10],
+                        "domain": (
+                            self._current_enrichment.get("domain", "general")
+                            if self._current_enrichment else "general"
+                        ),
+                    }
                 else:
                     logger.info(
                         'Domain validation passed for %s', feature.name,
@@ -4378,6 +4426,23 @@ class PrimeContractorWorkflow:
             if anzen_data:
                 history_entry["anzen_gate"] = anzen_data
             self.integration_history.append(history_entry)
+
+            # REQ-RFL-125: Per-feature review (I1 — log-only, no gate)
+            if self.review_enabled and not self.walkthrough:
+                review = self._review_feature(feature, result.metadata)
+                if review:
+                    if feature.metadata is None:
+                        feature.metadata = {}
+                    feature.metadata["review"] = review
+                    self.review_results[feature.id] = review
+                    logger.info(
+                        "Review for %s: score=%s verdict=%s",
+                        feature.name,
+                        review.get("score"),
+                        review.get("verdict"),
+                        extra={"feature_name": feature.name},
+                    )
+
             if self.on_feature_complete:
                 self.on_feature_complete(feature)
             return True

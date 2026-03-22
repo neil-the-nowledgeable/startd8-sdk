@@ -381,52 +381,11 @@ class PrimePostMortemReport:
 
 # ---------------------------------------------------------------------------
 # Disk quality scoring (Phase E — Kaizen Quality)
+# Canonical implementation lives in forward_manifest_validator.py (REQ-RFL-110).
+# Re-exported here for backward compatibility.
 # ---------------------------------------------------------------------------
 
-
-def compute_disk_quality_score(compliance: Any) -> float:
-    """Compute a composite disk quality score from DiskComplianceResult.
-
-    Formula:
-        composite = (contract_compliance × 0.4) + (import_completeness × 0.2)
-                  + (stub_penalty × 0.2) + (semantic_penalty × 0.2)
-
-    Args:
-        compliance: DiskComplianceResult instance.
-
-    Returns:
-        Float score in [0.0, 1.0].
-    """
-    if compliance is None:
-        return 0.0
-    if not getattr(compliance, "ast_valid", True):
-        return 0.0
-
-    contract_compliance = getattr(compliance, "contract_compliance", 1.0)
-    import_completeness = getattr(compliance, "import_completeness", 1.0)
-    stubs = getattr(compliance, "stubs_remaining", 0)
-    semantic_issues = getattr(compliance, "semantic_issues", [])
-
-    stub_penalty = max(0.0, 1.0 - stubs * 0.1)
-
-    # Severity-weighted semantic penalty: errors hit 3x harder than warnings.
-    error_count = 0
-    warning_count = 0
-    for issue in (semantic_issues or []):
-        sev = issue.get("severity", "warning") if isinstance(issue, dict) else "warning"
-        if sev == "error":
-            error_count += 1
-        else:
-            warning_count += 1
-    semantic_penalty = max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
-
-    composite = (
-        contract_compliance * 0.4
-        + import_completeness * 0.2
-        + stub_penalty * 0.2
-        + semantic_penalty * 0.2
-    )
-    return max(0.0, min(1.0, composite))
+from startd8.forward_manifest_validator import compute_disk_quality_score  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

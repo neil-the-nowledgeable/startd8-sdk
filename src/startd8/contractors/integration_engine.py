@@ -1046,6 +1046,15 @@ class IntegrationEngine:
                         str(p) for p in outcome.repaired_files
                     ],
                 })
+                # REQ-RFL-105: Condensed repair summary for review adapter
+                result_obj_metadata.setdefault(
+                    "repair_summaries", [],
+                ).append({
+                    "phase": "post_merge",
+                    "total_repairs": len(outcome.repaired_files) if outcome.repaired_files else 0,
+                    "steps_applied": list(outcome.steps_applied) if outcome.steps_applied else [],
+                    "any_modified": bool(outcome.any_modified),
+                })
                 if truncation_skipped:
                     result_obj_metadata["truncation_skipped"] = (
                         truncation_skipped
@@ -1580,18 +1589,23 @@ class IntegrationEngine:
         self,
         integrated_files: List[Path],
         unit: IntegrationUnit,
-    ) -> None:
-        """Run semantic validation on integrated Python files via disk compliance.
+    ) -> Dict[str, Any]:
+        """Run semantic validation on integrated files via disk compliance.
 
         Uses ``validate_disk_compliance()`` (the full L1–L10 semantic check
         suite) rather than the limited ``semantic_checks.py`` module.  Issues
         are logged as warnings (non-blocking).  This runs after syntax repair
         but before final commit.
+
+        Returns:
+            Dict of per-file compliance data for files with issues
+            (REQ-RFL-100).  Keys are paths relative to project_root.
         """
+        compliance_results: Dict[str, Any] = {}
         try:
             from startd8.forward_manifest_validator import validate_disk_compliance
         except ImportError:
-            return
+            return compliance_results
 
         project_root = str(self.project_root) if self.project_root else "."
 
@@ -1609,6 +1623,31 @@ class IntegrationEngine:
                             issue.get("message", str(issue)),
                             extra={"unit_id": unit.id},
                         )
+                    # REQ-RFL-100: Persist compliance data for files with issues
+                    if (not compliance.ast_valid
+                            or compliance.stubs_remaining > 0
+                            or compliance.duplicate_definitions > 0
+                            or compliance.import_completeness < 1.0
+                            or compliance.contract_compliance < 1.0
+                            or compliance.semantic_issues):
+                        try:
+                            rel = str(fpath.relative_to(self.project_root))
+                        except ValueError:
+                            rel = str(fpath)
+                        compliance_results[rel] = {
+                            "ast_valid": compliance.ast_valid,
+                            "stubs_remaining": compliance.stubs_remaining,
+                            "duplicate_definitions": compliance.duplicate_definitions,
+                            "import_completeness": compliance.import_completeness,
+                            "contract_compliance": compliance.contract_compliance,
+                            "semantic_issues": [
+                                {"category": si.get("category", "unknown"),
+                                 "severity": si.get("severity", "warning"),
+                                 "message": str(si.get("message", ""))[:200]}
+                                for si in (compliance.semantic_issues or [])
+                                if isinstance(si, dict)
+                            ],
+                        }
                 except Exception as exc:
                     logger.debug(
                         "Semantic check failed for %s: %s", fpath, exc,
@@ -1718,6 +1757,8 @@ class IntegrationEngine:
                         "Node.js semantic check failed for %s: %s", fpath, exc,
                     )
 
+        return compliance_results
+
     def _attempt_semantic_repair(
         self,
         integrated_files: List[Path],
@@ -1754,8 +1795,8 @@ class IntegrationEngine:
                 result["issues_found"],
                 len(result.get("per_file", {})),
             )
-            # Re-run semantic checks to update warning state with post-repair results
-            self._run_semantic_checks(integrated_files, unit)
+            # Post-repair semantic re-check moved to caller (REQ-RFL-100)
+            # so compliance results can be captured in result metadata.
 
         return result
 
@@ -1820,6 +1861,18 @@ class IntegrationEngine:
                 extra={"unit_id": unit.id},
             )
 
+            # REQ-MSR-220: Persist contract violation diagnostics
+            result_obj_metadata["contract_violation_details"] = [
+                {
+                    "expected": str(getattr(v, "expected", ""))[:200],
+                    "actual": str(getattr(v, "actual", ""))[:200],
+                    "severity": getattr(v, "severity", "error"),
+                    "violation_type": str(getattr(v, "violation_type", ""))[:100],
+                    "repaired": False,  # Updated after repair
+                }
+                for v in error_violations[:20]
+            ]
+
             # Convert ContractViolation → ContractViolationDiagnostic
             diagnostics: list = []
             for v in error_violations:
@@ -1879,6 +1932,9 @@ class IntegrationEngine:
                 result_obj_metadata["contract_files_repaired"] = [
                     str(p) for p in outcome.repaired_files
                 ]
+                # REQ-MSR-220: Mark violations as repaired
+                for entry in result_obj_metadata.get("contract_violation_details", []):
+                    entry["repaired"] = True
                 logger.info(
                     "Contract violation repair applied to %d file(s) for %s",
                     len(outcome.repaired_files), unit.name,
@@ -2042,6 +2098,16 @@ class IntegrationEngine:
                     for w in cleanup_warnings:
                         logger.warning("Post-gen cleanup: %s", w)
                         warnings.append(w)
+                    # REQ-MSR-330: Persist language-specific warnings
+                    if cleanup_warnings:
+                        _lang_id = getattr(self._language_profile, "language_id", "unknown")
+                        result_obj_metadata.setdefault(
+                            "language_warnings", [],
+                        ).extend([
+                            {"language": _lang_id, "category": "post_gen_cleanup",
+                             "message": str(w)[:200]}
+                            for w in cleanup_warnings[:20]
+                        ])
                 except Exception as exc:
                     logger.warning("Post-gen cleanup failed: %s", exc)
 
@@ -2076,6 +2142,16 @@ class IntegrationEngine:
                     )
                     if repaired_result is not None:
                         pre_result = repaired_result
+                        # REQ-RFL-105: Record pre-merge repair in metadata
+                        result_obj_metadata.setdefault(
+                            "repair_summaries", [],
+                        ).append({
+                            "phase": "pre_merge",
+                            "any_modified": True,
+                            "repair_succeeded": (
+                                pre_result.status != CheckpointStatus.FAILED
+                            ),
+                        })
 
                 if pre_result.status == CheckpointStatus.FAILED:
                     error_msg = pre_result.message
@@ -2478,6 +2554,13 @@ class IntegrationEngine:
                         "; ".join(result.conflicts[:3]),
                         extra={"unit_id": unit.id},
                     )
+                    # REQ-MSR-100: Persist merge conflict details
+                    result_obj_metadata.setdefault(
+                        "merge_conflicts", [],
+                    ).append({
+                        "file": self._rel_display(target_path),
+                        "conflicts": result.conflicts[:5],
+                    })
                     integrated_files.append(target_path)
                 else:
                     logger.error(
@@ -2566,12 +2649,36 @@ class IntegrationEngine:
             )
 
             # ── Semantic checks (Phase D — Kaizen Quality) ──
-            self._run_semantic_checks(integrated_files, unit)
+            compliance_results = self._run_semantic_checks(integrated_files, unit)
 
             # ── Semantic repair (Phase D+ — REQ-SR-100–400) ──
             sem_repair = self._attempt_semantic_repair(integrated_files, unit)
             if sem_repair is not None:
                 result_obj_metadata["semantic_repair"] = sem_repair
+                # Re-capture compliance after repair to reflect final state
+                if sem_repair.get("issues_repaired", 0) > 0:
+                    compliance_results = self._run_semantic_checks(
+                        integrated_files, unit,
+                    )
+
+            # REQ-RFL-100: Persist disk compliance for downstream consumers
+            if compliance_results:
+                result_obj_metadata["disk_compliance"] = compliance_results
+
+                # REQ-RFL-115: Compute disk quality score (min = weakest link)
+                try:
+                    from types import SimpleNamespace
+                    from startd8.forward_manifest_validator import (
+                        compute_disk_quality_score,
+                    )
+                    scores = [
+                        compute_disk_quality_score(SimpleNamespace(**d))
+                        for d in compliance_results.values()
+                    ]
+                    if scores:
+                        result_obj_metadata["disk_quality_score"] = min(scores)
+                except Exception:
+                    pass  # advisory — never block integration
 
             # ── Anzen gate (SP-GT-001–004) — security verification ──
             # Runs AFTER semantic repair (evaluates repaired code) and
@@ -2610,6 +2717,23 @@ class IntegrationEngine:
                 listener.on_checkpoint_result(unit, cr)
 
             checkpoint_results = results
+            # REQ-MSR-120: Persist checkpoint details for postmortem analysis
+            _cp_details = []
+            for _cr in results:
+                _cp_entry = {
+                    "check_name": getattr(_cr, "name", "unknown"),
+                    "passed": getattr(_cr, "status", None) != CheckpointStatus.FAILED,
+                }
+                _msg = getattr(_cr, "message", None)
+                if _msg:
+                    _cp_entry["message"] = str(_msg)[:500]
+                _errs = getattr(_cr, "errors", None)
+                if _errs:
+                    _cp_entry["diagnostics"] = [str(e)[:200] for e in _errs[:5]]
+                _cp_details.append(_cp_entry)
+            if _cp_details:
+                result_obj_metadata["checkpoint_details"] = _cp_details
+
             all_passed = (
                 True if repair_success
                 else self.checkpoint.summarize_results(results)
@@ -2687,6 +2811,28 @@ class IntegrationEngine:
             self._record_element_merge_outcomes(
                 unit, integrated_files, skipped_files,
             )
+
+        # REQ-MSR-310: Export element registry repair summary
+        if self._element_registry is not None:
+            try:
+                all_elements = list(self._element_registry._elements.values()) if hasattr(self._element_registry, "_elements") else []
+                repaired = [e for e in all_elements if isinstance(e, dict) and e.get("phase_status", {}).get("integrate") == "repaired"]
+                if repaired:
+                    repair_by_type: Dict[str, int] = {}
+                    for e in repaired:
+                        t = e.get("element_type", "unknown")
+                        repair_by_type[t] = repair_by_type.get(t, 0) + 1
+                    result_obj_metadata["element_repair_summary"] = {
+                        "total_elements": len(all_elements),
+                        "repaired": len(repaired),
+                        "repair_by_type": repair_by_type,
+                    }
+            except Exception:
+                pass  # advisory — never block integration
+
+        # REQ-MSR-300: Persist skipped files in metadata for postmortem
+        if skipped_files:
+            result_obj_metadata["skipped_files"] = skipped_files
 
         # 9. Notify completed
         listener.on_integration_completed(unit, integrated_files)
