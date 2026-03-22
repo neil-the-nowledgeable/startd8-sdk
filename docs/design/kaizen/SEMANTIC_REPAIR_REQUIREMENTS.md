@@ -176,7 +176,7 @@ These are capability-level success criteria. Per-category metrics will be define
 - **LLM-backed repair** — deferred to Capability 4 / KZ-Q2
 - **Cross-file repair** — repairing file A based on content of file B (e.g., fixing imports by reading sibling modules' `__all__`). This is architecturally complex and deferred.
 - **Replacing upstream prompt fixes** — semantic repair is a safety net, not a substitute for better prompts. REQ-SV2-1300/1400 remain active.
-- **Repairing non-Python files** — Dockerfiles, requirements.in, YAML, HTML are out of scope for this iteration.
+- **Repairing non-Python files** — Dockerfiles, requirements.in, YAML, HTML are out of scope for this iteration. **Note (2026-03-22):** C# deterministic repair (SQL parameterization) is now in scope via REQ-KZ-CS-402a–c in `KAIZEN_CSHARP_REQUIREMENTS.md`. The `.py`-only filter in `run_semantic_repair()` must be extended to dispatch by file extension.
 
 ---
 

@@ -28,11 +28,30 @@ class TestTranslateToDiagnostics:
             {"category": "import_resolution", "severity": "error", "message": "m", "line": 2, "symbol": "y"},
             {"category": "discarded_return", "severity": "warning", "message": "m", "line": 3, "symbol": "z"},
             {"category": "duplicate_main_guard", "severity": "warning", "message": "m", "line": 4, "symbol": "w"},
+            {"category": "sql_injection_risk", "severity": "error", "message": "m", "line": 5},
         ]
         result = translate_to_diagnostics(issues, "test.py")
-        assert len(result) == 4
-        categories = {d.semantic_category for d in result}
-        assert categories == _REPAIRABLE_CATEGORIES
+        assert len(result) == 5
+        # sql_injection_risk produces a plain Diagnostic (category="security"),
+        # not a SemanticDiagnostic, so collect categories from both types.
+        from startd8.repair.models import SemanticDiagnostic
+        semantic_cats = {d.semantic_category for d in result if isinstance(d, SemanticDiagnostic)}
+        route_cats = {d.category for d in result if not isinstance(d, SemanticDiagnostic)}
+        assert semantic_cats == {"method_resolution", "import_resolution", "discarded_return", "duplicate_main_guard"}
+        assert route_cats == {"security"}
+
+    def test_sql_injection_risk_routes_as_security(self):
+        """REQ-KZ-CS-402b: sql_injection_risk maps to category='security'."""
+        issues = [
+            {"category": "sql_injection_risk", "severity": "error",
+             "message": "SQL injection risk", "line": 65},
+        ]
+        result = translate_to_diagnostics(issues, "AlloyDBCartStore.cs")
+        assert len(result) == 1
+        d = result[0]
+        assert d.category == "security"
+        assert d.file == "AlloyDBCartStore.cs"
+        assert d.message == "SQL injection risk"
 
     def test_unreachable_function_not_translated(self):
         issues = [

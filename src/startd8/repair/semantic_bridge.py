@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List
 
-from .models import SemanticDiagnostic
+from .models import Diagnostic, SemanticDiagnostic
 
 # Categories that have a corresponding repair step registered in the
 # routing table.  Updated when new semantic repair steps are added.
@@ -21,14 +21,30 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
     "import_resolution",
     "discarded_return",
     "duplicate_main_guard",
+    # REQ-KZ-CS-402b: C# SQL injection → sql_parameterize step
+    "sql_injection_risk",
 })
+
+# REQ-KZ-CS-402b: Categories that route through a non-"semantic" routing
+# category.  SemanticDiagnostic forces category="semantic", but the routing
+# table entry for C# SQL injection uses category="security".  These produce
+# a plain Diagnostic with the correct routing category instead.
+_CATEGORY_TO_ROUTE: dict[str, str] = {
+    "sql_injection_risk": "security",
+}
+
+# Map semantic issue categories to routing-table pattern names.
+# Default: the category name itself (e.g. "import_resolution").
+_CATEGORY_TO_PATTERN: dict[str, str] = {
+    "sql_injection_risk": "csharp_sql_injection",
+}
 
 
 def translate_to_diagnostics(
     semantic_issues: List[dict],
     file_path: str,
-) -> List[SemanticDiagnostic]:
-    """Convert semantic issue dicts to ``SemanticDiagnostic`` objects.
+) -> List[Diagnostic]:
+    """Convert semantic issue dicts to ``Diagnostic`` objects.
 
     Args:
         semantic_issues: Dicts from ``DiskComplianceResult.semantic_issues``
@@ -37,9 +53,10 @@ def translate_to_diagnostics(
         file_path: Path to the source file (for the diagnostic ``file`` field).
 
     Returns:
-        List of ``SemanticDiagnostic`` — only repairable categories included.
+        List of ``Diagnostic`` (or ``SemanticDiagnostic``) — only repairable
+        categories included.
     """
-    diagnostics: list[SemanticDiagnostic] = []
+    diagnostics: list[Diagnostic] = []
     for issue in semantic_issues:
         if not isinstance(issue, dict):
             continue
@@ -47,14 +64,23 @@ def translate_to_diagnostics(
         if category not in _REPAIRABLE_CATEGORIES:
             continue
 
-        diagnostics.append(SemanticDiagnostic(
-            category="semantic",
-            file=file_path,
-            message=issue.get("message", ""),
-            semantic_category=category,
-            severity=issue.get("severity", "warning"),
-            symbol=issue.get("symbol", ""),
-            line=issue.get("line", 0),
-        ))
+        route_category = _CATEGORY_TO_ROUTE.get(category)
+        if route_category is not None:
+            # REQ-KZ-CS-402b: non-semantic routing (e.g. "security")
+            diagnostics.append(Diagnostic(
+                category=route_category,
+                file=file_path,
+                message=issue.get("message", ""),
+            ))
+        else:
+            diagnostics.append(SemanticDiagnostic(
+                category="semantic",
+                file=file_path,
+                message=issue.get("message", ""),
+                semantic_category=category,
+                severity=issue.get("severity", "warning"),
+                symbol=issue.get("symbol", ""),
+                line=issue.get("line", 0),
+            ))
 
     return diagnostics

@@ -405,8 +405,9 @@ To enable C# repair:
 ### REQ-KZ-CS-402: SQL Injection Semantic-to-Repair Bridge
 
 **Priority:** P1
-**Status:** Implemented (2026-03-22) — `SqlParameterizeStep` + routing + diagnostic bridge
-**Source:** Run-095/099 AlloyDBCartStore (DQS 0.80, 16-17 semantic errors)
+**Status:** Partial — step + routing implemented; pipeline wiring in progress
+**Source:** Run-095/099 AlloyDBCartStore (DQS 0.80, 16-17 semantic errors); Run-100 confirmed gap persists
+**Depends on:** REQ-KZ-CS-402a, REQ-KZ-CS-402b, REQ-KZ-CS-402c (below)
 
 The `sql_injection_risk` semantic check result MUST trigger the `sql_parameterize` repair step deterministically, converting string-interpolated SQL to parameterized queries without LLM involvement.
 
@@ -428,30 +429,66 @@ The `sql_injection_risk` semantic check result MUST trigger the `sql_parameteriz
 6. After repair, re-running the semantic check on the same file produces zero `sql_injection_risk` issues
 7. The repair is non-destructive: only `.cs` files with both `$"` and SQL keywords are processed
 
-**Implementation files:**
+**Implementation status:**
 - `src/startd8/repair/steps/sql_parameterize.py` — Deterministic rewrite engine (IMPLEMENTED)
 - `src/startd8/repair/routing.py` — Route registration (IMPLEMENTED)
 - `src/startd8/repair/steps/__init__.py` — Step export (IMPLEMENTED)
-- `src/startd8/contractors/integration_engine.py` — Semantic-to-diagnostic bridge (NEEDED)
 - `tests/unit/repair/test_sql_parameterize.py` — 8 tests (IMPLEMENTED)
 
-**Diagnostic bridge (not yet wired):**
+#### REQ-KZ-CS-402a: Multi-Language Semantic Repair Dispatch
 
-The missing piece is in `integration_engine.py` where semantic issues are collected but not fed back to the repair pipeline. The bridge should:
+**Priority:** P1
+**Status:** Not implemented
+**Blocks:** REQ-KZ-CS-402
 
-```python
-# In _run_semantic_checks() or _attempt_repair():
-sql_issues = [i for i in semantic_issues if i.check == "sql_injection_risk"]
-if sql_issues:
-    from startd8.repair.models import SemanticDiagnostic
-    diagnostics.append(SemanticDiagnostic(
-        category="security",
-        pattern="csharp_sql_injection",
-        severity="HIGH",
-        message=f"{len(sql_issues)} SQL injection risk(s) detected",
-    ))
-    # Re-run repair pipeline with the new diagnostics
-```
+`run_semantic_repair()` in `repair/orchestrator.py` MUST dispatch to language-appropriate semantic checks based on file extension, not hardcode `.py`.
+
+**Problem:** `run_semantic_repair()` (line 974) contains `if fpath.suffix != ".py": continue`, skipping all C# files. The function docstring explicitly states "Non-Python files are skipped." The parent document (`SEMANTIC_REPAIR_REQUIREMENTS.md` Section 6) lists non-Python repair as a non-goal for that iteration. REQ-KZ-CS-402 was written after that constraint but did not update it.
+
+**Acceptance criteria:**
+1. `run_semantic_repair()` processes `.cs` files in addition to `.py` files
+2. For `.cs` files, detection uses `run_csharp_semantic_checks()` instead of `validate_disk_compliance()`
+3. For `.cs` files, the `compute_disk_quality_score()` pre/post scoring uses the C# quality formula (REQ-KZ-CS-300)
+4. The `.py` path is unchanged — no regressions to existing Python semantic repair
+5. Unknown extensions are still skipped (no catch-all)
+
+**Implementation:**
+- `src/startd8/repair/orchestrator.py` — Replace `.py`-only filter with extension dispatch table; add `_repair_single_csharp_file()` alongside existing `_repair_single_file()`
+
+#### REQ-KZ-CS-402b: C# Semantic Bridge Category Registration
+
+**Priority:** P1
+**Status:** Not implemented
+**Blocks:** REQ-KZ-CS-402
+
+The `semantic_bridge.py` `_REPAIRABLE_CATEGORIES` set and the `RepairConfig.semantic_repair_categories` field MUST include C# SQL injection as a repairable category.
+
+**Problem:** `_REPAIRABLE_CATEGORIES` in `semantic_bridge.py` only contains 4 Python categories (`method_resolution`, `import_resolution`, `discarded_return`, `duplicate_main_guard`). The `sql_injection_risk` category from `csharp_semantic_checks.py` is not registered, so `translate_to_diagnostics()` filters it out even if `.cs` files reach the repair pipeline. Additionally, `RepairConfig.semantic_repair_categories` defaults to `frozenset()` (empty) — the C# language profile must populate it.
+
+**Acceptance criteria:**
+1. `_REPAIRABLE_CATEGORIES` in `semantic_bridge.py` includes `"sql_injection_risk"`
+2. The `translate_to_diagnostics()` function maps `sql_injection_risk` issues to `SemanticDiagnostic` with `category="security"` (matching the routing table's category)
+3. The C# language profile (or integration engine for C# runs) sets `semantic_repair_categories` to include `"sql_injection_risk"` when building `RepairConfig`
+
+**Implementation:**
+- `src/startd8/repair/semantic_bridge.py` — Add `"sql_injection_risk"` to `_REPAIRABLE_CATEGORIES`; map it to `category="security"` for routing
+- `src/startd8/contractors/integration_engine.py` — When language is C#, include `"sql_injection_risk"` in the `RepairConfig.semantic_repair_categories`
+
+#### REQ-KZ-CS-402c: C# Semantic Issue Collection in Integration Engine
+
+**Priority:** P1
+**Status:** Not implemented
+**Blocks:** REQ-KZ-CS-402
+
+The integration engine MUST collect C# semantic check results into `compliance_results` in the same format as Python results, so that `_attempt_semantic_repair()` can consume them.
+
+**Problem:** In `_run_semantic_checks()`, Python files are checked via `validate_disk_compliance()` and results are stored in `compliance_results` dict (lines 1637-1650). C# files are checked via `run_csharp_semantic_checks()` but results are only logged as warnings (lines 1669-1673) — they are NOT stored in `compliance_results`. When `_attempt_semantic_repair()` runs, it calls `validate_disk_compliance()` which only processes Python files, so C# semantic issues never reach the repair pipeline.
+
+**Acceptance criteria:**
+1. C# semantic check results from `run_csharp_semantic_checks()` are stored in `compliance_results` in the same dict format as Python results (`ast_valid`, `stubs_remaining`, `semantic_issues`, etc.)
+2. `_attempt_semantic_repair()` receives the C# compliance results and can dispatch them to the repair pipeline
+3. After repair, `_run_semantic_checks()` re-runs C# checks to verify the repair (matching the existing Python re-check pattern at lines 2659-2662)
+4. The Anzen gate deduplication (lines 1666-1668) continues to work correctly — Query Prime injection findings take precedence over `csharp_semantic_checks` injection findings for files processed by both
 
 ---
 

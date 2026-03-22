@@ -1672,6 +1672,27 @@ class IntegrationEngine:
                             issue.message,
                             extra={"unit_id": unit.id},
                         )
+                    # REQ-KZ-CS-402c: Store C# results in compliance_results
+                    # so _attempt_semantic_repair() can consume them.
+                    if issues:
+                        try:
+                            rel = str(fpath.relative_to(self.project_root))
+                        except ValueError:
+                            rel = str(fpath)
+                        compliance_results[rel] = {
+                            "ast_valid": True,  # passed tree-sitter
+                            "stubs_remaining": 0,
+                            "duplicate_definitions": 0,
+                            "import_completeness": 1.0,
+                            "contract_compliance": 1.0,
+                            "semantic_issues": [
+                                {"category": si.check,
+                                 "severity": si.severity,
+                                 "message": str(si.message)[:200],
+                                 "line": getattr(si, "line", 0)}
+                                for si in issues
+                            ],
+                        }
                     # REQ-KZ-CS-502: Using directive coverage check
                     if fpath.suffix == ".cs":
                         try:
@@ -1764,19 +1785,38 @@ class IntegrationEngine:
         integrated_files: List[Path],
         unit: IntegrationUnit,
     ) -> Optional[Dict[str, Any]]:
-        """Run semantic repair on integrated files (REQ-SR-100–400).
+        """Run semantic repair on integrated files (REQ-SR-100–400, REQ-KZ-CS-402).
 
         Delegates to ``run_semantic_repair()`` in the repair orchestrator.
-        Only active when ``semantic_repair_categories`` is non-empty.
+        Active when ``semantic_repair_categories`` is non-empty OR when C#
+        files are present (auto-enables sql_injection_risk repair).
 
         Returns:
             Semantic repair result dict (for postmortem dual scoring), or None.
         """
-        if (
-            self._repair_config is None
-            or not getattr(self._repair_config, "repair_enabled", False)
-            or not getattr(self._repair_config, "semantic_repair_categories", None)
+        if self._repair_config is None or not getattr(
+            self._repair_config, "repair_enabled", False,
         ):
+            return None
+
+        repair_config = self._repair_config
+
+        # REQ-KZ-CS-402b: Auto-enable sql_injection_risk repair for C# files.
+        has_csharp = any(f.suffix == ".cs" for f in integrated_files)
+        existing_categories = getattr(repair_config, "semantic_repair_categories", frozenset()) or frozenset()
+        if has_csharp and "sql_injection_risk" not in existing_categories:
+            from startd8.repair.config import RepairConfig
+            repair_config = RepairConfig(
+                repair_enabled=repair_config.repair_enabled,
+                repairable_categories=repair_config.repairable_categories,
+                semantic_repair_categories=existing_categories | frozenset({"sql_injection_risk"}),
+                max_semantic_repairs_per_file=repair_config.max_semantic_repairs_per_file,
+                semantic_repair_circuit_breaker_threshold=repair_config.semantic_repair_circuit_breaker_threshold,
+                per_step_timeout_s=repair_config.per_step_timeout_s,
+                total_timeout_s=repair_config.total_timeout_s,
+            )
+
+        if not getattr(repair_config, "semantic_repair_categories", None):
             return None
 
         try:
@@ -1786,7 +1826,7 @@ class IntegrationEngine:
 
         project_root = self.project_root or Path(".")
         result = run_semantic_repair(
-            integrated_files, self._repair_config, project_root,
+            integrated_files, repair_config, project_root,
         )
         if result.get("issues_repaired", 0) > 0:
             logger.info(
