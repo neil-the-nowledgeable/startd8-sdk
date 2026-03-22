@@ -109,9 +109,9 @@ class TestValidateSeedFieldCoverage:
 
 
 class TestValidateForRoute:
-    """Route-specific validation tests."""
+    """Unified validation tests (route-agnostic context field checks)."""
 
-    def test_artisan_warns_on_missing_calibration(self):
+    def test_warns_on_missing_calibration(self):
         seed = _minimal_seed(
             onboarding={"path": "/p"},
             service_metadata={"x": 1},
@@ -119,11 +119,10 @@ class TestValidateForRoute:
             project_metadata={"criticality": "low"},
         )
         warnings = validate_for_route(seed, "artisan")
-        artisan_warnings = [w for w in warnings if "[artisan]" in w]
-        assert any("design_calibration" in w for w in artisan_warnings)
-        assert any("architectural_context" in w for w in artisan_warnings)
+        assert any("design_calibration" in w for w in warnings)
+        assert any("architectural_context" in w for w in warnings)
 
-    def test_prime_warns_on_missing_onboarding(self):
+    def test_warns_on_missing_onboarding(self):
         seed = _minimal_seed(
             architectural_context={"goals": []},
             design_calibration={"PI-001": {}},
@@ -132,10 +131,9 @@ class TestValidateForRoute:
             project_metadata={"criticality": "low"},
         )
         warnings = validate_for_route(seed, "prime")
-        prime_warnings = [w for w in warnings if "[prime]" in w]
-        assert any("onboarding" in w for w in prime_warnings)
+        assert any("onboarding" in w for w in warnings)
 
-    def test_artisan_no_route_warning_when_populated(self):
+    def test_no_context_warning_when_all_populated(self):
         seed = _minimal_seed(
             architectural_context={"goals": []},
             design_calibration={"PI-001": {}},
@@ -145,5 +143,10 @@ class TestValidateForRoute:
             project_metadata={"criticality": "low"},
         )
         warnings = validate_for_route(seed, "artisan")
-        artisan_warnings = [w for w in warnings if "[artisan]" in w]
-        assert len(artisan_warnings) == 0
+        context_warnings = [
+            w for w in warnings
+            if "design_calibration" in w
+            or "architectural_context" in w
+            or "onboarding" in w
+        ]
+        assert len(context_warnings) == 0

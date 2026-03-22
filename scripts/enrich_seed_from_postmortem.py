@@ -133,6 +133,7 @@ def main() -> None:
         sys.exit(0)
 
     enriched = enrich_seed(seed, suggestions)
+    enriched["authoring_mode"] = "hybrid"  # REQ-SU-300: pipeline + post-enrichment
 
     output = args.output or args.seed
     output.parent.mkdir(parents=True, exist_ok=True)

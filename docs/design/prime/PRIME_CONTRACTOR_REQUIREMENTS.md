@@ -360,3 +360,4 @@ The system SHALL record retry outcomes and ensure post-generation repair runs af
 | [`ARTISAN_RUN2_POSTMORTEM.md`](../../../Processes/cap-dev-pipe-test/design/ARTISAN_RUN2_POSTMORTEM.md) | Run 2 defect analysis (source for staleness and scope requirements) |
 | [`PIPELINE_REQUIREMENTS_INDEX.md`](../../../Processes/cap-dev-pipe-prod/PIPELINE_REQUIREMENTS_INDEX.md) | Pipeline requirements master index |
 | [`MICRO_PRIME_REQUIREMENTS.md`](../micro-prime/MICRO_PRIME_REQUIREMENTS.md) | Micro Prime subsystem requirements (local/escalation behavior) |
+| [`SEED_UNIFICATION_REQUIREMENTS.md`](../SEED_UNIFICATION_REQUIREMENTS.md) | Architectural anchor: REQ-SU-200 consolidates REQ-PC-009 with REQ-RFL-100/105/115 — implementing RFL I1 delivers PC-009 |

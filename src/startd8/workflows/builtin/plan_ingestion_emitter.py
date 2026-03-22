@@ -940,8 +940,8 @@ class PhaseEmitter:
         """Emit context-seed.json for the given route.
 
         Consolidates the former ``_emit_artisan_seed`` and ``_emit_prime_seed``
-        into a single method. Artisan route includes ingestion quality metadata
-        (REQ-KPI-600); prime route omits it.
+        into a single method. Ingestion quality metadata (REQ-KPI-600) is
+        computed for all routes (seed unification REQ-SU-100).
         """
         from .plan_ingestion_workflow import _validate_context_seed, _log_seed_coverage
 
@@ -976,6 +976,7 @@ class PhaseEmitter:
             project_metadata=project_metadata or None,
             forward_manifest=forward_manifest_dict,
             security_contract=security_contract,
+            authoring_mode="pipeline",  # REQ-SU-300: pipeline-derived seed
         )
 
         # OI-005: Build capability coverage map (requirement_id → task_ids)
@@ -990,51 +991,51 @@ class PhaseEmitter:
         seed_dict = seed.to_dict()
 
         # Kaizen Phase 3: inject ingestion quality metadata (REQ-KPI-600)
-        # Only for artisan route — prime route omits this block.
-        if route == ContractorRoute.ARTISAN:
-            _task_density = compute_task_density(seed_dict.get("tasks", []))
-            _sq_score, _sq_warnings = compute_seed_quality(
-                seed_dict, task_density=_task_density,
+        # Computed for ALL routes (seed unification — quality metadata is
+        # universally valuable for KSU-1xx seed fitness scoring).
+        _task_density = compute_task_density(seed_dict.get("tasks", []))
+        _sq_score, _sq_warnings = compute_seed_quality(
+            seed_dict, task_density=_task_density,
+        )
+        _parse_q = {}
+        if parsed_plan is not None:
+            _parse_q = compute_parse_quality(
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+                parsed_plan.mentioned_files,
             )
-            _parse_q = {}
-            if parsed_plan is not None:
-                _parse_q = compute_parse_quality(
-                    parsed_plan.features,
-                    parsed_plan.dependency_graph,
-                    parsed_plan.mentioned_files,
-                )
-            _assess_q = {}
-            if complexity is not None:
-                _dims = [
-                    complexity.feature_count, complexity.cross_file_deps,
-                    complexity.api_surface, complexity.test_complexity,
-                    complexity.integration_depth, complexity.domain_novelty,
-                    complexity.ambiguity,
-                ]
-                _assess_q = compute_assess_quality(
-                    complexity.composite,
-                    route_label,
+        _assess_q = {}
+        if complexity is not None:
+            _dims = [
+                complexity.feature_count, complexity.cross_file_deps,
+                complexity.api_surface, complexity.test_complexity,
+                complexity.integration_depth, complexity.domain_novelty,
+                complexity.ambiguity,
+            ]
+            _assess_q = compute_assess_quality(
+                complexity.composite,
+                route_label,
+                getattr(self._workflow, "_complexity_threshold", 40),
+                _dims,
+            )
+            _margin = _assess_q.get("route_margin", 999)
+            if _margin < 10:
+                logger.warning(
+                    "ASSESS: route_margin=%d (composite=%d, threshold=%d) — "
+                    "borderline routing; minor plan changes may flip the route",
+                    _margin, complexity.composite,
                     getattr(self._workflow, "_complexity_threshold", 40),
-                    _dims,
                 )
-                _margin = _assess_q.get("route_margin", 999)
-                if _margin < 10:
-                    logger.warning(
-                        "ASSESS: route_margin=%d (composite=%d, threshold=%d) — "
-                        "borderline routing; minor plan changes may flip the route",
-                        _margin, complexity.composite,
-                        getattr(self._workflow, "_complexity_threshold", 40),
-                    )
-            _density_warnings = compute_density_warnings(_task_density)
-            seed_dict["_ingestion_quality"] = {
-                "seed_quality_score": _sq_score,
-                "features_extracted": _parse_q.get("features_extracted", 0),
-                "multi_file_features": _parse_q.get("multi_file_features", 0),
-                "route_margin": _assess_q.get("route_margin", 0),
-                "field_coverage_warnings": _sq_warnings,
-                "density_warnings": _density_warnings,
-                "diagnostic_report_path": "plan-ingestion-diagnostic.json",
-            }
+        _density_warnings = compute_density_warnings(_task_density)
+        seed_dict["_ingestion_quality"] = {
+            "seed_quality_score": _sq_score,
+            "features_extracted": _parse_q.get("features_extracted", 0),
+            "multi_file_features": _parse_q.get("multi_file_features", 0),
+            "route_margin": _assess_q.get("route_margin", 0),
+            "field_coverage_warnings": _sq_warnings,
+            "density_warnings": _density_warnings,
+            "diagnostic_report_path": "plan-ingestion-diagnostic.json",
+        }
 
         if not _validate_context_seed(seed_dict):
             seed_dict["_schema_valid"] = False

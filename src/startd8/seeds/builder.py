@@ -84,6 +84,7 @@ class SeedBuilder:
         self._source_checksum: Optional[str] = None
         self._generation_profile: Optional[str] = None  # REQ-GPC-401
         self._security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
+        self._authoring_mode: Optional[str] = None  # REQ-SU-300
         self._refine_suggestions: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
@@ -111,6 +112,26 @@ class SeedBuilder:
     def set_route(self, route: str) -> "SeedBuilder":
         """Record which contractor route this seed targets."""
         self._route = route
+        return self
+
+    _VALID_AUTHORING_MODES = {"pipeline", "designed", "hybrid"}
+
+    def set_authoring_mode(self, mode: str) -> "SeedBuilder":
+        """Set seed authoring mode (REQ-SU-300). Provenance only.
+
+        Args:
+            mode: One of ``"pipeline"`` (derived by plan ingestion),
+                ``"designed"`` (hand-authored golden seed), or
+                ``"hybrid"`` (pipeline + post-ingestion enrichment).
+
+        Raises:
+            ValueError: If *mode* is not a recognized value.
+        """
+        if mode not in self._VALID_AUTHORING_MODES:
+            raise ValueError(
+                f"authoring_mode must be one of {self._VALID_AUTHORING_MODES}, got {mode!r}"
+            )
+        self._authoring_mode = mode
         return self
 
     def derive_tasks(
@@ -486,5 +507,6 @@ class SeedBuilder:
             route=self._route,
             generation_profile=self._generation_profile,
             security_contract=self._security_contract,
+            authoring_mode=self._authoring_mode,
         )
         return seed.to_dict()

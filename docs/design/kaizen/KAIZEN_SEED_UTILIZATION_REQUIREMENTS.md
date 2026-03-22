@@ -368,3 +368,4 @@ More importantly, the *fitness* score (once implemented) should show a larger im
 | `complexity/classifier.py` | Tier classification from seed signals |
 | SDK Lessons: Leg 13 #33 | Requirements layer gap — data injection ≠ prompt consumption |
 | SDK Lessons: Leg 13 #40 | 12-point pipeline field threading — silent data loss at wiring gaps |
+| [SEED_UNIFICATION_REQUIREMENTS.md](../SEED_UNIFICATION_REQUIREMENTS.md) | Architectural anchor: REQ-SU-201 simplifies KSU-100 via static consumption map; REQ-SU-100 removes artisan guard on `_ingestion_quality` enabling KSU fitness scoring for Prime |

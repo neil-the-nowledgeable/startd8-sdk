@@ -1,5 +1,9 @@
 """
-Seed validation — JSON schema checks, field coverage, route-specific checks.
+Seed validation — JSON schema checks and unified field coverage.
+
+All context fields are validated regardless of route (seed unification
+REQ-SU-101). The ``route`` parameter on ``validate_for_route`` is retained
+for backward compatibility but does not alter validation behavior.
 """
 
 from __future__ import annotations
@@ -151,11 +155,15 @@ def log_seed_coverage(seed_dict: Dict[str, Any], label: str = "") -> None:
 
 
 def validate_for_route(seed_dict: Dict[str, Any], route: str) -> List[str]:
-    """Route-specific validation on top of base schema + coverage.
+    """Validate seed with schema check and unified field coverage.
+
+    All context fields (architectural_context, design_calibration, onboarding,
+    etc.) are validated regardless of route — see REQ-SU-101.
 
     Args:
         seed_dict: The seed dictionary to validate.
-        route: ``"artisan"`` or ``"prime"``.
+        route: Retained for backward compatibility. Does not affect
+            validation behavior (all fields checked for all routes).
 
     Returns:
         List of warning strings (empty = no issues).
@@ -165,24 +173,8 @@ def validate_for_route(seed_dict: Dict[str, Any], route: str) -> List[str]:
     if not validate_context_seed(seed_dict):
         warnings.append("base schema validation failed")
 
+    # validate_seed_field_coverage already checks all context fields
+    # (architectural_context, design_calibration, onboarding, etc.)
     warnings.extend(validate_seed_field_coverage(seed_dict))
-
-    route_lower = route.lower() if isinstance(route, str) else ""
-
-    if route_lower == "artisan":
-        if not seed_dict.get("design_calibration"):
-            warnings.append(
-                "[artisan] design_calibration empty — design phase will use defaults"
-            )
-        if not seed_dict.get("architectural_context"):
-            warnings.append(
-                "[artisan] architectural_context empty — shared context unavailable"
-            )
-
-    elif route_lower == "prime":
-        if not seed_dict.get("onboarding"):
-            warnings.append(
-                "[prime] onboarding missing — mode detection may be affected"
-            )
 
     return warnings

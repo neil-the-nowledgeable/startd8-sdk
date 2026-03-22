@@ -337,7 +337,8 @@ class TestRewriteForwardManifestTaskIds:
 
 
 class TestSeedBuilderValidate:
-    def test_validate_artisan_warns_on_missing_calibration(self):
+    def test_validate_warns_on_missing_calibration(self):
+        """Unified validation warns on missing context fields regardless of route."""
         b = SeedBuilder()
         b.set_tasks([{
             "task_id": "PI-001",
@@ -345,11 +346,11 @@ class TestSeedBuilderValidate:
             "config": {"task_description": "d", "context": {"target_files": ["a.py"]}},
         }])
         warnings = b.validate(route="artisan")
-        artisan_warnings = [w for w in warnings if "[artisan]" in w]
-        assert any("design_calibration" in w for w in artisan_warnings)
-        assert any("architectural_context" in w for w in artisan_warnings)
+        assert any("design_calibration" in w for w in warnings)
+        assert any("architectural_context" in w for w in warnings)
 
-    def test_validate_prime_warns_on_missing_onboarding(self):
+    def test_validate_warns_on_missing_onboarding(self):
+        """Unified validation warns on missing onboarding regardless of route."""
         b = SeedBuilder()
         b.set_tasks([{
             "task_id": "PI-001",
@@ -357,10 +358,10 @@ class TestSeedBuilderValidate:
             "config": {"task_description": "d", "context": {"target_files": ["a.py"]}},
         }])
         warnings = b.validate(route="prime")
-        prime_warnings = [w for w in warnings if "[prime]" in w]
-        assert any("onboarding" in w for w in prime_warnings)
+        assert any("onboarding" in w for w in warnings)
 
     def test_validate_uses_builder_route(self):
+        """Builder route is passed to validate_for_route; unified warnings appear."""
         b = SeedBuilder()
         b.set_route("artisan")
         b.set_tasks([{
@@ -369,8 +370,7 @@ class TestSeedBuilderValidate:
             "config": {"task_description": "d", "context": {"target_files": ["a.py"]}},
         }])
         warnings = b.validate()
-        artisan_warnings = [w for w in warnings if "[artisan]" in w]
-        assert any("design_calibration" in w for w in artisan_warnings)
+        assert any("design_calibration" in w for w in warnings)
 
     def test_validate_no_route_uses_base_schema(self):
         b = SeedBuilder()

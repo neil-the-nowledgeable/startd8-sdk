@@ -309,3 +309,4 @@ This separation of concerns enables independent tuning:
 | [TASK_DENSITY_ENRICHMENT_REQUIREMENTS.md](TASK_DENSITY_ENRICHMENT_REQUIREMENTS.md) | Deterministic enrichment (Option A) — pipeline-side complement |
 | `run-049` | Highest reference fidelity run (14/16 byte-identical) — golden seed starting point |
 | `run-050` | Degraded run despite same pipeline — evidence for designed-over-derived approach |
+| [SEED_UNIFICATION_REQUIREMENTS.md](../../SEED_UNIFICATION_REQUIREMENTS.md) | Architectural anchor: REQ-SU-300 refactors the "designed, not derived" concept (REQ-GS-201/202) into an authoring mode classification that separates how seeds are created from how they are consumed |

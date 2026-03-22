@@ -59,13 +59,23 @@ class ContextSeed:
     generation_profile: Optional[str] = None  # REQ-GPC-400
     security_contract: Optional[Dict[str, Any]] = None  # REQ-ICD-106
     capability_coverage_map: Optional[Dict[str, List[str]]] = None  # OI-005
+    authoring_mode: Optional[str] = None  # REQ-SU-300: "pipeline", "designed", or "hybrid"
+
+    # Optional fields serialized only when non-None (used by to_dict loop).
+    _OPTIONAL_FIELDS = (
+        "source_checksum", "architectural_context", "design_calibration",
+        "onboarding", "context_files", "service_metadata",
+        "service_communication_graph", "wave_metadata", "lane_assignments",
+        "project_metadata", "forward_manifest", "route",
+        "generation_profile", "security_contract",
+        "capability_coverage_map", "authoring_mode",
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "version": self.version,
             "schema_version": self.schema_version,
             "generated_at": self.generated_at,
-            "source_checksum": self.source_checksum,
             "generator": self.generator,
             "plan": self.plan,
             "complexity": self.complexity,
@@ -73,34 +83,10 @@ class ContextSeed:
             "artifacts": dict(self.artifacts),
             "ingestion_metrics": dict(self.ingestion_metrics),
         }
-        if self.architectural_context is not None:
-            d["architectural_context"] = self.architectural_context
-        if self.design_calibration is not None:
-            d["design_calibration"] = self.design_calibration
-        if self.onboarding is not None:
-            d["onboarding"] = self.onboarding
-        if self.context_files is not None:
-            d["context_files"] = self.context_files
-        if self.service_metadata is not None:
-            d["service_metadata"] = self.service_metadata
-        if self.service_communication_graph is not None:
-            d["service_communication_graph"] = self.service_communication_graph
-        if self.wave_metadata is not None:
-            d["wave_metadata"] = self.wave_metadata
-        if self.lane_assignments is not None:
-            d["lane_assignments"] = self.lane_assignments
-        if self.project_metadata is not None:
-            d["project_metadata"] = self.project_metadata
-        if self.forward_manifest is not None:
-            d["forward_manifest"] = self.forward_manifest
-        if self.route is not None:
-            d["route"] = self.route
-        if self.generation_profile is not None:
-            d["generation_profile"] = self.generation_profile
-        if self.security_contract is not None:
-            d["security_contract"] = self.security_contract
-        if self.capability_coverage_map is not None:
-            d["capability_coverage_map"] = self.capability_coverage_map
+        for field_name in self._OPTIONAL_FIELDS:
+            val = getattr(self, field_name)
+            if val is not None:
+                d[field_name] = val
         return d
 
 
