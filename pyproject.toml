@@ -106,7 +106,6 @@ convergent-review = "startd8.workflows.builtin.convergent_review_workflow:Conver
 architectural-review-log = "startd8.workflows.builtin.architectural_review_log_workflow:ArchitecturalReviewLogWorkflow"
 dashboard-create = "startd8.dashboard_creator.workflow:DashboardCreatorWorkflow"
 prime-contractor = "startd8.workflows.builtin.prime_contractor_workflow:PrimeContractorWorkflowAdapter"
-todo-completion = "startd8.workflows.builtin.todo_completion_workflow:TodoCompletionWorkflow"
 
 # Prime Contractor entry points for plugin discovery
 [project.entry-points."startd8.preflight_rules"]
