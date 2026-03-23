@@ -44,9 +44,16 @@ Node.js covers both JavaScript and TypeScript within the Prime Contractor pipeli
 - **Dependency management**: npm, yarn, and pnpm have different lockfile formats. LLMs sometimes reference packages that don't exist on npm, or use outdated API surfaces.
 - **Cross-language contamination**: When generating mixed-language projects (e.g., Go microservices with Node.js frontends), the Python skeleton assembly path can emit Python stubs for `.js` files routed through trivial/simple tiers (see MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md).
 
-### MicroPrime Bypass
+### MicroPrime Integration
 
-Node.js uses **file-whole generation** in MicroPrime. The `merge_strategy_preference` is `"simple"` — no AST-based splicing or element-level decomposition. All generation produces complete files rather than individual functions or classes.
+Node.js tasks are routed through **MicroPrime complexity classification** (TRIVIAL/SIMPLE/MODERATE/COMPLEX) like all languages with a registered `LanguageProfile`. Element-level generation is supported via `nodejs_parser.py` (regex-based extraction of functions, classes, methods, arrow functions) and `nodejs_splicer.py` (text brace-matching body replacement).
+
+- **TRIVIAL/SIMPLE:** Template matching or local Ollama generation for simple handlers, utility functions
+- **MODERATE:** Element-level decomposition with splicer merge
+- **COMPLEX:** File-whole generation via cloud LeadContractor (language-aware prompts)
+- The `merge_strategy_preference` is `"simple"` (text-based, not AST merge)
+
+See [MICROPRIME_POLYGLOT_REQUIREMENTS.md](../prime/MICROPRIME_POLYGLOT_REQUIREMENTS.md) for the language-agnostic MicroPrime integration pattern.
 
 ### Relationship to Parent Requirements
 

@@ -43,10 +43,14 @@ Java is the newest language in the Prime Contractor pipeline and the least matur
 
 ### Generation Strategy
 
-Java tasks use **file-whole generation** (MicroPrime bypass). Element-by-element splicing is not supported because:
-- Java's one-public-class-per-file convention makes file-level generation natural.
-- Package declarations, import ordering, and class-level structure require whole-file coherence.
-- The `merge_strategy_preference` is `"simple"` (full file replacement, not merge).
+Java tasks are routed through **MicroPrime complexity classification** (TRIVIAL/SIMPLE/MODERATE/COMPLEX) like all languages with a registered `LanguageProfile`. Element-level generation is supported via `java_parser.py` (regex-based structure extraction) and `java_splicer.py` (text brace-matching body replacement).
+
+- **TRIVIAL/SIMPLE:** Template matching or local Ollama generation for interfaces, POJOs, simple methods
+- **MODERATE:** Element-level decomposition with splicer merge
+- **COMPLEX:** File-whole generation via cloud LeadContractor (language-aware prompts)
+- The `merge_strategy_preference` is `"simple"` (text-based, not AST merge)
+
+See [JAVA_MICROPRIME_ELEMENT_REQUIREMENTS.md](JAVA_MICROPRIME_ELEMENT_REQUIREMENTS.md) for full MicroPrime integration details.
 
 ---
 
