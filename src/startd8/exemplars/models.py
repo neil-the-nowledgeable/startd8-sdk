@@ -138,6 +138,7 @@ def _ext_to_language(ext: str) -> str:
         ".go": "go",
         ".py": "python",
         ".js": "nodejs", ".ts": "nodejs", ".jsx": "nodejs", ".tsx": "nodejs",
+        ".mjs": "nodejs", ".cjs": "nodejs",
         ".cs": "csharp",
         ".rs": "rust",
     }

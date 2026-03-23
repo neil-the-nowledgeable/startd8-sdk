@@ -242,10 +242,24 @@ class CSharpLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
-            "PascalCase for public members, camelCase for private fields/locals. "
-            "Use nullable reference types. Prefer async/await. "
-            "Use 'using' declarations for IDisposable. "
-            "Expression-bodied members for simple accessors."
+            "C# coding standards:\n"
+            "- PascalCase for public members/types, camelCase for private fields/locals, "
+            "_camelCase for private fields.\n"
+            "- NAMESPACES: Use file-scoped namespaces (`namespace Foo;`) not block-scoped "
+            "(`namespace Foo { }`) for .NET 6+ projects.\n"
+            "- DEPENDENCY INJECTION: Use constructor injection for all service dependencies. "
+            "NEVER use property injection or service locator pattern.\n"
+            "- LOGGING: Use `ILogger<T>` injected via constructor — "
+            "NEVER use `Console.WriteLine` for logging in production services.\n"
+            "- ASYNC: Use `async`/`await` for all I/O operations. "
+            "Use `CancellationToken` in async method signatures.\n"
+            "- SECURITY: Use parameterized queries (`@param`) for ALL database access — "
+            "NEVER use string interpolation or concatenation in SQL strings.\n"
+            "- NULL SAFETY: Enable `<Nullable>enable</Nullable>` in .csproj. "
+            "Annotate nullable parameters with `?`.\n"
+            "- Use `using` declarations for IDisposable. "
+            "Catch specific exception types — NEVER use bare `catch` or `catch (Exception)`.\n"
+            "- TESTING: Include both happy-path AND error-path test cases."
         )
 
     @property

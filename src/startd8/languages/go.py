@@ -110,9 +110,18 @@ class GoLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
-            "Idiomatic Go: exported names capitalized, explicit `if err != nil` "
-            "error handling, composition over inheritance, no unused imports or "
-            "variables (compiler-enforced). Use standard library where possible."
+            "Go coding standards:\n"
+            "- Exported names PascalCase, unexported camelCase. Package names lowercase, single-word.\n"
+            "- ERROR HANDLING: ALWAYS check returned errors with `if err != nil`. "
+            "NEVER ignore error returns — the Go compiler allows it but it is a critical defect.\n"
+            "- No unused imports or variables (compiler-enforced). Use `_` for intentionally unused values.\n"
+            "- LOGGING: Use `log/slog` (structured logging) or `log.Printf` — "
+            "NEVER use `fmt.Println` for service logging.\n"
+            "- Use `context.Context` as the first parameter for functions that do I/O or may be cancelled.\n"
+            "- Prefer composition over inheritance. Use interfaces for abstraction.\n"
+            "- Use `defer` for cleanup (file close, mutex unlock). "
+            "Use standard library where possible — avoid unnecessary third-party dependencies.\n"
+            "- Group imports: stdlib, then third-party, then local (goimports enforces this)."
         )
 
     @property

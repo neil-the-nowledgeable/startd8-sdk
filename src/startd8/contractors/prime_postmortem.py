@@ -502,6 +502,31 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "all target file extensions."
         ),
     },
+    # --- Python AST semantic check hints (REQ-KZ-003) ---
+    "duplicate_main_guard_detected": {
+        "phase": "draft",
+        "hint": (
+            "Files should have at most one `if __name__ == '__main__':` guard. "
+            "Multiple guards indicate copy-paste from different sources. "
+            "Keep only the bottom-most guard that serves as the entry point."
+        ),
+    },
+    "bare_except_pass_detected": {
+        "phase": "draft",
+        "hint": (
+            "Never use bare `except: pass` — this silently swallows all errors "
+            "including KeyboardInterrupt and SystemExit. Use specific exception "
+            "types: `except (ValueError, TypeError):` or at minimum `except Exception:`."
+        ),
+    },
+    "phantom_dependency_detected": {
+        "phase": "draft",
+        "hint": (
+            "Every import must resolve to a known module — either stdlib, a declared "
+            "dependency, or a sibling file in the project. Unresolvable imports "
+            "indicate a missing dependency or typo in the import path."
+        ),
+    },
     # --- Cross-language semantic issue hints ---
     "console_logging_detected": {
         "phase": "draft",
@@ -916,6 +941,11 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "obs_threshold_mismatch": "obs_threshold_mismatch",
     "obs_missing_availability_slo": "obs_missing_availability_slo",
     "obs_transport_metric_mismatch": "obs_transport_metric_mismatch",
+    # Python AST semantic checks (REQ-KZ-003)
+    "duplicate_main_guard": "duplicate_main_guard_detected",
+    "duplicate_definition": "duplicate_definition_detected",
+    "bare_except_pass": "bare_except_pass_detected",
+    "phantom_dependency": "phantom_dependency_detected",
 }
 
 

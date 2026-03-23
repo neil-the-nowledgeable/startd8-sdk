@@ -353,7 +353,133 @@ class FeatureQueue:
                 spec.metadata.update(meta)
             added.append(spec)
 
+        # Detect and break circular dependencies so the queue isn't deadlocked.
+        # LLM-generated plans frequently produce bidirectional dependencies
+        # (e.g., A→B and B→A) that prevent any feature from being processable.
+        self._detect_and_break_cycles()
+
         return added
+
+    # ------------------------------------------------------------------
+    # Cycle detection and breaking
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_cycles(adj: Dict[str, List[str]]) -> List[List[str]]:
+        """Find all cycles in a directed graph using iterative DFS.
+
+        Args:
+            adj: Adjacency list {node: [neighbors]}.
+
+        Returns:
+            List of cycles, each represented as a list of node IDs
+            forming the cycle (first == last).
+        """
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: Dict[str, int] = {n: WHITE for n in adj}
+        parent: Dict[str, Optional[str]] = {n: None for n in adj}
+        cycles: List[List[str]] = []
+
+        for start in adj:
+            if color[start] != WHITE:
+                continue
+            stack = [start]
+            while stack:
+                node = stack[-1]
+                if color[node] == WHITE:
+                    color[node] = GRAY
+                    for neighbor in adj.get(node, []):
+                        if neighbor not in color:
+                            continue  # dependency on unknown node — ignore
+                        if color[neighbor] == WHITE:
+                            parent[neighbor] = node
+                            stack.append(neighbor)
+                        elif color[neighbor] == GRAY:
+                            # Back edge found — reconstruct cycle
+                            cycle = [neighbor, node]
+                            p = parent.get(node)
+                            while p is not None and p != neighbor:
+                                cycle.append(p)
+                                p = parent.get(p)
+                            cycle.append(neighbor)
+                            cycle.reverse()
+                            cycles.append(cycle)
+                else:
+                    color[node] = BLACK
+                    stack.pop()
+
+        return cycles
+
+    def _detect_and_break_cycles(self) -> int:
+        """Detect circular dependencies and break them by removing back-edges.
+
+        Returns:
+            Number of back-edges removed.
+        """
+        # Build adjacency list from current features
+        adj: Dict[str, List[str]] = {}
+        for fid, spec in self.features.items():
+            adj[fid] = list(spec.dependencies)
+
+        cycles = self._find_cycles(adj)
+        if not cycles:
+            return 0
+
+        removed = 0
+        seen_edges: set = set()
+
+        for cycle in cycles:
+            # Break the back-edge (last → first) in each cycle
+            for i in range(len(cycle) - 1):
+                src, dst = cycle[i], cycle[i + 1]
+                edge = (src, dst)
+                if edge in seen_edges:
+                    continue
+                # Only break if the reverse edge also exists (bidirectional)
+                # or if this is the back-edge of a longer cycle
+                spec = self.features.get(src)
+                if spec and dst in spec.dependencies:
+                    spec.dependencies.remove(dst)
+                    seen_edges.add(edge)
+                    removed += 1
+                    logger.warning(
+                        "Broke circular dependency: %s → %s (cycle: %s)",
+                        src, dst, " → ".join(cycle),
+                    )
+                    break  # One break per cycle is sufficient
+
+        if removed:
+            logger.warning(
+                "Broke %d circular dependency edge(s) across %d cycle(s). "
+                "LLM-generated dependency graphs are unreliable — "
+                "validate acyclicity post-ingestion.",
+                removed, len(cycles),
+            )
+            # Check if deadlock remains (no root nodes)
+            roots = [
+                fid for fid, spec in self.features.items()
+                if not spec.dependencies
+                and spec.status == FeatureStatus.PENDING
+            ]
+            if not roots:
+                # Aggressive: break ALL back-edges until at least one root exists
+                logger.warning(
+                    "Still deadlocked after initial cycle breaking. "
+                    "Clearing all dependencies to unblock the queue."
+                )
+                for fid, spec in self.features.items():
+                    if spec.dependencies:
+                        logger.warning(
+                            "Cleared dependencies for %s: %s",
+                            fid, spec.dependencies,
+                        )
+                        spec.dependencies = []
+                        removed += 1
+
+            if self.auto_save:
+                self.save_state()
+
+        return removed
 
     def get_feature(self, feature_id: str) -> Optional[FeatureSpec]:
         """Look up a feature by ID."""

@@ -71,11 +71,13 @@ class TestFormatPrompt:
             format_prompt("review", task_description="t")
 
     def test_format_draft_system_with_language_placeholders(self):
-        # System prompts now accept language_role and coding_standards
+        # System prompts accept language_role, coding_standards, and
+        # import_instruction (R1-3: parameterized per language).
         result = format_prompt(
             "draft_system_create",
             language_role="an expert Python engineer",
             coding_standards="Ruff: no single-letter vars.",
+            import_instruction="Include all import statements at the top.",
         )
         assert isinstance(result, str)
         assert "expert Python engineer" in result

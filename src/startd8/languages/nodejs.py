@@ -128,8 +128,19 @@ class NodeLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
-            "Modern JavaScript: async/await, const by default, destructuring. "
-            "No var. Use explicit error handling for async operations."
+            "Node.js coding standards:\n"
+            "- Use `const` by default, `let` only when reassignment is needed. NEVER use `var`.\n"
+            "- MODULE SYSTEM: Use ONE module system consistently per project. "
+            "If package.json has `\"type\": \"module\"`, use ESM (`import`/`export`). "
+            "Otherwise use CJS (`require`/`module.exports`). NEVER mix `require()` and `import` in the same file.\n"
+            "- ASYNC: Use async/await for all asynchronous operations. "
+            "Wrap async calls in try/catch. Add `process.on('unhandledRejection')` in entry points.\n"
+            "- LOGGING: Use a structured logger (pino, winston) — "
+            "NEVER use `console.log()` in production service code (test files excepted).\n"
+            "- Use destructuring for object/array access. Prefer arrow functions for callbacks.\n"
+            "- ERROR HANDLING: Catch specific error types. Never swallow errors silently.\n"
+            "- DEPENDENCIES: Every `require()`/`import` of a non-stdlib module must have a "
+            "corresponding entry in package.json `dependencies`."
         )
 
     @property

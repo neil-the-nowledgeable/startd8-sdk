@@ -132,40 +132,16 @@ def _format_lead_prompt(template_name: str, fallback: str, **kwargs: Any) -> str
             return fallback
 
 
-# Inline fallbacks
-_PLAN_CONTEXT_EDIT_FRAMING_FALLBACK = (
-    "The following plan excerpt describes CHANGES to apply to existing code. "
-    "Do NOT treat it as a greenfield specification."
-)
-_PLAN_CONTEXT_CREATE_FRAMING_FALLBACK = (
-    "The following plan excerpt provides context for this task. "
-    "The design document (if present) is authoritative."
-)
-_ARCH_CONTEXT_EDIT_FRAMING_FALLBACK = (
-    "Apply these architectural constraints to the existing file(s). "
-    "Do not redesign from scratch."
-)
-_SPEC_EDIT_PREAMBLE_BASE_FALLBACK = (
-    "## EDIT MODE — Existing Code Modification\n"
-    "**Task type: {task_verb}** existing code.\n\n"
-    "This task MODIFIES an existing file. The existing code is shown "
-    "below in the task description.\n"
-    "Your specification must:\n"
-    "- Describe ONLY the additions and modifications needed\n"
-    "- List which existing functions/classes to keep unchanged\n"
-    "- NOT redesign or restructure existing code\n"
-    "- Specify exact insertion points (e.g., 'Add after class X' "
-    "or 'Modify method Y')\n"
-)
-_SPEC_EDIT_QUANTITATIVE_FALLBACK = (
-    "\n**The existing file(s) total {total_lines} lines.** "
-    "Your spec must result in a draft that is AT LEAST "
-    "{min_lines} lines ({edit_min_pct}% of existing).\n"
-)
-_SPEC_CREATE_PREAMBLE_FALLBACK = (
-    "## CREATE MODE — New Implementation\n"
-    "**Task type: Implement** this specification from scratch.\n\n"
-)
+# Legacy fallback constants — kept as empty strings for backward compatibility.
+# All fallbacks are now in prompts/__init__.py:_FALLBACK_TEMPLATES (R0-3).
+# _format_lead_prompt() calls get_template() first, which loads from YAML
+# or _FALLBACK_TEMPLATES. These constants are never reached.
+_PLAN_CONTEXT_EDIT_FRAMING_FALLBACK = ""
+_PLAN_CONTEXT_CREATE_FRAMING_FALLBACK = ""
+_ARCH_CONTEXT_EDIT_FRAMING_FALLBACK = ""
+_SPEC_EDIT_PREAMBLE_BASE_FALLBACK = ""
+_SPEC_EDIT_QUANTITATIVE_FALLBACK = ""
+_SPEC_CREATE_PREAMBLE_FALLBACK = ""
 
 
 def build_spec_plan_section(
@@ -1290,7 +1266,13 @@ def build_spec_prompt(
         prioritized.append((
             0,
             "coding_standards",
-            f"## Coding Standards (Target Language)\n\n{_cs_text}",
+            f"## Coding Standards (Target Language)\n\n{_cs_text}\n\n"
+            f"**IMPORTANT:** These coding standards take precedence over reference "
+            f"implementation patterns. If the task description or negative scope says "
+            f"\"do not use\" something that the coding standards above REQUIRE "
+            f"(e.g., \"do not use ILogger\" when standards say \"use ILogger<T>\"), "
+            f"follow the coding standard. The goal is to generate code that meets "
+            f"modern language best practices, not to replicate reference limitations.",
         ))
 
     # P2: Anti-pattern guidance for env var handling (REQ-SV2-1400)

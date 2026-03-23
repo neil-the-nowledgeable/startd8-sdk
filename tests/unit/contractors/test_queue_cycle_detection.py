@@ -133,3 +133,109 @@ class TestCopySourceTaskIdResolution:
 
         pi001 = q.get_feature("PI-001")
         assert pi001.copy_source_task_id == "UNKNOWN-999"
+
+
+class TestFindCycles:
+    """Tests for the static _find_cycles graph algorithm."""
+
+    def test_no_cycles_in_dag(self):
+        adj = {"A": ["B"], "B": ["C"], "C": []}
+        cycles = FeatureQueue._find_cycles(adj)
+        assert len(cycles) == 0
+
+    def test_simple_bidirectional_cycle(self):
+        adj = {"A": ["B"], "B": ["A"]}
+        cycles = FeatureQueue._find_cycles(adj)
+        assert len(cycles) >= 1
+
+    def test_triangle_cycle(self):
+        adj = {"A": ["B"], "B": ["C"], "C": ["A"]}
+        cycles = FeatureQueue._find_cycles(adj)
+        assert len(cycles) >= 1
+
+    def test_disconnected_graph_with_cycle(self):
+        adj = {"A": ["B"], "B": ["A"], "C": ["D"], "D": []}
+        cycles = FeatureQueue._find_cycles(adj)
+        assert len(cycles) >= 1
+        # Only A↔B cycle, not C→D
+        cycle_nodes = {n for c in cycles for n in c}
+        assert "C" not in cycle_nodes
+        assert "D" not in cycle_nodes
+
+    def test_self_loop(self):
+        adj = {"A": ["A"]}
+        cycles = FeatureQueue._find_cycles(adj)
+        assert len(cycles) >= 1
+
+    def test_empty_graph(self):
+        assert FeatureQueue._find_cycles({}) == []
+
+
+class TestDetectAndBreakCycles:
+    """Tests for cycle breaking in add_features_from_seed."""
+
+    def _make_seed(self, tmp_path, tasks):
+        seed = {"version": "1.0", "tasks": tasks}
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(seed))
+        return seed_path
+
+    def test_bidirectional_deps_broken(self, tmp_path):
+        """A→B and B→A: one edge removed, queue unblocked."""
+        seed_path = self._make_seed(tmp_path, [
+            {"task_id": "A", "title": "A", "depends_on": ["B"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+            {"task_id": "B", "title": "B", "depends_on": ["A"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+        ])
+        q = FeatureQueue(project_root=tmp_path)
+        added = q.add_features_from_seed(seed_path)
+        # At least one feature should now be processable
+        nxt = q.get_next_feature()
+        assert nxt is not None
+
+    def test_acyclic_deps_preserved(self, tmp_path):
+        """A→B (no cycle): dependency preserved, B runs first."""
+        seed_path = self._make_seed(tmp_path, [
+            {"task_id": "A", "title": "A", "depends_on": ["B"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+            {"task_id": "B", "title": "B", "depends_on": [],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+        ])
+        q = FeatureQueue(project_root=tmp_path)
+        q.add_features_from_seed(seed_path)
+        nxt = q.get_next_feature()
+        assert nxt is not None
+        assert nxt.id == "B"
+        # A should still depend on B
+        a = q.get_feature("A")
+        assert "B" in a.dependencies
+
+    def test_full_deadlock_cleared(self, tmp_path):
+        """All features in cycles with no roots — aggressive clear fires."""
+        seed_path = self._make_seed(tmp_path, [
+            {"task_id": "A", "title": "A", "depends_on": ["B"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+            {"task_id": "B", "title": "B", "depends_on": ["C"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+            {"task_id": "C", "title": "C", "depends_on": ["A"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+        ])
+        q = FeatureQueue(project_root=tmp_path)
+        q.add_features_from_seed(seed_path)
+        # All 3 should be processable after aggressive clear
+        nxt = q.get_next_feature()
+        assert nxt is not None
+
+    def test_cycle_breaking_logs_warning(self, tmp_path, caplog):
+        """Cycle breaking emits WARNING log messages."""
+        seed_path = self._make_seed(tmp_path, [
+            {"task_id": "X", "title": "X", "depends_on": ["Y"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+            {"task_id": "Y", "title": "Y", "depends_on": ["X"],
+             "config": {"task_description": "d", "context": {"target_files": []}}},
+        ])
+        q = FeatureQueue(project_root=tmp_path)
+        with caplog.at_level(logging.WARNING, logger="startd8.contractors.queue"):
+            q.add_features_from_seed(seed_path)
+        assert any("circular dependency" in r.message.lower() for r in caplog.records)

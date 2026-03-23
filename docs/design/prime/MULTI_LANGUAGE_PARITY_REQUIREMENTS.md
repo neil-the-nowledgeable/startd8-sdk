@@ -11,6 +11,8 @@
 
 Python has the deepest pipeline integration. This section documents every capability that other languages must match or explicitly justify skipping.
 
+> **BASELINE VERIFICATION WARNING (2026-03-23):** The cross-language wiring gap audit found that Python — the reference implementation — is **40% wired** at the pipeline level. The 4 semantic checks in `semantic_checks.py` are orphaned (never called). The integration engine has no Python dispatch branch. 0/4 semantic categories have Kaizen suggestion mappings. **Before grading other languages against this baseline, verify that every Python capability listed below is actively exercised in the production pipeline.** A capability that exists as dead code is NOT a baseline — it is a gap. See [CROSS_LANGUAGE_WIRING_GAP_AUDIT.md](CROSS_LANGUAGE_WIRING_GAP_AUDIT.md) for details.
+
 ### 1.1 Syntax Validation & Repair
 
 | Step | Implementation | Python-Specific? |
@@ -126,6 +128,67 @@ Python has the deepest pipeline integration. This section documents every capabi
 | DFA skeletons | Yes | No | Yes | No | No |
 | Decomposition strategy | Class + Function | No | Class | No | No |
 | **Parity grade** | **Baseline** | **C** | **B+** | **D** | **D** |
+
+### 2.6 Pipeline Connectivity Matrix (Added 2026-03-23)
+
+> The component-based grades in Sections 2.1-2.5 measure whether components **exist**, not whether they're **connected**. This matrix traces each semantic check from detection through to action, revealing the actual pipeline wiring state.
+
+**Classification key:**
+- **COMPLETE** — Check fires → collected → scored → suggestion mapping → repair route
+- **ADVISORY** — Check fires → collected → scored → suggestion mapping → intentionally no repair (documented reason)
+- **BROKEN** — Check fires but pipeline is disconnected at some stage (detection generates data that is silently discarded)
+
+| Language | Total Checks | Complete | Advisory | Broken | Pipeline Connectivity |
+|----------|:------:|:--------:|:--------:|:------:|:-------------------:|
+| **Python** | 4 | 0 | 0 | 4 | **0%** |
+| **Go** | 6 | 5 | 0 | 1 | **83%** |
+| **Node.js** | 9 | 3 | 3 | 3 | **67%** |
+| **Java** | 12 | 4 | 2 | 6 | **50%** |
+| **C#** | 9 | 4 | 2 | 3 | **67%** |
+
+**Broken checks by language:**
+
+| Language | Check | Break Point | Gap ID |
+|----------|-------|-------------|--------|
+| Python | `duplicate_main_guard` | Never called (orphaned code) | C-3 |
+| Python | `duplicate_definition` | Never called (orphaned code) | C-3 |
+| Python | `bare_except_pass` | Never called (orphaned code) | C-3 |
+| Python | `phantom_dependency` | Never called (orphaned code) | C-3 |
+| Go | MicroPrime profile | `code_generator._language_profile` is `None` | H-4 |
+| Node.js | TS/JSX dispatch | `.ts/.tsx/.jsx` skipped in validator dispatch | C-2 |
+| Node.js | package.json semantics | Semantic checks not collected | C-4 |
+| Node.js | `unhandled_promise` | No repair route (deferred, not advisory) | H-3 |
+| Java | `raw_type_usage` | No repair route (deferred) | H-3 |
+| Java | `missing_override` | No repair route (deferred) | H-3 |
+| Java | `duplicate_method` | No repair route (deferred) | H-3 |
+| Java | `interface_file_contains_class` | No repair route (advisory — undocumented) | H-3 |
+| Java | `package_filepath_mismatch` | No repair route (deferred) | H-3 |
+| Java | `invalid_java_version` | No repair route (advisory — undocumented) | H-3 |
+| C# | `console_writeline_in_service` | No repair route (advisory — undocumented) | H-3 |
+| C# | `missing_async_await` | No repair route (advisory — undocumented) | H-3 |
+| C# | `missing_access_modifier` | No repair route (deferred) | H-3 |
+
+> **REQ-MLP-PIPELINE:** The Pipeline Connectivity metric SHALL be tracked alongside component grades. A language is not first-class until its connectivity rate is ≥ 80% (all checks are either COMPLETE or ADVISORY with documented rationale). BROKEN checks indicate accidental complexity — wiring that was started but not finished.
+
+### 2.7 Semantic Check Implementation Checklist Template (Added 2026-03-23)
+
+> Per REQ-KZ-007 (advisory/repairable classification), every new semantic check SHALL use this 5-column template to ensure full pipeline wiring at implementation time:
+
+| Check | Function | Collection Point | Suggestion Mapping | Classification |
+|-------|----------|:---:|:---:|:---:|
+| *check name* | `validators/{lang}_semantic_checks.py` | `_validate_{lang}_file()` → `result.semantic_issues` | `category` → `_SEMANTIC_CATEGORY_TO_SUGGESTION[category]` → `CAUSE_TO_SUGGESTION[key]` | REPAIRABLE / ADVISORY (reason) / DEFERRED (effort) |
+
+**Example (complete):**
+
+| Check | Function | Collection | Suggestion | Classification |
+|-------|----------|:---:|:---:|:---:|
+| `check_var_usage` | `nodejs_semantic_checks.py` | `_validate_js_file()` | `var_usage` → `var_usage_detected` → hint text | REPAIRABLE → `var_to_const` step |
+
+**Example (advisory):**
+
+| Check | Function | Collection | Suggestion | Classification |
+|-------|----------|:---:|:---:|:---:|
+| `check_module_system_mixing` | `nodejs_semantic_checks.py` | `_validate_js_file()` | `module_system_mixing` → `module_system_mixing_detected` | ADVISORY — CJS↔ESM is an architectural decision requiring package.json `type` field coordination |
 
 ---
 
@@ -358,13 +421,17 @@ A language is a **first-class citizen** when:
 6. `build_project_context_section()` provides language-specific LLM guidance
 7. Dependency file generation works (`generate_dependency_file()`)
 8. Language-specific stub patterns are defined and detected
+9. **(Added 2026-03-23)** Pipeline connectivity ≥ 80% — all semantic checks are either COMPLETE or ADVISORY with documented rationale (REQ-MLP-PIPELINE)
+10. **(Added 2026-03-23)** `coding_standards` injected into spec prompts via REQ-KZ-005
 
 ### Current Citizenship Status
 
-| Language | Criteria Met | Status |
-|----------|-------------|--------|
-| **Python** | 8/8 | First-class |
-| **Java** | 5/8 (missing: repair, semantic checks, cross-lang in non-Java) | **Second-class** |
-| **Go** | 4/8 (missing: repair, semantic checks, cross-lang detection, stub scoring) | **Second-class** |
-| **C#** | 5/8 (missing: repair, semantic checks, cross-lang in non-CS) | **Second-class** |
-| **Node.js** | 5/8 (missing: repair steps, semantic checks, cross-lang in non-JS) | **Second-class** |
+> **Updated 2026-03-23** to reflect wiring gap audit findings. Python was previously listed as 8/8 first-class, but the audit revealed its semantic checks are orphaned code (never run) and its pipeline connectivity is 0%. Status downgraded to second-class pending wiring fixes.
+
+| Language | Criteria Met | Pipeline Connectivity | Status |
+|----------|-------------|:---:|--------|
+| **Python** | 6/10 (missing: pipeline connectivity, coding_standards injection, semantic checks run, integration dispatch) | 0% | **Second-class** (wiring gaps) |
+| **Go** | 8/10 (missing: coding_standards injection, MicroPrime profile timing) | 83% | **Near first-class** |
+| **Java** | 7/10 (missing: pipeline connectivity, coding_standards injection, 6 deferred repair routes) | 50% | **Second-class** |
+| **C#** | 7/10 (missing: pipeline connectivity, coding_standards injection, block_scoped check) | 67% | **Second-class** |
+| **Node.js** | 7/10 (missing: pipeline connectivity, coding_standards injection, TS/JSX dispatch) | 67% | **Second-class** |

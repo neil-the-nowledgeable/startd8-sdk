@@ -86,24 +86,11 @@ def _get_pricing() -> PricingService:
 # ---------------------------------------------------------------------------
 
 def _get_output_template(name: str) -> str:
-    """Load output format template from consolidated contractor YAML."""
-    try:
-        return get_template(name)
-    except (FileNotFoundError, KeyError, ImportError):
-        _fallbacks = {
-            "single_file_output": "Provide your complete implementation in a single fenced code block.",
-            "multi_file_output": "Produce a SEPARATE fenced code block for each file.\n\nREQUIRED files:\n{file_list}\n\n{file_checklist}",
-            "single_file_edit_output": (
-                "Output the COMPLETE modified file ({existing_line_count} lines original).\n"
-                "Your draft must be AT LEAST {min_output_lines} lines ({min_pct}% of existing).\n"
-                "Do NOT omit or abbreviate existing code."
-            ),
-            "multi_file_edit_output": (
-                "Output COMPLETE modified files.\n"
-                "{existing_line_summary}\n\nREQUIRED files:\n{file_list}\n\n{file_checklist}"
-            ),
-        }
-        return _fallbacks.get(name, "")
+    """Load output format template from consolidated contractor YAML.
+
+    All fallbacks are now in prompts/__init__.py:_FALLBACK_TEMPLATES (R0-3).
+    """
+    return get_template(name)
 
 
 # ---------------------------------------------------------------------------
@@ -220,10 +207,46 @@ def get_drafter_system_prompt(
     if language_profile is not None and hasattr(language_profile, "stub_marker_text"):
         _stub_marker = language_profile.stub_marker_text
 
+    # R1-3: Language-specific import instruction (replaces Python-centric
+    # "import statements at the top" that was hardcoded in all 4 templates).
+    _IMPORT_INSTRUCTIONS = {
+        "python": (
+            "CRITICAL: Include ALL import statements at the top of the file. "
+            "stdlib first, third-party second, local third. "
+            "Missing imports are the #1 cause of generation failure."
+        ),
+        "csharp": (
+            "CRITICAL: Include ALL using directives at the top of the file. "
+            "System namespaces first, then third-party, then project namespaces. "
+            "Missing using directives cause compilation failure."
+        ),
+        "go": (
+            "CRITICAL: Include ALL import declarations in a grouped import block. "
+            "stdlib first, then third-party (separated by blank line). "
+            "Unused imports cause compilation failure in Go."
+        ),
+        "java": (
+            "CRITICAL: Include ALL import statements after the package declaration. "
+            "Do not use wildcard imports (import pkg.*). "
+            "Missing imports cause compilation failure."
+        ),
+        "nodejs": (
+            "CRITICAL: Include ALL require() or import statements at the top of the file. "
+            "Use the module system matching the project (CJS require or ESM import, not both). "
+            "Missing dependencies cause runtime failure."
+        ),
+    }
+    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _import_instruction = _IMPORT_INSTRUCTIONS.get(
+        _lang_id,
+        _IMPORT_INSTRUCTIONS["python"],
+    )
+
     prompt = prompt.format(
         language_role=_role,
         coding_standards=_standards,
         stub_marker=_stub_marker,
+        import_instruction=_import_instruction,
     )
 
     # Anzen SP-INJ-001: P0 security constraint when database framework detected.

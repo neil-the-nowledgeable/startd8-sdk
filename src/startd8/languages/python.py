@@ -73,8 +73,18 @@ class PythonLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
-            "Ruff: no single-letter vars l/O/I; define helpers before use; "
-            "stdlib-only imports unless listed."
+            "Python coding standards:\n"
+            "- PEP 8 naming: snake_case functions/variables, PascalCase classes, UPPER_SNAKE constants.\n"
+            "- Type hints on all public function signatures (parameters and return types).\n"
+            "- Use specific exception types: `except (ValueError, TypeError):` — "
+            "NEVER use bare `except:` or `except: pass`.\n"
+            "- Use `from __future__ import annotations` for forward references.\n"
+            "- LOGGING: Use `logging.getLogger(__name__)` — "
+            "NEVER use `print()` for diagnostic output in library/service code.\n"
+            "- IMPORTS: stdlib first, third-party second, local third (isort convention). "
+            "No single-letter variable names (l, O, I). Define helpers before use.\n"
+            "- Use context managers (`with`) for file I/O and resource management.\n"
+            "- Prefer `pathlib.Path` over `os.path` for file operations."
         )
 
     @property

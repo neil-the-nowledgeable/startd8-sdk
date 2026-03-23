@@ -14,17 +14,18 @@
 
 1. [Overview](#1-overview)
 2. [Status Dashboard](#2-status-dashboard)
-3. [Layer 1 — Prime Post-Mortem Parity (REQ-KZ-1xx)](#3-layer-1--prime-post-mortem-parity-req-kz-1xx)
-4. [Layer 2 — Prompt-Response Pairing (REQ-KZ-2xx)](#4-layer-2--prompt-response-pairing-req-kz-2xx)
-5. [Layer 3 — Run Metrics & Archive Index (REQ-KZ-3xx)](#5-layer-3--run-metrics--archive-index-req-kz-3xx)
-6. [Layer 4 — Cross-Run Aggregation (REQ-KZ-4xx)](#6-layer-4--cross-run-aggregation-req-kz-4xx)
-7. [Layer 5 — Feedback Loop (REQ-KZ-5xx)](#7-layer-5--feedback-loop-req-kz-5xx)
-8. [Layer 6 — Prompt Quality Correlation (REQ-KZ-6xx)](#8-layer-6--prompt-quality-correlation-req-kz-6xx)
-9. [Existing Capabilities Leveraged](#9-existing-capabilities-leveraged)
-10. [Traceability Matrix](#10-traceability-matrix)
-11. [Verification Strategy](#11-verification-strategy)
-12. [Cross-References](#12-cross-references)
-13. [Convergent Review — Round R1 (Triaged)](#convergent-review--round-r1-triaged)
+3. [Layer 0 — Language Backbone Contract (REQ-KZ-0xx)](#3-layer-0--language-backbone-contract-req-kz-0xx)
+4. [Layer 1 — Prime Post-Mortem Parity (REQ-KZ-1xx)](#4-layer-1--prime-post-mortem-parity-req-kz-1xx)
+5. [Layer 2 — Prompt-Response Pairing (REQ-KZ-2xx)](#5-layer-2--prompt-response-pairing-req-kz-2xx)
+6. [Layer 3 — Run Metrics & Archive Index (REQ-KZ-3xx)](#6-layer-3--run-metrics--archive-index-req-kz-3xx)
+7. [Layer 4 — Cross-Run Aggregation (REQ-KZ-4xx)](#7-layer-4--cross-run-aggregation-req-kz-4xx)
+8. [Layer 5 — Feedback Loop (REQ-KZ-5xx)](#8-layer-5--feedback-loop-req-kz-5xx)
+9. [Layer 6 — Prompt Quality Correlation (REQ-KZ-6xx)](#9-layer-6--prompt-quality-correlation-req-kz-6xx)
+10. [Existing Capabilities Leveraged](#10-existing-capabilities-leveraged)
+11. [Traceability Matrix](#11-traceability-matrix)
+12. [Verification Strategy](#12-verification-strategy)
+13. [Cross-References](#13-cross-references)
+14. [Convergent Review — Round R1 (Triaged)](#convergent-review--round-r1-triaged)
 
 ---
 
@@ -60,7 +61,10 @@ The Prime Contractor is operated through the Capability Delivery Pipeline (`cap-
 | K-5a | Prime route has no post-mortem in pipeline | Layer 1 |
 | K-5b | No run metrics index for archive querying | Layer 3 |
 
-Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`.
+| K-7 | Language backbone has no contract — wiring gaps are invisible until audit | Layer 0 |
+| K-8 | Language coding_standards never injected into first-run prompts | Layer 0 |
+
+Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`. K-7 and K-8 were identified by the 2026-03-23 cross-language wiring gap audit ([CROSS_LANGUAGE_WIRING_GAP_AUDIT.md](CROSS_LANGUAGE_WIRING_GAP_AUDIT.md)).
 
 ### 1.4 Success Criteria
 
@@ -86,6 +90,13 @@ Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`.
 
 | Req ID | Description | Impl Home | Status | Closes |
 |--------|-------------|-----------|--------|--------|
+| **Layer 0 — Language Backbone Contract** | | | | |
+| REQ-KZ-001 | Semantic dispatch completeness invariant | startd8-sdk | PLANNED | K-7 |
+| REQ-KZ-002 | Semantic collection completeness invariant | startd8-sdk | PLANNED | K-7 |
+| REQ-KZ-003 | Suggestion mapping completeness invariant | startd8-sdk | PLANNED | K-7 |
+| REQ-KZ-004 | Language-aware quality scoring | startd8-sdk | PLANNED | K-7 |
+| REQ-KZ-005 | First-run quality injection (coding_standards) | startd8-sdk | PLANNED | K-8 |
+| REQ-KZ-006 | Semantic check pipeline completeness test | startd8-sdk | PLANNED | K-7 |
 | **Layer 1 — Prime Post-Mortem Parity** | | | | |
 | REQ-KZ-100 | Post-mortem invocation in `run-prime-contractor.sh` | cap-dev-pipe | PLANNED | K-5a |
 | REQ-KZ-101 | Post-mortem output in run archive | cap-dev-pipe | PLANNED | K-5a |
@@ -117,7 +128,98 @@ Note: K-5 (run archive) is **already partially closed** by `run-atomic.sh`.
 
 ---
 
-## 3. Layer 1 — Prime Post-Mortem Parity (REQ-KZ-1xx)
+## 3. Layer 0 — Language Backbone Contract (REQ-KZ-0xx)
+
+**Closes:** Gap K-7 (language backbone has no contract — wiring gaps invisible until audit), Gap K-8 (coding_standards never injected)
+
+> **Added:** 2026-03-23. Motivated by the cross-language wiring gap audit ([CROSS_LANGUAGE_WIRING_GAP_AUDIT.md](CROSS_LANGUAGE_WIRING_GAP_AUDIT.md)), which found 15 wiring gaps caused by the absence of backbone-to-plugin contracts. Python — the reference implementation — was 40% wired because the backbone never specified its obligations to language plugins.
+
+### Problem Statement
+
+The Kaizen pipeline is a **shared backbone** (integration engine → disk compliance → quality scoring → postmortem → suggestions → prompt injection) with **language-specific plugins** at each stage. Requirements documents specify language plugins independently (KAIZEN_NODEJS_REQUIREMENTS, MULTI_LANGUAGE_PARITY_REQUIREMENTS), but no document specifies what the backbone owes to each plugin. This creates a class of gap where a plugin is fully implemented but the backbone never calls it.
+
+### REQ-KZ-001: Semantic Dispatch Completeness
+
+`_run_semantic_checks()` in `integration_engine.py` SHALL have a dispatch branch for every language registered in `_EXT_TO_LANGUAGE` (or `LanguageRegistry`). Adding a new language to `_EXT_TO_LANGUAGE` without a corresponding dispatch branch is a requirements violation.
+
+**Invariant:** `set(dispatch_branches) ⊇ set(_EXT_TO_LANGUAGE.values())` — every registered language gets semantic validation at integration time.
+
+**Current violation:** Python has no dispatch branch (C-1 in the audit). This is the primary language and should have been the first branch implemented.
+
+### REQ-KZ-002: Semantic Collection Completeness
+
+Every file type validated by `_validate_non_python_file()` in `forward_manifest_validator.py` SHALL have its semantic issues collected into `DiskComplianceResult.semantic_issues`. The set of file extensions routed to semantic validation SHALL match the union of all registered `LanguageProfile.source_extensions`.
+
+**Invariant:** If `LanguageProfile.source_extensions` includes `.ts`, then `.ts` files SHALL be routed to the appropriate validation function.
+
+**Current violations:**
+- `.ts`, `.tsx`, `.jsx` are listed in `NodeLanguageProfile.source_extensions` but are NOT routed to `_validate_js_file()` (C-2)
+- `package.json` is validated structurally but semantic checks are not collected (C-4)
+
+### REQ-KZ-003: Suggestion Mapping Completeness
+
+Every semantic check category emitted by any `validators/*_semantic_checks.py` module SHALL have a corresponding entry in `_SEMANTIC_CATEGORY_TO_SUGGESTION` that maps to a valid `CAUSE_TO_SUGGESTION` key. A check that fires without a suggestion mapping is a pipeline violation — the detection generates data that is silently discarded.
+
+**Invariant:** `set(all_emitted_categories) ⊆ set(_SEMANTIC_CATEGORY_TO_SUGGESTION.keys())`
+
+**Current violations:** 4 Python categories (`duplicate_main_guard`, `duplicate_definition`, `bare_except_pass`, `phantom_dependency`) have no mapping (H-1).
+
+### REQ-KZ-004: Language-Aware Quality Scoring
+
+`compute_disk_quality_score()` in `forward_manifest_validator.py` SHALL accept an optional `language_id` parameter. When provided, severity weights SHALL be loaded from a language-specific configuration rather than using hardcoded values (currently error=0.3, warning=0.1).
+
+**Rationale:** Different languages have different severity norms. A Go `unchecked_error` is a critical defect (the Go compiler would reject it); a Python `bare_except` is a moderate code smell. Language-blind scoring conflates these.
+
+**Design:** A `_LANGUAGE_SEVERITY_WEIGHTS` dict maps `language_id → {error: float, warning: float}`. Unknown languages fall back to Python weights (backward compatible).
+
+### REQ-KZ-005: First-Run Quality Injection (Language Standards)
+
+The Prime Contractor SHALL inject `language_profile.coding_standards` into the spec prompt for every run, regardless of whether Kaizen config exists. This provides baseline quality guidance that does not depend on prior run history.
+
+**Rationale:** The Kaizen feedback loop (REQ-KZ-500-504) requires at least one failed run to generate suggestions. `coding_standards` injection gives run 1 immediate quality uplift — preventing the defects that Kaizen would later detect and suggest fixes for. This is the "first mile" of the feedback loop.
+
+**Implementation:**
+1. `prime_contractor.py:_build_generation_context()` SHALL extract `language_profile.coding_standards` into `gen_context["coding_standards"]`
+2. `spec_builder.py:build_spec_prompt()` SHALL inject this as a `## Coding Standards` section
+3. The section SHALL be classified as P0 priority (never truncated by `enforce_prompt_budget()`)
+
+**Prompt budget:** `coding_standards` content is typically 200-500 tokens per language. If a language profile's content exceeds 1000 tokens, truncate to the first 1000 with a `[truncated]` marker.
+
+**Interaction with REQ-KZ-502:** If a Kaizen config also contains `prompt_hints` for the same issue, deduplicate by content hash. `coding_standards` are P0 (never truncated). Kaizen hints are P1 (truncatable).
+
+### REQ-KZ-006: Semantic Check Pipeline Completeness Test
+
+A cross-language integration test SHALL verify the end-to-end pipeline for every registered language: semantic check → collection in `DiskComplianceResult` → contribution to quality score → suggestion mapping → prompt injection.
+
+**Implementation:** The test iterates all 5 languages, creates a sample file with a known defect for each language, runs `validate_disk_compliance()`, and asserts:
+1. The defect appears in `result.semantic_issues`
+2. `compute_disk_quality_score(result)` returns a score < 1.0
+3. The category maps to a valid suggestion via `_SEMANTIC_CATEGORY_TO_SUGGESTION`
+
+**Defect samples:**
+- Python: file with `except: pass`
+- Go: file with unchecked `err` return
+- Node.js: file with `var x = 1;`
+- Java: file with `catch (Exception e) { }`
+- C#: file with `catch (Exception) { }`
+
+This single test would have caught all 15 gaps found in the 2026-03-23 audit.
+
+### REQ-KZ-007: Advisory/Repairable Classification Requirement
+
+Every semantic check category SHALL be explicitly classified at requirements time as one of:
+
+| Classification | Meaning | Pipeline Treatment |
+|---------------|---------|-------------------|
+| **REPAIRABLE** | A deterministic repair step can fix this issue | Must have repair route + step in `_ROUTING_TABLE` |
+| **ADVISORY** | Repair requires human judgment or architectural decision | Detection + Kaizen suggestion only; document WHY repair is infeasible |
+| **DEFERRED** | Repair is feasible but not yet implemented | Track in backlog with effort estimate; treat as ADVISORY until implemented |
+
+The classification SHALL appear in the language-specific requirements document. The `_REPAIRABLE_CATEGORIES` set in `semantic_bridge.py` is the runtime enforcement; the requirements are the source of truth.
+
+---
+
+## 4. Layer 1 — Prime Post-Mortem Parity (REQ-KZ-1xx)
 
 **Closes:** Gap K-5a (prime route has no post-mortem in pipeline)
 
@@ -547,6 +649,8 @@ A script `cap-dev-pipe/run-kaizen-correlation.sh` SHALL compute correlations bet
 
 | Kaizen Gap | Requirements | Design Principle Rule | Impl Home |
 |-----------|-------------|---------------------|-----------|
+| K-7: Language backbone has no contract | REQ-KZ-001, 002, 003, 004, 006, 007 | Rule 5: Feed Forward | SDK |
+| K-8: coding_standards not injected in first-run prompts | REQ-KZ-005 | Rule 5: Feed Forward | SDK |
 | K-1: No prompt capture in real runs | REQ-KZ-200, 201, 202, 203, 204 | Rule 2: Prompt-Response Pairing | SDK + cap-dev-pipe |
 | K-2: No cross-run aggregation | REQ-KZ-400, 401, 402 | Rule 3: Measure Before and After | cap-dev-pipe |
 | K-3: No feedback loop | REQ-KZ-500, 501, 502, 503, 504 | Rule 5: Feed Forward | cap-dev-pipe + SDK |

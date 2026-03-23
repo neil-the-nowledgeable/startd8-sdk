@@ -35,7 +35,9 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "## Task\n{task_description}\n{requirements_section}\n"
         "{context_sections}\n{critical_parameters_section}\n"
         "{forward_contracts_section}\n## Constraints\n{domain_constraints}\n\n"
-        "Forward design content verbatim. ADD: Technical Approach, Code Structure, "
+        "Forward design content (preserve structure and semantics). "
+        "If the design already covers a section, use its version. "
+        "ADD sections only for gaps: Technical Approach, Code Structure, "
         "Acceptance Criteria, Edge Cases, Examples."
     ),
     "draft": (
@@ -57,47 +59,39 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
     "draft_system_create": (
         "You are {language_role}. Implement the spec exactly. "
         "Output raw file content exactly as it should appear on disk. "
-        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
+        "Do NOT wrap content in a script, generator, or any other meta-program. "
         "Complete implementations only — no stubs, TODOs, or pass bodies. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
-        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
-        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
-        "Missing imports are the #1 cause of generation failure."
+        "{import_instruction}"
     ),
     "draft_system_edit": (
         "You are {language_role} editing existing source code. "
         "Output raw file content exactly as it should appear on disk. "
-        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
+        "Do NOT wrap content in a script, generator, or any other meta-program. "
         "PRESERVE all unchanged code. Output the COMPLETE modified file. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
-        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
-        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
-        "Missing imports are the #1 cause of generation failure."
+        "{import_instruction}"
     ),
     "draft_system_search_replace": (
         "You are {language_role} making targeted edits to large files. "
         "Output raw file content exactly as it should appear on disk. "
-        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
+        "Do NOT wrap content in a script, generator, or any other meta-program. "
         "Minimal changes only. Output the COMPLETE modified file — every line. "
         "Use parameter names from upstream documents verbatim. "
         "{coding_standards} "
-        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
-        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
-        "Missing imports are the #1 cause of generation failure."
+        "{import_instruction}"
     ),
     "draft_system_skeleton_fill": (
         "You are {language_role} filling method bodies in pre-assembled skeleton files. "
         "Output raw file content exactly as it should appear on disk. "
-        "Do NOT wrap content in a Python script, generator function, or any other meta-program. "
+        "Do NOT wrap content in a script, generator, or any other meta-program. "
         "Implement ONLY methods marked with {stub_marker}. Do not modify pre-filled elements. "
         "Use parameter names from upstream documents verbatim. Do not rename them. "
         "Preserve all imports, class structure, and pre-filled method bodies exactly as provided. "
         "{coding_standards} "
-        "CRITICAL: Every file you produce MUST include ALL import statements at the top. "
-        "Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. "
-        "Missing imports are the #1 cause of generation failure."
+        "{import_instruction}"
     ),
     "draft_skeleton_fill": (
         "Fill the unfilled method bodies in the pre-assembled skeleton file below.\n\n"
@@ -121,10 +115,11 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "## Implementation\n{implementation}\n\n"
         "{convergence_instructions}\n\n"
         "## Output Format\n"
-        "### Score: [0-100]\n### Verdict: [PASS/FAIL]\n"
-        "### Strengths\n### Issues\n### Suggestions\n"
-        "### Blocking Issues\n\n"
-        "Pass threshold: {pass_threshold}"
+        "### Score: [0-100]\n"
+        "### Verdict: [PASS/FAIL] (PASS if score >= {pass_threshold} AND no BLOCKING issues)\n"
+        "### Strengths\n"
+        "### Issues\nList each issue as: - [BLOCKING] / [MAJOR] / [MINOR] description\n"
+        "### Suggestions"
     ),
     "review_system": (
         "You are a senior engineer reviewing code for correctness and completeness. "
@@ -132,9 +127,81 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "Verify parameter names match upstream documents exactly. "
         "Cross-check: if the implementation follows the spec but violates language "
         "coding standards (e.g. wildcard imports in Java, bare except in Python, "
-        "unused imports in Go), flag as MINOR with a note that the spec itself "
-        "conflicts with the language standard. "
+        "unused imports in Go, Console.Write instead of ILogger in C#, "
+        "var instead of const in Node.js), flag as MAJOR with a note that the "
+        "coding standard takes precedence over the spec. "
         "Convergence: state RESOLVED or STILL OUTSTANDING for prior issues."
+    ),
+    # --- Integration ---
+    "integration": (
+        "Finalize this implementation for production.\n\n"
+        "## Task\n{task_description}\n\n"
+        "## Implementation\n{implementation}\n\n"
+        "## Review History\n{review_history}\n\n"
+        "## Instructions\n{integration_instructions}\n{multi_file_directive}\n\n"
+        "Make final polish, then output the production-ready code in a fenced block."
+    ),
+    # --- Framing templates ---
+    "plan_context_edit_framing": (
+        "The following plan describes CHANGES to existing code. Do NOT treat as greenfield.\n"
+    ),
+    "plan_context_create_framing": (
+        "The following plan provides context. The design document (if present) is authoritative.\n"
+    ),
+    "arch_context_edit_framing": (
+        "Apply these architectural constraints to the existing file(s). Do not redesign.\n"
+    ),
+    "spec_edit_preamble_base": (
+        "## EDIT MODE\n"
+        "**Task type: {task_verb}** existing code.\n"
+        "Describe ONLY additions and modifications. List unchanged functions/classes.\n"
+        "Specify exact insertion points.\n"
+    ),
+    "spec_edit_quantitative_constraint": (
+        "**Existing file(s): {total_lines} lines.** "
+        "Draft must be >= {min_lines} lines ({edit_min_pct}%).\n"
+    ),
+    "spec_create_preamble": (
+        "## CREATE MODE — New Implementation\n"
+        "**Task type: Implement** this specification from scratch.\n\n"
+    ),
+    "available_imports": (
+        "## Available Imports\n\n"
+        "The following packages are installed and available for import:\n\n"
+        "{available_packages}\n\n"
+        "{import_syntax}\n"
+    ),
+    "spec_completeness_warning": (
+        "## Spec Completeness Warning\n"
+        "These parameters from requirements are NOT in the spec — include them:\n"
+        "{missing_lines}\n"
+    ),
+    # --- Output format templates ---
+    "single_file_output": (
+        "Provide the COMPLETE file content in a single fenced code block "
+        "— not a program that generates it.\n"
+    ),
+    "multi_file_output": (
+        "Produce a SEPARATE fenced code block for each file. "
+        "First line comment = file path.\n\n"
+        "REQUIRED files:\n{file_list}\n\n"
+        "Format per file:\n```\n# <full path>\n<implementation>\n```\n\n"
+        "Checklist — verify each file has a block:\n{file_checklist}\n\n"
+        "Rules: Every file gets its own block. No skipping. "
+        "Each block contains raw file content — not a program that generates it."
+    ),
+    "single_file_edit_output": (
+        "Output the COMPLETE modified file ({existing_line_count} lines original).\n"
+        "Your draft must be AT LEAST {min_output_lines} lines ({min_pct}% of existing).\n"
+        "Do NOT omit or abbreviate existing code."
+    ),
+    "multi_file_edit_output": (
+        "Output COMPLETE modified files — every line of original plus changes.\n"
+        "{existing_line_summary}\n\n"
+        "REQUIRED files:\n{file_list}\n\n"
+        "Format per file:\n```\n# <full path>\n<complete modified file>\n```\n\n"
+        "Checklist:\n{file_checklist}\n\n"
+        "Rules: every file gets its own block. Preserve all existing code."
     ),
 }
 

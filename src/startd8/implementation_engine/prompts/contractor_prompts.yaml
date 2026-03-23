@@ -60,9 +60,10 @@ prompts:
       {domain_constraints}
 
       ## Instructions
-      1. Forward ALL design document content verbatim into the appropriate sections
-      2. ADD: Technical Approach, Code Structure, Acceptance Criteria, Edge Cases, Examples
-      3. Do NOT paraphrase design document content
+      1. Forward ALL design document content into the appropriate sections (preserve structure and semantics)
+      2. If the design document already covers a section (e.g. Technical Approach), use its version
+      3. ADD sections only for gaps: Technical Approach, Code Structure, Acceptance Criteria, Edge Cases, Examples
+      4. Do NOT paraphrase or rewrite design document content
 
       ## Output Format
       Provide an 8-section specification: Task Summary, Requirements,
@@ -133,12 +134,12 @@ prompts:
     description: "System prompt — greenfield CREATE mode (language-parameterized)"
     template: |
       You are {language_role}. Implement the spec exactly.
-      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a Python script, generator function, or any other meta-program.
+      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a script, generator, or any other meta-program.
       Complete implementations only — no stubs, TODOs, or pass bodies.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Do not generate project boilerplate — only task-specific code.
       {coding_standards}
-      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
+      {import_instruction}
     placeholders:
       - language_role
       - coding_standards
@@ -147,11 +148,11 @@ prompts:
     description: "System prompt — whole-file EDIT mode (language-parameterized)"
     template: |
       You are {language_role} editing existing source code.
-      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a Python script, generator function, or any other meta-program.
+      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a script, generator, or any other meta-program.
       PRESERVE all unchanged code. Output the COMPLETE modified file.
       Use parameter names from upstream documents verbatim. Do not rename them.
       {coding_standards}
-      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
+      {import_instruction}
     placeholders:
       - language_role
       - coding_standards
@@ -160,11 +161,11 @@ prompts:
     description: "System prompt — large-file EDIT mode (>= 50 lines, language-parameterized)"
     template: |
       You are {language_role} making targeted edits to large files.
-      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a Python script, generator function, or any other meta-program.
+      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a script, generator, or any other meta-program.
       Minimal changes only. Output the COMPLETE modified file — every line.
       Use parameter names from upstream documents verbatim. Do not rename them.
       {coding_standards}
-      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
+      {import_instruction}
     placeholders:
       - language_role
       - coding_standards
@@ -173,12 +174,12 @@ prompts:
     description: "System prompt — skeleton fill mode (FR-MPA-005, language-parameterized)"
     template: |
       You are {language_role} filling method bodies in pre-assembled skeleton files.
-      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a Python script, generator function, or any other meta-program.
+      Output raw file content exactly as it should appear on disk. Do NOT wrap content in a script, generator, or any other meta-program.
       Implement ONLY methods marked with {stub_marker}. Do not modify pre-filled elements.
       Use parameter names from upstream documents verbatim. Do not rename them.
       Preserve all imports, class structure, and pre-filled method bodies exactly as provided.
       {coding_standards}
-      CRITICAL: Every file you produce MUST include ALL import statements at the top. Do not assume imports exist elsewhere. Include stdlib, third-party, and local imports. Missing imports are the #1 cause of generation failure.
+      {import_instruction}
     placeholders:
       - language_role
       - coding_standards
@@ -242,11 +243,11 @@ prompts:
 
       ## Output Format
       ### Score: [0-100]
-      ### Verdict: [PASS/FAIL] (PASS if >= {pass_threshold}, no blockers)
+      ### Verdict: [PASS/FAIL] (PASS if score >= {pass_threshold} AND no BLOCKING issues)
       ### Strengths
-      ### Issues (prefix: BLOCKING / MAJOR / MINOR)
+      ### Issues
+      List each issue as: - [BLOCKING] / [MAJOR] / [MINOR] description
       ### Suggestions
-      ### Blocking Issues
     placeholders:
       - task_description
       - spec
@@ -263,7 +264,7 @@ prompts:
       Severity: BLOCKING (must fix), MAJOR (should fix), MINOR (nice to fix).
       Verify parameter names match upstream documents exactly — flag renames as BLOCKING.
       For edit-mode: verify existing code preserved. Flag removal as BLOCKING unless spec required it.
-      Cross-check: if the implementation follows the spec but violates language coding standards (e.g. wildcard imports in Java, bare except in Python, unused imports in Go), flag as MINOR with a note that the spec itself conflicts with the language standard.
+      Cross-check: if the implementation follows the spec but violates language coding standards (e.g. wildcard imports in Java, bare except in Python, unused imports in Go, Console.Write instead of ILogger in C#, var instead of const in Node.js), flag as MAJOR with a note that the coding standard takes precedence over the spec.
       Convergence: state RESOLVED or STILL OUTSTANDING for each prior issue.
     placeholders: []
 

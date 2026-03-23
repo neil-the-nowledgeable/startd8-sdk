@@ -538,7 +538,7 @@ Return a JSON object wrapped in ```json code fences with exactly these keys:
       "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "def MyService.serve(request, context) -> Response"],
       "protocol": "grpc or http or cli or library or none",
       "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
-      "negative_scope": ["things explicitly excluded from this feature"],
+      "negative_scope": ["items the plan LITERALLY says are out of scope, e.g. Kubernetes manifests"],
 {lang_schema_fields}
     }}
   ],
@@ -564,7 +564,7 @@ artifact_types_addressed: optional list of artifact types this feature generates
 api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "def ClassName.method_name(param: type) -> return_type" (dotted notation for methods). For gRPC services, model RPC handlers as methods of their Servicer class (e.g. "def EmailService.SendOrderConfirmation(request, context)" not bare "def SendOrderConfirmation(request, context)"). Include ALL signatures mentioned for the feature.
 protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
 runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
-negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
+negative_scope: list of things the plan EXPLICITLY states are out-of-scope for this feature (e.g., "Kubernetes manifests are not included", "CI/CD pipelines excluded"). Only include items the plan TEXT LITERALLY says are out of scope. Do NOT infer exclusions from reference implementation patterns — if the reference uses Console.WriteLine, that does NOT mean ILogger is excluded. If the reference uses string interpolation for SQL, that does NOT mean parameterized queries are excluded. Reference implementation patterns are starting points to IMPROVE upon, not constraints to preserve.
 {lang_guidance}
 {dep_ordering_guidance}
 Be thorough. Extract every feature, file reference, and dependency.
