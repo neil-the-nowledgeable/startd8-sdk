@@ -3732,11 +3732,18 @@ class MicroPrimeEngine:
         task_description: Optional[str] = None,
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
-        # REQ-MLT-101: Non-Python files bypass element generation entirely.
+        # REQ-MP-1210: Language-aware bypass — only escalate files with NO
+        # registered language profile (Dockerfile, YAML, HTML, etc.).
+        # Files with profiles (Go, Java, C#, Node.js) proceed to template
+        # short-circuit and/or Ollama generation with language-aware prompts,
+        # splicer, and validation. If generation fails, escalation happens
+        # naturally via _verify_and_build_result().
         if _is_non_python_file(file_path):
+            # File has no registered LanguageProfile — escalate
+            # (_is_non_python_file returns False for .go/.java/.cs/.js/.ts
+            #  because those ARE in the LanguageRegistry extension map)
             logger.info(
-                "Non-Python file %s bypassing MicroPrime element generation "
-                "(SIMPLE tier, element=%s)",
+                "No language support for %s — bypassing SIMPLE tier (element=%s)",
                 file_path, element.name,
             )
             return ElementResult.make_escalation(
@@ -3745,7 +3752,7 @@ class MicroPrimeEngine:
                     element_name=element.name, file_path=file_path,
                     tier=TierClassification.SIMPLE,
                     reason=EscalationReason.NON_PYTHON_BYPASS,
-                    detail=f"Non-Python file {file_path} — skipping element generation",
+                    detail=f"No language profile for {file_path}",
                 ),
                 generation_strategy="non_python_bypass",
             )
