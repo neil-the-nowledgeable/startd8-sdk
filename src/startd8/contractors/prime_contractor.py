@@ -3584,11 +3584,64 @@ class PrimeContractorWorkflow:
                 "TODO completion: %d/%d succeeded",
                 succeeded, succeeded + failed,
             )
+
+            # REQ-TCW-303: Update inventory with completion status
+            self._update_todo_inventory_status(
+                instr_dir / "todo-inventory.json", added,
+            )
+
             return succeeded, failed
 
         except Exception as exc:
             logger.error("TODO scan failed (non-fatal): %s", exc, exc_info=True)
             return 0, 0
+
+    def _update_todo_inventory_status(
+        self,
+        inventory_path: Path,
+        executed_specs: list,
+    ) -> None:
+        """Update TODO inventory entries with completion status (REQ-TCW-303).
+
+        After TODO tasks execute, re-reads the inventory JSON and updates
+        each entry's ``status`` field: ``completed`` (task passed),
+        ``failed`` (task failed), or ``deferred`` (not attempted).
+        """
+        try:
+            data = json.loads(inventory_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+
+        # Build lookup: todo_id → feature status
+        status_map: dict[str, str] = {}
+        for spec in executed_specs:
+            feature = self.queue.get_feature(spec.id)
+            if feature is None:
+                continue
+            # Map TODO entry IDs from the seed task's context
+            todo_id = (feature.metadata or {}).get("_todo_context", {}).get("todo_id", "")
+            if not todo_id:
+                # Fall back: match by feature ID prefix
+                todo_id = spec.id
+            if feature.status and feature.status.value in ("complete", "generated"):
+                status_map[spec.id] = "completed"
+            elif feature.status and feature.status.value == "failed":
+                status_map[spec.id] = "failed"
+            else:
+                status_map[spec.id] = "deferred"
+
+        # Update entries — match by sequence (TODO-001 → first entry, etc.)
+        for i, entry in enumerate(data.get("entries", [])):
+            task_id = f"TODO-{i + 1:03d}"
+            entry["status"] = status_map.get(task_id, "deferred")
+
+        try:
+            inventory_path.write_text(
+                json.dumps(data, indent=2, default=str), encoding="utf-8",
+            )
+            logger.debug("TODO inventory updated with completion status: %s", inventory_path)
+        except OSError as exc:
+            logger.warning("Could not update TODO inventory: %s", exc)
 
     def _resolve_generated_dir(self) -> Optional[Path]:
         """Resolve the generated output directory."""
@@ -3756,9 +3809,19 @@ class PrimeContractorWorkflow:
         # PC-Q3: Propagate edit_min_pct from Prime config into gen_context
         gen_context["edit_min_pct"] = self.edit_min_pct
 
-        # R-ML-003: Resolve language profile from target files
+        # R-ML-003: Resolve language profile from target files.
+        # Pass all batch target files as context so language-neutral files
+        # (Dockerfiles, config files) can infer language from siblings.
         from ..languages import resolve_language
-        language_profile = resolve_language(feature.target_files)
+        _batch_files: Optional[List[str]] = None
+        if hasattr(self, "queue") and self.queue is not None:
+            _batch_files = []
+            for fspec in self.queue.features.values():
+                if fspec.target_files:
+                    _batch_files.extend(fspec.target_files)
+        language_profile = resolve_language(
+            feature.target_files, batch_target_files=_batch_files,
+        )
         self._language_profile = language_profile
         gen_context["language_profile"] = language_profile
         gen_context["language_role"] = language_profile.system_prompt_role
@@ -4840,13 +4903,16 @@ class PrimeContractorWorkflow:
         self._save_queue_state_with_mode()
 
         # REQ-TCW-203: Post-generation TODO scan + task injection
-        if self._enable_todo_completion and not self.dry_run:
-            todo_succeeded, todo_failed = self._run_todo_scan_and_inject(
+        _todo_succeeded = 0
+        _todo_failed = 0
+        _todo_enabled = self._enable_todo_completion and not self.dry_run
+        if _todo_enabled:
+            _todo_succeeded, _todo_failed = self._run_todo_scan_and_inject(
                 max_cost_usd=max_cost_usd,
             )
-            features_processed += todo_succeeded + todo_failed
-            features_succeeded += todo_succeeded
-            features_failed += todo_failed
+            features_processed += _todo_succeeded + _todo_failed
+            features_succeeded += _todo_succeeded
+            features_failed += _todo_failed
 
         logger.info(
             'WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out',
@@ -4907,6 +4973,14 @@ class PrimeContractorWorkflow:
         result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
         if result_dict_registry is not None:
             result_dict["element_registry"] = result_dict_registry
+        # REQ-TCW-303: Include TODO completion status in result
+        if _todo_enabled:
+            result_dict["todo_completion"] = {
+                "enabled": True,
+                "succeeded": _todo_succeeded,
+                "failed": _todo_failed,
+                "executed": (_todo_succeeded + _todo_failed) > 0,
+            }
         self._write_generation_manifest(result_dict)
 
         # Launch async post-mortem evaluation

@@ -393,7 +393,7 @@ The Prime Contractor MUST load the instrumentation contract from the seed's onbo
 #### REQ-TCW-303: Inventory Update on Completion
 
 **Priority:** P2
-**Status:** Not implemented
+**Status:** Implemented (2026-03-22) — `_update_todo_inventory_status()` in `prime_contractor.py`
 **Supersedes:** v2 REQ-TCW-303 (separate commit identity)
 
 After TODO tasks execute, the TODO inventory MUST be updated with completion status.
@@ -582,15 +582,16 @@ The v2 architecture ran TODO completion as a **separate workflow** (`TodoComplet
 **Status:** Implemented 2026-03-18. `normalize_instrumentation_data()` bridges ContextCore hints → StartD8 contract schema.
 **Files:** `src/startd8/validators/todo_scanner.py` (723 lines, 30+ tests)
 
-### Phase 3: Prime Contractor Integration (StartD8 SDK) — IN PROGRESS
+### Phase 3: Prime Contractor Integration (StartD8 SDK) — COMPLETE
 
 **Requirements:** REQ-TCW-200, REQ-TCW-201, REQ-TCW-300, REQ-TCW-301, REQ-TCW-303
-**Status:** Implementing. See plan: `docs/plans/todo-completion-v3-integration.md`
-**Scope:** Queue metadata threading, uncomment shortcut, post-generation scan trigger, inventory update
+**Status:** Implemented 2026-03-22. All 5 requirements complete.
+**Scope:** Queue metadata threading, uncomment shortcut, post-generation scan trigger, inventory update, result dict TODO section
 **Files modified:**
-- `src/startd8/contractors/queue.py` — thread `task_type` into metadata
-- `src/startd8/contractors/prime_contractor.py` — `_try_uncomment_shortcut()`, post-generation scan hook
-- `src/startd8/seeds/todo_derivation.py` — updated to return tasks (not write separate seed)
+- `src/startd8/contractors/queue.py` — thread `task_type` into metadata (REQ-TCW-201)
+- `src/startd8/contractors/prime_contractor.py` — `_try_uncomment_shortcut()` (REQ-TCW-300), `_run_todo_scan_and_inject()` (REQ-TCW-203), `_update_todo_inventory_status()` (REQ-TCW-303), `todo_completion` section in result dict
+- `src/startd8/seeds/todo_derivation.py` — returns task list (REQ-TCW-200)
+**Activation:** `workflow.enable_todo_completion()` or `ENABLE_TODO_COMPLETION=true` env var or `--todo-completion` CLI flag
 
 ### Phase 4: Pipeline Integration + Kaizen (Both) — PLANNED
 
