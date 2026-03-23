@@ -25,7 +25,7 @@ FROM {runtime_image}
 WORKDIR /app
 COPY --from=builder /app .
 ENV DOTNET_EnableDiagnostics=0
-USER 1000
+USER 65532:65532
 EXPOSE {port}
 ENTRYPOINT ["./{service_name}"]
 """
@@ -74,7 +74,7 @@ RUN ./gradlew bootJar --no-daemon -x test
 FROM {runtime_image}
 WORKDIR /app
 COPY --from=builder /app/build/libs/*.jar app.jar
-USER 1000
+USER 65532:65532
 EXPOSE {port}
 ENTRYPOINT ["java", "-jar", "app.jar"]
 """
@@ -92,7 +92,7 @@ COPY . .
 FROM {runtime_image}
 WORKDIR /app
 COPY --from=builder /app .
-USER 1000
+USER 65532:65532
 EXPOSE {port}
 ENTRYPOINT ["node", "{entry_point}"]
 """

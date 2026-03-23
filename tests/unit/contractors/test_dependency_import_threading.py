@@ -182,6 +182,73 @@ class TestCollectDependencyImports:
         result = wf._collect_dependency_imports(feature)
         assert result == {}
 
+    def test_extracts_from_service_communication_graph(self):
+        """Strategy 3: Match target file path to graph service key."""
+        dep = _make_feature(
+            "PI-003", description="Email gRPC server",
+            target_files=["src/emailservice/email_server.py"],
+        )
+        feature = _make_feature("PI-004", dependencies=["PI-003"])
+        wf = _make_workflow({"PI-003": dep})
+
+        # Inject service communication graph via seed context
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeSeedContext:
+            service_communication_graph: dict = None
+
+        wf._seed_context = FakeSeedContext(
+            service_communication_graph={
+                "services": {
+                    "emailservice": {
+                        "imports": ["demo_pb2", "demo_pb2_grpc", "grpc"],
+                    },
+                    "recommendationservice": {
+                        "imports": ["demo_pb2", "grpc", "logging"],
+                    },
+                },
+            },
+        )
+
+        result = wf._collect_dependency_imports(feature)
+        assert "PI-003" in result
+        modules = result["PI-003"]["modules"]
+        assert "demo_pb2" in modules
+        assert "demo_pb2_grpc" in modules
+        assert "grpc" in modules
+        # recommendationservice modules should NOT appear (wrong service)
+        assert "logging" not in modules
+
+    def test_graph_case_insensitive_matching(self):
+        """Strategy 3: Case-insensitive service key matching."""
+        dep = _make_feature(
+            "PI-001", description="Cart implementation",
+            target_files=["src/CartService/CartService.cs"],
+        )
+        feature = _make_feature("PI-002", dependencies=["PI-001"])
+        wf = _make_workflow({"PI-001": dep})
+
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeSeedContext:
+            service_communication_graph: dict = None
+
+        wf._seed_context = FakeSeedContext(
+            service_communication_graph={
+                "services": {
+                    "cartservice": {  # lowercase key
+                        "imports": ["Grpc.Core", "StackExchange.Redis"],
+                    },
+                },
+            },
+        )
+
+        result = wf._collect_dependency_imports(feature)
+        assert "PI-001" in result
+        assert "Grpc.Core" in result["PI-001"]["modules"]
+
     def test_dep_with_no_modules_skipped(self):
         dep = _make_feature("PI-003", description="Simple utility.")
         feature = _make_feature("PI-004", dependencies=["PI-003"])
