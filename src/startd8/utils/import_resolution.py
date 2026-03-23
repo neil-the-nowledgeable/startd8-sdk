@@ -141,8 +141,12 @@ def resolve_import(
     if top_level in _STDLIB_MODULES:
         return "stdlib"
 
-    if _PROTOBUF_STUB_RE.match(top_level):
-        return "proto"
+    # Check any segment of the dotted path for proto stubs, not just the
+    # top-level.  Handles `emailservice.email_server_pb2` where the proto
+    # suffix is on a nested module, not the namespace package.
+    for segment in module_name.split("."):
+        if _PROTOBUF_STUB_RE.match(segment):
+            return "proto"
 
     if top_level in sibling_modules:
         return f"local:{top_level}"

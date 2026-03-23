@@ -1929,9 +1929,19 @@ def _validate_method_resolution(tree: ast.AST) -> List[Dict[str, object]]:
         if not isinstance(node, ast.ClassDef):
             continue
         class_methods: set[str] = set()
+        # Collect functions bound to the class via dict attributes (e.g.
+        # Locust's `tasks = {index: 1, checkout: 2}` or @task decorators).
+        # These are accessible via self.attr through framework dispatch.
+        dispatch_funcs: set[str] = set()
         for item in ast.iter_child_nodes(node):
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 class_methods.add(item.name)
+            # Dict assignment: tasks = {func_name: weight, ...}
+            if isinstance(item, ast.Assign):
+                if isinstance(item.value, ast.Dict):
+                    for key in item.value.keys:
+                        if isinstance(key, ast.Name) and key.id in module_funcs:
+                            dispatch_funcs.add(key.id)
 
         for child in ast.walk(node):
             if (
@@ -1940,6 +1950,7 @@ def _validate_method_resolution(tree: ast.AST) -> List[Dict[str, object]]:
                 and child.value.id == "self"
                 and child.attr in module_funcs
                 and child.attr not in class_methods
+                and child.attr not in dispatch_funcs
             ):
                 issues.append({
                     "category": "method_resolution",
