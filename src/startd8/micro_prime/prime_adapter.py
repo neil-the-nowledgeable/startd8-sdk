@@ -1900,6 +1900,34 @@ class MicroPrimeCodeGenerator:
                     )
                 continue
 
+            # .js/.ts/.mjs/.cjs source files: use NodejsDeterministicFileAssembler
+            if _suffix in (".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx"):
+                try:
+                    from startd8.utils.nodejs_file_assembler import (
+                        NodejsDeterministicFileAssembler,
+                    )
+
+                    js_assembler = NodejsDeterministicFileAssembler()
+                    js_source = js_assembler.render_file(file_spec)
+                    if js_source:
+                        skeletons[file_path] = js_source
+                        logger.debug(
+                            "Generated Node.js skeleton for %s (%d lines)",
+                            file_path,
+                            js_source.count("\n") + 1,
+                        )
+                    else:
+                        logger.debug(
+                            "Node.js DFA returned None for %s, skipping skeleton",
+                            file_path,
+                        )
+                except (ImportError, ValueError, TypeError, AttributeError) as exc:
+                    logger.warning(
+                        "Node.js skeleton generation failed for %s: %s",
+                        file_path, exc,
+                    )
+                continue
+
             # --- Generic non-Python bypass (after language-specific checks) ---
             # Non-Python files (go.mod, YAML, HTML, etc.) must not go through
             # the Python DeterministicFileAssembler — it emits `from __future__

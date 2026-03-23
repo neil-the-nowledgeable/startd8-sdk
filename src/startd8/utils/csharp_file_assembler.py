@@ -201,39 +201,16 @@ def _render_field(
 
 
 def _python_type_to_csharp(type_str: str) -> str:
-    """Best-effort Python type → C# type conversion."""
-    mapping = {
-        "str": "string",
-        "int": "int",
-        "float": "double",
-        "bool": "bool",
-        "None": "void",
-        "bytes": "byte[]",
-        "list": "List<object>",
-        "dict": "Dictionary<string, object>",
-        "set": "HashSet<object>",
-        "tuple": "object[]",
-        "Any": "object",
-        "Optional": "object",
-    }
-    # Handle Optional[X] → X?
-    if type_str.startswith("Optional["):
-        inner = type_str[len("Optional["):-1]
-        inner_cs = _python_type_to_csharp(inner)
-        return f"{inner_cs}?"
-    # Handle List[X]
-    if type_str.startswith(("List[", "list[")):
-        inner = type_str[type_str.index("[") + 1:-1]
-        return f"List<{_python_type_to_csharp(inner)}>"
-    # Handle Dict[K, V]
-    if type_str.startswith(("Dict[", "dict[")):
-        inner = type_str[type_str.index("[") + 1:-1]
-        parts = inner.split(",", 1)
-        if len(parts) == 2:
-            k = _python_type_to_csharp(parts[0].strip())
-            v = _python_type_to_csharp(parts[1].strip())
-            return f"Dictionary<{k}, {v}>"
-    return mapping.get(type_str, type_str)
+    """Best-effort Python type → C# type conversion.
+
+    Delegates to the centralized ``convert_python_type`` with the C#
+    skeleton config.  Kept as a thin wrapper for backward compatibility.
+    """
+    from startd8.languages._validation_utils import (
+        CSHARP_SKELETON_CONFIG,
+        convert_python_type,
+    )
+    return convert_python_type(type_str, CSHARP_SKELETON_CONFIG)
 
 
 def _render_csharp_params(elem: Any) -> str:

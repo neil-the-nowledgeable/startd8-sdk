@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import time
 import textwrap
 from collections.abc import Callable, Iterator
@@ -887,6 +888,59 @@ def _coerce_literals_for_language(code: str, language_id: str) -> str:
     return "".join(result_lines)
 
 
+def _extract_brace_body(code: str, func_name: str) -> str | None:
+    """Extract function/method body using brace-depth counting.
+
+    Language-neutral for any brace-delimited language (Java, C#, JS/TS, Go).
+    Finds the first declaration containing *func_name* followed by ``{``,
+    then extracts the body lines between the opening and closing braces.
+    """
+    lines = code.splitlines()
+    # Find the declaration line containing the function name and opening brace
+    decl_line = None
+    for i, line in enumerate(lines):
+        # Match function/method name followed by ( — handles:
+        #   function foo(     (JS)
+        #   public void foo(  (Java/C#)
+        #   async foo(        (JS)
+        if re.search(rf'\b{re.escape(func_name)}\s*\(', line):
+            decl_line = i
+            break
+
+    if decl_line is None:
+        return None
+
+    # Find the opening brace (may be on the declaration line or next line)
+    brace_line = None
+    for i in range(decl_line, min(decl_line + 3, len(lines))):
+        if "{" in lines[i]:
+            brace_line = i
+            break
+
+    if brace_line is None:
+        return None
+
+    # Count braces to find the matching closing brace
+    depth = 0
+    body_start = None
+    for i in range(brace_line, len(lines)):
+        for ch in lines[i]:
+            if ch == "{":
+                if depth == 0:
+                    body_start = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    # Extract body lines (between { and })
+                    body_lines = lines[body_start + 1:i]
+                    if not body_lines:
+                        return None
+                    return "\n".join(body_lines)
+
+    return None
+
+
 def extract_function_body(
     raw_code: str,
     element: ForwardElementSpec,
@@ -947,6 +1001,15 @@ def extract_function_body(
                 return body_text if body_text.strip() else None
             return None
         except (ImportError, Exception):
+            return None
+
+    if lang_id in ("java", "nodejs"):
+        # Java/Node.js: brace-based body extraction (same approach as Go).
+        # Find the function/method declaration by name, then extract the
+        # body between { and } using brace-depth counting.
+        try:
+            return _extract_brace_body(code, element.name)
+        except Exception:
             return None
 
     # Python: AST-based

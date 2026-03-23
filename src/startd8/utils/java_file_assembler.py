@@ -386,38 +386,16 @@ def _element_kind_to_java(elem: Any) -> str:
 
 
 def _python_type_to_java(type_str: str) -> str:
-    """Best-effort Python type → Java type conversion."""
-    mapping = {
-        "str": "String",
-        "int": "int",
-        "float": "double",
-        "bool": "boolean",
-        "None": "void",
-        "bytes": "byte[]",
-        "list": "List<Object>",
-        "dict": "Map<String, Object>",
-        "set": "Set<Object>",
-        "tuple": "Object[]",
-        "Any": "Object",
-        "Optional": "Object",
-    }
-    # Handle Optional[X]
-    if type_str.startswith("Optional["):
-        inner = type_str[len("Optional["):-1]
-        return _python_type_to_java(inner)
-    # Handle List[X]
-    if type_str.startswith(("List[", "list[")):
-        inner = type_str[type_str.index("[") + 1:-1]
-        return f"List<{_python_type_to_java(inner)}>"
-    # Handle Dict[K, V]
-    if type_str.startswith(("Dict[", "dict[")):
-        inner = type_str[type_str.index("[") + 1:-1]
-        parts = inner.split(",", 1)
-        if len(parts) == 2:
-            k = _python_type_to_java(parts[0].strip())
-            v = _python_type_to_java(parts[1].strip())
-            return f"Map<{k}, {v}>"
-    return mapping.get(type_str, type_str)
+    """Best-effort Python type → Java type conversion.
+
+    Delegates to the centralized ``convert_python_type`` with the Java
+    skeleton config.  Kept as a thin wrapper for backward compatibility.
+    """
+    from startd8.languages._validation_utils import (
+        JAVA_SKELETON_CONFIG,
+        convert_python_type,
+    )
+    return convert_python_type(type_str, JAVA_SKELETON_CONFIG)
 
 
 def _render_java_params(elem: Any) -> str:
