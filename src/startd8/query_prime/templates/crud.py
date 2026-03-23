@@ -99,10 +99,36 @@ public async Task Delete{table.capitalize()}Async(
     await cmd.ExecuteNonQueryAsync();
 }}'''
 
+def _pg_upsert_csharp(wi: QueryWorkItem) -> str:
+    """INSERT...ON CONFLICT DO UPDATE (REQ-QPI-003)."""
+    table = _table_name(wi)
+    params = _param_names(wi)
+    key = params[0]
+    value_cols = params[1:] if len(params) > 1 else params
+    col_list = ", ".join(params)
+    val_list = ", ".join(f"@{p}" for p in params)
+    set_clause = ", ".join(f"{p} = @{p}" for p in value_cols)
+    add_lines = "\n    ".join(
+        f'cmd.Parameters.AddWithValue("@{p}", {p});' for p in params
+    )
+    method_params = ", ".join(f"string {p}" for p in params)
+    return f'''\
+public async Task Upsert{table.capitalize()}Async(
+    NpgsqlDataSource dataSource, {method_params})
+{{
+    await using var conn = await dataSource.OpenConnectionAsync();
+    await using var cmd = new NpgsqlCommand(
+        "INSERT INTO {table} ({col_list}) VALUES ({val_list}) "
+        + "ON CONFLICT ({key}) DO UPDATE SET {set_clause}", conn);
+    {add_lines}
+    await cmd.ExecuteNonQueryAsync();
+}}'''
+
 register_template(DatabaseType.POSTGRESQL, "csharp", OperationType.SELECT, _pg_select_csharp)
 register_template(DatabaseType.POSTGRESQL, "csharp", OperationType.INSERT, _pg_insert_csharp)
 register_template(DatabaseType.POSTGRESQL, "csharp", OperationType.UPDATE, _pg_update_csharp)
 register_template(DatabaseType.POSTGRESQL, "csharp", OperationType.DELETE, _pg_delete_csharp)
+register_template(DatabaseType.POSTGRESQL, "csharp", OperationType.UPSERT, _pg_upsert_csharp)
 
 # ---------------------------------------------------------------------------
 # PostgreSQL — Python (psycopg2)

@@ -366,7 +366,13 @@ _LANGUAGE_REVIEW_RULES: Dict[str, str] = {
         "- Block-scoped namespace (namespace X { }): MINOR for net8.0+ targets. "
         "Prefer file-scoped (namespace X;).\n"
         "- Missing ILogger<T> constructor injection in any service class: MAJOR.\n"
-        "- Bare `catch { return false; }` without logging: MINOR."
+        "- Bare `catch { return false; }` without logging: MINOR.\n"
+        "- .csproj MUST include `<Nullable>enable</Nullable>` in PropertyGroup: MAJOR. "
+        "Modern C# projects require nullable reference type analysis.\n"
+        "- IDisposable resources stored as fields MUST be disposed: "
+        "implement IAsyncDisposable on the owning class.\n"
+        "- Interface files (IFoo.cs) MUST contain ONLY the interface definition: MAJOR. "
+        "Never put class implementations in an interface file."
     ),
     "go": (
         "## Go Quality Rules (enforce as MAJOR issues)\n"

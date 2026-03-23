@@ -951,6 +951,16 @@ def build_spec_prompt(
         if sql_warning:
             design_document = design_document + sql_warning
 
+    # REQ-QPI-204: Also scan design_doc_sections for SQL interpolation.
+    # These carry reference examples independently of the design document.
+    _dds = context.get("design_doc_sections")
+    if _dds and isinstance(_dds, list):
+        for _i, _section in enumerate(_dds):
+            if isinstance(_section, str):
+                _sql_warn = _detect_sql_interpolation_in_examples(_section)
+                if _sql_warn:
+                    _dds[_i] = _section + _sql_warn
+
     # --- FR-MPA-005: Pre-assembly scope narrowing ---
     # When element tiers are available, narrow the spec to unfilled elements only.
     # This reduces W-3 waste (30-50% input token reduction).
