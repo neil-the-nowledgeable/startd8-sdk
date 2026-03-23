@@ -183,6 +183,10 @@ def splice_body_into_skeleton(
     if _is_java_source(skeleton, file_path):
         return _splice_java_dispatch(body, element, skeleton)
 
+    # Language dispatch: C# files use brace-based splicing via csharp_splicer
+    if _is_csharp_source(skeleton, file_path):
+        return _splice_csharp_dispatch(body, element, skeleton)
+
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         code = _splice_constant(body, element, skeleton)
         return SpliceResult(code=code)
@@ -297,6 +301,54 @@ def _splice_java_dispatch(body: str, element: ForwardElementSpec, skeleton: str)
         ))
 
     return SpliceResult(code=java_result.code, violations=violations)
+
+
+def _is_csharp_source(skeleton: str, file_path: str) -> bool:
+    """Detect if skeleton content is C# source."""
+    if file_path.endswith(".cs"):
+        return True
+    # C# files use 'namespace' with semicolons or 'using' with semicolons
+    for line in skeleton.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("/"):
+            continue
+        if stripped.startswith("namespace ") and (";" in stripped or "{" in stripped):
+            return True
+        if stripped.startswith("using ") and stripped.endswith(";"):
+            return True
+        return False
+    return False
+
+
+def _splice_csharp_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -> SpliceResult:
+    """Dispatch to C# splicer for C# skeleton files."""
+    try:
+        from startd8.languages.csharp_splicer import splice_csharp_bodies
+    except ImportError:
+        logger.warning("csharp_splicer not available — cannot splice C# skeleton")
+        return SpliceResult(code=None, violations=[
+            SpliceViolation(
+                violation_type="language_unsupported",
+                message="C# splicer not available",
+                element_name=element.name,
+            )
+        ])
+
+    method_name = element.name
+    csharp_result = splice_csharp_bodies(
+        skeleton,
+        {method_name: body},
+    )
+
+    violations = []
+    for w in getattr(csharp_result, "warnings", []):
+        violations.append(SpliceViolation(
+            violation_type="csharp_splice_warning",
+            message=w,
+            element_name=method_name,
+        ))
+
+    return SpliceResult(code=csharp_result.code, violations=violations)
 
 
 def _splice_function_body(
