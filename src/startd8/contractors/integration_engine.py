@@ -178,6 +178,9 @@ class IntegrationEngine:
         self._forward_manifest: Any = None
         # Language profile for language-aware repair gating
         self._language_profile: Any = None
+        # REQ-QPA-500: Cross-feature Anzen gate accumulator.
+        # Entries are appended per-feature and finalized once at workflow end.
+        self._anzen_gate_entries: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Phase 4: Manifest diff (IN-1 through IN-3)
@@ -1426,6 +1429,8 @@ class IntegrationEngine:
             # Query Prime's two-pass detection is authoritative for injection.
             self._anzen_gated_files: set = getattr(self, "_anzen_gated_files", set())
             self._anzen_gated_files.update(r.file_path for r in gate_results)
+            # REQ-QPA-500: Accumulate for cross-feature finalization
+            self._anzen_gate_entries.extend(enriched_entries)
 
             # Bridge Anzen findings into semantic_issues for postmortem/Kaizen
             # visibility (CRITICAL: without this, security findings are orphaned
@@ -1548,137 +1553,134 @@ class IntegrationEngine:
             except (ImportError, OSError) as exc:
                 logger.debug("Gate metrics report skipped: %s", exc)
 
-            # Query Prime Kaizen: write query_security metrics (REQ-KQP-100/500)
-            try:
-                from startd8.security_prime.kaizen import update_query_security_metrics
+            # REQ-QPA-500: Per-unit metrics writes removed — accumulated
+            # entries are finalized by finalize_anzen_metrics() at workflow end.
+            # Per-unit report is still stashed in result_metadata for the
+            # postmortem to thread into integration_history per-feature.
+            result_metadata["_query_security_entries"] = enriched_entries
 
-                # Build report from gate results — shape matches
-                # query_prime.kaizen_metrics.build_verification_report() output
-                qp_by_db: dict = {}
-                for entry in enriched_entries:
-                    db = entry.get("database", "unknown")
-                    qp_by_db.setdefault(db, {"count": 0, "mean_score": 0.0, "scores": []})
-                    qp_by_db[db]["count"] += 1
-                    qp_by_db[db]["scores"].append(entry.get("score", 0.0))
+    # ------------------------------------------------------------------
+    # REQ-QPA-500: Cross-feature Anzen gate finalization
+    # ------------------------------------------------------------------
 
-                for db_data in qp_by_db.values():
-                    s = db_data.pop("scores")
-                    db_data["mean_score"] = round(sum(s) / len(s), 4) if s else 0.0
+    def finalize_anzen_metrics(
+        self, output_dir: str, run_id: str,
+    ) -> Dict[str, Any]:
+        """Aggregate accumulated Anzen gate entries and write final metrics.
 
-                injection_total = sum(
-                    e.get("finding_types", {}).get("injection", 0)
-                    for e in enriched_entries
-                )
-                credential_total = sum(
-                    e.get("finding_types", {}).get("credential_leakage", 0)
-                    for e in enriched_entries
-                )
-                lifecycle_total = sum(
-                    e.get("finding_types", {}).get("lifecycle", 0)
-                    for e in enriched_entries
-                )
-                all_scores = [e.get("score", 0.0) for e in enriched_entries]
-                mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
-                pass_count = sum(1 for s in all_scores if s >= 0.8)
+        Called once at workflow end (after all features integrated).
+        Returns the aggregated report dict for threading into result_dict.
+        """
+        entries = self._anzen_gate_entries
+        if not entries:
+            empty_report: Dict[str, Any] = {
+                "status": "no_queries_detected",
+                "mean_score": 0.0,
+                "pass_rate": 0.0,
+                "total_work_items": 0,
+                "total_cost_usd": 0.0,
+                "injection_total": 0,
+                "credential_total": 0,
+                "lifecycle_total": 0,
+                "parameterization_rate": 0.0,
+                "false_positives_suppressed": 0,
+                "by_database": {},
+                "by_tier": {},
+            }
+            self._write_query_security_files(output_dir, run_id, empty_report)
+            return empty_report
 
-                qp_report = {
-                    "mean_score": round(mean_score, 4),
-                    "pass_rate": round(pass_count / len(all_scores), 4) if all_scores else 0.0,
-                    "total_work_items": len(enriched_entries),
-                    "total_cost_usd": 0.0,
-                    "injection_total": injection_total,
-                    "credential_total": credential_total,
-                    "lifecycle_total": lifecycle_total,
-                    "by_database": qp_by_db,
-                    "by_tier": {},
-                }
+        # Aggregate by database
+        qp_by_db: Dict[str, Any] = {}
+        for entry in entries:
+            db = entry.get("database", "unknown")
+            bucket = qp_by_db.setdefault(
+                db, {"count": 0, "mean_score": 0.0, "scores": []},
+            )
+            bucket["count"] += 1
+            bucket["scores"].append(entry.get("score", 0.0))
 
-                output_dir = str(self.project_root) if self.project_root else "."
-                update_query_security_metrics(output_dir, qp_report)
+        for db_data in qp_by_db.values():
+            scores = db_data.pop("scores")
+            db_data["mean_score"] = (
+                round(sum(scores) / len(scores), 4) if scores else 0.0
+            )
 
-                # REQ-QPA-100: stash qp_report in result_metadata so the
-                # postmortem script can merge it into pipeline-output
-                # kaizen-metrics.json (the Anzen gate runs before the
-                # postmortem and writes to project_root, not pipeline output).
-                result_metadata["_query_security_report"] = qp_report
+        injection_total = sum(
+            e.get("finding_types", {}).get("injection", 0) for e in entries
+        )
+        credential_total = sum(
+            e.get("finding_types", {}).get("credential_leakage", 0)
+            for e in entries
+        )
+        lifecycle_total = sum(
+            e.get("finding_types", {}).get("lifecycle", 0) for e in entries
+        )
+        all_scores = [e.get("score", 0.0) for e in entries]
+        mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+        pass_count = sum(1 for s in all_scores if s >= 0.8)
 
-                # REQ-QPA-102: write standalone query-security-metrics.json
-                # to project root (pipeline output copy handled by postmortem).
-                import datetime as _datetime
-                import json as _json
-                qp_standalone = {
-                    "schema_version": "1.0.0",
-                    "run_id": run_id,
-                    "timestamp": _datetime.datetime.now(
-                        _datetime.timezone.utc,
-                    ).isoformat(),
-                    **qp_report,
-                }
-                qp_path = Path(output_dir) / "query-security-metrics.json"
-                try:
-                    qp_path.write_text(
-                        _json.dumps(qp_standalone, indent=2, default=str) + "\n",
-                        encoding="utf-8",
-                    )
-                    logger.info(
-                        "Wrote query-security-metrics.json to %s", qp_path,
-                    )
-                except OSError as wexc:
-                    logger.debug(
-                        "Advisory: query-security-metrics.json write failed: %s",
-                        wexc,
-                    )
+        report: Dict[str, Any] = {
+            "status": "pass" if injection_total == 0 else "fail",
+            "mean_score": round(mean_score, 4),
+            "pass_rate": (
+                round(pass_count / len(all_scores), 4) if all_scores else 0.0
+            ),
+            "total_work_items": len(entries),
+            "total_cost_usd": 0.0,
+            "injection_total": injection_total,
+            "credential_total": credential_total,
+            "lifecycle_total": lifecycle_total,
+            "parameterization_rate": (
+                round(1.0 - injection_total / len(entries), 4)
+                if entries else 0.0
+            ),
+            "false_positives_suppressed": 0,
+            "by_database": qp_by_db,
+            "by_tier": {},
+        }
 
-            except (ImportError, OSError) as exc:
-                logger.debug("Query security metrics update skipped: %s", exc)
+        self._write_query_security_files(output_dir, run_id, report)
+        logger.info(
+            "Anzen gate finalized: %d files, %d injections, %d credentials, "
+            "score=%.2f (%d databases)",
+            len(entries), injection_total, credential_total,
+            mean_score, len(qp_by_db),
+        )
+        return report
 
-        else:
-            # REQ-QP-FIX-001/004: No database-facing files verified.
-            # Write explicit empty metrics to prevent stale data from prior
-            # runs persisting and contaminating this run's postmortem.
-            try:
-                from startd8.security_prime.kaizen import update_query_security_metrics
-                import datetime as _datetime
-                import json as _json
+    def _write_query_security_files(
+        self, output_dir: str, run_id: str, report: Dict[str, Any],
+    ) -> None:
+        """Write query-security-metrics.json + update kaizen-metrics.json."""
+        import datetime as _datetime
+        import json as _json
 
-                empty_report = {
-                    "mean_score": 0.0,
-                    "pass_rate": 0.0,
-                    "total_work_items": 0,
-                    "total_cost_usd": 0.0,
-                    "injection_total": 0,
-                    "credential_total": 0,
-                    "lifecycle_total": 0,
-                    "by_database": {},
-                    "by_tier": {},
-                    "status": "no_queries_detected",
-                }
-                output_dir = str(self.project_root) if self.project_root else "."
-                update_query_security_metrics(output_dir, empty_report)
-                result_metadata["_query_security_report"] = empty_report
+        try:
+            from startd8.security_prime.kaizen import update_query_security_metrics
+            update_query_security_metrics(output_dir, report)
+        except (ImportError, OSError) as exc:
+            logger.debug("Query security metrics update skipped: %s", exc)
 
-                # Overwrite stale standalone file
-                qp_path = Path(output_dir) / "query-security-metrics.json"
-                qp_standalone = {
-                    "schema_version": "1.0.0",
-                    "run_id": result_metadata.get("run_id", ""),
-                    "timestamp": _datetime.datetime.now(
-                        _datetime.timezone.utc,
-                    ).isoformat(),
-                    **empty_report,
-                }
-                try:
-                    qp_path.write_text(
-                        _json.dumps(qp_standalone, indent=2, default=str) + "\n",
-                        encoding="utf-8",
-                    )
-                    logger.info(
-                        "Wrote empty query-security-metrics.json (no queries detected)",
-                    )
-                except OSError:
-                    pass
-            except ImportError:
-                pass
+        qp_standalone = {
+            "schema_version": "1.0.0",
+            "run_id": run_id,
+            "timestamp": _datetime.datetime.now(
+                _datetime.timezone.utc,
+            ).isoformat(),
+            **report,
+        }
+        qp_path = Path(output_dir) / "query-security-metrics.json"
+        try:
+            qp_path.write_text(
+                _json.dumps(qp_standalone, indent=2, default=str) + "\n",
+                encoding="utf-8",
+            )
+            logger.info("Wrote query-security-metrics.json to %s", qp_path)
+        except OSError as exc:
+            logger.debug(
+                "Advisory: query-security-metrics.json write failed: %s", exc,
+            )
 
     # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
@@ -1826,115 +1828,78 @@ class IntegrationEngine:
                         "C# semantic check failed for %s: %s", fpath, exc,
                     )
             elif fpath.suffix == ".java":
-                try:
-                    from startd8.validators.java_semantic_checks import (
-                        run_java_semantic_checks,
-                    )
-                    source = fpath.read_text(encoding="utf-8")
-                    issues = run_java_semantic_checks(source, file_path=str(fpath))
-                    for issue in issues:
-                        logger.warning(
-                            "Java semantic: %s",
-                            issue.message,
-                            extra={"unit_id": unit.id},
-                        )
-                    if issues:
-                        try:
-                            rel = str(fpath.relative_to(self.project_root))
-                        except ValueError:
-                            rel = str(fpath)
-                        compliance_results[rel] = {
-                            "ast_valid": True,
-                            "stubs_remaining": 0,
-                            "duplicate_definitions": 0,
-                            "import_completeness": 1.0,
-                            "contract_compliance": 1.0,
-                            "semantic_issues": [
-                                {"category": si.check,
-                                 "severity": si.severity,
-                                 "message": str(si.message)[:200],
-                                 "line": getattr(si, "line", 0)}
-                                for si in issues
-                            ],
-                        }
-                except Exception as exc:
-                    logger.debug(
-                        "Java semantic check failed for %s: %s", fpath, exc,
-                    )
+                from startd8.validators.java_semantic_checks import (
+                    run_java_semantic_checks,
+                )
+                self._collect_language_semantic_checks(
+                    fpath, unit, compliance_results,
+                    run_java_semantic_checks, "Java",
+                )
             elif fpath.suffix == ".go":
-                try:
-                    from startd8.validators.go_semantic_checks import (
-                        run_go_semantic_checks,
-                    )
-                    source = fpath.read_text(encoding="utf-8")
-                    issues = run_go_semantic_checks(source, file_path=str(fpath))
-                    for issue in issues:
-                        logger.warning(
-                            "Go semantic: %s",
-                            issue.message,
-                            extra={"unit_id": unit.id},
-                        )
-                    if issues:
-                        try:
-                            rel = str(fpath.relative_to(self.project_root))
-                        except ValueError:
-                            rel = str(fpath)
-                        compliance_results[rel] = {
-                            "ast_valid": True,
-                            "stubs_remaining": 0,
-                            "duplicate_definitions": 0,
-                            "import_completeness": 1.0,
-                            "contract_compliance": 1.0,
-                            "semantic_issues": [
-                                {"category": si.check,
-                                 "severity": si.severity,
-                                 "message": str(si.message)[:200],
-                                 "line": getattr(si, "line", 0)}
-                                for si in issues
-                            ],
-                        }
-                except Exception as exc:
-                    logger.debug(
-                        "Go semantic check failed for %s: %s", fpath, exc,
-                    )
+                from startd8.validators.go_semantic_checks import (
+                    run_go_semantic_checks,
+                )
+                self._collect_language_semantic_checks(
+                    fpath, unit, compliance_results,
+                    run_go_semantic_checks, "Go",
+                )
             elif fpath.suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
-                try:
-                    from startd8.validators.nodejs_semantic_checks import (
-                        run_nodejs_semantic_checks,
-                    )
-                    source = fpath.read_text(encoding="utf-8")
-                    issues = run_nodejs_semantic_checks(source, file_path=str(fpath))
-                    for issue in issues:
-                        logger.warning(
-                            "Node.js semantic: %s",
-                            issue.message,
-                            extra={"unit_id": unit.id},
-                        )
-                    if issues:
-                        try:
-                            rel = str(fpath.relative_to(self.project_root))
-                        except ValueError:
-                            rel = str(fpath)
-                        compliance_results[rel] = {
-                            "ast_valid": True,
-                            "stubs_remaining": 0,
-                            "duplicate_definitions": 0,
-                            "import_completeness": 1.0,
-                            "contract_compliance": 1.0,
-                            "semantic_issues": [
-                                {"category": si.check,
-                                 "severity": si.severity,
-                                 "message": str(si.message)[:200],
-                                 "line": getattr(si, "line", 0)}
-                                for si in issues
-                            ],
-                        }
-                except Exception as exc:
-                    logger.debug(
-                        "Node.js semantic check failed for %s: %s", fpath, exc,
-                    )
+                from startd8.validators.nodejs_semantic_checks import (
+                    run_nodejs_semantic_checks,
+                )
+                self._collect_language_semantic_checks(
+                    fpath, unit, compliance_results,
+                    run_nodejs_semantic_checks, "Node.js",
+                )
 
         return compliance_results
+
+    def _collect_language_semantic_checks(
+        self,
+        fpath: Path,
+        unit: "IntegrationUnit",
+        compliance_results: Dict[str, Any],
+        check_fn: Any,
+        language_label: str,
+    ) -> None:
+        """Run language-specific semantic checks and collect into compliance_results.
+
+        Shared helper that eliminates per-language boilerplate (REQ-KZ-001).
+        Each language branch imports its check function, then delegates here.
+        """
+        try:
+            source = fpath.read_text(encoding="utf-8")
+            issues = check_fn(source, file_path=str(fpath))
+            for issue in issues:
+                logger.warning(
+                    "%s semantic: %s",
+                    language_label,
+                    issue.message,
+                    extra={"unit_id": unit.id},
+                )
+            if issues:
+                try:
+                    rel = str(fpath.relative_to(self.project_root))
+                except ValueError:
+                    rel = str(fpath)
+                compliance_results[rel] = {
+                    "ast_valid": True,
+                    "stubs_remaining": 0,
+                    "duplicate_definitions": 0,
+                    "import_completeness": 1.0,
+                    "contract_compliance": 1.0,
+                    "semantic_issues": [
+                        {"category": si.check, "severity": si.severity,
+                         "message": str(si.message)[:200],
+                         "line": getattr(si, "line", 0)}
+                        for si in issues
+                    ],
+                }
+        except Exception as exc:
+            logger.debug(
+                "%s semantic check failed for %s: %s",
+                language_label, fpath, exc,
+            )
 
     def _attempt_semantic_repair(
         self,

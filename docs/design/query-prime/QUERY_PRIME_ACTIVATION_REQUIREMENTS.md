@@ -1,7 +1,7 @@
 # Query Prime Activation & Artifact Routing — Requirements
 
-> **Version:** 1.0.0
-> **Status:** IMPLEMENTED — 11/11 requirements done; validation requires live pipeline run
+> **Version:** 1.1.0
+> **Status:** IMPLEMENTED — 14/14 requirements done (11 original + 3 from Layer E)
 > **Date:** 2026-03-22
 > **Scope:** Close the gaps between Query Prime's implemented Kaizen layer (REQ-KQP-*) and the Prime Contractor pipeline's ability to invoke it, persist its outputs, and feed them into cross-run analysis
 > **Parent:** [QUERY_PRIME_REQUIREMENTS.md](QUERY_PRIME_REQUIREMENTS.md), [KAIZEN_QUERY_PRIME_REQUIREMENTS.md](KAIZEN_QUERY_PRIME_REQUIREMENTS.md)
@@ -55,6 +55,7 @@ Run-101 (online-boutique-demo, 2026-03-22) generated 40 Go microservice features
 | QPA-4 | Only 1/40 files gated because `detect_database_type(source)` requires direct DB imports | Features that delegate to DB-bearing modules are invisible |
 | QPA-5 | Seed tasks not tagged `security_sensitive` despite "AlloyDB" in feature description | Prompt-level P1 security injection missed |
 | QPA-6 | Trend script `_load_runs()` uses `relative_path` key but kaizen-index uses `run_dir`/`metrics_path` | Script loads 0 runs from a 20-run index |
+| QPA-7 | Anzen gate writes `query_security` per-feature; later non-DB features overwrite DB features' metrics with `no_queries_detected` | Run-114: 15 features, 3 with DB surface, but final metrics empty because PI-014 (tests) overwrote PI-008 (AlloyDB) |
 
 ### 1.3 Constraints
 
@@ -82,6 +83,10 @@ Run-101 (online-boutique-demo, 2026-03-22) generated 40 Go microservice features
 | **Layer D — Trend Pipeline Compatibility** | | | |
 | REQ-QPA-400 | Fix _load_runs() to use kaizen-index actual field names | **DONE** | QPA-6 |
 | REQ-QPA-401 | Validate trend pipeline reads query_security from kaizen-metrics.json | **DONE** | QPA-6 |
+| **Layer E — Cross-Feature Metric Accumulation** | | | |
+| REQ-QPA-500 | Accumulate Anzen gate findings across features; finalize once at workflow end | **DONE** | QPA-7 |
+| REQ-QPA-501 | Non-database features MUST NOT overwrite database features' metrics | **DONE** | QPA-7 |
+| REQ-QPA-502 | Empty sentinel written only when zero features had database surface | **DONE** | QPA-7 |
 
 ---
 
@@ -247,6 +252,36 @@ After REQ-QPA-100 and REQ-QPA-400 are implemented:
 
 ---
 
+## 6.5 Layer E — Cross-Feature Metric Accumulation (REQ-QPA-5xx)
+
+**Closes:** QPA-7 (per-feature metric overwrite)
+
+**Evidence from Run-114:** C# cartservice with 15 features. PI-007 (Spanner), PI-008 (AlloyDB), PI-006 (Redis) produce valid Anzen gate results with 6 SQL injection errors and 4 credential issues. PI-014 (CartServiceTests), PI-012 (Startup.cs), and other non-database features integrate after them and each writes `no_queries_detected`, overwriting the valid metrics.
+
+### REQ-QPA-500: Cross-Feature Metric Accumulation
+
+The Anzen gate MUST accumulate findings across all features in a run rather than writing metrics per-feature.
+
+**Implementation:**
+- `IntegrationEngine._anzen_gate_entries: list[dict]` accumulates enriched entries per feature
+- `IntegrationEngine.finalize_anzen_metrics(output_dir, run_id)` aggregates and writes once at workflow end
+- Called from `PrimeContractorWorkflow.run()` after `_write_generation_manifest()`
+
+**Acceptance criteria:**
+- Run with N features where M < N have database surface → final `query-security-metrics.json` reflects all M features' findings
+- `total_work_items` = M (not 0)
+- `by_database` contains entries for each detected database type
+
+### REQ-QPA-501: Non-Database Feature Protection
+
+Non-database features MUST NOT overwrite or reset database features' accumulated metrics. The per-feature `_run_anzen_gate()` call appends to the accumulator when gate results exist and is a no-op when they don't.
+
+### REQ-QPA-502: Empty Sentinel Write
+
+The `no_queries_detected` sentinel SHALL be written only when **zero** features across the entire run had database surface (i.e., `_anzen_gate_entries` is empty at finalization time).
+
+---
+
 ## 7. Traceability Matrix
 
 | Gap | Requirements | Upstream Kaizen Req | Implementation Site |
@@ -257,6 +292,7 @@ After REQ-QPA-100 and REQ-QPA-400 are implemented:
 | QPA-4 | REQ-QPA-200, 201, 202 | REQ-QP-603 | `decomposer.py`, `integration_engine.py` |
 | QPA-5 | REQ-QPA-300, 301 | REQ-QP-701 | `seeds/builder.py` or `security_prime/enrichment.py` |
 | QPA-6 | REQ-QPA-400, 401 | REQ-KQP-400 | `scripts/run_query_prime_trends.py` |
+| QPA-7 | REQ-QPA-500, 501, 502 | REQ-KQP-100/500 | `integration_engine.py` (accumulator + finalize) + `prime_contractor.py` (call site) |
 
 ---
 
@@ -285,3 +321,5 @@ After REQ-QPA-100 and REQ-QPA-400 are implemented:
 4. `detect_database_type()` matches Go stdlib `database/sql` and common Go DB drivers
 5. Features with "AlloyDB" in description are auto-tagged `security_sensitive`
 6. Trend script finds and reports query data from archived runs
+7. Run with N features (M database-bearing) produces `total_work_items: M` in final metrics (not 0)
+8. Non-database features integrating after database features do not reset `query_security` to empty

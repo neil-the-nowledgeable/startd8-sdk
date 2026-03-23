@@ -5048,6 +5048,18 @@ class PrimeContractorWorkflow:
             }
         self._write_generation_manifest(result_dict)
 
+        # REQ-QPA-500: Finalize accumulated Anzen gate metrics across all features
+        try:
+            _manifest_dir = str(self._manifest_path().parent)
+            _run_id = os.environ.get("KAIZEN_RUN_ID") or ""
+            qp_report = self._engine.finalize_anzen_metrics(
+                output_dir=_manifest_dir, run_id=_run_id,
+            )
+            if qp_report:
+                result_dict["_query_security_report"] = qp_report
+        except Exception:
+            logger.debug("Anzen gate finalization skipped", exc_info=True)
+
         # Launch async post-mortem evaluation
         try:
             from .prime_postmortem import launch_prime_postmortem_async
