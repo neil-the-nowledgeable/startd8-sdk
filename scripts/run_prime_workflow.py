@@ -656,24 +656,38 @@ def main() -> int:
         or _todo_env == "true"
         or _instr_env == "true"
     )
-    logger.info(
-        "TODO completion check: ENABLE_TODO_COMPLETION=%r, ENABLE_INSTRUMENTATION=%r, "
-        "--todo-completion=%r → enabled=%s",
-        _todo_env, _instr_env, getattr(args, "todo_completion", False), _todo_enabled,
-    )
-    if not _todo_enabled and _instr_env == "auto":
-        # Auto mode: enable if generation profile implies instrumentation
+    # Auto-enable for generation_profile in {source, full} — check env var,
+    # run-metadata.json, AND seed (belt + suspenders — env var propagation
+    # from shell scripts is unreliable across pipeline invocation layers).
+    if not _todo_enabled:
         _profile = os.environ.get("GENERATION_PROFILE", "").lower()
         if not _profile:
-            # Try to read from seed
+            # Check run-metadata.json (written by run-atomic.sh)
+            _run_meta = output_dir.parent / "run-metadata.json"
+            if not _run_meta.is_file():
+                _run_meta = output_dir / "run-metadata.json"
+            if _run_meta.is_file():
+                try:
+                    _profile = json.loads(
+                        _run_meta.read_text(encoding="utf-8"),
+                    ).get("generation_profile", "").lower()
+                except (json.JSONDecodeError, OSError):
+                    pass
+        if not _profile:
+            # Fall back to seed
             try:
-                import json as _json
-                _seed_data = _json.loads(Path(args.seed).read_text(encoding="utf-8"))
-                _profile = _seed_data.get("generation_profile", "").lower()
-            except (OSError, ValueError, AttributeError):
+                _seed_check = json.loads(Path(args.seed).read_text(encoding="utf-8"))
+                _profile = _seed_check.get("generation_profile", "").lower()
+            except (OSError, ValueError, AttributeError, json.JSONDecodeError):
                 pass
         if _profile in ("source", "full"):
             _todo_enabled = True
+    logger.info(
+        "TODO completion: ENABLE_TODO_COMPLETION=%r, ENABLE_INSTRUMENTATION=%r, "
+        "--todo-completion=%r, profile=%r → enabled=%s",
+        _todo_env, _instr_env, getattr(args, "todo_completion", False),
+        _profile if "_profile" in dir() else "n/a", _todo_enabled,
+    )
     if _todo_enabled:
         workflow.enable_todo_completion()
 
