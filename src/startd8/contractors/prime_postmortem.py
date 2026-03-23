@@ -2186,6 +2186,46 @@ class PrimePostMortemEvaluator:
                 lines.append(f"- [{lesson.severity.value}] {lesson.title}")
             lines.append("")
 
+        # Query Security (REQ-KQP-502)
+        # Render when any features have query_security semantic issues
+        _qs_features = [
+            f for f in report.features
+            if f.disk_compliance and any(
+                isinstance(si, dict) and si.get("category", "").startswith("query_security")
+                for si in (getattr(f.disk_compliance, "semantic_issues", None) or [])
+            )
+        ]
+        _qs_total_issues = sum(
+            getattr(f, "semantic_error_count", 0) for f in _qs_features
+        )
+        if _qs_features or _qs_total_issues > 0:
+            lines.extend([
+                "## Query Security",
+                "",
+                f"- Features with query security findings: {len(_qs_features)}",
+                f"- Total security semantic errors: {_qs_total_issues}",
+                "",
+            ])
+            # Per-database breakdown from semantic issues
+            _qs_by_db: dict = {}
+            for f in _qs_features:
+                for si in (getattr(f.disk_compliance, "semantic_issues", None) or []):
+                    if isinstance(si, dict) and si.get("category", "").startswith("query_security"):
+                        db = getattr(f.disk_compliance, "detected_database", "unknown") or "unknown"
+                        _qs_by_db.setdefault(db, {"findings": 0, "features": set()})
+                        _qs_by_db[db]["findings"] += 1
+                        _qs_by_db[db]["features"].add(f.name)
+            if _qs_by_db:
+                lines.extend([
+                    "| Database | Findings | Features |",
+                    "|----------|----------|----------|",
+                ])
+                for db, data in sorted(_qs_by_db.items()):
+                    lines.append(
+                        f"| {db} | {data['findings']} | {', '.join(sorted(data['features']))} |"
+                    )
+                lines.append("")
+
         # Cost Summary
         if report.cost_summary:
             cs = report.cost_summary

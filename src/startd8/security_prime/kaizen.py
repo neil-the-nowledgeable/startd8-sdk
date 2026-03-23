@@ -162,14 +162,24 @@ def update_query_security_metrics(
         except (json.JSONDecodeError, OSError):
             pass
 
+    total_items = report.get("total_work_items", 0)
+    injection_total = report.get("injection_total", 0)
+
     existing["query_security"] = {
+        "status": report.get("status", "pass" if total_items > 0 else "no_queries_detected"),
         "mean_score": report.get("mean_score", 0.0),
         "pass_rate": report.get("pass_rate", 0.0),
-        "total_work_items": report.get("total_work_items", 0),
+        "total_work_items": total_items,
         "total_cost_usd": report.get("total_cost_usd", 0.0),
-        "injection_total": report.get("injection_total", 0),
+        "injection_total": injection_total,
         "credential_total": report.get("credential_total", 0),
         "lifecycle_total": report.get("lifecycle_total", 0),
+        # REQ-KQP-300/500: Additional schema fields
+        "parameterization_rate": (
+            round((total_items - injection_total) / total_items, 4)
+            if total_items > 0 else 0.0
+        ),
+        "false_positives_suppressed": report.get("false_positives_suppressed", 0),
         "by_database": report.get("by_database", {}),
         "by_tier": report.get("by_tier", {}),
     }

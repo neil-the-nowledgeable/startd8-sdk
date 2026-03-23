@@ -511,6 +511,33 @@ def _collect_todo_metrics(output_dir: Path, report: object) -> dict:
         return {}
 
 
+def _copy_query_security_standalone(output_dir: Path) -> None:
+    """QP-GAP-006: Copy query-security-metrics.json from project root to run dir.
+
+    The trend script scans run directories for this file but the Anzen gate
+    writes it to the project root. This function finds the project root copy
+    and places it alongside kaizen-metrics.json in the run output.
+    """
+    dest = output_dir / "query-security-metrics.json"
+    if dest.is_file():
+        return  # Already present
+
+    # Walk up to find project root
+    candidate = output_dir
+    for _ in range(10):
+        src = candidate / "query-security-metrics.json"
+        if src.is_file() and src != dest:
+            try:
+                import shutil
+                shutil.copy2(str(src), str(dest))
+                return
+            except OSError:
+                return
+        candidate = candidate.parent
+        if candidate == candidate.parent:
+            break
+
+
 def _merge_query_security_from_project_root(
     metrics: dict, output_dir: Path,
 ) -> None:
@@ -724,6 +751,10 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
     # (written by Anzen gate via update_query_security_metrics) into the
     # pipeline-output copy so cross-run trend scripts can find it.
     _merge_query_security_from_project_root(metrics, output_dir)
+
+    # QP-GAP-006 / REQ-QPI-002: Copy standalone query-security-metrics.json
+    # to the run directory so trend scripts can find it alongside kaizen-metrics.json.
+    _copy_query_security_standalone(output_dir)
 
     # REQ-KZ-OBS-500: Merge observability artifact quality into metrics
     # (obs artifacts are generated earlier in the pipeline, before this
