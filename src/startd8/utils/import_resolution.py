@@ -23,6 +23,33 @@ from startd8.utils.requirements_generator import (
 )
 from startd8.implementation_engine.package_aliases import import_to_pypi, pypi_to_import
 
+# Well-known third-party packages that are always considered valid imports
+# even without a requirements.in file.  These are common frameworks that
+# LLM-generated code legitimately uses.  Without this allowlist, the
+# import resolver flags them as unresolvable errors when requirements.in
+# hasn't been generated yet (e.g. Python services that install deps via
+# Dockerfile pip commands).
+_WELL_KNOWN_PACKAGES: frozenset[str] = frozenset({
+    # Web frameworks
+    "flask", "django", "fastapi", "starlette", "uvicorn", "gunicorn",
+    "werkzeug", "jinja2", "markupsafe",
+    # Testing / load
+    "pytest", "locust", "faker", "mock",
+    # Data / ML
+    "numpy", "pandas", "scipy", "tensorflow", "torch", "transformers",
+    # HTTP / networking
+    "requests", "httpx", "aiohttp", "urllib3",
+    # Cloud / infrastructure
+    "redis", "celery", "boto3", "botocore",
+    # Observability
+    "prometheus_client", "opentelemetry",
+    # Serialization / parsing
+    "pydantic", "marshmallow", "lxml",
+    # gRPC ecosystem (where import != PyPI name, handled by alias map,
+    # but sub-modules like grpc.aio may still miss)
+    "grpc",
+})
+
 
 def extract_import_modules(tree: ast.AST) -> List[Dict[str, object]]:
     """Extract all imports from a parsed AST with metadata.
@@ -119,6 +146,11 @@ def resolve_import(
 
     if top_level in sibling_modules:
         return f"local:{top_level}"
+
+    # Well-known third-party packages — always valid even without
+    # requirements.in (common frameworks that LLM code legitimately uses).
+    if top_level in _WELL_KNOWN_PACKAGES:
+        return f"pip:{top_level}"
 
     # PyPI check: see if the import maps to a known package that is in
     # the task's requirements.  ``import_to_pypi`` returns the import name
