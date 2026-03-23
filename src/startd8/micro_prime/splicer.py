@@ -304,10 +304,14 @@ def _splice_java_dispatch(body: str, element: ForwardElementSpec, skeleton: str)
 
 
 def _is_csharp_source(skeleton: str, file_path: str) -> bool:
-    """Detect if skeleton content is C# source."""
+    """Detect if skeleton content is C# source.
+
+    Heuristic: C# ``namespace`` and ``using`` directives end with semicolons,
+    distinguishing them from Python ``import`` (no semicolons) and Java
+    ``package`` (checked separately by ``_is_java_source``).
+    """
     if file_path.endswith(".cs"):
         return True
-    # C# files use 'namespace' with semicolons or 'using' with semicolons
     for line in skeleton.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("/"):
@@ -321,7 +325,11 @@ def _is_csharp_source(skeleton: str, file_path: str) -> bool:
 
 
 def _splice_csharp_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -> SpliceResult:
-    """Dispatch to C# splicer for C# skeleton files."""
+    """Dispatch to C# splicer for C# skeleton files.
+
+    Delegates to ``csharp_splicer.splice_csharp_bodies()`` which uses
+    tree-sitter byte-offset splicing to replace stub method bodies.
+    """
     try:
         from startd8.languages.csharp_splicer import splice_csharp_bodies
     except ImportError:
@@ -340,11 +348,13 @@ def _splice_csharp_dispatch(body: str, element: ForwardElementSpec, skeleton: st
         {method_name: body},
     )
 
+    # CSharpSpliceResult may not have a 'warnings' attribute depending on
+    # version; use getattr defensively (R4).
     violations = []
-    for w in getattr(csharp_result, "warnings", []):
+    for w in getattr(csharp_result, "warnings", []) or []:
         violations.append(SpliceViolation(
             violation_type="csharp_splice_warning",
-            message=w,
+            message=str(w),
             element_name=method_name,
         ))
 

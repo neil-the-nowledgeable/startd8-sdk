@@ -76,24 +76,48 @@ _NEG_SCOPE_CONFLICT_RE = re.compile(
 )
 
 
+# Fallback safe syntax examples per language — used when DatabasePatternRegistry
+# is unavailable (R1: module-level constant, not rebuilt per call).
+_SAFE_SYNTAX_FALLBACKS: dict[str, str] = {
+    "csharp": 'cmd.Parameters.AddWithValue("@param", value)',
+    "python": 'cursor.execute("SELECT ... WHERE id = %s", (value,))',
+    "nodejs": 'client.query("SELECT ... WHERE id = $1", [value])',
+    "go": 'spanner.Statement{SQL: "... @param", Params: map}',
+    "java": 'PreparedStatement with ? placeholders',
+}
+
+# R2: Regexes used in sanitize_task_description — compiled at module level.
+_INTERP_SQL_RE = re.compile(
+    r"(?:string[- ]interpolat\w+\s+SQL|"
+    r"SQL\s+(?:using\s+)?string[- ]interpolat\w+|"
+    r"Uses\s+string[- ]interpolat\w+\s+SQL\b[^.]*)",
+    re.IGNORECASE,
+)
+_REF_MATCH_RE = re.compile(
+    r"matching\s+reference\s+implementation",
+    re.IGNORECASE,
+)
+
+
 def _get_safe_syntax(detected_database: str, language: str) -> str:
-    """Look up safe parameterization syntax from DatabasePatternRegistry."""
+    """Look up safe parameterization syntax from DatabasePatternRegistry.
+
+    Args:
+        detected_database: Database identifier (e.g., ``"postgresql"``, ``"spanner"``).
+        language: Language identifier (e.g., ``"csharp"``, ``"python"``).
+
+    Returns:
+        A human-readable safe parameterization example string.
+        Falls back to a generic example if the registry is unavailable.
+    """
     try:
         from startd8.query_prime.patterns import DatabasePatternRegistry
         pattern = DatabasePatternRegistry.get(detected_database, language)
         if pattern and pattern.safe_param_syntax:
             return pattern.safe_param_syntax[0]
-    except (ImportError, AttributeError):
-        pass
-    # Fallback examples per language
-    _FALLBACKS = {
-        "csharp": 'cmd.Parameters.AddWithValue("@param", value)',
-        "python": 'cursor.execute("SELECT ... WHERE id = %s", (value,))',
-        "nodejs": 'client.query("SELECT ... WHERE id = $1", [value])',
-        "go": 'spanner.Statement{SQL: "... @param", Params: map}',
-        "java": 'PreparedStatement with ? placeholders',
-    }
-    return _FALLBACKS.get(language, "parameterized query syntax")
+    except (ImportError, AttributeError) as exc:
+        logger.debug("DatabasePatternRegistry unavailable: %s", exc)
+    return _SAFE_SYNTAX_FALLBACKS.get(language, "parameterized query syntax")
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +131,12 @@ def classify_acceptance_anchor(
     language: str = "",
 ) -> Dict[str, Any]:
     """Classify an acceptance anchor as safe or anti-pattern.
+
+    Args:
+        anchor: A single acceptance obligation string from the seed.
+        detected_database: Database identifier for safe-syntax lookup
+            (e.g., ``"postgresql"``). Empty if unknown.
+        language: Target language for safe-syntax lookup (e.g., ``"csharp"``).
 
     Returns:
         ``{"classified": "safe"}`` or
@@ -223,16 +253,9 @@ def sanitize_task_description(
     audit: List[Dict[str, Any]] = []
     result = description
 
-    # Pattern: "string-interpolated SQL" or "string interpolation...SQL"
-    _interp_sql = re.compile(
-        r"(?:string[- ]interpolat\w+\s+SQL|"
-        r"SQL\s+(?:using\s+)?string[- ]interpolat\w+|"
-        r"Uses\s+string[- ]interpolat\w+\s+SQL\b[^.]*)",
-        re.IGNORECASE,
-    )
+    # R2: Uses module-level _INTERP_SQL_RE (compiled once, not per call).
     safe = _get_safe_syntax(detected_database, language)
-    match = _interp_sql.search(result)
-    if match:
+    if (match := _INTERP_SQL_RE.search(result)):
         original_phrase = match.group(0)
         replacement = f"parameterized SQL using {safe}"
         result = result[:match.start()] + replacement + result[match.end():]
@@ -246,17 +269,14 @@ def sanitize_task_description(
             original_phrase, replacement,
         )
 
-    # Pattern: "matching reference implementation" in SQL context
-    _ref_match = re.compile(
-        r"matching\s+reference\s+implementation",
-        re.IGNORECASE,
-    )
-    if _ref_match.search(result) and _SQL_KW_RE.search(description):
-        original_phrase_2 = _ref_match.search(result).group(0)
+    # R3: Check "matching reference implementation" against the ORIGINAL
+    # description (not the modified `result`) to avoid matching content
+    # introduced by the replacement above.
+    if (m := _REF_MATCH_RE.search(result)) and _SQL_KW_RE.search(description):
         replacement_2 = "using secure parameterized query patterns"
-        result = _ref_match.sub(replacement_2, result, count=1)
+        result = _REF_MATCH_RE.sub(replacement_2, result, count=1)
         audit.append({
-            "original": original_phrase_2,
+            "original": m.group(0),
             "replacement": replacement_2,
             "reason": "description_reference_match",
         })

@@ -3622,7 +3622,12 @@ class MicroPrimeEngine:
         return None
 
     def _get_registry_for_language(self, language_id: str) -> TemplateRegistry:
-        """Get or create a TemplateRegistry for the given language."""
+        """Get or create a TemplateRegistry for the given language.
+
+        Returns the default (Python) registry for ``"python"``;
+        caches per-language registries for non-Python to avoid
+        re-creation on every element.
+        """
         if language_id == "python":
             return self._templates
         if language_id not in self._template_registries:

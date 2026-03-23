@@ -89,6 +89,26 @@ logger = get_logger(__name__)
 # REQ-GPC-300: profiles that require parameter resolvability in preflight
 _RESOLVABILITY_PROFILES = frozenset({"full", "observability", "monitoring", "operator"})
 
+
+def _infer_language_from_files(target_files: List[str]) -> str:
+    """Infer language_id from target file extensions (C1: deduplicated helper).
+
+    Returns the first matching language or ``"csharp"`` as default
+    (most common non-Python target in the pipeline).
+    """
+    for f in target_files:
+        if f.endswith(".go"):
+            return "go"
+        if f.endswith(".java"):
+            return "java"
+        if f.endswith((".js", ".ts")):
+            return "nodejs"
+        if f.endswith(".py"):
+            return "python"
+        if f.endswith(".cs"):
+            return "csharp"
+    return "csharp"
+
 # QP-1: Declarative set of PARSE fields that are threaded into task context.
 # Adding a new field here automatically wires it through seed assembly —
 # no manual ``if feat.X: ctx["X"] = ...`` block required.
@@ -2608,21 +2628,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                             strip_conflicting_negative_scope,
                         )
                         _db = ctx["detected_database"]
-                        # Infer language from target files
-                        _lang = "csharp"  # default
-                        for _f in ordered_files:
-                            if _f.endswith(".go"):
-                                _lang = "go"
-                                break
-                            elif _f.endswith(".java"):
-                                _lang = "java"
-                                break
-                            elif _f.endswith((".js", ".ts")):
-                                _lang = "nodejs"
-                                break
-                            elif _f.endswith(".py"):
-                                _lang = "python"
-                                break
+                        _lang = _infer_language_from_files(ordered_files)
                         if ctx.get("acceptance_obligations"):
                             ctx["acceptance_obligations"], _anch_audit = (
                                 sanitize_acceptance_obligations(
@@ -2643,7 +2649,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                                     for s in _stripped
                                 )
                     except ImportError:
-                        pass  # anchor sanitizer not available
+                        logger.debug("Anchor sanitizer not available (plan_ingestion_anchor_sanitizer)")
 
                 rationale: List[str] = [
                     "feature selected via requirement identifier match"
@@ -2727,20 +2733,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     _task = tasks[-1]
                     _orig_desc = _task["config"]["task_description"]
                     if _orig_desc:
-                        _lang = "csharp"
-                        for _f in ordered_files:
-                            if _f.endswith(".go"):
-                                _lang = "go"
-                                break
-                            elif _f.endswith(".java"):
-                                _lang = "java"
-                                break
-                            elif _f.endswith((".js", ".ts")):
-                                _lang = "nodejs"
-                                break
-                            elif _f.endswith(".py"):
-                                _lang = "python"
-                                break
+                        _lang = _infer_language_from_files(ordered_files)
                         _clean_desc, _desc_audit = sanitize_task_description(
                             _orig_desc, ctx["detected_database"], _lang,
                         )
