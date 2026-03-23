@@ -6,9 +6,31 @@ from ``prime_contractor.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
+
+
+# Default per-language semantic repair categories (P3-3).
+# Each language enables only the categories that have working repair steps.
+_DEFAULT_SEMANTIC_CATEGORIES_BY_LANGUAGE: Dict[str, frozenset[str]] = {
+    "python": frozenset({
+        "import_resolution", "method_resolution",
+        "discarded_return", "duplicate_main_guard",
+    }),
+    "go": frozenset({
+        "unchecked_error", "dot_import", "python_contamination",
+    }),
+    "nodejs": frozenset({
+        "var_usage", "duplicate_require", "python_contamination",
+    }),
+    "java": frozenset({
+        "wildcard_import", "java_sql_injection",
+    }),
+    "csharp": frozenset({
+        "csharp_sql_injection", "csharp_convention_error",
+    }),
+}
 
 
 @dataclass(frozen=True)
@@ -27,6 +49,12 @@ class RepairConfig:
         staging_retention_hours: Hours to retain failed staging dirs for debugging.
         semantic_repair_categories: Per-category enable for semantic repair (DC-4).
             Default empty — no semantic categories enabled until gate criteria met.
+            Used as fallback when language_id is not provided to
+            ``get_semantic_categories()``.
+        semantic_repair_categories_by_language: Per-language semantic repair
+            categories (P3-3). Overrides ``semantic_repair_categories`` when
+            a language_id is provided. Defaults to language-specific sets
+            matching the repair steps that exist for each language.
         max_semantic_repairs_per_file: Safety bound on semantic repairs per file.
         semantic_repair_circuit_breaker_threshold: Consecutive failures before
             disabling semantic repair for the remainder of the run.
@@ -43,5 +71,26 @@ class RepairConfig:
     staging_retention_hours: int = 24
     # Semantic repair (REQ-SR-100–400)
     semantic_repair_categories: frozenset[str] = frozenset()
+    semantic_repair_categories_by_language: Dict[str, frozenset[str]] = field(
+        default_factory=lambda: dict(_DEFAULT_SEMANTIC_CATEGORIES_BY_LANGUAGE),
+    )
     max_semantic_repairs_per_file: int = 5
     semantic_repair_circuit_breaker_threshold: int = 3
+
+    def get_semantic_categories(
+        self,
+        language_id: Optional[str] = None,
+    ) -> frozenset[str]:
+        """Get semantic repair categories for a language.
+
+        Args:
+            language_id: Language ID (e.g. 'python', 'go'). When provided,
+                returns language-specific categories. Falls back to the
+                flat ``semantic_repair_categories`` for unknown languages.
+
+        Returns:
+            Frozenset of enabled semantic repair category names.
+        """
+        if language_id and language_id in self.semantic_repair_categories_by_language:
+            return self.semantic_repair_categories_by_language[language_id]
+        return self.semantic_repair_categories

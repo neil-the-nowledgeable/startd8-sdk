@@ -404,6 +404,10 @@ def run_csharp_semantic_checks(
     issues.extend(_check_missing_access_modifiers(source))
     issues.extend(_check_wildcard_usings(source))
     issues.extend(_check_namespace_filepath_alignment(source, file_path))
+    # P3-1: Block-scoped namespace detection (check exists in semantic_checks.py,
+    # wired here so it flows through the C# semantic pipeline)
+    from startd8.validators.semantic_checks import check_block_scoped_namespace
+    issues.extend(check_block_scoped_namespace(source, file_path or ""))
 
     return _stamp_file_path(issues, file_path)
 

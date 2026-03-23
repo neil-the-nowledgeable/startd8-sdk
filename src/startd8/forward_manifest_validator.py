@@ -477,12 +477,35 @@ def validate_disk_compliance(
 # ---------------------------------------------------------------------------
 
 
-def _compute_semantic_penalty(semantic_issues: list) -> float:
+# Language-specific severity weights for semantic penalty calculation (P3-2).
+# Go errors are more critical (compiler enforces); Python/Node.js are more lenient.
+_LANGUAGE_SEVERITY_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "go": {"error": 0.4, "warning": 0.15},
+    "java": {"error": 0.35, "warning": 0.1},
+    "csharp": {"error": 0.35, "warning": 0.1},
+    "nodejs": {"error": 0.3, "warning": 0.1},
+    "python": {"error": 0.3, "warning": 0.1},
+}
+_DEFAULT_SEVERITY_WEIGHTS = {"error": 0.3, "warning": 0.1}
+
+
+def _compute_semantic_penalty(
+    semantic_issues: list,
+    language_id: Optional[str] = None,
+) -> float:
     """Compute severity-weighted semantic penalty from issues list.
 
-    Errors penalize 0.3 per instance, warnings 0.1. Returns a value
-    in [0.0, 1.0] where 1.0 means no semantic issues.
+    Args:
+        semantic_issues: List of semantic issue dicts with 'severity' key.
+        language_id: Optional language ID for language-specific weights.
+            Falls back to Python weights (backward compatible).
+
+    Returns:
+        Float in [0.0, 1.0] where 1.0 means no semantic issues.
     """
+    weights = _LANGUAGE_SEVERITY_WEIGHTS.get(
+        language_id or "python", _DEFAULT_SEVERITY_WEIGHTS,
+    )
     error_count = 0
     warning_count = 0
     for issue in (semantic_issues or []):
@@ -491,10 +514,13 @@ def _compute_semantic_penalty(semantic_issues: list) -> float:
             error_count += 1
         else:
             warning_count += 1
-    return max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
+    return max(0.0, 1.0 - error_count * weights["error"] - warning_count * weights["warning"])
 
 
-def compute_disk_quality_score(compliance: Any) -> float:
+def compute_disk_quality_score(
+    compliance: Any,
+    language_id: Optional[str] = None,
+) -> float:
     """Compute a composite disk quality score from DiskComplianceResult.
 
     Formula:
@@ -503,6 +529,8 @@ def compute_disk_quality_score(compliance: Any) -> float:
 
     Args:
         compliance: DiskComplianceResult instance or SimpleNamespace with same fields.
+        language_id: Optional language ID for language-specific severity weights.
+            Falls back to Python weights (backward compatible).
 
     Returns:
         Float score in [0.0, 1.0].
@@ -518,7 +546,7 @@ def compute_disk_quality_score(compliance: Any) -> float:
     semantic_issues = getattr(compliance, "semantic_issues", [])
 
     stub_penalty = max(0.0, 1.0 - stubs * 0.1)
-    semantic_penalty = _compute_semantic_penalty(semantic_issues)
+    semantic_penalty = _compute_semantic_penalty(semantic_issues, language_id)
 
     composite = (
         contract_compliance * 0.4

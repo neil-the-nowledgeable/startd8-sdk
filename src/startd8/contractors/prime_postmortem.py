@@ -527,6 +527,51 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "indicate a missing dependency or typo in the import path."
         ),
     },
+    # --- Python L1-L10 disk compliance check hints (P3-4) ---
+    "import_resolution_detected": {
+        "phase": "draft",
+        "hint": (
+            "Imports must resolve to existing modules. Check for typos in import "
+            "paths, missing __init__.py files, or dependencies not declared in "
+            "the project's dependency manifest."
+        ),
+    },
+    "cross_scope_duplicate_detected": {
+        "phase": "draft",
+        "hint": (
+            "Duplicate definitions at module level (same function or class name "
+            "defined twice). Remove the duplicate or rename to avoid shadowing."
+        ),
+    },
+    "factory_return_detected": {
+        "phase": "draft",
+        "hint": (
+            "Factory functions (create_*, make_*, build_*) must return a value. "
+            "A factory that returns None silently breaks callers."
+        ),
+    },
+    "discarded_return_detected": {
+        "phase": "draft",
+        "hint": (
+            "Function return values must be captured. Calling a function that "
+            "returns a value without assigning the result is likely a bug."
+        ),
+    },
+    "method_resolution_detected": {
+        "phase": "draft",
+        "hint": (
+            "self.method() calls must resolve to actual methods on the class. "
+            "Check for typos in method names or calls to module-level functions "
+            "via self instead of direct call."
+        ),
+    },
+    "service_identity_detected": {
+        "phase": "draft",
+        "hint": (
+            "A module must not import itself. Self-imports create circular "
+            "dependencies and indicate a naming collision."
+        ),
+    },
     # --- Cross-language semantic issue hints ---
     "console_logging_detected": {
         "phase": "draft",
@@ -946,6 +991,13 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "duplicate_definition": "duplicate_definition_detected",
     "bare_except_pass": "bare_except_pass_detected",
     "phantom_dependency": "phantom_dependency_detected",
+    # Python L1-L10 disk compliance categories (P3-4 terminology alignment)
+    "import_resolution": "import_resolution_detected",
+    "cross_scope_duplicate": "cross_scope_duplicate_detected",
+    "factory_return": "factory_return_detected",
+    "discarded_return": "discarded_return_detected",
+    "method_resolution": "method_resolution_detected",
+    "service_identity_mismatch": "service_identity_detected",
 }
 
 
@@ -1603,8 +1655,20 @@ class PrimePostMortemEvaluator:
                     )
                     fpm.disk_compliance = compliance
 
-                    # Compute disk quality score
-                    fpm.disk_quality_score = compute_disk_quality_score(compliance)
+                    # Compute disk quality score (P3-2: language-aware severity)
+                    _ext = Path(file_path).suffix.lower()
+                    _EXT_LANG = {
+                        ".py": "python", ".go": "go",
+                        ".java": "java", ".kt": "java",
+                        ".cs": "csharp", ".csproj": "csharp",
+                        ".js": "nodejs", ".ts": "nodejs",
+                        ".mjs": "nodejs", ".cjs": "nodejs",
+                        ".jsx": "nodejs", ".tsx": "nodejs",
+                    }
+                    _lang = _EXT_LANG.get(_ext)
+                    fpm.disk_quality_score = compute_disk_quality_score(
+                        compliance, language_id=_lang,
+                    )
 
                     # Merge Anzen gate findings into semantic_issues so the
                     # Kaizen feedback loop can see security findings (Issues #1-4
