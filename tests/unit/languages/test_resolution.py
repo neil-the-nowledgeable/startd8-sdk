@@ -85,10 +85,26 @@ class TestResolveLanguage:
         profile = resolve_language(["src/adservice/build.gradle"])
         assert profile.language_id == "java"
 
-    def test_dockerfile_in_service_dir_resolves_to_go(self):
-        """Dockerfile in a *service directory should infer Go."""
+    def test_dockerfile_alone_defaults_to_python(self):
+        """Standalone Dockerfile with no sibling context → Python default."""
         profile = resolve_language(["src/shippingservice/Dockerfile"])
+        assert profile.language_id == "python"
+
+    def test_dockerfile_with_go_sibling_resolves_to_go(self):
+        """Dockerfile alongside Go files in batch → Go."""
+        profile = resolve_language([
+            "src/shippingservice/Dockerfile",
+            "src/shippingservice/main.go",
+        ])
         assert profile.language_id == "go"
+
+    def test_dockerfile_with_java_sibling_resolves_to_java(self):
+        """Dockerfile in Java project with Java files in batch → Java."""
+        profile = resolve_language([
+            "src/adservice/Dockerfile",
+            "src/adservice/src/main/java/hipstershop/AdService.java",
+        ])
+        assert profile.language_id == "java"
 
     def test_go_mod_with_go_files(self):
         """go.mod + .go files should still resolve to Go."""
@@ -114,6 +130,43 @@ class TestResolveLanguage:
         profile = resolve_language(["templates/home.html"])
         assert profile.language_id == "python"
 
+    # --- batch_target_files cross-feature inference ---
+
+    def test_dockerfile_with_java_batch_context(self):
+        """Dockerfile alone with Java siblings in batch → Java."""
+        profile = resolve_language(
+            ["src/adservice/Dockerfile"],
+            batch_target_files=[
+                "src/adservice/build.gradle",
+                "src/adservice/src/main/java/hipstershop/AdService.java",
+                "src/adservice/Dockerfile",
+            ],
+        )
+        assert profile.language_id == "java"
+
+    def test_dockerfile_with_go_batch_context(self):
+        """Dockerfile alone with Go siblings in batch → Go."""
+        profile = resolve_language(
+            ["src/shippingservice/Dockerfile"],
+            batch_target_files=[
+                "src/shippingservice/main.go",
+                "src/shippingservice/Dockerfile",
+            ],
+        )
+        assert profile.language_id == "go"
+
+    def test_batch_context_ignored_when_extension_resolves(self):
+        """Java file resolves by extension even with Go batch context."""
+        profile = resolve_language(
+            ["src/service/Main.java"],
+            batch_target_files=[
+                "src/service/main.go",
+                "src/service/handler.go",
+                "src/service/Main.java",
+            ],
+        )
+        assert profile.language_id == "java"
+
     def test_dockerfile_in_frontend_service_resolves_to_go(self):
         """Dockerfile in a non-'service'-named Go dir with Go sibling."""
         profile = resolve_language([
@@ -121,3 +174,25 @@ class TestResolveLanguage:
             "src/frontend/main.go",
         ])
         assert profile.language_id == "go"
+
+    # --- Java config/resource file resolution ---
+
+    def test_gradle_wrapper_properties_resolves_to_java(self):
+        """gradle-wrapper.properties is a Java build artifact."""
+        profile = resolve_language(["src/adservice/gradle/wrapper/gradle-wrapper.properties"])
+        assert profile.language_id == "java"
+
+    def test_log4j2_xml_in_resources_resolves_to_java(self):
+        """XML config under src/main/resources/ → Java."""
+        profile = resolve_language(["src/adservice/src/main/resources/log4j2.xml"])
+        assert profile.language_id == "java"
+
+    def test_java_test_resources_resolves_to_java(self):
+        """File under src/test/resources/ → Java."""
+        profile = resolve_language(["src/service/src/test/resources/application-test.yml"])
+        assert profile.language_id == "java"
+
+    def test_settings_gradle_kts_resolves_to_java(self):
+        """settings.gradle.kts is a Java/Kotlin build file."""
+        profile = resolve_language(["src/service/settings.gradle.kts"])
+        assert profile.language_id == "java"

@@ -44,10 +44,10 @@ _CATEGORY_TO_ROUTE: dict[str, str] = {
 
 # Map semantic issue categories to routing-table pattern names.
 # Default: the category name itself (e.g. "import_resolution").
+# Base mapping — used when no language-specific override exists.
 _CATEGORY_TO_PATTERN: dict[str, str] = {
     "sql_injection_risk": "csharp_sql_injection",
 }
-
 
 def translate_to_diagnostics(
     semantic_issues: List[dict],
@@ -75,7 +75,10 @@ def translate_to_diagnostics(
 
         route_category = _CATEGORY_TO_ROUTE.get(category)
         if route_category is not None:
-            # REQ-KZ-CS-402b: non-semantic routing (e.g. "security")
+            # REQ-KZ-CS-402b / REQ-KZ-JV-402a.1: non-semantic routing.
+            # Language-aware pattern resolved via _resolve_pattern() for
+            # diagnostic tracing; actual routing dispatch uses language_id
+            # filter in route_failures().
             diagnostics.append(Diagnostic(
                 category=route_category,
                 file=file_path,

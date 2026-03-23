@@ -3812,15 +3812,19 @@ class PrimeContractorWorkflow:
         # R-ML-003: Resolve language profile from target files.
         # Pass all batch target files as context so language-neutral files
         # (Dockerfiles, config files) can infer language from siblings.
+        # Cached on first call — queue contents don't change mid-run.
         from ..languages import resolve_language
-        _batch_files: Optional[List[str]] = None
-        if hasattr(self, "queue") and self.queue is not None:
-            _batch_files = []
-            for fspec in self.queue.features.values():
-                if fspec.target_files:
-                    _batch_files.extend(fspec.target_files)
+        if not hasattr(self, "_batch_target_files"):
+            self._batch_target_files: Optional[List[str]] = None
+            if hasattr(self, "queue") and self.queue is not None:
+                self._batch_target_files = [
+                    tf
+                    for fspec in self.queue.features.values()
+                    if fspec.target_files
+                    for tf in fspec.target_files
+                ]
         language_profile = resolve_language(
-            feature.target_files, batch_target_files=_batch_files,
+            feature.target_files, batch_target_files=self._batch_target_files,
         )
         self._language_profile = language_profile
         gen_context["language_profile"] = language_profile

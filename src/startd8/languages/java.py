@@ -72,7 +72,10 @@ class JavaLanguageProfile:
 
     @property
     def build_file_patterns(self) -> List[str]:
-        return ["build.gradle", "settings.gradle", "pom.xml", "build.gradle.kts"]
+        return [
+            "build.gradle", "settings.gradle", "pom.xml", "build.gradle.kts",
+            "gradle-wrapper.properties", "settings.gradle.kts",
+        ]
 
     @property
     def syntax_check_command(self) -> Optional[List[str]]:

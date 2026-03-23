@@ -263,6 +263,7 @@ prompts:
       Severity: BLOCKING (must fix), MAJOR (should fix), MINOR (nice to fix).
       Verify parameter names match upstream documents exactly — flag renames as BLOCKING.
       For edit-mode: verify existing code preserved. Flag removal as BLOCKING unless spec required it.
+      Cross-check: if the implementation follows the spec but violates language coding standards (e.g. wildcard imports in Java, bare except in Python, unused imports in Go), flag as MINOR with a note that the spec itself conflicts with the language standard.
       Convergence: state RESOLVED or STILL OUTSTANDING for each prior issue.
     placeholders: []
 

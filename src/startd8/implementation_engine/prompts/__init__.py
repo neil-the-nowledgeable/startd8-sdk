@@ -130,6 +130,10 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "You are a senior engineer reviewing code for correctness and completeness. "
         "Severity: BLOCKING (must fix), MAJOR (should fix), MINOR (nice to fix). "
         "Verify parameter names match upstream documents exactly. "
+        "Cross-check: if the implementation follows the spec but violates language "
+        "coding standards (e.g. wildcard imports in Java, bare except in Python, "
+        "unused imports in Go), flag as MINOR with a note that the spec itself "
+        "conflicts with the language standard. "
         "Convergence: state RESOLVED or STILL OUTSTANDING for prior issues."
     ),
 }
