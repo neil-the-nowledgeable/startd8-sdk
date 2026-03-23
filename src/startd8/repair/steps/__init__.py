@@ -20,6 +20,14 @@ from .dedup_require import DedupRequireStep
 from .eslint_autofix import EslintAutoFixStep
 from .shebang_strip import ShebangStripStep
 from .var_to_const import VarToConstStep
+# P4-1: Java repair steps
+from .java_missing_override import JavaMissingOverrideStep
+from .java_raw_type_fix import JavaRawTypeFixStep
+from .java_duplicate_method import JavaDuplicateMethodStep
+# P4-2: C# repair steps
+from .csharp_nullable_fix import CSharpNullableFixStep
+from .csharp_access_modifier import CSharpAccessModifierStep
+from .csharp_namespace_fix import CSharpNamespaceFixStep
 from .class_body_dedup import ClassBodyDeduplicationStep
 from .definition_order_fix import DefinitionOrderFixStep
 from .dunder_all_fix import DunderAllFixStep
@@ -76,4 +84,12 @@ __all__ = [
     "TodoUncommentStep",
     "UnusedVariableRemovalStep",
     "VariableInitializationStep",
+    # P4-1: Java
+    "JavaMissingOverrideStep",
+    "JavaRawTypeFixStep",
+    "JavaDuplicateMethodStep",
+    # P4-2: C#
+    "CSharpNullableFixStep",
+    "CSharpAccessModifierStep",
+    "CSharpNamespaceFixStep",
 ]
