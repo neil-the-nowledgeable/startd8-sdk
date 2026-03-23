@@ -248,6 +248,81 @@ def _check_best_practices(
             )
 
 
+    # DV-BP-012: Cross-stage base image version consistency
+    _check_stage_version_consistency(lines, advisories)
+
+
+def _extract_image_version(image_ref: str) -> tuple[str, str]:
+    """Extract (image_family, major_version) from a FROM image reference.
+
+    Examples:
+        'eclipse-temurin:24.0.2_12-jdk-noble@sha256:...' → ('eclipse-temurin', '24')
+        'golang:1.25-alpine' → ('golang', '1')
+        'python:3.12-slim' → ('python', '3')
+        'mcr.microsoft.com/dotnet/sdk:10.0' → ('dotnet/sdk', '10')
+    """
+    import re as _re
+
+    # Strip digest
+    ref = image_ref.split("@")[0]
+    # Split image:tag
+    if ":" in ref:
+        image, tag = ref.rsplit(":", 1)
+    else:
+        return ref, ""
+    # Normalize image family (strip registry prefix for comparison)
+    family = image.split("/")[-1] if "/" in image else image
+    # For .NET, use last two segments (dotnet/sdk, dotnet/runtime-deps)
+    if "dotnet" in image or "microsoft" in image:
+        parts = image.split("/")
+        family = "/".join(parts[-2:]) if len(parts) >= 2 else family
+    # Extract major version from tag (first numeric segment)
+    m = _re.match(r"(\d+)", tag)
+    major = m.group(1) if m else ""
+    return family, major
+
+
+def _check_stage_version_consistency(
+    lines: list[str], advisories: list[str],
+) -> None:
+    """DV-BP-012: Warn if builder and runtime stages use incompatible major versions.
+
+    Detects cases like JDK 24 (builder) → JRE 25 (runtime) where bytecode
+    compiled on one version may not run on another.
+    """
+    stages: list[tuple[str, str]] = []  # (family, major_version)
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("FROM "):
+            parts = stripped.split()
+            image_parts = [p for p in parts[1:] if not p.startswith("--")]
+            image_ref = image_parts[0] if image_parts else ""
+            if image_ref.upper() == "AS" or image_ref.lower() == "scratch":
+                continue
+            family, major = _extract_image_version(image_ref)
+            if family and major:
+                stages.append((family, major))
+
+    if len(stages) < 2:
+        return
+
+    # Compare major versions across stages with compatible families
+    # e.g., temurin:24-jdk and temurin:25-jre share "temurin" family
+    builder = stages[0]
+    for runtime in stages[1:]:
+        # Check if families are related (same base name, ignoring
+        # jdk/jre/sdk/runtime suffixes)
+        b_base = builder[0].split("-")[0].lower()
+        r_base = runtime[0].split("-")[0].lower()
+        if b_base == r_base and builder[1] != runtime[1]:
+            advisories.append(
+                f"DV-BP-012: Cross-stage version mismatch — "
+                f"builder uses major version {builder[1]} "
+                f"but runtime uses {runtime[1]} (risk: bytecode/ABI incompatibility)"
+            )
+            break
+
+
 def _check_layer_ordering(lines: list[str], advisories: list[str]) -> None:
     """DV-BP-005: Check that dependency files are copied before source."""
     saw_requirements_copy = False

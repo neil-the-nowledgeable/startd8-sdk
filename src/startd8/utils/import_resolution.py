@@ -90,12 +90,21 @@ def discover_sibling_modules(
 
     Both the immediate parent directory's ``.py`` children and any
     sub-directory names (potential packages) are returned.
+
+    The parent directory name is also included as a local package so that
+    qualified imports like ``from emailservice.logger import X`` resolve
+    correctly when the file lives in ``src/emailservice/``.
     """
     abs_path = Path(project_root) / file_path
     parent = abs_path.parent
     modules: Set[str] = set()
     if not parent.is_dir():
         return modules
+    # Register the parent directory itself as a local package so qualified
+    # intra-service imports (e.g., `from emailservice.logger import X`)
+    # resolve when the file is inside that directory.
+    if parent.name and parent.name != ".":
+        modules.add(parent.name)
     for child in parent.iterdir():
         if child.suffix == ".py" and child.name != abs_path.name:
             modules.add(child.stem)

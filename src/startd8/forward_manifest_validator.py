@@ -422,6 +422,25 @@ def validate_disk_compliance(
     reachability_issues = _validate_reachability(tree)
     result.semantic_issues.extend(reachability_issues)
 
+    # L11: Python AST semantic checks — duplicate main guards, bare except:pass
+    # (REQ-KZ-001: semantic dispatch completeness)
+    try:
+        from startd8.validators.semantic_checks import (
+            check_duplicate_main_guards,
+            check_bare_except_pass,
+        )
+
+        for _check_fn in (check_duplicate_main_guards, check_bare_except_pass):
+            for issue in _check_fn(tree):
+                result.semantic_issues.append({
+                    "category": issue.check,
+                    "severity": issue.severity,
+                    "message": str(issue.message)[:200],
+                    "line": issue.line,
+                })
+    except ImportError:
+        pass
+
     # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
     _emit_semantic_observability(result, file_path, import_map)
 
@@ -458,6 +477,23 @@ def validate_disk_compliance(
 # ---------------------------------------------------------------------------
 
 
+def _compute_semantic_penalty(semantic_issues: list) -> float:
+    """Compute severity-weighted semantic penalty from issues list.
+
+    Errors penalize 0.3 per instance, warnings 0.1. Returns a value
+    in [0.0, 1.0] where 1.0 means no semantic issues.
+    """
+    error_count = 0
+    warning_count = 0
+    for issue in (semantic_issues or []):
+        sev = issue.get("severity", "warning") if isinstance(issue, dict) else "warning"
+        if sev == "error":
+            error_count += 1
+        else:
+            warning_count += 1
+    return max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
+
+
 def compute_disk_quality_score(compliance: Any) -> float:
     """Compute a composite disk quality score from DiskComplianceResult.
 
@@ -482,17 +518,7 @@ def compute_disk_quality_score(compliance: Any) -> float:
     semantic_issues = getattr(compliance, "semantic_issues", [])
 
     stub_penalty = max(0.0, 1.0 - stubs * 0.1)
-
-    # Severity-weighted semantic penalty: errors hit 3x harder than warnings.
-    error_count = 0
-    warning_count = 0
-    for issue in (semantic_issues or []):
-        sev = issue.get("severity", "warning") if isinstance(issue, dict) else "warning"
-        if sev == "error":
-            error_count += 1
-        else:
-            warning_count += 1
-    semantic_penalty = max(0.0, 1.0 - error_count * 0.3 - warning_count * 0.1)
+    semantic_penalty = _compute_semantic_penalty(semantic_issues)
 
     composite = (
         contract_compliance * 0.4
@@ -652,7 +678,7 @@ def _validate_non_python_file(
         result = _validate_html_file(content, result)
     elif suffix in (".yaml", ".yml"):
         result = _validate_yaml_file(content, result)
-    elif suffix in (".js", ".mjs", ".cjs"):
+    elif suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
         result = _validate_js_file(content, result, file_path=str(abs_path))
     elif suffix == ".go":
         result = _validate_go_file(content, result, file_path=str(abs_path))
@@ -1209,6 +1235,21 @@ def _validate_package_json(
         return result
 
     result.contract_compliance = 1.0
+
+    # Collect Node.js semantic checks for package.json (REQ-KZ-002)
+    try:
+        from startd8.validators.nodejs_semantic_checks import run_nodejs_semantic_checks
+
+        for sem_issue in run_nodejs_semantic_checks(content, file_path="package.json"):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": str(sem_issue.message)[:200],
+                "line": getattr(sem_issue, "line", None),
+            })
+    except ImportError:
+        pass
+
     return result
 
 
@@ -1696,6 +1737,22 @@ _KNOWN_NON_IMPORT_PACKAGES = frozenset({
     "pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy",
 })
 
+# Packages consumed by build tooling or code generation, not imported
+# directly in application code.  Suppresses orphan_dependency warnings.
+_KNOWN_BUILD_TIME_PACKAGES = frozenset({
+    "grpcio-tools",      # protoc plugin — generates *_pb2.py stubs
+    "protobuf",          # runtime dep of generated *_pb2.py (imported transitively)
+    "cython",            # C extension compilation
+    "setuptools-scm",    # version extraction at build time
+    "build",             # PEP 517 build frontend
+    "twine",             # PyPI upload
+    "pyinstaller",       # binary packaging
+    "nuitka",            # AOT compilation
+    "maturin",           # Rust+Python build tool
+    "google-cloud-profiler",  # injected via agent, not imported in app code
+    "opentelemetry-exporter-gcp-trace",  # loaded via OTel SDK config
+})
+
 
 def _validate_requirements_coverage(
     requirements_content: str,
@@ -1721,7 +1778,7 @@ def _validate_requirements_coverage(
         # Extract package name (before version specifier)
         spec = stripped.split("#")[0].strip()
         package = re.split(r"[~=!<>\[;]", spec)[0].strip().lower()
-        if not package or package in _KNOWN_NON_IMPORT_PACKAGES:
+        if not package or package in _KNOWN_NON_IMPORT_PACKAGES or package in _KNOWN_BUILD_TIME_PACKAGES:
             continue
 
         # Map package to expected import name
@@ -1967,6 +2024,50 @@ def _validate_method_resolution(tree: ast.AST) -> List[Dict[str, object]]:
     return issues
 
 
+# Framework decorator patterns that register functions externally
+# (e.g., Flask/FastAPI routes, Click commands, pytest fixtures).
+# Functions with these decorators are reachable via the framework's
+# dispatch mechanism without explicit calls within the file.
+_FRAMEWORK_DECORATOR_NAMES = frozenset({
+    # Flask / FastAPI / Starlette
+    "route", "get", "post", "put", "delete", "patch", "head", "options",
+    "before_request", "after_request", "errorhandler", "teardown_appcontext",
+    "before_serving", "after_serving",
+    # Click / Typer
+    "command", "group", "callback",
+    # pytest
+    "fixture", "mark",
+    # Celery
+    "task", "shared_task",
+    # Django
+    "receiver",
+    # gRPC servicer registration
+    "add_to_server",
+})
+
+
+def _has_framework_decorator(node: ast.FunctionDef) -> bool:
+    """Return True if the function has a decorator that looks like a framework registration."""
+    for dec in node.decorator_list:
+        # @app.route(...), @router.get(...), @bp.errorhandler(...)
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
+            if dec.func.attr in _FRAMEWORK_DECORATOR_NAMES:
+                return True
+        # @app.route (no call)
+        if isinstance(dec, ast.Attribute):
+            if dec.attr in _FRAMEWORK_DECORATOR_NAMES:
+                return True
+        # @pytest.fixture, @click.command
+        if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
+            if isinstance(dec.func.value, ast.Name):
+                if dec.func.value.id in ("pytest", "click", "typer", "celery"):
+                    return True
+        # Bare @fixture, @task
+        if isinstance(dec, ast.Name) and dec.id in _FRAMEWORK_DECORATOR_NAMES:
+            return True
+    return False
+
+
 def _validate_reachability(tree: ast.AST) -> List[Dict[str, object]]:
     """Flag module-level functions never referenced within the file (REQ-SV2-600).
 
@@ -1976,11 +2077,17 @@ def _validate_reachability(tree: ast.AST) -> List[Dict[str, object]]:
     """
     issues: List[Dict[str, object]] = []
 
-    # Collect module-level function defs (skip private, main, class methods)
+    # Collect module-level function defs (skip private, main, class methods,
+    # and functions with framework decorators that register them externally).
     func_defs: dict[str, int] = {}
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name.startswith("_") or node.name == "main":
+                continue
+            # Skip functions with framework decorators — these are reachable
+            # via the framework's dispatch mechanism (e.g., Flask/FastAPI routes,
+            # Click commands, pytest fixtures) without explicit call in the file.
+            if _has_framework_decorator(node):
                 continue
             func_defs[node.name] = node.lineno
 
