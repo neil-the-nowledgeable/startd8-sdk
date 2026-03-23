@@ -794,11 +794,14 @@ def _build_system_prompt(
     # Determine language-specific formatting instructions
     is_go = profile.language_id == "go"
     is_java = profile.language_id == "java"
+    is_csharp = profile.language_id == "csharp"
     indent_rule = "Use tab indentation." if is_go else "Use 4-space indentation."
     if is_go:
         stub_marker = 'panic("not implemented")'
     elif is_java:
         stub_marker = 'throw new UnsupportedOperationException("TODO")'
+    elif is_csharp:
+        stub_marker = 'throw new NotImplementedException()'
     else:
         stub_marker = "raise NotImplementedError"
 
@@ -931,6 +934,18 @@ def extract_function_body(
             if not body_lines:
                 return None
             return "\n".join(body_lines)
+        except (ImportError, Exception):
+            return None
+
+    if lang_id == "csharp":
+        # C#: tree-sitter byte-offset body extraction via existing splicer
+        try:
+            from startd8.languages.csharp_splicer import _extract_method_bodies_ts
+            bodies = _extract_method_bodies_ts(code)
+            if element.name in bodies:
+                _, _, body_text = bodies[element.name]
+                return body_text if body_text.strip() else None
+            return None
         except (ImportError, Exception):
             return None
 

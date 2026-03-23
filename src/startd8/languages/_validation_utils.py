@@ -1,30 +1,225 @@
-"""Shared validation utilities for language profiles."""
+"""Shared validation utilities for language profiles.
+
+Centralizes contamination fingerprints, type mapping, and skeleton
+config so that language-specific validators and assemblers can share
+a single source of truth.
+"""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple
 
-# Python fingerprints — if these appear in non-Python files, it's
-# cross-language contamination.  Shared by Java and C# validators.
+
+# ---------------------------------------------------------------------------
+# Contamination fingerprints
+# ---------------------------------------------------------------------------
+
+# Core Python fingerprints — if these appear in non-Python files, it's
+# cross-language contamination.  Used as the base set for all languages.
 PYTHON_FINGERPRINTS: tuple[str, ...] = (
     "def ", "import os", "from __future__", "print(", "self.",
     "#!/usr/bin/env python", "#!/usr/bin/python",
 )
 
-# Go-specific contamination fingerprints (REQ-KZ-GO-402a).
-# Superset of PYTHON_FINGERPRINTS plus Go-specific patterns that indicate
-# a Python file was emitted instead of Go.  Single canonical source —
-# imported by go_semantic_checks.py and go_contamination_strip.py.
+# Per-language fingerprint overrides.  Each tuple is the set of patterns
+# to check for that specific target language.  Patterns that would
+# false-positive on legitimate code in the target language are removed.
 #
-# NOTE: "print(" was removed — it false-positives on Go's builtin print()
-# and println(), and also matches substrings like fmt.Fprint(.  Python
-# print() contamination always co-occurs with stronger signals (def, from
-# __future__, import os) so removing it does not reduce detection power.
+# Example: "print(" is removed from Go (matches builtin print() and
+# fmt.Fprint), and "class " is removed from Node.js (JS has classes).
 GO_CONTAMINATION_FINGERPRINTS: tuple[str, ...] = (
     "def ", "import os", "from __future__", "self.",
     "#!/usr/bin/env python", "#!/usr/bin/python",
-    "class ",       # Python class definition
+    "class ",       # Python class definition (safe — Go has no class keyword)
     "raise ",       # Python exception raising
     "if __name__",  # Python main guard
 )
+
+JAVA_CONTAMINATION_FINGERPRINTS: tuple[str, ...] = (
+    "def ", "import os", "from __future__", "self.",
+    "#!/usr/bin/env python", "#!/usr/bin/python",
+    "raise ",       # Python exception raising (Java uses "throw")
+    "if __name__",  # Python main guard
+    # Note: "print(" safe in Java — Java uses System.out.println()
+    # Note: "class " NOT included — Java has classes
+)
+
+NODEJS_CONTAMINATION_FINGERPRINTS: tuple[str, ...] = (
+    "def ", "import os", "from __future__", "self.",
+    "#!/usr/bin/env python", "#!/usr/bin/python",
+    "raise ",       # Python exception raising (JS uses "throw")
+    "if __name__",  # Python main guard
+    # Note: "print(" safe in Node — console.log() doesn't match, but
+    #       print() is not a JS function so it IS a signal.  However,
+    #       it false-positives on formatted template strings.
+    # Note: "class " NOT included — JS has classes
+)
+
+# Registry: language_id → fingerprint tuple
+CONTAMINATION_FINGERPRINTS: dict[str, tuple[str, ...]] = {
+    "go": GO_CONTAMINATION_FINGERPRINTS,
+    "java": JAVA_CONTAMINATION_FINGERPRINTS,
+    "csharp": JAVA_CONTAMINATION_FINGERPRINTS,  # same set — C# has classes too
+    "nodejs": NODEJS_CONTAMINATION_FINGERPRINTS,
+}
+
+
+def get_contamination_fingerprints(language_id: str) -> tuple[str, ...]:
+    """Return the fingerprint tuple for a given language.
+
+    Falls back to the base ``PYTHON_FINGERPRINTS`` for unknown languages.
+    """
+    return CONTAMINATION_FINGERPRINTS.get(language_id, PYTHON_FINGERPRINTS)
+
+
+# ---------------------------------------------------------------------------
+# Skeleton configuration (language-neutral DFA support)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SkeletonConfig:
+    """Language-specific rendering rules for the polyglot file assembler.
+
+    Captures the small set of differences between brace-delimited
+    languages (Java, C#, Go, Node.js/TS) so that a single assembler
+    can produce correct skeletons for all of them.
+    """
+    language_id: str
+    stub_body: str
+    sentinel: str = "// [STARTD8-SKELETON]"
+
+    # Namespace / package
+    namespace_template: str = ""       # e.g. "package {ns};" or "namespace {ns};"
+    import_template: str = ""          # e.g. "import {mod};" or "using {mod};"
+    stdlib_prefixes: Sequence[str] = ()  # for 2-tier import grouping
+
+    # Type mapping (Python type str → target language type str)
+    type_map: Dict[str, str] = field(default_factory=dict)
+    default_type: str = "object"       # fallback for unknown types
+    nullable_suffix: str = ""          # e.g. "?" for C#
+    list_template: str = "List<{inner}>"
+    dict_template: str = "Dictionary<{key}, {value}>"
+
+    # Rendering
+    has_properties: bool = False        # C# has { get; set; }
+    indent: str = "    "
+    comment_prefix: str = "//"
+
+
+# Pre-built configs for each language
+JAVA_SKELETON_CONFIG = SkeletonConfig(
+    language_id="java",
+    stub_body='throw new UnsupportedOperationException("TODO");',
+    namespace_template="package {ns};",
+    import_template="import {mod};",
+    stdlib_prefixes=("java.", "javax."),
+    type_map={
+        "str": "String", "int": "int", "float": "double",
+        "bool": "boolean", "None": "void", "bytes": "byte[]",
+        "list": "List<Object>", "dict": "Map<String, Object>",
+        "set": "Set<Object>", "tuple": "Object[]",
+        "Any": "Object", "Optional": "Object",
+    },
+    default_type="Object",
+    list_template="List<{inner}>",
+    dict_template="Map<{key}, {value}>",
+)
+
+CSHARP_SKELETON_CONFIG = SkeletonConfig(
+    language_id="csharp",
+    stub_body="throw new NotImplementedException();",
+    namespace_template="namespace {ns};",
+    import_template="using {mod};",
+    stdlib_prefixes=("System", "Microsoft"),
+    type_map={
+        "str": "string", "int": "int", "float": "double",
+        "bool": "bool", "None": "void", "bytes": "byte[]",
+        "list": "List<object>", "dict": "Dictionary<string, object>",
+        "set": "HashSet<object>", "tuple": "object[]",
+        "Any": "object", "Optional": "object",
+    },
+    default_type="object",
+    nullable_suffix="?",
+    has_properties=True,
+    list_template="List<{inner}>",
+    dict_template="Dictionary<{key}, {value}>",
+)
+
+GO_SKELETON_CONFIG = SkeletonConfig(
+    language_id="go",
+    stub_body='panic("not implemented")',
+    namespace_template="package {ns}",
+    import_template='"{mod}"',
+    type_map={
+        "str": "string", "int": "int", "float": "float64",
+        "bool": "bool", "None": "", "bytes": "[]byte",
+        "list": "[]interface{}", "dict": "map[string]interface{}",
+        "Any": "interface{}",
+    },
+    default_type="interface{}",
+    indent="\t",
+)
+
+NODEJS_SKELETON_CONFIG = SkeletonConfig(
+    language_id="nodejs",
+    stub_body='throw new Error("not implemented");',
+    namespace_template="",  # JS has no package/namespace
+    import_template="",     # handled per-format (CJS vs ESM)
+    type_map={
+        "str": "string", "int": "number", "float": "number",
+        "bool": "boolean", "None": "void", "bytes": "Buffer",
+        "list": "Array", "dict": "Object",
+        "Any": "any",
+    },
+    default_type="any",
+    indent="  ",  # JS convention: 2-space
+)
+
+SKELETON_CONFIGS: dict[str, SkeletonConfig] = {
+    "java": JAVA_SKELETON_CONFIG,
+    "csharp": CSHARP_SKELETON_CONFIG,
+    "go": GO_SKELETON_CONFIG,
+    "nodejs": NODEJS_SKELETON_CONFIG,
+}
+
+
+def get_skeleton_config(language_id: str) -> Optional[SkeletonConfig]:
+    """Return skeleton config for a language, or None if not registered."""
+    return SKELETON_CONFIGS.get(language_id)
+
+
+def convert_python_type(type_str: str, config: SkeletonConfig) -> str:
+    """Convert a Python type annotation to the target language type.
+
+    Handles ``Optional[X]``, ``List[X]``, ``Dict[K, V]`` recursively.
+    """
+    if not type_str:
+        return config.default_type
+
+    # Optional[X] → nullable
+    if type_str.startswith("Optional["):
+        inner = type_str[len("Optional["):-1]
+        inner_conv = convert_python_type(inner, config)
+        if config.nullable_suffix:
+            return f"{inner_conv}{config.nullable_suffix}"
+        return inner_conv
+
+    # List[X]
+    if type_str.startswith(("List[", "list[")):
+        inner = type_str[type_str.index("[") + 1:-1]
+        inner_conv = convert_python_type(inner, config)
+        return config.list_template.format(inner=inner_conv)
+
+    # Dict[K, V]
+    if type_str.startswith(("Dict[", "dict[")):
+        inner = type_str[type_str.index("[") + 1:-1]
+        parts = inner.split(",", 1)
+        if len(parts) == 2:
+            k = convert_python_type(parts[0].strip(), config)
+            v = convert_python_type(parts[1].strip(), config)
+            return config.dict_template.format(key=k, value=v)
+
+    return config.type_map.get(type_str, type_str)
 
 
 def check_balanced_braces(code: str) -> tuple[bool, str]:

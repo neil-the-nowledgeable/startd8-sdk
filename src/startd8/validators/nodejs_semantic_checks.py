@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from ..languages._validation_utils import get_contamination_fingerprints
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _CONSOLE_LOG_RE = re.compile(
@@ -138,10 +139,8 @@ def _check_unhandled_promises(source: str) -> List[SemanticIssue]:
     return issues
 
 
-_PY_FINGERPRINTS = (
-    "def ", "import os", "from __future__",
-    "#!/usr/bin/env python",
-)
+# Use centralized fingerprints — avoids per-language copy drift.
+_PY_FINGERPRINTS = get_contamination_fingerprints("nodejs")
 
 # "self." requires a line-start anchor to avoid false positives
 # in string literals like "help yourself." (QW-1).
@@ -239,4 +238,68 @@ def run_nodejs_semantic_checks(
     issues.extend(_check_unhandled_promises(source))
     issues.extend(_check_module_system_consistency(source))
 
+    # package.json version validation (dispatched by file type)
+    if file_path and file_path.endswith("package.json"):
+        issues.extend(_check_package_json_version(source))
+
     return _stamp_file_path(issues, file_path)
+
+
+# Known valid Node.js major versions (LTS and current).
+_NODE_VERSION_RANGE = (14, 24)
+
+
+def _check_package_json_version(source: str) -> List[SemanticIssue]:
+    """Validate Node.js engine version in package.json.
+
+    Checks:
+    - ``"engines": {"node": ">=X"}`` or ``"^X"`` — major version in range.
+    - ``"type"`` field present (ESM vs CJS clarity).
+    - No Python contamination in package.json.
+    """
+    issues: List[SemanticIssue] = []
+
+    try:
+        import json
+        data = json.loads(source)
+    except (json.JSONDecodeError, ValueError):
+        issues.append(SemanticIssue(
+            check="invalid_package_json",
+            severity="error",
+            message="package.json is not valid JSON",
+        ))
+        return issues
+
+    # Check engines.node version range
+    engines = data.get("engines", {})
+    if isinstance(engines, dict):
+        node_constraint = engines.get("node", "")
+        if node_constraint:
+            # Extract major version from constraints like ">=18", "^20.0.0", "18.x"
+            version_match = re.search(r'(\d+)', str(node_constraint))
+            if version_match:
+                major = int(version_match.group(1))
+                min_v, max_v = _NODE_VERSION_RANGE
+                if not (min_v <= major <= max_v):
+                    issues.append(SemanticIssue(
+                        check="invalid_node_version",
+                        severity="error",
+                        message=(
+                            f"Node.js engine version `{major}` is outside "
+                            f"known valid range ({min_v}–{max_v})"
+                        ),
+                    ))
+
+    # Check for missing "type" field (ESM/CJS ambiguity)
+    if "type" not in data:
+        issues.append(SemanticIssue(
+            check="missing_module_type",
+            severity="warning",
+            message=(
+                'package.json missing "type" field — add '
+                '"type": "module" (ESM) or "type": "commonjs" (CJS) '
+                "to make module system explicit"
+            ),
+        ))
+
+    return issues

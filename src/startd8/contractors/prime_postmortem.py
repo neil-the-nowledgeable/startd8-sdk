@@ -603,6 +603,33 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         ),
         "confidence": 1.0,
     },
+    # --- C# semantic issue hints (REQ-CS-MP-400) ---
+    "missing_async_await_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had async methods that never use 'await'. "
+            "If a method is marked 'async', it MUST contain at least one 'await' expression. "
+            "If no async work is needed, remove the 'async' modifier and return the result directly."
+        ),
+    },
+    "missing_access_modifier_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run had type or member declarations without explicit access modifiers. "
+            "C#: always specify 'public', 'internal', 'private', or 'protected'. "
+            "Java: always specify 'public', 'protected', 'private', or package-private. "
+            "Do not rely on language defaults."
+        ),
+    },
+    "interface_file_contains_class_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run placed concrete class implementations in interface files "
+            "(e.g., IFoo.cs or IFoo.java). Interface files should contain ONLY the "
+            "interface definition. Move implementations to separate files named "
+            "after the implementing class."
+        ),
+    },
     # --- Go semantic issue hints (REQ-KZ-GO-501) ---
     "duplicate_definition_detected": {
         "phase": "draft",
@@ -617,6 +644,94 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         "hint": (
             "Prior run used dot-imports (import . \"pkg\") which pollute the namespace. "
             "Always use explicit package-qualified access (e.g., fmt.Println, not Println)."
+        ),
+    },
+    # --- Cross-language validation hints ---
+    "raw_type_usage_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used raw generic types (e.g., List instead of List<String>). "
+            "Always specify type parameters for generic types to enable compile-time "
+            "type checking and avoid ClassCastException at runtime."
+        ),
+    },
+    "missing_override_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run overrode methods without the @Override annotation. "
+            "Always add @Override when implementing interface methods or overriding "
+            "superclass methods — the compiler catches signature mismatches."
+        ),
+    },
+    "wildcard_import_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run used wildcard imports (e.g., import java.util.*). "
+            "Use explicit imports for each type to avoid namespace collisions "
+            "and make dependencies visible."
+        ),
+    },
+    "duplicate_method_detected": {
+        "phase": "draft",
+        "hint": (
+            "Prior run declared the same method with identical parameter types "
+            "twice in a single file. Check for existing method signatures before "
+            "generating new ones. Overloading (same name, different param types) "
+            "is fine — exact duplicates are not."
+        ),
+    },
+    "invalid_java_version_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run specified a Java version outside the known valid range (8–24). "
+            "Use a released Java LTS version (11, 17, or 21) for sourceCompatibility "
+            "and targetCompatibility in build.gradle."
+        ),
+    },
+    "invalid_node_version_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run specified a Node.js engine version outside the known valid "
+            "range (14–24). Use a current LTS version (18 or 20) in the "
+            '"engines" field of package.json.'
+        ),
+    },
+    "missing_module_type_detected": {
+        "phase": "spec",
+        "hint": (
+            'Prior run package.json was missing the "type" field. Add '
+            '"type": "module" for ESM or "type": "commonjs" for CJS '
+            "to make the module system explicit and avoid import confusion."
+        ),
+    },
+    "invalid_package_json_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run produced an invalid package.json (not valid JSON). "
+            "Ensure the generated file is well-formed JSON with required "
+            'fields ("name", "version", "dependencies").'
+        ),
+    },
+    "invalid_go_version_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run specified a Go version outside the known valid range. "
+            "Use a released Go version (1.18–1.24). Verify go.mod and "
+            "Dockerfile golang: image tag match."
+        ),
+    },
+    "invalid_go_mod_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run produced a malformed go.mod (missing module or go directive). "
+            "Every go.mod must start with 'module <path>' followed by 'go <version>'."
+        ),
+    },
+    "missing_nullable_csproj_detected": {
+        "phase": "spec",
+        "hint": (
+            "Prior run .csproj was missing <Nullable>enable</Nullable>. "
+            "For .NET 6+, always enable nullable reference types."
         ),
     },
     # --- Query Prime security entries (REQ-KQP-602) ---
@@ -774,6 +889,26 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "unhandled_promise": "unhandled_promise_detected",
     # Code style
     "block_scoped_namespace": "block_scoped_namespace_detected",
+    # C# semantic checks (REQ-CS-MP-400)
+    "missing_async_await": "missing_async_await_detected",
+    "missing_access_modifier": "missing_access_modifier_detected",
+    "interface_file_contains_class": "interface_file_contains_class_detected",
+    # Java semantic checks
+    "raw_type_usage": "raw_type_usage_detected",
+    "missing_override": "missing_override_detected",
+    "wildcard_import": "wildcard_import_detected",
+    # Go version/mod validation
+    "invalid_go_version": "invalid_go_version_detected",
+    "invalid_go_mod": "invalid_go_mod_detected",
+    # C# csproj validation
+    "missing_nullable_in_csproj": "missing_nullable_csproj_detected",
+    # Java version validation
+    "duplicate_method": "duplicate_method_detected",
+    "invalid_java_version": "invalid_java_version_detected",
+    # Node.js package.json validation
+    "invalid_node_version": "invalid_node_version_detected",
+    "missing_module_type": "missing_module_type_detected",
+    "invalid_package_json": "invalid_package_json_detected",
     # Observability artifact issues (REQ-KZ-OBS-600)
     "obs_phantom_service": "obs_phantom_service",
     "obs_missing_red_coverage": "obs_missing_red_panels",

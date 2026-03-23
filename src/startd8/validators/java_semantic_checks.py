@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional
 
+from ..languages._validation_utils import get_contamination_fingerprints
 from .semantic_checks import SemanticIssue, _basename, _is_comment_line, _stamp_file_path
 
 _SQL_KW = r'(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|TRUNCATE)\b'
@@ -386,5 +387,152 @@ def run_java_semantic_checks(
     issues.extend(_check_missing_access_modifiers(source))
     issues.extend(_check_wildcard_imports(source))
     issues.extend(_check_package_filepath_alignment(source, file_path))
+    issues.extend(_check_python_contamination(source))
+    issues.extend(_check_duplicate_methods(source))
+
+    # build.gradle version validation (dispatched by file type)
+    if file_path and (
+        file_path.endswith("build.gradle")
+        or file_path.endswith("build.gradle.kts")
+    ):
+        issues.extend(_check_gradle_version(source))
 
     return _stamp_file_path(issues, file_path)
+
+
+def _check_python_contamination(source: str) -> List[SemanticIssue]:
+    """Flag Python fingerprints in Java source files.
+
+    Uses the centralized fingerprint registry from ``_validation_utils``
+    to avoid per-language pattern duplication.
+    """
+    issues: List[SemanticIssue] = []
+    fingerprints = get_contamination_fingerprints("java")
+
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if _is_comment_line(stripped):
+            continue
+        for fp in fingerprints:
+            if fp in stripped:
+                issues.append(SemanticIssue(
+                    check="python_contamination",
+                    severity="error",
+                    message=f"Python fingerprint `{fp.strip()}` in Java file",
+                    line=i,
+                ))
+                break  # one match per line is sufficient
+    return issues
+
+
+# Java method declaration — captures return type, name, and parameter types.
+# Handles modifiers (public/private/static/etc.), generics, annotations.
+_JAVA_METHOD_RE = re.compile(
+    r'^\s*(?:(?:public|private|protected|static|final|abstract|synchronized|native'
+    r'|default|strictfp)\s+)*'
+    r'(?:<[^>]+>\s+)?'           # optional type params <T>
+    r'(?P<return>\w[\w.<>,\[\] ?]*)\s+'
+    r'(?P<name>\w+)\s*\('
+    r'(?P<params>[^)]*)\)'
+)
+
+
+def _check_duplicate_methods(source: str) -> List[SemanticIssue]:
+    """Flag duplicate method declarations in the same file.
+
+    Java allows method overloading (same name, different parameter types),
+    so we key on ``(name, param_type_signature)`` — only exact duplicates
+    with the same parameter types are flagged.
+    """
+    issues: List[SemanticIssue] = []
+    # Key: (method_name, normalized_param_types) → first line number
+    seen: dict[tuple[str, str], int] = {}
+
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if _is_comment_line(stripped):
+            continue
+        m = _JAVA_METHOD_RE.match(stripped)
+        if m:
+            name = m.group("name")
+            # Normalize params to just types (strip names and whitespace)
+            raw_params = m.group("params").strip()
+            param_types = _normalize_java_param_types(raw_params)
+            key = (name, param_types)
+            if key in seen:
+                issues.append(SemanticIssue(
+                    check="duplicate_method",
+                    severity="warning",
+                    message=(
+                        f"Duplicate method `{name}({param_types})` "
+                        f"(first at line {seen[key]}, again at line {i})"
+                    ),
+                    line=i,
+                ))
+            else:
+                seen[key] = i
+    return issues
+
+
+def _normalize_java_param_types(raw_params: str) -> str:
+    """Extract just the type names from a Java parameter list.
+
+    ``"String name, int count"`` → ``"String, int"``
+    ``""`` → ``""``
+    ``"final List<String> items"`` → ``"List<String>"``
+    """
+    if not raw_params:
+        return ""
+    types: list[str] = []
+    for param in raw_params.split(","):
+        param = param.strip()
+        if not param:
+            continue
+        # Remove annotations (@NonNull, etc.)
+        param = re.sub(r'@\w+\s*', '', param).strip()
+        # Remove 'final' modifier
+        param = re.sub(r'\bfinal\s+', '', param).strip()
+        # The type is everything except the last token (the parameter name)
+        parts = param.rsplit(None, 1)
+        if len(parts) == 2:
+            types.append(parts[0])
+        elif parts:
+            types.append(parts[0])
+    return ", ".join(types)
+
+
+# Known valid Java LTS and recent versions.
+_JAVA_VERSION_RANGE = (8, 24)  # Java 8 through Java 24
+
+
+def _check_gradle_version(source: str) -> List[SemanticIssue]:
+    """Validate Java version in build.gradle source/target compatibility.
+
+    Flags ``sourceCompatibility`` / ``targetCompatibility`` / ``jvmTarget``
+    values outside the known valid range.
+    """
+    issues: List[SemanticIssue] = []
+    version_re = re.compile(
+        r'(?:sourceCompatibility|targetCompatibility|jvmTarget)\s*[=:]\s*'
+        r"""['"]*(\d+)['"]*"""
+    )
+
+    for i, line in enumerate(source.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        m = version_re.search(stripped)
+        if m:
+            version = int(m.group(1))
+            min_v, max_v = _JAVA_VERSION_RANGE
+            if not (min_v <= version <= max_v):
+                issues.append(SemanticIssue(
+                    check="invalid_java_version",
+                    severity="error",
+                    message=(
+                        f"Java version `{version}` is outside known valid "
+                        f"range ({min_v}–{max_v})"
+                    ),
+                    line=i,
+                ))
+    return issues

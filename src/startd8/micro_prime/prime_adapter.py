@@ -1848,6 +1848,36 @@ class MicroPrimeCodeGenerator:
                     )
                 continue
 
+            # .cs source files: use CSharpDeterministicFileAssembler for
+            # skeleton generation (real C# skeletons with file-scoped namespace,
+            # 2-tier usings, and NotImplementedException stubs).
+            if _suffix == ".cs":
+                try:
+                    from startd8.utils.csharp_file_assembler import (
+                        CSharpDeterministicFileAssembler,
+                    )
+
+                    cs_assembler = CSharpDeterministicFileAssembler()
+                    cs_source = cs_assembler.render_file(file_spec)
+                    if cs_source:
+                        skeletons[file_path] = cs_source
+                        logger.debug(
+                            "Generated C# skeleton for %s (%d lines)",
+                            file_path,
+                            cs_source.count("\n") + 1,
+                        )
+                    else:
+                        logger.debug(
+                            "C# DFA returned None for %s, skipping skeleton",
+                            file_path,
+                        )
+                except (ImportError, ValueError, TypeError, AttributeError) as exc:
+                    logger.warning(
+                        "C# skeleton generation failed for %s: %s",
+                        file_path, exc,
+                    )
+                continue
+
             # .go source files: use existing content if available, otherwise
             # skip — the file-whole generation path handles Go without needing
             # a Python-style skeleton.  Go skeletons with panic("not implemented")
