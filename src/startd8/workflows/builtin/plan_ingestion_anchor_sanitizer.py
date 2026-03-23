@@ -57,12 +57,20 @@ _REFERENCE_MATCH_SQL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Negative scope patterns to strip
+# Negative scope patterns to strip — covers multiple phrasings:
+# "No parameterized queries"
+# "Parameterized queries not used"
+# "Parameterized queries (intentionally uses string interpolation...)"
+# "Don't use parameterized queries"
 _NEG_SCOPE_CONFLICT_RE = re.compile(
     r"(?:"
     r"\b(?:no|not|don'?t|without)\s+(?:use\s+)?parameteriz"
     r"|"
     r"\bparameteriz\w+\s+(?:queries?\s+)?(?:intentionally\s+)?not\s+used"
+    r"|"
+    r"\bparameteriz\w+\s+(?:queries?\s+)?\(.*(?:interpolat|inject|vulnerab)"
+    r"|"
+    r"\bintentionally\s+(?:uses?\s+)?(?:string\s+)?interpolat"
     r")",
     re.IGNORECASE,
 )
