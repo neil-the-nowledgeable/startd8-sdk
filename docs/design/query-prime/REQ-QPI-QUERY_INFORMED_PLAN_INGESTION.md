@@ -1,8 +1,8 @@
 # Query-Informed Plan Ingestion — Requirements
 
-> **Version:** 1.0.0
-> **Status:** DRAFT
-> **Date:** 2026-03-22
+> **Version:** 1.1.0
+> **Status:** DRAFT (revised post-implementation-plan review)
+> **Date:** 2026-03-22 (v1.1 same-day revision)
 > **Parent:** [QUERY_PRIME_REQUIREMENTS.md](QUERY_PRIME_REQUIREMENTS.md), [KAIZEN_QUERY_PRIME_REQUIREMENTS.md](KAIZEN_QUERY_PRIME_REQUIREMENTS.md)
 > **Design Principle:** Secure by construction — safe query patterns are deterministic scaffolds, not LLM judgment calls
 > **Scope:** Integrate Query Prime knowledge into plan ingestion so that seeds produce secure query scaffolds before any LLM generation
@@ -108,7 +108,65 @@ Plan Document → Parse → Derive Features
 
 ---
 
-## 4. Layer 1 — Query Prime Probe (REQ-QPI-1xx)
+## 3.3 v1.1 Revision — Post-Implementation-Plan Insights
+
+Writing the implementation plan revealed seven gaps in v1.0 that change the requirements:
+
+**Insight 1: The task DESCRIPTION is a bigger poisoning surface than acceptance anchors.**
+The AlloyDB seed description says *"Uses string-interpolated SQL matching reference implementation"* — this flows into `task_description`, which the LLM reads directly in the spec body. Sanitizing acceptance_obligations alone leaves the description untouched. **→ Added REQ-QPI-203 (Task Description Sanitization).**
+
+**Insight 2: `design_doc_sections` carry reference SQL examples into the spec independently of anchors.**
+Run-104's AlloyDB task has 9 `design_doc_sections` including SQL patterns. The spec builder already has `_detect_sql_interpolation_in_examples()` for design documents, but it doesn't run on `design_doc_sections` from the seed context. **→ Added REQ-QPI-204 (Design Doc Section SQL Sanitization).**
+
+**Insight 3: UPSERT template doesn't exist — the coverage matrix claims it.**
+AlloyDB's `AddItemAsync` is INSERT...ON CONFLICT DO UPDATE (UPSERT). `query_prime/templates/crud.py` has SELECT, INSERT, UPDATE, DELETE for PostgreSQL×C# but no UPSERT. The Phase 2 scaffold example showed `"operation": "UPSERT"` but no template would generate it. **→ Fixed REQ-QPI-303 coverage matrix; added UPSERT as a Phase 2 template gap to close.**
+
+**Insight 4: Sanitization must run BEFORE `_CONTEXT_THREADABLE_FIELDS` propagation.**
+`negative_scope` is in `_CONTEXT_THREADABLE_FIELDS` (line 96), meaning it auto-propagates from features to task contexts. If sanitization runs after threading, the original `negative_scope` is already copied. **→ Added timing constraint to REQ-QPI-201.**
+
+**Insight 5: Quick wins exist that are independent of the full sanitizer module.**
+Populating `detected_database` and `security_sensitive` (which already exist as empty SeedTask fields) is ~10 lines of code that immediately enriches the Anzen gate and spec builder's `_build_security_guidance_section()`. This is smaller than Phase 1 and can ship independently. **→ Added Phase 0 (Quick Wins) to rollout.**
+
+**Insight 6: `detected_database` is already populated in run-104 — but the Anzen gate only found 1 work item.**
+The seed shows `detected_database: "postgresql"` on AlloyDB. The gap isn't that the field is empty — it's that the Anzen gate's file-level `detect_database_type(source)` fails to match generated code that uses `Npgsql` without the word "postgres" in it. **→ Added REQ-QPI-105 (Anzen Gate Database Detection Enrichment) to pass seed-level database context to the gate.**
+
+**Insight 7: The spec builder's existing P0 security guidance already contradicts AC-16 — and the LLM resolves in favor of AC-16.**
+This means Phase 1 (anchor sanitization) alone is sufficient to fix the AlloyDB problem. The existing P0 security guidance becomes effective once the contradicting AC is removed. Scaffolds (Phase 2) are a separate cost-optimization value stream, not a prerequisite for security. **→ Reframed Phase 1 as the security fix and Phase 2 as the cost fix.**
+
+---
+
+## 4. Quick Wins — Phase 0 (REQ-QPI-0xx)
+
+These can ship in <30 minutes each, independently of the full sanitizer module. They immediately improve downstream quality even without anchor sanitization.
+
+### REQ-QPI-001: Populate SeedTask.detected_database During Plan Ingestion
+
+**Effort:** ~10 lines. **Impact:** High.
+
+The `SeedTask` model already has `detected_database: str = ""` and `security_sensitive: bool = False` fields (seeds/models.py). Plan ingestion already calls `detect_database_type()` in at least one code path but never stores the result in the seed task.
+
+**What to do:** In `_derive_tasks_from_features()`, after feature context assembly, call `detect_database_type()` on the combined feature text and populate the fields.
+
+**Downstream impact:**
+- `_build_security_guidance_section()` in spec_builder.py receives `detected_databases` → P0 security guidance fires with database-specific examples
+- Anzen gate can use seed-level database context instead of re-detecting from source code
+- Kaizen metrics `by_database` breakdown gets data
+
+### REQ-QPI-002: Copy query-security-metrics.json to Run Directory
+
+**Effort:** ~5 lines. **Impact:** Fixes L4=F (trend script finds 0 runs).
+
+The standalone `query-security-metrics.json` is written to the project root but the trend script scans run directories. Copy the file to `{run_dir}/plan-ingestion/` alongside `kaizen-metrics.json`.
+
+### REQ-QPI-003: Add UPSERT Template for PostgreSQL×C#
+
+**Effort:** ~30 lines in `query_prime/templates/crud.py`. **Impact:** Closes the most common scaffold gap.
+
+AlloyDB's `AddItemAsync` is `INSERT...ON CONFLICT DO UPDATE` — the most common PostgreSQL upsert pattern. Template using `cmd.Parameters.AddWithValue("@param", value)` for both INSERT and UPDATE SET clauses.
+
+---
+
+## 5. Layer 1 — Query Prime Probe (REQ-QPI-1xx)
 
 Run Query Prime's decomposition and classification on each feature during plan ingestion — before any LLM generation.
 
@@ -144,6 +202,17 @@ Classify each `QueryWorkItem` as TRIVIAL, SIMPLE, MODERATE, or COMPLEX using the
 3. MODERATE: multi-table transactions, aggregates, conditional logic
 4. COMPLEX: recursive queries, CTEs, dynamic SQL
 5. Classification stored in `context["query_tier"]` per work item
+
+### REQ-QPI-105: Anzen Gate Database Detection Enrichment
+
+The Anzen gate's file-level `detect_database_type(source)` misses files that use database libraries (e.g., `Npgsql`) without containing the exact keyword "postgres." Run-104 processed only 1 of 15 features despite 3 database backends.
+
+**Fix:** When the Anzen gate processes integrated files, consult the task's `detected_database` field (from REQ-QPI-100) as a fallback when file-level detection returns None.
+
+**Acceptance criteria:**
+1. If `detect_database_type(source)` returns None but the task's `detected_database` is populated, use the task-level value
+2. All files belonging to a database-facing task are verified by the Anzen gate
+3. `total_work_items` in `query-security-metrics.json` reflects actual database-facing files, not just keyword matches
 
 ---
 
@@ -182,6 +251,7 @@ Replace flagged anti-pattern anchors with safe equivalents from `DatabasePattern
 2. Original anchor text is preserved in `context["replaced_anchors"]` for audit trail
 3. `negative_scope` entries that conflict with safe query patterns are stripped (e.g., "No parameterized queries")
 4. Replacement runs AFTER database detection (REQ-QPI-100) so the correct safe syntax is known
+5. **Timing constraint (v1.1):** Sanitization MUST run BEFORE `_CONTEXT_THREADABLE_FIELDS` propagation (line 2543 of `plan_ingestion_workflow.py`), because `negative_scope` is in the threadable set and auto-propagates from features to task contexts. If sanitization runs after threading, the original `negative_scope` is already copied.
 
 ### REQ-QPI-202: Sanitization Audit Trail
 
@@ -205,6 +275,35 @@ Produce a structured log of all anchor replacements for postmortem analysis:
   ]
 }
 ```
+
+### REQ-QPI-203: Task Description Sanitization
+
+**Added in v1.1** — Implementation planning revealed that the task `description` is a larger poisoning surface than acceptance anchors.
+
+Run-104's AlloyDB seed description says: *"Uses string-interpolated SQL matching reference implementation."* This flows into `task_description`, which the LLM reads directly in the spec body — independently of acceptance criteria.
+
+**Requirement:** When a task has `detected_database` set and its `task_description` contains SQL anti-pattern language (same detection rules as REQ-QPI-200), replace the anti-pattern language in-place.
+
+**Rules:**
+- "string-interpolated SQL" → "parameterized SQL using {safe_param_syntax}"
+- "string interpolation matching reference" → "parameterized queries (deviating from reference for security)"
+- Preserve all other description content unchanged
+
+**Timing constraint:** Must run AFTER database detection (REQ-QPI-100) and BEFORE seed emission, in the same pass as anchor sanitization.
+
+### REQ-QPI-204: Design Doc Section SQL Sanitization
+
+**Added in v1.1** — The seed's `design_doc_sections` carry reference SQL examples into the spec independently of anchors and descriptions.
+
+The spec builder already has `_detect_sql_interpolation_in_examples()` (spec_builder.py:763) that detects SQL interpolation in design documents and appends a warning. But this only runs on the design document at spec time — not on `design_doc_sections` from the seed context.
+
+**Requirement:** Apply the same `_detect_sql_interpolation_in_examples()` detection to each `design_doc_section` string during plan ingestion. If SQL interpolation is detected in a section:
+1. Append a `⚠ WARNING` block (same format as spec_builder.py:763) to the section text
+2. Log the flagged section for audit
+
+**Alternative (simpler):** Instead of modifying sections at ingestion time, extend the spec builder to also scan `design_doc_sections` (not just the design document). This leverages existing code without adding new ingestion logic.
+
+**Recommendation:** The simpler alternative — extend spec_builder to cover `design_doc_sections`. Less ingestion complexity, same protection.
 
 ---
 
@@ -290,13 +389,23 @@ This ensures `_build_security_guidance_section()` in the spec builder receives a
 
 ---
 
-## 8. Phased Rollout
+## 8. Phased Rollout (Revised v1.1)
 
-| Phase | Requirements | What It Enables | Risk |
-|-------|-------------|-----------------|------|
-| **1** | REQ-QPI-100, REQ-QPI-200, REQ-QPI-201, REQ-QPI-400 | Database detection + anchor sanitization + field population. No scaffolds yet — but seeds no longer encode anti-patterns. | Low — additive enrichment, no generation changes |
-| **2** | REQ-QPI-101, REQ-QPI-102, REQ-QPI-300, REQ-QPI-301 | Query decomposition + scaffold assembly. TRIVIAL operations get pre-approved code. LLM fills non-trivial. | Medium — scaffold quality must be validated |
-| **3** | REQ-QPI-302, REQ-QPI-303, REQ-QPI-401 | Validation gate + coverage matrix + auto-derived security contract. Full coverage tracking. | Low — quality assurance layer |
+| Phase | Requirements | What It Enables | Risk | Effort |
+|-------|-------------|-----------------|------|--------|
+| **0 (Quick Wins)** | REQ-QPI-001, 002, 003 | Populate empty SeedTask fields, fix trend file location, add UPSERT template | None — filling empty fields, copying a file, adding a template | <1 hour |
+| **1 (Security Fix)** | REQ-QPI-100, 200, 201, 203, 400 | **THE security fix.** Seeds no longer encode anti-patterns. Existing P0 security guidance in spec builder becomes effective because AC-16 no longer contradicts it. | Low — additive enrichment, no generation changes | 1 day |
+| **1b (Breadth)** | REQ-QPI-105, 204 | Anzen gate uses seed-level database context (more files verified). Design doc sections scanned for SQL interpolation. | Low | Half day |
+| **2 (Cost Fix)** | REQ-QPI-101, 102, 300, 301, 003 | TRIVIAL operations get $0.00 scaffolds. LLM fills non-trivial. This is **cost optimization**, not security — Phase 1 already fixed the security issue. | Medium — scaffold quality validation | 2 days |
+| **3 (Quality)** | REQ-QPI-302, 303, 401 | Validation gate + coverage matrix + auto-derived security contract. | Low | 1 day |
+
+### Key v1.1 Insight: Phase 1 Alone Fixes the Security Problem
+
+The implementation plan revealed that the spec builder already has comprehensive P0 security guidance (`_build_security_guidance_section()`) that says "MANDATORY OVERRIDE: use parameterized queries." This guidance ALREADY EXISTS in every C# database-facing spec. The reason it doesn't work is that AC-16 ("All SQL uses string interpolation") contradicts it, and the LLM follows the more specific instruction.
+
+**Phase 1 removes AC-16.** Once the acceptance anchor is sanitized, the existing P0 security guidance has no contradiction to resolve. The LLM receives consistent instructions: both the security section and the acceptance criteria say "use parameterized queries." This is the cheapest possible fix — remove the poison, let existing defenses work.
+
+Phase 2 (scaffolds) is valuable for cost reduction and belt-and-suspenders security, but it's not required to eliminate SQL injection. It's a separate value stream.
 
 ### Phase 1 Expected Impact (AlloyDB Example)
 
@@ -348,16 +457,22 @@ query_scaffolds: [
 
 ## 9. Traceability Matrix
 
-| Requirement | Implements | Leverages | Files |
-|-------------|-----------|-----------|-------|
-| REQ-QPI-100 | DP-2 (Query Prime authoritative) | `decomposer.detect_database_type()` | `plan_ingestion_workflow.py` |
-| REQ-QPI-101 | DP-1 (Secure by construction) | `decomposer.decompose_feature()` | `plan_ingestion_workflow.py` |
-| REQ-QPI-102 | DP-3 (Scaffold over correction) | `templates.is_trivial()` | `plan_ingestion_workflow.py` |
-| REQ-QPI-200 | DP-4 (Reference ≠ vulnerability) | `patterns.DatabasePatternRegistry` unsafe_patterns | `plan_ingestion_contracts.py` |
-| REQ-QPI-201 | DP-4 | `patterns.DatabasePatternRegistry` safe_param_syntax | `plan_ingestion_contracts.py` |
-| REQ-QPI-202 | Audit trail | — | `plan_ingestion_workflow.py` |
-| REQ-QPI-300 | DP-1, DP-3 | `templates/crud.py`, `templates/health_check.py` | NEW: `plan_ingestion_query_scaffold.py` |
-| REQ-QPI-301 | DP-1 | `spec_builder.py` P0 sections | `spec_builder.py` |
+| Requirement | Phase | Implements | Leverages | Files |
+|-------------|-------|-----------|-----------|-------|
+| REQ-QPI-001 | 0 | Quick win | `SeedTask` empty fields | `plan_ingestion_workflow.py` (~10 lines) |
+| REQ-QPI-002 | 0 | Quick win | File copy | `integration_engine.py` or pipeline script (~5 lines) |
+| REQ-QPI-003 | 0 | Quick win | CRUD template pattern | `query_prime/templates/crud.py` (~30 lines) |
+| REQ-QPI-100 | 1 | DP-2 (Query Prime authoritative) | `decomposer.detect_database_type()` | `plan_ingestion_workflow.py` |
+| REQ-QPI-105 | 1b | DP-2 | Seed-level `detected_database` | `integration_engine.py` Anzen gate |
+| REQ-QPI-101 | 2 | DP-1 (Secure by construction) | `decomposer.decompose_feature()` | `plan_ingestion_workflow.py` |
+| REQ-QPI-102 | 2 | DP-3 (Scaffold over correction) | `templates.is_trivial()` | `plan_ingestion_workflow.py` |
+| REQ-QPI-200 | 1 | DP-4 (Reference ≠ vulnerability) | `DatabasePatternRegistry` unsafe_patterns | NEW: `plan_ingestion_anchor_sanitizer.py` |
+| REQ-QPI-201 | 1 | DP-4 | `DatabasePatternRegistry` safe_param_syntax | NEW: `plan_ingestion_anchor_sanitizer.py` |
+| REQ-QPI-202 | 1 | Audit trail | — | `plan_ingestion_workflow.py` |
+| REQ-QPI-203 | 1 | DP-4 (v1.1) | Same sanitizer, applied to `task_description` | NEW: `plan_ingestion_anchor_sanitizer.py` |
+| REQ-QPI-204 | 1b | DP-4 (v1.1) | Existing `_detect_sql_interpolation_in_examples()` | `spec_builder.py` (extend to `design_doc_sections`) |
+| REQ-QPI-300 | 2 | DP-1, DP-3 | `templates/crud.py`, `templates/health_check.py` | NEW: `plan_ingestion_query_scaffold.py` |
+| REQ-QPI-301 | 2 | DP-1 | `spec_builder.py` P0 sections | `spec_builder.py` |
 | REQ-QPI-302 | DP-1 | `LanguageProfile.validate_syntax()`, `DatabasePatternRegistry` | NEW: `plan_ingestion_query_scaffold.py` |
 | REQ-QPI-303 | Coverage | `templates/__init__.py` registry | Documentation |
 | REQ-QPI-400 | DP-2 | `SeedTask` model fields (exist, unpopulated) | `plan_ingestion_workflow.py`, `seeds/builder.py` |
