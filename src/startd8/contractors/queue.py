@@ -324,6 +324,18 @@ class FeatureQueue:
                 # For uncomment tasks, preserve full context for the shortcut
                 if task_type == "uncomment" and context:
                     meta["_todo_context"] = context
+            # REQ-QP-FIX-002: Bridge detected_database and security_sensitive
+            # from seed context into FeatureSpec.metadata so the Anzen gate
+            # can use seed-level database context when file-level detection
+            # returns None (e.g., Npgsql code without "postgres" keyword).
+            if context.get("detected_database"):
+                meta["detected_database"] = context["detected_database"]
+            if context.get("security_sensitive"):
+                meta["security_sensitive"] = True
+            # Also bridge safe_param_syntax for downstream prompt injection
+            if context.get("safe_param_syntax"):
+                meta["safe_param_syntax"] = context["safe_param_syntax"]
+
             # REQ-MSR-210: Preserve seed task metadata through queue boundary
             # so postmortem can correlate priority/effort with quality/cost.
             seed_meta: Dict[str, Any] = {}

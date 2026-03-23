@@ -1632,6 +1632,54 @@ class IntegrationEngine:
             except (ImportError, OSError) as exc:
                 logger.debug("Query security metrics update skipped: %s", exc)
 
+        else:
+            # REQ-QP-FIX-001/004: No database-facing files verified.
+            # Write explicit empty metrics to prevent stale data from prior
+            # runs persisting and contaminating this run's postmortem.
+            try:
+                from startd8.security_prime.kaizen import update_query_security_metrics
+                import datetime as _datetime
+                import json as _json
+
+                empty_report = {
+                    "mean_score": 0.0,
+                    "pass_rate": 0.0,
+                    "total_work_items": 0,
+                    "total_cost_usd": 0.0,
+                    "injection_total": 0,
+                    "credential_total": 0,
+                    "lifecycle_total": 0,
+                    "by_database": {},
+                    "by_tier": {},
+                    "status": "no_queries_detected",
+                }
+                output_dir = str(self.project_root) if self.project_root else "."
+                update_query_security_metrics(output_dir, empty_report)
+                result_metadata["_query_security_report"] = empty_report
+
+                # Overwrite stale standalone file
+                qp_path = Path(output_dir) / "query-security-metrics.json"
+                qp_standalone = {
+                    "schema_version": "1.0.0",
+                    "run_id": result_metadata.get("run_id", ""),
+                    "timestamp": _datetime.datetime.now(
+                        _datetime.timezone.utc,
+                    ).isoformat(),
+                    **empty_report,
+                }
+                try:
+                    qp_path.write_text(
+                        _json.dumps(qp_standalone, indent=2, default=str) + "\n",
+                        encoding="utf-8",
+                    )
+                    logger.info(
+                        "Wrote empty query-security-metrics.json (no queries detected)",
+                    )
+                except OSError:
+                    pass
+            except ImportError:
+                pass
+
     # ------------------------------------------------------------------
     # Phase D: Semantic validation (Kaizen Quality)
     # ------------------------------------------------------------------
