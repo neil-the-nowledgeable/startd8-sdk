@@ -320,15 +320,32 @@ class CSharpDeterministicFileAssembler:
         # Derive class name
         class_name = _derive_class_name(file_path)
 
+        # REQ-DFA-104a: Detect C# interface files from I-prefix convention.
+        # ICartStore.cs → interface ICartStore (not class ICartStore).
+        is_interface = (
+            class_name.startswith("I")
+            and len(class_name) > 1
+            and class_name[1].isupper()
+        )
+        type_keyword = "interface" if is_interface else "class"
+
         # Group elements
         elements = getattr(file_spec, "elements", [])
         type_elements = [e for e in elements if _is_type_element(e)]
         member_elements = [e for e in elements if not _is_type_element(e)]
 
         if not type_elements:
-            # Default: create a public class with the file's class name
-            class_body = self._render_members(member_elements, class_name)
-            sections.append(f"public class {class_name}\n{{\n{class_body}\n}}")
+            # Default: create a public type with the file's name
+            if is_interface:
+                # Interface: method signatures only, no bodies
+                sections.append(
+                    f"public {type_keyword} {class_name}\n{{\n}}"
+                )
+            else:
+                class_body = self._render_members(member_elements, class_name)
+                sections.append(
+                    f"public {type_keyword} {class_name}\n{{\n{class_body}\n}}"
+                )
         else:
             for te in type_elements:
                 kind = _element_kind_to_csharp(te)

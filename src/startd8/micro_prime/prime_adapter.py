@@ -1878,25 +1878,32 @@ class MicroPrimeCodeGenerator:
                     )
                 continue
 
-            # .go source files: use existing content if available, otherwise
-            # skip — the file-whole generation path handles Go without needing
-            # a Python-style skeleton.  Go skeletons with panic("not implemented")
-            # stubs would require a Go-aware assembler (future enhancement).
+            # .go source files: use GoDeterministicFileAssembler (REQ-DFA-105),
+            # falling back to existing content passthrough.
             if _suffix == ".go":
-                existing = existing_files.get(file_path, "")
-                if existing:
-                    skeletons[file_path] = existing
-                    logger.debug(
-                        "Go skeleton for %s: passthrough existing content "
-                        "(%d lines)",
-                        file_path,
-                        existing.count("\n") + 1,
+                try:
+                    from startd8.utils.go_file_assembler import (
+                        GoDeterministicFileAssembler,
                     )
-                else:
-                    logger.debug(
-                        "Go file %s has no existing content, skipping "
-                        "skeleton (file-whole generation)",
-                        file_path,
+
+                    go_assembler = GoDeterministicFileAssembler()
+                    go_source = go_assembler.render_file(file_spec)
+                    if go_source:
+                        skeletons[file_path] = go_source
+                        logger.debug(
+                            "Generated Go skeleton for %s (%d lines)",
+                            file_path,
+                            go_source.count("\n") + 1,
+                        )
+                    else:
+                        # Fall back to existing content passthrough
+                        existing = existing_files.get(file_path, "")
+                        if existing:
+                            skeletons[file_path] = existing
+                except (ImportError, ValueError, TypeError, AttributeError) as exc:
+                    logger.warning(
+                        "Go skeleton generation failed for %s: %s",
+                        file_path, exc,
                     )
                 continue
 
@@ -1963,6 +1970,11 @@ class MicroPrimeCodeGenerator:
                 logger.warning(
                     "Failed to generate skeleton for %s: %s", file_path, exc,
                 )
+
+        # REQ-DFA-107a: Inject skeletons into context so the drafter uses
+        # skeleton_fill mode instead of file-whole generation.
+        if skeletons and context is not None:
+            context.setdefault("skeleton_sources", {}).update(skeletons)
 
         return skeletons
 
