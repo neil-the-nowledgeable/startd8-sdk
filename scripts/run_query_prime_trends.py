@@ -24,10 +24,29 @@ if _SDK_SRC.is_dir():
 from startd8.utils.trend_math import linear_slope
 
 
+def _find_kaizen_index(output_dir: Path) -> Path | None:
+    """Locate kaizen-index.json by walking up from *output_dir*.
+
+    The index lives at the pipeline-base level (e.g.,
+    ``pipeline-output/online-boutique/kaizen-index.json``), but the script
+    receives a per-run output dir (e.g., ``run-113/plan-ingestion/``).
+    Walk up at most 3 levels to find it.
+    """
+    candidate = output_dir / "kaizen-index.json"
+    if candidate.is_file():
+        return candidate
+    for _ in range(3):
+        output_dir = output_dir.parent
+        candidate = output_dir / "kaizen-index.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _load_runs(output_dir: Path) -> list[dict]:
     """Load query security metrics from kaizen-index.json run history."""
-    index_path = output_dir / "kaizen-index.json"
-    if not index_path.is_file():
+    index_path = _find_kaizen_index(output_dir)
+    if index_path is None:
         return []
 
     try:
