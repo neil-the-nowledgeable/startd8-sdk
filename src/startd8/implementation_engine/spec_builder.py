@@ -465,6 +465,66 @@ def _build_sibling_imports_section(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _build_local_modules_section(context: Dict[str, Any]) -> str:
+    """List sibling module names the LLM can import from.
+
+    Unlike ``_build_sibling_imports_section`` which shows *what* siblings
+    import, this section tells the LLM *which local modules exist* so it
+    can write ``from logger import getJSONLogger`` instead of hallucinating
+    a qualified cross-service import like ``from emailservice.logger import X``.
+
+    Returns empty string if no sibling source files are found.
+    """
+    existing_files = context.get("existing_files_content") or context.get("existing_files", {})
+    if not existing_files:
+        return ""
+
+    target_files = context.get("target_files", [])
+    if not target_files:
+        return ""
+
+    target_dir = os.path.dirname(target_files[0]) if target_files else ""
+
+    # Resolve source extensions from language profile
+    lang_profile = context.get("language_profile")
+    if lang_profile is not None:
+        source_exts = set(getattr(lang_profile, "source_extensions", [".py"]))
+    else:
+        source_exts = {".py"}
+
+    # Collect sibling file stems (module names) in the same directory,
+    # excluding the target file itself
+    target_stems = {os.path.splitext(os.path.basename(t))[0] for t in target_files}
+    local_modules: dict[str, str] = {}  # stem → basename
+    for path in existing_files:
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in source_exts:
+            continue
+        if os.path.dirname(path) != target_dir:
+            continue
+        stem = os.path.splitext(os.path.basename(path))[0]
+        if stem in target_stems or stem == "__init__":
+            continue
+        local_modules[stem] = os.path.basename(path)
+
+    if not local_modules:
+        return ""
+
+    lines = [
+        "## Available Local Modules\n",
+        "These files exist in the SAME directory as the file you are generating.",
+        "Import from them using their module name (bare import, NOT qualified):\n",
+    ]
+    for stem, basename in sorted(local_modules.items()):
+        lines.append(f"  - `{basename}` → import as `from {stem} import ...`")
+    lines.append("")
+    lines.append(
+        "Do NOT use qualified imports like `from servicename.module import X`."
+        " Use bare `from module import X` since these are sibling files."
+    )
+    return "\n".join(lines)
+
+
 def _build_dependency_imports_section(context: Dict[str, Any]) -> str:
     """Build a section listing importable modules from dependency tasks.
 
@@ -1191,6 +1251,11 @@ def build_spec_prompt(
     if sibling_section:
         prioritized.append((1, "sibling_imports", sibling_section))
 
+    # P1: Available local modules (file stems the LLM can import from)
+    local_modules_section = _build_local_modules_section(context)
+    if local_modules_section:
+        prioritized.append((1, "local_modules", local_modules_section))
+
     # P1: Dependency task imports (upstream modules for correct proto/gRPC imports)
     dep_imports_section = _build_dependency_imports_section(context)
     if dep_imports_section:
@@ -1215,6 +1280,18 @@ def build_spec_prompt(
     security_section = _build_security_guidance_section(_sec_ctx)
     if security_section:
         prioritized.append((0, "security_guidance", security_section))
+
+    # P0: Language coding standards (REQ-KZ-005 — first-run quality injection)
+    _coding_standards = context.get("coding_standards")
+    if _coding_standards and isinstance(_coding_standards, str) and _coding_standards.strip():
+        _cs_text = _coding_standards.strip()
+        if len(_cs_text) > 3000:
+            _cs_text = _cs_text[:3000] + "\n\n[truncated]"
+        prioritized.append((
+            0,
+            "coding_standards",
+            f"## Coding Standards (Target Language)\n\n{_cs_text}",
+        ))
 
     # P2: Anti-pattern guidance for env var handling (REQ-SV2-1400)
     anti_pattern_section = _build_anti_pattern_section(context, task_description)

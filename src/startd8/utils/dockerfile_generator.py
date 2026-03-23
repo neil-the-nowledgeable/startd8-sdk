@@ -97,11 +97,39 @@ EXPOSE {port}
 ENTRYPOINT ["node", "{entry_point}"]
 """
 
+_PYTHON_TEMPLATE = """\
+# syntax=docker/dockerfile:1
+FROM {builder_image} AS builder
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+FROM {runtime_image}
+
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PORT={port}
+
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /app .
+
+USER 65532:65532
+EXPOSE {port}
+ENTRYPOINT ["python", "{entry_point}"]
+"""
+
 _TEMPLATES = {
     "csharp": _CSHARP_TEMPLATE,
     "go": _GO_TEMPLATE,
     "java": _JAVA_TEMPLATE,
     "nodejs": _NODEJS_TEMPLATE,
+    "python": _PYTHON_TEMPLATE,
 }
 
 _DEFAULT_PORTS = {
@@ -109,6 +137,7 @@ _DEFAULT_PORTS = {
     "go": 8080,
     "java": 8080,
     "nodejs": 3000,
+    "python": 8080,
 }
 
 _DEFAULT_BUILDER_IMAGES = {
@@ -116,6 +145,7 @@ _DEFAULT_BUILDER_IMAGES = {
     "go": "golang:1.25-alpine",
     "java": "eclipse-temurin:21-jdk",
     "nodejs": "node:20-alpine",
+    "python": "python:3.12-slim",
 }
 
 _DEFAULT_RUNTIME_IMAGES = {
@@ -123,6 +153,7 @@ _DEFAULT_RUNTIME_IMAGES = {
     "go": "gcr.io/distroless/static",
     "java": "eclipse-temurin:21-jre-alpine",
     "nodejs": "node:20-alpine",
+    "python": "python:3.12-slim",
 }
 
 
