@@ -170,12 +170,21 @@ def extract_signals_from_feature(
     except (OSError, TypeError):
         pass
 
-    # estimated_loc: prefer metadata, else rough heuristic from description
+    # estimated_loc: prefer feature attribute → metadata → description heuristic.
+    # Plan-ingested features carry estimated_loc as a top-level attribute,
+    # not inside metadata.  Check both sources before falling back.
     estimated_loc = 0
     try:
-        estimated_loc = int(metadata.get("estimated_loc", 0))
+        _feat_loc = getattr(feature, "estimated_loc", None)
+        if isinstance(_feat_loc, (int, float)):
+            estimated_loc = int(_feat_loc)
     except (TypeError, ValueError):
         pass
+    if estimated_loc <= 0:
+        try:
+            estimated_loc = int(metadata.get("estimated_loc", 0))
+        except (TypeError, ValueError):
+            pass
     if estimated_loc <= 0:
         estimated_loc = max(len(description) // 3, 1)
 
