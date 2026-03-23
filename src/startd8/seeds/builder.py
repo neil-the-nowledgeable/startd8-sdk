@@ -211,6 +211,36 @@ class SeedBuilder:
 
         return self
 
+    def enrich_forward_manifest_elements(
+        self,
+        framework_imports: Optional[Dict[str, Any]] = None,
+    ) -> "SeedBuilder":
+        """Populate ForwardElementSpec entries for non-Python files (REQ-DFA-100).
+
+        Calls the element deriver to enrich file_specs with derived elements
+        from feature metadata. Idempotent — never overwrites existing elements.
+
+        Must be called after ``derive_tasks()`` and ``set_forward_manifest()``.
+
+        Args:
+            framework_imports: LanguageProfile framework_imports dict for
+                DI constructor parameter derivation.
+        """
+        if not self._forward_manifest or not self._tasks:
+            return self
+
+        try:
+            from .element_deriver import enrich_forward_manifest
+            enrich_forward_manifest(
+                self._forward_manifest,
+                self._tasks,
+                framework_imports=framework_imports,
+            )
+        except (ImportError, Exception) as exc:
+            logger.warning("Element deriver skipped: %s", exc)
+
+        return self
+
     def derive_architectural_context(
         self,
         parsed_plan: Any,

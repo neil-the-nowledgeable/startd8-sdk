@@ -1975,6 +1975,13 @@ class MicroPrimeCodeGenerator:
         # skeleton_fill mode instead of file-whole generation.
         if skeletons and context is not None:
             context.setdefault("skeleton_sources", {}).update(skeletons)
+            # REQ-DFA-107b: Set element_tiers so template matching activates.
+            # Non-Python skeletons with stubs are classified as SIMPLE tier
+            # (body fill only — no decomposition needed).
+            et = context.setdefault("element_tiers", {})
+            for fpath in skeletons:
+                if fpath not in et:
+                    et[fpath] = {"tier": "SIMPLE", "source": "dfa_skeleton"}
 
         return skeletons
 
