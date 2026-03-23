@@ -2595,6 +2595,56 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if source_references:
                     ctx["source_references"] = sorted(set(source_references))
 
+                # REQ-QPI-200/201: Sanitize acceptance anchors + negative_scope
+                # when a database surface is detected. Runs AFTER threadable
+                # field propagation (line 2543) to catch both feature-level
+                # and anchor-level anti-patterns.
+                if ctx.get("detected_database") and (
+                    ctx.get("acceptance_obligations") or ctx.get("negative_scope")
+                ):
+                    try:
+                        from startd8.workflows.builtin.plan_ingestion_anchor_sanitizer import (
+                            sanitize_acceptance_obligations,
+                            strip_conflicting_negative_scope,
+                        )
+                        _db = ctx["detected_database"]
+                        # Infer language from target files
+                        _lang = "csharp"  # default
+                        for _f in ordered_files:
+                            if _f.endswith(".go"):
+                                _lang = "go"
+                                break
+                            elif _f.endswith(".java"):
+                                _lang = "java"
+                                break
+                            elif _f.endswith((".js", ".ts")):
+                                _lang = "nodejs"
+                                break
+                            elif _f.endswith(".py"):
+                                _lang = "python"
+                                break
+                        if ctx.get("acceptance_obligations"):
+                            ctx["acceptance_obligations"], _anch_audit = (
+                                sanitize_acceptance_obligations(
+                                    ctx["acceptance_obligations"], _db, _lang,
+                                )
+                            )
+                            if _anch_audit:
+                                ctx["replaced_anchors"] = _anch_audit
+                        if ctx.get("negative_scope"):
+                            ctx["negative_scope"], _stripped = (
+                                strip_conflicting_negative_scope(
+                                    ctx["negative_scope"], _db,
+                                )
+                            )
+                            if _stripped:
+                                ctx.setdefault("replaced_anchors", []).extend(
+                                    {"original": s, "reason": "negative_scope_conflict"}
+                                    for s in _stripped
+                                )
+                    except ImportError:
+                        pass  # anchor sanitizer not available
+
                 rationale: List[str] = [
                     "feature selected via requirement identifier match"
                 ]
@@ -2604,6 +2654,29 @@ class PlanIngestionWorkflow(WorkflowBase):
                         + ", ".join(mapped_artifacts)
                     )
                 ctx["mapping_rationale"] = rationale
+
+            # REQ-QPI-201: Sanitize negative_scope for SQL anti-patterns.
+            # This runs OUTSIDE the mapped_requirements block because
+            # negative_scope comes from _CONTEXT_THREADABLE_FIELDS (line 2543),
+            # not from acceptance anchors. Tasks without mapped requirements
+            # still need their negative_scope cleaned.
+            if ctx.get("detected_database") and ctx.get("negative_scope"):
+                try:
+                    from startd8.workflows.builtin.plan_ingestion_anchor_sanitizer import (
+                        strip_conflicting_negative_scope,
+                    )
+                    ctx["negative_scope"], _stripped = (
+                        strip_conflicting_negative_scope(
+                            ctx["negative_scope"], ctx["detected_database"],
+                        )
+                    )
+                    if _stripped:
+                        ctx.setdefault("replaced_anchors", []).extend(
+                            {"original": s, "reason": "negative_scope_conflict"}
+                            for s in _stripped
+                        )
+                except ImportError:
+                    pass
 
             # REQ-PD-003: Build requirements_text from description +
             # acceptance_obligations + source_references so DESIGN has
@@ -2643,6 +2716,39 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "context": ctx,
                 },
             })
+
+            # REQ-QPI-203: Sanitize task_description for SQL anti-patterns.
+            # Done after task assembly because feat may be frozen.
+            if ctx.get("detected_database") and tasks:
+                try:
+                    from startd8.workflows.builtin.plan_ingestion_anchor_sanitizer import (
+                        sanitize_task_description,
+                    )
+                    _task = tasks[-1]
+                    _orig_desc = _task["config"]["task_description"]
+                    if _orig_desc:
+                        _lang = "csharp"
+                        for _f in ordered_files:
+                            if _f.endswith(".go"):
+                                _lang = "go"
+                                break
+                            elif _f.endswith(".java"):
+                                _lang = "java"
+                                break
+                            elif _f.endswith((".js", ".ts")):
+                                _lang = "nodejs"
+                                break
+                            elif _f.endswith(".py"):
+                                _lang = "python"
+                                break
+                        _clean_desc, _desc_audit = sanitize_task_description(
+                            _orig_desc, ctx["detected_database"], _lang,
+                        )
+                        if _clean_desc != _orig_desc:
+                            _task["config"]["task_description"] = _clean_desc
+                            ctx.setdefault("replaced_anchors", []).extend(_desc_audit)
+                except ImportError:
+                    pass
 
         # ── Clean up dangling dependency references from skipped features ──
         emitted_ids = {t["task_id"] for t in tasks}
