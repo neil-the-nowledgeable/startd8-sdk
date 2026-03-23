@@ -3968,6 +3968,16 @@ class PrimeContractorWorkflow:
         # Wire language profile to integration engine for repair gating
         self._engine._language_profile = profile
 
+        # Wire language profile to code generator (MicroPrime or fallback)
+        # (REQ-KZ-005: ensures stub detection and syntax validation use
+        # the correct language patterns, not Python defaults)
+        if hasattr(self, "code_generator") and self.code_generator is not None:
+            if hasattr(self.code_generator, "_language_profile"):
+                self.code_generator._language_profile = profile
+            if (hasattr(self.code_generator, "_engine")
+                    and hasattr(self.code_generator._engine, "_language_profile")):
+                self.code_generator._engine._language_profile = profile
+
         # Re-select merge strategy based on language preference
         lang_id = profile.language_id
         if lang_id != "python":
@@ -4215,38 +4225,23 @@ class PrimeContractorWorkflow:
         if not (self._complexity_routing_enabled and self._complexity_router is not None):
             return generator
 
-        # Non-Python languages bypass MicroPrime — force COMPLEX tier to
-        # route to LeadContractor (cloud) which has language-aware prompts.
-        # MicroPrime's engine, prompts, and quality gates are Python-specific.
-        #
-        # Two checks: (1) resolved language profile is non-Python, OR
-        # (2) ALL target files are non-Python (catches Dockerfiles, HTML,
-        # go.mod, etc. that resolve as "python" because they have no
-        # recognized language extension).
+        # Files without a registered LanguageProfile (Dockerfiles, HTML,
+        # YAML, go.mod, etc.) force COMPLEX tier — MicroPrime cannot
+        # decompose or splice these.  Files WITH a registered profile
+        # (Python, Go, Java, C#, Node.js) proceed through normal
+        # complexity classification regardless of language.
         from startd8.micro_prime.engine import _is_non_python_file
 
-        _all_targets_non_python = (
+        _all_targets_unregistered = (
             feature.target_files
             and all(_is_non_python_file(f) for f in feature.target_files)
         )
-        if (
-            self._micro_prime_enabled
-            and (
-                (self._language_profile is not None
-                 and self._language_profile.language_id != "python")
-                or _all_targets_non_python
-            )
-        ):
+        if self._micro_prime_enabled and _all_targets_unregistered:
             from startd8.complexity.models import ComplexityTier
             tier = ComplexityTier.COMPLEX
-            _lang_id = (
-                self._language_profile.language_id
-                if self._language_profile is not None
-                else "unknown"
-            )
             reason = (
-                f"non-Python targets ({_lang_id}) "
-                f"— MicroPrime bypass, routing to cloud"
+                "targets have no registered LanguageProfile "
+                "— routing to cloud for file-whole generation"
             )
             generator = self._complexity_router.select(tier) or generator
             tier_agent_spec = self._complexity_router.select_agent_spec(tier)
