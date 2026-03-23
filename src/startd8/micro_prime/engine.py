@@ -3665,6 +3665,13 @@ class MicroPrimeEngine:
 
         registry = self._get_registry_for_language(language_id)
         match = registry.match(element, file_spec, contracts)
+        # REQ-MPV-001: Classification observability
+        logger.info(
+            "TRIVIAL dispatch: element=%s kind=%s parent=%s lang=%s file=%s match=%s",
+            element.name, element.kind, element.parent_class or "(none)",
+            language_id, file_path,
+            match.name if match else "NONE",
+        )
         if match is None:
             if language_id == "python":
                 # Python: fall through to SIMPLE (existing behavior)
@@ -3738,6 +3745,11 @@ class MicroPrimeEngine:
         # short-circuit and/or Ollama generation with language-aware prompts,
         # splicer, and validation. If generation fails, escalation happens
         # naturally via _verify_and_build_result().
+        # REQ-MPV-001: Log entry into SIMPLE handler
+        logger.info(
+            "SIMPLE dispatch: element=%s kind=%s parent=%s file=%s",
+            element.name, element.kind, element.parent_class or "(none)", file_path,
+        )
         if _is_non_python_file(file_path):
             # File has no registered LanguageProfile — escalate
             # (_is_non_python_file returns False for .go/.java/.cs/.js/.ts
