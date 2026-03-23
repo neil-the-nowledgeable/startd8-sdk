@@ -676,7 +676,7 @@ def generate_dashboard_spec(
                     f'rate({prom}_bucket{{service="{service.service_id}"}}[$__rate_interval]))'
                 )
                 panels.append({
-                    "type": "histogram",
+                    "type": "timeseries",
                     "title": f"{_panel_title(metric.name)} ({label})",
                     "expr": q_query,
                     "unit": unit,
@@ -847,13 +847,16 @@ def _ensure_red_coverage(
         try:
             avail_target = round(float(business.availability) / 100.0, 6)
             avail_gauge_expr = (
-                f"1 - (\n"
+                f"(\n"
                 f"  sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}"}}[1h]))\n'
+                f"  - sum(rate({duration_metric}_count"
                 f'{{service="{service.service_id}",'
                 f'{_error_filter_for_protocol(service.transport)}}}[1h]))\n'
-                f"  / sum(rate({duration_metric}_count"
+                f")\n"
+                f"/ sum(rate({duration_metric}_count"
                 f'{{service="{service.service_id}"}}[1h]))\n'
-                f")"
+                f"or vector(1)"
             )
             panels.append({
                 "type": "gauge",
