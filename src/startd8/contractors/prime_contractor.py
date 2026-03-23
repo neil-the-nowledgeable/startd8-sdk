@@ -3519,14 +3519,22 @@ class PrimeContractorWorkflow:
                p.suffix not in self._DETERMINISTIC_BUILD_EXTENSIONS:
                 return None  # Has non-build files — proceed to LLM
 
-        # All targets are build/config files — check if they exist on disk
+        # All targets are build/config files — check if they exist on disk.
+        # Check both output_dir (where _ensure_dependency_file may write)
+        # and project_root (where the file may already exist).
         resolved: list[str] = []
+        output_dir = self._resolve_output_dir()
         for tf in target_files:
             p = Path(tf)
             if not p.is_absolute():
-                p = self._resolve_output_dir() / tf
-            if not p.is_file():
-                return None  # File not pre-generated — need LLM
+                # Check output dir first, then project root
+                candidates = [output_dir / tf, self.project_root / tf]
+                found = next((c for c in candidates if c.is_file()), None)
+                if found is None:
+                    return None  # File not pre-generated — need LLM
+                p = found
+            elif not p.is_file():
+                return None
             resolved.append(str(p))
 
         feature.generated_files = resolved

@@ -545,6 +545,37 @@ def main() -> int:
     # Re-read required: seed_path may have changed to an enriched version
     # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+
+    # REQ-DFA-100/108: Enrich ForwardManifest file_specs with derived elements
+    # for non-Python files (activates DFA skeletons, skeleton_fill mode, and
+    # 29 existing MicroPrime templates for C#/Go/Java/Node.js).
+    try:
+        from startd8.seeds.element_deriver import enrich_forward_manifest
+        fm = seed_data.get("forward_manifest")
+        tasks = seed_data.get("tasks", [])
+        if fm and isinstance(fm, dict):
+            # Try to get framework_imports from the language profile
+            fw_imports = None
+            try:
+                from startd8.languages.registry import LanguageRegistry
+                LanguageRegistry.discover()
+                # Detect language from file_specs extensions
+                for fp in fm.get("file_specs", {}):
+                    ext = Path(fp).suffix
+                    profile = LanguageRegistry.get_by_extension(ext)
+                    if profile:
+                        fi = getattr(profile, "framework_imports", None)
+                        if isinstance(fi, dict) and fi:
+                            fw_imports = fi
+                            break
+            except (ImportError, Exception):
+                pass
+            enriched = enrich_forward_manifest(fm, tasks, framework_imports=fw_imports)
+            if enriched > 0:
+                logger.info("Element deriver enriched %d file_specs", enriched)
+    except Exception as exc:
+        logger.debug("Element deriver skipped: %s", exc)
+
     workflow.load_seed_context(seed_data, cli_mode=args.mode, seed_path=str(seed_path))
     workflow.force_regenerate = args.force_regenerate or pc_config.micro_prime.get("dry_run", False)
 
