@@ -656,6 +656,11 @@ def main() -> int:
         or _todo_env == "true"
         or _instr_env == "true"
     )
+    logger.info(
+        "TODO completion check: ENABLE_TODO_COMPLETION=%r, ENABLE_INSTRUMENTATION=%r, "
+        "--todo-completion=%r → enabled=%s",
+        _todo_env, _instr_env, getattr(args, "todo_completion", False), _todo_enabled,
+    )
     if not _todo_enabled and _instr_env == "auto":
         # Auto mode: enable if generation profile implies instrumentation
         _profile = os.environ.get("GENERATION_PROFILE", "").lower()
