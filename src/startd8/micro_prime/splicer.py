@@ -187,6 +187,10 @@ def splice_body_into_skeleton(
     if _is_csharp_source(skeleton, file_path):
         return _splice_csharp_dispatch(body, element, skeleton)
 
+    # Language dispatch: Node.js/TypeScript files use brace-based splicing
+    if _is_nodejs_source(skeleton, file_path):
+        return _splice_nodejs_dispatch(body, element, skeleton)
+
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         code = _splice_constant(body, element, skeleton)
         return SpliceResult(code=code)
@@ -359,6 +363,67 @@ def _splice_csharp_dispatch(body: str, element: ForwardElementSpec, skeleton: st
         ))
 
     return SpliceResult(code=csharp_result.code, violations=violations)
+
+
+_JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
+
+
+def _is_nodejs_source(skeleton: str, file_path: str) -> bool:
+    """Detect if skeleton content is JavaScript or TypeScript source.
+
+    Checks file extension first (covers .js, .mjs, .cjs, .ts, .tsx, .jsx),
+    then falls back to content heuristics (require/import/export keywords
+    without semicolons-on-every-line that would indicate Java).
+    """
+    from pathlib import PurePosixPath
+    if PurePosixPath(file_path).suffix.lower() in _JS_EXTENSIONS:
+        return True
+    for line in skeleton.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
+            continue
+        if any(kw in stripped for kw in ("require(", "module.exports", "export ", "import ")):
+            # Distinguish from Java: Java imports end with semicolons AND
+            # start with lowercase package paths, JS imports use quotes
+            if "from " in stripped or "require(" in stripped or "export " in stripped:
+                return True
+        break
+    return False
+
+
+def _splice_nodejs_dispatch(body: str, element: ForwardElementSpec, skeleton: str) -> SpliceResult:
+    """Dispatch to Node.js splicer for JS/TS skeleton files.
+
+    Delegates to ``nodejs_splicer.splice_nodejs_bodies()`` which uses
+    brace-matching to replace stub function bodies.
+    """
+    try:
+        from startd8.languages.nodejs_splicer import splice_nodejs_bodies
+    except ImportError:
+        logger.warning("nodejs_splicer not available — cannot splice JS/TS skeleton")
+        return SpliceResult(code=None, violations=[
+            SpliceViolation(
+                violation_type="language_unsupported",
+                message="Node.js splicer not available",
+                element_name=element.name,
+            )
+        ])
+
+    method_name = element.name
+    nodejs_result = splice_nodejs_bodies(
+        skeleton,
+        {method_name: body},
+    )
+
+    violations = []
+    for w in getattr(nodejs_result, "warnings", []) or []:
+        violations.append(SpliceViolation(
+            violation_type="nodejs_splice_warning",
+            message=str(w),
+            element_name=method_name,
+        ))
+
+    return SpliceResult(code=nodejs_result.code, violations=violations)
 
 
 def _splice_function_body(

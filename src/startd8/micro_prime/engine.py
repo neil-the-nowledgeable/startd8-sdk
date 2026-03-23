@@ -796,6 +796,7 @@ def _build_system_prompt(
     is_go = profile.language_id == "go"
     is_java = profile.language_id == "java"
     is_csharp = profile.language_id == "csharp"
+    is_nodejs = profile.language_id == "nodejs"
     indent_rule = "Use tab indentation." if is_go else "Use 4-space indentation."
     if is_go:
         stub_marker = 'panic("not implemented")'
@@ -803,6 +804,8 @@ def _build_system_prompt(
         stub_marker = 'throw new UnsupportedOperationException("TODO")'
     elif is_csharp:
         stub_marker = 'throw new NotImplementedException()'
+    elif is_nodejs:
+        stub_marker = "throw new Error('not implemented')"
     else:
         stub_marker = "raise NotImplementedError"
 
