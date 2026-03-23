@@ -3793,22 +3793,33 @@ class MicroPrimeEngine:
         Returns an ``ElementResult`` if the element was handled without
         invoking Ollama, or ``None`` to proceed to generation.
         """
-        # REQ-MLT-101: Non-Python files should not attempt Python template
-        # matching or decomposition — caller (_handle_simple) already guards,
-        # but defense-in-depth.
-        if _is_non_python_file(file_path):
-            return None  # signal: not handled, fall through to _handle_simple guard
+        # REQ-MP-1200: Polyglot template short-circuit — try language-specific
+        # templates for non-Python files before falling back. Same pattern as
+        # _handle_trivial: detect language, get registry, try match.
+        # Guard: only attempt templates for files with registered language
+        # profiles. Unknown extensions (yaml, html, etc.) resolve to "python"
+        # via _language_id_from_path but should NOT use Python templates.
+        from pathlib import PurePosixPath as _P
+        _ext = _P(file_path).suffix.lower()
+        if _ext and _ext != ".py" and _is_non_python_file(file_path):
+            return None  # no registered language profile — skip templates
+        language_id = _language_id_from_path(file_path)
+        if not TemplateRegistry.has_templates_for(language_id):
+            return None  # no templates for this language
 
         # REQ-MP-1006: Template-first short-circuit
-        template_match = self._templates.match(element, file_spec, contracts)
+        registry = self._get_registry_for_language(language_id)
+        template_match = registry.match(element, file_spec, contracts)
         if template_match is not None:
-            struct_ok, struct_reason = _structural_verify(template_match.code, element)
-            if not struct_ok:
-                logger.info(
-                    "Template short-circuit failed structural verify for %s: %s",
-                    element.name, struct_reason,
-                )
-                return None  # fall through to Ollama
+            # Structural verification — Python only
+            if language_id == "python":
+                struct_ok, struct_reason = _structural_verify(template_match.code, element)
+                if not struct_ok:
+                    logger.info(
+                        "Template short-circuit failed structural verify for %s: %s",
+                        element.name, struct_reason,
+                    )
+                    return None  # fall through to Ollama
             logger.info(
                 "Template short-circuit in _handle_simple for %s (template=%s)",
                 element.name, template_match.name,
