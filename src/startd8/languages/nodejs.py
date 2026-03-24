@@ -5,6 +5,7 @@ Handles both CommonJS (require) and ESM (import from) patterns.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -154,8 +155,6 @@ class NodeLanguageProfile:
         console.log   → logger.info
         var x =       → const x =
         """
-        import re
-
         # Order: most specific first to avoid double-matching.
         text = re.sub(
             r'console\.error\s*\(([^)]*)\)',
@@ -611,18 +610,20 @@ class NodeLanguageProfile:
         return " "
 
 
-def _looks_like_typescript(code: str) -> bool:
-    """Heuristic: code contains TypeScript-specific syntax — REQ-NODE-MP-300."""
-    import re
-
-    _TS_INDICATORS = [
+_TS_INDICATORS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(p) for p in (
         r":\s*(?:string|number|boolean|void|any|never|unknown|undefined)\b",
         r"\binterface\s+\w+",
         r"<\w+(?:\s*,\s*\w+)*>",           # generics
         r"\bas\s+(?:const|string|number)\b",
         r"\btype\s+\w+\s*=",
-    ]
-    return any(re.search(p, code) for p in _TS_INDICATORS)
+    )
+)
+
+
+def _looks_like_typescript(code: str) -> bool:
+    """Heuristic: code contains TypeScript-specific syntax — REQ-NODE-MP-300."""
+    return any(p.search(code) for p in _TS_INDICATORS)
 
 
 def detect_module_system(project_root: Path) -> str:

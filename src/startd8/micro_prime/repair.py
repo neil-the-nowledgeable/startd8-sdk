@@ -26,6 +26,7 @@ analysis (OLLAMA_QUALITY_RESEARCH_AGENDA Section 7).
 from __future__ import annotations
 
 import ast
+import functools
 import re
 import time
 import textwrap
@@ -1366,6 +1367,13 @@ def _is_allowed_import(
     return True
 
 
+@functools.lru_cache(maxsize=1)
+def _get_nodejs_profile() -> Any:
+    """Cached singleton for Node.js validation dispatch in _try_parse()."""
+    from startd8.languages.nodejs import NodeLanguageProfile
+    return NodeLanguageProfile()
+
+
 def _try_parse(
     code: str,
     is_method: bool = False,
@@ -1411,10 +1419,9 @@ def _try_parse(
             return True
 
     if language_id == "nodejs":
-        # REQ-NODE-MP-302: dispatch to NodeLanguageProfile.validate_syntax().
+        # REQ-NODE-MP-302: dispatch to cached NodeLanguageProfile.
         try:
-            from startd8.languages.nodejs import NodeLanguageProfile
-            valid, _ = NodeLanguageProfile().validate_syntax(code)
+            valid, _ = _get_nodejs_profile().validate_syntax(code)
             return valid
         except (ImportError, OSError):
             return True  # node not available — assume valid

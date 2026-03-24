@@ -1253,8 +1253,6 @@ class NodeFileDecomposeStrategy:
             kind = "function"
             if elem.kind in (ElementKind.METHOD, ElementKind.ASYNC_METHOD):
                 kind = "method"
-            elif elem.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD):
-                kind = "function"
             is_async = elem.kind in (
                 ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
             )
