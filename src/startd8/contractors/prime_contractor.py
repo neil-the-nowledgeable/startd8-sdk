@@ -5058,7 +5058,7 @@ class PrimeContractorWorkflow:
             if qp_report:
                 result_dict["_query_security_report"] = qp_report
         except Exception:
-            logger.debug("Anzen gate finalization skipped", exc_info=True)
+            logger.warning("Anzen gate finalization skipped", exc_info=True)
 
         # Launch async post-mortem evaluation
         try:

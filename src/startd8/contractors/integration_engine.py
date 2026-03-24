@@ -1632,7 +1632,7 @@ class IntegrationEngine:
             "credential_total": credential_total,
             "lifecycle_total": lifecycle_total,
             "parameterization_rate": (
-                round(1.0 - injection_total / len(entries), 4)
+                round(max(0.0, 1.0 - injection_total / len(entries)), 4)
                 if entries else 0.0
             ),
             "false_positives_suppressed": 0,
@@ -1653,8 +1653,8 @@ class IntegrationEngine:
         self, output_dir: str, run_id: str, report: Dict[str, Any],
     ) -> None:
         """Write query-security-metrics.json + update kaizen-metrics.json."""
-        import datetime as _datetime
-        import json as _json
+        import datetime
+        import json
 
         try:
             from startd8.security_prime.kaizen import update_query_security_metrics
@@ -1665,15 +1665,15 @@ class IntegrationEngine:
         qp_standalone = {
             "schema_version": "1.0.0",
             "run_id": run_id,
-            "timestamp": _datetime.datetime.now(
-                _datetime.timezone.utc,
+            "timestamp": datetime.datetime.now(
+                datetime.timezone.utc,
             ).isoformat(),
             **report,
         }
         qp_path = Path(output_dir) / "query-security-metrics.json"
         try:
             qp_path.write_text(
-                _json.dumps(qp_standalone, indent=2, default=str) + "\n",
+                json.dumps(qp_standalone, indent=2, default=str) + "\n",
                 encoding="utf-8",
             )
             logger.info("Wrote query-security-metrics.json to %s", qp_path)
