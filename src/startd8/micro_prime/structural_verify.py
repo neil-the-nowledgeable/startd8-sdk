@@ -16,10 +16,22 @@ from startd8.forward_manifest import ForwardElementSpec
 from startd8.utils.code_manifest import ElementKind
 
 
-def structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, str]:
+def structural_verify(
+    code: str,
+    element: ForwardElementSpec,
+    language_id: str = "python",
+) -> tuple[bool, str]:
     """Verify structural correctness of generated code.
 
-    Checks:
+    For Python: full AST-based checks (function exists, no stubs, return
+    statements, self/cls parameter, factory returns, class body statements).
+
+    For non-Python languages: syntax validation via the language's own
+    parser (tree-sitter for C#, gofmt for Go, etc.).  Python-specific
+    structural checks are skipped because they rely on ``ast`` module
+    semantics that don't apply to other languages.
+
+    Checks (Python only):
     - AST parses successfully
     - For functions: target function exists and body is non-empty
     - For constants: target assignment exists
@@ -30,6 +42,14 @@ def structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, str
     - Class body has no bare executable statements (splicer assembly defects)
     - Factory functions (create_*/make_*/build_*) return a value
     """
+    if language_id != "python" and language_id:
+        # Non-Python: validate syntax via language-aware parser, skip
+        # Python-specific structural checks (function names, self param, etc.)
+        from startd8.micro_prime.repair import _try_parse
+        is_method = bool(element.parent_class)
+        if _try_parse(code, is_method=is_method, language_id=language_id):
+            return True, "structural checks passed (non-Python syntax valid)"
+        return False, f"{language_id} syntax validation failed"
     is_method = bool(element.parent_class)
 
     def _render_def_line(target: ForwardElementSpec) -> Optional[str]:
@@ -215,8 +235,25 @@ def structural_verify(code: str, element: ForwardElementSpec) -> tuple[bool, str
     return True, "structural checks passed"
 
 
-def ast_parse_valid(code: str, element: ForwardElementSpec) -> bool:
-    """Return True if the code parses as a full element (method wrapper-aware)."""
+def ast_parse_valid(
+    code: str,
+    element: ForwardElementSpec,
+    language_id: str = "python",
+) -> bool:
+    """Return True if the code parses as valid syntax.
+
+    For Python: uses ``ast.parse()`` with class-wrapper fallback for methods.
+    For other languages: delegates to ``repair._try_parse()`` which dispatches
+    to the language's own syntax validator (tree-sitter for C#, gofmt for Go,
+    etc.).
+    """
+    if language_id != "python" and language_id:
+        # Non-Python: use the language-aware parser from the repair module
+        from startd8.micro_prime.repair import _try_parse
+        is_method = bool(element.parent_class)
+        return _try_parse(code, is_method=is_method, language_id=language_id)
+
+    # Python: AST-based with class-wrapper fallback for methods
     is_method = bool(element.parent_class)
     try:
         ast.parse(code)

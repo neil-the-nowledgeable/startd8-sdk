@@ -3094,7 +3094,8 @@ class MicroPrimeEngine:
                 output_tokens=total_output,
             )
 
-        structural_ok, structural_reason = _structural_verify(assembled, element)
+        _mod_lang = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+        structural_ok, structural_reason = _structural_verify(assembled, element, language_id=_mod_lang)
         if not structural_ok:
             _record_decomp_failed(plan.strategy, file_path, "structural_verification")
             return None, assembly_time_ms, self._moderate_escalation_result(
@@ -4105,7 +4106,8 @@ class MicroPrimeEngine:
                 # If extraction fails, fall through with raw code —
                 # the repair pipeline's bare_statement_wrap handles it as before.
 
-            ast_valid_before = _ast_parse_valid(code, element)
+            _lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+            ast_valid_before = _ast_parse_valid(code, element, language_id=_lang_id)
             code = code
             repair_steps: list[str] = []
             repair_attribution = None
@@ -4113,7 +4115,6 @@ class MicroPrimeEngine:
             repair_recovered = False
 
             if self._config.repair_enabled:
-                _lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
                 repair_result = run_repair_pipeline(
                     code, element, file_spec, skeleton_source=skeleton,
                     language_id=_lang_id,
@@ -4288,7 +4289,8 @@ class MicroPrimeEngine:
         code = outcome.code
 
         # Structural verification (REQ-MP-512)
-        structural_ok, structural_reason = _structural_verify(code, element)
+        _vfy_lang = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+        structural_ok, structural_reason = _structural_verify(code, element, language_id=_vfy_lang)
         if not structural_ok:
             struct_handoff = None
             if self._config.repair_enabled and outcome.repair_result is not None:
