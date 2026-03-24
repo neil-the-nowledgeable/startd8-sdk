@@ -608,6 +608,12 @@ def _step_definition_order_fix(
     return _shared_definition_order_fix(code, ctx, Path("<file>"))
 
 
+# Module-level language context for repair steps that can't accept
+# extra parameters (fixed signature: code, element, file_spec, skeleton).
+# Set by run_repair_pipeline() before invoking the step list.
+_current_repair_language_id: str = "python"
+
+
 def _step_ast_validate(
     code: str,
     element: ForwardElementSpec,
@@ -616,10 +622,11 @@ def _step_ast_validate(
 ) -> RepairStepResult:
     """Step 10: Final AST validation gate (REQ-MP-405).
 
-    Delegates to shared ``AstValidateStep``.
+    Uses the module-level ``_current_repair_language_id`` to dispatch
+    to the correct syntax validator for the target language.
     """
     is_method = bool(element.parent_class)
-    valid, error = _validate_ast_with_error(code, is_method)
+    valid, error = _validate_ast_with_error(code, is_method, _current_repair_language_id)
     metrics = {"valid": valid}
     if error:
         metrics["error"] = error
@@ -740,6 +747,9 @@ def run_repair_pipeline(
         RepairResult with repaired code and step metadata.
     """
     start = time.monotonic()
+    global _current_repair_language_id  # noqa: PLW0603
+    _current_repair_language_id = language_id
+
     results: list[RepairStepResult] = []
     current = code
     is_method = bool(element.parent_class)
@@ -831,6 +841,9 @@ def run_file_repair_pipeline(
     Returns:
         RepairResult with repaired code and step metadata.
     """
+    global _current_repair_language_id  # noqa: PLW0603
+    _current_repair_language_id = language_id
+
     start = time.monotonic()
     results: list[RepairStepResult] = []
     current = code
@@ -1228,8 +1241,21 @@ def _find_skeleton_indent(
     return None
 
 
-def _validate_ast_with_error(code: str, is_method: bool = False) -> tuple[bool, Optional[str]]:
-    """Validate code via ast.parse(), returning error details if invalid."""
+def _validate_ast_with_error(
+    code: str,
+    is_method: bool = False,
+    language_id: str = "python",
+) -> tuple[bool, Optional[str]]:
+    """Validate code syntax, returning error details if invalid.
+
+    Dispatches by language: Python uses ``ast.parse()``, non-Python
+    languages delegate to ``_try_parse()`` (which uses tree-sitter for
+    C#, gofmt for Go, etc.).
+    """
+    if language_id != "python" and language_id:
+        valid = _try_parse(code, is_method, language_id)
+        return valid, None if valid else f"{language_id} syntax validation failed"
+
     try:
         ast.parse(code)
         return True, None
