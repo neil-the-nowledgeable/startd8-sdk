@@ -246,16 +246,29 @@ def _attempt_splice_violation_repair(
         spliced_code, ctx, Path(file_path),
     )
     if result.modified:
-        # Validate repaired code still parses
+        # Validate repaired code still parses.
+        # REQ-MPL-105: Use language-aware validation — ast.parse() rejects
+        # valid Go/Java/C# code, silently discarding successful repairs.
+        _repair_valid = False
         try:
-            ast.parse(result.code)
+            _repair_lang = _language_id_from_path(file_path)
+            if _repair_lang != "python" and _repair_lang:
+                from startd8.micro_prime.repair import _try_parse
+                _repair_valid = _try_parse(result.code, is_method=False, language_id=_repair_lang)
+            else:
+                ast.parse(result.code)
+                _repair_valid = True
+        except SyntaxError:
+            pass
+
+        if _repair_valid:
             fixes = result.metrics.get("fixes", [])
             logger.info(
                 "Splice violation repair applied %d fix(es) to %s: %s",
                 len(fixes), file_path, "; ".join(fixes),
             )
             return result.code, fixes
-        except SyntaxError:
+        else:
             logger.warning(
                 "Splice violation repair produced invalid syntax for %s — reverting",
                 file_path,

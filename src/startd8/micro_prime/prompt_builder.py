@@ -572,11 +572,16 @@ def _render_constraints(contracts: list[InterfaceContract]) -> list[str]:
     return lines
 
 
-def _is_usable_example(ce: dict) -> bool:
+def _is_usable_example(ce: dict, language_id: str = "python") -> bool:
     """Return True if a completed element dict is safe to inject as few-shot."""
     if not ce.get("syntax_valid") or not ce.get("code"):
         return False
     # Re-validate: the syntax_valid flag may have been set before post-processing.
+    # REQ-MPL-105: Non-Python code was already validated by gofmt/tree-sitter
+    # during generation — ast.parse() would reject valid Go/Java/C# code,
+    # silently excluding it from few-shot examples.
+    if language_id != "python" and language_id:
+        return True  # trust the generation-time validation
     try:
         ast.parse(ce["code"])
     except SyntaxError:
@@ -629,11 +634,22 @@ def find_few_shot_examples(
         examples.append(code)
         return True
 
+    # REQ-MPL-105: Derive language_id for few-shot validation (avoid
+    # ast.parse() rejecting valid Go/Java/C# examples).
+    _fs_lang = "python"
+    _ext = file_path.rsplit(".", 1)[-1] if "." in file_path else ""
+    _EXT_TO_LANG = {
+        "go": "go", "java": "java", "cs": "csharp",
+        "js": "nodejs", "ts": "nodejs", "mjs": "nodejs",
+    }
+    if _ext in _EXT_TO_LANG:
+        _fs_lang = _EXT_TO_LANG[_ext]
+
     # Tier 1: Same class
     if element.parent_class:
         candidates = sorted(
             (ce for ce in completed_elements
-             if _is_usable_example(ce)
+             if _is_usable_example(ce, _fs_lang)
              and ce.get("element", {}).get("parent_class") == element.parent_class
              and ce.get("element", {}).get("name") != element.name),
             key=_repair_sort_key,
@@ -647,7 +663,7 @@ def find_few_shot_examples(
     if len(examples) < max_examples:
         candidates = sorted(
             (ce for ce in completed_elements
-             if _is_usable_example(ce)
+             if _is_usable_example(ce, _fs_lang)
              and ce.get("file_path") == file_path
              and ce.get("element", {}).get("name") != element.name),
             key=_repair_sort_key,
@@ -661,7 +677,7 @@ def find_few_shot_examples(
     if len(examples) < max_examples:
         candidates = sorted(
             (ce for ce in completed_elements
-             if _is_usable_example(ce)
+             if _is_usable_example(ce, _fs_lang)
              and ce.get("element", {}).get("kind") == element.kind
              and ce.get("element", {}).get("name") != element.name),
             key=_repair_sort_key,
@@ -781,6 +797,34 @@ def _extract_element_context_from_skeleton(
     """Extract the rendered element and indent level from a skeleton file."""
     if not skeleton:
         return None, None, []
+
+    # REQ-MPL-105: Non-Python skeletons can't be parsed by ast.parse().
+    # Use text-based extraction for Go/Java/C#/Node — find the target
+    # element by name and extract surrounding context lines.
+    _skel_is_python = True
+    if language_profile is not None:
+        _skel_lang = getattr(language_profile, "language_id", "python")
+        if _skel_lang != "python" and _skel_lang:
+            _skel_is_python = False
+
+    if not _skel_is_python:
+        # Text-based context extraction for non-Python skeletons.
+        # Find the target element's declaration line and extract indent.
+        lines = skeleton.splitlines()
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if element.name in stripped and stripped.startswith(("func ", "public ", "private ", "protected ", "function ", "export ")):
+                indent = line[:len(line) - len(stripped)]
+                # Collect surrounding sibling declarations as context
+                siblings = []
+                for j, sib_line in enumerate(lines):
+                    sib_stripped = sib_line.lstrip()
+                    if j != i and sib_stripped.startswith(("func ", "type ", "const ", "var ", "public ", "private ")):
+                        siblings.append(f"# {sib_stripped.split('{')[0].rstrip()}")
+                context = "\n".join(lines[max(0, i-2):i+3])
+                return context, indent or "\t", siblings
+        return None, "\t" if language_profile and getattr(language_profile, "language_id", "") == "go" else None, []
+
     try:
         tree = ast.parse(skeleton)
     except SyntaxError:
