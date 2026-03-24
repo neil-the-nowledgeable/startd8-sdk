@@ -1922,15 +1922,29 @@ class IntegrationEngine:
 
         repair_config = self._repair_config
 
-        # REQ-KZ-CS-402b: Auto-enable sql_injection_risk repair for C# files.
-        has_csharp = any(f.suffix == ".cs" for f in integrated_files)
+        # Auto-enable language-specific semantic repair categories.
+        # RepairConfig._DEFAULT_SEMANTIC_CATEGORIES_BY_LANGUAGE defines
+        # which categories each language supports (e.g., Go: unchecked_error,
+        # C#: sql_injection_risk).  Merge these into the config so the
+        # orchestrator doesn't skip repair for languages with defaults.
         existing_categories = getattr(repair_config, "semantic_repair_categories", frozenset()) or frozenset()
-        if has_csharp and "sql_injection_risk" not in existing_categories:
+        auto_categories = set(existing_categories)
+        for f in integrated_files:
+            ext = f.suffix.lower()
+            try:
+                from startd8.languages.registry import LanguageRegistry
+                profile = LanguageRegistry.get_by_extension(ext)
+                if profile is not None:
+                    lang_defaults = repair_config.get_semantic_categories(profile.language_id)
+                    auto_categories.update(lang_defaults)
+            except (ImportError, AttributeError):
+                pass
+        if auto_categories != existing_categories:
             from startd8.repair.config import RepairConfig
             repair_config = RepairConfig(
                 repair_enabled=repair_config.repair_enabled,
                 repairable_categories=repair_config.repairable_categories,
-                semantic_repair_categories=existing_categories | frozenset({"sql_injection_risk"}),
+                semantic_repair_categories=frozenset(auto_categories),
                 max_semantic_repairs_per_file=repair_config.max_semantic_repairs_per_file,
                 semantic_repair_circuit_breaker_threshold=repair_config.semantic_repair_circuit_breaker_threshold,
                 per_step_timeout_s=repair_config.per_step_timeout_s,
