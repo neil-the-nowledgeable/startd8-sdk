@@ -1059,7 +1059,11 @@ def extract_function_body(
             if not body_lines:
                 return None
             return "\n".join(body_lines)
-        except (ImportError, Exception):
+        except ImportError:
+            logger.debug("Go splicer not available for body extraction of %s", element.name)
+            return None
+        except Exception as exc:
+            logger.warning("Go body extraction failed for %s: %s", element.name, exc)
             return None
 
     if lang_id == "csharp":
@@ -1071,7 +1075,11 @@ def extract_function_body(
                 _, _, body_text = bodies[element.name]
                 return body_text if body_text.strip() else None
             return None
-        except (ImportError, Exception):
+        except ImportError:
+            logger.debug("C# splicer not available for body extraction of %s", element.name)
+            return None
+        except Exception as exc:
+            logger.warning("C# body extraction failed for %s: %s", element.name, exc)
             return None
 
     if lang_id in ("java", "nodejs"):
@@ -1080,7 +1088,8 @@ def extract_function_body(
         # body between { and } using brace-depth counting.
         try:
             return _extract_brace_body(code, element.name)
-        except Exception:
+        except Exception as exc:
+            logger.warning("%s body extraction failed for %s: %s", lang_id, element.name, exc)
             return None
 
     # Python: AST-based

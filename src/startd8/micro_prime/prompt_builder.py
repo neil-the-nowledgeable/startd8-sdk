@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import ast
 import textwrap
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from startd8.languages.protocol import LanguageProfile
 
 from startd8.forward_manifest import (
     ContractConfidence,
@@ -23,6 +26,17 @@ from startd8.utils.code_manifest import ElementKind
 logger = get_logger(__name__)
 
 
+def _get_language_id(profile: Optional[LanguageProfile]) -> str:
+    """Extract language_id from a LanguageProfile, defaulting to 'python'."""
+    if profile is None:
+        return "python"
+    lang_id = getattr(profile, "language_id", "")
+    if not lang_id:
+        logger.debug("LanguageProfile missing language_id — defaulting to python")
+        return "python"
+    return lang_id
+
+
 def build_full_function_prompt(
     element: ForwardElementSpec,
     file_spec: ForwardFileSpec,
@@ -33,7 +47,7 @@ def build_full_function_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
-    language_profile: Optional[Any] = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> str:
     """Build a prompt for a local model to generate a complete function.
 
@@ -65,7 +79,7 @@ def build_body_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
-    language_profile: Optional[Any] = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> str:
     """Build a prompt for a local model to generate a single element body.
 
@@ -112,7 +126,7 @@ def _build_function_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
-    language_profile: Optional[Any] = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     return _build_element_prompt_core(
@@ -134,7 +148,7 @@ def _build_full_function_prompt_inner(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
-    language_profile: Optional[Any] = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> str:
     """Build prompt asking the model to output a complete function declaration + body."""
     return _build_element_prompt_core(
@@ -158,7 +172,7 @@ def _build_element_prompt_core(
     domain_constraints: Optional[list[str]] = None,
     *,
     full_function: bool = False,
-    language_profile: Optional[Any] = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> str:
     """Shared prompt builder for body-only and full-function modes.
 
@@ -389,14 +403,14 @@ def _build_constant_prompt(
     return "\n".join(sections)
 
 
-def _build_element_stub(element: ForwardElementSpec, language_profile: Any = None) -> str:
+def _build_element_stub(element: ForwardElementSpec, language_profile: Optional[LanguageProfile] = None) -> str:
     """Render an element as a language-appropriate stub.
 
     REQ-MP-1211a: When *language_profile* is provided and is non-Python,
     renders in the target language's syntax (Go ``func``, Java ``public``,
     etc.).  Falls back to Python ``def`` when profile is None.
     """
-    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _lang_id = _get_language_id(language_profile)
     if _lang_id != "python" and _lang_id:
         return _build_non_python_stub(element, language_profile)
 
@@ -447,7 +461,7 @@ def _build_element_stub(element: ForwardElementSpec, language_profile: Any = Non
     return "\n".join(lines)
 
 
-def _build_non_python_stub(element: ForwardElementSpec, language_profile: Any) -> str:
+def _build_non_python_stub(element: ForwardElementSpec, language_profile: LanguageProfile) -> str:
     """Render a non-Python element stub in the target language's syntax.
 
     REQ-MP-1211a: Produces Go ``func``, Java ``public``, C# ``public``,
@@ -567,7 +581,7 @@ def _render_imports(file_spec: ForwardFileSpec, language_profile: Any = None) ->
     REQ-MP-1211b: Go uses ``import "pkg"``, Java uses ``import pkg;``,
     C# uses ``using Namespace;``, Node.js uses ESM/CJS syntax.
     """
-    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _lang_id = _get_language_id(language_profile)
     lines: list[str] = []
     for imp in file_spec.imports:
         if _lang_id == "go":
@@ -596,7 +610,7 @@ def _render_imports(file_spec: ForwardFileSpec, language_profile: Any = None) ->
 
 def _render_sibling_stubs(
     element: ForwardElementSpec, file_spec: ForwardFileSpec,
-    language_profile: Any = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> list[str]:
     """Render stubs for sibling methods in the same class.
 
@@ -608,7 +622,7 @@ def _render_sibling_stubs(
     stubs: list[str] = []
     if not element.parent_class:
         return stubs
-    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _lang_id = _get_language_id(language_profile)
 
     for sib in file_spec.elements:
         if sib.parent_class == element.parent_class and sib.name != element.name:
@@ -616,7 +630,7 @@ def _render_sibling_stubs(
                 # Non-Python: use language-aware stub, take first line
                 _comment = "//"
                 stub_text = _build_element_stub(sib, language_profile)
-                first_line = stub_text.splitlines()[0] if stub_text else ""
+                first_line = (stub_text.splitlines() or [""])[0] if stub_text else ""
                 hint = f"  {_comment} {sib.docstring_hint}" if sib.docstring_hint else ""
                 stubs.append(f"{first_line}{hint}")
             else:
@@ -636,7 +650,7 @@ def _lookup_init_context(
     parent_class: str,
     file_spec: ForwardFileSpec,
     skeleton: str,
-    language_profile: Any = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> Optional[str]:
     """Extract __init__ method context for a class to expose instance attributes.
 
@@ -645,7 +659,7 @@ def _lookup_init_context(
     Returns a comment-prefixed string or None.
     """
     # AST audit P2: __init__ is Python-specific — skip for non-Python.
-    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _lang_id = _get_language_id(language_profile)
     if _lang_id != "python" and _lang_id:
         return None
 
@@ -940,7 +954,7 @@ def _extract_sibling_stubs_from_skeleton(
 def _extract_element_context_from_skeleton(
     skeleton: str,
     element: ForwardElementSpec,
-    language_profile: Any = None,
+    language_profile: Optional[LanguageProfile] = None,
 ) -> tuple[Optional[str], Optional[str], list[str]]:
     """Extract the rendered element and indent level from a skeleton file."""
     if not skeleton:
