@@ -685,6 +685,61 @@ def _enrich_file_spec_from_skeleton(
     )
 
 
+def _enrich_non_python_file_spec_from_skeleton(
+    file_spec: ForwardFileSpec,
+    skeleton: str,
+    language_id: str,
+) -> ForwardFileSpec:
+    """REQ-GO-MP-300: Decompose non-Python files into per-function elements.
+
+    When a non-Python file enters MicroPrime with a single file-level element
+    (e.g., "tracker" for tracker.go) but the skeleton contains multiple stub
+    functions, this replaces the single element with individual function specs.
+
+    This enables per-function template matching, generation, and splicing —
+    the core MicroPrime value loop.
+
+    Uses ``extract_go_skeleton_specs()`` (or equivalent per language) to detect
+    stub functions and create ForwardElementSpec entries.  Only replaces elements
+    when the skeleton produces more specs than the file_spec already has.
+    """
+    if not skeleton or not language_id:
+        return file_spec
+
+    # Only decompose when we have 1 (or 0) file-level elements
+    # and the skeleton has multiple functions
+    if len(file_spec.elements) > 3:
+        return file_spec  # Already has function-level elements
+
+    if language_id == "go":
+        from startd8.micro_prime.skeleton_spec_extractor import extract_go_skeleton_specs
+        new_specs = extract_go_skeleton_specs(skeleton, file_spec.file)
+    else:
+        # Other languages: no skeleton decomposition yet
+        return file_spec
+
+    if not new_specs or len(new_specs) <= len(file_spec.elements):
+        return file_spec
+
+    # Merge: keep existing elements that aren't superseded by skeleton specs
+    new_names = {s.name for s in new_specs}
+    kept = [e for e in file_spec.elements if e.name not in new_names]
+
+    logger.info(
+        "Go file decomposition: %s → %d function elements from skeleton "
+        "(was %d file-level elements): %s",
+        file_spec.file, len(new_specs), len(file_spec.elements),
+        ", ".join(s.name for s in new_specs),
+    )
+
+    return ForwardFileSpec(
+        file=file_spec.file,
+        elements=kept + new_specs,
+        imports=file_spec.imports,
+        dependencies=file_spec.dependencies,
+    )
+
+
 def _compute_context_checksum(
     element: ForwardElementSpec,
     file_path: str,
@@ -2166,6 +2221,16 @@ class MicroPrimeEngine:
                 enriched_file_spec = _enrich_file_spec_from_skeleton(
                     element, enriched_file_spec, skeleton,
                 )
+
+        # REQ-GO-MP-300: Go file-level decomposition — break multi-function
+        # Go files into individual function elements. When a Go file enters
+        # with a single file-level element but the skeleton contains multiple
+        # stub functions, replace the single element with per-function elements.
+        _decomp_lang_id = getattr(self._language_profile, "language_id", "") if self._language_profile else ""
+        if _decomp_lang_id != "python" and _decomp_lang_id and skeleton:
+            enriched_file_spec = _enrich_non_python_file_spec_from_skeleton(
+                enriched_file_spec, skeleton, _decomp_lang_id,
+            )
 
         # Defense-in-depth: warn if any CLASS element still has no child
         # methods after enrichment.  This means class_decompose will reject
