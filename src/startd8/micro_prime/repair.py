@@ -722,6 +722,7 @@ def run_repair_pipeline(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
     skeleton_source: Optional[str] = None,
+    language_id: str = "python",
 ) -> RepairResult:
     """Run the full 8-step repair pipeline.
 
@@ -733,6 +734,7 @@ def run_repair_pipeline(
         element: Target manifest element.
         file_spec: File spec for import context.
         skeleton_source: Optional skeleton source for indent normalization.
+        language_id: Target language for syntax validation dispatch.
 
     Returns:
         RepairResult with repaired code and step metadata.
@@ -741,16 +743,16 @@ def run_repair_pipeline(
     results: list[RepairStepResult] = []
     current = code
     is_method = bool(element.parent_class)
-    ast_valid_before = _try_parse(current, is_method)
+    ast_valid_before = _try_parse(current, is_method, language_id)
 
     for step_fn in _REPAIR_STEPS:
-        was_valid_before = _try_parse(current, is_method)
+        was_valid_before = _try_parse(current, is_method, language_id)
         result = step_fn(current, element, file_spec, skeleton_source)
         results.append(result)
 
         if result.modified:
             # REQ-MP-406: Non-destructive guarantee
-            is_valid_after = _try_parse(result.code, is_method)
+            is_valid_after = _try_parse(result.code, is_method, language_id)
             if was_valid_before and not is_valid_after:
                 # Revert — this step broke valid code
                 logger.debug(
@@ -765,7 +767,7 @@ def run_repair_pipeline(
                 current = result.code
 
     # Determine AST validity + last error from ast_validate step
-    ast_valid = _try_parse(current, is_method)
+    ast_valid = _try_parse(current, is_method, language_id)
     last_error = None
     for r in results:
         if r.step_name == "ast_validate":
@@ -812,6 +814,7 @@ _FILE_REPAIR_STEPS = [
 def run_file_repair_pipeline(
     code: str,
     file_spec: Optional[ForwardFileSpec] = None,
+    language_id: str = "python",
 ) -> RepairResult:
     """Run the file-whole repair pipeline (AC-R18).
 
@@ -823,6 +826,7 @@ def run_file_repair_pipeline(
     Args:
         code: Raw LLM-generated complete file.
         file_spec: File spec for import context.
+        language_id: Target language for syntax validation dispatch.
 
     Returns:
         RepairResult with repaired code and step metadata.
@@ -832,7 +836,7 @@ def run_file_repair_pipeline(
     current = code
     # File-whole output is never a method body — always a complete file.
     is_method = False
-    ast_valid_before = _try_parse(current, is_method)
+    ast_valid_before = _try_parse(current, is_method, language_id)
 
     # Use a synthetic element for the step API (steps require an element
     # argument even though file-level steps don't use element-specific
@@ -845,12 +849,12 @@ def run_file_repair_pipeline(
     )
 
     for step_fn in _FILE_REPAIR_STEPS:
-        was_valid_before = _try_parse(current, is_method)
+        was_valid_before = _try_parse(current, is_method, language_id)
         result = step_fn(current, synthetic_element, file_spec, None)
         results.append(result)
 
         if result.modified:
-            is_valid_after = _try_parse(result.code, is_method)
+            is_valid_after = _try_parse(result.code, is_method, language_id)
             if was_valid_before and not is_valid_after:
                 logger.debug(
                     "File repair step '%s' broke valid code, reverting",
@@ -862,7 +866,7 @@ def run_file_repair_pipeline(
             else:
                 current = result.code
 
-    ast_valid = _try_parse(current, is_method)
+    ast_valid = _try_parse(current, is_method, language_id)
     last_error = None
     for r in results:
         if r.step_name == "ast_validate":
@@ -1310,18 +1314,54 @@ def _is_allowed_import(
     return True
 
 
-def _try_parse(code: str, is_method: bool = False) -> bool:
-    """Try ast.parse(), with class-wrapper fallback for methods."""
-    try:
-        ast.parse(code)
-        return True
-    except SyntaxError:
-        pass
-    if is_method:
+def _try_parse(
+    code: str,
+    is_method: bool = False,
+    language_id: str = "python",
+) -> bool:
+    """Validate code syntax, dispatching by language.
+
+    Python: ``ast.parse()`` with class-wrapper fallback for methods.
+    C#: tree-sitter via ``csharp_parser.validate_csharp_syntax()`` if
+        available, else assume valid (the C# repair steps validate
+        independently).
+    Go/Java/Node.js: language-specific syntax check or assume valid.
+    """
+    if language_id == "python" or not language_id:
         try:
-            wrapped = "class _Wrapper:\n" + textwrap.indent(code, "    ")
-            ast.parse(wrapped)
+            ast.parse(code)
             return True
         except SyntaxError:
             pass
-    return False
+        if is_method:
+            try:
+                wrapped = "class _Wrapper:\n" + textwrap.indent(code, "    ")
+                ast.parse(wrapped)
+                return True
+            except SyntaxError:
+                pass
+        return False
+
+    if language_id == "csharp":
+        try:
+            from startd8.languages.csharp_parser import validate_csharp_syntax
+            valid, _ = validate_csharp_syntax(code)
+            return valid
+        except ImportError:
+            return True  # tree-sitter unavailable — assume valid
+
+    if language_id == "go":
+        try:
+            from startd8.repair.steps._go_tool_runner import run_go_tool
+            result = run_go_tool(code, ["gofmt", "-e"])
+            return result.returncode == 0 if result.tool_found else True
+        except ImportError:
+            return True
+
+    if language_id in ("java", "nodejs"):
+        # No in-process parser available — assume valid.
+        # Validation happens via the language's own syntax validate step.
+        return True
+
+    # Unknown language — assume valid to avoid false escalation
+    return True

@@ -424,7 +424,12 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
     },
     "ast_failure": {
         "phase": "draft",
-        "hint": "Emit syntactically valid Python at all times; run a mental parse check before returning.",
+        "hint": (
+            "Emit syntactically valid code for the target language. "
+            "Python: ensure ast.parse() succeeds. C#: valid braces, file-scoped namespace. "
+            "Go: ensure gofmt passes. Java: valid braces, correct package. "
+            "Run a mental parse check before returning."
+        ),
     },
     "size_regression": {
         "phase": "draft",
@@ -464,7 +469,12 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
     },
     "repeated_escalation:ast_failure": {
         "phase": "draft",
-        "hint": "Emit syntactically valid Python; run a mental parse check. If generating function bodies, always include the def line.",
+        "hint": (
+            "Emit syntactically valid code for the target language. "
+            "If generating function bodies, always include the full signature line. "
+            "Python: def line. C#: method signature with braces. Go: func signature. "
+            "Java: method signature with braces."
+        ),
     },
     "repeated_escalation:tier_too_high": {
         "phase": "spec",

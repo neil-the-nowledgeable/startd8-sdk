@@ -4113,8 +4113,10 @@ class MicroPrimeEngine:
             repair_recovered = False
 
             if self._config.repair_enabled:
+                _lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
                 repair_result = run_repair_pipeline(
                     code, element, file_spec, skeleton_source=skeleton,
+                    language_id=_lang_id,
                 )
                 code = repair_result.code
                 repair_steps = repair_result.steps_applied
