@@ -215,3 +215,116 @@ def extract_skeleton_specs(
         )
 
     return specs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Go skeleton spec extraction — REQ-GO-MP-700
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def extract_go_skeleton_specs(
+    source_code: str,
+    file_path: str,
+) -> list[ForwardElementSpec]:
+    """Parse Go source and create ForwardElementSpecs for stub functions.
+
+    Creates specs for functions/methods whose body matches Go stub patterns
+    (``panic("not implemented")``, ``// TODO``, empty body).
+
+    Uses ``go_parser.parse_go_source()`` for structural extraction and
+    ``GoLanguageProfile.stub_patterns`` for stub detection.
+
+    Args:
+        source_code: Go source code to parse.
+        file_path: Relative file path used in spec IDs.
+
+    Returns:
+        List of ForwardElementSpec entries for stub elements.
+        Empty list on parse errors or empty files.
+    """
+    if not source_code or not source_code.strip():
+        return []
+
+    try:
+        from startd8.languages.go_parser import parse_go_source
+        from startd8.languages.registry import LanguageRegistry
+    except ImportError:
+        logger.debug("Go parser not available for skeleton extraction")
+        return []
+
+    elements = parse_go_source(source_code)
+    if not elements:
+        return []
+
+    # Get stub patterns from Go profile
+    LanguageRegistry.discover()
+    go_profile = LanguageRegistry.get("go")
+    stub_regexes = []
+    if go_profile and hasattr(go_profile, "stub_patterns"):
+        import re as _re
+        stub_regexes = [_re.compile(p) for p in go_profile.stub_patterns]
+
+    # Detect stubs by finding the function body (brace-matched) and
+    # checking if it matches a stub pattern.
+    source_lines = source_code.splitlines()
+
+    # Import splicer helpers for precise body range detection
+    try:
+        from startd8.languages.go_splicer import _find_func_declaration, _find_body_range
+        _has_splicer = True
+    except ImportError:
+        _has_splicer = False
+
+    specs: list[ForwardElementSpec] = []
+    for elem in elements:
+        if elem.kind not in ("function", "method"):
+            continue
+
+        # Find the function body precisely via brace matching
+        is_stub = False
+        if _has_splicer:
+            decl_line = _find_func_declaration(source_lines, elem.name)
+            if decl_line is not None:
+                body_range = _find_body_range(source_lines, decl_line)
+                if body_range:
+                    open_line, close_line = body_range
+                    body_text = "\n".join(source_lines[open_line + 1:close_line])
+                    for pat in stub_regexes:
+                        if pat.search(body_text):
+                            is_stub = True
+                            break
+        else:
+            # Fallback: check 3 lines after declaration (less precise)
+            start_line = elem.line_number  # 1-based
+            for i in range(start_line, min(start_line + 3, len(source_lines))):
+                line = source_lines[i] if i < len(source_lines) else ""
+                for pat in stub_regexes:
+                    if pat.search(line):
+                        is_stub = True
+                        break
+                if is_stub:
+                    break
+
+        if not is_stub:
+            continue
+
+        # Build spec
+        kind = ElementKind.METHOD if elem.parent_type else ElementKind.FUNCTION
+        spec_id = _make_spec_id(file_path, elem.line_number, elem.name)
+        sig = Signature(params=[], return_annotation=elem.return_type)
+
+        specs.append(ForwardElementSpec(
+            name=elem.name,
+            kind=kind,
+            signature=sig,
+            parent_class=elem.parent_type,
+            decomposition_source=spec_id,
+        ))
+
+    if specs:
+        logger.debug(
+            "Extracted Go skeleton specs",
+            extra={"file_path": file_path, "count": len(specs)},
+        )
+
+    return specs

@@ -47,6 +47,7 @@ class GoElement:
     line_number: int = 0
     doc_comment: Optional[str] = None
     type_annotation: Optional[str] = None  # for consts/vars
+    interface_methods: list[str] = field(default_factory=list)  # method signatures for interfaces
 
 
 # --- Regex patterns ---
@@ -174,6 +175,32 @@ def _find_struct_body(source: str, start_pos: int) -> str:
     return source[idx + 1 : end]
 
 
+# Regex for interface method signature: MethodName(params) (returns)
+_INTERFACE_METHOD_RE = re.compile(
+    r"^\s+(?P<name>[A-Za-z_]\w*)\s*\((?P<params>[^)]*)\)\s*(?P<returns>\([^)]*\)|[\w*.\[\]]+)?",
+    re.MULTILINE,
+)
+
+
+def _extract_interface_methods(body: str) -> list[str]:
+    """Extract method signatures from an interface body.
+
+    Returns a list of method signature strings like:
+    ``["Read(p []byte) (int, error)", "Close() error"]``
+    """
+    methods: list[str] = []
+    for m in _INTERFACE_METHOD_RE.finditer(body):
+        name = m.group("name")
+        # Skip embedded types (uppercase single word on a line, no parens)
+        params = m.group("params") or ""
+        returns = m.group("returns") or ""
+        sig = f"{name}({params})"
+        if returns:
+            sig += f" {returns}"
+        methods.append(sig)
+    return methods
+
+
 def _line_number(source: str, pos: int) -> int:
     """Return 1-based line number for a position in source."""
     return source[:pos].count("\n") + 1
@@ -232,10 +259,14 @@ def parse_go_source(source: str) -> List[GoElement]:
         type_kind = m.group("kind")
         is_iface = type_kind == "interface"
 
-        # Extract embedded types from struct body
+        # Extract embedded types from struct body, or method signatures from interface body
         bases = []
-        if not is_iface:
-            body = _find_struct_body(source, m.end())
+        interface_methods: list[str] = []
+        body = _find_struct_body(source, m.end())
+        if is_iface:
+            # REQ-GO-MP-600: Extract method signatures from interface body
+            interface_methods = _extract_interface_methods(body)
+        else:
             for em in _EMBEDDED_RE.finditer(body):
                 bases.append(em.group("type"))
 
@@ -247,6 +278,7 @@ def parse_go_source(source: str) -> List[GoElement]:
             is_interface=is_iface,
             line_number=_line_number(source, m.start()),
             doc_comment=_get_doc_comment(source, m.start()),
+            interface_methods=interface_methods if is_iface else [],
         ))
 
     # --- Type aliases and simple type definitions ---

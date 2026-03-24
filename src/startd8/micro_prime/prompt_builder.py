@@ -173,7 +173,7 @@ def _build_element_prompt_core(
     """
     stub = _build_element_stub(element, language_profile)
     skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
-        skeleton or "", element,
+        skeleton or "", element, language_profile,
     )
     if not indent_str:
         indent_str = _fallback_indent(element)
@@ -600,7 +600,8 @@ def _render_sibling_stubs(
 ) -> list[str]:
     """Render stubs for sibling methods in the same class.
 
-    REQ-MP-1211a: Uses ``_build_element_stub()`` for language-native rendering.
+    REQ-MP-1211a: Uses language-native rendering for non-Python siblings.
+    Python retains the compact ``def name(...): ...`` one-liner format.
     Includes ``docstring_hint`` when available so the LLM can differentiate
     sibling methods by purpose.
     """
@@ -608,13 +609,26 @@ def _render_sibling_stubs(
     if not element.parent_class:
         return stubs
     _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
-    _comment = "//" if _lang_id in ("go", "java", "csharp", "nodejs") else "#"
+
     for sib in file_spec.elements:
         if sib.parent_class == element.parent_class and sib.name != element.name:
-            stub_text = _build_element_stub(sib, language_profile)
-            first_line = stub_text.splitlines()[0] if stub_text else ""
-            hint = f"  {_comment} {sib.docstring_hint}" if sib.docstring_hint else ""
-            stubs.append(f"{first_line}{hint}")
+            if _lang_id != "python" and _lang_id:
+                # Non-Python: use language-aware stub, take first line
+                _comment = "//"
+                stub_text = _build_element_stub(sib, language_profile)
+                first_line = stub_text.splitlines()[0] if stub_text else ""
+                hint = f"  {_comment} {sib.docstring_hint}" if sib.docstring_hint else ""
+                stubs.append(f"{first_line}{hint}")
+            else:
+                # Python: compact one-liner format (original behavior)
+                if sib.signature:
+                    params = ", ".join(
+                        f"{p.name}: {p.annotation}" if p.annotation else p.name
+                        for p in sib.signature.params
+                    )
+                    ret = f" -> {sib.signature.return_annotation}" if sib.signature.return_annotation else ""
+                    hint = f"  # {sib.docstring_hint}" if sib.docstring_hint else ""
+                    stubs.append(f"def {sib.name}({params}){ret}: ...{hint}")
     return stubs
 
 
@@ -926,6 +940,7 @@ def _extract_sibling_stubs_from_skeleton(
 def _extract_element_context_from_skeleton(
     skeleton: str,
     element: ForwardElementSpec,
+    language_profile: Any = None,
 ) -> tuple[Optional[str], Optional[str], list[str]]:
     """Extract the rendered element and indent level from a skeleton file."""
     if not skeleton:
