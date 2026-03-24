@@ -908,16 +908,29 @@ class MicroPrimeCodeGenerator:
                     _SKELETON_MARKER + "\n", "",
                 ).replace(_SKELETON_MARKER, "")
 
-                # Phase 1, Step 9: ast.parse syntax gate AFTER sentinel strip
-                try:
-                    ast.parse(final_content)
-                except SyntaxError as syn_err:
-                    logger.warning(
-                        "Micro Prime ast.parse gate failed for %s: %s — skipping write",
-                        file_path, syn_err,
-                    )
-                    st.escalated_files.append(file_path)
-                    continue
+                # Phase 1, Step 9: syntax gate AFTER sentinel strip.
+                # REQ-MPL-100: Use language-aware validation, not hardcoded ast.parse().
+                # Python: ast.parse(). Go: gofmt -e. C#: tree-sitter. Others: skip.
+                _gate_lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+                if _gate_lang_id == "python":
+                    try:
+                        ast.parse(final_content)
+                    except SyntaxError as syn_err:
+                        logger.warning(
+                            "Micro Prime syntax gate failed for %s: %s — skipping write",
+                            file_path, syn_err,
+                        )
+                        st.escalated_files.append(file_path)
+                        continue
+                elif self._language_profile is not None and hasattr(self._language_profile, "validate_syntax"):
+                    _valid, _err = self._language_profile.validate_syntax(final_content)
+                    if not _valid:
+                        logger.warning(
+                            "Micro Prime syntax gate failed for %s (%s): %s — skipping write",
+                            file_path, _gate_lang_id, _err,
+                        )
+                        st.escalated_files.append(file_path)
+                        continue
                 output_path = self._output_dir / file_path
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_text(final_content, encoding="utf-8")
