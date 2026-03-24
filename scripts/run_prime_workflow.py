@@ -688,6 +688,15 @@ def main() -> int:
         _todo_env, _instr_env, getattr(args, "todo_completion", False),
         _profile if "_profile" in dir() else "n/a", _todo_enabled,
     )
+    # DIAGNOSTIC: Print to stderr so it appears even if logger is filtered
+    import sys
+    print(
+        f"[DIAG] TODO activation: env={_todo_env!r} instr={_instr_env!r} "
+        f"cli={getattr(args, 'todo_completion', False)} "
+        f"profile={_profile if '_profile' in dir() else 'UNSET'!r} "
+        f"→ enabled={_todo_enabled}",
+        file=sys.stderr, flush=True,
+    )
     if _todo_enabled:
         workflow.enable_todo_completion()
 
