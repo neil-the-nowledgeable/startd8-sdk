@@ -142,6 +142,107 @@ Extend `prompt_builder.py:_build_element_prompt_core()` to use `LanguageProfile`
 - C# prompts reference `throw new NotImplementedException()` not `raise NotImplementedError`
 - Prompt contains skeleton context with the actual stub body to be replaced
 
+### REQ-MP-1211a: Language-Aware Element Stub Rendering (CRITICAL — Forensic Finding)
+
+**Status:** NOT IMPLEMENTED. Discovered during run-118 Go forensic audit (2026-03-24).
+
+**Problem:** `_build_element_stub()` (prompt_builder.py:390-435) is **hardcoded Python**. Its docstring says "Render an element as a **Python** stub." It produces `def quote():` with `raise NotImplementedError` for ALL languages, including Go/Java/C#/Node.js. The LLM sees instructions saying "implement this `func` function" (Go-aware from REQ-MPL-101) next to a stub saying `def quote(): raise NotImplementedError` (Python).
+
+**Evidence:** Run-118 Go elements received this prompt:
+```
+# Task: Write the complete implementation of function `quote`.
+# Output the full function: the `func` declaration and the function body.
+
+# Now implement this function:
+def quote(ctx: context.Context, items: []*pb.CartItem) -> error:
+    raise NotImplementedError
+```
+
+The instructions are Go-aware. The stub is Python. The LLM must resolve a contradiction.
+
+**Requirement:** `_build_element_stub()` MUST accept a `language_profile` parameter and render language-appropriate syntax:
+
+| Language | Stub Output |
+|----------|------------|
+| Python | `def quote(ctx, items): raise NotImplementedError` |
+| Go | `func quote(ctx context.Context, items []*pb.CartItem) error { panic("not implemented") }` |
+| Java | `public ReturnType quote(ParamType param) { throw new UnsupportedOperationException(); }` |
+| C# | `public ReturnType Quote(ParamType param) { throw new NotImplementedException(); }` |
+| Node.js | `function quote(ctx, items) { throw new Error("not implemented"); }` |
+
+**Implementation approach:** Add a `render_element_stub(element, language_profile)` method to the `LanguageProfile` protocol. Each profile renders its own syntax. The prompt builder calls the profile method instead of the hardcoded Python renderer. Falls back to current Python rendering when `language_profile is None`.
+
+**Acceptance criteria:**
+1. Go elements see `func` + `panic("not implemented")` in the prompt stub
+2. Java/C# elements see `public`/`private` + `throw new ...` in the stub
+3. Node.js elements see `function`/`export` + `throw new Error(...)` in the stub
+4. Python behavior unchanged (regression)
+5. Signature parameters rendered in the target language's syntax (Go: `name Type`, not Python: `name: Type`)
+6. Return type rendered in the target language's syntax (Go: after params, not Python: `-> Type`)
+
+**Dependencies:** REQ-MP-1211 (language-aware prompt builder). This is a deeper fix than 1211 — it fixes the *content* the LLM sees, not just the *instructions*.
+
+### REQ-MP-1211b: Language-Aware Import Rendering (HIGH — Forensic Finding)
+
+**Status:** NOT IMPLEMENTED.
+
+**Problem:** `_render_imports()` (prompt_builder.py:456-466) renders ALL imports as Python `import X` or `from X import Y`. Go imports (`import "fmt"`), Java imports (`import java.util.List`), and Node.js imports (`const X = require('X')` / `import X from 'X'`) are all rendered as Python syntax.
+
+**Requirement:** `_render_imports()` MUST dispatch by language to produce correct import syntax.
+
+| Language | Import Syntax |
+|----------|--------------|
+| Python | `import X` / `from X import Y` |
+| Go | `import "pkg/path"` (single) / `import (\n\t"pkg1"\n\t"pkg2"\n)` (block) |
+| Java | `import pkg.Class;` |
+| C# | `using Namespace;` |
+| Node.js (CJS) | `const X = require('pkg')` |
+| Node.js (ESM) | `import X from 'pkg'` / `import { X } from 'pkg'` |
+
+**Implementation approach:** Each `LanguageProfile` already has `get_import_syntax_guidance()`. Add a `render_import_line(module, names, alias)` method to the protocol, or use a simpler dispatch by `language_id` in `_render_imports()`.
+
+**Acceptance criteria:**
+1. Go prompts show `import "context"` not `import context`
+2. Java prompts show `import java.util.List;` not `import java.util.List`
+3. C# prompts show `using System;` not `import System`
+4. Node.js prompts show `const express = require('express')` or `import express from 'express'`
+5. Python behavior unchanged
+
+### REQ-MP-1211c: Language-Aware Signature Parsing at Plan Ingestion (HIGH — Forensic Finding)
+
+**Status:** NOT IMPLEMENTED. Existing signature parsers for Go/Java/C#/Node.js exist but are NEVER CALLED.
+
+**Problem:** `_parse_api_signature()` in `plan_ingestion_micro_ingest.py:127-251` calls `ast.parse()` on all signatures. Go/Java/C#/Node signatures fail with `SyntaxError` → returns `None` → zero `ForwardElementSpec` entries → all non-Python elements routed to Tier 3 escalation.
+
+Language-specific signature parsers **already exist**:
+- `go_signature_parser.py` — parses `func Name(params) returns`
+- `java_signature_parser.py` — parses `access ReturnType name(params)`
+- `csharp_signature_parser.py` — parses `access ReturnType Name(params)`
+- `nodejs_signature_parser.py` — parses `function name(params)` / `const name = (params) =>`
+
+These parsers are **imported nowhere** in the plan ingestion pipeline.
+
+**Requirement:** `_parse_api_signature()` MUST dispatch to the language-specific parser when `language_id` is available in the task context (set by REQ-TDE-200 enrichment).
+
+**Implementation approach:**
+```
+IF language_id == "python": ast.parse() (existing)
+ELIF language_id == "go": go_signature_parser.parse_go_signatures()
+ELIF language_id == "java": java_signature_parser.parse_java_signatures()
+ELIF language_id == "csharp": csharp_signature_parser.parse_csharp_signatures()
+ELIF language_id == "nodejs": nodejs_signature_parser.parse_nodejs_signatures()
+ELSE: return None (unchanged fallback)
+```
+
+**Acceptance criteria:**
+1. Go function signatures produce valid `ForwardElementSpec` with `Signature(params=[...], return_annotation="...")`
+2. Java method signatures produce valid `ForwardElementSpec`
+3. Non-Python elements are classified at Tier 0-2 (local generation), not always Tier 3 (escalation)
+4. Python behavior unchanged
+5. `_parse_api_signature()` receives `language_id` from task context
+
+**Dependencies:** REQ-TDE-200 (language_id in seed context). This is the Hayai-correct fix — the language is known at plan ingestion time, so signature parsing should use it.
+
 ### REQ-MP-1212: Post-Splice Validation Gate
 
 After splicer inserts generated body into skeleton:
@@ -265,6 +366,9 @@ Replace `EscalationReason.NON_PYTHON_BYPASS` with specific reasons:
 | REQ-MP-1201–1204 | 1 | Go/Java/C#/Node.js | REQ-MP-1200 | micro_prime/templates.py |
 | REQ-MP-1210 | 2 | Go/Java/C# | Splicers (exist) | engine.py:_handle_simple() |
 | REQ-MP-1211 | 2 | All | REQ-MP-1210 | prompt_builder.py |
+| **REQ-MP-1211a** | **2** | **All non-Python** | **REQ-MP-1211** | **prompt_builder.py:_build_element_stub() + LanguageProfile.render_element_stub()** |
+| **REQ-MP-1211b** | **2** | **All non-Python** | **REQ-MP-1211** | **prompt_builder.py:_render_imports()** |
+| **REQ-MP-1211c** | **2** | **All non-Python** | **REQ-TDE-200** | **plan_ingestion_micro_ingest.py:_parse_api_signature() + language parsers** |
 | REQ-MP-1212 | 2 | Go/Java/C# | LanguageProfile.validate_syntax() | engine.py post-splice gate |
 | REQ-MP-1213 | 2b | Node.js | — | languages/nodejs_splicer.py |
 | REQ-MP-1220 | 3 | Go/Java/C# | Language parsers (exist) | micro_prime/decomposer.py |

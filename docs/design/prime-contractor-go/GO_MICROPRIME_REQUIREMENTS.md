@@ -40,13 +40,44 @@
 
 ### What's Not Working (Effectiveness Gaps)
 
-| Gap | Description | Impact | Root Cause |
-|-----|-------------|--------|-----------|
-| **Template granularity mismatch** | 7 Go templates registered but 0/12 matched in run-118 | Templates provide zero-cost generation, but never fire | Elements are file-level modules ("tracker", "money"), templates match function-level patterns ("NewXxx", "String", "Close") |
-| **Splicer never exercised** | Go splicer dispatch wired but zero splices in run-118 | Incremental generation unavailable | Depends on function-level decomposition (same root cause as template gap) |
-| **Python AST decomposer bottleneck** | `FunctionBodyDecomposer` uses `ast.parse()` — can't decompose Go files into functions | Multi-function Go files stay as single elements | Decomposer is Python-only; Go parser exists but not wired as decomposer |
-| **`unchecked_error` recurrence** | 28 warnings across 11 features despite coding standards injection | 27.5% of features have unchecked errors | LLM compliance gap — structural rules in prompts don't guarantee LLM follows them |
-| **go.mod deterministic generation** | `_try_generate_go_mod()` exists but coverage is limited | Some go.mod files fall through to LLM generation | Missing dependencies, indirect requires not always captured from plan |
+| Gap | Severity | Description | Impact | Root Cause | Polyglot Req |
+|-----|----------|-------------|--------|-----------|-------------|
+| **Element stub is Python** | CRITICAL | `_build_element_stub()` renders `def quote(): raise NotImplementedError` for Go elements | LLM sees contradictory instructions (Go-aware) vs stub (Python) | Function is hardcoded Python, no language param | REQ-MP-1211a |
+| **Imports are Python** | HIGH | `_render_imports()` renders `import fmt` instead of `import "fmt"` | LLM sees wrong import syntax | Function is hardcoded Python, no language dispatch | REQ-MP-1211b |
+| **Signature parsing skips Go** | HIGH | `_parse_api_signature()` calls `ast.parse()` on Go signatures → `SyntaxError` → zero ForwardElementSpec | All Go elements routed to Tier 3 (escalation) despite Go signature parser existing | Python AST parser used; `go_signature_parser.py` exists but not called | REQ-MP-1211c |
+| **Template granularity mismatch** | MEDIUM | 7 Go templates registered but 0/12 matched in run-118 | Templates provide zero-cost generation, but never fire | Elements are file-level modules, templates match function-level patterns | Deferred (REQ-GO-MP-300) |
+| **Splicer never exercised** | MEDIUM | Go splicer dispatch wired but zero splices in run-118 | Incremental generation unavailable | Depends on function-level decomposition | Deferred (REQ-GO-MP-300) |
+| **Python AST decomposer** | MEDIUM | `FunctionBodyDecomposer` uses `ast.parse()` — can't decompose Go | Multi-function Go files stay as single elements | Decomposer is Python-only | Deferred (REQ-GO-MP-300) |
+| **`unchecked_error` recurrence** | MEDIUM | 28 warnings across 11 features despite coding standards injection | 27.5% of features have unchecked errors | LLM compliance gap | REQ-GO-MP-200 |
+| **go.mod deterministic gen** | LOW | `_try_generate_go_mod()` exists but coverage is limited | Some go.mod files fall through to LLM | Missing indirect deps | REQ-GO-MP-400 |
+| **Interface method extraction** | MEDIUM | `go_parser.py` detects interfaces but doesn't extract method signatures from body | Interface contracts incomplete in ForwardManifest | `_find_struct_body()` skips interface bodies | Go parser enhancement |
+| **Skeleton enrichment Python-only** | MEDIUM | `skeleton_spec_extractor.py` only handles Python (`ast.parse`) | Go skeletons with `panic("not implemented")` not auto-enriched | No Go equivalent | Go skeleton enrichment |
+
+### Forensic Evidence: The Prompt Mismatch (Run-118)
+
+The forensic audit traced the exact prompt a Go element receives. The **instructions** are language-aware (REQ-MPL-101), but the **stub and imports** are Python:
+
+```
+# Task: Write the complete implementation of function `quote`.          ← Go-aware ✓
+# Output the full function: the `func` declaration and the function body. ← Go-aware ✓
+
+# Available imports (ONLY use these):
+import context                    ← PYTHON (should be: import "context")  ✗
+import github.com.example.pb      ← PYTHON (should be: "github.com/example/pb") ✗
+
+# Now implement this function:
+def quote(ctx: context.Context, items: []*pb.CartItem) -> error:  ← PYTHON ✗
+    raise NotImplementedError                                      ← PYTHON ✗
+```
+
+**Expected Go prompt:**
+```
+func quote(ctx context.Context, items []*pb.CartItem) error {
+    panic("not implemented")
+}
+```
+
+This mismatch forces the LLM to resolve a contradiction between instructions and stub. The three new REQ-MP-1211a/b/c requirements address the root causes.
 
 ---
 
@@ -288,19 +319,26 @@ Current Go status against the [MicroPrime Language Enablement Playbook](../micro
 | 7.5 (Leakage Audit) | 7.5.1–7.5.8 | All DONE (post REQ-MPL) |
 | 8 (Semantic/Postmortem) | 8.1–8.7 | All DONE |
 
-**Summary:** 42/50 checkpoints DONE. 8 remaining, all in template coverage (Stage 4) and decomposition (Stage 5).
+**Summary:** 42/54 checkpoints DONE. Remaining gaps span prompt rendering (CRITICAL), signature parsing (HIGH), and decomposition (MEDIUM).
 
 ---
 
 ## 8. Implementation Priority
 
+**Revised priority based on forensic findings (2026-03-24).** The prompt rendering gaps (REQ-MP-1211a/b/c) are higher priority than template expansion or decomposition because they affect the quality of EVERY element the LLM generates, not just a subset.
+
 | Phase | Requirements | Effort | Dependency | Expected Impact |
 |-------|-------------|--------|------------|-----------------|
-| **1** | REQ-GO-MP-100 (file-level templates) | 2–3 hours | None | 2–4 template matches per run (test files, handlers) |
-| **2** | REQ-GO-MP-200 (error handling P0) | 1 hour | None | Reduce `unchecked_error` from 28 to < 10 |
-| **3** | REQ-GO-MP-300 (decomposer) | 6–8 hours | Go parser + splicer (exist) | Enable function-level generation; unlock all 7+ templates + splicer |
+| **0 (CRITICAL)** | REQ-MP-1211a (language-aware stub rendering) | 4–6 hours | LanguageProfile protocol extension | LLM sees correct Go syntax in prompt — eliminates instruction/stub contradiction |
+| **0 (HIGH)** | REQ-MP-1211b (language-aware import rendering) | 2 hours | None | LLM sees `import "fmt"` not `import fmt` |
+| **0 (HIGH)** | REQ-MP-1211c (Go signature parser wiring) | 2 hours | REQ-TDE-200 (done) | Go elements get ForwardElementSpec from plan → Tier 0-2 routing instead of Tier 3 escalation |
+| **1** | REQ-GO-MP-200 (error handling P0 constraint) | 1 hour | None | Reduce `unchecked_error` from 28 to < 10 |
+| **2** | REQ-GO-MP-100 (file-level templates) | 2–3 hours | None | 2–4 template matches per run |
+| **3** | REQ-GO-MP-300 (decomposer) | 6–8 hours | Go parser + splicer (exist) | Enable function-level generation; unlock templates + splicer |
 | **4** | REQ-GO-MP-400 (go.mod assembly) | 2 hours | None | Eliminate LLM cost for go.mod files |
 | **5** | REQ-GO-MP-500 (metrics) | 1 hour | None | Visibility into Go MicroPrime effectiveness |
+
+**Critical path:** Phase 0 (stub + imports + signature parsing) is the highest-value work. Every Go element benefits immediately. Phases 1-5 have narrower per-item impact.
 
 **Critical path:** Phase 3 (decomposer) is the highest-value change — it unlocks template matching, splicer integration, and per-function validation. Phases 1 and 2 can proceed in parallel.
 
