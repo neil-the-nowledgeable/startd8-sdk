@@ -32,6 +32,8 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
     # REQ-KZ-ND-402d Phase 2: Node.js semantic repair
     "var_usage",
     "duplicate_require",
+    # Credential leakage — language-neutral
+    "query_security_credential_leakage",
 })
 
 # REQ-KZ-CS-402b: Categories that route through a non-"semantic" routing
@@ -40,6 +42,7 @@ _REPAIRABLE_CATEGORIES: frozenset[str] = frozenset({
 # a plain Diagnostic with the correct routing category instead.
 _CATEGORY_TO_ROUTE: dict[str, str] = {
     "sql_injection_risk": "security",
+    "query_security_credential_leakage": "security",
 }
 
 # Map semantic issue categories to routing-table pattern names.

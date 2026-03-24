@@ -17,6 +17,7 @@ from .steps import (
     BracketBalanceStep,
     ClassBodyDeduplicationStep,
     ContaminationStripJsStep,
+    CredentialSanitizeStep,
     CSharpAccessModifierStep,
     CSharpConventionFixStep,
     CSharpNamespaceFixStep,
@@ -81,6 +82,7 @@ _CANONICAL_ORDER = [
     "semantic_method_resolution_fix",
     "semantic_discarded_return_fix",
     "semantic_duplicate_main_fix",
+    "credential_sanitize",
     "csharp_convention_fix",
     "csharp_nullable_fix",
     "csharp_access_modifier_fix",
@@ -146,6 +148,12 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     ("semantic", "missing_nullable_in_csproj", ["csharp_nullable_fix"], "MEDIUM", "csharp"),
     ("semantic", "missing_access_modifier", ["csharp_access_modifier_fix", "csharp_syntax_validate"], "MEDIUM", "csharp"),
     ("semantic", "namespace_filepath_mismatch", ["csharp_namespace_fix", "csharp_syntax_validate"], "MEDIUM", "csharp"),
+    # Credential leakage repair — language-neutral step, per-language routing
+    ("security", "credential_leakage", ["credential_sanitize", "csharp_syntax_validate"], "HIGH", "csharp"),
+    ("security", "credential_leakage", ["credential_sanitize", "java_syntax_validate"], "HIGH", "java"),
+    ("security", "credential_leakage", ["credential_sanitize", "go_syntax_validate"], "HIGH", "go"),
+    ("security", "credential_leakage", ["credential_sanitize", "js_syntax_validate"], "HIGH", "nodejs"),
+    ("security", "credential_leakage", ["credential_sanitize", "ast_validate"], "HIGH", "python"),
     # Node.js repair routes
     ("syntax", "js_syntax_error", ["fence_strip", "shebang_strip", "todo_uncomment", "bracket_balance", "js_syntax_validate"], "HIGH", "nodejs"),
     ("import", "js_import_error", ["fence_strip", "todo_uncomment", "js_syntax_validate"], "MEDIUM", "nodejs"),
@@ -159,6 +167,7 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
 
 # Step name → step class constructor
 _STEP_FACTORIES: dict[str, type] = {
+    "credential_sanitize": CredentialSanitizeStep,
     "fence_strip": FenceStripStep,
     "todo_uncomment": TodoUncommentStep,
     "future_import_reorder": FutureImportReorderStep,
