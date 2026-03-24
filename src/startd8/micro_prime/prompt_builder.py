@@ -171,7 +171,7 @@ def _build_element_prompt_core(
     - Few-shot formatting (indented body vs complete def+body)
     - Target label ("implement this" vs "implement this function")
     """
-    stub = _build_element_stub(element)
+    stub = _build_element_stub(element, language_profile)
     skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
         skeleton or "", element,
     )
@@ -180,8 +180,8 @@ def _build_element_prompt_core(
     if skeleton_context:
         stub = skeleton_context
 
-    import_lines = _render_imports(file_spec)
-    sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec)
+    import_lines = _render_imports(file_spec, language_profile)
+    sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec, language_profile)
     constraint_lines = _render_constraints(contracts)
 
     sections: list[str] = []
@@ -197,7 +197,7 @@ def _build_element_prompt_core(
             sections.append(
                 f"# This is a method of class `{element.parent_class}`."
             )
-        init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "")
+        init_hint = _lookup_init_context(element.parent_class, file_spec, skeleton or "", language_profile)
         if init_hint:
             sections.append("# Constructor context (use `self.*` for instance state):")
             sections.append(init_hint)
@@ -239,7 +239,7 @@ def _build_element_prompt_core(
         indent_spaces = len(indent_str or "")
         est_lines = _estimate_body_lines(element)
         def_line = None
-        for line in _build_element_stub(element).splitlines():
+        for line in _build_element_stub(element, language_profile).splitlines():
             if line.strip().startswith("@"):
                 continue
             def_line = line.strip()
@@ -254,9 +254,11 @@ def _build_element_prompt_core(
             body_framing = (
                 f"# Task: Implement the body of function `{element.name}`."
             )
-        # REQ-MPL-101: Language-aware indentation instruction
+        # REQ-MPL-101 / REQ-NODE-MP-700: Language-aware indentation instruction
         if _lang_id == "go":
             _indent_instr = "# Use tab indentation (Go standard)."
+        elif language_profile is not None and hasattr(language_profile, "indent_size"):
+            _indent_instr = f"# Indent every line with exactly {language_profile.indent_size} spaces."
         else:
             _indent_instr = f"# Indent every line with exactly {indent_spaces} spaces."
 
@@ -387,8 +389,18 @@ def _build_constant_prompt(
     return "\n".join(sections)
 
 
-def _build_element_stub(element: ForwardElementSpec) -> str:
-    """Render an element as a Python stub at top-level indent."""
+def _build_element_stub(element: ForwardElementSpec, language_profile: Any = None) -> str:
+    """Render an element as a language-appropriate stub.
+
+    REQ-MP-1211a: When *language_profile* is provided and is non-Python,
+    renders in the target language's syntax (Go ``func``, Java ``public``,
+    etc.).  Falls back to Python ``def`` when profile is None.
+    """
+    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    if _lang_id != "python" and _lang_id:
+        return _build_non_python_stub(element, language_profile)
+
+    # ── Python stub (original, unchanged) ──
     lines: list[str] = []
 
     # Decorators
@@ -435,6 +447,102 @@ def _build_element_stub(element: ForwardElementSpec) -> str:
     return "\n".join(lines)
 
 
+def _build_non_python_stub(element: ForwardElementSpec, language_profile: Any) -> str:
+    """Render a non-Python element stub in the target language's syntax.
+
+    REQ-MP-1211a: Produces Go ``func``, Java ``public``, C# ``public``,
+    or Node.js ``function`` syntax with language-appropriate stub bodies.
+    """
+    lang_id = language_profile.language_id
+    stub_body = language_profile.stub_marker_text.strip("`") if hasattr(language_profile, "stub_marker_text") else "// TODO: implement"
+
+    # Build param list in target language syntax
+    params_str = ""
+    if element.signature and element.signature.params:
+        parts = []
+        for p in element.signature.params:
+            if lang_id in ("go",):
+                # Go: name Type (no colon)
+                parts.append(f"{p.name} {p.annotation}" if p.annotation else p.name)
+            elif lang_id in ("java", "csharp"):
+                # Java/C#: Type name (type before name)
+                parts.append(f"{p.annotation} {p.name}" if p.annotation else p.name)
+            else:
+                # Node.js/TypeScript: name: Type
+                parts.append(f"{p.name}: {p.annotation}" if p.annotation else p.name)
+        params_str = ", ".join(parts)
+
+    ret_annotation = ""
+    if element.signature and element.signature.return_annotation:
+        ret_annotation = element.signature.return_annotation
+
+    name = element.name
+    doc = f"// {element.docstring_hint}" if element.docstring_hint else ""
+
+    if element.kind == ElementKind.CLASS:
+        # Class/struct/interface stubs
+        if lang_id == "go":
+            keyword = "interface" if element.is_abstract else "struct"
+            bases = ""
+            if element.bases:
+                bases = "\n\t" + "\n\t".join(element.bases)
+            return f"type {name} {keyword} {{{bases}\n}}"
+        elif lang_id in ("java", "csharp"):
+            keyword = "interface" if element.is_abstract else "class"
+            extends = f" extends {element.bases[0]}" if element.bases else ""
+            return f"public {keyword} {name}{extends} {{\n    {stub_body}\n}}"
+        else:
+            # Node.js
+            extends = f" extends {element.bases[0]}" if element.bases else ""
+            return f"class {name}{extends} {{\n    constructor() {{ {stub_body} }}\n}}"
+
+    # Function/method stubs
+    if lang_id == "go":
+        # Go: func (r *Receiver) Name(params) ReturnType { stub }
+        receiver = ""
+        if element.parent_class:
+            receiver = f"(s *{element.parent_class}) "
+        ret = f" {ret_annotation}" if ret_annotation else ""
+        result = f"func {receiver}{name}({params_str}){ret} {{\n\t{stub_body}\n}}"
+        if doc:
+            result = f"{doc}\n{result}"
+        return result
+
+    elif lang_id == "java":
+        ret = ret_annotation if ret_annotation else "void"
+        modifiers = "public"
+        if element.is_static:
+            modifiers += " static"
+        result = f"{modifiers} {ret} {name}({params_str}) {{\n    {stub_body}\n}}"
+        if doc:
+            result = f"{doc}\n{result}"
+        return result
+
+    elif lang_id == "csharp":
+        ret = ret_annotation if ret_annotation else "void"
+        modifiers = "public"
+        if element.is_static:
+            modifiers += " static"
+        if element.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD):
+            modifiers += " async"
+            if ret == "void":
+                ret = "Task"
+        result = f"{modifiers} {ret} {name}({params_str}) {{\n    {stub_body}\n}}"
+        if doc:
+            result = f"{doc}\n{result}"
+        return result
+
+    else:
+        # Node.js/TypeScript
+        is_async = element.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD)
+        prefix = "async function" if is_async else "function"
+        ret = f": {ret_annotation}" if ret_annotation else ""
+        result = f"{prefix} {name}({params_str}){ret} {{\n  {stub_body}\n}}"
+        if doc:
+            result = f"{doc}\n{result}"
+        return result
+
+
 def _estimate_body_lines(element: ForwardElementSpec) -> str:
     """Heuristic line-count estimate for the length constraint hint."""
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
@@ -453,41 +561,60 @@ def _estimate_body_lines(element: ForwardElementSpec) -> str:
     return "6-12"
 
 
-def _render_imports(file_spec: ForwardFileSpec) -> list[str]:
-    """Render import lines from file spec."""
+def _render_imports(file_spec: ForwardFileSpec, language_profile: Any = None) -> list[str]:
+    """Render import lines from file spec in language-appropriate syntax.
+
+    REQ-MP-1211b: Go uses ``import "pkg"``, Java uses ``import pkg;``,
+    C# uses ``using Namespace;``, Node.js uses ESM/CJS syntax.
+    """
+    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
     lines: list[str] = []
     for imp in file_spec.imports:
-        if imp.kind == "from":
-            names = ", ".join(imp.names)
-            lines.append(f"from {imp.module} import {names}")
+        if _lang_id == "go":
+            alias = f"{imp.alias} " if imp.alias else ""
+            lines.append(f'import {alias}"{imp.module}"')
+        elif _lang_id == "java":
+            lines.append(f"import {imp.module};")
+        elif _lang_id == "csharp":
+            lines.append(f"using {imp.module};")
+        elif _lang_id == "nodejs":
+            if imp.kind == "from" and imp.names:
+                names = ", ".join(imp.names)
+                lines.append(f"import {{ {names} }} from '{imp.module}';")
+            else:
+                lines.append(f"import {imp.module} from '{imp.module}';")
         else:
-            alias = f" as {imp.alias}" if imp.alias else ""
-            lines.append(f"import {imp.module}{alias}")
+            # Python (default)
+            if imp.kind == "from":
+                names = ", ".join(imp.names)
+                lines.append(f"from {imp.module} import {names}")
+            else:
+                alias = f" as {imp.alias}" if imp.alias else ""
+                lines.append(f"import {imp.module}{alias}")
     return lines
 
 
 def _render_sibling_stubs(
     element: ForwardElementSpec, file_spec: ForwardFileSpec,
+    language_profile: Any = None,
 ) -> list[str]:
     """Render stubs for sibling methods in the same class.
 
+    REQ-MP-1211a: Uses ``_build_element_stub()`` for language-native rendering.
     Includes ``docstring_hint`` when available so the LLM can differentiate
-    sibling methods by purpose (e.g. ``Check`` = health check vs.
-    ``ListRecommendations`` = business logic).
+    sibling methods by purpose.
     """
     stubs: list[str] = []
     if not element.parent_class:
         return stubs
+    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    _comment = "//" if _lang_id in ("go", "java", "csharp", "nodejs") else "#"
     for sib in file_spec.elements:
         if sib.parent_class == element.parent_class and sib.name != element.name:
-            if sib.signature:
-                params = ", ".join(
-                    f"{p.name}: {p.annotation}" if p.annotation else p.name
-                    for p in sib.signature.params
-                )
-                ret = f" -> {sib.signature.return_annotation}" if sib.signature.return_annotation else ""
-                hint = f"  # {sib.docstring_hint}" if sib.docstring_hint else ""
-                stubs.append(f"def {sib.name}({params}){ret}: ...{hint}")
+            stub_text = _build_element_stub(sib, language_profile)
+            first_line = stub_text.splitlines()[0] if stub_text else ""
+            hint = f"  {_comment} {sib.docstring_hint}" if sib.docstring_hint else ""
+            stubs.append(f"{first_line}{hint}")
     return stubs
 
 
@@ -495,6 +622,7 @@ def _lookup_init_context(
     parent_class: str,
     file_spec: ForwardFileSpec,
     skeleton: str,
+    language_profile: Any = None,
 ) -> Optional[str]:
     """Extract __init__ method context for a class to expose instance attributes.
 
@@ -502,6 +630,11 @@ def _lookup_init_context(
     Falls back to manifest __init__ signature (``def __init__(self, stub)``).
     Returns a comment-prefixed string or None.
     """
+    # AST audit P2: __init__ is Python-specific — skip for non-Python.
+    _lang_id = getattr(language_profile, "language_id", "python") if language_profile else "python"
+    if _lang_id != "python" and _lang_id:
+        return None
+
     # Try skeleton first — it has the actual __init__ body
     if skeleton:
         try:

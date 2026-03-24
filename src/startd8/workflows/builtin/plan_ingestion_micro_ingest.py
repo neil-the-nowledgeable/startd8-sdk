@@ -324,11 +324,62 @@ def _build_forward_element_spec(parsed: dict) -> Optional[Any]:
         return None
 
 
-def _parse_signatures_to_elements(api_sigs: List[str]) -> List[Any]:
+def _parse_signatures_to_elements(
+    api_sigs: List[str],
+    language_id: str = "python",
+    target_file: str = "",
+) -> List[Any]:
     """Parse a list of API signature strings into ForwardElementSpec objects.
+
+    REQ-MP-1211c: When *language_id* is non-Python, dispatches to the
+    language-specific signature parser (Go/Java/C#/Node.js) instead of
+    the Python ``ast.parse()`` path.  Language parsers exist and are tested
+    but were previously never called from the plan ingestion pipeline.
 
     Skips unparseable signatures silently (logged at DEBUG by callee).
     """
+    # REQ-MP-1211c: Language-specific dispatch
+    if language_id != "python" and language_id:
+        return _parse_signatures_by_language(api_sigs, language_id, target_file)
+
+    # Python path (unchanged)
+    elements = []
+    for s in api_sigs:
+        parsed = _parse_api_signature(s)
+        if parsed:
+            spec = _build_forward_element_spec(parsed)
+            if spec:
+                elements.append(spec)
+    return elements
+
+
+def _parse_signatures_by_language(
+    api_sigs: List[str], language_id: str, target_file: str,
+) -> List[Any]:
+    """Dispatch to language-specific signature parsers (REQ-MP-1211c).
+
+    These parsers already exist and have test suites — they were simply
+    never wired into the plan ingestion pipeline.
+    """
+    try:
+        if language_id == "go":
+            from startd8.utils.go_signature_parser import parse_go_signatures
+            return parse_go_signatures(api_sigs, target_file)
+        elif language_id == "java":
+            from startd8.utils.java_signature_parser import parse_java_signatures
+            return parse_java_signatures(api_sigs, target_file)
+        elif language_id == "csharp":
+            from startd8.utils.csharp_signature_parser import parse_csharp_signatures
+            return parse_csharp_signatures(api_sigs, target_file)
+        elif language_id == "nodejs":
+            from startd8.utils.nodejs_signature_parser import parse_nodejs_signatures
+            return parse_nodejs_signatures(api_sigs, target_file)
+    except Exception as exc:
+        logger.warning(
+            "Language-specific signature parser failed for %s: %s — falling back to Python",
+            language_id, exc,
+        )
+    # Fallback: try Python parser
     elements = []
     for s in api_sigs:
         parsed = _parse_api_signature(s)
@@ -489,7 +540,11 @@ def classify_enrichment_routes(
             api_sigs = ctx["api_signatures"]
 
         if api_sigs:
-            parsed_elements = _parse_signatures_to_elements(api_sigs)
+            _mi_lang_id = ctx.get("language_id", "python")
+            _mi_target = target_files[0] if target_files else ""
+            parsed_elements = _parse_signatures_to_elements(
+                api_sigs, language_id=_mi_lang_id, target_file=_mi_target,
+            )
 
             if parsed_elements:
                 element_names = [e.name for e in parsed_elements]
@@ -780,7 +835,11 @@ def _get_or_build_file_spec(
     if not api_sigs:
         return None
 
-    parsed_elements = _parse_signatures_to_elements(api_sigs)
+    _synth_lang_id = ctx.get("language_id", "python")
+    _synth_target = target_files[0] if target_files else ""
+    parsed_elements = _parse_signatures_to_elements(
+        api_sigs, language_id=_synth_lang_id, target_file=_synth_target,
+    )
     if not parsed_elements:
         return None
 

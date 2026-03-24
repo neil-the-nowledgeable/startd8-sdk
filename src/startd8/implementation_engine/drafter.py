@@ -276,6 +276,18 @@ def get_drafter_system_prompt(
                 ", ".join(_detected),
             )
 
+    # REQ-GO-MP-200: P0 error handling constraint for Go.
+    # Go's #1 quality defect is unchecked errors (28 warnings in run-118).
+    if language_profile is not None and getattr(language_profile, "language_id", "") == "go":
+        prompt += (
+            "\n\nGO ERROR HANDLING (P0 — MANDATORY): Every function call that "
+            "returns an error MUST have the error checked on the NEXT line with "
+            "`if err != nil { return ..., err }`. NEVER use `_` to discard error "
+            "values. NEVER proceed past an error-returning call without checking. "
+            "This is the #1 Go quality defect."
+        )
+        logger.info("Drafter P0 Go error handling constraint injected")
+
     logger.info("Drafter system prompt mode: %s (template=%s)", mode, template_key)
 
     return prompt, mode
