@@ -121,11 +121,19 @@ def _render_panel(panel: PanelSpec) -> str:
 
     if ptype == PanelType.ROW:
         collapsed = "true" if panel.options.get("collapsed") else "false"
-        return f"panels.row('{_escape_jsonnet_string(panel.title)}', collapsed={collapsed})"
+        call = f"panels.row('{_escape_jsonnet_string(panel.title)}', collapsed={collapsed})"
+        merge_block = _render_merge_block(panel)
+        if merge_block:
+            call += f" {merge_block}"
+        return call
 
     if ptype == PanelType.TEXT:
         content = _escape_jsonnet_string(panel.options.get("content", ""))
-        return f"panels.text('{_escape_jsonnet_string(panel.title)}', '{content}')"
+        call = f"panels.text('{_escape_jsonnet_string(panel.title)}', '{content}')"
+        merge_block = _render_merge_block(panel)
+        if merge_block:
+            call += f" {merge_block}"
+        return call
 
     constructor = _panel_constructor_name(ptype)
     args: List[str] = [f"'{_escape_jsonnet_string(panel.title)}'"]

@@ -38,6 +38,8 @@ __all__ = [
     "has_error_panel",
     "has_duration_panel",
     "get_all_panel_exprs",
+    "PortalValidationResult",
+    "validate_portal",
 ]
 
 
@@ -1047,3 +1049,142 @@ def _compute_red_coverage(panels: List[Dict[str, Any]]) -> float:
     if has_duration_panel(panels):
         signals += 1
     return signals / 3.0
+
+
+# ---------------------------------------------------------------------------
+# Portal validation (REQ-OBP-104)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PortalValidationResult:
+    """Validation result for onboarding portal dashboard JSON."""
+
+    file_path: str
+    json_valid: bool = False
+    panel_count: int = 0
+    text_panel_count: int = 0
+    has_overview: bool = False
+    has_service_inventory: bool = False
+    checks_passed: int = 0
+    checks_total: int = 0
+    issues: List[ObservabilityIssue] = field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        return self.checks_passed / self.checks_total if self.checks_total else 0.0
+
+
+def validate_portal(
+    content: str,
+    file_path: str = "",
+    *,
+    expected_service_count: Optional[int] = None,
+) -> PortalValidationResult:
+    """Validate onboarding portal dashboard JSON (REQ-OBP-104a).
+
+    Checks:
+    - OBP-104-1: JSON is valid and has panels
+    - OBP-104-2: Has at least one text panel
+    - OBP-104-3: Has "Project Overview" panel
+    - OBP-104-4: Has "Service Inventory" or service-related panel
+    - OBP-104-5: Service count matches expected (when provided)
+    - OBP-104-6: Has dashboard title containing "Portal"
+    """
+    import json as _json
+
+    result = PortalValidationResult(file_path=file_path)
+
+    # OBP-104-1: Valid JSON with panels
+    result.checks_total += 1
+    try:
+        dashboard = _json.loads(content)
+        result.json_valid = True
+        result.checks_passed += 1
+    except (ValueError, TypeError):
+        result.issues.append(ObservabilityIssue(
+            "OBP-104-1", "error", "Portal content is not valid JSON",
+        ))
+        return result
+
+    panels = dashboard.get("panels", [])
+    result.panel_count = len(panels)
+
+    # OBP-104-2: At least one text panel
+    result.checks_total += 1
+    text_panels = [p for p in panels if p.get("type") == "text"]
+    result.text_panel_count = len(text_panels)
+    if text_panels:
+        result.checks_passed += 1
+    else:
+        result.issues.append(ObservabilityIssue(
+            "OBP-104-2", "error", "Portal has no text panels",
+        ))
+
+    # OBP-104-3: Has "Project Overview" panel
+    result.checks_total += 1
+    panel_titles = [p.get("title", "") for p in panels]
+    if "Project Overview" in panel_titles:
+        result.has_overview = True
+        result.checks_passed += 1
+    else:
+        result.issues.append(ObservabilityIssue(
+            "OBP-104-3", "warning", "Portal missing 'Project Overview' panel",
+        ))
+
+    # OBP-104-4: Has service-related panel
+    result.checks_total += 1
+    has_services = any(
+        "service" in t.lower() or "inventory" in t.lower()
+        for t in panel_titles
+    )
+    if has_services:
+        result.has_service_inventory = True
+        result.checks_passed += 1
+    else:
+        result.issues.append(ObservabilityIssue(
+            "OBP-104-4", "warning",
+            "Portal missing service inventory panel",
+        ))
+
+    # OBP-104-5: Service count match (when expected count provided)
+    if expected_service_count is not None:
+        result.checks_total += 1
+        # Count service rows in the service inventory text panel
+        for p in text_panels:
+            title = p.get("title", "")
+            if "service" in title.lower() and "inventory" in title.lower():
+                content_text = p.get("options", {}).get("content", "")
+                # Count data rows (lines starting with |, excluding header/separator)
+                data_rows = [
+                    line for line in content_text.split("\n")
+                    if line.startswith("|") and not line.startswith("|-")
+                    and "Service" not in line.split("|")[1] if "|" in line
+                ]
+                # Subtract header row
+                row_count = max(0, len(data_rows) - 1)
+                if row_count == expected_service_count:
+                    result.checks_passed += 1
+                else:
+                    result.issues.append(ObservabilityIssue(
+                        "OBP-104-5", "warning",
+                        f"Service count mismatch: expected {expected_service_count}, "
+                        f"found {row_count} rows in inventory",
+                    ))
+                break
+        else:
+            # No service inventory panel found — already flagged in OBP-104-4
+            pass
+
+    # OBP-104-6: Dashboard title contains "Portal"
+    result.checks_total += 1
+    title = dashboard.get("title", "")
+    if "portal" in title.lower():
+        result.checks_passed += 1
+    else:
+        result.issues.append(ObservabilityIssue(
+            "OBP-104-6", "info",
+            f"Dashboard title '{title}' does not contain 'Portal'",
+        ))
+
+    return result

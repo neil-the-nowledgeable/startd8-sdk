@@ -1205,6 +1205,106 @@ def _generate_one(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4b: Portal artifact generation (REQ-OBP-103)
+# ---------------------------------------------------------------------------
+
+
+def _generate_portal_artifact(
+    business: BusinessContext,
+    services: List[ServiceHints],
+    report: GenerationReport,
+    metadata: Dict[str, Any],
+    output_dir: Path,
+    *,
+    persona: str = "operator",
+    provision_url: Optional[str] = None,
+    dry_run: bool = False,
+) -> Optional[ArtifactResult]:
+    """Generate an onboarding portal via DashboardCreatorWorkflow.
+
+    Builds a DashboardSpec dict from pipeline context, then routes through
+    the Jsonnet → Grafana JSON pipeline for compilation and optional provisioning.
+
+    Returns ArtifactResult or None on failure.
+    """
+    try:
+        from startd8.observability.portal_spec_builder import build_portal_spec
+    except ImportError:
+        logger.warning("portal_spec_builder not available; skipping portal generation")
+        return None
+
+    project_id = business.project_id or "unknown"
+
+    try:
+        spec_dict = build_portal_spec(
+            business, services, report, metadata, persona=persona,
+        )
+    except Exception:
+        logger.exception("Portal spec build failed for %s", project_id)
+        return ArtifactResult(
+            artifact_type="portal",
+            service_id=project_id,
+            output_path=f"portal/{project_id}-portal.json",
+            status="error",
+            error_message="Portal spec build raised exception",
+        )
+
+    # Route through DashboardCreatorWorkflow
+    portal_output_dir = output_dir / "portal"
+    portal_output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
+
+        workflow = DashboardCreatorWorkflow()
+        config: Dict[str, Any] = {
+            "spec": spec_dict,
+            "output_dir": str(portal_output_dir),
+            "dry_run": dry_run,
+        }
+        if provision_url:
+            config["provision"] = True
+            config["grafana_url"] = provision_url
+
+        result = workflow.run(config)
+
+        if result.success:
+            uid = spec_dict.get("uid", f"portal-{project_id}")
+            json_path = portal_output_dir / f"{uid}.json"
+            content = ""
+            if json_path.is_file():
+                content = json_path.read_text()
+
+            logger.info("Portal generated: %s", json_path)
+            return ArtifactResult(
+                artifact_type="portal",
+                service_id=project_id,
+                output_path=f"portal/{uid}.json",
+                status="generated",
+                content=content,
+            )
+        else:
+            error_msg = result.output.get("error", "Unknown workflow error") if isinstance(result.output, dict) else str(result.output)
+            logger.error("Portal workflow failed: %s", error_msg)
+            return ArtifactResult(
+                artifact_type="portal",
+                service_id=project_id,
+                output_path=f"portal/{project_id}-portal.json",
+                status="error",
+                error_message=str(error_msg),
+            )
+    except Exception:
+        logger.exception("Portal generation failed for %s", project_id)
+        return ArtifactResult(
+            artifact_type="portal",
+            service_id=project_id,
+            output_path=f"portal/{project_id}-portal.json",
+            status="error",
+            error_message="DashboardCreatorWorkflow raised exception",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Phase 5: Orchestration + index file
 # ---------------------------------------------------------------------------
 
@@ -1214,6 +1314,9 @@ def generate_observability_artifacts(
     output_dir: Path,
     manifest_path: Optional[Path] = None,
     dry_run: bool = False,
+    portal: bool = False,
+    portal_persona: str = "operator",
+    portal_provision_url: Optional[str] = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -1253,6 +1356,17 @@ def generate_observability_artifacts(
     report.services_skipped = len(
         [s for s in services if not s.convention_metrics]
     )
+
+    # Portal generation — after per-service artifacts (REQ-OBP-103a)
+    if portal:
+        portal_result = _generate_portal_artifact(
+            business, services, report, metadata, output_dir,
+            persona=portal_persona,
+            provision_url=portal_provision_url,
+            dry_run=dry_run,
+        )
+        if portal_result is not None:
+            report.artifacts.append(portal_result)
 
     if not dry_run:
         _write_artifacts(report.artifacts, output_dir)

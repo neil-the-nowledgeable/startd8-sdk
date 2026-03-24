@@ -81,6 +81,23 @@ def main() -> int:
         action="store_true",
         help="Print what would be generated without writing files",
     )
+    parser.add_argument(
+        "--portal",
+        action="store_true",
+        help="Generate onboarding portal Grafana dashboard (opt-in, REQ-OBP-103d)",
+    )
+    parser.add_argument(
+        "--portal-persona",
+        default="operator",
+        choices=["operator", "engineer", "manager", "all"],
+        help="Portal persona variant (default: operator)",
+    )
+    parser.add_argument(
+        "--portal-provision",
+        default=None,
+        metavar="URL",
+        help="Provision portal to Grafana at URL (e.g. http://localhost:3000)",
+    )
     args = parser.parse_args()
 
     onboarding = Path(args.onboarding_metadata)
@@ -90,12 +107,48 @@ def main() -> int:
     if args.check:
         return check_drift(onboarding, output, manifest)
 
-    report = generate_observability_artifacts(
-        onboarding_metadata_path=onboarding,
-        output_dir=output,
-        manifest_path=manifest,
-        dry_run=args.dry_run,
-    )
+    # Handle --portal-persona all: generate one run per persona
+    if args.portal and args.portal_persona == "all":
+        # Generate base artifacts once, then add each persona portal
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=onboarding,
+            output_dir=output,
+            manifest_path=manifest,
+            dry_run=args.dry_run,
+            portal=False,  # We'll generate portals individually below
+        )
+        for persona in ("operator", "engineer", "manager"):
+            from startd8.observability.artifact_generator import _generate_portal_artifact
+            from startd8.observability.artifact_generator import (
+                load_onboarding_metadata,
+                extract_service_hints,
+                load_business_context,
+            )
+            metadata = load_onboarding_metadata(onboarding)
+            services = extract_service_hints(metadata)
+            business = load_business_context(manifest, metadata)
+            result = _generate_portal_artifact(
+                business, services, report, metadata, output,
+                persona=persona,
+                provision_url=args.portal_provision,
+                dry_run=args.dry_run,
+            )
+            if result is not None:
+                report.artifacts.append(result)
+                if result.status == "generated" and result.content and not args.dry_run:
+                    dest = output / result.output_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(result.content)
+    else:
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=onboarding,
+            output_dir=output,
+            manifest_path=manifest,
+            dry_run=args.dry_run,
+            portal=args.portal,
+            portal_persona=args.portal_persona,
+            portal_provision_url=args.portal_provision,
+        )
 
     # Print summary
     generated = sum(1 for a in report.artifacts if a.status == "generated")
