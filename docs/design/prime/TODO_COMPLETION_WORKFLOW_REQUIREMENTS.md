@@ -1,9 +1,9 @@
 # Deterministic Observability & TODO Completion — Requirements
 
-**Version:** 3.0.0
+**Version:** 3.1.0
 **Created:** 2026-03-18
-**Revised:** 2026-03-21 — v3: Eliminated separate workflow; TODO tasks are now first-class Prime Contractor seed tasks dispatched through existing complexity routing and shortcut infrastructure.
-**Status:** Draft
+**Revised:** 2026-03-23 — v3.1: All Layer 0–3 requirements IMPLEMENTED. Layer 4 activation revised — env var propagation proved unreliable across pipeline layers; replaced with multi-signal cascade reading `run-metadata.json` directly (REQ-TCW-400).
+**Status:** IMPLEMENTED — Layers 0–3 complete; Layer 4 activation implemented (REQ-TCW-400, 401 partial); Layer 4 Kaizen integration and closed-loop validation remain P2/P3
 **Depends on:** `PRIME_CONTRACTOR_REQUIREMENTS.md` (REQ-PC-001–014), `PRIME_EXECUTION_MODES_REQUIREMENTS.md` (REQ-PEM-000–012), Pipeline-Innate Requirements (REQ-CDP-OBS-001–007), ContextCore EXPORT stage
 **Source:** Run-068/069 Java adservice analysis — observability stubs present but unimplemented; pipeline already produces all context needed to implement them. Run-079/084/094 execution analysis — separate workflow had 0% completion rate due to API mismatch, LLM overwrite of uncomment tasks, and first-failure abort.
 **Scope:** Cross-system — ContextCore (Stages 0–4) and StartD8 SDK (Stages 5–6)
@@ -326,7 +326,7 @@ When a TODO implementation requires new dependencies, the seed MUST include a de
 #### REQ-TCW-203: Scan Trigger Point
 
 **Priority:** P1
-**Status:** Not implemented
+**Status:** Implemented (2026-03-22) — `_run_todo_scan_and_inject()` in `prime_contractor.py`
 **Supersedes:** v2 REQ-TCW-203 (plan validation)
 
 The TODO scan + derivation MUST run after pass-one generation completes and before postmortem.
@@ -348,7 +348,7 @@ TODO tasks execute through the existing `develop_feature()` 9-phase pipeline. Ca
 #### REQ-TCW-300: Uncomment Shortcut in develop_feature()
 
 **Priority:** P1
-**Status:** Not implemented
+**Status:** Implemented (2026-03-22) — `_try_uncomment_shortcut()` in `prime_contractor.py`
 **Supersedes:** v2 REQ-TCW-300 (separate `_execute_plan()`), v2 REQ-TCW-301 (uncomment via LLM)
 
 Category A tasks MUST be handled by a deterministic shortcut in `develop_feature()`, bypassing LLM generation entirely.
@@ -365,7 +365,7 @@ Category A tasks MUST be handled by a deterministic shortcut in `develop_feature
 #### REQ-TCW-301: Category B via Normal Generation Path
 
 **Priority:** P1
-**Status:** Partially implemented — instrumentation contract injection exists, task_type threading does not
+**Status:** Implemented (2026-03-22) — Category B tasks route through `develop_feature()` with instrumentation contract in gen_context
 **Supersedes:** v2 REQ-TCW-302 (separate Category B execution)
 
 Category B tasks MUST execute through the standard `develop_feature()` path with instrumentation contract context.
@@ -410,13 +410,27 @@ After TODO tasks execute, the TODO inventory MUST be updated with completion sta
 #### REQ-TCW-400: Opt-In Activation
 
 **Priority:** P2
-**Status:** Not implemented
+**Status:** Implemented (2026-03-23) — multi-signal activation in `run_prime_workflow.py`
+**Revised:** 2026-03-23 — env var propagation through multi-layer pipeline invocation proved unreliable (Run-113/114: shell script exported `ENABLE_TODO_COMPLETION=true` but Python process received empty string). Replaced with belt-and-suspenders approach that reads `generation_profile` directly from `run-metadata.json`.
 
 **Acceptance criteria:**
-1. `PrimeContractorWorkflow` accepts a `enable_todo_completion: bool` config flag (default: `False`)
+1. `PrimeContractorWorkflow` accepts `enable_todo_completion()` method (default: off)
 2. When enabled, the post-generation TODO scan + task injection runs automatically
-3. The flag is surfaced in `pipeline.env` as `ENABLE_TODO_COMPLETION=true` and in CLI as `--todo-completion`
+3. Activation is determined by a **priority-ordered signal cascade** (first match wins):
+   a. `--todo-completion` CLI flag (explicit, highest priority)
+   b. `ENABLE_TODO_COMPLETION=true` environment variable (explicit)
+   c. `ENABLE_INSTRUMENTATION=true` environment variable (legacy compatibility)
+   d. `run-metadata.json` → `generation_profile` in `{"source", "full"}` (pipeline-native, most reliable)
+   e. Seed → `generation_profile` in `{"source", "full"}` (fallback)
 4. `--todo-completion --scan-only` produces the inventory without executing tasks (dry run mode)
+5. The activation decision is logged at INFO level with all signal values for pipeline debugging
+6. `run-metadata.json` is checked at `{output_dir}/../run-metadata.json` (pipeline layout: `run-NNN/run-metadata.json`, output_dir is `run-NNN/plan-ingestion/`)
+
+**Rationale for signal cascade:** Shell-to-Python env var propagation is unreliable across pipeline invocation layers (run-atomic.sh → run-prime-contractor.sh → python3 run_prime_workflow.py). The `run-metadata.json` file is written by the pipeline orchestrator and is always available at the run directory root, making it the most reliable signal source.
+
+**Implementation files:**
+- `scripts/run_prime_workflow.py` — Signal cascade logic (lines 652-678)
+- `src/startd8/contractors/prime_contractor.py` — `enable_todo_completion()` method + `_run_todo_scan_and_inject()` + `_update_todo_inventory_status()`
 
 #### REQ-TCW-401: Kaizen Integration
 
