@@ -86,6 +86,7 @@ def build_portal_spec(
 
     if "overview" in sections:
         panels.extend(_build_project_overview_panels(business, report))
+        panels.extend(_build_persona_value_panel(persona))
 
     if "services" in sections:
         panels.extend(_build_service_inventory_panels(services, report))
@@ -161,6 +162,82 @@ def build_all_portal_specs(
 # ---------------------------------------------------------------------------
 # Section builders — each returns List[panel_dict] or []
 # ---------------------------------------------------------------------------
+
+
+# Pain points and value propositions per persona.
+# Source: wayfinder-demo-retail/demo/persona-views/*.md
+_PERSONA_VALUE: Dict[str, Dict[str, str]] = {
+    "operator": {
+        "title": "Platform Engineer / SRE",
+        "pain": "$247K/yr",
+        "headline": "Infrastructure That Understands Business Value",
+        "content": (
+            "**The problem:** Incidents arrive without context — no owner, no "
+            "criticality, no runbook link. 15-minute MTTA delay at $10K/hr "
+            "downtime cost.\n\n"
+            "**What this portal provides:**\n"
+            "- Alert inventory with severity and thresholds derived from requirements\n"
+            "- Service communication graph for dependency analysis\n"
+            "- Dashboard links for every service — one click to operational metrics\n"
+            "- Quality scores showing artifact generation health"
+        ),
+    },
+    "engineer": {
+        "title": "Developer / AI Engineer",
+        "pain": "$475K/yr",
+        "headline": "Agents That Remember",
+        "content": (
+            "**The problem:** Redundant status updates across 3 tools. AI agents "
+            "re-discover context every session instead of persisting learnings.\n\n"
+            "**What this portal provides:**\n"
+            "- Service inventory with protocol, language, and database detection\n"
+            "- Communication graph for understanding service topology\n"
+            "- Dashboard links for debugging and tracing\n"
+            "- Run provenance for generation audit trail"
+        ),
+    },
+    "manager": {
+        "title": "Team Lead / Project Manager",
+        "pain": "$117K–$258K/yr",
+        "headline": "Status Updates That Write Themselves",
+        "content": (
+            "**The problem:** Weekly status compilation from manual chasing. "
+            "Portfolio assembly from 5 separate tools.\n\n"
+            "**What this portal provides:**\n"
+            "- Project objectives with measurable targets\n"
+            "- Artifact quality gauge — are we generating healthy observability?\n"
+            "- Artifact health stats (generated / errored / skipped)\n"
+            "- Run provenance for accountability"
+        ),
+    },
+    "executive": {
+        "title": "Executive",
+        "pain": "$1.3M/yr aggregate",
+        "headline": "Business Impact at a Glance",
+        "content": (
+            "**The problem:** No single view of project health, SLO targets, "
+            "or observability quality across the portfolio.\n\n"
+            "**What this portal provides:**\n"
+            "- Project overview with criticality and ownership\n"
+            "- Objectives with availability and latency targets\n"
+            "- Composite quality score across all generated artifacts"
+        ),
+    },
+}
+
+
+def _build_persona_value_panel(persona: str) -> List[Dict[str, Any]]:
+    """Build persona-specific value proposition panel."""
+    info = _PERSONA_VALUE.get(persona)
+    if not info:
+        return []
+
+    content = (
+        f"### {info['headline']}\n"
+        f"*{info['title']}* — estimated pain: **{info['pain']}** (enterprise)\n\n"
+        f"{info['content']}"
+    )
+    return [_text_panel("Why This Portal", content, "Project Overview")]
 
 
 def _build_project_overview_panels(
