@@ -1818,6 +1818,12 @@ class MicroPrimeEngine:
         self._semantic_agent: Optional[Any] = None
 
     @property
+    def _resolved_language_id(self) -> str:
+        """Language ID from the active profile, defaulting to 'python'."""
+        lp = self._language_profile
+        return getattr(lp, "language_id", "python") if lp else "python"
+
+    @property
     def config(self) -> MicroPrimeConfig:
         return self._config
 
@@ -3181,8 +3187,7 @@ class MicroPrimeEngine:
                 output_tokens=total_output,
             )
 
-        _mod_lang = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
-        structural_ok, structural_reason = _structural_verify(assembled, element, language_id=_mod_lang)
+        structural_ok, structural_reason = _structural_verify(assembled, element, language_id=self._resolved_language_id)
         if not structural_ok:
             _record_decomp_failed(plan.strategy, file_path, "structural_verification")
             return None, assembly_time_ms, self._moderate_escalation_result(
@@ -3879,6 +3884,18 @@ class MicroPrimeEngine:
         if shortcircuit is not None:
             return shortcircuit
 
+        # Section 3.5: File-level function decomposition (REQ-NODE-MP-400).
+        # For multi-function non-Python files, decompose into per-function
+        # sub-elements, generate each via _handle_simple(), and splice back.
+        file_decomp = self._try_file_function_decompose(
+            element, file_spec, skeleton, contracts, file_path,
+            reasoning, start_time,
+            design_doc_sections=design_doc_sections,
+            task_description=task_description,
+        )
+        if file_decomp is not None:
+            return file_decomp
+
         # Sections 4–6: prompt construction + Ollama retry loop
         outcome = self._generate_with_retry(
             element, file_spec, skeleton, contracts, file_path,
@@ -3998,6 +4015,110 @@ class MicroPrimeEngine:
             _record_simple_decompose_rejected(file_path)
 
         return None
+
+    def _try_file_function_decompose(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str,
+        start_time: float,
+        *,
+        design_doc_sections: Optional[list[str]] = None,
+        task_description: Optional[str] = None,
+    ) -> Optional[ElementResult]:
+        """Decompose multi-function files into per-function generation (REQ-NODE-MP-400).
+
+        For non-Python files with multiple stub functions in the skeleton,
+        decomposes into individual function elements, generates each via
+        ``_handle_simple()``, and splices results back into the skeleton.
+
+        Returns ``ElementResult`` on success, ``None`` to fall through to Ollama.
+        """
+        if not skeleton or not self._decomposer:
+            return None
+        _lang = _language_id_from_path(file_path)
+        if _lang == "python":
+            return None  # Python uses FunctionBodyDecomposer instead
+
+        plan = self._decomposer.decompose(
+            element, file_spec, self._current_manifest, reasoning,
+        )
+        if not plan or len(plan.sub_elements) < 2:
+            return None
+
+        logger.info(
+            "File-function decomposition for %s (%s): %d sub-elements",
+            element.name, _lang, len(plan.sub_elements),
+        )
+
+        sub_results, total_input, total_output, failure = self._generate_sub_elements(
+            plan, element, file_spec, skeleton, contracts,
+            file_path, reasoning, start_time,
+            design_doc_sections, task_description,
+        )
+        if failure is not None:
+            logger.info(
+                "File-function decompose failed for %s — falling through to Ollama",
+                element.name,
+            )
+            return None  # fall through to Ollama file-whole
+
+        assert sub_results is not None
+
+        assembled, assembly_time_ms, asm_failure = self._assemble_and_verify_moderate(
+            plan, sub_results, skeleton, element, file_path,
+            reasoning, start_time, total_input, total_output,
+        )
+        if asm_failure is not None:
+            logger.info(
+                "File-function assembly failed for %s — falling through to Ollama",
+                element.name,
+            )
+            return None
+
+        assert assembled is not None
+        gen_time = (time.monotonic() - start_time) * 1000
+
+        logger.info(
+            "File-function decomposition succeeded for %s: %d/%d sub-elements, %.0fms",
+            element.name, len(sub_results), len(plan.sub_elements), gen_time,
+        )
+
+        self._completed.append({
+            "element": {
+                "name": element.name,
+                "parent_class": element.parent_class,
+                "kind": element.kind,
+            },
+            "file_path": file_path,
+            "code": assembled,
+            "syntax_valid": True,
+            "repair_recovered": False,
+            "repair_steps_count": 0,
+        })
+
+        return ElementResult.make_decomposition_success(
+            element.name, file_path, TierClassification.SIMPLE, reasoning,
+            assembled,
+            decomposition_metadata={
+                "strategy": plan.strategy,
+                "sub_elements": len(plan.sub_elements),
+                "sub_element_results": [
+                    {"name": s.name, "kind": s.kind, "success": s.name in sub_results}
+                    for s in plan.sub_elements
+                ],
+                "assembly_time_ms": assembly_time_ms,
+                "total_time_ms": gen_time,
+            },
+            model=f"{self._config.provider}:{self._config.model}",
+            generation_time_ms=gen_time,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            generation_strategy="file_function_decompose",
+        )
 
     def _generate_with_ollama_retry(
         self,
@@ -4154,7 +4275,7 @@ class MicroPrimeEngine:
         # REQ-MPL-102: Non-Python lacks ast.parse() body extraction and
         # bare_statement_wrap produces Python def wrappers — always use
         # full_function for non-Python to avoid cross-language repair output.
-        _gen_lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+        _gen_lang_id = self._resolved_language_id
         use_full_function = (
             self._config.element_prompt_mode == "full_function"
             or _gen_lang_id != "python"
@@ -4211,7 +4332,7 @@ class MicroPrimeEngine:
                 # If extraction fails, fall through with raw code —
                 # the repair pipeline's bare_statement_wrap handles it as before.
 
-            _lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+            _lang_id = self._resolved_language_id
             ast_valid_before = _ast_parse_valid(code, element, language_id=_lang_id)
             code = code
             repair_steps: list[str] = []
@@ -4394,8 +4515,7 @@ class MicroPrimeEngine:
         code = outcome.code
 
         # Structural verification (REQ-MP-512)
-        _vfy_lang = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
-        structural_ok, structural_reason = _structural_verify(code, element, language_id=_vfy_lang)
+        structural_ok, structural_reason = _structural_verify(code, element, language_id=self._resolved_language_id)
         if not structural_ok:
             struct_handoff = None
             if self._config.repair_enabled and outcome.repair_result is not None:

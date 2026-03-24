@@ -1,9 +1,10 @@
-"""Tests for multi-language repair isolation — REQ-MPL-100.
+"""Tests for multi-language repair isolation — REQ-MPL-100, REQ-NODE-MP-350.
 
 Verifies that:
 - _detect_definition_line() recognizes function declarations in all 5 languages
 - bare_statement_wrap is a no-op for non-Python languages
 - Python bare_statement_wrap behavior is unchanged (regression)
+- _hoist_leading_imports() recognizes Node.js CJS require() patterns
 """
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from startd8.micro_prime import repair as repair_mod
 from startd8.micro_prime.repair import (
     _detect_definition_line,
+    _hoist_leading_imports,
     _step_bare_statement_wrap,
 )
 from startd8.forward_manifest import ForwardElementSpec
@@ -138,3 +140,75 @@ class TestBareStatementWrapLanguageGuard:
     def teardown_method(self):
         """Reset global state after each test."""
         repair_mod._current_repair_language_id = "python"
+
+
+# ---------------------------------------------------------------------------
+# _hoist_leading_imports — Node.js CJS require() support (REQ-NODE-MP-350)
+# ---------------------------------------------------------------------------
+
+class TestHoistNodejsImports:
+    """REQ-NODE-MP-350: _hoist_leading_imports recognizes CJS require()."""
+
+    def setup_method(self):
+        repair_mod._current_repair_language_id = "nodejs"
+
+    def teardown_method(self):
+        repair_mod._current_repair_language_id = "python"
+
+    def test_hoist_const_require(self):
+        lines = [
+            "const express = require('express');",
+            "",
+            "function handler(req, res) {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 1
+        assert "require('express')" in hoisted[0]
+        assert body[0].startswith("function")
+
+    def test_hoist_destructured_require(self):
+        lines = [
+            "const { Router } = require('express');",
+            "function setup() {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 1
+        assert "{ Router }" in hoisted[0]
+
+    def test_hoist_esm_import(self):
+        """ESM import already works via 'import ' prefix."""
+        lines = [
+            "import express from 'express';",
+            "function handler(req, res) {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 1
+        assert "import express" in hoisted[0]
+
+    def test_non_import_const_not_hoisted(self):
+        lines = [
+            "const x = 5;",
+            "function foo() {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 0
+
+    def test_mixed_imports_hoisted(self):
+        lines = [
+            "const pino = require('pino');",
+            "import { v4 } from 'uuid';",
+            "",
+            "function main() {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 2
+
+    def test_python_mode_skips_require(self):
+        """Regression: Python mode should NOT hoist require()."""
+        repair_mod._current_repair_language_id = "python"
+        lines = [
+            "const x = require('pkg');",
+            "function foo() {",
+        ]
+        hoisted, body = _hoist_leading_imports(lines, None)
+        assert len(hoisted) == 0

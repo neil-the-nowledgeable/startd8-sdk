@@ -1,8 +1,8 @@
 """Tests for LanguageProfile.sanitize_code_examples() — REQ-TDE-202.
 
 Each language profile transforms known anti-patterns (Console.WriteLine,
-fmt.Println, System.out.println) into standards-compliant equivalents.
-Python and Node.js are no-ops.
+fmt.Println, System.out.println, console.log) into standards-compliant
+equivalents.  Python is a no-op.
 """
 
 import pytest
@@ -100,7 +100,44 @@ class TestPythonSanitize:
 
 
 class TestNodeSanitize:
-    def test_noop(self):
-        profile = LanguageRegistry.get("nodejs")
-        text = 'console.log("debug");'
-        assert profile.sanitize_code_examples(text) == text
+    def _profile(self):
+        return LanguageRegistry.get("nodejs")
+
+    def test_console_log_transformed(self):
+        text = 'console.log("starting server")'
+        result = self._profile().sanitize_code_examples(text)
+        assert "console.log" not in result
+        assert "logger.info" in result
+
+    def test_console_error_transformed(self):
+        text = 'console.error("connection failed")'
+        result = self._profile().sanitize_code_examples(text)
+        assert "console.error" not in result
+        assert "logger.error" in result
+
+    def test_console_warn_transformed(self):
+        text = 'console.warn("deprecated")'
+        result = self._profile().sanitize_code_examples(text)
+        assert "console.warn" not in result
+        assert "logger.warn" in result
+
+    def test_var_to_const(self):
+        text = "var count = 0"
+        result = self._profile().sanitize_code_examples(text)
+        assert "var " not in result
+        assert "const count =" in result
+
+    def test_clean_code_unchanged(self):
+        text = 'logger.info("hello")'
+        result = self._profile().sanitize_code_examples(text)
+        assert result == text
+
+    def test_multiline_transforms(self):
+        text = (
+            'console.log("line1");\n'
+            'console.error("line2");\n'
+            'logger.info("line3");\n'
+        )
+        result = self._profile().sanitize_code_examples(text)
+        assert "console" not in result
+        assert result.count("logger") == 3

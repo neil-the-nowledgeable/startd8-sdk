@@ -1094,6 +1094,211 @@ class FunctionChainStrategy:
         return assembled
 
 
+# ── Node.js File-Level Function Decomposer (REQ-NODE-MP-400) ────────
+
+
+_JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
+
+
+class NodeFileDecomposeStrategy:
+    """Decompose a multi-function Node.js file into per-function sub-elements.
+
+    Uses ``nodejs_parser.parse_nodejs_source()`` to find stub functions in the
+    skeleton, creates one ``SubElement`` per stub, and reassembles via
+    ``splice_nodejs_bodies()``.
+
+    This enables per-function template matching, local LLM generation, and
+    validation — instead of generating the entire file in one LLM call.
+    """
+
+    def __init__(
+        self,
+        config: Optional[MicroPrimeConfig] = None,
+        template_registry: Optional[Any] = None,
+        language_id: str = "nodejs",
+    ) -> None:
+        self._config = config or MicroPrimeConfig()
+        self._language_id = language_id
+
+    @property
+    def name(self) -> str:
+        return "nodejs_file_function"
+
+    def can_handle(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+        external_dependency_count: Optional[int] = None,
+    ) -> bool:
+        """Return True if the file is Node.js with ≥2 stub functions."""
+        ext = ""
+        if file_spec and file_spec.file:
+            ext = "." + file_spec.file.rsplit(".", 1)[-1] if "." in file_spec.file else ""
+        if ext.lower() not in _JS_EXTENSIONS:
+            return False
+
+        stubs = self._find_stub_functions(file_spec)
+        return len(stubs) >= 2
+
+    def plan(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: ForwardManifest,
+        classification_reason: str,
+        classification_signals: Optional[set[str]] = None,
+    ) -> Optional[DecompositionPlan]:
+        """Create one SubElement per stub function in the skeleton."""
+        stubs = self._find_stub_functions(file_spec)
+        if len(stubs) < 2:
+            return None
+
+        sub_elements: list[SubElement] = []
+        for i, (node_elem, body_lines) in enumerate(stubs):
+            # Map NodeElement.kind to ElementKind
+            if node_elem.kind == "method":
+                ek = ElementKind.ASYNC_METHOD if node_elem.is_async else ElementKind.METHOD
+            elif node_elem.is_async:
+                ek = ElementKind.ASYNC_FUNCTION
+            else:
+                ek = ElementKind.FUNCTION
+
+            spec = ForwardElementSpec(
+                name=node_elem.name,
+                kind=ek,
+                parent_class=node_elem.parent_class,
+                signature=Signature(params=[]),
+                docstring_hint=f"Implement the {node_elem.name} function.",
+            )
+
+            sub_elements.append(SubElement(
+                name=node_elem.name,
+                kind="function_body",
+                prompt_context=f"Implement function {node_elem.name} in {file_spec.file}",
+                depends_on=[],
+                assembly_order=i,
+                element_spec=spec,
+                deterministic=False,
+            ))
+
+        return DecompositionPlan(
+            original_element=element,
+            sub_elements=sub_elements,
+            strategy=self.name,
+            assembly_kind="splice",
+            confidence=0.9,
+        )
+
+    def assemble(
+        self,
+        plan: DecompositionPlan,
+        sub_results: dict[str, str],
+        skeleton: str,
+    ) -> Optional[str]:
+        """Splice generated function bodies back into the skeleton."""
+        if not sub_results:
+            return None
+        try:
+            from startd8.languages.nodejs_splicer import splice_nodejs_bodies
+        except ImportError:
+            logger.warning("nodejs_splicer not available — cannot assemble")
+            return None
+
+        result = splice_nodejs_bodies(skeleton, sub_results)
+        if result.code and result.functions_spliced > 0:
+            logger.info(
+                "Node.js file decompose: spliced %d/%d functions (%d skipped)",
+                result.functions_spliced,
+                len(sub_results),
+                result.functions_skipped,
+            )
+            return result.code
+        return None
+
+    def _find_stub_functions(
+        self, file_spec: ForwardFileSpec,
+    ) -> list[tuple[Any, list[str]]]:
+        """Parse skeleton and return (NodeElement, body_lines) for stub functions."""
+        skeleton = getattr(file_spec, "_skeleton_source", None)
+        if not skeleton:
+            # Try to get skeleton from elements — file_spec doesn't carry raw source.
+            # Fall back to checking if elements are available from the parser.
+            return self._find_stubs_from_source(file_spec)
+        return self._parse_and_filter_stubs(skeleton)
+
+    def _find_stubs_from_source(
+        self, file_spec: ForwardFileSpec,
+    ) -> list[tuple[Any, list[str]]]:
+        """Estimate decomposability from file_spec element count.
+
+        The skeleton source isn't on ForwardFileSpec — it's passed separately
+        to the engine.  For ``can_handle()`` we use element count as a proxy:
+        ≥2 elements suggests a multi-function file worth decomposing.
+
+        Returns lightweight proxy objects with ``NodeElement``-compatible
+        attributes so ``plan()`` can iterate uniformly.
+        """
+        if not file_spec or len(file_spec.elements) < 2:
+            return []
+        # Build NodeElement-compatible proxies from ForwardElementSpec.
+        try:
+            from startd8.languages.nodejs_parser import NodeElement
+        except ImportError:
+            return []
+        proxies: list[tuple[Any, list[str]]] = []
+        for elem in file_spec.elements:
+            kind = "function"
+            if elem.kind in (ElementKind.METHOD, ElementKind.ASYNC_METHOD):
+                kind = "method"
+            elif elem.kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD):
+                kind = "function"
+            is_async = elem.kind in (
+                ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+            )
+            proxy = NodeElement(
+                kind=kind,
+                name=elem.name,
+                is_async=is_async,
+                parent_class=elem.parent_class,
+                line=0,
+            )
+            proxies.append((proxy, []))
+        return proxies
+
+    def _parse_and_filter_stubs(
+        self, skeleton: str,
+    ) -> list[tuple[Any, list[str]]]:
+        """Parse skeleton source and filter to stub functions."""
+        try:
+            from startd8.languages.nodejs_parser import parse_nodejs_source
+            from startd8.languages.nodejs_splicer import _is_stub_body, _find_declaration, _find_brace_close
+        except ImportError:
+            return []
+
+        elements = parse_nodejs_source(skeleton)
+        lines = skeleton.splitlines()
+        stubs: list[tuple[Any, list[str]]] = []
+
+        for elem in elements:
+            if elem.kind in ("interface", "type_alias", "class"):
+                continue
+            decl = _find_declaration(lines, elem.name)
+            if decl is None:
+                continue
+            decl_line, _indent = decl
+            close_line = _find_brace_close(lines, decl_line)
+            if close_line < 0:
+                continue
+            body_lines = lines[decl_line + 1:close_line]
+            if _is_stub_body(body_lines):
+                stubs.append((elem, body_lines))
+
+        return stubs
+
+
 # ── Moderate Decomposer (REQ-MP-900) ────────────────────────────────
 
 
@@ -1115,6 +1320,14 @@ class ModerateDecomposer:
         elif language_id == "java":
             self._strategies = [
                 JavaClassDecomposeStrategy(config=self._config, template_registry=template_registry),
+                FunctionChainStrategy(config=self._config, language_id=language_id),
+            ]
+        elif language_id == "nodejs":
+            # REQ-NODE-MP-400: Node.js file-level function decomposition first,
+            # then fall through to generic strategies.
+            self._strategies = [
+                NodeFileDecomposeStrategy(config=self._config, language_id=language_id),
+                ClassDecomposeStrategy(config=self._config, template_registry=template_registry),
                 FunctionChainStrategy(config=self._config, language_id=language_id),
             ]
         else:

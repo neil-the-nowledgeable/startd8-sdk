@@ -233,6 +233,11 @@ def _step_over_generation_trim(
 # (with optional whitespace) followed by an optional language tag.
 _FENCE_LINE_RE = re.compile(r"^\s*```[\w]*\s*$", re.MULTILINE)
 
+# REQ-NODE-MP-350: CJS require() import pattern for _hoist_leading_imports().
+_JS_IMPORT_RE = re.compile(
+    r"^(?:const|let|var)\s+(?:\w+|\{[^}]*\})\s*=\s*require\s*\("
+)
+
 
 def _detect_definition_line(code: str) -> bool:
     """Return True if *code* already starts with a function/class declaration.
@@ -286,6 +291,10 @@ def _hoist_leading_imports(
         if not lstripped:
             continue
         if lstripped.startswith(("import ", "from ")):
+            hoisted.append(lstripped)
+            first_body_idx = i + 1
+        elif _current_repair_language_id == "nodejs" and _JS_IMPORT_RE.match(lstripped):
+            # REQ-NODE-MP-350: hoist CJS require() lines for Node.js.
             hoisted.append(lstripped)
             first_body_idx = i + 1
         else:
@@ -1401,7 +1410,16 @@ def _try_parse(
         except ImportError:
             return True
 
-    if language_id in ("java", "nodejs"):
+    if language_id == "nodejs":
+        # REQ-NODE-MP-302: dispatch to NodeLanguageProfile.validate_syntax().
+        try:
+            from startd8.languages.nodejs import NodeLanguageProfile
+            valid, _ = NodeLanguageProfile().validate_syntax(code)
+            return valid
+        except (ImportError, OSError):
+            return True  # node not available — assume valid
+
+    if language_id == "java":
         # No in-process parser available — assume valid.
         # Validation happens via the language's own syntax validate step.
         return True

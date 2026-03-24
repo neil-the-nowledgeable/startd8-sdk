@@ -113,6 +113,35 @@ class TestNoneProfileDefaultsPython:
         assert "NotImplementedError" in prompt
 
 
+class TestNodejsPromptInstructions:
+    """REQ-NODE-MP-700: Node.js prompts use 2-space indentation."""
+
+    def _node_profile(self):
+        return LanguageRegistry.get("nodejs")
+
+    def test_full_function_uses_function_keyword(self):
+        prompt = build_full_function_prompt(
+            _make_element(), _make_file_spec(), [],
+            language_profile=self._node_profile(),
+        )
+        assert "`function`" in prompt
+        assert "`def`" not in prompt
+
+    def test_body_prompt_uses_2_space_indent(self):
+        prompt = build_body_prompt(
+            _make_element(), _make_file_spec(), [],
+            language_profile=self._node_profile(),
+        )
+        assert "2 spaces" in prompt
+
+    def test_body_prompt_uses_throw_error_stub(self):
+        prompt = build_body_prompt(
+            _make_element(), _make_file_spec(), [],
+            language_profile=self._node_profile(),
+        )
+        assert 'throw new Error("not implemented")' in prompt
+
+
 class TestCSharpPromptInstructions:
     """REQ-MPL-101: C# prompts use C#-specific keywords."""
 

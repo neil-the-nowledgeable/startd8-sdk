@@ -128,13 +128,16 @@ class NodeLanguageProfile:
     @property
     def coding_standards(self) -> str:
         return (
+            "CRITICAL NODE.JS CONSTRAINTS (violations cause runtime crashes):\n"
+            "- MODULE SYSTEM: Use ONE module system consistently per file and project. "
+            "If ESM: ONLY `import`/`export`. If CJS: ONLY `require()`/`module.exports`. "
+            "NEVER mix — a single `require()` in an ESM module crashes at runtime.\n"
+            "- ASYNC: Use async/await for ALL asynchronous operations. "
+            "Wrap async calls in try/catch. NEVER leave a Promise unhandled — "
+            "unhandled rejections crash Node.js in production.\n"
+            "\n"
             "Node.js coding standards:\n"
             "- Use `const` by default, `let` only when reassignment is needed. NEVER use `var`.\n"
-            "- MODULE SYSTEM: Use ONE module system consistently per project. "
-            "If package.json has `\"type\": \"module\"`, use ESM (`import`/`export`). "
-            "Otherwise use CJS (`require`/`module.exports`). NEVER mix `require()` and `import` in the same file.\n"
-            "- ASYNC: Use async/await for all asynchronous operations. "
-            "Wrap async calls in try/catch. Add `process.on('unhandledRejection')` in entry points.\n"
             "- LOGGING: Use a structured logger (pino, winston) — "
             "NEVER use `console.log()` in production service code (test files excepted).\n"
             "- Use destructuring for object/array access. Prefer arrow functions for callbacks.\n"
@@ -144,7 +147,36 @@ class NodeLanguageProfile:
         )
 
     def sanitize_code_examples(self, text: str) -> str:
-        """No-op for Node.js — console.log is acceptable in many contexts."""
+        """REQ-NODE-MP-100: Transform Node.js anti-patterns in code examples.
+
+        console.error → logger.error
+        console.warn  → logger.warn
+        console.log   → logger.info
+        var x =       → const x =
+        """
+        import re
+
+        # Order: most specific first to avoid double-matching.
+        text = re.sub(
+            r'console\.error\s*\(([^)]*)\)',
+            r'logger.error(\1)',
+            text,
+        )
+        text = re.sub(
+            r'console\.warn\s*\(([^)]*)\)',
+            r'logger.warn(\1)',
+            text,
+        )
+        text = re.sub(
+            r'console\.log\s*\(([^)]*)\)',
+            r'logger.info(\1)',
+            text,
+        )
+        text = re.sub(
+            r'\bvar\s+(\w+)\s*=',
+            r'const \1 =',
+            text,
+        )
         return text
 
     @property
@@ -259,8 +291,25 @@ class NodeLanguageProfile:
         }
         return json.dumps(config, indent=2) + "\n"
 
-    def validate_syntax(self, code: str) -> tuple[bool, str]:
-        """Validate Node.js syntax via node --check on a temp file."""
+    def validate_syntax(
+        self, code: str, *, filename_hint: str = "",
+    ) -> tuple[bool, str]:
+        """Validate JS/TS syntax — REQ-NODE-MP-300.
+
+        Dispatches to ``node --check`` for JavaScript and ``tsc --noEmit``
+        for TypeScript.  The *filename_hint* kwarg is additive (backward
+        compatible with the ``LanguageProfile`` protocol signature).
+        """
+        is_ts = (
+            filename_hint.endswith((".ts", ".tsx"))
+            or _looks_like_typescript(code)
+        )
+        if is_ts:
+            return self._validate_typescript(code)
+        return self._validate_javascript(code)
+
+    def _validate_javascript(self, code: str) -> tuple[bool, str]:
+        """Validate JavaScript syntax via ``node --check``."""
         import subprocess
         import tempfile
         tmp = None
@@ -280,6 +329,53 @@ class NodeLanguageProfile:
             return True, ""  # node not installed — best-effort
         except subprocess.TimeoutExpired:
             return False, "node --check timed out"
+        except OSError as exc:
+            return False, str(exc)
+        finally:
+            if tmp is not None:
+                import os
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+
+    def _validate_typescript(self, code: str) -> tuple[bool, str]:
+        """Validate TypeScript syntax via ``tsc --noEmit`` — REQ-NODE-MP-300.
+
+        Uses ``--isolatedModules --skipLibCheck`` to check syntax without
+        needing a project context or node_modules.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+
+        tmp = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".ts", mode="w", delete=False)
+            tmp.write(code)
+            tmp.flush()
+            tmp.close()
+
+            tsc = shutil.which("tsc")
+            if tsc:
+                cmd = [tsc, "--noEmit", "--isolatedModules", "--skipLibCheck", tmp.name]
+            else:
+                npx = shutil.which("npx")
+                if npx:
+                    cmd = [npx, "tsc", "--noEmit", "--isolatedModules", "--skipLibCheck", tmp.name]
+                else:
+                    return True, ""  # tsc not available — best-effort pass
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                return True, ""
+            return False, result.stdout.strip() or result.stderr.strip()
+        except FileNotFoundError:
+            return True, ""  # tsc not installed — best-effort
+        except subprocess.TimeoutExpired:
+            return False, "tsc --noEmit timed out"
         except OSError as exc:
             return False, str(exc)
         finally:
@@ -394,8 +490,27 @@ class NodeLanguageProfile:
 
         is_esm = module_system == "esm"
 
+        # REQ-NODE-MP-200: CRITICAL preamble reinforcing module system choice.
+        if is_esm:
+            critical_line = (
+                "**CRITICAL: This project uses ES Modules (ESM). "
+                "Generate ONLY `import`/`export` syntax. "
+                "NEVER use `require()` or `module.exports`. "
+                "File extensions REQUIRED in relative imports: `import X from './util.js'`. "
+                "Mixing module systems causes immediate runtime failure.**"
+            )
+        else:
+            critical_line = (
+                "**CRITICAL: This project uses CommonJS (CJS). "
+                "Generate ONLY `require()`/`module.exports` syntax. "
+                "NEVER use `import`/`export` statements. "
+                "Mixing module systems causes immediate runtime failure.**"
+            )
+
         lines = [
             "## Node.js Module Context (CRITICAL — required for correct imports)\n",
+            critical_line,
+            "",
             f"- **Module system**: {'ES Modules (ESM)' if is_esm else 'CommonJS (CJS)'}",
             f"- **Node.js version**: {node_version}",
         ]
@@ -484,6 +599,30 @@ class NodeLanguageProfile:
     def stub_marker_text(self) -> str:
         """Node.js stub marker for skeleton fill prompts (REQ-PE-301)."""
         return '`throw new Error("not implemented")`'
+
+    @property
+    def indent_size(self) -> int:
+        """REQ-NODE-MP-700: JS/TS community standard is 2-space indentation."""
+        return 2
+
+    @property
+    def indent_char(self) -> str:
+        """Spaces, not tabs (unlike Go)."""
+        return " "
+
+
+def _looks_like_typescript(code: str) -> bool:
+    """Heuristic: code contains TypeScript-specific syntax — REQ-NODE-MP-300."""
+    import re
+
+    _TS_INDICATORS = [
+        r":\s*(?:string|number|boolean|void|any|never|unknown|undefined)\b",
+        r"\binterface\s+\w+",
+        r"<\w+(?:\s*,\s*\w+)*>",           # generics
+        r"\bas\s+(?:const|string|number)\b",
+        r"\btype\s+\w+\s*=",
+    ]
+    return any(re.search(p, code) for p in _TS_INDICATORS)
 
 
 def detect_module_system(project_root: Path) -> str:
