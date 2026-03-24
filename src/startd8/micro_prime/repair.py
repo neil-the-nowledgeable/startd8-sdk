@@ -235,9 +235,18 @@ _FENCE_LINE_RE = re.compile(r"^\s*```[\w]*\s*$", re.MULTILINE)
 
 
 def _detect_definition_line(code: str) -> bool:
-    """Return True if *code* already starts with a def/class/decorator."""
+    """Return True if *code* already starts with a function/class declaration.
+
+    Recognizes declaration keywords for all 5 registered languages so that
+    repair steps can distinguish "body-only output" from "complete function".
+    """
     stripped = code.lstrip()
-    return stripped.startswith(("def ", "async def ", "class ", "@"))
+    return stripped.startswith((
+        "def ", "async def ", "class ", "@",           # Python
+        "func ",                                        # Go
+        "public ", "private ", "protected ", "static ", # Java / C#
+        "function ", "export ", "async function ",      # Node.js / TypeScript
+    ))
 
 
 def _strip_residual_fences(code: str) -> tuple[str, bool]:
@@ -372,6 +381,14 @@ def _step_bare_statement_wrap(
     wraps it in the canonical signature from the manifest.
     """
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS):
+        return RepairStepResult(
+            step_name="bare_statement_wrap", modified=False, code=code,
+        )
+
+    # REQ-MPL-100: bare_statement_wrap synthesizes Python `def` signatures.
+    # Non-Python languages must skip this step — it produces invalid hybrid
+    # code (e.g., `def tracker():` wrapping Go function bodies → ast_failure).
+    if _current_repair_language_id != "python":
         return RepairStepResult(
             step_name="bare_statement_wrap", modified=False, code=code,
         )

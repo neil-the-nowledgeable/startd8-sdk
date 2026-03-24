@@ -87,6 +87,10 @@ class PythonLanguageProfile:
             "- Prefer `pathlib.Path` over `os.path` for file operations."
         )
 
+    def sanitize_code_examples(self, text: str) -> str:
+        """No-op for Python — print() in examples is context-dependent."""
+        return text
+
     @property
     def merge_strategy_preference(self) -> str:
         return "ast"

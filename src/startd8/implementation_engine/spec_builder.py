@@ -965,11 +965,23 @@ def build_spec_prompt(
     # --- Design document forwarding (Mottainai Rule 2) ---
     design_document = context.pop("design_document", None) or ""
 
-    # --- REQ-PI-CS-100/200: C# design document sanitization ---
+    # --- REQ-TDE-205: Language-aware design document + task description sanitization ---
+    # Delegates to LanguageProfile.sanitize_code_examples() (REQ-TDE-202).
+    # Defense-in-depth: enrichment handles primary sanitization at seed time;
+    # this catches tasks that bypass enrichment or spec LLM hallucinations.
     lang_profile = context.get("language_profile")
     _lang_id = getattr(lang_profile, "language_id", "") if lang_profile else ""
+    # If no profile object, try to re-hydrate from language_id (set by enrichment)
+    if lang_profile is None and context.get("language_id"):
+        from ..languages.registry import LanguageRegistry
+        LanguageRegistry.discover()
+        lang_profile = LanguageRegistry.get(context["language_id"])
+        _lang_id = getattr(lang_profile, "language_id", "") if lang_profile else ""
+    if lang_profile is not None and hasattr(lang_profile, "sanitize_code_examples"):
+        if design_document:
+            design_document = lang_profile.sanitize_code_examples(design_document)
+        task_description = lang_profile.sanitize_code_examples(task_description)
     if _lang_id == "csharp" and design_document:
-        design_document = _sanitize_csharp_code_examples(design_document)
         sql_warning = _detect_sql_interpolation_in_examples(design_document)
         if sql_warning:
             design_document = design_document + sql_warning
@@ -1351,6 +1363,9 @@ def build_spec_prompt(
         # REQ-PE-200: Use target language for code fence, not hardcoded python
         _lang_profile = context.get("language_profile")
         _fence_lang = getattr(_lang_profile, "language_id", "") if _lang_profile else ""
+        # REQ-TDE-205: Sanitize reference implementation via protocol method.
+        if lang_profile is not None and hasattr(lang_profile, "sanitize_code_examples"):
+            reference_implementation = lang_profile.sanitize_code_examples(reference_implementation)
         prioritized.append((3, "reference", (
             "## Reference Implementation (predecessor — adapt, do not copy verbatim)\n"
             f"```{_fence_lang}\n"
@@ -1429,6 +1444,16 @@ def build_spec(
     )
 
     response_text, response_time_ms, token_usage = agent.generate(prompt)
+
+    # REQ-TDE-205: Sanitize spec LLM output via protocol method — defense-in-depth.
+    # Even with clean inputs, the spec LLM can hallucinate anti-patterns.
+    _spec_lang_profile = context.get("language_profile")
+    if _spec_lang_profile is None and context.get("language_id"):
+        from ..languages.registry import LanguageRegistry
+        LanguageRegistry.discover()
+        _spec_lang_profile = LanguageRegistry.get(context["language_id"])
+    if _spec_lang_profile is not None and hasattr(_spec_lang_profile, "sanitize_code_examples"):
+        response_text = _spec_lang_profile.sanitize_code_examples(response_text)
 
     # Parse structured sections
     requirements = parse_list_section(response_text, "Requirements")

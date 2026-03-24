@@ -76,6 +76,7 @@ class RootCause(str, Enum):
     SIZE_REGRESSION = "size_regression"
     GENERATION_ERROR = "generation_error"
     DEPENDENCY_BLOCKED = "dependency_blocked"
+    REPAIR_LANGUAGE_MISMATCH = "repair_language_mismatch"
     UNKNOWN = "unknown"
 
 
@@ -462,6 +463,14 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
     "dependency_blocked": {
         "phase": "spec",
         "hint": "Declare dependencies explicitly in the spec so blocked features are skipped early.",
+    },
+    "repair_language_mismatch": {
+        "phase": "repair",
+        "hint": (
+            "The repair pipeline produced Python syntax for a non-Python file. "
+            "This is a pipeline bug — bare_statement_wrap generated a Python def "
+            "wrapper for code in another language. Verify REQ-MPL-100 language guard."
+        ),
     },
     "unknown": {
         "phase": "draft",

@@ -6,6 +6,7 @@ Go profile values derived from the online-boutique-demo Go services.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -123,6 +124,24 @@ class GoLanguageProfile:
             "Use standard library where possible — avoid unnecessary third-party dependencies.\n"
             "- Group imports: stdlib, then third-party, then local (goimports enforces this)."
         )
+
+    def sanitize_code_examples(self, text: str) -> str:
+        """REQ-TDE-202: Transform Go anti-patterns in code examples.
+
+        fmt.Println → slog.Info
+        fmt.Printf → slog.Info(fmt.Sprintf(...))
+        """
+        text = re.sub(
+            r'fmt\.Printf\s*\(([^)]*)\)',
+            r'slog.Info(fmt.Sprintf(\1))',
+            text,
+        )
+        text = re.sub(
+            r'fmt\.Println\s*\(([^)]*)\)',
+            r'slog.Info(\1)',
+            text,
+        )
+        return text
 
     @property
     def merge_strategy_preference(self) -> str:

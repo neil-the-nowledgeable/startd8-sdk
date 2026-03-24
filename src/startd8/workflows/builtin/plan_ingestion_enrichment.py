@@ -529,6 +529,85 @@ def _enrich_copy_source(
     return count
 
 
+# ── Step 7: Language-Aware Coding Standards (REQ-TDE-200) ─────────────
+
+
+def _enrich_coding_standards(
+    tasks: List[Dict[str, Any]],
+) -> tuple:
+    """Resolve language profile, inject coding standards, sanitize anti-patterns.
+
+    REQ-TDE-200: Resolve language_id from target_files at enrichment time.
+    REQ-TDE-201: Forward-propagate coding_standards and language_role.
+    REQ-TDE-203: Sanitize anti-patterns in task_description and design_doc_sections.
+
+    Returns:
+        Tuple of (coding_standards_injected_count, descriptions_sanitized_count).
+    """
+    from ...languages import resolve_language
+    from ...languages.registry import LanguageRegistry
+
+    LanguageRegistry.discover()
+
+    # Build batch context — all target_files across all tasks — for
+    # language-neutral file inference (same pattern as prime_contractor:3885-3891).
+    batch_target_files: List[str] = []
+    for task in tasks:
+        ctx = _ensure_task_context(task)
+        tf = ctx.get("target_files", [])
+        if isinstance(tf, list):
+            batch_target_files.extend(tf)
+
+    injected_count = 0
+    sanitized_count = 0
+
+    for task in tasks:
+        ctx = _ensure_task_context(task)
+
+        # No-clobber: skip if language already resolved (e.g., from a prior run)
+        if ctx.get("language_id"):
+            continue
+
+        target_files = ctx.get("target_files", [])
+        if not target_files:
+            continue
+
+        profile = resolve_language(
+            target_files, batch_target_files=batch_target_files,
+        )
+
+        # Persist scalar properties (JSON-serializable, survive seed save/load)
+        ctx["language_id"] = profile.language_id
+        ctx["coding_standards"] = profile.coding_standards
+        ctx["language_role"] = profile.system_prompt_role
+        injected_count += 1
+
+        # REQ-TDE-203: Sanitize anti-patterns in task description
+        config = task.get("config", {})
+        description = config.get("task_description", "")
+        if description:
+            sanitized = profile.sanitize_code_examples(description)
+            if sanitized != description:
+                # Preserve original for audit trail
+                ctx["_original_task_description"] = description
+                config["task_description"] = sanitized
+                sanitized_count += 1
+
+        # Sanitize design_doc_sections entries
+        dds = ctx.get("design_doc_sections")
+        if dds and isinstance(dds, list):
+            for i, section in enumerate(dds):
+                if isinstance(section, str):
+                    dds[i] = profile.sanitize_code_examples(section)
+
+        logger.debug(
+            "ENRICH-A: language_id=%s for %s (%d target files)",
+            profile.language_id, task.get("task_id", "?"), len(target_files),
+        )
+
+    return injected_count, sanitized_count
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────
 
 
@@ -544,6 +623,7 @@ def enrich_tasks_deterministic(
     enrich_api_signatures: bool = True,
     enrich_refine_suggestions: bool = True,
     enrich_copy_source: bool = True,
+    enrich_coding_standards: bool = True,
     enrich_req_proximity_chars: int = 500,
 ) -> Any:
     """Run all deterministic enrichment steps on *tasks* in-place (REQ-TDE-105).
@@ -613,6 +693,15 @@ def enrich_tasks_deterministic(
         except Exception:
             logger.warning("ENRICH-A: copy_source step failed", exc_info=True)
 
+    # Step 7: Language-aware coding standards injection (REQ-TDE-200)
+    if enrich_coding_standards:
+        try:
+            _cs_injected, _cs_sanitized = _enrich_coding_standards(tasks)
+            diag.coding_standards_injected = _cs_injected
+            diag.descriptions_sanitized = _cs_sanitized
+        except Exception:
+            logger.warning("ENRICH-A: coding_standards step failed", exc_info=True)
+
     # Snapshot density signals after enrichment
     diag.after = _compute_density_snapshot(tasks)
 
@@ -630,7 +719,8 @@ def enrich_tasks_deterministic(
     # Per-step counts
     logger.info(
         "ENRICH-A: %d/%d tasks enriched (neg_scope=%d, req_refs=%d, "
-        "target_files=%d, api_sigs=%d, refine_sug=%d, copy_src=%d) in %dms",
+        "target_files=%d, api_sigs=%d, refine_sug=%d, copy_src=%d, "
+        "coding_std=%d, desc_sanitized=%d) in %dms",
         diag.tasks_enriched,
         len(tasks),
         diag.negative_scope_added,
@@ -639,6 +729,8 @@ def enrich_tasks_deterministic(
         diag.api_signatures_added,
         diag.refine_suggestions_mapped,
         diag.copy_source_detected,
+        diag.coding_standards_injected,
+        diag.descriptions_sanitized,
         diag.time_ms,
     )
 

@@ -265,6 +265,10 @@ prompts:
       Verify parameter names match upstream documents exactly — flag renames as BLOCKING.
       For edit-mode: verify existing code preserved. Flag removal as BLOCKING unless spec required it.
       Cross-check: if the implementation follows the spec but violates language coding standards (e.g. wildcard imports in Java, bare except in Python, unused imports in Go, Console.Write instead of ILogger in C#, var instead of const in Node.js), flag as MAJOR with a note that the coding standard takes precedence over the spec.
+      Precedence rule — spec vs coding standards conflict:
+        - SECURITY violations (SQL injection, credential leakage, path traversal, command injection): always BLOCKING, regardless of what the spec says. The spec cannot override security rules.
+        - STYLE/QUALITY violations (Console.WriteLine instead of ILogger, print() instead of logging, fmt.Println instead of slog, System.out.println instead of SLF4J): flag as MAJOR. The coding standard takes precedence, but do NOT mark BLOCKING unless it compounds with a security issue.
+        - When flagging a spec-vs-standard conflict, quote both the spec instruction and the violated standard so the user can fix the spec for future runs.
       Convergence: state RESOLVED or STILL OUTSTANDING for each prior issue.
     placeholders: []
 

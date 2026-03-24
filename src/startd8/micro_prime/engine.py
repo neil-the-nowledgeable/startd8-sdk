@@ -4063,8 +4063,15 @@ class MicroPrimeEngine:
                 max_examples=self._config.max_few_shot_examples,
             )
 
-        # Select prompt mode: full_function (default) or body_only (legacy)
-        use_full_function = self._config.element_prompt_mode == "full_function"
+        # Select prompt mode: full_function (default) or body_only (legacy).
+        # REQ-MPL-102: Non-Python lacks ast.parse() body extraction and
+        # bare_statement_wrap produces Python def wrappers — always use
+        # full_function for non-Python to avoid cross-language repair output.
+        _gen_lang_id = getattr(self._language_profile, "language_id", "python") if self._language_profile else "python"
+        use_full_function = (
+            self._config.element_prompt_mode == "full_function"
+            or _gen_lang_id != "python"
+        )
 
         if use_full_function:
             prompt = build_full_function_prompt(
@@ -4075,6 +4082,7 @@ class MicroPrimeEngine:
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
                 domain_constraints=self._current_domain_constraints,
+                language_profile=self._language_profile,
             )
         else:
             prompt = build_body_prompt(
@@ -4085,6 +4093,7 @@ class MicroPrimeEngine:
                 design_doc_sections=design_doc_sections,
                 task_description=task_description,
                 domain_constraints=self._current_domain_constraints,
+                language_profile=self._language_profile,
             )
 
         # ── Validate-and-repair closure for element-body path ──
@@ -4095,6 +4104,15 @@ class MicroPrimeEngine:
 
         def _validate_element(raw_code: str, attempt: int) -> tuple[str | None, str | None]:
             code = raw_code
+
+            # REQ-MPL-103: Pre-strip markdown fences before validation.
+            # Ollama wraps output in ```lang fences 100% of the time (run-118).
+            # Stripping here avoids a repair-pipeline round-trip.
+            from startd8.utils.code_extraction import extract_code_from_response as _extract_fences
+            _pre_stripped = _extract_fences(code)
+            if _pre_stripped != code:
+                code = _pre_stripped
+                _last_repair_state["pre_fence_stripped"] = True
 
             # Full-function mode: extract body from the model's def+body output
             # via AST before feeding to the repair pipeline.  This deterministic

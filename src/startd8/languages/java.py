@@ -188,6 +188,24 @@ class JavaLanguageProfile:
             "INTERFACES: Interface files MUST contain ONLY the interface definition, not implementations."
         )
 
+    def sanitize_code_examples(self, text: str) -> str:
+        """REQ-TDE-202: Transform Java anti-patterns in code examples.
+
+        System.out.println → logger.info
+        System.err.println → logger.error
+        """
+        text = re.sub(
+            r'System\.err\.println\s*\(([^)]*)\)',
+            r'logger.error(\1)',
+            text,
+        )
+        text = re.sub(
+            r'System\.out\.println\s*\(([^)]*)\)',
+            r'logger.info(\1)',
+            text,
+        )
+        return text
+
     @property
     def merge_strategy_preference(self) -> str:
         return "simple"

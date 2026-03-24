@@ -763,6 +763,7 @@ class PhaseEmitter:
             enrich_target_files=_kc.enrich_target_files,
             enrich_api_signatures=_kc.enrich_api_signatures,
             enrich_refine_suggestions=_kc.enrich_refine_suggestions,
+            enrich_coding_standards=_kc.enrich_coding_standards,
             enrich_req_proximity_chars=_kc.enrich_req_proximity_chars,
         )
 

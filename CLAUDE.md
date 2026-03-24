@@ -140,13 +140,45 @@ src/startd8/              # Main package
 │       ├── retrospective.py        # Retrospective phase
 │       └── runner.py               # Phase runner
 │
+├── security_prime/       # Security validation orchestration (~550 lines)
+│   ├── contract.py       # derive_security_contract() — security context from seed
+│   ├── enrichment.py     # enrich_security_fields() — inject security context into specs
+│   ├── scorer.py         # compute_security_score() — SecurityScoreResult
+│   ├── gate_models.py    # GateVerdictReport — Anzen gate pass/fail
+│   ├── kaizen.py         # update_query_security_metrics() — kaizen-metrics.json security section
+│   ├── allowlist.py      # False positive suppression
+│   └── otel.py           # OTel tracing for security gate
+│
+├── query_prime/          # Secure database query generation
+│   ├── engine.py         # QueryPrimeEngine — orchestrates query generation
+│   ├── classifier.py     # classify_query_tier() — routes to T1/T2/T3 models
+│   ├── generator.py      # generate_query() — parameterized query output
+│   ├── decomposer.py     # decompose_feature() — multi-query features
+│   ├── router.py         # Query routing by tier
+│   ├── models.py         # QueryResult, QuerySpec, QueryTier
+│   ├── security/         # Injection/credential/lifecycle checks (verify_file)
+│   ├── patterns/         # DB-specific patterns (Redis, MySQL, SQLite, Spanner, PostgreSQL)
+│   └── templates/        # Health check, CRUD query templates
+│
+├── exemplars/            # Proven Exemplar Pipeline (PEP)
+│   ├── models.py         # ConfigFingerprint, ExemplarEntry
+│   ├── registry.py       # ExemplarRegistry — load/save/lookup by fingerprint
+│   ├── extractor.py      # extract_exemplars_from_run() — mine perfect-score features
+│   ├── structural_extractor.py  # AST-based structural fingerprinting
+│   └── template_promoter.py     # Promote exemplars to MicroPrime templates
+│
 ├── utils/                # Shared utilities
 │   ├── agent_resolution.py       # Agent spec resolution
 │   ├── code_extraction.py        # Code extraction from LLM responses
 │   ├── file_operations.py        # File I/O operations
+│   ├── import_resolution.py      # Cross-file import resolution (stdlib, proto, pip, well-known packages)
 │   ├── prime_task_enrichment.py  # Prime task enrichment
 │   ├── retry.py                  # Retry logic
-│   └── token_usage.py            # Token usage tracking
+│   ├── token_usage.py            # Token usage tracking
+│   ├── requirements_generator.py # Python requirements.in/requirements.txt generation
+│   ├── *_file_assembler.py       # Per-language file assembly (python, go, java, csharp, nodejs)
+│   ├── *_signature_parser.py     # Per-language signature parsing (go, java, csharp, nodejs)
+│   └── search_replace.py         # Search/replace utilities for edit-mode generation
 │
 ├── workflows/            # Workflow orchestration
 │   ├── base.py           # WorkflowBase class
@@ -183,28 +215,48 @@ src/startd8/              # Main package
 │   ├── metrics.py        # OTel metrics for generation
 │   └── config_loader.py  # Configuration loading
 │
-├── repair/               # Post-generation repair pipeline
+├── repair/               # Post-generation repair pipeline (~45 repair steps)
 │   ├── orchestrator.py   # run_file_repair(), run_element_repair()
 │   ├── diagnostics.py    # Checkpoint diagnostic parsing and classification
 │   ├── routing.py        # Failure routing to repair steps
+│   ├── semantic_bridge.py  # Semantic check → repair step routing
 │   ├── staging.py        # Atomic staging for repair operations
 │   ├── models.py         # RepairOutcome, RepairRoute, RepairStepResult
 │   ├── config.py         # RepairConfig (repairable_categories, timeouts)
-│   └── steps/            # Individual repair steps (fence_strip, ast_validate, etc.)
+│   └── steps/            # ~45 repair steps by category:
+│       ├── fence_strip, ast_validate, lint_fix, import_fix  # Core (Python)
+│       ├── go_*.py (5)    # Go: unchecked error, dot import, contamination, syntax, tool runner
+│       ├── java_*.py (5)  # Java: import sort, sql parameterize, missing override, raw type, duplicate method
+│       ├── csharp_*.py (4)  # C#: nullable, access modifier, namespace, convention
+│       ├── *_js.py (3)    # Node.js: contamination strip, dedup require, var→const
+│       ├── sql_parameterize.py, credential_sanitize.py  # Cross-language security
+│       ├── semantic_*.py (5)  # Semantic: method fix, duplicate main, discarded return, import, method resolution
+│       └── todo_uncomment.py  # TODO completion: uncomment placeholder stubs
 │
-├── languages/            # Multi-language support (Protocol-based)
+├── languages/            # Multi-language support (Protocol-based, 5 languages)
 │   ├── protocol.py       # LanguageProfile protocol (15 properties/methods)
 │   ├── registry.py       # LanguageRegistry singleton with entry point discovery
 │   ├── resolution.py     # resolve_language() — dominant language from target files
+│   ├── _validation_utils.py  # Shared validation helpers (contamination fingerprints)
 │   ├── python.py         # PythonLanguageProfile (AST repair, Ruff lint, pytest)
 │   ├── go.py             # GoLanguageProfile (goimports, text-based splicer, go.mod gen)
 │   ├── go_parser.py      # Regex-based Go structure extraction (functions, types, methods)
 │   ├── go_splicer.py     # Text-based Go body splicing with brace matching
 │   ├── nodejs.py         # NodeLanguageProfile (CommonJS+ESM, package.json gen)
-│   └── java.py           # JavaLanguageProfile (Gradle, build.gradle gen)
+│   ├── java.py           # JavaLanguageProfile (Gradle, build.gradle gen)
+│   ├── csharp.py         # CSharpLanguageProfile (.NET, csproj gen, namespace validation)
+│   ├── csharp_parser.py  # C# syntax parsing and structure extraction
+│   └── csharp_splicer.py # C# code splicing into existing files
 │
-├── validators/           # Code quality validators
-│   └── semantic_checks.py  # 4-check AST validator (dupe main guards, dupe defs, bare except, phantom imports)
+├── validators/           # Code quality validators (per-language semantic checks)
+│   ├── semantic_checks.py            # Python: 4-check AST validator (dupe main guards, dupe defs, bare except, phantom imports)
+│   ├── csharp_semantic_checks.py     # C#: namespace alignment, sql injection, credential leakage, console output
+│   ├── go_semantic_checks.py         # Go: unchecked errors, dot imports, Python contamination, package dir mismatch
+│   ├── java_semantic_checks.py       # Java: empty catch, wildcard import, raw types, missing @Override, contamination
+│   ├── nodejs_semantic_checks.py     # Node.js: require/import style, var usage, console.log in services
+│   ├── todo_scanner.py               # TODO/FIXME detection with A/B/C classification
+│   ├── observability_artifact_checks.py   # Dashboard/Alert/SLO structural + semantic validation (REQ-KZ-OBS)
+│   └── observability_artifact_validators.py  # Cross-artifact consistency + postmortem evaluation
 │
 ├── implementation_engine/  # Code generation engine for contractors
 │   ├── spec_builder.py   # Spec prompt construction (with enforce_prompt_budget)
@@ -234,7 +286,11 @@ src/startd8/              # Main package
 ├── forward_manifest_extractor.py # Extract contracts from source code
 │
 ├── diagnostics/          # Diagnostic/validation system with auto-fix
-├── observability/        # OTel manifest and collector
+├── observability/        # OTel manifest, collector, and artifact generation
+│   ├── artifact_generator.py   # Dashboard/Alert/SLO generation from onboarding metadata
+│   ├── portal_spec_builder.py  # Grafana portal specs from pipeline data
+│   ├── manifest.py             # OTel manifest model
+│   └── collector.py            # Collector orchestration
 ├── evaluation/           # Evaluation corpus and pipeline
 ├── storage/              # Storage backends
 ├── events/               # Event bus system
@@ -248,7 +304,7 @@ src/startd8/              # Main package
 ├── testing/              # Test assertion utilities
 └── help_content/         # TUI help YAML files (topics, contextual, workflow, advanced)
 
-scripts/                  # Runner and utility scripts (~45 files)
+scripts/                  # Runner and utility scripts (~52 files)
 ├── run_artisan_workflow.py       # Full 8-phase artisan workflow
 ├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
 ├── run_artisan_implement_only.py # Impl half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
@@ -261,7 +317,7 @@ scripts/                  # Runner and utility scripts (~45 files)
 ├── generate_observability_manifest.py  # OTel manifest generation
 └── ...                           # OTel, evaluation, decompose scripts
 
-tests/                    # Test suite (~407 files)
+tests/                    # Test suite (~523 files)
 ├── unit/                 # Unit tests
 │   ├── contractors/      # Contractor-specific unit tests (~2744 tests)
 │   ├── micro_prime/      # Micro Prime engine tests (~355 tests)
@@ -333,7 +389,10 @@ Key patterns:
 - `ArtisanContractorWorkflow` - 8-phase code generation orchestrator (ON HOLD)
 - `PrimeContractorWorkflow` - Multi-feature batch code generation (active construction path)
 - `PrimePostMortemEvaluator` - Post-mortem evaluation with disk quality scoring
-- `LanguageRegistry` - Multi-language profile discovery and resolution
+- `SecurityScoreResult` / `GateVerdictReport` - Security Prime scoring and gate decisions
+- `QueryPrimeEngine` - Secure database query generation by tier
+- `ExemplarRegistry` - Proven exemplar lookup and promotion
+- `LanguageRegistry` - Multi-language profile discovery and resolution (5 languages)
 - `WorkflowBase` - Base class for registered workflows
 - `ModelCatalogEntry` - Centralized model defaults with `.agent_spec` property
 
@@ -375,16 +434,19 @@ LanguageRegistry.discover()  # loads from entry points
 profile = resolve_language(["src/main.go", "src/util.go"])  # -> GoLanguageProfile
 ```
 
-| Language | ID | Capabilities | MicroPrime |
-|----------|-----|-------------|------------|
-| **Python** | `python` | AST repair, Ruff lint, pytest, pip | Full (AST splicer) |
-| **Go** | `go` | goimports/gofmt, text-based stub detection, body splicing, go.mod gen | Bypass (text-based splicer only) |
-| **Node.js** | `nodejs` | Node syntax check, npm test, CommonJS+ESM, package.json gen | Bypass |
-| **Java** | `java` | Gradle compile, text-based stub detection, build.gradle gen | Bypass |
+| Language | ID | Capabilities | MicroPrime | Semantic Checks |
+|----------|-----|-------------|------------|-----------------|
+| **Python** | `python` | AST repair, Ruff lint, pytest, pip | Full (AST splicer) | 4 checks (dupe main, dupe defs, bare except, phantom imports) |
+| **Go** | `go` | goimports/gofmt, text-based stub detection, body splicing, go.mod gen | Full (text-based splicer) | unchecked error, dot import, contamination, package dir |
+| **Node.js** | `nodejs` | Node syntax check, npm test, CommonJS+ESM, package.json gen | Full | require/import style, var usage, console.log |
+| **Java** | `java` | Gradle compile, text-based stub detection, build.gradle gen | Full | empty catch, wildcard import, raw types, @Override, contamination |
+| **C#** | `csharp` | .NET build, csproj gen, namespace validation, file-scoped namespaces | Full | namespace alignment, SQL injection, credential leakage, console output |
 
 Key patterns:
 - **LanguageProfile protocol**: 15 properties/methods covering syntax check, lint, test, stub detection, dependency file gen, Docker images, merge strategy
-- **Non-Python bypass**: Non-Python tasks bypass MicroPrime element-level generation and use file-whole generation instead
+- **Multi-language MicroPrime**: All 5 languages support MicroPrime element-level generation. Python uses AST-based splicer; Go uses text-based splicer with brace matching; C#/Node.js/Java use file-whole generation with element-level decomposition.
+- **Per-language semantic validators**: Each language has a dedicated `*_semantic_checks.py` module with language-specific quality checks
+- **Per-language repair steps**: ~45 repair steps organized by language (Go: 5, Java: 5, C#: 4, Node.js: 3, Python: core, cross-language: 2)
 - **resolve_language()**: Counts file extensions across target files, returns dominant language profile, falls back to Python
 - **Go-specific tooling**: `go_parser.py` (regex-based structure extraction), `go_splicer.py` (text-based body splicing with brace matching)
 
@@ -406,6 +468,34 @@ Post-mortem artifacts per run:
 - `batch-postmortem-report.json` — cross-run progression tracking
 - `kaizen-trends.json/md` — success rate slope, cost slope, failure patterns across runs
 - `kaizen-correlation.json/md` — prompt feature ↔ outcome Spearman correlations
+
+### Security Prime
+
+Security validation orchestration wired into the prime contractor pipeline:
+- `security_prime/contract.py` — `derive_security_contract()` extracts security context from seed tasks
+- `security_prime/enrichment.py` — `enrich_security_fields()` injects security context into spec/draft prompts
+- `security_prime/scorer.py` — `compute_security_score()` → `SecurityScoreResult` (injection, credentials, lifecycle)
+- `security_prime/gate_models.py` — `GateVerdictReport` for Anzen gate pass/fail decisions
+- Wired via `integration_engine.py` → `verify_file()` from `query_prime/security/`
+- Kaizen integration: `update_query_security_metrics()` writes `query_security` section to kaizen-metrics.json
+
+### Query Prime
+
+Secure database query generation engine:
+- `query_prime/engine.py` — `QueryPrimeEngine` orchestrates query generation by tier (T1=template, T2=Haiku, T3=Sonnet)
+- `query_prime/classifier.py` — `classify_query_tier()` routes queries to appropriate model
+- `query_prime/security/` — `verify_file()` checks for injection, credential leakage, lifecycle issues
+- `query_prime/patterns/` — DB-specific patterns (Redis, MySQL, SQLite, Spanner, PostgreSQL)
+- Integrated into plan ingestion via query-informed enrichment (REQ-QPI)
+
+### Proven Exemplar Pipeline (PEP)
+
+Mines perfect-score features from prior runs to use as templates:
+- `exemplars/extractor.py` — `extract_exemplars_from_run()` identifies features scoring 1.00
+- `exemplars/registry.py` — `ExemplarRegistry` with fingerprint-based lookup
+- `exemplars/structural_extractor.py` — AST-based structural fingerprinting (`ConfigFingerprint`)
+- `exemplars/template_promoter.py` — Promotes mature exemplars to MicroPrime templates
+- Exemplar data persisted to `exemplar-registry.json` per run
 
 ### Keiyaku A2A Contracts (Micro Prime)
 
@@ -468,9 +558,9 @@ primary-contractor-contextcore, architectural-review-log,
 policy-analysis, plain-language, plan-ingestion,
 domain-preflight, dashboard-create
 
-# Language profiles (4 registered)
+# Language profiles (5 registered)
 [project.entry-points."startd8.languages"]
-python, go, nodejs, java
+python, go, nodejs, java, csharp
 
 # Contractor plugins
 [project.entry-points."startd8.contractors.instrumentors"]
@@ -523,7 +613,7 @@ Agents are specified as `provider:model` strings:
 - When splitting modules, run `grep -rn 'from old_module import\|patch.*old_module' tests/` to find all symbols and patch targets that need forwarding
 - When adding new LLM-calling boundaries in `micro_prime/`, define JSON input/output contracts before implementation (REQ-MP-1010, Keiyaku compliance gate)
 - Call `LanguageRegistry.discover()` before using language profiles (same pattern as ProviderRegistry)
-- Non-Python tasks must bypass MicroPrime — use file-whole generation path via `prime_adapter.py`
+- All 5 languages (Python, Go, Node.js, Java, C#) support MicroPrime element-level generation — file-whole bypass is no longer the default for non-Python tasks
 
 ### Must Avoid
 - Don't hardcode API keys - they come from environment variables
@@ -584,10 +674,15 @@ Key docs in `docs/`:
 - `docs/design/micro-prime/` - Micro Prime engine requirements and plans
 - `docs/design/prime/` - Prime Contractor requirements, Kaizen convergent review
 - `docs/design/kaizen/` - Kaizen quality system requirements, validation reports, phase plans
+  - Per-language: `KAIZEN_PYTHON_REQUIREMENTS.md`, `KAIZEN_CSHARP_REQUIREMENTS.md`, `KAIZEN_GO_REQUIREMENTS.md`, `KAIZEN_JAVA_REQUIREMENTS.md`, `KAIZEN_NODEJS_REQUIREMENTS.md`
+  - Observability: `KAIZEN_OBSERVABILITY_ARTIFACT_REQUIREMENTS.md`
+- `docs/design/security-prime/` - Security Prime requirements (7 docs)
+- `docs/design/query-prime/` - Query Prime requirements + query-informed plan ingestion (7 docs)
 - `docs/design-princples/` - Cross-cutting design principles:
   - `MOTTAINAI_DESIGN_PRINCIPLE.md` - Don't discard artifacts (within a run)
   - `KAIZEN_DESIGN_PRINCIPLE.md` - Don't discard lessons (across runs)
   - `WARM_UP_DESIGN_PRINCIPLE.md` - Don't discard context (across toolchain transitions)
+  - `HAYAI_DESIGN_PRINCIPLE.md` - Don't defer enforcement (across pipeline stages)
 - `docs/capability-index/` - Capability tracking across versions (benefits, capabilities, functional requirements, agent card, MCP tools)
 
 ## Embedded Pipeline (`.cap-dev-pipe/`)

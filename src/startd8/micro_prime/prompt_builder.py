@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ast
 import textwrap
-from typing import Optional
+from typing import Any, Optional
 
 from startd8.forward_manifest import (
     ContractConfidence,
@@ -33,13 +33,14 @@ def build_full_function_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
+    language_profile: Optional[Any] = None,
 ) -> str:
     """Build a prompt for a local model to generate a complete function.
 
     Unlike ``build_body_prompt`` which asks for body-only output, this asks
-    the model to output the full ``def`` + body.  The caller then extracts
-    the body deterministically via AST, eliminating bare_statement_wrap and
-    import_completion repairs.
+    the model to output the full function declaration + body.  The caller then
+    extracts the body deterministically via AST (Python) or uses the output
+    directly (non-Python, REQ-MPL-102).
     """
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         return _build_constant_prompt(element, file_spec, few_shot_examples)
@@ -49,6 +50,7 @@ def build_full_function_prompt(
         design_doc_sections=design_doc_sections,
         task_description=task_description,
         domain_constraints=domain_constraints,
+        language_profile=language_profile,
     )
     return _truncate_to_budget(prompt, token_budget)
 
@@ -63,6 +65,7 @@ def build_body_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
+    language_profile: Optional[Any] = None,
 ) -> str:
     """Build a prompt for a local model to generate a single element body.
 
@@ -95,6 +98,7 @@ def build_body_prompt(
         design_doc_sections=design_doc_sections,
         task_description=task_description,
         domain_constraints=domain_constraints,
+        language_profile=language_profile,
     )
     return _truncate_to_budget(prompt, token_budget)
 
@@ -108,6 +112,7 @@ def _build_function_prompt(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
+    language_profile: Optional[Any] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     return _build_element_prompt_core(
@@ -116,6 +121,7 @@ def _build_function_prompt(
         task_description=task_description,
         domain_constraints=domain_constraints,
         full_function=False,
+        language_profile=language_profile,
     )
 
 
@@ -128,14 +134,16 @@ def _build_full_function_prompt_inner(
     design_doc_sections: Optional[list[str]] = None,
     task_description: Optional[str] = None,
     domain_constraints: Optional[list[str]] = None,
+    language_profile: Optional[Any] = None,
 ) -> str:
-    """Build prompt asking the model to output a complete function (def + body)."""
+    """Build prompt asking the model to output a complete function declaration + body."""
     return _build_element_prompt_core(
         element, file_spec, contracts, skeleton, few_shot_examples,
         design_doc_sections=design_doc_sections,
         task_description=task_description,
         domain_constraints=domain_constraints,
         full_function=True,
+        language_profile=language_profile,
     )
 
 
@@ -150,8 +158,13 @@ def _build_element_prompt_core(
     domain_constraints: Optional[list[str]] = None,
     *,
     full_function: bool = False,
+    language_profile: Optional[Any] = None,
 ) -> str:
     """Shared prompt builder for body-only and full-function modes.
+
+    REQ-MPL-101: When *language_profile* is provided, instructions use
+    language-specific stub markers, indentation rules, and declaration
+    keywords from the profile (single source of truth — no parallel dict).
 
     The only differences between modes are:
     - Instructions (body-only vs complete function)
@@ -189,6 +202,21 @@ def _build_element_prompt_core(
             sections.append("# Constructor context (use `self.*` for instance state):")
             sections.append(init_hint)
 
+    # REQ-MPL-101: Derive language-specific instruction fragments from profile.
+    _decl_keyword = "def"
+    _stub_marker = "raise NotImplementedError"
+    _lang_id = ""
+    if language_profile is not None:
+        _lang_id = getattr(language_profile, "language_id", "")
+        if hasattr(language_profile, "stub_marker_text"):
+            _stub_marker = language_profile.stub_marker_text.strip("`")
+        if _lang_id == "go":
+            _decl_keyword = "func"
+        elif _lang_id in ("java", "csharp"):
+            _decl_keyword = "public/private"
+        elif _lang_id == "nodejs":
+            _decl_keyword = "function"
+
     # Mode-specific instructions
     if full_function:
         if element.parent_class:
@@ -200,10 +228,11 @@ def _build_element_prompt_core(
             task_line = f"# Task: Write the complete implementation of function `{element.name}`."
         sections.extend([
             task_line,
-            "# Output the full function: the `def` line and the function body.",
+            f"# Output the full function: the `{_decl_keyword}` declaration and the function body.",
             "# Do NOT output import statements, class wrappers, or other functions.",
             "# Output ONLY the single function definition and NOTHING else.",
             "# Do NOT add comments, explanations, or markdown fences.",
+            "# Do NOT wrap output in ```code blocks```. Output raw source code ONLY.",
             "",
         ])
     else:
@@ -225,13 +254,19 @@ def _build_element_prompt_core(
             body_framing = (
                 f"# Task: Implement the body of function `{element.name}`."
             )
+        # REQ-MPL-101: Language-aware indentation instruction
+        if _lang_id == "go":
+            _indent_instr = "# Use tab indentation (Go standard)."
+        else:
+            _indent_instr = f"# Indent every line with exactly {indent_spaces} spaces."
+
         sections.extend([
             body_framing,
-            "# Replace the `raise NotImplementedError` line with a working implementation.",
+            f"# Replace the `{_stub_marker}` line with a working implementation.",
             f"# The body MUST be {est_lines} lines. Do NOT exceed this.",
             "# Output ONLY the indented body lines that go INSIDE the function.",
-            "# Do NOT output a `def` line, `class` wrapper, docstring, or imports.",
-            f"# Indent every line with exactly {indent_spaces} spaces.",
+            f"# Do NOT output a `{_decl_keyword}` line, class wrapper, docstring, or imports.",
+            _indent_instr,
             "# Do NOT write standalone statements, helper functions, extra classes, main blocks, or tests.",
             "# Do NOT add comments, explanations, or markdown fences.",
             "# Output ONLY the function body and NOTHING else.",

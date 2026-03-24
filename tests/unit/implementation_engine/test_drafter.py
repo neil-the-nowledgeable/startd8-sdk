@@ -9,6 +9,7 @@ from startd8.implementation_engine.budget import (
     SUPPLEMENTARY_BUDGET_CHARS,
 )
 from startd8.implementation_engine.drafter import (
+    _annotate_spec_conflicts,
     _target_file_lines,
     build_existing_files_section,
     build_output_format,
@@ -17,6 +18,7 @@ from startd8.implementation_engine.drafter import (
     detect_size_regression,
     get_drafter_system_prompt,
 )
+from startd8.languages.registry import LanguageRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -674,3 +676,70 @@ class TestBuildOutputFormatNonPython:
             edit_min_pct=80,
         )
         assert "must be >=" not in result
+
+
+# ---------------------------------------------------------------------------
+# _annotate_spec_conflicts  (REQ-TDE-206 — profile-based conflict detection)
+# ---------------------------------------------------------------------------
+
+class TestAnnotateSpecConflicts:
+    """REQ-TDE-206: Spec text containing anti-patterns gets inline annotations."""
+
+    @classmethod
+    def setup_class(cls):
+        LanguageRegistry.discover()
+
+    def test_csharp_console_writeline_annotated(self):
+        spec = 'Console.WriteLine($"AddItemAsync called with userId={userId}");\n'
+        profile = LanguageRegistry.get("csharp")
+        ctx = {"language_profile": profile}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert "SPEC-STANDARD CONFLICT" in result
+
+    def test_csharp_no_false_positive_on_clean_spec(self):
+        spec = '_logger.LogInformation("AddItemAsync called with userId={UserId}", userId);\n'
+        profile = LanguageRegistry.get("csharp")
+        ctx = {"language_profile": profile}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert result == spec
+
+    def test_go_fmt_println_annotated(self):
+        spec = 'fmt.Println("starting server")\n'
+        profile = LanguageRegistry.get("go")
+        ctx = {"language_profile": profile}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert "SPEC-STANDARD CONFLICT" in result
+
+    def test_java_sysout_annotated(self):
+        spec = 'System.out.println("hello");\n'
+        profile = LanguageRegistry.get("java")
+        ctx = {"language_profile": profile}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert "SPEC-STANDARD CONFLICT" in result
+
+    def test_python_no_patterns_returns_unchanged(self):
+        spec = 'print("debug")\n'
+        profile = LanguageRegistry.get("python")
+        ctx = {"language_profile": profile}
+        result = _annotate_spec_conflicts(spec, ctx)
+        # Python profile sanitize_code_examples is a no-op
+        assert result == spec
+
+    def test_no_context_returns_unchanged(self):
+        spec = 'Console.WriteLine("test");\n'
+        result = _annotate_spec_conflicts(spec, None)
+        assert result == spec
+
+    def test_language_id_rehydration(self):
+        """REQ-TDE-200: language_id from enrichment rehydrates the profile."""
+        spec = 'Console.WriteLine("test");\n'
+        ctx = {"language_id": "csharp"}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert "SPEC-STANDARD CONFLICT" in result
+
+    def test_unknown_language_returns_unchanged(self):
+        spec = 'Console.WriteLine("test");\n'
+        # No profile, no language_id — should return unchanged
+        ctx = {"language_id": "rust"}
+        result = _annotate_spec_conflicts(spec, ctx)
+        assert result == spec

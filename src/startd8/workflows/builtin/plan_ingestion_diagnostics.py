@@ -91,6 +91,8 @@ class EnrichmentDiagnostic:
     api_signatures_added: int = 0
     refine_suggestions_mapped: int = 0
     copy_source_detected: int = 0
+    coding_standards_injected: int = 0
+    descriptions_sanitized: int = 0
     tasks_enriched: int = 0
     tasks_skipped: int = 0
     time_ms: int = 0
@@ -133,6 +135,7 @@ class PlanIngestionKaizenConfig:
     enrich_target_files: bool = True         # REQ-TDE-102
     enrich_api_signatures: bool = True       # REQ-TDE-103
     enrich_refine_suggestions: bool = True   # REQ-TDE-104
+    enrich_coding_standards: bool = True     # REQ-TDE-200
     enrich_req_proximity_chars: int = 500    # REQ-TDE-101 proximity window
 
     # Micro-Ingest (REQ-MI-4xx) — config-driven, no CLI flag

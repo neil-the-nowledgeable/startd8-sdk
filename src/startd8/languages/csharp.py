@@ -262,6 +262,25 @@ class CSharpLanguageProfile:
             "- TESTING: Include both happy-path AND error-path test cases."
         )
 
+    def sanitize_code_examples(self, text: str) -> str:
+        """REQ-TDE-202: Transform C# anti-patterns in code examples.
+
+        Console.WriteLine → _logger.LogInformation
+        Console.Error.WriteLine → _logger.LogError
+        """
+        # Order matters: match Console.Error.WriteLine first (more specific)
+        text = re.sub(
+            r'Console\.Error\.WriteLine\s*\(([^)]*)\)',
+            r'_logger.LogError(\1)',
+            text,
+        )
+        text = re.sub(
+            r'Console\.WriteLine\s*\(([^)]*)\)',
+            r'_logger.LogInformation(\1)',
+            text,
+        )
+        return text
+
     @property
     def merge_strategy_preference(self) -> str:
         return "simple"

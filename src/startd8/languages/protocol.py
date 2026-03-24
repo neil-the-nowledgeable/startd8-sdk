@@ -314,6 +314,24 @@ class LanguageProfile(Protocol):
         """
         ...
 
+    def sanitize_code_examples(self, text: str) -> str:
+        """Transform known anti-patterns in code examples to standards-compliant equivalents.
+
+        Called at enrichment time (earliest) and spec-building time (defense-in-depth)
+        to prevent anti-patterns in plans/seeds from propagating into generated code.
+
+        The default implementation is a no-op. Language profiles should override
+        to transform patterns like Console.WriteLine → ILogger (C#),
+        fmt.Println → slog.Info (Go), System.out.println → logger.info (Java).
+
+        Args:
+            text: Text containing code examples (task descriptions, design docs, specs).
+
+        Returns:
+            Text with anti-patterns replaced by standards-compliant equivalents.
+        """
+        return text
+
     @property
     def stub_marker_text(self) -> str:
         """Human-readable stub marker for skeleton fill prompts (REQ-PE-301).

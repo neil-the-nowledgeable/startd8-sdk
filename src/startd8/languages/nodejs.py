@@ -143,6 +143,10 @@ class NodeLanguageProfile:
             "corresponding entry in package.json `dependencies`."
         )
 
+    def sanitize_code_examples(self, text: str) -> str:
+        """No-op for Node.js — console.log is acceptable in many contexts."""
+        return text
+
     @property
     def merge_strategy_preference(self) -> str:
         return "simple"

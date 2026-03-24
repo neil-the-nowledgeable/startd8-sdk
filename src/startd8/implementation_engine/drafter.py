@@ -4,6 +4,7 @@ Draft generator for the implementation engine.
 Produces code implementations from specs with mode-aware system prompts.
 """
 
+import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1046,6 +1047,58 @@ def _detect_skeleton_fill(
     return bool(skeleton_sources)
 
 
+# ---------------------------------------------------------------------------
+# Spec-vs-Standard conflict annotation (REQ-TDE-206)
+# ---------------------------------------------------------------------------
+
+
+def _annotate_spec_conflicts(
+    raw_spec: str,
+    context: Optional[Dict[str, Any]],
+) -> str:
+    """Detect and annotate anti-patterns in spec text using the language profile.
+
+    Uses LanguageProfile.sanitize_code_examples() as the conflict detector:
+    if sanitizing changes the text, the original contains anti-patterns.
+    Inserts a single annotation block — does NOT transform the spec
+    (enrichment or spec builder handle the actual transformation).
+    """
+    if not context:
+        return raw_spec
+
+    # Resolve language profile from context (object or language_id string)
+    lang_profile = context.get("language_profile")
+    if lang_profile is None and context.get("language_id"):
+        from ..languages.registry import LanguageRegistry
+        LanguageRegistry.discover()
+        lang_profile = LanguageRegistry.get(context["language_id"])
+
+    if lang_profile is None or not hasattr(lang_profile, "sanitize_code_examples"):
+        return raw_spec
+
+    sanitized = lang_profile.sanitize_code_examples(raw_spec)
+    if sanitized == raw_spec:
+        return raw_spec  # No conflicts detected
+
+    lang_id = getattr(lang_profile, "language_id", "unknown")
+    coding_standards = getattr(lang_profile, "coding_standards", "")
+    # Extract first line of coding standards as a summary
+    std_summary = coding_standards.split("\n")[0] if coding_standards else ""
+
+    annotation = (
+        f"⚠ SPEC-STANDARD CONFLICT: This spec contains code patterns that "
+        f"violate {lang_id} coding standards. Follow the coding standard, "
+        f"not the spec examples. {std_summary}"
+    )
+
+    logger.warning(
+        "Spec contains coding-standard conflict(s) for %s — annotated for drafter",
+        lang_id,
+    )
+
+    return f"[{annotation}]\n\n{raw_spec}"
+
+
 def create_draft(
     agent: Any,
     spec: Any,
@@ -1132,6 +1185,10 @@ def create_draft(
             logger.debug("Drafter: spec lacks raw_spec attribute, using str(spec)")
             raw_spec = str(spec)
         spec_id = getattr(spec, "spec_id", "")
+
+        # PI-002: Annotate spec-vs-standard conflicts so the drafter
+        # sees the contradiction explicitly and follows coding standards.
+        raw_spec = _annotate_spec_conflicts(raw_spec, context)
 
         # Build supplementary sections from pipeline context
         supplementary = ""
