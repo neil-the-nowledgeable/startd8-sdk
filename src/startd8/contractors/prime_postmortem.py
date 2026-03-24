@@ -1385,11 +1385,14 @@ class PrimePostMortemEvaluator:
         # Extract lessons
         report.lessons = self._extract_lessons(report)
 
-        # Write outputs
+        # Write outputs (stash result_dict for _write_outputs to merge query_security)
+        self._result_dict = result_dict
         try:
             self._write_outputs(report, output_dir)
         except Exception:
             logger.warning("Failed to write postmortem outputs", exc_info=True)
+        finally:
+            self._result_dict = None  # don't hold reference after write
 
         # Extract exemplars from perfect-scoring features (REQ-PEP-000)
         try:
@@ -2070,20 +2073,24 @@ class PrimePostMortemEvaluator:
         except Exception:
             logger.debug("Kaizen suggestion auto-emit failed (non-fatal)", exc_info=True)
 
-        # Wire security metrics if anzen_gate data available in report
-        try:
-            anzen_data = getattr(report, "anzen_gate", None)
-            if anzen_data is None:
-                # Check in the raw result dict that produced this report
-                report_dict_check = dataclasses.asdict(report)
-                # anzen_gate isn't a report field — it lives in result_metadata.
-                # The postmortem receives per-feature results which may contain
-                # anzen data. Security metrics are primarily wired in
-                # integration_engine._run_anzen_gate() (Phase 0 primary path).
-                # This is a secondary fallback for standalone postmortem runs.
-                pass
-        except Exception:
-            logger.debug("Postmortem security metrics wiring skipped", exc_info=True)
+        # REQ-QPA-100: Merge query_security into pipeline-output kaizen-metrics.json.
+        # The Anzen gate writes to project root; the postmortem writes to pipeline
+        # output.  Bridge the gap by reading _query_security_report from result_dict
+        # (stashed by finalize_anzen_metrics) and writing it to the pipeline output.
+        if hasattr(self, "_result_dict") and self._result_dict:
+            qp_report = self._result_dict.get("_query_security_report")
+            if qp_report and qp_report.get("total_work_items", 0) > 0:
+                try:
+                    from startd8.security_prime.kaizen import update_query_security_metrics
+                    update_query_security_metrics(output_dir, qp_report)
+                    logger.info(
+                        "Query security metrics merged into pipeline output "
+                        "(items=%d, score=%.2f)",
+                        qp_report.get("total_work_items", 0),
+                        qp_report.get("mean_score", 0.0),
+                    )
+                except (ImportError, OSError) as exc:
+                    logger.debug("Pipeline query_security merge skipped: %s", exc)
 
     def _extract_exemplars(
         self, report: PrimePostMortemReport, output_dir: str,
