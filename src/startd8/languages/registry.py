@@ -19,6 +19,17 @@ logger = logging.getLogger(__name__)
 EP_LANGUAGES = "startd8.languages"
 
 
+def _invalidate_microprime_extension_cache() -> None:
+    """Clear MicroPrime extension frozenset cache when registry contents change."""
+    try:
+        from startd8.micro_prime import engine as _mp_engine
+    except ImportError:
+        return
+    fn = getattr(_mp_engine, "_get_microprime_extensions", None)
+    if fn is not None and hasattr(fn, "_caches"):
+        getattr(fn, "_caches").clear()  # type: ignore[attr-defined]
+
+
 class LanguageRegistry:
     """Central registry for language profiles.
 
@@ -76,6 +87,7 @@ class LanguageRegistry:
                 "Registered language profile: %s (%s) extensions=%s",
                 lang_id, profile.display_name, profile.source_extensions,
             )
+        _invalidate_microprime_extension_cache()
 
     @classmethod
     def discover(cls, force: bool = False) -> None:
@@ -168,6 +180,14 @@ class LanguageRegistry:
             except ImportError:
                 logger.debug("CSharpLanguageProfile not available")
 
+        # Vue 3 SFC (REQ-VUE-B-001) — also loadable via entry point
+        if "vue" not in already:
+            try:
+                from .vue import VueLanguageProfile
+                cls.register(VueLanguageProfile())
+            except ImportError:
+                logger.debug("VueLanguageProfile not available")
+
     @classmethod
     def get(cls, language_id: str) -> Optional[LanguageProfile]:
         """Get language profile by ID (case-insensitive)."""
@@ -219,6 +239,9 @@ class LanguageRegistry:
         Calls :meth:`discover` on first access.  The mapping is computed
         from each profile's ``source_extensions`` property.
 
+        REQ-JSF-005: each extension maps to at most one ``language_id``;
+        conflicting registrations raise ``ValueError``.
+
         Returns:
             Dict mapping file extensions (with dot, e.g. ``'.py'``) to
             language IDs (e.g. ``'python'``).
@@ -226,9 +249,21 @@ class LanguageRegistry:
         cls.discover()
         mapping: Dict[str, str] = {}
         with cls._lock:
-            for profile in cls._profiles.values():
+            # Deterministic order for stable conflict messages (REQ-JSF-004).
+            profiles = sorted(
+                cls._profiles.values(),
+                key=lambda p: (p.language_id.lower(), p.display_name),
+            )
+            for profile in profiles:
                 for ext in profile.source_extensions:
-                    mapping[ext] = profile.language_id
+                    ext_l = ext.lower()
+                    existing = mapping.get(ext_l)
+                    if existing is not None and existing != profile.language_id:
+                        raise ValueError(
+                            f"LanguageRegistry extension conflict: {ext_l!r} maps to "
+                            f"{existing!r} and {profile.language_id!r}"
+                        )
+                    mapping[ext_l] = profile.language_id
         return mapping
 
     @classmethod
@@ -237,3 +272,4 @@ class LanguageRegistry:
         with cls._lock:
             cls._profiles.clear()
             cls._discovered = False
+        _invalidate_microprime_extension_cache()

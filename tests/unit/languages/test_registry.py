@@ -59,6 +59,7 @@ class TestRegistryDiscovery:
         assert "go" in langs
         assert "nodejs" in langs
         assert "java" in langs
+        assert "vue" in langs
 
     def test_discover_idempotent(self):
         LanguageRegistry.discover()
@@ -113,6 +114,12 @@ class TestRegistryByExtension:
         profile = LanguageRegistry.get_by_extension(".java")
         assert profile is not None
         assert profile.language_id == "java"
+
+    def test_get_by_extension_vue(self):
+        LanguageRegistry.discover()
+        profile = LanguageRegistry.get_by_extension(".vue")
+        assert profile is not None
+        assert profile.language_id == "vue"
 
     def test_get_by_extension_unknown(self):
         LanguageRegistry.discover()

@@ -1426,6 +1426,10 @@ def _try_parse(
         except (ImportError, OSError):
             return True  # node not available — assume valid
 
+    if language_id == "vue":
+        # Merged SFC / partial repair buffers are not plain JS (REQ-VUE-B-006).
+        return True
+
     if language_id == "java":
         # No in-process parser available — assume valid.
         # Validation happens via the language's own syntax validate step.

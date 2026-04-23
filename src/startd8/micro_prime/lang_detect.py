@@ -9,7 +9,19 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-Language = Literal["python", "dockerfile", "go", "java", "nodejs", "csharp", "proto", "text", "unknown"]
+# ``vue`` reserved for SFC dialect (Part B); explicit_lang / registry may return it.
+Language = Literal[
+    "python",
+    "dockerfile",
+    "go",
+    "java",
+    "nodejs",
+    "csharp",
+    "proto",
+    "text",
+    "vue",
+    "unknown",
+]
 
 # Non-language extensions that the LanguageRegistry does not cover.
 _TEXT_AND_OTHER_EXTENSIONS: dict[str, Language] = {
@@ -44,7 +56,7 @@ _FILENAME_TO_LANG: dict[str, Language] = {
 _DOCKERFILE_PATTERN = re.compile(r"^Dockerfile(\..+)?$", re.IGNORECASE)
 
 
-def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Language:
+def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> str:
     """Detect language from file path or explicit override.
 
     Args:
@@ -54,8 +66,9 @@ def detect_language(file_path: str, explicit_lang: Optional[str] = None) -> Lang
             without inference.
 
     Returns:
-        Language identifier: "python", "go", "java", "nodejs",
-        "csharp", "dockerfile", "proto", "text", or "unknown".
+        Language identifier string (typically ``language_id`` from
+        :class:`~startd8.languages.registry.LanguageRegistry`, plus
+        ``proto``, ``text``, ``unknown`` for non-registered extensions).
     """
     if explicit_lang is not None:
         return explicit_lang

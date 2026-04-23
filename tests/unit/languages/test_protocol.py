@@ -7,6 +7,7 @@ from startd8.languages.python import PythonLanguageProfile
 from startd8.languages.go import GoLanguageProfile
 from startd8.languages.nodejs import NodeLanguageProfile
 from startd8.languages.java import JavaLanguageProfile
+from startd8.languages.vue import VueLanguageProfile
 
 
 @pytest.mark.unit
@@ -18,6 +19,7 @@ class TestProtocolSatisfaction:
         GoLanguageProfile,
         NodeLanguageProfile,
         JavaLanguageProfile,
+        VueLanguageProfile,
     ])
     def test_isinstance_check(self, profile_cls):
         """Profile instances pass runtime_checkable isinstance check."""
@@ -29,6 +31,7 @@ class TestProtocolSatisfaction:
         (GoLanguageProfile, "go"),
         (NodeLanguageProfile, "nodejs"),
         (JavaLanguageProfile, "java"),
+        (VueLanguageProfile, "vue"),
     ])
     def test_language_id(self, profile_cls, expected_id):
         assert profile_cls().language_id == expected_id
@@ -38,6 +41,7 @@ class TestProtocolSatisfaction:
         GoLanguageProfile,
         NodeLanguageProfile,
         JavaLanguageProfile,
+        VueLanguageProfile,
     ])
     def test_required_properties_are_non_empty(self, profile_cls):
         """All required properties return non-empty values."""
@@ -57,6 +61,7 @@ class TestProtocolSatisfaction:
         GoLanguageProfile,
         NodeLanguageProfile,
         JavaLanguageProfile,
+        VueLanguageProfile,
     ])
     def test_supports_own_extensions(self, profile_cls):
         """Profile supports its own declared extensions."""
@@ -69,6 +74,7 @@ class TestProtocolSatisfaction:
         GoLanguageProfile,
         NodeLanguageProfile,
         JavaLanguageProfile,
+        VueLanguageProfile,
     ])
     def test_get_import_patterns_returns_list(self, profile_cls):
         """get_import_patterns returns a non-empty list of strings."""
@@ -85,6 +91,7 @@ class TestProtocolSatisfaction:
         GoLanguageProfile,
         NodeLanguageProfile,
         JavaLanguageProfile,
+        VueLanguageProfile,
     ])
     def test_get_stdlib_prefixes_returns_sequence(self, profile_cls):
         p = profile_cls()
@@ -178,3 +185,18 @@ class TestJavaProfile:
     def test_build_files_include_gradle(self):
         p = JavaLanguageProfile()
         assert "build.gradle" in p.build_file_patterns
+
+
+@pytest.mark.unit
+class TestVueProfile:
+    def test_js_host_matches_node(self):
+        from startd8.languages.js_metadata import JS_DIALECT_VUE_SFC, JS_HOST_JAVASCRIPT_NODE
+        from startd8.languages.nodejs import NodeLanguageProfile
+
+        v = VueLanguageProfile()
+        n = NodeLanguageProfile()
+        assert v.js_host_id == n.js_host_id == JS_HOST_JAVASCRIPT_NODE
+        assert v.js_dialect_id == JS_DIALECT_VUE_SFC
+
+    def test_syntax_check_deferred(self):
+        assert VueLanguageProfile().syntax_check_command is None

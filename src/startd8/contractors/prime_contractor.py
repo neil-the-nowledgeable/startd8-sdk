@@ -3784,6 +3784,14 @@ class PrimeContractorWorkflow:
             )
         return None
 
+    def _forward_path_language_hints(self) -> Dict[str, str]:
+        """Build path → language_id hints from ``ForwardFileSpec.language`` (REQ-JSF-007)."""
+        from startd8.forward_manifest import path_language_hints_from_forward_manifest
+
+        return path_language_hints_from_forward_manifest(
+            getattr(self, "_forward_manifest", None),
+        )
+
     def _build_generation_context(
         self, feature: FeatureSpec, prior_error: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -3880,6 +3888,7 @@ class PrimeContractorWorkflow:
         # (Dockerfiles, config files) can infer language from siblings.
         # Cached on first call — queue contents don't change mid-run.
         from ..languages import resolve_language
+        from ..languages.js_metadata import read_js_dialect_id, read_js_host_id
         if not hasattr(self, "_batch_target_files"):
             self._batch_target_files: Optional[List[str]] = None
             if hasattr(self, "queue") and self.queue is not None:
@@ -3890,12 +3899,22 @@ class PrimeContractorWorkflow:
                     for tf in fspec.target_files
                 ]
         language_profile = resolve_language(
-            feature.target_files, batch_target_files=self._batch_target_files,
+            feature.target_files,
+            batch_target_files=self._batch_target_files,
+            path_language_hints=self._forward_path_language_hints(),
         )
         self._language_profile = language_profile
         gen_context["language_profile"] = language_profile
         gen_context["language_role"] = language_profile.system_prompt_role
         gen_context["coding_standards"] = language_profile.coding_standards
+
+        # REQ-JSF-009: JS host / dialect for prompts and downstream routing
+        _hid = read_js_host_id(language_profile)
+        _did = read_js_dialect_id(language_profile)
+        if _hid:
+            gen_context["js_host_id"] = _hid
+        if _did:
+            gen_context["js_dialect_id"] = _did
 
         # --- Mottainai: Thread all extracted context into gen_context ---
         # Each field is injected only if present and not already set by a

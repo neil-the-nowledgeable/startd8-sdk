@@ -758,6 +758,7 @@ class PhaseEmitter:
             parsed_plan.features,
             plan_text=parsed_plan.raw_text,
             refine_suggestions=refine_suggestions or None,
+            forward_manifest=forward_manifest,
             enrich_negative_scope=_kc.enrich_negative_scope,
             enrich_requirement_refs=_kc.enrich_requirement_refs,
             enrich_target_files=_kc.enrich_target_files,

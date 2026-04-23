@@ -9,9 +9,21 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .js_metadata import JS_DIALECT_PLAIN, JS_HOST_JAVASCRIPT_NODE
+
 
 class NodeLanguageProfile:
     """Language profile for Node.js code generation."""
+
+    @property
+    def js_host_id(self) -> str:
+        """Shared JS-on-Node host (REQ-JSF-001); matches future Vue SFC dialect."""
+        return JS_HOST_JAVASCRIPT_NODE
+
+    @property
+    def js_dialect_id(self) -> str:
+        """Plain-source dialect (``.js`` / ``.ts`` / …), dialect index 0."""
+        return JS_DIALECT_PLAIN
 
     @property
     def language_id(self) -> str:

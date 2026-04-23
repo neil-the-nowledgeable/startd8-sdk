@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..logging_config import get_logger
 from .protocol import LanguageProfile
@@ -144,11 +144,16 @@ def _infer_language_from_path(file_path: str) -> Optional[str]:
     return None
 
 
+def _norm_rel_path(file_path: str) -> str:
+    return Path(file_path).as_posix()
+
+
 def resolve_language(
     target_files: Optional[List[str]] = None,
     *,
     default_id: str = "python",
     batch_target_files: Optional[List[str]] = None,
+    path_language_hints: Optional[Dict[str, str]] = None,
 ) -> LanguageProfile:
     """Select the dominant language profile from *target_files*.
 
@@ -160,6 +165,9 @@ def resolve_language(
             for inferring the language of language-neutral files
             (Dockerfiles, config files, etc.) that can't be resolved from
             their own extension or path alone.
+        path_language_hints: Optional map of relative path → ``language_id``
+            (typically from ``ForwardFileSpec.language``, REQ-JSF-007). Keys
+            may be raw or POSIX-normalized paths.
     """
     if not target_files:
         profile = LanguageRegistry.get(default_id)
@@ -173,7 +181,22 @@ def resolve_language(
     # Use batch files for sibling context when available
     context_files = batch_target_files if batch_target_files else target_files
     counts: Counter = Counter()
+    hints = path_language_hints or {}
     for fpath in target_files:
+        hint_raw = hints.get(fpath)
+        hint_norm = hints.get(_norm_rel_path(fpath))
+        hint_id = (hint_raw or hint_norm or "").strip().lower()
+        if hint_id:
+            hinted = LanguageRegistry.get(hint_id)
+            if hinted is not None:
+                counts[hint_id] += 1
+                continue
+            logger.warning(
+                "resolve_language: unknown path_language_hint %r for %s — falling back to inference",
+                hint_id,
+                fpath,
+            )
+
         fp = Path(fpath)
         ext = fp.suffix.lower()
         lang_id = ext_map.get(ext)

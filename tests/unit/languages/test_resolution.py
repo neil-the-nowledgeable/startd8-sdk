@@ -196,3 +196,21 @@ class TestResolveLanguage:
         """settings.gradle.kts is a Java/Kotlin build file."""
         profile = resolve_language(["src/service/settings.gradle.kts"])
         assert profile.language_id == "java"
+
+    def test_vue_only_batch_resolves_vue(self):
+        profile = resolve_language(["src/components/App.vue"])
+        assert profile.language_id == "vue"
+
+    def test_vue_and_typescript_prefers_higher_count(self):
+        """Dominant extension wins (REQ-VUE-B-004 tie-break: counts)."""
+        profile = resolve_language(
+            ["src/components/App.vue", "src/a.ts", "src/b.ts"],
+        )
+        assert profile.language_id == "nodejs"
+
+    def test_vue_with_neutral_readme_uses_batch_hints(self):
+        profile = resolve_language(
+            ["README.md", "src/components/App.vue"],
+            batch_target_files=["README.md", "src/components/App.vue"],
+        )
+        assert profile.language_id == "vue"

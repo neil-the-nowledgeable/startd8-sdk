@@ -87,6 +87,8 @@ ollama = "startd8.providers.openai:OllamaProvider"
 mock = "startd8.providers.mock:MockProvider"
 gemini = "startd8.providers.gemini:GeminiProvider"
 mistral = "startd8.providers.mistral:MistralProvider"
+nim = "startd8.providers.openai:NIMProvider"
+openai-compatible = "startd8.providers.openai:OpenAICompatibleProvider"
 
 [project.entry-points."startd8.workflows"]
 pipeline = "startd8.workflows.builtin.pipeline_workflow:PipelineWorkflow"
@@ -118,6 +120,7 @@ go = "startd8.languages.go:GoLanguageProfile"
 nodejs = "startd8.languages.nodejs:NodeLanguageProfile"
 java = "startd8.languages.java:JavaLanguageProfile"
 csharp = "startd8.languages.csharp:CSharpLanguageProfile"
+vue = "startd8.languages.vue:VueLanguageProfile"
 
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"

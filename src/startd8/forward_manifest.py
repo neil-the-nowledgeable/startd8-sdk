@@ -285,6 +285,8 @@ class ForwardFileSpec(BaseModel):
         elements: Expected code elements (classes, functions, methods).
         imports: Expected import statements.
         dependencies: External and stdlib package dependencies.
+        language: Optional override aligned with ``language_id`` (FR-DFA-009,
+            REQ-JSF-007), e.g. ``python``, ``nodejs``, ``vue``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -743,6 +745,39 @@ def forward_import_spec_from_entry(
     )
 
 
+def path_language_hints_from_file_specs(
+    file_specs: Optional[dict[str, "ForwardFileSpec"]],
+) -> dict[str, str]:
+    """Build path → ``language_id`` map from ``ForwardFileSpec.language`` (REQ-JSF-007).
+
+    Populates both the manifest dict key and a POSIX-normalized path so
+    ``resolve_language`` can match ``target_files`` regardless of separator style.
+    """
+    if not file_specs:
+        return {}
+    out: dict[str, str] = {}
+    for path, spec in file_specs.items():
+        lang = spec.language
+        if not lang:
+            continue
+        lid = str(lang).strip().lower()
+        out[path] = lid
+        try:
+            out[Path(path).as_posix()] = lid
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def path_language_hints_from_forward_manifest(
+    manifest: Optional["ForwardManifest"],
+) -> dict[str, str]:
+    """REQ-JSF-007: collect per-path language overrides from a deserialized manifest."""
+    if manifest is None:
+        return {}
+    return path_language_hints_from_file_specs(manifest.file_specs)
+
+
 def forward_dependencies_from_deps(deps: Dependencies) -> ForwardDependencies:
     """Convert AST ``Dependencies`` to ``ForwardDependencies``.
 
@@ -775,4 +810,6 @@ __all__ = [
     "forward_element_spec_from_element",
     "forward_import_spec_from_entry",
     "forward_dependencies_from_deps",
+    "path_language_hints_from_file_specs",
+    "path_language_hints_from_forward_manifest",
 ]

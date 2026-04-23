@@ -7,6 +7,7 @@ descriptions at plan ingestion time.
 
 import pytest
 
+from startd8.forward_manifest import ForwardFileSpec, ForwardManifest
 from startd8.workflows.builtin.plan_ingestion_enrichment import (
     _enrich_coding_standards,
     _ensure_task_context,
@@ -135,6 +136,23 @@ class TestDescriptionSanitization:
         _, sanitized = _enrich_coding_standards(tasks)
         assert sanitized == 0
         assert tasks[0]["config"]["task_description"] == desc
+
+
+class TestForwardManifestLanguageHints:
+    """REQ-JSF-007: plan-ingestion enrichment honors manifest ``language`` hints."""
+
+    def test_readme_hint_nodejs(self):
+        tasks = [_make_task("PI-001", ["README.md"])]
+        fm = ForwardManifest(
+            file_specs={
+                "README.md": ForwardFileSpec(
+                    file="README.md", elements=[], language="nodejs",
+                ),
+            },
+        )
+        injected, _ = _enrich_coding_standards(tasks, forward_manifest=fm)
+        assert injected == 1
+        assert tasks[0]["config"]["context"]["language_id"] == "nodejs"
 
 
 class TestBatchContext:

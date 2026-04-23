@@ -27,6 +27,7 @@ from startd8.forward_manifest import (
     forward_dependencies_from_deps,
     forward_element_spec_from_element,
     forward_import_spec_from_entry,
+    path_language_hints_from_forward_manifest,
 )
 from startd8.utils.code_manifest import (
     Dependencies,
@@ -921,3 +922,26 @@ class TestConversionFunctions:
         fwd = forward_dependencies_from_deps(deps)
         assert fwd.external == ["httpx"]
         assert fwd.stdlib == ["json"]
+
+
+class TestPathLanguageHints:
+    """REQ-JSF-007: manifest-derived hints for ``resolve_language``."""
+
+    def test_hints_from_manifest(self) -> None:
+        fm = ForwardManifest(
+            file_specs={
+                "src/App.vue": ForwardFileSpec(
+                    file="src/App.vue", elements=[], language="vue",
+                ),
+                "README.md": ForwardFileSpec(
+                    file="README.md", elements=[], language="nodejs",
+                ),
+            },
+        )
+        hints = path_language_hints_from_forward_manifest(fm)
+        assert hints["README.md"] == "nodejs"
+        assert hints["src/App.vue"] == "vue"
+
+    def test_empty_manifest(self) -> None:
+        assert path_language_hints_from_forward_manifest(None) == {}
+        assert path_language_hints_from_forward_manifest(ForwardManifest()) == {}

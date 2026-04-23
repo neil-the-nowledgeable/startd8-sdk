@@ -534,6 +534,7 @@ def _enrich_copy_source(
 
 def _enrich_coding_standards(
     tasks: List[Dict[str, Any]],
+    forward_manifest: Optional[Any] = None,
 ) -> tuple:
     """Resolve language profile, inject coding standards, sanitize anti-patterns.
 
@@ -548,6 +549,10 @@ def _enrich_coding_standards(
     from ...languages.registry import LanguageRegistry
 
     LanguageRegistry.discover()
+
+    from startd8.forward_manifest import path_language_hints_from_forward_manifest
+
+    path_hints = path_language_hints_from_forward_manifest(forward_manifest)
 
     # Build batch context — all target_files across all tasks — for
     # language-neutral file inference (same pattern as prime_contractor:3885-3891).
@@ -573,7 +578,9 @@ def _enrich_coding_standards(
             continue
 
         profile = resolve_language(
-            target_files, batch_target_files=batch_target_files,
+            target_files,
+            batch_target_files=batch_target_files,
+            path_language_hints=path_hints or None,
         )
 
         # Persist scalar properties (JSON-serializable, survive seed save/load)
@@ -616,6 +623,7 @@ def enrich_tasks_deterministic(
     features: list,
     plan_text: str = "",
     refine_suggestions: Optional[List[Dict[str, Any]]] = None,
+    forward_manifest: Optional[Any] = None,
     *,
     enrich_negative_scope: bool = True,
     enrich_requirement_refs: bool = True,
@@ -696,7 +704,9 @@ def enrich_tasks_deterministic(
     # Step 7: Language-aware coding standards injection (REQ-TDE-200)
     if enrich_coding_standards:
         try:
-            _cs_injected, _cs_sanitized = _enrich_coding_standards(tasks)
+            _cs_injected, _cs_sanitized = _enrich_coding_standards(
+                tasks, forward_manifest=forward_manifest,
+            )
             diag.coding_standards_injected = _cs_injected
             diag.descriptions_sanitized = _cs_sanitized
         except Exception:

@@ -50,6 +50,16 @@ class TestDetectLanguage:
         assert detect_language("app.py", explicit_lang="go") == "go"
         assert detect_language("Dockerfile", explicit_lang="python") == "python"
 
+    def test_explicit_vue_reserved(self):
+        """``explicit_lang`` passes through without consulting the extension map."""
+        assert detect_language("src/App.vue", explicit_lang="vue") == "vue"
+
+    def test_vue_extension_registered(self):
+        from startd8.languages.registry import LanguageRegistry
+
+        LanguageRegistry.discover()
+        assert detect_language("src/App.vue") == "vue"
+
     def test_explicit_none_falls_through(self):
         """explicit_lang=None triggers normal inference."""
         assert detect_language("app.py", explicit_lang=None) == "python"

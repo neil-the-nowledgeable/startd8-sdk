@@ -864,7 +864,7 @@ def _build_system_prompt(
     is_go = profile.language_id == "go"
     is_java = profile.language_id == "java"
     is_csharp = profile.language_id == "csharp"
-    is_nodejs = profile.language_id == "nodejs"
+    is_nodejs = profile.language_id in ("nodejs", "vue")
     indent_rule = "Use tab indentation." if is_go else "Use 4-space indentation."
     if is_go:
         stub_marker = 'panic("not implemented")'
@@ -1082,8 +1082,8 @@ def extract_function_body(
             logger.warning("C# body extraction failed for %s: %s", element.name, exc)
             return None
 
-    if lang_id in ("java", "nodejs"):
-        # Java/Node.js: brace-based body extraction (same approach as Go).
+    if lang_id in ("java", "nodejs", "vue"):
+        # Java/Node.js/Vue script: brace-based body extraction (same approach as Go).
         # Find the function/method declaration by name, then extract the
         # body between { and } using brace-depth counting.
         try:
@@ -1645,7 +1645,7 @@ def _validate_file_whole_result(
         # Non-Python: skip AST-based structural checks, only check stubs + skeleton markers
         if _skeleton_has_stubs(code, language_profile):
             return False, "stub bodies remain", []
-        if SKELETON_MARKER in code:
+        if "[STARTD8-SKELETON]" in code:
             return False, "contains skeleton markers", []
         return True, "", []
 
@@ -1667,7 +1667,7 @@ def _validate_file_whole_result(
                     return False, f"nested duplicate function: {node.name}", []
 
     # Check for skeleton markers — hard fail
-    if SKELETON_MARKER in code:
+    if "[STARTD8-SKELETON]" in code:
         return False, "contains skeleton markers", []
 
     # ── Soft-fail collection ──
@@ -2443,7 +2443,7 @@ class MicroPrimeEngine:
         # instead of writing them to disk.  Uses AST-based stub detection
         # (AC-R3) to avoid false positives on branch/comment usage.
         _has_stubs = _skeleton_has_stubs(current_skeleton, self._language_profile)
-        _has_marker = SKELETON_MARKER in current_skeleton
+        _has_marker = "[STARTD8-SKELETON]" in current_skeleton
         if _has_stubs or _has_marker:
             for er in file_result.element_results:
                 if er.success and not er.code:
@@ -2744,9 +2744,11 @@ class MicroPrimeEngine:
 
         # Strip skeleton marker before prompting — if the model echoes it,
         # validation fails with "contains skeleton markers."
-        _prompt_skeleton = skeleton.replace(
-            SKELETON_MARKER + "\n", ""
-        ).replace(SKELETON_MARKER, "")
+        # REQ-KZ-GO-605: Match bracket-delimited portion for all languages.
+        _prompt_skeleton = "\n".join(
+            line for line in skeleton.splitlines()
+            if "[STARTD8-SKELETON]" not in line
+        )
 
         prompt = _build_file_whole_prompt(
             _prompt_skeleton, file_spec,

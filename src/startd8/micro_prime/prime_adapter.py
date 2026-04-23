@@ -217,7 +217,7 @@ def _detect_assembly_defect(content: str, file_path: str) -> Optional[str]:
     2. ``[STARTD8-SKELETON]`` markers (skeleton was never fully assembled)
     3. Nested duplicate function definitions (Ollama over-generation artifact)
     """
-    if _SKELETON_MARKER in content:
+    if "[STARTD8-SKELETON]" in content:
         return "`[STARTD8-SKELETON]` marker still present"
     if file_path.endswith(".py"):
         try:
@@ -904,9 +904,12 @@ class MicroPrimeCodeGenerator:
                         continue
 
                 # REQ-MP-703: Write filled skeleton to disk
-                final_content = file_result.filled_skeleton.replace(
-                    _SKELETON_MARKER + "\n", "",
-                ).replace(_SKELETON_MARKER, "")
+                # REQ-KZ-GO-605: Strip skeleton markers for all languages
+                # (Python uses "# [STARTD8-SKELETON]", Go/Java/C#/Node use "//")
+                final_content = "\n".join(
+                    line for line in file_result.filled_skeleton.splitlines()
+                    if "[STARTD8-SKELETON]" not in line
+                )
 
                 # Phase 1, Step 9: syntax gate AFTER sentinel strip.
                 # REQ-MPL-100: Use language-aware validation, not hardcoded ast.parse().
@@ -1945,6 +1948,23 @@ class MicroPrimeCodeGenerator:
                     logger.warning(
                         "Node.js skeleton generation failed for %s: %s",
                         file_path, exc,
+                    )
+                continue
+
+            # Vue SFC: never run Python DFA; passthrough existing or skip (REQ-VUE-B-003).
+            if _suffix == ".vue":
+                existing = existing_files.get(file_path, "")
+                if existing:
+                    skeletons[file_path] = existing
+                    logger.debug(
+                        "Vue SFC skeleton for %s: passthrough existing (%d lines)",
+                        file_path,
+                        existing.count("\n") + 1,
+                    )
+                else:
+                    logger.debug(
+                        "Vue SFC %s: no existing content, skipping deterministic skeleton",
+                        file_path,
                     )
                 continue
 

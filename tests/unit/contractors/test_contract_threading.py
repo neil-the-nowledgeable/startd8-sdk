@@ -64,6 +64,10 @@ def _make_workflow(
     wf._guidance_context = None
     wf.edit_min_pct = 0.0
     wf._complexity_routing_enabled = False
+    wf._resolved_artifact_params = None
+    wf._expected_output_contracts = None
+    wf._design_calibration_hints = None
+    wf._quality_accumulator = None
 
     return wf
 
@@ -137,6 +141,34 @@ class TestInstrumentationContractThreading:
         gen_context = wf._build_generation_context(feature)
         assert "instrumentation_contract" in gen_context
         assert gen_context["instrumentation_contract"]["metrics"]["required"][0]["name"] == "request_count"
+
+
+class TestGenContextJsHostHints:
+    """REQ-JSF-009: ``js_host_id`` / ``js_dialect_id`` from forward manifest hints."""
+
+    def test_readme_resolves_node_via_manifest_hint(self, tmp_path):
+        from startd8.contractors.queue import FeatureSpec
+        from startd8.forward_manifest import ForwardFileSpec, ForwardManifest
+        from startd8.languages.js_metadata import JS_DIALECT_PLAIN, JS_HOST_JAVASCRIPT_NODE
+
+        wf = _make_workflow(project_root=tmp_path)
+        wf._forward_manifest = ForwardManifest(
+            file_specs={
+                "README.md": ForwardFileSpec(
+                    file="README.md", elements=[], language="nodejs",
+                ),
+            },
+        )
+        feature = FeatureSpec(
+            id="F-001",
+            name="readme-task",
+            target_files=["README.md"],
+            description="Doc",
+        )
+        gen_context = wf._build_generation_context(feature)
+        assert gen_context["language_profile"].language_id == "nodejs"
+        assert gen_context["js_host_id"] == JS_HOST_JAVASCRIPT_NODE
+        assert gen_context["js_dialect_id"] == JS_DIALECT_PLAIN
 
 
 class TestGuidanceThreading:
