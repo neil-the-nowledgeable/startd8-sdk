@@ -1,7 +1,5 @@
 """Tests for complexity.classifier — tier classification logic."""
 
-import pytest
-
 from startd8.complexity.classifier import classify_tier
 from startd8.complexity.models import (
     ClassificationResult,
@@ -290,6 +288,16 @@ class TestNonPythonRouting:
             _signals(file_extension=".txt", estimated_loc=9)
         )
         assert tier is ComplexityTier.TRIVIAL
+
+    def test_vue_uses_full_classifier_when_registered(self):
+        """REQ-VUE-P-008: ``.vue`` is a supported extension — not LOC-only trivial."""
+        from startd8.languages.registry import LanguageRegistry
+
+        LanguageRegistry.discover()
+        tier, reason = classify_tier(
+            _signals(file_extension=".vue", estimated_loc=20),
+        )
+        assert "non-Python file (.vue)" not in reason
 
 
 class TestNoneConfig:

@@ -1,6 +1,6 @@
 # Implementation plan — Phase C: Vue / Node parity (REQ-VUE-P-001 … P-016)
 
-**Status:** In progress — **C.1**–**C.3** landed (§2 streams C.1–C.3). **C.3** details: P-004/P-005 — TS heuristic parity on extracted script, ``test_command`` documented vs Node, optional ESLint via ``STARTD8_VUE_LINT``, ``vue-tsc`` + ``tsc`` paths documented in ``vue.py``. **C.4**+ follow §3 sequencing.  
+**Status:** In progress — **C.1**–**C.4** landed (§2 streams C.1–C.4). **C.4** (P-008, P-009): complexity classifier comment + test that ``.vue`` uses full analysis when registered; repair ``route_failures`` treats ``vue`` like ``nodejs``; ``vue_sfc_repair`` projection for JS steps (contamination, dedup, var/const, shebang, eslint phase2, ``js_syntax_validate``); ``RepairConfig`` semantic categories for ``vue``; engine docstring for registry discover. **C.5**+ follow §3 sequencing.  
 **Parent requirements:** [REQ_JS_HOST_FRAMEWORKS_AND_VUE.md](REQ_JS_HOST_FRAMEWORKS_AND_VUE.md) — Part C  
 **Prerequisites:**
 
@@ -78,7 +78,7 @@
 | **C.4.2** | For each language-aware repair step touching `.ts`/`.js`, add Vue branch on **extracted script** or Vue-specific step with same violation taxonomy. | `repair/` |
 | **C.4.3** | **Opportunistic debt (only if touching same files):** reduce reliance on **`_language_id_from_path`** (`engine.py`) defaulting unknown → `python` — prefer **`LanguageRegistry` / profile** resolution aligned with REQ v0.2 §0.1. | `engine.py`, `repair/` |
 
-**Exit:** P-008, P-009 satisfied.
+**Exit:** P-008, P-009 satisfied (routing + script projection + classifier test + semantic parity).
 
 ---
 

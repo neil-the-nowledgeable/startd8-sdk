@@ -30,6 +30,12 @@ from pathlib import Path
 from typing import Optional
 
 from ..models import ElementContext, RepairContext, RepairStepResult
+from ..vue_sfc_repair import (
+    VueScriptRepairSlice,
+    merge_script_back,
+    synthetic_script_path,
+    vue_script_slice,
+)
 
 _JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
 
@@ -53,25 +59,33 @@ class EslintAutoFixStep:
         file_path: Path,
         element_context: Optional[ElementContext] = None,
     ) -> RepairStepResult:
-        if file_path.suffix.lower() not in _JS_EXTENSIONS:
+        sl = vue_script_slice(code, file_path)
+        eff_code = sl.script if sl is not None else code
+        eff_path = (
+            synthetic_script_path(file_path, sl.inner_suffix)
+            if sl is not None
+            else file_path
+        )
+        if file_path.suffix.lower() not in _JS_EXTENSIONS and sl is None:
             return RepairStepResult(
                 step_name=self.name, modified=False, code=code,
             )
 
         # Try ESLint first
         if shutil.which("eslint") is not None:
-            result = _run_eslint_fix(code, file_path.suffix)
+            result = _run_eslint_fix(eff_code, eff_path.suffix)
             if result is not None:
                 fixed_code, eslint_modified = result
                 # Chain: run dedup_require after eslint (eslint can't fix it)
                 final_code, dedup_modified = _run_dedup_fallback(
-                    fixed_code, file_path,
+                    fixed_code, eff_path,
                 )
                 modified = eslint_modified or dedup_modified
+                merged = merge_script_back(sl, code, final_code, modified)
                 return RepairStepResult(
                     step_name=self.name,
-                    modified=modified,
-                    code=final_code,
+                    modified=merged != code,
+                    code=merged,
                     metrics={
                         "engine": "eslint",
                         "eslint_modified": eslint_modified,
@@ -81,7 +95,9 @@ class EslintAutoFixStep:
             # ESLint failed (config error, timeout, etc.) — fall through
 
         # Fallback: Phase 2 text-based steps
-        return _run_phase2_fallback(code, context, file_path, element_context)
+        return _run_phase2_fallback(
+            eff_code, context, eff_path, element_context, sl, code,
+        )
 
 
 def _run_eslint_fix(code: str, suffix: str) -> Optional[tuple[str, bool]]:
@@ -105,7 +121,7 @@ def _run_eslint_fix(code: str, suffix: str) -> Optional[tuple[str, bool]]:
         # Run eslint --fix — config auto-discovered from cwd (flat config).
         # Do NOT use --config with absolute path — ESLint v10 treats the
         # file as "outside of base path" and ignores it.
-        result = subprocess.run(
+        subprocess.run(
             ["eslint", "--fix", src_path],
             capture_output=True,
             text=True,
@@ -147,6 +163,8 @@ def _run_phase2_fallback(
     context: RepairContext,
     file_path: Path,
     element_context: Optional[ElementContext],
+    sl: VueScriptRepairSlice | None,
+    original_full: str,
 ) -> RepairStepResult:
     """Run Phase 2 text-based steps sequentially as ESLint fallback."""
     from .dedup_require import DedupRequireStep
@@ -162,9 +180,10 @@ def _run_phase2_fallback(
             any_modified = True
             current = result.code
 
+    merged = merge_script_back(sl, original_full, current, any_modified)
     return RepairStepResult(
         step_name="eslint_autofix",
-        modified=any_modified,
-        code=current,
+        modified=merged != original_full,
+        code=merged,
         metrics={"engine": "phase2_fallback"},
     )

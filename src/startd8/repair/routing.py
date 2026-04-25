@@ -295,7 +295,9 @@ def route_failures(
         # Language filtering: skip routes that don't match the target language
         if language_id is not None and route_lang is not None:
             if route_lang != language_id:
-                continue
+                # REQ-VUE-P-009: Vue SFC uses the same repair taxonomy as Node.
+                if not (language_id == "vue" and route_lang == "nodejs"):
+                    continue
         matched_patterns.append(pattern)
         step_names.update(steps)
         if confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 0):

@@ -15,6 +15,7 @@ from typing import Optional
 
 from ...languages._validation_utils import PYTHON_FINGERPRINTS, check_balanced_braces
 from ..models import ElementContext, RepairContext, RepairStepResult
+from ..vue_sfc_repair import vue_script_slice
 
 _JS_KEYWORDS = frozenset({
     "function", "const", "let", "var", "class", "import", "export",
@@ -36,7 +37,9 @@ class JsSyntaxValidateStep:
         file_path: Path,
         element_context: Optional[ElementContext] = None,
     ) -> RepairStepResult:
-        valid, error = _validate_js_syntax(code)
+        sl = vue_script_slice(code, file_path)
+        work = sl.script if sl is not None else code
+        valid, error = _validate_js_syntax(work)
         return RepairStepResult(
             step_name=self.name,
             modified=False,

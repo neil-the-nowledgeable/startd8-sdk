@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..models import ElementContext, RepairContext, RepairStepResult
+from ..vue_sfc_repair import merge_script_back, vue_script_slice
 
 _JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
 
@@ -44,12 +45,14 @@ class ContaminationStripJsStep:
         file_path: Path,
         element_context: Optional[ElementContext] = None,
     ) -> RepairStepResult:
-        if file_path.suffix.lower() not in _JS_EXTENSIONS:
+        sl = vue_script_slice(code, file_path)
+        body = sl.script if sl is not None else code
+        if file_path.suffix.lower() not in _JS_EXTENSIONS and sl is None:
             return RepairStepResult(
                 step_name=self.name, modified=False, code=code,
             )
 
-        lines = code.splitlines(keepends=True)
+        lines = body.splitlines(keepends=True)
         keep: list[str] = []
         removed_count = 0
         patterns_found: set[str] = set()
@@ -91,17 +94,20 @@ class ContaminationStripJsStep:
                 keep.append(line)
 
         if removed_count == 0:
+            out = merge_script_back(sl, code, "".join(keep), False)
             return RepairStepResult(
                 step_name=self.name,
                 modified=False,
-                code=code,
+                code=out,
                 metrics={"lines_removed": 0, "patterns_matched": []},
             )
 
+        new_script = "".join(keep)
+        out = merge_script_back(sl, code, new_script, True)
         return RepairStepResult(
             step_name=self.name,
-            modified=True,
-            code="".join(keep),
+            modified=out != code,
+            code=out,
             metrics={
                 "lines_removed": removed_count,
                 "patterns_matched": sorted(patterns_found),

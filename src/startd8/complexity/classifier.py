@@ -7,7 +7,7 @@ Port of ``_classify_complexity_tier()`` from Artisan's
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from startd8.logging_config import get_logger
 
@@ -143,7 +143,7 @@ def _classify_tier_core(
     cfg = config or ComplexityRoutingConfig()
 
     # --- Non-Python early routing ---
-    # Files for supported languages (Go, Node.js, Java) use the full
+    # Files for supported languages (Go, Node.js, Java, Vue, …) use the full
     # complexity analysis below.  Non-supported languages (HTML, Dockerfile,
     # YAML, requirements.txt, etc.) route by LOC only.
     # Run-013 showed an HTML template costing $0.59 via cloud fallback — it

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..models import ElementContext, RepairContext, RepairStepResult
+from ..vue_sfc_repair import merge_script_back, vue_script_slice
 
 _JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
 
@@ -45,12 +46,14 @@ class DedupRequireStep:
         file_path: Path,
         element_context: Optional[ElementContext] = None,
     ) -> RepairStepResult:
-        if file_path.suffix.lower() not in _JS_EXTENSIONS:
+        sl = vue_script_slice(code, file_path)
+        body = sl.script if sl is not None else code
+        if file_path.suffix.lower() not in _JS_EXTENSIONS and sl is None:
             return RepairStepResult(
                 step_name=self.name, modified=False, code=code,
             )
 
-        lines = code.splitlines(keepends=True)
+        lines = body.splitlines(keepends=True)
         result_lines: list[str] = []
         # Track: module → (first_line_index, has_destructuring)
         seen: dict[str, tuple[int, bool]] = {}
@@ -84,9 +87,11 @@ class DedupRequireStep:
             result_lines.append(line)
 
         modified = removed > 0
+        new_script = "".join(result_lines)
+        out = merge_script_back(sl, code, new_script, modified)
         return RepairStepResult(
             step_name=self.name,
-            modified=modified,
-            code="".join(result_lines),
+            modified=out != code,
+            code=out,
             metrics={"duplicates_removed": removed},
         )

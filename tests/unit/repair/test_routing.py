@@ -154,6 +154,19 @@ class TestLanguageAwareRouting:
         assert "js_syntax_validate" in route.steps
         assert "ast_validate" not in route.steps
 
+    def test_vue_syntax_route_matches_nodejs_steps(self):
+        """REQ-VUE-P-009: Vue uses the same JS repair sequence as ``nodejs``."""
+        config = RepairConfig(repairable_categories={"syntax"})
+        route_js = route_failures(
+            [Diagnostic(category="syntax", file="app.js", message="e")],
+            config,
+        )
+        route_vue = route_failures(
+            [Diagnostic(category="syntax", file="App.vue", message="e")],
+            config,
+        )
+        assert route_vue.steps == route_js.steps
+
     def test_explicit_language_id_overrides_inference(self):
         diags = [Diagnostic(category="syntax", file="unknown.txt", message="error")]
         config = RepairConfig(repairable_categories={"syntax"})
@@ -193,6 +206,10 @@ class TestInferLanguageFromDiagnostics:
         diags = [Diagnostic(category="syntax", file="app.js", message="err")]
         assert infer_language_from_diagnostics(diags) == "nodejs"
 
+    def test_vue_files(self):
+        diags = [Diagnostic(category="syntax", file="App.vue", message="err")]
+        assert infer_language_from_diagnostics(diags) == "vue"
+
     def test_mixed_languages_returns_none(self):
         diags = [
             Diagnostic(category="syntax", file="app.py", message="err"),
@@ -203,6 +220,14 @@ class TestInferLanguageFromDiagnostics:
     def test_unknown_extension_returns_none(self):
         diags = [Diagnostic(category="syntax", file="data.xyz", message="err")]
         assert infer_language_from_diagnostics(diags) is None
+
+
+class TestRepairConfigVueSemantic:
+    """REQ-VUE-P-008 / P-009: Vue semantic repair categories align with Node."""
+
+    def test_vue_semantic_categories_match_nodejs(self):
+        cfg = RepairConfig()
+        assert cfg.get_semantic_categories("vue") == cfg.get_semantic_categories("nodejs")
 
 
 class TestStepFactoryCompleteness:

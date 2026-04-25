@@ -24,6 +24,9 @@ _DEFAULT_SEMANTIC_CATEGORIES_BY_LANGUAGE: Dict[str, frozenset[str]] = {
     "nodejs": frozenset({
         "var_usage", "duplicate_require", "python_contamination",
     }),
+    "vue": frozenset({
+        "var_usage", "duplicate_require", "python_contamination",
+    }),
     "java": frozenset({
         "wildcard_import", "java_sql_injection",
     }),

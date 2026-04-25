@@ -192,7 +192,8 @@ def _language_id_from_path(file_path: str) -> str:
     """Resolve a file path to a language_id using LanguageRegistry.
 
     Returns ``"python"`` for unknown extensions or when the registry
-    is unavailable.
+    is unavailable (call :meth:`LanguageRegistry.discover` before relying
+    on non-Python extensions such as ``.vue`` — REQ-VUE-P-008 / C.4.3).
     """
     from pathlib import PurePosixPath
 
