@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from startd8.forward_manifest import ForwardManifest
+from startd8.forward_manifest import ForwardFileSpec, ForwardManifest
 from startd8.micro_prime.artisan_adapter import MicroPrimePrePass, PrePassResult
 from startd8.micro_prime.models import MicroPrimeConfig
 from startd8.micro_prime.prime_adapter import MicroPrimeCodeGenerator
@@ -1525,6 +1525,72 @@ class TestPostGenerationRepair:
             result = gen._run_post_generation_repair([vue])
         assert result == 0
         mock_cp.assert_not_called()
+
+
+@pytest.mark.unit
+class TestVueExplicitMicroPrimePath:
+    """REQ-VUE-P-010: ``.vue`` targets use MicroPrime, not generic non-Python bypass."""
+
+    def test_vue_not_bypass_when_is_non_python_true(self, tmp_path):
+        """Simulate registry gap: ``_is_non_python_file`` True, engine still invoked."""
+        from startd8.languages.vue import VueLanguageProfile
+        from startd8.micro_prime.context import MicroPrimeContext
+        from startd8.micro_prime.models import ElementResult, FileResult, TierClassification
+        from startd8.micro_prime.prime_adapter import _FileProcessingState
+
+        vue_path = "src/App.vue"
+        file_spec = ForwardFileSpec(file=vue_path, elements=[], language="vue")
+        manifest = ForwardManifest(
+            schema_version="1.0.0",
+            file_specs={vue_path: file_spec},
+            contracts=[],
+        )
+        skeleton = (
+            "<template><p>x</p></template>\n"
+            "<script setup>\nconst x = 1;\n</script>\n"
+        )
+        gen = MicroPrimeCodeGenerator(
+            manifest=manifest,
+            skeletons={vue_path: skeleton},
+            output_dir=tmp_path,
+            language_profile=VueLanguageProfile(),
+        )
+        st = _FileProcessingState()
+        mp_ctx = MicroPrimeContext.from_prime(
+            {}, manifest, [vue_path], ollama_available=False,
+        )
+        fake_result = FileResult(
+            file_path=vue_path,
+            filled_skeleton=skeleton,
+            element_results=[
+                ElementResult.make_cached(
+                    "stub",
+                    vue_path,
+                    TierClassification.TRIVIAL,
+                    "test",
+                    code="const x = 1;",
+                ),
+            ],
+        )
+        with patch(
+            "startd8.micro_prime.engine._is_non_python_file",
+            return_value=True,
+        ), patch.object(
+            gen._engine,
+            "process_file_with_context",
+            return_value=fake_result,
+        ) as proc:
+            gen._process_target_files(
+                st,
+                [vue_path],
+                manifest,
+                {vue_path: skeleton},
+                mp_ctx,
+                "task",
+                {},
+            )
+            proc.assert_called_once()
+        assert vue_path not in st.bypass_files
 
 
 class TestFillRateSuccessCriteria:

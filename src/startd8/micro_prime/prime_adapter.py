@@ -693,9 +693,16 @@ class MicroPrimeCodeGenerator:
             # Without this, non-Python files without skeletons fall into the
             # generic "no skeleton" bypass and get routed to the LLM fallback
             # via MicroPrime's bypass path instead of being handled directly.
+            #
+            # REQ-VUE-P-010: ``.vue`` SFCs always use the MicroPrime element
+            # pipeline when manifest + skeleton exist — never the generic
+            # non-Python bypass (even if language registry / extension map is
+            # incomplete and ``_is_non_python_file`` would otherwise return True).
             from startd8.micro_prime.engine import _is_non_python_file
 
-            if _is_non_python_file(file_path):
+            _explicit_vue_sfc = Path(file_path).suffix.lower() == ".vue"
+
+            if not _explicit_vue_sfc and _is_non_python_file(file_path):
                 # FR-DFA-003: Dockerfile passthrough (skeleton available)
                 lang = getattr(file_spec, "language", None) if file_spec else None
                 if lang == "dockerfile" and skeleton:
@@ -859,6 +866,11 @@ class MicroPrimeCodeGenerator:
             _dds = context.get("design_doc_sections") or []
             # Mottainai Rule 2: Forward task description to element prompts
             _task_desc = task or None
+            if _explicit_vue_sfc:
+                logger.debug(
+                    "MicroPrime explicit Vue SFC path (REQ-VUE-P-010): %s",
+                    file_path,
+                )
             file_result = self._engine.process_file_with_context(
                 file_spec, skeleton, mp_context,
                 design_doc_sections=_dds if _dds else None,

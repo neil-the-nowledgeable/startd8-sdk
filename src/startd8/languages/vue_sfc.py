@@ -7,13 +7,29 @@ Precedence for the primary editable script block:
 
 ``<script src="…">`` blocks are skipped (external scripts are not logical
 edit units for MicroPrime in the basic tier).
+
+**Splice contract (REQ-VUE-P-003):** ``reinject_vue_script`` replaces only the
+inner text of the chosen ``<script>`` … ``</script>`` match. Opening tag
+attributes, template/style blocks, and block order outside that span are
+preserved verbatim (including CRLF vs LF in the rest of the file).
+
+**Compiler macros & ``nodejs_parser`` parity (REQ-VUE-P-002):** Vue 3 macros
+(``defineProps``, ``defineEmits``, ``defineExpose``, ``withDefaults``, etc.)
+compile away; at the extracted-script text layer they look like ordinary
+call expressions. The shared ``parse_vue_sfc_script_elements`` helper delegates
+to ``nodejs_parser.parse_nodejs_source``, which is regex-based and shares the
+same limitations as for plain ``.ts`` / ``.js`` (see that module's docstring).
+Full AST-level macro modeling is out of scope for the basic tier.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional, Tuple
+
+from startd8.languages.nodejs_parser import NodeElement, parse_nodejs_source
 
 _SCRIPT_BLOCK = re.compile(
     r"<script(?P<attrs>[^>]*?)>(?P<body>.*?)</script>",
@@ -47,8 +63,8 @@ def extract_vue_script(source: str) -> Optional[VueScriptExtract]:
     if not source or "<script" not in source.lower():
         return None
 
-    setup_hits: List[Any] = []
-    plain_hits: List[Any] = []
+    setup_hits: List[re.Match[str]] = []
+    plain_hits: List[re.Match[str]] = []
     for m in _SCRIPT_BLOCK.finditer(source):
         attrs = m.group("attrs")
         if "src=" in attrs.lower():
@@ -90,3 +106,24 @@ def reinject_vue_script(original: str, new_script: str) -> str:
         + new_script
         + original[ext.content_end :]
     )
+
+
+def vue_script_block_checksum(source: str) -> Optional[Tuple[int, int, str]]:
+    """Fingerprint primary script inner span for idempotence checks (REQ-VUE-P-013).
+
+    Returns ``(content_start, content_end, sha256_hex)`` of the extracted
+    script body text, or ``None`` when no primary block exists.
+    """
+    ext = extract_vue_script(source)
+    if ext is None:
+        return None
+    digest = hashlib.sha256(ext.script.encode("utf-8")).hexdigest()
+    return (ext.content_start, ext.content_end, digest)
+
+
+def parse_vue_sfc_script_elements(source: str) -> List[NodeElement]:
+    """Parse the primary ``<script>`` block with the Node regex extractor (REQ-VUE-P-002)."""
+    ext = extract_vue_script(source)
+    if ext is None or not ext.script.strip():
+        return []
+    return parse_nodejs_source(ext.script)

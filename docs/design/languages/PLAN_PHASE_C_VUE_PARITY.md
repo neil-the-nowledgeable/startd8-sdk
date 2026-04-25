@@ -1,6 +1,6 @@
 # Implementation plan — Phase C: Vue / Node parity (REQ-VUE-P-001 … P-016)
 
-**Status:** In progress — **C.1** (profile hygiene: P-001, P-006, P-007, P-014 slice) landed in `languages/vue.py`; remaining streams follow §3 sequencing.  
+**Status:** In progress — **C.1** (profile hygiene: P-001, P-006, P-007, P-014 slice) landed in `languages/vue.py`. **C.2** (P-002, P-003, P-010, P-013): explicit ``.vue`` path in ``prime_adapter``, ``vue_sfc`` splice docs + ``parse_vue_sfc_script_elements`` / checksum helper, golden + CRLF + idempotence tests — landed. Remaining streams follow §3 sequencing.  
 **Parent requirements:** [REQ_JS_HOST_FRAMEWORKS_AND_VUE.md](REQ_JS_HOST_FRAMEWORKS_AND_VUE.md) — Part C  
 **Prerequisites:**
 

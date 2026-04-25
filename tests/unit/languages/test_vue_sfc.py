@@ -1,6 +1,15 @@
-"""Tests for Vue SFC script extraction (REQ-VUE-B-002)."""
+"""Tests for Vue SFC script extraction (REQ-VUE-B-002, REQ-VUE-P-002/003/013)."""
 
-from startd8.languages.vue_sfc import extract_vue_script, reinject_vue_script
+from pathlib import Path
+
+from startd8.languages.vue_sfc import (
+    extract_vue_script,
+    parse_vue_sfc_script_elements,
+    reinject_vue_script,
+    vue_script_block_checksum,
+)
+
+_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "lang-vue-basic" / "App.vue"
 
 
 def test_extract_script_setup_default_js() -> None:
@@ -80,3 +89,68 @@ def test_reinject_preserves_script_whitespace_slice() -> None:
     assert "const x = 2" in out
     assert "const x = 1" not in out
     assert out.endswith("</script>")
+
+
+def test_reinject_idempotent_same_body() -> None:
+    """REQ-VUE-P-013: reinjecting the extracted body leaves the SFC unchanged."""
+    src = '<script setup lang="ts" generic="T extends object">\nconst n = 1\n</script>\n'
+    ext = extract_vue_script(src)
+    assert ext is not None
+    assert reinject_vue_script(src, ext.script) == src
+
+
+def test_reinject_idempotent_double_apply() -> None:
+    body = "\nconst y = 2;\n"
+    src = f"<script setup>{body}</script>"
+    once = reinject_vue_script(src, body)
+    twice = reinject_vue_script(once, body)
+    assert once == twice == src
+
+
+def test_crlf_round_trip_preserves_prefix() -> None:
+    """REQ-VUE-P-013: CRLF outside the script block is preserved."""
+    src = (
+        "<template>\r\n<p>x</p>\r\n</template>\r\n"
+        "<script setup>\r\nconst a = 1\r\n</script>"
+    )
+    ext = extract_vue_script(src)
+    assert ext is not None
+    assert "\r\n" in ext.script
+    new_body = ext.script.replace("1", "2")
+    out = reinject_vue_script(src, new_body)
+    assert "<template>\r\n" in out
+    assert "const a = 2" in out
+
+
+def test_vue_script_block_checksum_stable_under_reinject() -> None:
+    src = "<script setup>\nfoo()\n</script>"
+    ext = extract_vue_script(src)
+    assert ext is not None
+    c0 = vue_script_block_checksum(src)
+    c1 = vue_script_block_checksum(reinject_vue_script(src, ext.script))
+    assert c0 == c1
+
+
+def test_parse_vue_sfc_matches_nodejs_on_extracted_fixture() -> None:
+    """REQ-VUE-P-002: same extractor as ``nodejs_parser`` on extracted script."""
+    from startd8.languages.nodejs_parser import parse_nodejs_source
+
+    sfc = _FIXTURE.read_text(encoding="utf-8")
+    ext = extract_vue_script(sfc)
+    assert ext is not None
+    from_script = parse_vue_sfc_script_elements(sfc)
+    direct = parse_nodejs_source(ext.script)
+    assert from_script == direct
+
+
+def test_parse_vue_lists_top_level_function() -> None:
+    """REQ-VUE-P-002: extracted script uses same heuristics as ``nodejs_parser``."""
+    src = (
+        '<script setup lang="ts">\n'
+        "export function greet(name: string): string {\n"
+        "  return `hello ${name}`;\n"
+        "}\n"
+        "</script>\n"
+    )
+    els = parse_vue_sfc_script_elements(src)
+    assert any(e.kind == "function" and e.name == "greet" for e in els)
