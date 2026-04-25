@@ -1,6 +1,6 @@
 # Implementation plan — Phase C: Vue / Node parity (REQ-VUE-P-001 … P-016)
 
-**Status:** In progress — **C.1**–**C.4** landed (§2 streams C.1–C.4). **C.4** (P-008, P-009): complexity classifier comment + test that ``.vue`` uses full analysis when registered; repair ``route_failures`` treats ``vue`` like ``nodejs``; ``vue_sfc_repair`` projection for JS steps (contamination, dedup, var/const, shebang, eslint phase2, ``js_syntax_validate``); ``RepairConfig`` semantic categories for ``vue``; engine docstring for registry discover. **C.5**+ follow §3 sequencing.  
+**Status:** In progress — **C.1**–**C.5** landed. **C.5** (P-011): template/style support levels + guardrails — ``non_script_region_snapshot`` / ``non_script_blocks_unchanged`` in ``vue_sfc``, splice-time warning, profile + ``VUE_P011_TEMPLATE_STYLE.md`` doc. **C.6**+ follow §3 sequencing.  
 **Parent requirements:** [REQ_JS_HOST_FRAMEWORKS_AND_VUE.md](REQ_JS_HOST_FRAMEWORKS_AND_VUE.md) — Part C  
 **Prerequisites:**
 
@@ -91,7 +91,7 @@
 | **C.5.1** | Document support level (LLM-only vs structured). |
 | **C.5.2** | Implement guardrails OR sub-block extraction for template/style (choose per product priority). |
 
-**Exit:** P-011 satisfied.
+**Exit:** P-011 satisfied (docs + snapshot guardrail + profile alignment).
 
 ---
 

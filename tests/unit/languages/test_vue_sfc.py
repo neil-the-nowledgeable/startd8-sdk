@@ -4,6 +4,8 @@ from pathlib import Path
 
 from startd8.languages.vue_sfc import (
     extract_vue_script,
+    non_script_blocks_unchanged,
+    non_script_region_snapshot,
     parse_vue_sfc_script_elements,
     reinject_vue_script,
     vue_script_block_checksum,
@@ -154,3 +156,34 @@ def test_parse_vue_lists_top_level_function() -> None:
     )
     els = parse_vue_sfc_script_elements(src)
     assert any(e.kind == "function" and e.name == "greet" for e in els)
+
+
+def test_non_script_snapshot_skips_style_src() -> None:
+    """P-011: external style links are not part of the inline snapshot."""
+    src = (
+        '<style src="./foo.css"></style>\n'
+        "<template><p>hi</p></template>\n"
+        "<style scoped>.a{color:red}</style>\n"
+    )
+    snap = non_script_region_snapshot(src)
+    assert "foo" not in snap.lower()
+    assert "hi" in snap
+    assert "color" in snap
+
+
+def test_reinject_preserves_non_script_for_guardrail() -> None:
+    """P-011: script-only round-trip does not change template/style snapshot."""
+    src = (
+        "<template><p>ok</p></template>\n"
+        "<script setup>\n"
+        "const n = 1\n"
+        "</script>\n"
+        "<style scoped>\n"
+        "p { margin: 0; }\n"
+        "</style>\n"
+    )
+    ext = extract_vue_script(src)
+    assert ext is not None
+    out = reinject_vue_script(src, ext.script.replace("1", "2"))
+    assert "const n = 2" in out
+    assert non_script_blocks_unchanged(src, out) is True

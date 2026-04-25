@@ -20,6 +20,16 @@ call expressions. The shared ``parse_vue_sfc_script_elements`` helper delegates
 to ``nodejs_parser.parse_nodejs_source``, which is regex-based and shares the
 same limitations as for plain ``.ts`` / ``.js`` (see that module's docstring).
 Full AST-level macro modeling is out of scope for the basic tier.
+
+**``<template>`` and ``<style>`` (REQ-VUE-P-011 / Phase C.5):** In the **basic
+tier**, MicroPrime’s **structured** edit surface is the primary ``<script>``
+block only. ``<template>`` and ``<style>`` (including ``scoped``) are
+**not** splicer targets; they should only change when a task or manifest
+**explicitly** calls for UI/style work, and then primarily via **LLM**
+editing with the same safety rules (see profile ``coding_standards``).
+**CSS preprocessors** (SCSS, Less) are not modeled here. A stable
+:func:`non_script_region_snapshot` supports **guardrails** (compare before/after)
+and future optional sub-block contracts.
 """
 
 from __future__ import annotations
@@ -33,6 +43,12 @@ from startd8.languages.nodejs_parser import NodeElement, parse_nodejs_source
 
 _SCRIPT_BLOCK = re.compile(
     r"<script(?P<attrs>[^>]*?)>(?P<body>.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# ``<template>`` and non-external ``<style>`` blocks (C.5 guardrail / future APIs)
+_NON_SCRIPT_BLOCK = re.compile(
+    r"<(template|style)(?P<attrs>[^>]*?)>(?P<body>.*?)</\1>",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -106,6 +122,31 @@ def reinject_vue_script(original: str, new_script: str) -> str:
         + new_script
         + original[ext.content_end :]
     )
+
+
+def non_script_region_snapshot(source: str) -> str:
+    """Stable text of all ``<template>`` and non-external ``<style>`` bodies (P-011).
+
+    Used to detect accidental edits outside the primary script block. Bodies
+    are collected in **document order**. External ``<style src=...>`` blocks
+    are skipped (same as script ``src=``).
+    """
+    if not source:
+        return ""
+    parts: list[str] = []
+    for m in _NON_SCRIPT_BLOCK.finditer(source):
+        tag = m.group(1).lower()
+        attrs = m.group("attrs")
+        if tag == "style" and "src=" in attrs.lower():
+            continue
+        body = m.group("body")
+        parts.append(f"{tag}\x1f{body}")
+    return "\x1e".join(parts)
+
+
+def non_script_blocks_unchanged(before: str, after: str) -> bool:
+    """``True`` when template + inline style regions match between two SFC sources."""
+    return non_script_region_snapshot(before) == non_script_region_snapshot(after)
 
 
 def vue_script_block_checksum(source: str) -> Optional[Tuple[int, int, str]]:

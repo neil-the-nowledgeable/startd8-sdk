@@ -385,7 +385,11 @@ def _splice_vue_sfc_dispatch(
     body: str, element: ForwardElementSpec, skeleton: str,
 ) -> SpliceResult:
     """Extract primary ``<script>``, splice with Node.js splicer, reinject."""
-    from startd8.languages.vue_sfc import extract_vue_script, reinject_vue_script
+    from startd8.languages.vue_sfc import (
+        extract_vue_script,
+        non_script_blocks_unchanged,
+        reinject_vue_script,
+    )
 
     ext = extract_vue_script(skeleton)
     if ext is None:
@@ -406,6 +410,12 @@ def _splice_vue_sfc_dispatch(
     if inner.code is None:
         return inner
     merged = reinject_vue_script(skeleton, inner.code)
+    if not non_script_blocks_unchanged(skeleton, merged):
+        logger.warning(
+            "REQ-VUE-P-011: non-script SFC regions changed after Vue script splice "
+            "(element=%s) — check reinject/regex boundaries",
+            element.name,
+        )
     return SpliceResult(code=merged, violations=inner.violations)
 
 
