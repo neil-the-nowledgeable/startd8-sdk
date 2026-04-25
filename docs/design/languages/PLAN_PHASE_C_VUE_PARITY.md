@@ -1,6 +1,6 @@
 # Implementation plan — Phase C: Vue / Node parity (REQ-VUE-P-001 … P-016)
 
-**Status:** In progress — **C.1** (profile hygiene: P-001, P-006, P-007, P-014 slice) landed in `languages/vue.py`. **C.2** (P-002, P-003, P-010, P-013): explicit ``.vue`` path in ``prime_adapter``, ``vue_sfc`` splice docs + ``parse_vue_sfc_script_elements`` / checksum helper, golden + CRLF + idempotence tests — landed. Remaining streams follow §3 sequencing.  
+**Status:** In progress — **C.1**–**C.3** landed (§2 streams C.1–C.3). **C.3** details: P-004/P-005 — TS heuristic parity on extracted script, ``test_command`` documented vs Node, optional ESLint via ``STARTD8_VUE_LINT``, ``vue-tsc`` + ``tsc`` paths documented in ``vue.py``. **C.4**+ follow §3 sequencing.  
 **Parent requirements:** [REQ_JS_HOST_FRAMEWORKS_AND_VUE.md](REQ_JS_HOST_FRAMEWORKS_AND_VUE.md) — Part C  
 **Prerequisites:**
 
@@ -64,7 +64,7 @@
 | **C.3.1** | Ensure `lang="ts"` paths use same rigor as `NodeLanguageProfile` TS validation (temp file or `vue-tsc` project mode). | `vue.py`, validation utils |
 | **C.3.2** | Non-`None` `syntax_check_command` / lint; `test_command` parity with Node or documented Vite/vitest default + manifest hinting. | `vue.py`, config |
 
-**Exit:** P-004, P-005 satisfied; **closes** REQ-VUE-B-005 optional gap.
+**Exit:** P-004, P-005 satisfied; **closes** REQ-VUE-B-005 optional gap (syntax + validate paths documented; lint opt-in).
 
 ---
 
