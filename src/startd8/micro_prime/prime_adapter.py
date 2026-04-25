@@ -438,6 +438,23 @@ class MicroPrimeCodeGenerator:
         self.lead_agent = getattr(fallback, "lead_agent", None)
         self.drafter_agent = getattr(fallback, "drafter_agent", None)
 
+    def _micro_prime_otel_profile_labels(self) -> dict[str, str]:
+        """OTel counter labels + metadata: ``language_id`` / JS host / dialect (REQ-VUE-P-012)."""
+        prof = self._language_profile
+        if prof is None:
+            return {"language_id": "python"}
+        out: dict[str, str] = {
+            "language_id": getattr(prof, "language_id", "python") or "python",
+        }
+        from startd8.languages.js_metadata import read_js_dialect_id, read_js_host_id
+
+        jh, jd = read_js_host_id(prof), read_js_dialect_id(prof)
+        if jh:
+            out["js_host_id"] = jh
+        if jd:
+            out["js_dialect_id"] = jd
+        return out
+
     def generate(
         self,
         task: str,
@@ -975,21 +992,27 @@ class MicroPrimeCodeGenerator:
                 if er.decomposition_metadata is not None:
                     st.decomposed_count += 1
 
-            # OTel metrics (REQ-MP-705)
+            # OTel metrics (REQ-MP-705) + REQ-VUE-P-012 (language / JS dialect labels)
+            _otel_prof = self._micro_prime_otel_profile_labels()
             if _elements_local_counter is not None:
                 for er in file_result.element_results:
                     if er.success:
                         _elements_local_counter.add(
-                            1, {"tier": er.tier.value, "file_path": file_path},
+                            1,
+                            {"tier": er.tier.value, "file_path": file_path, **_otel_prof},
                         )
                         if er.template_used and _template_hits_counter is not None:
                             _template_hits_counter.add(
-                                1, {"file_path": file_path},
+                                1, {"file_path": file_path, **_otel_prof},
                             )
                     if er.escalation is not None and _elements_escalated_counter is not None:
                         _elements_escalated_counter.add(
                             1,
-                            {"reason": er.escalation.reason.value, "file_path": file_path},
+                            {
+                                "reason": er.escalation.reason.value,
+                                "file_path": file_path,
+                                **_otel_prof,
+                            },
                         )
 
             # Element-level escalation: only delegate the whole file to
@@ -1187,6 +1210,7 @@ class MicroPrimeCodeGenerator:
                 _serialize_file_result(fr) for fr in st.all_file_results
             ],
         }
+        meta.update(self._micro_prime_otel_profile_labels())
         meta.update(extra)
         return meta
 

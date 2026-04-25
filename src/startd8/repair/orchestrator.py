@@ -27,7 +27,7 @@ from .models import (
     StepEffectiveness,
 )
 from .protocol import AstParseValidator, RepairStep
-from .routing import create_steps_from_route, route_failures
+from .routing import create_steps_from_route, infer_language_from_diagnostics, route_failures
 from .semantic_bridge import translate_to_diagnostics
 
 logger = get_logger(__name__)
@@ -520,6 +520,8 @@ def run_file_repair(
     """
     repair_start = time.monotonic()
 
+    _metric_language_id = infer_language_from_diagnostics(diagnostics) or "unset"
+
     route = route_failures(diagnostics, config)
 
     # CR-H4: Determine per-category circuit breaker keys.
@@ -546,9 +548,18 @@ def run_file_repair(
         # Emit skipped metrics — use first category for OTel label
         cb_label = tripped_categories[0] if tripped_categories else "unknown"
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_label})
+            _repair_attempts.add(
+                1,
+                {
+                    "outcome": "skipped",
+                    "error_category": cb_label,
+                    "language_id": _metric_language_id,
+                },
+            )
         if _repair_wall_clock is not None:
-            _repair_wall_clock.record(duration_ms)
+            _repair_wall_clock.record(
+                duration_ms, {"language_id": _metric_language_id},
+            )
         return RepairOutcome(
             route=route,
             any_modified=False,
@@ -560,9 +571,18 @@ def run_file_repair(
     if not route.steps:
         duration_ms = (time.monotonic() - repair_start) * 1000
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": "skipped", "error_category": cb_label})
+            _repair_attempts.add(
+                1,
+                {
+                    "outcome": "skipped",
+                    "error_category": cb_label,
+                    "language_id": _metric_language_id,
+                },
+            )
         if _repair_wall_clock is not None:
-            _repair_wall_clock.record(duration_ms)
+            _repair_wall_clock.record(
+                duration_ms, {"language_id": _metric_language_id},
+            )
         return RepairOutcome(
             route=route,
             any_modified=False,
@@ -576,6 +596,7 @@ def run_file_repair(
             attributes={
                 "repair.file_count": len(files),
                 "repair.route_confidence": route.confidence,
+                "repair.language_id": _metric_language_id,
             },
         )
         span_ctx.__enter__()
@@ -644,11 +665,22 @@ def run_file_repair(
 
         # Emit OTel metrics (REQ-RPL-401)
         if _repair_attempts is not None:
-            _repair_attempts.add(1, {"outcome": outcome_label, "error_category": cb_label})
+            _repair_attempts.add(
+                1,
+                {
+                    "outcome": outcome_label,
+                    "error_category": cb_label,
+                    "language_id": _metric_language_id,
+                },
+            )
         if any_modified and _repair_success is not None:
-            _repair_success.add(1, {"error_category": cb_label})
+            _repair_success.add(
+                1, {"error_category": cb_label, "language_id": _metric_language_id},
+            )
         if _repair_wall_clock is not None:
-            _repair_wall_clock.record(duration_ms)
+            _repair_wall_clock.record(
+                duration_ms, {"language_id": _metric_language_id},
+            )
 
         # Set span attributes for success
         if _HAS_OTEL and _tracer is not None:

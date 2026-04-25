@@ -1,6 +1,6 @@
 # Implementation plan — Phase C: Vue / Node parity (REQ-VUE-P-001 … P-016)
 
-**Status:** In progress — **C.1**–**C.5** landed. **C.5** (P-011): template/style support levels + guardrails — ``non_script_region_snapshot`` / ``non_script_blocks_unchanged`` in ``vue_sfc``, splice-time warning, profile + ``VUE_P011_TEMPLATE_STYLE.md`` doc. **C.6**+ follow §3 sequencing.  
+**Status:** In progress — **C.1**–**C.6** landed. **C.5** (P-011): template/style support levels + guardrails — ``non_script_region_snapshot`` / ``non_script_blocks_unchanged`` in ``vue_sfc``, splice-time warning, profile + ``VUE_P011_TEMPLATE_STYLE.md`` doc. **C.6** (P-012): ``language_id`` / ``js_host_id`` / ``js_dialect_id`` on MicroPrime generation metadata + element OTel counters, generation-path engine metrics, micro-prime repair telemetry, and contractor ``run_file_repair`` metrics/spans (``unset`` when diagnostics are ambiguous). **C.7**+ follow §3 sequencing.  
 **Parent requirements:** [REQ_JS_HOST_FRAMEWORKS_AND_VUE.md](REQ_JS_HOST_FRAMEWORKS_AND_VUE.md) — Part C  
 **Prerequisites:**
 

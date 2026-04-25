@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1122,6 +1122,35 @@ class TestVueRepairSkips:
             )
         assert result.code == sfc
         assert result.steps_applied == []
+
+
+class TestVueRepairTelemetry:
+    """REQ-VUE-P-012: micro-prime repair OTel carries ``language_id``."""
+
+    def test_skip_path_counters_include_vue(self, simple_function_element):
+        fs = ForwardFileSpec(file="App.vue", elements=[], language="vue")
+        from startd8.micro_prime import repair as mp_repair
+
+        with patch.object(mp_repair, "_HAS_OTEL", True):
+            m_att = MagicMock()
+            m_rec = MagicMock()
+            m_step = MagicMock()
+            m_hist = MagicMock()
+            with patch.object(mp_repair, "_mp_repair_attempts", m_att), patch.object(
+                mp_repair, "_mp_repair_recovered", m_rec,
+            ), patch.object(mp_repair, "_mp_repair_step_applied", m_step), patch.object(
+                mp_repair, "_mp_repair_wall_clock", m_hist,
+            ):
+                run_repair_pipeline(
+                    "<script>x</script>",
+                    simple_function_element,
+                    file_spec=fs,
+                    language_id="vue",
+                )
+        m_att.add.assert_called_once()
+        assert m_att.add.call_args[0][1]["language_id"] == "vue"
+        m_hist.record.assert_called_once()
+        assert m_hist.record.call_args[0][1]["language_id"] == "vue"
 
 
 class TestRunFileWholeContractorRepairVue:

@@ -731,6 +731,7 @@ def _emit_repair_telemetry(
         log_extra["repair"]["element_name"] = element_name
     if file_path:
         log_extra["repair"]["file_path"] = file_path
+    log_extra["repair"]["language_id"] = _current_repair_language_id
     logger.info(
         "micro_prime.repair.complete %s recovered=%s steps=%s",
         pipeline_mode,
@@ -740,13 +741,19 @@ def _emit_repair_telemetry(
     )
     if _HAS_OTEL and _mp_repair_attempts is not None:
         try:
-            _mp_repair_attempts.add(1, {"pipeline_mode": pipeline_mode})
+            _lang_attrs = {
+                "pipeline_mode": pipeline_mode,
+                "language_id": _current_repair_language_id,
+            }
+            _mp_repair_attempts.add(1, _lang_attrs)
             if result.repair_recovered:
-                _mp_repair_recovered.add(1, {"pipeline_mode": pipeline_mode})
+                _mp_repair_recovered.add(1, _lang_attrs)
             for step in steps_applied:
-                _mp_repair_step_applied.add(1, {"step": step, "pipeline_mode": pipeline_mode})
+                _mp_repair_step_applied.add(
+                    1, {"step": step, "pipeline_mode": pipeline_mode, "language_id": _current_repair_language_id},
+                )
             if wall_clock_ms > 0 and _mp_repair_wall_clock is not None:
-                _mp_repair_wall_clock.record(wall_clock_ms, {"pipeline_mode": pipeline_mode})
+                _mp_repair_wall_clock.record(wall_clock_ms, _lang_attrs)
         except Exception:
             pass
 

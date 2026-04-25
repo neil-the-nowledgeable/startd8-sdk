@@ -169,6 +169,7 @@ class TestOTelSpans:
         attrs = call_args[1]["attributes"]
         assert "repair.file_count" in attrs
         assert "repair.route_confidence" in attrs
+        assert attrs.get("repair.language_id") == "python"
 
     @patch("startd8.repair.orchestrator._HAS_OTEL", False)
     @patch("startd8.repair.orchestrator._tracer", None)
@@ -232,8 +233,9 @@ class TestOTelMetrics:
         run_file_repair(files, diags, config, project_root)
 
         mock_attempts.add.assert_called_once()
-        call_kwargs = mock_attempts.add.call_args[0]
-        assert call_kwargs[1]["outcome"] == "skipped"
+        _amount, attrs = mock_attempts.add.call_args[0]
+        assert attrs["outcome"] == "skipped"
+        assert attrs["language_id"] == "python"
 
     @patch("startd8.repair.orchestrator._repair_wall_clock", None)
     @patch("startd8.repair.orchestrator._repair_success", None)
@@ -247,6 +249,24 @@ class TestOTelMetrics:
 
         outcome = run_file_repair(files, diags, config, project_root)
         assert isinstance(outcome.any_modified, bool)
+
+    @patch("startd8.repair.orchestrator._repair_wall_clock")
+    @patch("startd8.repair.orchestrator._repair_success")
+    @patch("startd8.repair.orchestrator._repair_attempts")
+    def test_metrics_include_language_id_vue(
+        self, mock_attempts, mock_success, mock_wall_clock,
+    ):
+        """REQ-VUE-P-012: contractor repair counters carry inferred ``language_id``."""
+        config = RepairConfig(circuit_breaker_threshold=100)
+        diags = [
+            SyntaxDiagnostic(category="syntax", file="src/App.vue", message="bad", line=1),
+        ]
+        files = {Path("App.vue"): "x\n"}
+        project_root = Path("/tmp")
+        run_file_repair(files, diags, config, project_root)
+        for call in mock_attempts.add.call_args_list:
+            attrs = call[0][1]
+            assert attrs.get("language_id") == "vue"
 
 
 class TestPerStepTimeout:

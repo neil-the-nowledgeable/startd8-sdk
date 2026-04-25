@@ -397,14 +397,24 @@ def _record_moderate_ollama_whole_succeeded(file_path: str) -> None:
     _engine_metrics.record("moderate_ollama_whole_succeeded", 1, {"file_path": file_path})
 
 
-def _record_generation_path(path: str, file_path: str) -> None:
-    """Record a generation path routing decision (R2-S3)."""
-    _engine_metrics.record("generation_path", 1, {"path": path, "file_path": file_path})
+def _record_generation_path(
+    path: str, file_path: str, labels: Optional[dict[str, str]] = None,
+) -> None:
+    """Record a generation path routing decision (R2-S3; REQ-VUE-P-012: *labels*)."""
+    attrs: dict[str, str] = {"path": path, "file_path": file_path}
+    if labels:
+        attrs.update(labels)
+    _engine_metrics.record("generation_path", 1, attrs)
 
 
-def _record_generation_path_outcome(path: str, outcome: str, file_path: str) -> None:
-    """Record the outcome of a generation path attempt (R2-S3)."""
-    _engine_metrics.record("generation_path_outcome", 1, {"path": path, "outcome": outcome, "file_path": file_path})
+def _record_generation_path_outcome(
+    path: str, outcome: str, file_path: str, labels: Optional[dict[str, str]] = None,
+) -> None:
+    """Record the outcome of a generation path attempt (R2-S3; REQ-VUE-P-012: *labels*)."""
+    attrs: dict[str, str] = {"path": path, "outcome": outcome, "file_path": file_path}
+    if labels:
+        attrs.update(labels)
+    _engine_metrics.record("generation_path_outcome", 1, attrs)
 
 
 # Depth label cardinality cap (REQ-MP-914, R2-F3): depths beyond this
@@ -1827,6 +1837,23 @@ class MicroPrimeEngine:
         lp = self._language_profile
         return getattr(lp, "language_id", "python") if lp else "python"
 
+    def _otel_language_metric_labels(self) -> dict[str, str]:
+        """OTel counter labels: ``language_id`` plus JS host/dialect when applicable (REQ-VUE-P-012)."""
+        prof = self._language_profile
+        if prof is None:
+            return {"language_id": "python"}
+        out: dict[str, str] = {
+            "language_id": getattr(prof, "language_id", "python") or "python",
+        }
+        from startd8.languages.js_metadata import read_js_dialect_id, read_js_host_id
+
+        jh, jd = read_js_host_id(prof), read_js_dialect_id(prof)
+        if jh:
+            out["js_host_id"] = jh
+        if jd:
+            out["js_dialect_id"] = jd
+        return out
+
     @property
     def config(self) -> MicroPrimeConfig:
         return self._config
@@ -2229,6 +2256,7 @@ class MicroPrimeEngine:
         self._current_manifest = manifest
         self._current_domain_constraints = domain_constraints
         current_skeleton = skeleton
+        _otel_lang = self._otel_language_metric_labels()
 
         # Enrich file_spec with methods from skeleton for classes whose
         # methods aren't separate manifest elements (e.g. gRPC servicers).
@@ -2307,7 +2335,7 @@ class MicroPrimeEngine:
         if ollama_available and self._is_file_ollama_whole_eligible(
             enriched_file_spec, skeleton,
         ):
-            _record_generation_path("file_whole_primary", file_spec.file)
+            _record_generation_path("file_whole_primary", file_spec.file, _otel_lang)
             file_whole_result = self._attempt_file_ollama_whole(
                 enriched_file_spec, skeleton,
                 task_description=task_description,
@@ -2317,13 +2345,17 @@ class MicroPrimeEngine:
                 pre_classified_tiers=_pre_tiers,
             )
             if file_whole_result is not None:
-                _record_generation_path_outcome("file_whole_primary", "success", file_spec.file)
+                _record_generation_path_outcome(
+                    "file_whole_primary", "success", file_spec.file, _otel_lang,
+                )
                 return file_whole_result
-            _record_generation_path_outcome("file_whole_primary", "failure", file_spec.file)
+            _record_generation_path_outcome(
+                "file_whole_primary", "failure", file_spec.file, _otel_lang,
+            )
 
         # File-whole was either ineligible or failed — fall through to
         # element-by-element generation (AC-R1 fallback path).
-        _record_generation_path("element_by_element_fallback", file_spec.file)
+        _record_generation_path("element_by_element_fallback", file_spec.file, _otel_lang)
         logger.info(
             "File-whole ineligible or failed for %s — falling through to element-by-element (fallback path)",
             file_spec.file,
@@ -2417,7 +2449,7 @@ class MicroPrimeEngine:
             and ollama_available
             and self._is_file_ollama_whole_eligible(enriched_file_spec, skeleton)
         ):
-            _record_generation_path("file_whole_escalation_retry", file_spec.file)
+            _record_generation_path("file_whole_escalation_retry", file_spec.file, _otel_lang)
             logger.info(
                 "All %d elements escalated for %s — retrying file-whole generation",
                 escalated_count, file_spec.file,
@@ -2431,13 +2463,17 @@ class MicroPrimeEngine:
                 pre_classified_tiers=_pre_tiers,
             )
             if retry_result is not None:
-                _record_generation_path_outcome("file_whole_escalation_retry", "success", file_spec.file)
+                _record_generation_path_outcome(
+                    "file_whole_escalation_retry", "success", file_spec.file, _otel_lang,
+                )
                 logger.info(
                     "File-whole retry succeeded for %s (%d elements)",
                     file_spec.file, escalated_count,
                 )
                 return retry_result
-            _record_generation_path_outcome("file_whole_escalation_retry", "failure", file_spec.file)
+            _record_generation_path_outcome(
+                "file_whole_escalation_retry", "failure", file_spec.file, _otel_lang,
+            )
             logger.info(
                 "File-whole retry also failed for %s — proceeding with escalation",
                 file_spec.file,
