@@ -198,5 +198,36 @@ class TestVueProfile:
         assert v.js_host_id == n.js_host_id == JS_HOST_JAVASCRIPT_NODE
         assert v.js_dialect_id == JS_DIALECT_VUE_SFC
 
-    def test_syntax_check_deferred(self):
+    def test_syntax_check_uses_vue_tsc_by_default(self):
+        p = VueLanguageProfile()
+        cmd = p.syntax_check_command
+        assert cmd is not None
+        assert "vue-tsc" in " ".join(cmd)
+        assert "{file}" in cmd
+
+    def test_syntax_check_none_when_disabled(self, monkeypatch):
+        monkeypatch.setenv("STARTD8_VUE_SYNTAX_CHECK", "0")
         assert VueLanguageProfile().syntax_check_command is None
+
+    def test_framework_imports_merge_node_plus_vue(self):
+        v = VueLanguageProfile()
+        n = NodeLanguageProfile()
+        assert "grpc" in v.framework_imports
+        assert "vue_router" in v.framework_imports
+        assert "pinia" in v.framework_imports
+        assert "vitest" in v.framework_imports
+        assert set(n.framework_imports.keys()) <= set(v.framework_imports.keys())
+
+    def test_cleanup_patterns_include_vite_artifacts(self):
+        p = VueLanguageProfile()
+        assert "dist/" in p.cleanup_patterns
+        assert ".vite/" in p.cleanup_patterns
+
+    def test_blast_radius_includes_colocated_module_exts(self):
+        exts = VueLanguageProfile().blast_radius_extensions
+        assert ".vue" in exts
+        assert ".mts" in exts
+        assert ".mjs" in exts
+
+    def test_coding_standards_mention_xss_guard(self):
+        assert "v-html" in VueLanguageProfile().coding_standards

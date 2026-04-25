@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import os
 import json
 import re
 import time
@@ -1816,6 +1817,8 @@ class MicroPrimeEngine:
         self._ollama_agent: Optional[Any] = None
         # Cached semantic verification agent (optional)
         self._semantic_agent: Optional[Any] = None
+        # REQ-VUE-P-016: log Vue file-whole gate at most once per engine instance
+        self._vue_file_whole_disable_logged = False
 
     @property
     def _resolved_language_id(self) -> str:
@@ -2355,7 +2358,10 @@ class MicroPrimeEngine:
             # If successful, splice into skeleton
             if result.success and result.code:
                 splice_result = splice_body_into_skeleton(
-                    result.code, element, current_skeleton,
+                    result.code,
+                    element,
+                    current_skeleton,
+                    file_path=file_spec.file,
                 )
                 if splice_result.code is not None:
                     current_skeleton = splice_result.code
@@ -2667,6 +2673,25 @@ class MicroPrimeEngine:
         """
         if not self._config.file_ollama_whole_enabled:
             return False
+
+        # REQ-VUE-B-003 / REQ-VUE-P-016: whole-file LLM for Vue SFC is opt-in
+        is_vue = (
+            self._resolved_language_id == "vue"
+            or file_spec.file.lower().endswith(".vue")
+            or (getattr(file_spec, "language", None) or "").strip().lower() == "vue"
+        )
+        if is_vue:
+            flag = os.environ.get("STARTD8_VUE_FILE_OLLAMA_WHOLE", "").strip().lower()
+            if flag not in ("1", "true", "yes", "on"):
+                if not self._vue_file_whole_disable_logged:
+                    logger.warning(
+                        "Vue SFC file-level Ollama-whole is disabled by default "
+                        "(set STARTD8_VUE_FILE_OLLAMA_WHOLE=1 to enable). REQ-VUE-P-016. file=%s",
+                        file_spec.file,
+                    )
+                    self._vue_file_whole_disable_logged = True
+                return False
+
         if not _skeleton_has_stubs(skeleton, self._language_profile):
             logger.debug(
                 "File-whole skipped for %s: no stubs in skeleton",
@@ -2788,7 +2813,11 @@ class MicroPrimeEngine:
             )
             if file_spec.elements:
                 # Tier 1: thin file-whole pipeline
-                repair_result = run_file_repair_pipeline(raw_code, file_spec)
+                repair_result = run_file_repair_pipeline(
+                    raw_code,
+                    file_spec,
+                    language_id=self._resolved_language_id,
+                )
                 if repair_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(
                         repair_result.code, skeleton, file_spec, self._language_profile,
@@ -2805,7 +2834,10 @@ class MicroPrimeEngine:
 
                 # Tier 2: full contractor repair pipeline
                 contractor_result = run_file_whole_contractor_repair(
-                    raw_code, reason, file_path,
+                    raw_code,
+                    reason,
+                    file_path,
+                    language_id=self._resolved_language_id,
                 )
                 if contractor_result.ast_valid:
                     re_valid, re_reason, re_missing = _validate_file_whole_result(

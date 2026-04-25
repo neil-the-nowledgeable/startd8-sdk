@@ -52,3 +52,31 @@ def test_reinject_round_trip() -> None:
 
 def test_no_script_returns_none() -> None:
     assert extract_vue_script("<template></template>") is None
+
+
+def test_extract_empty_script_setup() -> None:
+    """B.2.4: empty primary script block is still discoverable."""
+    src = "<template><p>x</p></template><script setup></script>"
+    ext = extract_vue_script(src)
+    assert ext is not None
+    assert ext.setup is True
+    assert ext.script.strip() == ""
+
+
+def test_extract_whitespace_only_script() -> None:
+    src = "<script setup>\n   \n  \n</script>"
+    ext = extract_vue_script(src)
+    assert ext is not None
+    assert ext.script.strip() == ""
+
+
+def test_reinject_preserves_script_whitespace_slice() -> None:
+    """Replacement span must match ``<script>`` inner text including newlines."""
+    src = "<script setup>\nconst x = 1\n</script>"
+    ext = extract_vue_script(src)
+    assert ext is not None
+    assert ext.script.startswith("\n")
+    out = reinject_vue_script(src, "\nconst x = 2\n")
+    assert "const x = 2" in out
+    assert "const x = 1" not in out
+    assert out.endswith("</script>")

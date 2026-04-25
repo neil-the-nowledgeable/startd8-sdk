@@ -187,6 +187,10 @@ def splice_body_into_skeleton(
     if _is_csharp_source(skeleton, file_path):
         return _splice_csharp_dispatch(body, element, skeleton)
 
+    # Language dispatch: Vue SFC — splice inside primary <script> block (REQ-VUE-B-003)
+    if _is_vue_sfc_source(skeleton, file_path):
+        return _splice_vue_sfc_dispatch(body, element, skeleton)
+
     # Language dispatch: Node.js/TypeScript files use brace-based splicing
     if _is_nodejs_source(skeleton, file_path):
         return _splice_nodejs_dispatch(body, element, skeleton)
@@ -366,6 +370,43 @@ def _splice_csharp_dispatch(body: str, element: ForwardElementSpec, skeleton: st
 
 
 _JS_EXTENSIONS = frozenset({".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"})
+
+
+def _is_vue_sfc_source(skeleton: str, file_path: str) -> bool:
+    """True when *skeleton* should be treated as a Vue single-file component."""
+    from pathlib import PurePosixPath
+
+    if PurePosixPath(file_path).suffix.lower() == ".vue":
+        return True
+    return "<script" in skeleton.lower()
+
+
+def _splice_vue_sfc_dispatch(
+    body: str, element: ForwardElementSpec, skeleton: str,
+) -> SpliceResult:
+    """Extract primary ``<script>``, splice with Node.js splicer, reinject."""
+    from startd8.languages.vue_sfc import extract_vue_script, reinject_vue_script
+
+    ext = extract_vue_script(skeleton)
+    if ext is None:
+        logger.warning(
+            "Vue SFC splice: no extractable non-src <script> block (%s)",
+            element.name,
+        )
+        return SpliceResult(
+            code=None,
+            violations=[SpliceViolation(
+                violation_type="vue_sfc_extract_failed",
+                message="No script block found in Vue SFC",
+                element_name=element.name,
+            )],
+        )
+
+    inner = _splice_nodejs_dispatch(body, element, ext.script)
+    if inner.code is None:
+        return inner
+    merged = reinject_vue_script(skeleton, inner.code)
+    return SpliceResult(code=merged, violations=inner.violations)
 
 
 def _is_nodejs_source(skeleton: str, file_path: str) -> bool:

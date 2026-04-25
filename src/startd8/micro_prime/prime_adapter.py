@@ -1290,8 +1290,22 @@ class MicroPrimeCodeGenerator:
         ``run_file_repair``) to fix F821/import/syntax errors in generated
         output.  Returns the number of files repaired, or 0 if checks pass
         or repair is unavailable.
+
+        Vue SFC files are excluded: the checkpoint defaults to Python-oriented
+        syntax/lint and must not run on ``.vue`` sources (REQ-VUE-B-006).
         """
         if not generated_files:
+            return 0
+
+        vue_paths = [p for p in generated_files if p.suffix.lower() == ".vue"]
+        py_paths = [p for p in generated_files if p.suffix.lower() != ".vue"]
+        if vue_paths:
+            logger.debug(
+                "Post-generation repair: skipping %d Vue SFC path(s) "
+                "(Python checkpoint not applicable; REQ-VUE-B-006)",
+                len(vue_paths),
+            )
+        if not py_paths:
             return 0
 
         try:
@@ -1308,8 +1322,8 @@ class MicroPrimeCodeGenerator:
         try:
             checkpoint = IntegrationCheckpoint(project_root=self._output_dir)
             results = []
-            results.append(checkpoint.check_syntax(generated_files))
-            results.append(checkpoint.check_lint(generated_files))
+            results.append(checkpoint.check_syntax(py_paths))
+            results.append(checkpoint.check_lint(py_paths))
         except (OSError, subprocess.TimeoutExpired) as exc:
             logger.warning(
                 "Post-generation checkpoint failed, skipping repair: %s", exc,
@@ -1323,11 +1337,11 @@ class MicroPrimeCodeGenerator:
 
         logger.info(
             "Post-generation repair: %d diagnostic(s) found in %d file(s)",
-            len(diagnostics), len(generated_files),
+            len(diagnostics), len(py_paths),
         )
 
         files_dict = {}
-        for fp in generated_files:
+        for fp in py_paths:
             try:
                 files_dict[fp] = fp.read_text(encoding="utf-8")
             except OSError:

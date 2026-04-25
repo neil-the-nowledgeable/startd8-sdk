@@ -10,6 +10,7 @@ import pytest
 
 from startd8.workflows.builtin.plan_ingestion_enrichment import (
     _enrich_api_signatures,
+    _enrich_coding_standards,
     _enrich_negative_scope,
     _enrich_refine_suggestions,
     _enrich_requirement_refs,
@@ -885,3 +886,14 @@ class TestEnsureTaskContext:
         ctx = _ensure_task_context(task)
         ctx["key"] = "val"
         assert task["config"]["context"]["key"] == "val"
+
+
+class TestVuePlanIngestionEnrichment:
+    """REQ-VUE-B-007: seeds expose ``language_id=vue`` for ``.vue`` targets."""
+
+    def test_enrich_coding_standards_sets_vue(self):
+        tasks = [_make_task("PI-VUE", feature_id="F-1", target_files=["src/App.vue"])]
+        injected, _san = _enrich_coding_standards(tasks, forward_manifest=None)
+        assert injected >= 1
+        assert tasks[0]["config"]["context"]["language_id"] == "vue"
+        assert "Vue" in tasks[0]["config"]["context"]["language_role"]

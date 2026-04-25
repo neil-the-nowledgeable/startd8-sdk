@@ -219,6 +219,7 @@ _EXT_TO_LANGUAGE: dict[str, str] = {
     ".java": "java",
     ".go": "go",
     ".cs": "csharp",
+    ".vue": "vue",
     ".js": "nodejs",
     ".mjs": "nodejs",
     ".cjs": "nodejs",

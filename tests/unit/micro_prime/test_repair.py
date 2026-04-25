@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from unittest.mock import patch
 
 import pytest
 
@@ -22,6 +23,8 @@ from startd8.micro_prime.repair import (
     _step_signature_reconcile,
     _try_parse,
     build_repair_attribution,
+    run_file_repair_pipeline,
+    run_file_whole_contractor_repair,
     run_repair_pipeline,
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
@@ -472,7 +475,7 @@ class TestRunRepairPipeline:
         code = "def get_name(self, key: str) -> str:\n    return key"
         result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         assert result.code == code  # Already valid, no changes needed
-        assert len(result.step_results) == 10  # All 10 steps run
+        assert len(result.step_results) == 11  # All ordered steps from _ALL_STEPS
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
@@ -497,7 +500,7 @@ class TestRunRepairPipeline:
         assert "fence_strip" in step_names
         assert "octal_literal_fix" in step_names
         assert "ast_validate" in step_names
-        assert len(step_names) == 10
+        assert len(step_names) == 11
 
 
 class TestBuildDefLine:
@@ -1087,3 +1090,55 @@ class TestFileWholeContractorRepairBridge:
             ast.parse(result.code)
         except SyntaxError:
             pytest.fail("Repair broke valid code")
+
+
+class TestVueRepairSkips:
+    """REQ-VUE-B-006: Vue SFC must not run Python-oriented repair steps."""
+
+    def test_element_pipeline_skips_and_preserves_code(self, simple_function_element):
+        sfc = "<script setup>const x=1</script>"
+        with patch(
+            "startd8.micro_prime.repair.ast.parse",
+            side_effect=AssertionError("ast.parse should not run for vue"),
+        ):
+            result = run_repair_pipeline(
+                sfc, simple_function_element, language_id="vue",
+            )
+        assert result.code == sfc
+        assert result.steps_applied == []
+
+    def test_file_pipeline_skips(self):
+        sfc = "<template><p>a</p></template><script setup>x</script>"
+        with patch(
+            "startd8.micro_prime.repair.ast.parse",
+            side_effect=AssertionError("ast.parse should not run for vue"),
+        ):
+            result = run_file_repair_pipeline(
+                sfc,
+                file_spec=ForwardFileSpec(
+                    file="src/C.vue", elements=[], language="vue",
+                ),
+                language_id="vue",
+            )
+        assert result.code == sfc
+        assert result.steps_applied == []
+
+
+class TestRunFileWholeContractorRepairVue:
+    """REQ-VUE-B-006: contractor repair must not run Python steps on ``.vue``."""
+
+    def test_skips_for_vue_path(self) -> None:
+        sfc = "<script setup>const x = 1</script>"
+        result = run_file_whole_contractor_repair(
+            sfc, "ast.parse() failed: test", "components/Hi.vue",
+        )
+        assert result.code == sfc
+        assert result.steps_applied == []
+
+    def test_skips_when_language_id_vue(self) -> None:
+        result = run_file_whole_contractor_repair(
+            "x", "stub bodies remain", "any/path",
+            language_id="vue",
+        )
+        assert result.code == "x"
+        assert result.steps_applied == []

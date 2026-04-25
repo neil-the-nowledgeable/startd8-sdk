@@ -7,14 +7,20 @@ extracted ``<script>`` block (see :mod:`startd8.languages.vue_sfc`).
 
 from __future__ import annotations
 
-from typing import List, Optional
+import os
+from typing import Dict, List, Optional
 
 from .js_metadata import JS_DIALECT_VUE_SFC, JS_HOST_JAVASCRIPT_NODE
 from .nodejs import NodeLanguageProfile
 
 
 class VueLanguageProfile(NodeLanguageProfile):
-    """Language profile for Vue 3 SFCs (``.vue``)."""
+    """Language profile for Vue 3 SFCs (``.vue``).
+
+    Phase C (REQ-VUE-P-001, P-006, P-007, P-014): extends the Node host with
+    Vue-specific cleanup, framework hints, blast radius for colocated modules,
+    and template XSS guidance — without duplicating Node ``grpc``/``otel`` entries.
+    """
 
     @property
     def language_id(self) -> str:
@@ -53,8 +59,61 @@ class VueLanguageProfile(NodeLanguageProfile):
 
     @property
     def syntax_check_command(self) -> Optional[List[str]]:
-        """Optional ``vue-tsc`` / ESLint wiring is REQ-VUE-B-005 (deferred for MVP)."""
-        return None
+        """REQ-VUE-B-005: optional ``vue-tsc --noEmit`` on the ``.vue`` file.
+
+        Checkpoint substitutes ``{file}`` and runs from ``project_root`` (see
+        ``contractors/checkpoint.py``). If ``npx`` / ``vue-tsc`` is missing,
+        the check is skipped with a warning.
+
+        Set ``STARTD8_VUE_SYNTAX_CHECK=0`` to disable subprocess checks and rely
+        on :meth:`validate_syntax` only (gap documented under REQ-VUE-P-005).
+        """
+        raw = os.environ.get("STARTD8_VUE_SYNTAX_CHECK", "1").strip().lower()
+        if raw in ("0", "false", "no", "off"):
+            return None
+        return ["npx", "--yes", "vue-tsc", "--noEmit", "--pretty", "false", "{file}"]
+
+    @property
+    def framework_imports(self) -> Dict[str, dict]:
+        """Node host stacks plus Vue 3 ecosystem (REQ-VUE-P-006)."""
+        merged = dict(super().framework_imports)
+        merged.update({
+            "vue_router": {
+                "detect": ["vue-router", "router", "createRouter", "useRouter"],
+                "dep_names": {"vue-router"},
+                "imports": [
+                    "import { createRouter, createWebHistory } from 'vue-router';",
+                ],
+                "conditional": {},
+            },
+            "pinia": {
+                "detect": ["pinia", "createPinia", "defineStore", "useStore"],
+                "dep_names": {"pinia"},
+                "imports": [
+                    "import { createPinia } from 'pinia';",
+                ],
+                "conditional": {},
+            },
+            "vitest": {
+                "detect": ["vitest", "describe(", "it(", "expect("],
+                "dep_names": {"vitest", "@vue/test-utils"},
+                "imports": [
+                    "import { describe, it, expect } from 'vitest';",
+                    "import { mount } from '@vue/test-utils';",
+                ],
+                "conditional": {},
+            },
+        })
+        return merged
+
+    @property
+    def cleanup_patterns(self) -> List[str]:
+        """Host patterns plus Vite output dirs (REQ-VUE-P-007)."""
+        base = list(super().cleanup_patterns)
+        for p in ("dist/", ".vite/", "coverage/"):
+            if p not in base:
+                base.append(p)
+        return base
 
     @property
     def lint_command(self) -> Optional[List[str]]:
@@ -62,7 +121,8 @@ class VueLanguageProfile(NodeLanguageProfile):
 
     @property
     def blast_radius_extensions(self) -> List[str]:
-        return [".vue", ".ts", ".tsx", ".js", ".jsx"]
+        # Colocated modules beside SFCs (REQ-VUE-P-001): match Node ESM variants.
+        return [".vue", ".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs"]
 
     @property
     def system_prompt_role(self) -> str:
@@ -81,6 +141,12 @@ class VueLanguageProfile(NodeLanguageProfile):
             "``lang=\"ts\"`` is set.\n"
             "- Do not add Nuxt-specific or Vue 2 Options API patterns unless the "
             "existing file already uses them.\n"
+            "\n"
+            "VUE SECURITY (REQ-VUE-P-014):\n"
+            "- Never use ``v-html`` with untrusted or user-controlled strings; prefer "
+            "text interpolation or a vetted sanitizer.\n"
+            "- Treat URL/query/body-derived values as untrusted when binding to DOM "
+            "or attributes.\n"
         )
         return node_std + sfc
 

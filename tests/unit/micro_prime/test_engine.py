@@ -781,6 +781,68 @@ class TestPartialDecompositionPreserved:
         assert len(engine._completed) == completed_before + 1
 
 
+class TestVueFileOllamaWholeGate:
+    """REQ-VUE-B-003 / REQ-VUE-P-016: Vue file-whole LLM is opt-in."""
+
+    def test_disabled_without_env(self, monkeypatch):
+        monkeypatch.delenv("STARTD8_VUE_FILE_OLLAMA_WHOLE", raising=False)
+        from startd8.languages.vue import VueLanguageProfile
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="str",
+            ),
+        )
+        fs = ForwardFileSpec(
+            file="src/App.vue",
+            elements=[elem],
+            language="vue",
+        )
+        skel = (
+            "<template><p>x</p></template>\n"
+            "<script setup>\n"
+            "function greet(name) {\n"
+            "  throw new Error('not implemented');\n"
+            "}\n"
+            "</script>\n"
+        )
+        cfg = MicroPrimeConfig(file_ollama_whole_enabled=True)
+        engine = MicroPrimeEngine(config=cfg, language_profile=VueLanguageProfile())
+        assert engine._is_file_ollama_whole_eligible(fs, skel) is False
+
+    def test_enabled_with_env(self, monkeypatch):
+        monkeypatch.setenv("STARTD8_VUE_FILE_OLLAMA_WHOLE", "1")
+        from startd8.languages.vue import VueLanguageProfile
+
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="str",
+            ),
+        )
+        fs = ForwardFileSpec(
+            file="src/App.vue",
+            elements=[elem],
+            language="vue",
+        )
+        skel = (
+            "<template><p>x</p></template>\n"
+            "<script setup>\n"
+            "function greet(name) {\n"
+            "  throw new Error('not implemented');\n"
+            "}\n"
+            "</script>\n"
+        )
+        cfg = MicroPrimeConfig(file_ollama_whole_enabled=True)
+        engine = MicroPrimeEngine(config=cfg, language_profile=VueLanguageProfile())
+        assert engine._is_file_ollama_whole_eligible(fs, skel) is True
+
+
 # ── P0: _strip_fences helper ────────────────────────────────────────
 
 

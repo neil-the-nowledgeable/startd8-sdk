@@ -751,6 +751,43 @@ def _emit_repair_telemetry(
             pass
 
 
+def _vue_repair_pipeline_skip_result(
+    code: str,
+    *,
+    file_spec: Optional[ForwardFileSpec],
+    pipeline_mode: str,
+    element_name: Optional[str],
+    wall_clock_start: float,
+) -> RepairResult:
+    """Vue SFC buffers skip Python-oriented repair steps (REQ-VUE-B-006)."""
+    logger.warning(
+        "Skipping MicroPrime manifest repair pipeline for language_id=vue "
+        "(REQ-VUE-B-006). file=%s element=%s",
+        file_spec.file if file_spec else None,
+        element_name or "",
+    )
+    result = RepairResult(
+        code=code,
+        steps_applied=[],
+        ast_valid=True,
+        ast_valid_before=True,
+        ast_valid_after=True,
+        repair_recovered=False,
+        metrics={},
+        step_results=[],
+        last_error=None,
+    )
+    wall_clock_ms = (time.monotonic() - wall_clock_start) * 1000
+    _emit_repair_telemetry(
+        result,
+        pipeline_mode=pipeline_mode,
+        element_name=element_name,
+        file_path=file_spec.file if file_spec else None,
+        wall_clock_ms=wall_clock_ms,
+    )
+    return result
+
+
 def run_repair_pipeline(
     code: str,
     element: ForwardElementSpec,
@@ -776,6 +813,15 @@ def run_repair_pipeline(
     start = time.monotonic()
     global _current_repair_language_id  # noqa: PLW0603
     _current_repair_language_id = language_id
+
+    if language_id == "vue":
+        return _vue_repair_pipeline_skip_result(
+            code,
+            file_spec=file_spec,
+            pipeline_mode="element",
+            element_name=element.name,
+            wall_clock_start=start,
+        )
 
     results: list[RepairStepResult] = []
     current = code
@@ -872,6 +918,15 @@ def run_file_repair_pipeline(
     _current_repair_language_id = language_id
 
     start = time.monotonic()
+    if language_id == "vue":
+        return _vue_repair_pipeline_skip_result(
+            code,
+            file_spec=file_spec,
+            pipeline_mode="file",
+            element_name=None,
+            wall_clock_start=start,
+        )
+
     results: list[RepairStepResult] = []
     current = code
     # File-whole output is never a method body — always a complete file.
@@ -1129,6 +1184,8 @@ def run_file_whole_contractor_repair(
     code: str,
     reason: str,
     file_path: str,
+    *,
+    language_id: Optional[str] = None,
 ) -> RepairResult:
     """Escalate file-whole repair to the full contractor pipeline.
 
@@ -1140,18 +1197,44 @@ def run_file_whole_contractor_repair(
         code: Raw LLM-generated complete file.
         reason: Failure reason from ``_validate_file_whole_result``.
         file_path: Relative file path for diagnostics.
+        language_id: Optional profile id (e.g. ``vue``); when omitted, ``.vue``
+            implies ``vue`` for parse/repair safety (REQ-VUE-B-006).
 
     Returns:
         RepairResult translated from the contractor's RepairOutcome.
     """
-    diagnostics = _translate_validation_failure(reason, file_path)
-    if not diagnostics:
+    from pathlib import PurePosixPath
+
+    eff_lang = language_id
+    if eff_lang is None:
+        eff_lang = "vue" if PurePosixPath(file_path).suffix.lower() == ".vue" else "python"
+
+    if eff_lang == "vue":
+        logger.warning(
+            "Skipping contractor file-level repair for Vue SFC %s (REQ-VUE-B-006)",
+            file_path,
+        )
+        ok = _try_parse(code, False, "vue")
         return RepairResult(
             code=code,
             steps_applied=[],
-            ast_valid=_try_parse(code),
-            ast_valid_before=_try_parse(code),
-            ast_valid_after=_try_parse(code),
+            ast_valid=ok,
+            ast_valid_before=ok,
+            ast_valid_after=ok,
+            repair_recovered=False,
+            metrics={},
+            step_results=[],
+        )
+
+    diagnostics = _translate_validation_failure(reason, file_path)
+    if not diagnostics:
+        ok = _try_parse(code, False, eff_lang)
+        return RepairResult(
+            code=code,
+            steps_applied=[],
+            ast_valid=ok,
+            ast_valid_before=ok,
+            ast_valid_after=ok,
             repair_recovered=False,
             metrics={},
             step_results=[],
@@ -1172,8 +1255,8 @@ def run_file_whole_contractor_repair(
 
     # Extract single-file result
     repaired_code = outcome.repaired_files.get(path_key, code)
-    ast_valid_before = _try_parse(code)
-    ast_valid_after = _try_parse(repaired_code)
+    ast_valid_before = _try_parse(code, False, eff_lang)
+    ast_valid_after = _try_parse(repaired_code, False, eff_lang)
 
     # Collect step results from the file result (if present)
     step_results: list[RepairStepResult] = []

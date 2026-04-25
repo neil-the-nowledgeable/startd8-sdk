@@ -69,9 +69,10 @@ def extract_vue_script(source: str) -> Optional[VueScriptExtract]:
     astrip = attrs.lstrip()
     is_setup = astrip.startswith("setup")
     lang = _lang_from_attrs(attrs)
-    body_stripped = body.strip("\n")
+    # Keep *body* exactly as captured so ``content_start``/``content_end``
+    # match ``reinject_vue_script`` replacement span (REQ-VUE-B-003).
     return VueScriptExtract(
-        script=body_stripped,
+        script=body,
         lang=lang,
         setup=is_setup,
         content_start=chosen.start("body"),

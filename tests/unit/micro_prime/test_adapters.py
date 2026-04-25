@@ -1512,6 +1512,20 @@ class TestPostGenerationRepair:
         result = gen._run_post_generation_repair([])
         assert result == 0
 
+    def test_repair_skips_vue_only_paths(self, tmp_path):
+        """REQ-VUE-B-006: Python checkpoint must not run on ``.vue`` outputs."""
+        from unittest.mock import patch
+
+        gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
+        vue = tmp_path / "App.vue"
+        vue.write_text('<script setup>const x = 1</script>\n')
+        with patch(
+            "startd8.contractors.checkpoint.IntegrationCheckpoint",
+        ) as mock_cp:
+            result = gen._run_post_generation_repair([vue])
+        assert result == 0
+        mock_cp.assert_not_called()
+
 
 class TestFillRateSuccessCriteria:
     """Tests for element fill-rate success criteria."""

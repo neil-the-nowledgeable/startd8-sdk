@@ -2,7 +2,7 @@
 
 from startd8.repair.config import RepairConfig
 from startd8.repair.models import SemanticDiagnostic, SyntaxDiagnostic
-from startd8.repair.routing import route_failures
+from startd8.repair.routing import infer_language_from_diagnostics, route_failures
 
 
 def _make_config(**overrides):
@@ -142,3 +142,11 @@ class TestSemanticRouting:
             idx_import = route.steps.index("semantic_import_fix")
             idx_method = route.steps.index("semantic_method_resolution_fix")
             assert idx_import < idx_method
+
+
+def test_infer_language_from_diagnostics_vue() -> None:
+    """REQ-VUE-B-006: ``.vue`` diagnostics map to ``vue`` for routing."""
+    diags = [
+        SyntaxDiagnostic(category="syntax", file="src/App.vue", message="x", line=1),
+    ]
+    assert infer_language_from_diagnostics(diags) == "vue"

@@ -648,3 +648,37 @@ class TestClassBodyDeduplication:
         )
         assert result.count("def SendOrderConfirmation") == 1
         ast.parse(result)
+
+
+class TestVueSfcSplice:
+    """REQ-VUE-B-003: splice through extracted ``<script>`` then reinject."""
+
+    def test_splice_function_into_vue_script_block(self) -> None:
+        element = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="str",
+            ),
+        )
+        skeleton = (
+            "<template><p>x</p></template>\n"
+            "<script setup>\n"
+            "function greet(name) {\n"
+            "  throw new Error('not implemented');\n"
+            "}\n"
+            "</script>\n"
+        )
+        body = (
+            "function greet(name) {\n"
+            "  return `hi ${name}`;\n"
+            "}\n"
+        )
+        res = _splice_body_into_skeleton_raw(
+            body, element, skeleton, file_path="src/Hi.vue",
+        )
+        assert res.code is not None
+        assert "<template>" in res.code
+        assert "throw new Error('not implemented')" not in res.code
+        assert "hi ${name}" in res.code
