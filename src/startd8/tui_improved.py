@@ -430,30 +430,19 @@ class CustomAgentManager:
             'name': 'Claude',
             'class': 'ClaudeAgent',
             'api_key_env': 'ANTHROPIC_API_KEY',
-            'default_model': 'claude-sonnet-4-6',
-            'models': [
-                'claude-opus-4-6',
-                'claude-sonnet-4-6',
-                'claude-sonnet-4-5-20250929',
-                'claude-opus-4-5-20251101',
-                'claude-haiku-4-5-20251001',
-                'claude-sonnet-4-20250514',
-            ]
+            'default_model': 'claude-opus-4-8',
+            # Model list derives from AnthropicProvider.supported_models at
+            # selection time (REQ-TMM-132); no parallel hardcoded copy here.
+            'models': []
         },
         'gpt4': {
             'name': 'GPT-4 / OpenAI',
             'class': 'GPT4Agent',
             'api_key_env': 'OPENAI_API_KEY',
-            'default_model': 'gpt-4o',
-            'models': [
-                'gpt-4o',
-                'gpt-4o-mini',
-                'gpt-4.1',
-                'gpt-4.1-mini',
-                'gpt-4.1-nano',
-                'o3-mini',
-                'o4-mini',
-            ]
+            'default_model': 'gpt-5.5-pro',
+            # Model list derives from OpenAIProvider.supported_models at
+            # selection time (REQ-TMM-132); no parallel hardcoded copy here.
+            'models': []
         },
         'openai_compatible': {
             'name': 'OpenAI-Compatible (Cursor, Ollama, etc.)',
@@ -512,12 +501,20 @@ class CustomAgentManager:
         }
     }
     
-    def __init__(self, storage_dir: Optional[Path] = None):
-        """Initialize custom agent manager"""
+    def __init__(self, storage_dir: Optional[Path] = None, framework: Optional["AgentFramework"] = None):
+        """Initialize custom agent manager.
+
+        Args:
+            storage_dir: Directory for the custom_agents.json config file.
+            framework: Optional AgentFramework used by ``create_agent_instance`` /
+                ``_create_builtin_agent`` to apply resilience settings via its
+                factory. When None, those methods fall back to direct creation.
+        """
         if storage_dir is None:
             storage_dir = Path.home() / ".startd8"
         self.storage_dir = Path(storage_dir)
         self.config_file = self.storage_dir / self.CONFIG_FILENAME
+        self.framework = framework
         self._ensure_storage_dir()
     
     def _ensure_storage_dir(self):
@@ -625,13 +622,13 @@ class CustomAgentManager:
         if agent_type == 'claude':
             return ClaudeAgent(
                 name=name or 'claude',
-                model=model or 'claude-sonnet-4-6',
+                model=model or 'claude-opus-4-8',
                 max_tokens=max_tokens
             )
         elif agent_type == 'gpt4':
             return GPT4Agent(
                 name=name or 'gpt4',
-                model=model or 'gpt-4o',
+                model=model or 'gpt-5.5-pro',
                 max_tokens=max_tokens
             )
         elif agent_type == 'openai_compatible':
@@ -740,20 +737,20 @@ class CustomAgentManager:
                 if fallback_type == 'gpt4':
                     return GPT4Agent(
                         name=name or 'gpt4',
-                        model=model or 'gpt-4o',
+                        model=model or 'gpt-5.5-pro',
                         max_tokens=max_tokens
                     )
                 elif fallback_type == 'claude':
                     return ClaudeAgent(
                         name=name or 'claude',
-                        model=model or 'claude-sonnet-4-6',
+                        model=model or 'claude-opus-4-8',
                         max_tokens=max_tokens
                     )
                 elif fallback_type == 'gemini':
                     from .agents import GeminiAgent
                     return GeminiAgent(
                         name=name or 'gemini',
-                        model=model or 'gemini-2.0-flash',
+                        model=model or 'gemini-2.5-pro',
                         max_tokens=max_tokens,
                         temperature=agent_config.get('temperature', 0.7),
                         api_key=agent_config.get('api_key')
@@ -785,13 +782,13 @@ class CustomAgentManager:
         if agent_type == 'claude':
             return ClaudeAgent(
                 name=kwargs.get('name', 'claude'),
-                model=kwargs.get('model', 'claude-sonnet-4-6'),
+                model=kwargs.get('model', 'claude-opus-4-8'),
                 max_tokens=kwargs.get('max_tokens', 4096)
             )
         elif agent_type == 'gpt4':
             return GPT4Agent(
                 name=kwargs.get('name', 'gpt4'),
-                model=kwargs.get('model', 'gpt-4o'),
+                model=kwargs.get('model', 'gpt-5.5-pro'),
                 max_tokens=kwargs.get('max_tokens', 4096)
             )
         elif agent_type == 'mock':
@@ -804,7 +801,7 @@ class CustomAgentManager:
                 from .agents import GeminiAgent
                 return GeminiAgent(
                     name=kwargs.get('name', 'gemini'),
-                    model=kwargs.get('model', 'gemini-2.0-flash'),
+                    model=kwargs.get('model', 'gemini-2.5-pro'),
                     max_tokens=kwargs.get('max_tokens', 4096)
                 )
             except ImportError:
@@ -1340,10 +1337,10 @@ class ImprovedTUI:
         
         # Initialize custom agent manager
         try:
-            self.agent_manager = CustomAgentManager(storage_dir)
+            self.agent_manager = CustomAgentManager(storage_dir, framework=self.framework)
         except Exception as e:
             console.print(f"[yellow]Warning: Failed to load custom agents: {e}[/yellow]", style="yellow")
-            self.agent_manager = CustomAgentManager(storage_dir)
+            self.agent_manager = CustomAgentManager(storage_dir, framework=self.framework)
         
         # Initialize config manager
         try:
@@ -1824,6 +1821,7 @@ class ImprovedTUI:
             
             choices.extend([
                 "🔄 Refresh Available Models",
+                "📋 Manage Models",
                 "🔬 Test All Agents",
                 "← Back to Main Menu"
             ])
@@ -1845,6 +1843,8 @@ class ImprovedTUI:
                 self._delete_agent(custom_agents)
             elif "Refresh" in action:
                 self._refresh_available_models()
+            elif "Manage Models" in action:
+                self._manage_models()
             elif "Test" in action:
                 self.test_agent_connections()
     
@@ -2094,6 +2094,264 @@ class ImprovedTUI:
         
         questionary.press_any_key_to_continue().ask()
     
+    # ------------------------------------------------------------------
+    # Model-list reconciliation helpers (REQ-TMM-110/120/131/132)
+    # ------------------------------------------------------------------
+
+    def _provider_name_for_agent_type(self, agent_type: str) -> Optional[str]:
+        """Map a builtin agent type to its reconciled provider name (REQ-TMM-110)."""
+        return {'claude': 'anthropic', 'gpt4': 'openai', 'gemini': 'gemini'}.get(agent_type)
+
+    def _get_provider_safe(self, provider_name: str):
+        """Resolve a provider instance via the registry, or None on failure."""
+        try:
+            from .providers.registry import ProviderRegistry
+            ProviderRegistry.discover()
+            return ProviderRegistry.get_provider(provider_name)
+        except Exception:
+            return None
+
+    def _model_view_for_provider(self, provider_name: str) -> List[Dict[str, Any]]:
+        """Origin-annotated model view for a provider (REQ-TMM-131, 132).
+
+        Baseline derives from ``provider.HARDCODED_MODELS`` (NOT ``AGENT_TYPES`` —
+        REQ-TMM-132); discovered from the discovery cache; user-added from the
+        overlay. De-duplicated with user > discovered > baseline precedence.
+        """
+        provider = self._get_provider_safe(provider_name)
+        baseline = list(getattr(provider, 'HARDCODED_MODELS', []) or [])
+        discovered: List[str] = []
+        try:
+            from .model_discovery import ModelDiscoveryService
+            discovered = ModelDiscoveryService().get_discovered_models(provider_name)
+        except Exception:
+            discovered = []
+        try:
+            from .user_models import UserModelStore
+            return UserModelStore().merge_view(provider_name, baseline, discovered)
+        except Exception:
+            seen, view = set(), []
+            for mid in list(baseline) + list(discovered):
+                if mid not in seen:
+                    view.append({'model_id': mid, 'origin': 'baseline'})
+                    seen.add(mid)
+            return view
+
+    def _maybe_persist_custom_model(self, provider_name: Optional[str], raw: Optional[str]) -> Optional[str]:
+        """Normalize a custom-entered id and offer to persist it (REQ-TMM-107/111/120)."""
+        if not raw:
+            return None
+        from .user_models import UserModelStore, normalize_model_id, ModelIdError, VALID_TIERS
+        try:
+            model_id = normalize_model_id(raw)
+        except ModelIdError as e:
+            self.console.print(f"[red]Invalid model id: {e}[/red]")
+            return None
+
+        if provider_name:
+            try:
+                from .model_sources import classify_model_id
+                classification = classify_model_id(provider_name, model_id)
+            except Exception:
+                classification = 'unrecognized'
+            if classification == 'unrecognized':
+                proceed = questionary.confirm(
+                    f"'{model_id}' was not found in any known source. Use it anyway?",
+                    default=True, style=custom_style,
+                ).ask()
+                if not proceed:
+                    return None
+
+            save = questionary.confirm(
+                "Save this model to your model list for reuse?",
+                default=False, style=custom_style,
+            ).ask()
+            if save:
+                tier = questionary.select(
+                    "Tier for this model:", choices=sorted(VALID_TIERS),
+                    default="balanced", style=custom_style,
+                ).ask()
+                try:
+                    UserModelStore().add(
+                        provider_name, model_id, tier=tier or "balanced", source="custom-entry"
+                    )
+                    self.console.print(f"[green]✓ Saved '{model_id}' to your model list.[/green]")
+                except Exception as e:
+                    self.console.print(f"[yellow]Could not save model: {e}[/yellow]")
+        return model_id
+
+    # ------------------------------------------------------------------
+    # Manage Models menu (REQ-TMM-100/101/102/103)
+    # ------------------------------------------------------------------
+
+    def _manage_models(self):
+        """Top-level Manage Models action: choose a provider, then CRUD its overlay."""
+        while True:
+            self.show_header("Manage Models")
+            self.console.print(
+                "[dim]Add, edit, suppress, or remove model ids per provider. "
+                "User-added models persist in ~/.startd8/user_models.json and appear "
+                "in the agent picker and routing catalog.[/dim]\n"
+            )
+            provider_name = questionary.select(
+                "Choose a provider:",
+                choices=[
+                    "anthropic", "openai", "gemini",
+                    questionary.Separator("──────────"),
+                    "← Back",
+                ],
+                style=custom_style,
+            ).ask()
+            if not provider_name or "Back" in provider_name:
+                break
+            self._manage_models_for_provider(provider_name)
+
+    def _manage_models_for_provider(self, provider_name: str):
+        """List + CRUD sub-menu for one provider's model overlay."""
+        while True:
+            self.show_header(f"Manage Models — {provider_name}")
+            view = self._model_view_for_provider(provider_name)
+
+            table = Table(title=f"{provider_name} models ({len(view)})", show_header=True)
+            table.add_column("Model", style="bright_white", no_wrap=False)
+            table.add_column("Origin", style="magenta")
+            table.add_column("Tier", style="cyan")
+            table.add_column("Source", style="dim")
+            for v in view:
+                origin = v.get("origin", "")
+                origin_disp = {
+                    "user-added": "[green]user-added[/green]",
+                    "discovered": "[yellow]discovered[/yellow]",
+                    "baseline": "baseline",
+                }.get(origin, origin)
+                table.add_row(
+                    v.get("model_id", "-"), origin_disp,
+                    v.get("tier") or "-", v.get("source") or "-",
+                )
+            self.console.print(table)
+            self.console.print()
+
+            action = questionary.select(
+                f"Manage {provider_name} models:",
+                choices=[
+                    "➕ Add model",
+                    "✏️  Edit user model",
+                    "🗑️  Remove / suppress model",
+                    questionary.Separator("──────────"),
+                    "← Back",
+                ],
+                style=custom_style,
+            ).ask()
+            if not action or "Back" in action:
+                break
+            if "Add" in action:
+                self._manage_models_add(provider_name)
+            elif "Edit" in action:
+                self._manage_models_edit(provider_name, view)
+            elif "Remove" in action:
+                self._manage_models_remove(provider_name, view)
+
+    def _manage_models_add(self, provider_name: str):
+        """Add a model id to the user overlay (REQ-TMM-101/107/120)."""
+        from .user_models import UserModelStore, normalize_model_id, ModelIdError, VALID_TIERS
+        raw = questionary.text("Model id to add:", style=custom_style).ask()
+        if not raw:
+            return
+        try:
+            model_id = normalize_model_id(raw)
+        except ModelIdError as e:
+            self.console.print(f"[red]Invalid model id: {e}[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+
+        try:
+            from .model_sources import classify_model_id
+            classification = classify_model_id(provider_name, model_id)
+        except Exception:
+            classification = "unrecognized"
+        if classification == "unrecognized":
+            proceed = questionary.confirm(
+                f"'{model_id}' was not found in any known source. Add anyway?",
+                default=True, style=custom_style,
+            ).ask()
+            if not proceed:
+                return
+
+        tier = questionary.select(
+            "Tier:", choices=sorted(VALID_TIERS), default="balanced", style=custom_style,
+        ).ask()
+        if not tier:
+            return
+        try:
+            UserModelStore().add(provider_name, model_id, tier=tier, source="manual")
+            self.console.print(f"[green]✓ Added '{model_id}' ({tier}).[/green]")
+        except Exception as e:
+            self.console.print(f"[red]Failed to add: {e}[/red]")
+        questionary.press_any_key_to_continue().ask()
+
+    def _manage_models_edit(self, provider_name: str, view: List[Dict[str, Any]]):
+        """Edit a user-added model's id/tier (REQ-TMM-103)."""
+        from .user_models import (
+            UserModelStore, ModelCollisionError, ModelIdError, VALID_TIERS,
+        )
+        user_ids = [v["model_id"] for v in view if v.get("origin") == "user-added"]
+        if not user_ids:
+            self.console.print("[yellow]No user-added models to edit (only user-added are editable).[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        model_id = questionary.select(
+            "Edit which model?", choices=user_ids + ["← Cancel"], style=custom_style,
+        ).ask()
+        if not model_id or "Cancel" in model_id:
+            return
+        new_id = questionary.text("New id (blank = keep):", default="", style=custom_style).ask()
+        tier = questionary.select(
+            "New tier (Esc = keep):", choices=sorted(VALID_TIERS), style=custom_style,
+        ).ask()
+
+        from .model_sources import classify_model_id
+
+        def _collision(prov: str, mid: str) -> bool:
+            return classify_model_id(prov, mid) != "unrecognized"
+
+        try:
+            UserModelStore().edit(
+                provider_name, model_id,
+                new_id=((new_id or "").strip() or None),
+                tier=tier or None,
+                collision_check=_collision,
+            )
+            self.console.print("[green]✓ Updated.[/green]")
+        except (ModelCollisionError, ModelIdError) as e:
+            self.console.print(f"[red]{e}[/red]")
+        questionary.press_any_key_to_continue().ask()
+
+    def _manage_models_remove(self, provider_name: str, view: List[Dict[str, Any]]):
+        """Remove a user model, or suppress a baseline/discovered id (REQ-TMM-102)."""
+        from .user_models import UserModelStore
+        ids = [v["model_id"] for v in view]
+        if not ids:
+            return
+        model_id = questionary.select(
+            "Remove (user) / suppress (baseline·discovered) which model?",
+            choices=ids + ["← Cancel"], style=custom_style,
+        ).ask()
+        if not model_id or "Cancel" in model_id:
+            return
+        try:
+            result = UserModelStore().remove(provider_name, model_id)
+        except Exception as e:
+            self.console.print(f"[red]Failed: {e}[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        msg = {
+            "removed": f"Removed user model '{model_id}'",
+            "suppressed": f"Suppressed (hidden) '{model_id}' — re-add to restore",
+            "noop": f"No change ('{model_id}' already suppressed)",
+        }.get(result, result)
+        self.console.print(f"[green]✓ {msg}[/green]")
+        questionary.press_any_key_to_continue().ask()
+
     def _configure_builtin_agent(self, agent_type: str) -> Optional[Dict[str, Any]]:
         """Configure a built-in agent (Claude, GPT-4, Mock)"""
         type_info = CustomAgentManager.AGENT_TYPES.get(agent_type, {})
@@ -2118,68 +2376,59 @@ class ImprovedTUI:
         if not name:
             return None
         
-        # Select model - include discovered models from providers
-        if type_info.get('models'):
-            # Get discovered models from provider registry
-            discovered_models = []
-            try:
-                from .providers.registry import ProviderRegistry
-                
-                if agent_type == 'claude':
-                    provider = ProviderRegistry.get_provider('anthropic')
-                    if provider:
-                        discovered_models = provider.supported_models or []
-                elif agent_type == 'gpt4':
-                    provider = ProviderRegistry.get_provider('openai')
-                    if provider:
-                        discovered_models = provider.supported_models or []
-            except Exception:
-                # If provider registry fails, just use hardcoded models
-                discovered_models = []
-            
-            # Merge hardcoded and discovered models, removing duplicates
-            all_models = list(type_info['models'])
-            for discovered in discovered_models:
-                if discovered not in all_models:
-                    all_models.append(discovered)
-            
-            # Sort models: hardcoded first, then discovered
-            hardcoded_set = set(type_info['models'])
-            sorted_models = []
-            discovered_sorted = []
-            
-            for m in all_models:
-                if m in hardcoded_set:
-                    sorted_models.append(m)
-                else:
-                    discovered_sorted.append(m)
-            
-            # Add discovered models section if any
-            model_choices = sorted_models.copy()
-            if discovered_sorted:
+        # Select model (REQ-TMM-110/132): derive choices from the provider's
+        # model view (baseline ∪ discovered ∪ user-added), NOT a hardcoded
+        # AGENT_TYPES['models'] copy. Falls back to the static list for agent
+        # types without a reconciled provider (e.g. mock).
+        provider_name = self._provider_name_for_agent_type(agent_type)
+        if provider_name:
+            view = self._model_view_for_provider(provider_name)
+            baseline = [v['model_id'] for v in view if v.get('origin') == 'baseline']
+            discovered = [v['model_id'] for v in view if v.get('origin') == 'discovered']
+            user_models = [v['model_id'] for v in view if v.get('origin') == 'user-added']
+
+            model_choices = list(baseline)
+            if discovered:
                 model_choices.append(questionary.Separator("─── Discovered Models ───"))
-                model_choices.extend(discovered_sorted)
-            
-            # Add option to enter custom model name
+                model_choices.extend(discovered)
+            if user_models:
+                model_choices.append(questionary.Separator("─── Your Models ───"))
+                model_choices.extend(user_models)
             model_choices.append(questionary.Separator("───────────────────────"))
             model_choices.append("✏️  Enter custom model name")
-            
+
+            string_choices = [c for c in model_choices if isinstance(c, str)]
+            default_model = type_info.get('default_model')
+            if default_model not in string_choices:
+                default_model = baseline[0] if baseline else None
+
+            model = questionary.select(
+                "Select model:",
+                choices=model_choices,
+                default=default_model,
+                style=custom_style
+            ).ask()
+
+            # Custom entry: normalize, flag-if-unrecognized, offer to persist.
+            if model == "✏️  Enter custom model name":
+                raw = questionary.text("Enter model name:", style=custom_style).ask()
+                model = self._maybe_persist_custom_model(provider_name, raw)
+        elif type_info.get('models'):
+            # Agent types without a reconciled provider (e.g. mock): static list.
+            model_choices = list(type_info['models'])
+            model_choices.append(questionary.Separator("───────────────────────"))
+            model_choices.append("✏️  Enter custom model name")
             model = questionary.select(
                 "Select model:",
                 choices=model_choices,
                 default=type_info.get('default_model'),
                 style=custom_style
             ).ask()
-            
-            # If user selected custom model option
             if model == "✏️  Enter custom model name":
-                model = questionary.text(
-                    "Enter model name:",
-                    style=custom_style
-                ).ask()
+                model = questionary.text("Enter model name:", style=custom_style).ask()
         else:
             model = type_info.get('default_model', 'default')
-        
+
         if not model:
             return None
         
@@ -2444,31 +2693,64 @@ class ImprovedTUI:
             style=custom_style
         ).ask()
         
-        # Edit model
-        if type_info.get('models'):
-            # Add option to enter custom model name
-            model_choices = type_info['models'] + ["✏️  Enter custom model name"]
-            current_model = agent.get('model', type_info.get('default_model'))
-            # If current model is not in the list, add it as an option
+        # Edit model (REQ-TMM-132): derive choices from the provider, not a
+        # hardcoded AGENT_TYPES['models'] copy.
+        provider_name = self._provider_name_for_agent_type(agent_type)
+        current_model = agent.get('model', type_info.get('default_model'))
+        if provider_name:
+            view = self._model_view_for_provider(provider_name)
+            baseline = [v['model_id'] for v in view if v.get('origin') == 'baseline']
+            discovered = [v['model_id'] for v in view if v.get('origin') == 'discovered']
+            user_models = [v['model_id'] for v in view if v.get('origin') == 'user-added']
+            known_ids = set(baseline) | set(discovered) | set(user_models)
+
+            model_choices = list(baseline)
+            if discovered:
+                model_choices.append(questionary.Separator("─── Discovered Models ───"))
+                model_choices.extend(discovered)
+            if user_models:
+                model_choices.append(questionary.Separator("─── Your Models ───"))
+                model_choices.extend(user_models)
+            if current_model and current_model not in known_ids:
+                model_choices.append(questionary.Separator("───────────────────────"))
+                model_choices.append(f"📌 {current_model} (current)")
+            model_choices.append(questionary.Separator("───────────────────────"))
+            model_choices.append("✏️  Enter custom model name")
+
+            new_model = questionary.select(
+                "Select model:",
+                choices=model_choices,
+                default=current_model if current_model in known_ids else None,
+                style=custom_style
+            ).ask()
+
+            if new_model == "✏️  Enter custom model name":
+                raw = questionary.text(
+                    "Enter model name:",
+                    default=current_model if current_model and current_model not in known_ids else "",
+                    style=custom_style
+                ).ask()
+                new_model = self._maybe_persist_custom_model(provider_name, raw) or current_model
+            elif isinstance(new_model, str) and new_model.startswith("📌 "):
+                new_model = new_model.replace("📌 ", "").replace(" (current)", "")
+        elif type_info.get('models'):
+            # Agent types without a reconciled provider (e.g. mock): static list.
+            model_choices = list(type_info['models']) + ["✏️  Enter custom model name"]
             if current_model and current_model not in type_info['models']:
                 model_choices.insert(-1, f"📌 {current_model} (current)")
-            
             new_model = questionary.select(
                 "Select model:",
                 choices=model_choices,
                 default=current_model if current_model in type_info['models'] else None,
                 style=custom_style
             ).ask()
-            
-            # Handle custom model selection
             if new_model == "✏️  Enter custom model name":
                 new_model = questionary.text(
                     "Enter model name:",
                     default=current_model if current_model and current_model not in type_info['models'] else "",
                     style=custom_style
                 ).ask()
-            elif new_model.startswith("📌 "):
-                # User selected the current custom model, keep it
+            elif isinstance(new_model, str) and new_model.startswith("📌 "):
                 new_model = new_model.replace("📌 ", "").replace(" (current)", "")
         else:
             new_model = agent.get('model')
@@ -3028,6 +3310,10 @@ class ImprovedTUI:
         choices.append("📥 Log External Usage")
         choices.append("📊 Compare SDK vs External")
         choices.append("🔧 Manage External Tools")
+
+        # Project setup section
+        choices.append(questionary.Separator("═══ PROJECT SETUP ═══"))
+        choices.append("📦 Install Capability Pipeline (cap-dev-pipe)")
 
         # System section
         choices.append(questionary.Separator("═══ SYSTEM ═══"))
@@ -3991,7 +4277,7 @@ Enhance this prompt:
         })
         
         # Built-in: Claude
-        claude_model = 'claude-sonnet-4-6'
+        claude_model = 'claude-opus-4-8'
         claude_key = f"claude:{claude_model}"
         agents.append({
             'name': 'Claude',
@@ -4007,7 +4293,7 @@ Enhance this prompt:
         })
         
         # Built-in: GPT-4
-        gpt4_model = 'gpt-4o'
+        gpt4_model = 'gpt-5.5-pro'
         gpt4_key = f"gpt4:{gpt4_model}"
         agents.append({
             'name': 'GPT-4',
@@ -8344,6 +8630,8 @@ Please be thorough, constructive, and specific in your analysis."""
                 self.compare_sdk_vs_external()
             elif "Manage External Tools" in choice:
                 self.manage_external_tools()
+            elif "cap-dev-pipe" in choice:
+                self.install_capdevpipe_flow()
             elif "Tour Guide" in choice:
                 if self.tour_guide:
                     self.tour_guide.show_tour_menu()
@@ -8352,7 +8640,340 @@ Please be thorough, constructive, and specific in your analysis."""
                     questionary.press_any_key_to_continue().ask()
             elif "Help" in choice:
                 self.show_help()
-    
+
+    # ------------------------------------------------------------------ #
+    # cap-dev-pipe installer flow (FR-1) — thin handler over CapDevPipeInstaller
+    # ------------------------------------------------------------------ #
+
+    def install_capdevpipe_flow(self, config: Optional[Dict[str, Any]] = None):
+        """Install & configure cap-dev-pipe into a project (FR-1).
+
+        Standalone-callable: pass a ``config`` dict to run **headless** (no prompts) for the
+        future workflow registry and tests (NFR-7 / S8); omit it for the interactive TUI
+        flow. All file/shell work is delegated to the TUI-agnostic ``CapDevPipeInstaller``;
+        this method only gathers inputs (or accepts them) and renders results. In headless
+        mode it returns the ``ExecuteResult`` (or the apply-mode ``VerifyResult``).
+        """
+        from .capdevpipe_installer import CapDevPipeInstaller
+        from .exceptions import Startd8Error
+
+        installer = CapDevPipeInstaller()
+        headless = config is not None
+        try:
+            cfg = (
+                self._capdevpipe_cfg_from_dict(config, installer)
+                if headless
+                else self._capdevpipe_configure(installer)
+            )
+            if cfg is None:
+                return None  # cancelled
+
+            state = installer.detect_existing(cfg.target_root)
+            if state.exists and not headless:
+                mode = self._capdevpipe_choose_mode(state)
+                if mode is None:
+                    return None
+                installer.apply_mode(cfg.target_root, mode, cfg)
+                vr = installer.verify(cfg.target_root)
+                self._capdevpipe_render_verify(cfg, vr, mode=mode)
+                self._persist_capdevpipe_prefs(cfg)
+                return vr
+
+            actions = installer.plan_actions(cfg)
+            if not headless and not self._capdevpipe_preview_confirm(cfg, actions):
+                return None
+
+            result = installer.execute(cfg)
+            if not result.success:
+                self._capdevpipe_render_failure(result)
+                return result
+
+            vr = installer.verify(cfg.target_root)
+            if not vr.passed:
+                # Verify-failure branch (R3-S4): never present a red verify as success.
+                self._capdevpipe_verify_failed(installer, cfg, vr, headless)
+                return result
+            if not headless:
+                self._capdevpipe_render_summary(cfg, vr)
+            self._persist_capdevpipe_prefs(cfg)
+            return result
+        except Startd8Error as exc:
+            # Actionable SDK errors (NFR-5): show the message, not a traceback.
+            self.console.print(
+                Panel(str(exc), title="cap-dev-pipe install", border_style="red")
+            )
+            if not headless:
+                questionary.press_any_key_to_continue().ask()
+            if headless:
+                raise
+            return None
+
+    def _capdevpipe_cfg_from_dict(self, config: Dict[str, Any], installer):
+        """Build an InstallConfig from a plain dict for headless runs (S8/NFR-7)."""
+        from .capdevpipe_installer import InstallConfig, InstallMethod, ProfileSpec
+
+        source = installer.locate_source(
+            Path(config["source_path"]) if config.get("source_path") else None
+        )
+        profiles = [
+            ProfileSpec(
+                lang=p["lang"],
+                plan=Path(p["plan"]) if p.get("plan") else None,
+                reqs=Path(p["reqs"]) if p.get("reqs") else None,
+            )
+            for p in config.get("profiles", [])
+        ]
+        cfg = InstallConfig(
+            source_path=source,
+            target_root=Path(config["target_root"]).expanduser(),
+            method=InstallMethod(config.get("method", "symlink")),
+            pipeline_env=dict(config.get("pipeline_env", {})),
+            default_lang=config.get("default_lang", "python"),
+            profiles=profiles,
+        )
+        cfg.pipeline_env = installer.detect_pipeline_env(cfg)
+        return cfg
+
+    def _capdevpipe_configure(self, installer):
+        """Interactive prompts → InstallConfig, or None on cancel (FR-2/3/4/7/8/9)."""
+        from .capdevpipe_installer import (
+            DEFAULT_SOURCE,
+            InstallConfig,
+            InstallMethod,
+            PREF_INSTALL_METHOD,
+            PREF_SOURCE_PATH,
+        )
+        from .config import get_config_manager
+
+        prefs = get_config_manager()
+        default_source = prefs.get_preference(PREF_SOURCE_PATH) or str(DEFAULT_SOURCE)
+        source_str = self._safe_path_input(
+            "cap-dev-pipe source checkout:", default=default_source, only_directories=True
+        )
+        if not source_str:
+            return None
+        source = installer.locate_source(Path(source_str))  # validates (FR-2)
+
+        target_str = self._safe_path_input(
+            "Target project root:", default=str(Path.cwd()), only_directories=True
+        )
+        if not target_str:
+            return None
+        target = Path(target_str).expanduser()
+
+        default_method = prefs.get_preference(PREF_INSTALL_METHOD) or "symlink"
+        method_choice = questionary.select(
+            "Install method:",
+            choices=[
+                "symlink (single source of truth; recommended)",
+                "copy (self-contained; drifts)",
+            ],
+            default=(
+                "symlink (single source of truth; recommended)"
+                if default_method == "symlink"
+                else "copy (self-contained; drifts)"
+            ),
+            style=custom_style,
+        ).ask()
+        if not method_choice:
+            return None
+        method = InstallMethod.SYMLINK if "symlink" in method_choice else InstallMethod.COPY
+
+        default_lang = questionary.text(
+            "Default language for the wrapper:", default="python", style=custom_style
+        ).ask()
+        if default_lang is None:
+            return None
+
+        cfg = InstallConfig(
+            source_path=source,
+            target_root=target,
+            method=method,
+            pipeline_env={},
+            default_lang=default_lang or "python",
+            profiles=[],
+        )
+        # Detect + confirm pipeline.env (FR-7).
+        cfg.pipeline_env = self._capdevpipe_confirm_env(installer, cfg)
+        if cfg.pipeline_env is None:
+            return None
+        # Profiles from detected docs (FR-9).
+        cfg.profiles = self._capdevpipe_select_profiles(installer, target)
+        return cfg
+
+    def _capdevpipe_confirm_env(self, installer, cfg):
+        """Detect the four managed keys and let the user confirm/edit each (FR-7)."""
+        detected = installer.detect_pipeline_env(cfg)
+        confirmed: Dict[str, str] = {}
+        for key in ("CONTEXTCORE_ROOT", "SDK_ROOT", "PROJECT_ROOT", "PROJECT_NAME"):
+            value = questionary.text(
+                f"{key}:", default=detected.get(key, ""), style=custom_style
+            ).ask()
+            if value is None:
+                return None
+            confirmed[key] = value
+        return confirmed
+
+    def _capdevpipe_select_profiles(self, installer, target):
+        """Let the user wire detected plan/requirements docs into language profiles (FR-9)."""
+        from .capdevpipe_installer import ProfileSpec
+
+        candidates = installer.detect_doc_candidates(target)
+        profiles = []
+        while True:
+            add = questionary.confirm(
+                "Add a language profile (wire plan/requirements docs)?",
+                default=not profiles,
+                style=custom_style,
+            ).ask()
+            if not add:
+                break
+            lang = questionary.text("Language name (e.g. python):", style=custom_style).ask()
+            if not lang:
+                break
+            plan = self._capdevpipe_pick_doc("plan", candidates.plans)
+            reqs = self._capdevpipe_pick_doc("requirements", candidates.reqs)
+            profiles.append(ProfileSpec(lang=lang, plan=plan, reqs=reqs))
+        return profiles
+
+    def _capdevpipe_pick_doc(self, kind, docs):
+        """Pick one detected doc (or skip)."""
+        if not docs:
+            return None
+        choices = [str(d) for d in docs] + ["← skip"]
+        picked = questionary.select(
+            f"Choose the {kind} doc:", choices=choices, style=custom_style
+        ).ask()
+        if not picked or picked == "← skip":
+            return None
+        return Path(picked)
+
+    def _capdevpipe_choose_mode(self, state):
+        """Choose a re-run mode for an existing install (FR-12)."""
+        from .capdevpipe_installer import ReRunMode
+
+        note = " [pending — prior run may have crashed]" if state.pending else ""
+        self.console.print(
+            Panel(
+                f"An existing .cap-dev-pipe/ install was detected{note}.",
+                title="cap-dev-pipe re-run",
+                border_style="yellow",
+            )
+        )
+        mapping = {
+            "repair (recreate missing/broken, then verify)": ReRunMode.REPAIR,
+            "upgrade (refresh scripts; prune orphans)": ReRunMode.UPGRADE,
+            "reconfigure (rewrite config/profiles)": ReRunMode.RECONFIGURE,
+            "replace-pipeline.env (rewrite managed keys)": ReRunMode.REPLACE_PIPELINE_ENV,
+            "← cancel": None,
+        }
+        picked = questionary.select(
+            "How would you like to proceed?",
+            choices=list(mapping.keys()),
+            style=custom_style,
+        ).ask()
+        return mapping.get(picked) if picked else None
+
+    def _capdevpipe_preview_confirm(self, cfg, actions) -> bool:
+        """Render the planned action list (FR-13) and require confirmation (NFR-2)."""
+        lines = "\n".join(f"  • {a.describe()}" for a in actions)
+        self.console.print(
+            Panel(
+                f"[bold]Target:[/bold] {cfg.target_root}\n"
+                f"[bold]Method:[/bold] {cfg.method.value}\n"
+                f"[bold]Planned actions ({len(actions)}):[/bold]\n{lines}",
+                title="cap-dev-pipe install — preview",
+                border_style="cyan",
+            )
+        )
+        return bool(
+            questionary.confirm("Proceed with these actions?", default=True, style=custom_style).ask()
+        )
+
+    def _capdevpipe_render_failure(self, result):
+        """Render an execute() failure (FR-16 rollback / repairable states)."""
+        tail = (
+            "Rolled back cleanly."
+            if result.rolled_back
+            else "Left repairable — re-run and choose 'repair'."
+            if result.repairable
+            else ""
+        )
+        self.console.print(
+            Panel(
+                f"[red]Install failed:[/red] {result.error}\n{tail}",
+                title="cap-dev-pipe install",
+                border_style="red",
+            )
+        )
+        questionary.press_any_key_to_continue().ask()
+
+    def _capdevpipe_verify_failed(self, installer, cfg, vr, headless):
+        """Verify-failure branch (R3-S4): surface the failure, offer repair (manifest-driven)."""
+        from .capdevpipe_installer import ReRunMode
+
+        self.console.print(
+            Panel(
+                f"[yellow]Install wrote files but verification failed:[/yellow]\n{vr.message}",
+                title="cap-dev-pipe verify",
+                border_style="yellow",
+            )
+        )
+        if headless:
+            return
+        if questionary.confirm("Attempt repair now?", default=True, style=custom_style).ask():
+            installer.apply_mode(cfg.target_root, ReRunMode.REPAIR, cfg)
+            vr2 = installer.verify(cfg.target_root)
+            self._capdevpipe_render_verify(cfg, vr2, mode=ReRunMode.REPAIR)
+        else:
+            questionary.press_any_key_to_continue().ask()
+
+    def _capdevpipe_render_verify(self, cfg, vr, mode=None):
+        """Render a verify result after an apply-mode/repair (FR-11/FR-12)."""
+        colour = "green" if vr.passed else "red"
+        status = "PASSED" if vr.passed else "FAILED"
+        label = f" ({mode.value})" if mode else ""
+        self.console.print(
+            Panel(
+                f"[{colour}]Verify {status}{label}[/{colour}]\n{vr.message}",
+                title="cap-dev-pipe",
+                border_style=colour,
+            )
+        )
+        questionary.press_any_key_to_continue().ask()
+
+    def _capdevpipe_render_summary(self, cfg, vr):
+        """Render the success summary + the exact next command (FR-14)."""
+        wrapper = f"./.cap-dev-pipe/{cfg.target_root.name}-cap-dlv-pipe.sh"
+        table = Table(title="cap-dev-pipe installed")
+        table.add_column("What", style="cyan")
+        table.add_column("Value", style="white")
+        table.add_row("Method", cfg.method.value)
+        table.add_row("Target", str(cfg.target_root))
+        table.add_row("Profiles", ", ".join(vr.expected_langs) or "(none)")
+        table.add_row("Verify", vr.message)
+        self.console.print(table)
+        self.console.print(
+            Panel(
+                f"[bold]Run the pipeline with:[/bold]\n  {wrapper}",
+                title="Next steps",
+                border_style="green",
+            )
+        )
+        questionary.press_any_key_to_continue().ask()
+
+    def _persist_capdevpipe_prefs(self, cfg):
+        """Remember source path + install method for next time (FR-15)."""
+        from .capdevpipe_installer import PREF_INSTALL_METHOD, PREF_SOURCE_PATH
+        from .config import get_config_manager
+
+        try:
+            prefs = get_config_manager()
+            prefs.set_preference(PREF_SOURCE_PATH, str(cfg.source_path))
+            prefs.set_preference(PREF_INSTALL_METHOD, cfg.method.value)
+        except Exception:  # pragma: no cover - pref persistence is best-effort
+            pass
+
     def list_all_prompts(self):
         """List all prompts"""
         self.show_header("All Prompts")
