@@ -74,6 +74,20 @@ _METHOD_RE = re.compile(
     re.MULTILINE,
 )
 
+# MULTILANG_MANIFEST_VALIDATION FR-4 — default exports. `export default <expr>` and
+# `module.exports = <expr>`. A bare identifier (`export default config;`) carries the bound
+# name; an object literal, a call (`defineConfig({...})`), or any other expression is the
+# anonymous default → sentinel name "default". `export default class/function …` is NOT
+# matched here (the class/function REs already emit those by their declared name).
+_DEFAULT_EXPORT_RE = re.compile(
+    r"export\s+default\s+(?!class\b|function\b|async\b)(?P<name>\w+)?\s*(?P<after>[(\[{;]|=>|$)",
+    re.MULTILINE,
+)
+_MODULE_EXPORTS_RE = re.compile(
+    r"module\.exports\s*=\s*(?P<name>\w+)?\s*(?P<after>[(\[{;]|$)",
+    re.MULTILINE,
+)
+
 # Reserved words that look like method calls but aren't
 _RESERVED = frozenset({
     "if", "else", "for", "while", "do", "switch", "case", "return",
@@ -182,6 +196,33 @@ def parse_nodejs_source(source: str) -> List[NodeElement]:
             is_exported=bool(m.group("exp")),
             line=_line_number(source, m.start()),
         ))
+
+    # --- Default exports (FR-4) ---
+    # A captured identifier NOT immediately followed by a call/`=>` is a bound name
+    # (`export default config;`); otherwise (object/array literal, call, arrow, none) the
+    # default export is anonymous → sentinel "default".
+    _seen_default = False
+    for m in _DEFAULT_EXPORT_RE.finditer(source):
+        name = m.group("name")
+        after = m.group("after")
+        if name and after not in ("(", "=>"):
+            export_name = name
+        else:
+            export_name = "default"
+        elements.append(NodeElement(
+            kind="default_export", name=export_name, is_exported=True,
+            line=_line_number(source, m.start()),
+        ))
+        _seen_default = True
+    if not _seen_default:
+        for m in _MODULE_EXPORTS_RE.finditer(source):
+            name = m.group("name")
+            after = m.group("after")
+            export_name = name if (name and after != "(") else "default"
+            elements.append(NodeElement(
+                kind="default_export", name=export_name, is_exported=True,
+                line=_line_number(source, m.start()),
+            ))
 
     elements.sort(key=lambda e: e.line)
     return elements

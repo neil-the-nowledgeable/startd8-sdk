@@ -17,7 +17,8 @@ def test_a_empty_input_filled_for_matching_paths():
     apply_framework_defaults(fe)
     assert fe["next.config.mjs"], "convention should fill empty list"
     el = fe["next.config.mjs"][0]
-    assert el.kind == ElementKind.CONSTANT
+    # MULTILANG FR-4: JS/TS default-export configs now use DEFAULT_EXPORT (was CONSTANT).
+    assert el.kind == ElementKind.DEFAULT_EXPORT
     assert el.name == "config"
     assert el.decomposition_source == "framework-conventions"
 
@@ -37,12 +38,21 @@ def test_c_deterministic_empty_collision_convention_wins():
 
 
 def test_d_pure_default_export_sentinel_name():
+    # MULTILANG FR-4: pure default-export JS/TS configs use DEFAULT_EXPORT + sentinel "default".
     for path in ("tailwind.config.js", "vite.config.ts", "jest.config.cjs"):
         fe = {path: []}
         apply_framework_defaults(fe)
         el = fe[path][0]
-        assert el.kind == ElementKind.CONSTANT
+        assert el.kind == ElementKind.DEFAULT_EXPORT
         assert el.name == "default", f"{path} should use sentinel name 'default'"
+
+
+def test_json_configs_stay_constant_not_default_export():
+    # JSON configs are NOT JavaScript (no `export default`) — they keep CONSTANT (FR-4 scope).
+    for path in ("tsconfig.json", "package.json", "jest.config.json", "prisma/schema.prisma"):
+        fe = {path: []}
+        apply_framework_defaults(fe)
+        assert fe[path][0].kind == ElementKind.CONSTANT, f"{path} must stay CONSTANT"
 
 
 def test_non_matching_path_untouched():

@@ -88,28 +88,31 @@ FRAMEWORK_CONFIG_REGISTRY_VERSION = "1.0.0"
 #: only path-qualified entry is prisma/schema.prisma.  Pure default-export
 #: configs use the sentinel name "default" (FR-5) pending a DEFAULT_EXPORT kind.
 _FRAMEWORK_CONFIG_DEFAULTS: "dict[str, list[tuple[ElementKind, str, Optional[str]]]]" = {
-    # Next.js — `const config = {...}; export default config` (named binding).
-    "next.config.js": [(ElementKind.CONSTANT, "config", "NextConfig")],
-    "next.config.mjs": [(ElementKind.CONSTANT, "config", "NextConfig")],
-    "next.config.ts": [(ElementKind.CONSTANT, "config", "NextConfig")],
-    # JSON documents — modeled as a single default object (sentinel name).
+    # Next.js — `const config = {...}; export default config` (named binding). DEFAULT_EXPORT
+    # (MULTILANG FR-4); name = the bound identifier `config` that nodejs_parser emits.
+    "next.config.js": [(ElementKind.DEFAULT_EXPORT, "config", "NextConfig")],
+    "next.config.mjs": [(ElementKind.DEFAULT_EXPORT, "config", "NextConfig")],
+    "next.config.ts": [(ElementKind.DEFAULT_EXPORT, "config", "NextConfig")],
+    # JSON documents — NOT JavaScript; the node parser never sees these, so they stay
+    # CONSTANT/sentinel "default" (there is no `export default` in JSON).
     "tsconfig.json": [(ElementKind.CONSTANT, "default", "TSConfig")],
     "package.json": [(ElementKind.CONSTANT, "default", "PackageJson")],
     "prisma/schema.prisma": [(ElementKind.CONSTANT, "default", "PrismaSchema")],
-    # Pure default-export configs — `export default defineConfig({...})`.
-    "vite.config.js": [(ElementKind.CONSTANT, "default", "UserConfig")],
-    "vite.config.ts": [(ElementKind.CONSTANT, "default", "UserConfig")],
-    "vite.config.mjs": [(ElementKind.CONSTANT, "default", "UserConfig")],
-    "vite.config.cjs": [(ElementKind.CONSTANT, "default", "UserConfig")],
-    "jest.config.js": [(ElementKind.CONSTANT, "default", "JestConfig")],
-    "jest.config.ts": [(ElementKind.CONSTANT, "default", "JestConfig")],
-    "jest.config.mjs": [(ElementKind.CONSTANT, "default", "JestConfig")],
-    "jest.config.cjs": [(ElementKind.CONSTANT, "default", "JestConfig")],
     "jest.config.json": [(ElementKind.CONSTANT, "default", "JestConfig")],
-    "tailwind.config.js": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
-    "tailwind.config.ts": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
-    "tailwind.config.mjs": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
-    "tailwind.config.cjs": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
+    # Pure default-export JS/TS configs — `export default defineConfig({...})` (anonymous):
+    # DEFAULT_EXPORT, sentinel name "default" matching nodejs_parser's anonymous-export output.
+    "vite.config.js": [(ElementKind.DEFAULT_EXPORT, "default", "UserConfig")],
+    "vite.config.ts": [(ElementKind.DEFAULT_EXPORT, "default", "UserConfig")],
+    "vite.config.mjs": [(ElementKind.DEFAULT_EXPORT, "default", "UserConfig")],
+    "vite.config.cjs": [(ElementKind.DEFAULT_EXPORT, "default", "UserConfig")],
+    "jest.config.js": [(ElementKind.DEFAULT_EXPORT, "default", "JestConfig")],
+    "jest.config.ts": [(ElementKind.DEFAULT_EXPORT, "default", "JestConfig")],
+    "jest.config.mjs": [(ElementKind.DEFAULT_EXPORT, "default", "JestConfig")],
+    "jest.config.cjs": [(ElementKind.DEFAULT_EXPORT, "default", "JestConfig")],
+    "tailwind.config.js": [(ElementKind.DEFAULT_EXPORT, "default", "TailwindConfig")],
+    "tailwind.config.ts": [(ElementKind.DEFAULT_EXPORT, "default", "TailwindConfig")],
+    "tailwind.config.mjs": [(ElementKind.DEFAULT_EXPORT, "default", "TailwindConfig")],
+    "tailwind.config.cjs": [(ElementKind.DEFAULT_EXPORT, "default", "TailwindConfig")],
 }
 
 

@@ -181,3 +181,68 @@ class TestAdvisoryEndToEndSeverity:
             elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Greeter")],
         )
         assert _validate_file_spec("app.ts", spec, reg) == []
+
+
+NEXT_CONFIG_SRC = "const config = { reactStrictMode: true };\nexport default config;\n"
+TAILWIND_SRC = "export default {\n  content: ['./src/**/*.{js,ts}'],\n};\n"
+
+
+class TestFr4DefaultExport:
+    """FR-4: nodejs_parser emits DEFAULT_EXPORT (named binding or sentinel), the framework
+    registry uses DEFAULT_EXPORT for JS/TS configs, and a default-export config validates
+    clean while a wrong-shape (`export class config`) draft is caught."""
+
+    def test_next_config_named_binding_default_export(self):
+        m = build_multilang_file_manifest("next.config.mjs", NEXT_CONFIG_SRC)
+        de = [e for e in m.elements if e.kind is ElementKind.DEFAULT_EXPORT]
+        assert len(de) == 1 and de[0].name == "config"  # the bound name
+
+    def test_tailwind_anonymous_default_export_sentinel(self):
+        m = build_multilang_file_manifest("tailwind.config.js", TAILWIND_SRC)
+        de = [e for e in m.elements if e.kind is ElementKind.DEFAULT_EXPORT]
+        assert len(de) == 1 and de[0].name == "default"
+
+    def test_framework_registry_uses_default_export_for_js(self):
+        from startd8.forward_manifest_extractor import apply_framework_defaults
+
+        fe = {"next.config.mjs": []}
+        apply_framework_defaults(fe)
+        assert fe["next.config.mjs"][0].kind is ElementKind.DEFAULT_EXPORT
+        assert fe["next.config.mjs"][0].name == "config"
+
+    def test_compliant_next_config_validates_clean(self):
+        # The convention's DEFAULT_EXPORT name="config" matches the parsed default export.
+        m = build_multilang_file_manifest("next.config.mjs", NEXT_CONFIG_SRC)
+        reg = ManifestRegistry({"next.config.mjs": m})
+        spec = ForwardFileSpec(
+            file="next.config.mjs",
+            elements=[ForwardElementSpec(kind=ElementKind.DEFAULT_EXPORT, name="config")],
+        )
+        assert _validate_file_spec("next.config.mjs", spec, reg) == []
+
+    def test_wrong_shape_export_class_is_flagged(self):
+        # PI-003: drafter emits `export class config` instead of a default-export object.
+        # The expected `config` default-export is absent -> a violation (advisory tier=warning).
+        wrong = "export class config { foo() {} }\n"
+        m = build_multilang_file_manifest("next.config.mjs", wrong)
+        reg = ManifestRegistry({"next.config.mjs": m})
+        spec = ForwardFileSpec(
+            file="next.config.mjs",
+            elements=[ForwardElementSpec(kind=ElementKind.DEFAULT_EXPORT, name="config")],
+        )
+        viols = _validate_file_spec("next.config.mjs", spec, reg)
+        assert len(viols) == 1
+        assert viols[0].violation_type == "missing_default_export"
+        assert viols[0].severity == "warning"  # .mjs is advisory tier
+
+    def test_r1f6_legacy_constant_contract_still_matches(self):
+        # R1-F6 / name-based equivalence: a contract authored with the OLD sentinel
+        # (CONSTANT name="default") still validates clean against a DEFAULT_EXPORT-extracted
+        # element of the same name — matching is by name, so the cutover is non-breaking.
+        m = build_multilang_file_manifest("tailwind.config.js", TAILWIND_SRC)
+        reg = ManifestRegistry({"tailwind.config.js": m})
+        legacy_spec = ForwardFileSpec(
+            file="tailwind.config.js",
+            elements=[ForwardElementSpec(kind=ElementKind.CONSTANT, name="default")],
+        )
+        assert _validate_file_spec("tailwind.config.js", legacy_spec, reg) == []

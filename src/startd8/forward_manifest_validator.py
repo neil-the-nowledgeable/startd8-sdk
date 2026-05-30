@@ -98,8 +98,20 @@ def _validate_file_spec(
     # Validate elements
     if spec.elements:
         actual_names = {e.name for e in elements}
+        # MULTILANG FR-4: DEFAULT_EXPORT is a *shape* contract, so match it kind-strictly —
+        # a class named `config` (`export class config`) must NOT satisfy a `DEFAULT_EXPORT
+        # config` spec (that is the PI-003 wrong-shape this is meant to catch). Every other
+        # kind keeps historical **name-only** matching (changing that risks false positives,
+        # and a legacy `CONSTANT name="default"` contract still matches by name — R1-F6).
+        actual_default_export_names = {
+            e.name for e in elements if e.kind == ElementKind.DEFAULT_EXPORT
+        }
         for expected_el in spec.elements:
-            if expected_el.name not in actual_names:
+            if expected_el.kind == ElementKind.DEFAULT_EXPORT:
+                present = expected_el.name in actual_default_export_names
+            else:
+                present = expected_el.name in actual_names
+            if not present:
                 violations.append(
                     ContractViolation(
                         contract_id=f"file_element:{file_path}:{expected_el.name}",
