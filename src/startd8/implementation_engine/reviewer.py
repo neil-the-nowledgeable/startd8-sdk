@@ -287,16 +287,28 @@ def _validate_against_manifest(
         if not scoped:
             scoped = list(file_specs.keys())
 
+        # The structural validator parses Python ASTs only, and ``implementation`` is a
+        # single drafted blob — it can be attributed to at most one file. With more than
+        # one Python spec in scope we cannot tell which file the blob is, so validating
+        # every spec against the same blob would emit false ``missing_element`` BLOCKING
+        # violations for the other files. Degrade to a no-op rather than fail the review
+        # incorrectly (consistent with the graceful-degradation contract above).
+        py_scoped = [
+            p for p in scoped if str(p).endswith(".py") and file_specs.get(p) is not None
+        ]
+        if len(py_scoped) > 1:
+            logger.debug(
+                "FLCM: %d Python files in scope for a single implementation blob; "
+                "skipping per-file validation to avoid cross-file false positives",
+                len(py_scoped),
+            )
+            return []
+
         out: List[Dict[str, str]] = []
         with tempfile.TemporaryDirectory() as _td:
             tdir = _Path(_td)
-            for rel in scoped:
-                spec = file_specs.get(rel)
-                if spec is None:
-                    continue
-                # The structural validator parses Python ASTs only.
-                if not str(rel).endswith(".py"):
-                    continue
+            for rel in py_scoped:
+                spec = file_specs[rel]
                 abs_path = tdir / _Path(rel).name
                 try:
                     abs_path.write_text(implementation)

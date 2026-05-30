@@ -52,6 +52,13 @@ MANIFEST_FILENAME = ".install-manifest.json"
 #: (graceful fallback on an unknown version) is added in P2 (R3-S5 / task #11).
 MANIFEST_VERSION = 1
 
+#: Timeouts (seconds) for installer subprocesses (NFR-8 reliability): a hung external
+#: script must not block the TUI / headless run indefinitely. ``TimeoutExpired`` is a
+#: ``subprocess.SubprocessError`` and so surfaces as :class:`FileOperationError` via
+#: :meth:`CapDevPipeInstaller._run_subprocess`.
+SUBPROCESS_TIMEOUT_INSTALL = 600.0  # rsync copy installer (install-cap-dev-pipe.sh)
+SUBPROCESS_TIMEOUT_VERIFY = 120.0  # run.sh --list-langs
+
 #: The four ``pipeline.env`` keys the installer owns. Any other key found in an existing
 #: ``pipeline.env`` is preserved across reconcile / replace-env / upgrade (FR-7, R3-F5).
 MANAGED_ENV_KEYS = ("CONTEXTCORE_ROOT", "SDK_ROOT", "PROJECT_ROOT", "PROJECT_NAME")
@@ -654,7 +661,11 @@ class CapDevPipeInstaller:
         elif action.type is ActionType.GITIGNORE_ENSURE:
             self._append_gitignore_line(t, action.detail or "")
         elif action.type is ActionType.RUN_SUBPROCESS:
-            proc = self._run_subprocess(action.argv or [], cwd=action.cwd or t)
+            proc = self._run_subprocess(
+                action.argv or [],
+                cwd=action.cwd or t,
+                timeout=SUBPROCESS_TIMEOUT_INSTALL,
+            )
             if proc.returncode != 0:
                 raise FileOperationError(
                     f"Command failed (exit {proc.returncode}): "
@@ -1218,7 +1229,9 @@ class CapDevPipeInstaller:
                     f"cap-dev-pipe source likely moved. Re-point via `upgrade`."
                 ),
             )
-        proc = self._run_subprocess([str(run_sh), "--list-langs"], cwd=embed)
+        proc = self._run_subprocess(
+            [str(run_sh), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
+        )
         listed = self._parse_listed_langs(proc.stdout)
         missing_profiles = [lang for lang in expected if lang not in proc.stdout]
         passed = proc.returncode == 0 and not missing_profiles and single_source_ok
