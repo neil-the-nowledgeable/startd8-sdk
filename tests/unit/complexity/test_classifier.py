@@ -428,3 +428,182 @@ class TestClassificationResultSignals:
         tier, reason = classify_tier(_signals(has_dynamic_dispatch=True))
         assert tier is ComplexityTier.COMPLEX
         assert "dynamic_dispatch" in reason
+
+
+# ── Exemplar-informed tier downgrade (Layer 1) ────────────────────
+
+
+class _FakeScores:
+    """Minimal stand-in for ExemplarScores."""
+
+    def __init__(self, disk_quality_score: float = 1.0, cost_usd: float = 0.0):
+        self.disk_quality_score = disk_quality_score
+        self.cost_usd = cost_usd
+
+
+class _FakeExemplar:
+    """Minimal stand-in for ExemplarEntry."""
+
+    def __init__(self, id: str = "ex-abc123", maturity: int = 3,
+                 disk_quality_score: float = 1.0):
+        self.id = id
+        self.maturity = maturity
+        self.scores = _FakeScores(disk_quality_score=disk_quality_score)
+
+
+class _FakeRegistry:
+    """Minimal stand-in for ExemplarRegistry."""
+
+    def __init__(self, match=None):
+        self._match = match
+
+    def find_best_match(self, fingerprint):
+        return self._match
+
+
+class _FakeFingerprint:
+    """Minimal stand-in for ConfigFingerprint."""
+    pass
+
+
+class TestExemplarDowngrade:
+    """Exemplar-informed complexity tier downgrade (Layer 1)."""
+
+    # Signals that normally classify as COMPLEX (default)
+    COMPLEX_SIGNALS = dict()  # default signals → COMPLEX
+
+    # Signals that normally classify as SIMPLE (strict)
+    SIMPLE_SIGNALS = dict(
+        manifest_coverage="full",
+        blast_radius=0,
+        edit_mode="create",
+        caller_count=0,
+        has_dynamic_dispatch=False,
+        estimated_loc=100,
+        target_file_count=1,
+    )
+
+    def test_downgrade_complex_to_moderate(self):
+        """COMPLEX task with qualifying exemplar → MODERATE (one step down)."""
+        registry = _FakeRegistry(match=_FakeExemplar(maturity=3, disk_quality_score=1.0))
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.MODERATE
+        assert "exemplar downgrade" in result.reason
+        assert "ex-abc123" in result.reason
+        assert result.exemplar_override == "ex-abc123"
+
+    def test_downgrade_simple_to_trivial(self):
+        """SIMPLE task with qualifying exemplar → TRIVIAL."""
+        registry = _FakeRegistry(match=_FakeExemplar(maturity=4, disk_quality_score=1.5))
+        result = classify_tier(
+            _signals(**self.SIMPLE_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.TRIVIAL
+        assert "exemplar downgrade" in result.reason
+
+    def test_trivial_stays_trivial(self):
+        """TRIVIAL task with qualifying exemplar stays TRIVIAL (floor)."""
+        registry = _FakeRegistry(match=_FakeExemplar(maturity=3, disk_quality_score=1.0))
+        result = classify_tier(
+            _signals(file_extension=".html", estimated_loc=50),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.TRIVIAL
+        assert result.exemplar_override is None  # no downgrade applied
+
+    def test_no_downgrade_low_maturity(self):
+        """maturity=2 does not qualify for downgrade."""
+        registry = _FakeRegistry(match=_FakeExemplar(maturity=2, disk_quality_score=1.0))
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_no_downgrade_low_score(self):
+        """disk_quality_score < 1.0 does not qualify for downgrade."""
+        registry = _FakeRegistry(match=_FakeExemplar(maturity=3, disk_quality_score=0.8))
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_no_downgrade_no_match(self):
+        """No matching exemplar → normal classification."""
+        registry = _FakeRegistry(match=None)
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_no_downgrade_none_registry(self):
+        """No registry passed → normal classification."""
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=None,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_no_downgrade_none_fingerprint(self):
+        """No fingerprint passed → normal classification."""
+        registry = _FakeRegistry(match=_FakeExemplar())
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=None,
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_registry_exception_non_fatal(self):
+        """Exception in registry.find_best_match → graceful fallback."""
+
+        class _BrokenRegistry:
+            def find_best_match(self, fp):
+                raise RuntimeError("boom")
+
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=_BrokenRegistry(),
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.tier is ComplexityTier.COMPLEX
+        assert result.exemplar_override is None
+
+    def test_exemplar_override_field_set(self):
+        """exemplar_override carries the exemplar ID when downgrade applied."""
+        registry = _FakeRegistry(match=_FakeExemplar(id="ex-test-99"))
+        result = classify_tier(
+            _signals(**self.COMPLEX_SIGNALS),
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.exemplar_override == "ex-test-99"
+
+    def test_signals_preserved_after_downgrade(self):
+        """Original signals are preserved through the downgrade."""
+        signals = _signals(blast_radius=10)
+        registry = _FakeRegistry(match=_FakeExemplar())
+        result = classify_tier(
+            signals,
+            exemplar_registry=registry,
+            fingerprint=_FakeFingerprint(),
+        )
+        assert result.signals is signals
