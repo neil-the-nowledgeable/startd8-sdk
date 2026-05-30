@@ -1,6 +1,5 @@
 """Tests for implementation_engine.reviewer — review, enrichment, convergent review, feedback."""
 
-import pytest
 from unittest.mock import Mock
 
 from startd8.implementation_engine.reviewer import (
@@ -202,25 +201,32 @@ class TestReviewDraft:
             assert "senior" in sys_prompt.lower() or "reviewing" in sys_prompt.lower()
 
     def test_flcm_contract_validation_detects_missing_element(self):
-        """FLCM now runs the REAL validator (FR-3 repair, no phantom method).
+        """FLCM now runs the REAL ForwardManifest.validate_implementation (FR-3 repair).
 
         A spec element absent from the drafted code yields a violation; a
-        present element yields none. This proves the path is no longer dormant.
+        present element yields none. This proves the path is no longer dormant and
+        that it runs against a *real* manifest method (not a phantom/Mock).
         """
         from startd8.implementation_engine.reviewer import _validate_against_manifest
-        from startd8.forward_manifest import ForwardFileSpec, ForwardElementSpec
+        from startd8.forward_manifest import (
+            ForwardFileSpec,
+            ForwardElementSpec,
+            ForwardManifest,
+        )
         from startd8.utils.code_manifest import ElementKind
 
-        fm = Mock()
-        fm.contracts = []
-        fm.file_specs = {
-            "mod.py": ForwardFileSpec(
-                file="mod.py",
-                elements=[
-                    ForwardElementSpec(kind=ElementKind.CONSTANT, name="EXPECTED_CONST")
-                ],
-            )
-        }
+        fm = ForwardManifest(
+            file_specs={
+                "mod.py": ForwardFileSpec(
+                    file="mod.py",
+                    elements=[
+                        ForwardElementSpec(
+                            kind=ElementKind.CONSTANT, name="EXPECTED_CONST"
+                        )
+                    ],
+                )
+            },
+        )
 
         # Missing the prescribed constant -> one violation.
         viols = _validate_against_manifest(fm, "x = 1\n", target_files=["mod.py"])

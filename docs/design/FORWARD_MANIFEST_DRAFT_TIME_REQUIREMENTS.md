@@ -1,8 +1,8 @@
 # Forward Manifest at Draft Time — Requirements
 
-**Version:** 0.4 (R2 implementation-vs-requirements audit — phantom-API correction)
+**Version:** 0.5 (R2 audit + FR-3 fully implemented — real `validate_implementation`)
 **Date:** 2026-05-30
-**Status:** Reviewed against the **shipped** implementation_engine + extractor code (post-Increment-2); R1 CRP applied; R2 audit corrected the FR-3 phantom-API premise
+**Status:** R1 CRP applied; R2 audit corrected the FR-3 phantom-API premise **and** the gap is now fully closed — `ForwardManifest.validate_implementation()` is implemented (multi-file Python + task-scoped contracts), reviewer rewired to it
 **Component:** startd8 SDK — `implementation_engine/spec_builder.py` + `forward_manifest_extractor.py`
 **Triggered by:** `RUN_003_FORWARD_MANIFEST_GAP_POSTMORTEM.md`
 
@@ -24,7 +24,7 @@
 | Fix 1 needs a new P0 section to be designed and inserted | The forward-manifest section is **already constructed** at `spec_builder.py:1113-1139`; it is just **not appended to the `prioritized` list**. Fix 1 is one append + one template wire-up | **FR-1** narrows: append + wire, not design |
 | spec_builder needs a `task_id` to look up file_specs | `file_specs_for_task(self, task_id, target_files)` **ignores `task_id`** (reserved); `target_files` is already in `context` (`spec_builder.py:1168`) | No new mapping work — OQ-2 resolved |
 | Prompt templating may be ad hoc | Standard pattern: YAML template (`prompts/__init__.py`) + `template.format(**format_kwargs)` at `:1399`; add one `{forward_manifest_section}` placeholder + one kwarg | OQ-3 resolved |
-| Reviewer/spec contract drift is a real risk | ⚠ **SUPERSEDED (R2-F1):** this row claimed `reviewer.py:270` calls `forward_manifest.validate_implementation()`. **That method never existed** — the call was a dormant `getattr(..., None)` returning `None`, so enforcement was a no-op. See corrected **FR-3**. | ~~FR-3 satisfied by construction~~ → FR-3 **rewritten**; real path is `_validate_against_manifest` → `_validate_file_spec` |
+| Reviewer/spec contract drift is a real risk | ⚠ **SUPERSEDED (R2-F1) → CLOSED (R2-F2):** this row claimed `reviewer.py:270` calls `forward_manifest.validate_implementation()`. That method never existed (dormant `getattr(..., None)` → no-op). **R2-F2 made it real**: `ForwardManifest.validate_implementation()` is now implemented (multi-file Python + task-scoped contracts). See **FR-3**. | ~~FR-3 satisfied by construction~~ → FR-3 **rewritten**; real method now exists and the reviewer is a thin adapter over it |
 | `ElementKind` already supports `default_export` | It does **not**. Kinds: `function`, `async_function`, `class`, `method`, `async_method`, `property`, **`constant`**, `variable` | **FR-5 / Fix 2** must model `next.config.mjs` as `CONSTANT name="config"`; defer a `DEFAULT_EXPORT` kind as a scoped follow-up |
 | Merge semantics for plan-declared vs convention need bespoke logic | `_SOURCE_PRECEDENCE` (`forward_manifest_extractor.py:63-69`) already orders sources (human-yaml > proto/reference > deterministic > source-AST); slot framework defaults at **"deterministic"** tier and plan-declared overrides win for free | **FR-6** simplifies to "slot at deterministic precedence"; OQ-7 resolved |
 | Path-pattern registry needs new design | Mirror `path_language_hints_from_file_specs` (`forward_manifest.py:748`) | OQ-8 resolved |
@@ -34,7 +34,7 @@
 - **OQ-1 → P0**, via appending to `prioritized` at `spec_builder.py:1113-1139` end.
 - **OQ-2 → No `task_id` derivation needed;** `target_files` from `context` is sufficient.
 - **OQ-3 → YAML template + `format_kwargs`** (one new placeholder + one kwarg).
-- **OQ-4 → Reviewer enforces the same `ForwardFileSpec`/`InterfaceContract`.** ⚠ **Corrected (R2-F1):** single-source is **not** guaranteed via a phantom `validate_implementation()` (it never existed; enforcement was dormant). It is guaranteed by the repaired `_validate_against_manifest` → `_validate_file_spec` path that consumes the same `ForwardFileSpec.elements[]`. See FR-3.
+- **OQ-4 → Reviewer enforces the same `ForwardFileSpec`/`InterfaceContract`.** ⚠ **Corrected (R2-F1) → implemented (R2-F2):** the original `validate_implementation()` was a phantom (dormant no-op). It is now a **real** method on `ForwardManifest` — single-source by construction (the reviewer calls it; it validates the same `ForwardFileSpec.elements[]` and task-scoped `InterfaceContract`s). See FR-3.
 - **OQ-5 → Use `CONSTANT name="config"`** for `next.config.mjs`; do not stretch scope by adding a new `ElementKind`.
 - **OQ-6 → Starter set (pinned per R1-S3 / R1-F7):** `next.config.{js,mjs,ts}`, `tsconfig.json`, `package.json`, `prisma/schema.prisma`, `vite.config.{js,ts,mjs,cjs}`, `jest.config.{js,ts,mjs,cjs,json}`, `tailwind.config.{js,ts,mjs,cjs}`.
 - **OQ-7 → `_SOURCE_PRECEDENCE` already handles merge** — framework defaults at "deterministic" tier; plan-declared wins.
@@ -105,45 +105,54 @@ Fix 1 alone improves any feature whose plan **does** declare elements. Fix 1 + F
 
   The structured shape is the postmortem classifier's hook (Fix 3 — out of scope here
   but consumes this event).
-- **FR-3 Single-source contract + enforcement-symmetry acceptance criterion (R1-F1;
-  corrected R2-F1).** The contract `spec_builder` injects MUST be the **same contract**
-  `reviewer.py` enforces post-hoc — so the drafter sees what it will be reviewed against,
-  end-to-end.
+- **FR-3 Single-source contract via a real `validate_implementation()` method (R1-F1;
+  R2-F1 phantom-API correction; R2-F2 implementation).** The contract `spec_builder`
+  injects MUST be the **same contract** `reviewer.py` enforces post-hoc — so the drafter
+  sees what it will be reviewed against, end-to-end. This is now realized by a real,
+  canonical method **on the manifest itself**: `ForwardManifest.validate_implementation()`.
 
-  **⚠ Correction (R2-F1 — phantom API).** The v0.2 planning discovery (see §0 row 4 and
-  OQ-4) asserted that `reviewer.py:270` invokes `forward_manifest.validate_implementation()`
-  on the same `ForwardManifest`, and declared FR-3 *"satisfied by construction."* **That
-  method never existed.** The call was a dormant
-  `getattr(forward_manifest, "validate_implementation", None)` that **always returned
-  `None`**, so `_validate_against_manifest` returned `[]` unconditionally — post-hoc
-  contract enforcement was a **no-op**. This was the *deeper* RUN_003 cause: not merely
-  "the drafter is blind at draft time" but "the contract was never actually enforced at
-  review time either." The planning pass mis-read the dormant `getattr` as a live call.
+  **History (R2-F1 — phantom API, now closed).** The v0.2 planning discovery (see §0 row 4
+  and OQ-4) asserted that `reviewer.py:270` invokes
+  `forward_manifest.validate_implementation()` and declared FR-3 *"satisfied by
+  construction."* That method **never existed** — the call was a dormant
+  `getattr(forward_manifest, "validate_implementation", None)` returning `None`, so post-hoc
+  enforcement was a silent **no-op** (the deeper RUN_003 cause). An interim repair
+  (`a9210da8`/`1d03be02`) wired a single-file, file-specs-only validator into
+  `reviewer._validate_against_manifest`. **R2-F2 closes the gap fully** by making the
+  originally-specified method real and complete.
 
-  **Real, repaired enforcement path (commit `a9210da8`).** `reviewer._validate_against_manifest`
-  builds a **single-file `ManifestRegistry`** from the drafted code and runs the real
-  per-file validator `forward_manifest_validator._validate_file_spec(rel, spec, registry)`
-  for each target file. There is no `validate_implementation()` method anywhere in the
-  codebase.
+  **Real method — `ForwardManifest.validate_implementation(implementation, target_files,
+  *, task_id=None, include_contracts=True) -> List[ContractViolation]`.** It:
+  1. Accepts a single drafted blob **or** a `{path: source}` mapping, and splits a
+     multi-file blob via `extract_multi_file_code` (the lead-contractor pattern).
+  2. Builds a Python `ManifestRegistry` via `generate_file_manifest(source=…)` — **no temp
+     files** — skipping files that fail to parse (a syntax error is caught separately and
+     must not masquerade as `missing_element`).
+  3. Runs the complete `forward_manifest_validator.validate_forward_manifest` over a
+     **scoped** sub-manifest: `file_specs` ∩ `target_files` (Python only), and — when a
+     `task_id` is supplied — interface **contracts** scoped via `contracts_for_task`
+     (function/class/import/formula). This is the first time the post-hoc path enforces
+     `contracts`, not just element specs.
+  `reviewer._validate_against_manifest` is now a thin adapter that calls this method and maps
+  `ContractViolation` → the review's dict shape; `review_draft`/`engine.py` thread `task_id`
+  (from `request.context`).
 
-  **Enforcement scope (commit `1d03be02`).** Because `review_draft` receives a single
-  `implementation` string (one drafted blob), post-hoc enforcement is **Python-files-only
-  and single-target**: when >1 Python target file is in scope, the blob cannot be
-  attributed to one file, so per-file validation **degrades to a no-op** rather than emit
-  cross-file false `missing_element` violations. Non-`.py` files and any parse error also
-  degrade to `[]`. *This asymmetry is intentional but must be stated:* draft-time injection
-  (FR-1) covers **all** target files, while review-time enforcement covers **one Python
-  file per review**. Closing that gap (multi-file post-hoc enforcement) requires
-  `review_draft` to carry per-file implementations and is tracked as a follow-up, not part
-  of this capability.
+  **Enforcement scope (stated precisely).** Element-level `file_specs` validation now covers
+  **all Python target files** of a draft (multi-file, attributed per file — no cross-file
+  false positives). Interface **contracts** are enforced when a `task_id` is available;
+  without one, contracts are **skipped** (the relevant subset can't be determined safely, and
+  validating project-wide against a single draft's registry would false-flag symbols defined
+  in undrafted files). **Non-Python files** are not element-validated (the structural
+  validator is Python-AST-based) — config-file *shape* is still guided at draft time by FR-1/
+  FR-5; runtime element enforcement for JS/TS configs is a separate (non-AST) follow-up.
 
-  **Acceptance criterion:** the (kind, name) tuples rendered into the forward-manifest
-  section for a given target file MUST be shape-equivalent to those
-  `_validate_file_spec` consumes from `ForwardFileSpec.elements[]` for the same file.
-  Validated by a unit test that exercises `_validate_against_manifest` against a **real**
-  `ForwardManifest` (e.g. `tests/unit/implementation_engine/test_reviewer.py` — a present
-  element yields zero violations; an absent one yields a `missing_*` violation). The
-  contract is asserted by execution, **not** against the phantom `validate_implementation()`.
+  **Acceptance criterion:** (a) a present element yields zero violations and an absent one a
+  `missing_*` violation, asserted against a **real** `ForwardManifest`
+  (`test_reviewer.py`); (b) a two-Python-file blob validates each file's spec independently
+  and attributes a violation to the correct file (no cross-file false positive); (c) a
+  `task_id`-scoped `function_name` contract is enforced and is skipped without a `task_id`;
+  (d) non-`.py` files and parse-error files degrade to `[]`
+  (`tests/unit/test_forward_manifest_validate_implementation.py`). Asserted by execution.
 - **FR-4 Token budget respected.** Adding the P0 section MUST stay within
   `TOTAL_SPEC_BUDGET_TOKENS` (4096). On budget pressure, lower-priority (P1–P3) sections
   are pruned, not P0. *(Assumption: `budget.enforce_prompt_budget` already does
@@ -312,13 +321,24 @@ v1.1.*
 **FR-3's "single-source contract" was built on a phantom API.** The v0.2 planning pass
 mis-read a dormant `getattr(forward_manifest, "validate_implementation", None)` as a live
 method call and declared FR-3 "satisfied by construction"; the method never existed and
-post-hoc enforcement was a no-op (the deeper RUN_003 cause). FR-3 rewritten to the real
-`_validate_against_manifest` → `_validate_file_spec` path, with the single-blob /
-Python-only enforcement-scope limitation stated. §0 row 4 + OQ-4 marked superseded. The
-paired plan's `t-validate-impl-read` (a PR-blocking gate to read the phantom method body)
-and `t-contract-symmetry` (asserting `validate_implementation(synth) == []`) are
-**obsolete** — see plan correction note. Dispositions in Appendix A / round R2 in
-Appendix C.*
+post-hoc enforcement was a no-op (the deeper RUN_003 cause). FR-3 rewritten; §0 row 4 +
+OQ-4 marked superseded. Dispositions in Appendix A / round R2 in Appendix C.*
+
+*v0.5 — FR-3 gap fully closed (R2-F2). The phantom is now **real**:
+`ForwardManifest.validate_implementation(implementation, target_files, *, task_id,
+include_contracts)` is implemented as the canonical single-source enforcement method —
+splits multi-file blobs (`extract_multi_file_code`), builds a Python `ManifestRegistry`
+(`generate_file_manifest(source=…)`, no temp files, parse-error files skipped), and runs
+the complete `validate_forward_manifest` over a scoped sub-manifest (file_specs ∩
+target_files; contracts via `contracts_for_task` when a `task_id` is supplied).
+`reviewer._validate_against_manifest` is now a thin adapter; `review_draft`/`engine.py`
+thread `task_id`. This closes three gaps at once: phantom→real, single-file→multi-file,
+file_specs-only→**+interface contracts**. New tests:
+`tests/unit/test_forward_manifest_validate_implementation.py` (12) +
+`test_reviewer.py::test_flcm_contract_validation_detects_missing_element` (real manifest).
+The plan's `t-validate-impl-read` / `t-contract-symmetry` remain obsolete as written (they
+target the phantom signature), but the real method's behavior is now covered by the tests
+above.*
 
 ---
 
@@ -346,7 +366,8 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R1-F6 | FR-6 should specify per-element merge vs full-source override granularity | R1 / claude-opus-4-7-1m | Applied to **FR-6**: full-source override (no per-element merge in MVP); also pinned deterministic-empty vs convention-non-empty collision rule (convention wins) — pairs with R1-S4. | 2026-05-29 |
 | R1-F7 | Resolve Tailwind inconsistency between FR-7 prose and OQ-6 starter set | R1 / claude-opus-4-7-1m | Applied to **FR-7** + **OQ-6**: Tailwind kept in scope; `tailwind.config.{js,ts,mjs,cjs}` added to the pinned starter set. Modeled per the FR-5 pure-default-export rule. | 2026-05-29 |
 | R1-F8 | Split FR-9 into FR-9a and FR-9b so failures attribute cleanly to Fix 1 vs Fix 2 | R1 / claude-opus-4-7-1m | Applied to **FR-9**: split into FR-9a (Fix 1 active) and FR-9b (Fix 2 active). Independent runnability supports FR-10's independent shippability per increment. | 2026-05-29 |
-| R2-F1 | Correct FR-3: `forward_manifest.validate_implementation()` is a phantom method — post-hoc enforcement was a dormant no-op (`getattr(..., None)` → `None` → `[]`). Rewrite FR-3 to the real `_validate_against_manifest` → `_validate_file_spec` path; state the single-blob / Python-only enforcement scope. | R2 / opus-4.8-1m (impl-vs-req audit) | Applied to **FR-3** (rewritten), **§0 row 4** + **OQ-4** (superseded). Real path verified in code (commits `a9210da8`, `1d03be02`); `grep validate_implementation` finds it only in the explanatory comment. Paired plan tasks `t-validate-impl-read` / `t-contract-symmetry` flagged obsolete. | 2026-05-30 |
+| R2-F1 | Correct FR-3: `forward_manifest.validate_implementation()` is a phantom method — post-hoc enforcement was a dormant no-op (`getattr(..., None)` → `None` → `[]`). Rewrite FR-3 to the real `_validate_against_manifest` → `_validate_file_spec` path; state the single-blob / Python-only enforcement scope. | R2 / opus-4.8-1m (impl-vs-req audit) | Applied to **FR-3** (rewritten), **§0 row 4** + **OQ-4** (superseded). Real path verified in code (commits `a9210da8`, `1d03be02`). Paired plan tasks `t-validate-impl-read` / `t-contract-symmetry` flagged obsolete. | 2026-05-30 |
+| R2-F2 | Fully close the FR-3 gap: make the originally-specified `ForwardManifest.validate_implementation()` **real** rather than documenting it away — multi-file split, Python registry (no temp files, skip parse-error files), and `validate_forward_manifest` over a scoped sub-manifest (file_specs ∩ target_files + task-scoped contracts). Rewire the reviewer as a thin adapter; thread `task_id`. | R2 / opus-4.8-1m | **Implemented** in `forward_manifest.py` (method), `reviewer.py` (adapter + `task_id`), `engine.py` (`task_id` from context). Closes phantom→real, single→multi-file, +contracts. Tests: `test_forward_manifest_validate_implementation.py` (12) + real-manifest reviewer test. | 2026-05-30 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -438,6 +459,7 @@ Topics that subsequent rounds should **not** re-litigate without new information
 | ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
 | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
 | R2-F1 | Validation | high | Rewrite FR-3 to remove every reference to the phantom `validate_implementation()`; describe the real `_validate_against_manifest` → `_validate_file_spec` single-file-`ManifestRegistry` path; state the single-blob / Python-only enforcement scope explicitly; re-point the acceptance criterion at the real `test_reviewer.py` test. Mark §0 row 4 and OQ-4 superseded. Flag the paired plan's `t-validate-impl-read` / `t-contract-symmetry` as obsolete. | A requirement and a PR-blocking plan gate built on a non-existent API cannot be satisfied as written, and they conceal that enforcement was dormant. The spec must describe the code that actually ships. | FR-3, §0, OQ-4, plan note | Code: `grep validate_implementation` finds only the comment; `test_reviewer.py` exercises the real path. |
+| R2-F2 | Architecture | high | Rather than only documenting the phantom away, **fully close the gap**: implement the originally-specified `ForwardManifest.validate_implementation()` as the canonical single-source enforcement method (multi-file split via `extract_multi_file_code`, Python `ManifestRegistry` with parse-error files skipped, `validate_forward_manifest` over a scoped sub-manifest = file_specs ∩ target_files + task-scoped contracts). Rewire `_validate_against_manifest` as a thin adapter; thread `task_id` through `review_draft`/`engine.py`. This removes the single-file-only and contracts-not-validated limitations the interim repair carried. | The user-facing value of FR-3 is *enforcement that matches what the drafter saw*. The interim repair enforced only single-file element specs; multi-file drafts and interface contracts went unchecked. A real method on the manifest (where the contract lives) is true single-source and unlocks multi-file + contract enforcement. | FR-3, `forward_manifest.py`, `reviewer.py`, `engine.py` | `test_forward_manifest_validate_implementation.py`: multi-file per-file attribution, contract scoping by `task_id`, non-py/parse-error degrade-to-empty; reviewer test uses a real manifest. |
 
 **Endorsements**: (none.)
-**Disagreements**: (none.)
+**Disagreements**: (none.) R2-F2 supersedes the "tracked as a follow-up" note in R2-F1's FR-3 text — the multi-file gap it deferred is now closed in the same pass.

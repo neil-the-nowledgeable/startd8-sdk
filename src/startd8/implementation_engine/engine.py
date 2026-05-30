@@ -183,6 +183,8 @@ class DefaultImplementationEngine:
                     # FLCM contract validation
                     forward_manifest=request.context.get("forward_manifest"),
                     target_files=request.target_files,
+                    # Scopes interface-contract validation (FR-3); None -> file_specs only.
+                    task_id=request.context.get("task_id"),
                     context=request.context,
                 )
                 result.reviews.append(review)

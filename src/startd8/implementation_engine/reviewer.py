@@ -256,80 +256,42 @@ def _validate_against_manifest(
     forward_manifest: Any,
     implementation: str,
     target_files: Optional[List[str]] = None,
+    task_id: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """Run post-generation contract validation against the ForwardManifest.
 
-    FR-3 repair (RUN_003): the previous implementation looked up a
-    ``validate_implementation`` method that never existed on ``ForwardManifest``
-    (``getattr(..., None)`` always returned ``None`` -> dormant enforcement).
-    This builds a single-file ``ManifestRegistry`` from the drafted code and
-    runs the real per-file validator (``_validate_file_spec``) for each target
-    file, scoped to ``target_files`` to avoid project-wide false positives.
-    Python files only; other languages and any parse error degrade gracefully
-    to an empty list.
+    Thin adapter over the single canonical enforcement path,
+    :meth:`ForwardManifest.validate_implementation` (FR-3) — the drafter is shown this
+    manifest's contracts at draft time (``spec_builder``), and this method enforces the
+    same manifest at review time, so producer and consumer cannot drift. (Historically
+    ``validate_implementation`` was *referenced* here but never existed; the ``getattr``
+    returned ``None`` and enforcement was dormant. It is now real and validates **multiple
+    Python files** plus task-scoped interface **contracts**, not just single-file element
+    specs.)
+
+    Maps the returned ``ContractViolation`` objects to the dict shape the review consumes.
+    Degrades gracefully to ``[]`` on any error (missing method, import failure, parse error).
     """
     try:
-        if not hasattr(forward_manifest, "contracts"):
+        validate = getattr(forward_manifest, "validate_implementation", None)
+        if not callable(validate):
             return []
-        file_specs = getattr(forward_manifest, "file_specs", None)
-        if not file_specs:
-            return []
-
-        import tempfile
-        from pathlib import Path as _Path
-
-        from startd8.forward_manifest_validator import _validate_file_spec
-        from startd8.utils.code_manifest import generate_file_manifest
-        from startd8.utils.manifest_registry import ManifestRegistry
-
-        # Scope to the files this draft produced; fall back to all specs.
-        scoped = [p for p in (target_files or []) if p in file_specs]
-        if not scoped:
-            scoped = list(file_specs.keys())
-
-        # The structural validator parses Python ASTs only, and ``implementation`` is a
-        # single drafted blob — it can be attributed to at most one file. With more than
-        # one Python spec in scope we cannot tell which file the blob is, so validating
-        # every spec against the same blob would emit false ``missing_element`` BLOCKING
-        # violations for the other files. Degrade to a no-op rather than fail the review
-        # incorrectly (consistent with the graceful-degradation contract above).
-        py_scoped = [
-            p for p in scoped if str(p).endswith(".py") and file_specs.get(p) is not None
+        violations = validate(
+            implementation,
+            target_files=target_files,
+            task_id=task_id,
+            include_contracts=task_id is not None,
+        )
+        return [
+            {
+                "severity": getattr(v, "severity", "warning"),
+                "violation_type": getattr(v, "violation_type", "unknown"),
+                "contract_id": getattr(v, "contract_id", ""),
+                "expected": getattr(v, "expected", ""),
+                "actual": getattr(v, "actual", "") or "",
+            }
+            for v in (violations or [])
         ]
-        if len(py_scoped) > 1:
-            logger.debug(
-                "FLCM: %d Python files in scope for a single implementation blob; "
-                "skipping per-file validation to avoid cross-file false positives",
-                len(py_scoped),
-            )
-            return []
-
-        out: List[Dict[str, str]] = []
-        with tempfile.TemporaryDirectory() as _td:
-            tdir = _Path(_td)
-            for rel in py_scoped:
-                spec = file_specs[rel]
-                abs_path = tdir / _Path(rel).name
-                try:
-                    abs_path.write_text(implementation)
-                    file_manifest = generate_file_manifest(abs_path, tdir)
-                except Exception as exc:  # noqa: BLE001 - degrade gracefully
-                    logger.debug(
-                        "FLCM: could not build manifest for %s: %s", rel, exc
-                    )
-                    continue
-                registry = ManifestRegistry({rel: file_manifest})
-                for v in _validate_file_spec(rel, spec, registry):
-                    out.append(
-                        {
-                            "severity": getattr(v, "severity", "warning"),
-                            "violation_type": getattr(v, "violation_type", "unknown"),
-                            "contract_id": getattr(v, "contract_id", ""),
-                            "expected": getattr(v, "expected", ""),
-                            "actual": getattr(v, "actual", "") or "",
-                        }
-                    )
-        return out
     except (ImportError, ModuleNotFoundError) as exc:
         logger.debug(
             "FLCM contract validation not available: %s", exc,
@@ -523,6 +485,8 @@ def review_draft(
     # FLCM contract validation
     forward_manifest: Any = None,
     target_files: Optional[List[str]] = None,
+    # Task id scopes interface-contract validation (FR-3); None -> file_specs only.
+    task_id: Optional[str] = None,
     # Full context dict (for supplementary sections)
     context: Optional[Dict[str, Any]] = None,
     # CR-C2: Machine-readable constraints from spec for enforcement
@@ -679,7 +643,7 @@ def review_draft(
     # FLCM contract validation (post-generation, optional)
     if forward_manifest:
         violations = _validate_against_manifest(
-            forward_manifest, implementation, target_files,
+            forward_manifest, implementation, target_files, task_id,
         )
         error_violations = [
             v for v in violations

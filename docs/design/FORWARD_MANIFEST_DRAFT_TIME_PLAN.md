@@ -1,21 +1,24 @@
 # Forward Manifest at Draft Time — Implementation Plan
 
-**Version:** 1.2 (R2 impl-audit correction — phantom-API tasks obsoleted)
+**Version:** 1.3 (R2 impl-audit + FR-3 method implemented)
 **Date:** 2026-05-30
-**Pairs with:** `FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS.md` (v0.4)
+**Pairs with:** `FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS.md` (v0.5)
 
-> **⚠ R2 correction (2026-05-30).** This plan is load-bearing on a method that does not
-> exist: `forward_manifest.validate_implementation()` (referenced in §1 row "Reviewer's
-> contract enforcement", §2/§3 prose, and tasks **`t-validate-impl-read`** and
-> **`t-contract-symmetry`**). It never existed — `reviewer.py:270`'s
+> **⚠ R2 correction (2026-05-30) → CLOSED.** This plan was load-bearing on a method that
+> *did not exist* when written: `forward_manifest.validate_implementation()` (referenced in
+> §1 row "Reviewer's contract enforcement", §2/§3 prose, and tasks **`t-validate-impl-read`**
+> and **`t-contract-symmetry`**). `reviewer.py:270`'s
 > `getattr(forward_manifest, "validate_implementation", None)` always returned `None`, so
-> enforcement was a dormant no-op. The shipped repair (commits `a9210da8`, `1d03be02`) uses
-> `_validate_against_manifest` → `forward_manifest_validator._validate_file_spec` over a
-> single-file `ManifestRegistry`, Python-only and single-target. **Tasks
-> `t-validate-impl-read` (the PR-blocking "read the method body" gate) and
-> `t-contract-symmetry` (asserting `validate_implementation(synth) == []`) are OBSOLETE** —
-> the real symmetry test lives in `tests/unit/implementation_engine/test_reviewer.py`. See
-> REQUIREMENTS FR-3 (rewritten) and Appendix C round R2.
+> enforcement was a dormant no-op. **As of 2026-05-30 the method is now REAL** (REQUIREMENTS
+> R2-F2): `ForwardManifest.validate_implementation(implementation, target_files, *, task_id,
+> include_contracts)` splits multi-file blobs, builds a Python `ManifestRegistry`, and runs
+> `validate_forward_manifest` over a scoped sub-manifest (file_specs + task-scoped contracts);
+> `reviewer._validate_against_manifest` is a thin adapter over it.
+> **Tasks `t-validate-impl-read` (a PR-blocking "read the method body" gate) and
+> `t-contract-symmetry` are obsolete *as written*** (they targeted the phantom signature and a
+> body that didn't exist); their *intent* — verify single-source enforcement by execution — is
+> now satisfied by `tests/unit/test_forward_manifest_validate_implementation.py` and the
+> real-manifest `test_reviewer.py` case. See REQUIREMENTS FR-3 (rewritten) and Appendix C R2.
 
 Grounded in a deep read of `spec_builder.py`, `forward_manifest.py`,
 `forward_manifest_extractor.py`, and `reviewer.py`. The headline finding from planning:

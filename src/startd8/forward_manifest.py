@@ -515,6 +515,126 @@ class ForwardManifest(BaseModel):
         """
         return Counter(c.category for c in self.contracts)
 
+    def validate_implementation(
+        self,
+        implementation,
+        target_files=None,
+        *,
+        task_id=None,
+        include_contracts=True,
+    ):
+        """Validate drafted code against this manifest's specs and contracts (FR-3).
+
+        This is the **single canonical** post-generation enforcement path: the same
+        ``ForwardManifest`` the drafter is shown at draft time (``spec_builder``) is the
+        one whose ``validate_implementation`` the reviewer calls — so the drafter sees
+        exactly what it will be reviewed against. (Historically this method was *referenced*
+        by ``reviewer.py`` but never existed; the ``getattr`` returned ``None`` and
+        enforcement was dormant — see ``FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS.md`` FR-3.)
+
+        Splits a multi-file implementation blob into per-file code, builds a Python
+        :class:`ManifestRegistry`, and runs the structural validator over a **scoped**
+        sub-manifest so a single-draft review never false-flags files it did not produce:
+
+        * ``file_specs`` are scoped to ``target_files`` and to **Python** files that parse
+          (the structural validator is AST-based; non-``.py`` files degrade to no-op rather
+          than emit spurious ``missing_element`` violations).
+        * ``contracts`` are validated only when ``include_contracts`` and a ``task_id`` is
+          given (scoped via :meth:`contracts_for_task`); without a ``task_id`` the relevant
+          contract subset cannot be determined safely, so contracts are skipped rather than
+          validated project-wide against a single draft's registry (which would false-flag
+          symbols defined in undrafted files).
+
+        Args:
+            implementation: Either a single drafted code string, or a mapping of
+                ``relative_path -> source`` for an already-split multi-file draft.
+            target_files: The relative paths this draft produced. Required to attribute a
+                single ``str`` blob to file specs; with multiple files the blob is split via
+                :func:`extract_multi_file_code`.
+            task_id: When provided, scopes contract validation to contracts applicable to
+                this task (:meth:`contracts_for_task`).
+            include_contracts: Set ``False`` to validate ``file_specs`` only.
+
+        Returns:
+            List of ``ContractViolation`` (the validator's dataclass; field-identical to
+            :class:`ContractViolation` here). Empty on a fully-compliant draft, on a parse
+            failure, or when there is nothing in scope to validate.
+        """
+        from pathlib import Path as _Path
+
+        from startd8.forward_manifest_validator import validate_forward_manifest
+        from startd8.utils.code_manifest import generate_file_manifest
+        from startd8.utils.manifest_registry import ManifestRegistry
+
+        # 1. Resolve per-file source. A dict is taken as-is; a str is split by target_files.
+        if isinstance(implementation, dict):
+            per_file = dict(implementation)
+        else:
+            files = list(target_files or [])
+            if not files:
+                # A bare blob with no target files cannot be attributed to a spec.
+                return []
+            if len(files) == 1:
+                per_file = {files[0]: implementation}
+            else:
+                from startd8.utils.code_extraction import extract_multi_file_code
+
+                per_file = extract_multi_file_code(implementation, files)
+                # Single unmatched file fallback (mirrors the lead-contractor path).
+                if not per_file and len(files) == 1:
+                    per_file = {files[0]: implementation}
+
+        # 2. Build a Python registry (AST-based). Non-.py files are skipped: the structural
+        #    validator parses Python only, so including them would yield false violations.
+        manifests = {}
+        for rel_path, src in per_file.items():
+            if not str(rel_path).endswith(".py") or src is None:
+                continue
+            try:
+                fm = generate_file_manifest(
+                    file_path=rel_path, project_root=_Path("."), source=src,
+                )
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully per file
+                logger.debug(
+                    "validate_implementation: could not build manifest for %s: %s",
+                    rel_path, exc,
+                )
+                continue
+            # A file that failed to parse has empty elements + populated errors;
+            # validating its spec would emit misleading ``missing_element`` violations
+            # for what is really a syntax error (caught separately by the reviewer).
+            if getattr(fm, "errors", None):
+                logger.debug(
+                    "validate_implementation: skipping %s (parse errors: %s)",
+                    rel_path, fm.errors,
+                )
+                continue
+            manifests[rel_path] = fm
+        if not manifests:
+            return []
+        registry = ManifestRegistry(manifests=manifests)
+
+        # 3. Scope the manifest to what this draft actually produced.
+        scope = set(target_files) if target_files else None
+        scoped_specs = {
+            path: spec
+            for path, spec in self.file_specs.items()
+            if path in manifests and (scope is None or path in scope)
+        }
+        if include_contracts and task_id is not None:
+            scoped_contracts = self.contracts_for_task(task_id)
+        else:
+            scoped_contracts = []
+
+        if not scoped_specs and not scoped_contracts:
+            return []
+
+        scoped_manifest = ForwardManifest(
+            file_specs=scoped_specs,
+            contracts=scoped_contracts,
+        )
+        return validate_forward_manifest(scoped_manifest, registry)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ContractViolation (plain dataclass, not Pydantic)
