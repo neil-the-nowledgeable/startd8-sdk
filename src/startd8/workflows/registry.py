@@ -16,6 +16,17 @@ from ..exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
+# Transient legacy workflow-id aliases (FR-4 / R2-F3, lead-contractor removal).
+# Resolves pre-existing stored state / external lookups that still key on the old
+# "lead-contractor" id onto the canonical "primary-contractor" id. This is a
+# migration-window shim ONLY — NOT a deprecation-warning emitter (OQ-4) — and is
+# removed in the same effort once internal consumers (FR-6) re-emit on the new id.
+# Keys/values MUST be lowercase (lookups are lowercased before normalization).
+_LEGACY_WORKFLOW_ID_ALIASES: Dict[str, str] = {
+    "lead-contractor": "primary-contractor",
+    "lead-contractor-contextcore": "primary-contractor-contextcore",
+}
+
 
 class WorkflowRegistry:
     """
@@ -309,7 +320,11 @@ class WorkflowRegistry:
                 result = workflow.run(config)
         """
         cls.discover()
-        return cls._workflows.get(workflow_id.lower())
+        normalized = workflow_id.lower()
+        # Transient legacy-id resolution (FR-4 / R2-F3): map old ids onto canonical
+        # ones so stored state / external callers still resolve during the migration.
+        normalized = _LEGACY_WORKFLOW_ID_ALIASES.get(normalized, normalized)
+        return cls._workflows.get(normalized)
 
     @classmethod
     def list_workflows(cls) -> List[str]:

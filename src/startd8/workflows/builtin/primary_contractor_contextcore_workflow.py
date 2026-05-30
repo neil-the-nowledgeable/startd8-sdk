@@ -303,7 +303,7 @@ class PrimaryContractorContextCoreWorkflow(PrimaryContractorWorkflow):
         ]
 
         return WorkflowMetadata(
-            workflow_id="lead-contractor-contextcore",
+            workflow_id="primary-contractor-contextcore",
             name="Primary Contractor with ContextCore Tracking",
             description="Cost-efficient multi-agent pattern with integrated task-as-spans tracking",
             version="1.0.0",

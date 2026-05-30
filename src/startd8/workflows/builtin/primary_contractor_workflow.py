@@ -218,7 +218,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
     @property
     def metadata(self) -> WorkflowMetadata:
         return WorkflowMetadata(
-            workflow_id="lead-contractor",
+            workflow_id="primary-contractor",
             name="Primary Contractor Workflow",  # alias: "Lead Contractor Workflow"
             description="Cost-efficient multi-agent pattern: Claude specs/reviews, cheaper models draft",
             version="1.0.0",

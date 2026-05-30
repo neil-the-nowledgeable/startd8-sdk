@@ -161,7 +161,7 @@ class TestMetadata:
     def test_workflow_id(self):
         """Test workflow ID is correct."""
         workflow = LeadContractorWorkflow()
-        assert workflow.metadata.workflow_id == "lead-contractor"
+        assert workflow.metadata.workflow_id == "primary-contractor"
 
     def test_capabilities(self):
         """Test workflow capabilities."""
@@ -1018,7 +1018,7 @@ class TestWorkflowExecution:
         )
 
         assert result.success is True
-        assert result.workflow_id == "lead-contractor"
+        assert result.workflow_id == "primary-contractor"
         assert "lead_cost" in result.metadata
         assert "drafter_cost" in result.metadata
 

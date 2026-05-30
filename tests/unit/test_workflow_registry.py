@@ -191,6 +191,33 @@ class TestWorkflowRegistry:
         assert WorkflowRegistry.get_workflow("myworkflow") is not None
         assert WorkflowRegistry.get_workflow("MYWORKFLOW") is not None
 
+    def test_legacy_lead_contractor_id_resolves_to_primary(self):
+        """FR-4 / R1-F4: the transient legacy-id alias resolves the old
+        'lead-contractor' id onto the canonical 'primary-contractor' workflow
+        while the alias is live, without emitting a deprecation warning (OQ-4)."""
+        import warnings
+
+        # Stand in for the real PrimaryContractor workflows registered under the
+        # canonical ids (the registry is cleared in setup_method).
+        WorkflowRegistry.register(MockWorkflow("primary-contractor"))
+        WorkflowRegistry.register(MockWorkflow("primary-contractor-contextcore"))
+
+        # Native lookups resolve.
+        assert WorkflowRegistry.get_workflow("primary-contractor") is not None
+
+        # Legacy ids resolve to the SAME (canonical) workflow...
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # no DeprecationWarning may be raised
+            legacy = WorkflowRegistry.get_workflow("lead-contractor")
+            legacy_cc = WorkflowRegistry.get_workflow("lead-contractor-contextcore")
+        assert legacy is not None
+        assert legacy_cc is not None
+        # ...and the resolved workflow reports the CANONICAL id, not the legacy one.
+        assert legacy.metadata.workflow_id == "primary-contractor"
+        assert legacy_cc.metadata.workflow_id == "primary-contractor-contextcore"
+        # Case-insensitive on the legacy id too.
+        assert WorkflowRegistry.get_workflow("Lead-Contractor") is not None
+
 
 class SearchableWorkflow(WorkflowBase):
     """Workflow with specific capabilities/tags for search testing."""
