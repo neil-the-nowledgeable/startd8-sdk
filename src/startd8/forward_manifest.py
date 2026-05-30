@@ -532,13 +532,16 @@ class ForwardManifest(BaseModel):
         by ``reviewer.py`` but never existed; the ``getattr`` returned ``None`` and
         enforcement was dormant — see ``FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS.md`` FR-3.)
 
-        Splits a multi-file implementation blob into per-file code, builds a Python
-        :class:`ManifestRegistry`, and runs the structural validator over a **scoped**
+        Splits a multi-file implementation blob into per-file code, builds a multi-language
+        :class:`ManifestRegistry` via ``build_multilang_file_manifest`` (MULTILANG FR-6 —
+        Python/C#/Java/Go/Node/Vue), and runs the structural validator over a **scoped**
         sub-manifest so a single-draft review never false-flags files it did not produce:
 
-        * ``file_specs`` are scoped to ``target_files`` and to **Python** files that parse
-          (the structural validator is AST-based; non-``.py`` files degrade to no-op rather
-          than emit spurious ``missing_element`` violations).
+        * ``file_specs`` are scoped to ``target_files`` and to files whose language has an
+          element extractor and that parse cleanly. Severity is **tier-calibrated** (FR-5):
+          authoritative parsers (Python AST / C# tree-sitter / Java javalang) emit ``error``;
+          advisory regex parsers (Go / Node / Vue) emit ``warning`` (a regex blind spot never
+          blocks). Unsupported languages and parse-failed files degrade to no-op.
         * ``contracts`` are validated only when ``include_contracts`` and a ``task_id`` is
           given (scoped via :meth:`contracts_for_task`); without a ``task_id`` the relevant
           contract subset cannot be determined safely, so contracts are skipped rather than
@@ -560,10 +563,8 @@ class ForwardManifest(BaseModel):
             :class:`ContractViolation` here). Empty on a fully-compliant draft, on a parse
             failure, or when there is nothing in scope to validate.
         """
-        from pathlib import Path as _Path
-
         from startd8.forward_manifest_validator import validate_forward_manifest
-        from startd8.utils.code_manifest import generate_file_manifest
+        from startd8.languages.manifest_adapter import build_multilang_file_manifest
         from startd8.utils.manifest_registry import ManifestRegistry
 
         # 1. Resolve per-file source. A dict is taken as-is; a str is split by target_files.
@@ -584,25 +585,29 @@ class ForwardManifest(BaseModel):
                 if not per_file and len(files) == 1:
                     per_file = {files[0]: implementation}
 
-        # 2. Build a Python registry (AST-based). Non-.py files are skipped: the structural
-        #    validator parses Python only, so including them would yield false violations.
+        # 2. Build a registry via the multi-language builder (MULTILANG FR-6): Python uses the
+        #    AST path unchanged; C#/Java (authoritative) and Go/Node/Vue (advisory) use their
+        #    adapters; the builder stamps ``parser_tier`` so ``_validate_file_spec`` calibrates
+        #    severity (advisory misses → ``warning``, never blocking — FR-5). A file is skipped
+        #    when: src is None; the language is unsupported (``parser_tier is None`` — preserves
+        #    the legacy no-op so an unhandled language never false-flags every spec element); or
+        #    the file failed to parse (Python populates ``errors`` — a syntax error must not
+        #    masquerade as ``missing_element``; it is caught separately by the reviewer).
         manifests = {}
         for rel_path, src in per_file.items():
-            if not str(rel_path).endswith(".py") or src is None:
+            if src is None:
                 continue
             try:
-                fm = generate_file_manifest(
-                    file_path=rel_path, project_root=_Path("."), source=src,
-                )
+                fm = build_multilang_file_manifest(rel_path, src)
             except Exception as exc:  # noqa: BLE001 - degrade gracefully per file
                 logger.debug(
                     "validate_implementation: could not build manifest for %s: %s",
                     rel_path, exc,
                 )
                 continue
-            # A file that failed to parse has empty elements + populated errors;
-            # validating its spec would emit misleading ``missing_element`` violations
-            # for what is really a syntax error (caught separately by the reviewer).
+            if getattr(fm, "parser_tier", None) is None:
+                # Unsupported language (no element extractor) — skip, as the Python-only path did.
+                continue
             if getattr(fm, "errors", None):
                 logger.debug(
                     "validate_implementation: skipping %s (parse errors: %s)",

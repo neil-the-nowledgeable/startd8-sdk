@@ -77,15 +77,19 @@ class TestFileSpecValidation:
         fm = ForwardManifest(file_specs={"mod.py": _spec("mod.py", "EXPECTED")})
         assert fm.validate_implementation("x = 1\n") == []
 
-    def test_non_python_file_skipped(self):
-        """The structural validator is Python-AST-based; non-.py files degrade to no-op."""
+    def test_non_python_supported_language_now_enforced_advisory(self):
+        """Post-MULTILANG FR-6: supported non-Python files (.mjs) are now element-enforced via
+        the node adapter, at the ADVISORY tier — a missing element is a WARNING (never blocks),
+        not silently skipped. (Pre-P5 this returned [] because non-.py was skipped entirely.)"""
         fm = ForwardManifest(
-            file_specs={
-                "next.config.mjs": _spec("next.config.mjs", "config"),
-            }
+            file_specs={"next.config.mjs": _spec("next.config.mjs", "config")}
         )
-        # No false 'missing config' violation for a JS file we cannot AST-parse.
-        assert fm.validate_implementation("export default {}\n", ["next.config.mjs"]) == []
+        # 'config' (a CONSTANT spec) is absent from an anonymous `export default {}` (whose
+        # only element is DEFAULT_EXPORT name="default") -> one advisory warning, never an error.
+        viols = fm.validate_implementation("export default {}\n", ["next.config.mjs"])
+        assert len(viols) == 1
+        assert viols[0].severity == "warning"
+        assert viols[0].tier == "advisory"
 
     def test_parse_error_degrades_to_empty(self):
         fm = ForwardManifest(file_specs={"mod.py": _spec("mod.py", "EXPECTED")})
@@ -132,3 +136,88 @@ class TestContractScoping:
     def test_contract_not_applicable_to_task_skipped(self):
         fm = self._fm_with_contract()  # contract applies to t1 only
         assert fm.validate_implementation("x = 1\n", ["mod.py"], task_id="t2") == []
+
+
+class TestMultiLanguageEnforcement:
+    """MULTILANG FR-6: validate_implementation now enforces non-Python files via
+    build_multilang_file_manifest, with tier-calibrated severity (advisory = warning)."""
+
+    def test_typescript_present_class_clean(self):
+        fm = ForwardManifest(
+            file_specs={
+                "app.ts": ForwardFileSpec(
+                    file="app.ts",
+                    elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Greeter")],
+                )
+            }
+        )
+        assert fm.validate_implementation(
+            "export class Greeter {}\n", target_files=["app.ts"]
+        ) == []
+
+    def test_typescript_missing_element_is_warning(self):
+        fm = ForwardManifest(
+            file_specs={
+                "app.ts": ForwardFileSpec(
+                    file="app.ts",
+                    elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Missing")],
+                )
+            }
+        )
+        viols = fm.validate_implementation(
+            "export class Greeter {}\n", target_files=["app.ts"]
+        )
+        assert len(viols) == 1
+        assert viols[0].severity == "warning"   # advisory (regex) tier — never blocks
+        assert viols[0].tier == "advisory"
+
+    def test_go_missing_element_is_warning(self):
+        fm = ForwardManifest(
+            file_specs={
+                "svc.go": ForwardFileSpec(
+                    file="svc.go",
+                    elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Absent")],
+                )
+            }
+        )
+        viols = fm.validate_implementation(
+            'package main\nfunc Hello() {}\n', target_files=["svc.go"]
+        )
+        assert len(viols) == 1 and viols[0].severity == "warning"
+
+    def test_mixed_python_and_go_per_file(self):
+        # Dict input, two languages: Python authoritative (error), Go advisory (warning).
+        fm = ForwardManifest(
+            file_specs={
+                "a.py": ForwardFileSpec(
+                    file="a.py",
+                    elements=[ForwardElementSpec(kind=ElementKind.CONSTANT, name="MISSING_PY")],
+                ),
+                "svc.go": ForwardFileSpec(
+                    file="svc.go",
+                    elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="MissingGo")],
+                ),
+            }
+        )
+        viols = fm.validate_implementation(
+            {"a.py": "X = 1\n", "svc.go": "package main\nfunc F() {}\n"},
+            target_files=["a.py", "svc.go"],
+        )
+        by_file = {v.file_path: v for v in viols}
+        assert by_file["a.py"].severity == "error"      # Python = authoritative
+        assert by_file["svc.go"].severity == "warning"  # Go = advisory
+
+    def test_unsupported_language_skipped_no_false_error(self):
+        # An unsupported language (.rs) has no element extractor -> tier None -> skipped,
+        # so its spec elements are NOT false-flagged as missing errors (FR-6 regression guard).
+        fm = ForwardManifest(
+            file_specs={
+                "main.rs": ForwardFileSpec(
+                    file="main.rs",
+                    elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Whatever")],
+                )
+            }
+        )
+        assert fm.validate_implementation(
+            "fn main() {}\n", target_files=["main.rs"]
+        ) == []

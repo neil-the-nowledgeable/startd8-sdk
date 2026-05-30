@@ -905,16 +905,21 @@ class PrimaryContractorWorkflow(WorkflowBase):
                 if not per_file_code and len(t_files) == 1:
                     per_file_code[t_files[0]] = implementation
 
-                from pathlib import Path
-                from startd8.utils.code_manifest import generate_file_manifest
+                # MULTILANG FR-7: build the registry via the shared multi-language builder so
+                # the lead/primary review enforces non-Python contracts too. For Python it
+                # delegates to generate_file_manifest unchanged (byte-identical — R1-F10), so
+                # existing Python review outcomes are preserved; C#/Java/Go/Node/Vue gain
+                # element enforcement with tier-calibrated severity (advisory = warning).
+                from startd8.languages.manifest_adapter import (
+                    build_multilang_file_manifest,
+                )
 
                 manifest_dict = {}
                 for rel_path, src in per_file_code.items():
                     try:
-                        manifest = generate_file_manifest(
-                            file_path=rel_path, source=src, project_root=Path(".")
+                        manifest_dict[rel_path] = build_multilang_file_manifest(
+                            rel_path, src
                         )
-                        manifest_dict[rel_path] = manifest
                     except Exception as exc:
                         logger.warning(
                             "Failed to parse dynamically generated file '%s' "
