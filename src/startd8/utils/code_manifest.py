@@ -419,6 +419,12 @@ class FileManifest(BaseModel):
 
     # Phase 6: file-level call edges
     call_graph_edges: Optional[list[CallEdge]] = None
+    # MULTILANG_MANIFEST_VALIDATION FR-5: confidence tier of the parse that produced
+    # this manifest — "authoritative" (AST-grade: Python ast / C# tree-sitter / Java
+    # javalang) or "advisory" (regex-grade, or an AST parser that fell back to regex).
+    # Read by forward_manifest_validator to calibrate violation severity. None = unset,
+    # treated as authoritative for the legacy Python path (backward-compatible).
+    parser_tier: Optional[str] = None
 
     def to_yaml(self) -> str:
         """Serialize the manifest to YAML format."""

@@ -1,0 +1,117 @@
+"""Phase 2 — MULTILANG_MANIFEST_VALIDATION (FR-1 builder, FR-2 adapter, FR-5 tiers).
+
+Covers the authoritative tier (Python/C#/Java). Go/Node/Vue (advisory) land in Phase 3.
+"""
+
+from startd8.languages.manifest_adapter import (
+    TIER_ADVISORY,
+    TIER_AUTHORITATIVE,
+    build_multilang_file_manifest,
+)
+from startd8.utils.code_manifest import ElementKind, generate_file_manifest
+from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
+from startd8.forward_manifest_validator import _validate_file_spec
+from startd8.utils.manifest_registry import ManifestRegistry
+
+CSHARP_SRC = """
+namespace Demo;
+public interface IGreeter { string Hello(); }
+public class Greeter : IGreeter {
+    public string Hello() { return "hi"; }
+}
+public enum Color { Red, Green }
+"""
+
+JAVA_SRC = """
+package demo;
+import java.util.List;
+public class Greeter {
+    public String hello() { return "hi"; }
+}
+interface Runnable2 { void run(); }
+"""
+
+
+def _names(manifest):
+    return {e.name for e in manifest.elements}
+
+
+def _kinds(manifest):
+    return {e.name: e.kind for e in manifest.elements}
+
+
+class TestBuilderDispatch:
+    def test_python_delegates_and_is_authoritative(self):
+        src = "EXPECTED = 1\ndef foo():\n    return 1\n"
+        manifest = build_multilang_file_manifest("mod.py", src)
+        assert manifest.parser_tier == TIER_AUTHORITATIVE
+        assert "EXPECTED" in _names(manifest) and "foo" in _names(manifest)
+
+    def test_python_golden_master_matches_generate_file_manifest(self):
+        # FR-7/R1-F10: the builder's Python path is byte/structure-identical to the
+        # inline generate_file_manifest (modulo the additive parser_tier stamp).
+        from pathlib import Path
+
+        src = "import os\nCONST = 2\nclass A:\n    def m(self):\n        return 1\n"
+        inline = generate_file_manifest(file_path="m.py", project_root=Path("."), source=src)
+        built = build_multilang_file_manifest("m.py", src)
+        assert [e.name for e in built.elements] == [e.name for e in inline.elements]
+        assert [i.module for i in built.imports] == [i.module for i in inline.imports]
+
+    def test_unsupported_language_empty_no_raise(self):
+        manifest = build_multilang_file_manifest("main.rs", "fn main() {}")
+        assert manifest.elements == [] and manifest.parser_tier is None
+
+
+class TestCSharpAdapter:
+    def test_elements_and_kinds(self):
+        manifest = build_multilang_file_manifest("Greeter.cs", CSHARP_SRC)
+        names = _names(manifest)
+        assert {"IGreeter", "Greeter", "Hello", "Color"} <= names
+        kinds = _kinds(manifest)
+        assert kinds["IGreeter"] is ElementKind.INTERFACE
+        assert kinds["Greeter"] is ElementKind.CLASS
+        assert kinds["Hello"] is ElementKind.METHOD  # callable -> has synthesized Signature
+        assert kinds["Color"] is ElementKind.ENUM
+        # tier is authoritative (tree-sitter) or advisory (regex fallback) — both valid.
+        assert manifest.parser_tier in (TIER_AUTHORITATIVE, TIER_ADVISORY)
+
+
+class TestJavaAdapter:
+    def test_elements_kinds_and_imports(self):
+        manifest = build_multilang_file_manifest("Greeter.java", JAVA_SRC)
+        names = _names(manifest)
+        assert {"Greeter", "hello"} <= names
+        assert _kinds(manifest)["hello"] is ElementKind.METHOD
+        assert any(i.module == "java.util.List" for i in manifest.imports)
+        assert manifest.parser_tier in (TIER_AUTHORITATIVE, TIER_ADVISORY)
+
+
+class TestFr5SeverityCalibration:
+    def _spec(self, path):
+        return ForwardFileSpec(
+            file=path,
+            elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Missing")],
+        )
+
+    def test_authoritative_miss_is_error(self):
+        # A C#/Java/Python manifest with an authoritative tier yields an `error` for a
+        # genuinely-missing element. Use Python (always authoritative) for determinism.
+        manifest = build_multilang_file_manifest("mod.py", "X = 1\n")
+        reg = ManifestRegistry({"mod.py": manifest})
+        viols = _validate_file_spec("mod.py", self._spec("mod.py"), reg)
+        assert len(viols) == 1
+        assert viols[0].severity == "error"
+        assert viols[0].tier == TIER_AUTHORITATIVE
+
+    def test_advisory_miss_is_warning_with_tier(self):
+        # Simulate an advisory (regex-grade) parse via model_copy; the validator must demote
+        # the missing-element violation to `warning` and stamp tier="advisory" (FR-5/R1-F9).
+        manifest = build_multilang_file_manifest("mod.py", "X = 1\n").model_copy(
+            update={"parser_tier": TIER_ADVISORY}
+        )
+        reg = ManifestRegistry({"mod.py": manifest})
+        viols = _validate_file_spec("mod.py", self._spec("mod.py"), reg)
+        assert len(viols) == 1
+        assert viols[0].severity == "warning"
+        assert viols[0].tier == TIER_ADVISORY

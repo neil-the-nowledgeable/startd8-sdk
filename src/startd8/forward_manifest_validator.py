@@ -30,6 +30,10 @@ class ContractViolation:
     actual: Optional[str] = None
     file_path: Optional[str] = None
     severity: str = "error"  # "error" for mandatory structures, "warning" for advisory formulas.
+    # MULTILANG_MANIFEST_VALIDATION FR-5/R1-F9: confidence of the parser that produced the
+    # manifest this was checked against — "authoritative" or "advisory". Lets a downstream
+    # classifier (Fix 3) discount a regex blind spot rather than misattribute it.
+    tier: Optional[str] = None
 
 
 def validate_forward_manifest(
@@ -80,6 +84,15 @@ def _validate_file_spec(
         )
         return violations
 
+    # MULTILANG_MANIFEST_VALIDATION FR-5: calibrate severity to the parser's confidence.
+    # A miss confirmed by an authoritative (AST-grade) parse is an `error`; a miss from an
+    # advisory (regex-grade) parse is a `warning` — a regex blind spot must NOT block a
+    # review for an element that is actually present. The tier is stamped on every emitted
+    # violation (R1-F9) so a downstream classifier can discount advisory misses. An unset
+    # tier (None — legacy Python path) is treated as authoritative (backward-compatible).
+    tier = getattr(file_manifest, "parser_tier", None)
+    severity = "warning" if tier == "advisory" else "error"
+
     elements = _flatten_elements(file_manifest.elements)
 
     # Validate elements
@@ -94,7 +107,8 @@ def _validate_file_spec(
                         expected=f"Element `{expected_el.name}` of kind `{expected_el.kind.value}`",
                         actual="Not found",
                         file_path=file_path,
-                        severity="error",
+                        severity=severity,
+                        tier=tier,
                     )
                 )
 
@@ -114,7 +128,8 @@ def _validate_file_spec(
                         expected=f"Module import `{req_imp.module}`",
                         actual="Not found",
                         file_path=file_path,
-                        severity="error",
+                        severity=severity,
+                        tier=tier,
                     )
                 )
 
