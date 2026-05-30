@@ -157,8 +157,8 @@ class PrimaryContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": Models.LEAD_CONTRACTOR_LEAD - Primary contractor,
-            "drafter_agent": Models.LEAD_CONTRACTOR_DRAFTER - Drafter agent (best value),
+            "lead_agent": Models.PRIMARY_CONTRACTOR_LEAD - Primary contractor,
+            "drafter_agent": Models.PRIMARY_CONTRACTOR_DRAFTER - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
@@ -251,14 +251,14 @@ class PrimaryContractorWorkflow(WorkflowBase):
                     name="lead_agent",
                     type="agent_spec",
                     required=False,
-                    default=Models.LEAD_CONTRACTOR_LEAD,
-                    description="Lead contractor agent (Claude recommended: sonnet-4.6, opus-4.6, haiku-4.5)"
+                    default=Models.PRIMARY_CONTRACTOR_LEAD,
+                    description="Lead agent (reviewing role in the Primary Contractor lead/drafter pattern) (Claude recommended: sonnet-4.6, opus-4.6, haiku-4.5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
                     type="agent_spec",
                     required=False,
-                    default=Models.LEAD_CONTRACTOR_DRAFTER,
+                    default=Models.PRIMARY_CONTRACTOR_DRAFTER,
                     description="Drafter agent (cost-efficient: haiku-4.5, gpt-4.1-nano)"
                 ),
                 WorkflowInput(
@@ -326,7 +326,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
         )
 
     def validate_config(self, config: Dict[str, Any]) -> ValidationResult:
-        """Validate lead contractor configuration."""
+        """Validate primary contractor configuration."""
         errors = []
 
         # Required: task_description
@@ -362,8 +362,8 @@ class PrimaryContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = dict(config.get("context", {}))
-        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
-        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
+        lead_spec = config.get("lead_agent", Models.PRIMARY_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.PRIMARY_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
@@ -1034,8 +1034,8 @@ class PrimaryContractorWorkflow(WorkflowBase):
 
         task_description = config["task_description"]
         context = dict(config.get("context", {}))
-        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
-        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
+        lead_spec = config.get("lead_agent", Models.PRIMARY_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.PRIMARY_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")

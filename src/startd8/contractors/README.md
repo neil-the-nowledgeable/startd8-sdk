@@ -46,7 +46,7 @@ The framework uses Python protocols (interfaces) to enable dependency injection:
 │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘            │
 │         │                │                │                     │
 │  ┌──────┴───────┐ ┌──────┴───────┐ ┌──────┴───────┐            │
-│  │LeadContractor│ │   Logging    │ │    Simple    │ ← Standalone│
+│  │PrimaryContr. │ │   Logging    │ │    Simple    │ ← Standalone│
 │  │  Generator   │ │ Instrumentor │ │ MergeStrategy│            │
 │  └──────────────┘ └──────────────┘ └──────────────┘            │
 │                   ┌──────┴───────┐ ┌──────┴───────┐            │
@@ -127,10 +127,10 @@ result = workflow.run()  # Emits spans to Tempo, insights to Loki
 
 ```python
 from startd8.contractors import PrimeContractorWorkflow
-from startd8.contractors.generators import LeadContractorCodeGenerator
+from startd8.contractors.generators import PrimaryContractorCodeGenerator
 
 workflow = PrimeContractorWorkflow(
-    code_generator=LeadContractorCodeGenerator(
+    code_generator=PrimaryContractorCodeGenerator(
         lead_agent="anthropic:claude-sonnet-4-6",
         drafter_agent="gemini:gemini-2.5-flash-lite",
     ),
@@ -164,7 +164,7 @@ src/startd8/contractors/
 │   └── contextcore.py        # ContextCoreInstrumentor, ASTMergeStrategy (optional)
 ├── generators/
 │   ├── __init__.py
-│   └── lead_contractor.py    # LeadContractorCodeGenerator
+│   └── primary_contractor.py # PrimaryContractorCodeGenerator
 └── artisan_phases/           # Phase implementations (design, testing, development, etc.)
 ```
 
@@ -307,7 +307,7 @@ Both work, but the new import is preferred for new code.
 
 The `contextcore-startd8` bridge package is deprecated. Its functionality is now in:
 
-- Code generation: `startd8.contractors.generators.LeadContractorCodeGenerator`
+- Code generation: `startd8.contractors.generators.PrimaryContractorCodeGenerator`
 - Observability: `startd8.contractors.adapters.contextcore.ContextCoreInstrumentor`
 
 ## Testing
@@ -435,7 +435,7 @@ When using ContextCoreInstrumentor, telemetry flows to the Grafana stack:
 
 | Scenario | Better Alternative |
 |----------|--------------------|
-| Single file generation | Use LeadContractorWorkflow directly |
+| Single file generation | Use PrimaryContractorWorkflow directly |
 | No integration needed (exploratory) | Use `run_workflow()` from `startd8.workflows` |
 | Real-time streaming required | Use Agent SDK with streaming callbacks |
 | Human-in-the-loop approval | Consider custom workflow with review steps |
@@ -528,7 +528,7 @@ workflow.run()
 - **Added** git safety features (dirty check, auto-stash, backup/recovery)
 - **Added** cost tracking (BLC-009)
 - **Added** insight emission (BLC-008)
-- **Added** LeadContractorCodeGenerator wrapper
+- **Added** PrimaryContractorCodeGenerator wrapper
 - **Deprecated** contextcore-startd8 bridge package
 
 ### v0.3.0 (Previous)

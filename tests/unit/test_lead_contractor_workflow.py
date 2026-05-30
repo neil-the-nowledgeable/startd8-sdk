@@ -34,8 +34,8 @@ class TestLeadContractorConfig:
         config = LeadContractorConfig(task_description="Test task")
         assert config.task_description == "Test task"
         # Use Models constants to stay in sync with config defaults
-        assert config.lead_agent == Models.LEAD_CONTRACTOR_LEAD
-        assert config.drafter_agent == Models.LEAD_CONTRACTOR_DRAFTER
+        assert config.lead_agent == Models.PRIMARY_CONTRACTOR_LEAD
+        assert config.drafter_agent == Models.PRIMARY_CONTRACTOR_DRAFTER
         assert config.max_iterations == 3
         assert config.pass_threshold == 80
 

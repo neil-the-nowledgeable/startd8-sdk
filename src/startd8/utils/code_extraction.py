@@ -2,7 +2,7 @@
 Code extraction utilities for LLM responses.
 
 Extracts code from markdown-fenced LLM responses, stripping preamble text
-and explanatory notes. Used by LeadContractorWorkflow and available for
+and explanatory notes. Used by PrimaryContractorWorkflow and available for
 downstream integration pipelines.
 """
 

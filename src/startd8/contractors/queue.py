@@ -27,7 +27,7 @@ class FeatureStatus(Enum):
     """Status of a feature in the queue."""
 
     PENDING = "pending"  # Not yet started
-    DEVELOPING = "developing"  # Lead contractor is generating code
+    DEVELOPING = "developing"  # Primary contractor is generating code
     GENERATED = "generated"  # Code generated, ready for integration
     INTEGRATING = "integrating"  # Integration in progress
     CHECKPOINT = "checkpoint"  # Running integration checkpoints
@@ -198,7 +198,7 @@ class FeatureQueue:
         """
         Add features from an integration plan.
 
-        This allows importing features from the lead contractor's
+        This allows importing features from the primary contractor's
         generated backlog.
 
         Args:

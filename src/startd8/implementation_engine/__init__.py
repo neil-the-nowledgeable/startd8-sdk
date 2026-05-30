@@ -2,7 +2,7 @@
 Implementation Engine — reusable spec-draft-review loop.
 
 Extracts the Prime Contractor's spec-creation and iterative draft-review
-loop into a standalone package that both LeadContractorWorkflow and Artisan
+loop into a standalone package that both PrimaryContractorWorkflow and Artisan
 ImplementPhaseHandler can consume.
 
 Usage::

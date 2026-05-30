@@ -2,7 +2,7 @@
 Data models for the implementation engine.
 
 Defines SpecResult, DraftResult, and ReviewResult in a neutral location
-that both LeadContractorWorkflow and Artisan ImplementPhaseHandler can import.
+that both PrimaryContractorWorkflow and Artisan ImplementPhaseHandler can import.
 """
 
 from dataclasses import dataclass, field
@@ -51,7 +51,7 @@ class SpecResult:
     time_ms: int = 0
 
     def to_implementation_spec(self) -> Any:
-        """Convert to ``ImplementationSpec`` for LeadContractorWorkflow compatibility."""
+        """Convert to ``ImplementationSpec`` for PrimaryContractorWorkflow compatibility."""
         from startd8.workflows.builtin.lead_contractor_models import ImplementationSpec
 
         return ImplementationSpec(

@@ -656,7 +656,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
     In dry-run mode: reports what would be implemented per task (unchanged).
     In real mode: delegates to :class:`DevelopmentPhase` with a
-    :class:`LeadContractorChunkExecutor`, gaining parallelism, state
+    :class:`PrimaryContractorChunkExecutor`, gaining parallelism, state
     persistence, crash recovery, and retry with error-informed feedback.
 
     Bridges the sync ``handler.execute()`` call from
@@ -2425,7 +2425,7 @@ class Test{class_name}:
         """Map DevelopmentResult back to the output format downstream expects.
 
         Reconstructs ``generation_results`` (dict[str, GenerationResult])
-        from chunk metadata where ``LeadContractorChunkExecutor`` stored them.
+        from chunk metadata where ``PrimaryContractorChunkExecutor`` stored them.
 
         Args:
             dev_result: The DevelopmentResult from DevelopmentPhase.run().

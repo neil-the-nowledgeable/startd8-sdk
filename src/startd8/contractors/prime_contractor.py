@@ -2363,7 +2363,7 @@ class PrimeContractorWorkflow:
         feature: "FeatureSpec",
         gen_context: Dict[str, Any],
     ) -> Dict[str, str]:
-        """Build all three LeadContractorWorkflow phase prompts as text.
+        """Build all three PrimaryContractorWorkflow phase prompts as text.
 
         Returns:
             dict[str, str] mapping filename to content. Keys are:
@@ -2847,7 +2847,7 @@ class PrimeContractorWorkflow:
                 for key, content in result.prompts.items():
                     gen_prompts[f"{key}_prompt.md"] = content
             # Responses are captured independently — un-gated from prompts
-            # so that micro-prime results or partial Lead Contractor results
+            # so that micro-prime results or partial Primary contractor results
             # still produce response files even when prompts are empty.
             if result is not None and hasattr(result, "responses") and result.responses:
                 for key, content in result.responses.items():
@@ -3044,7 +3044,7 @@ class PrimeContractorWorkflow:
     ) -> None:
         """Persist all LLM prompts for a feature without making LLM calls.
 
-        Captures the 3 LeadContractorWorkflow phases (spec, draft, review)
+        Captures the 3 PrimaryContractorWorkflow phases (spec, draft, review)
         as markdown files plus a metadata.json summary.
 
         Args:

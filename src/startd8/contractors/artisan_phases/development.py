@@ -1168,7 +1168,7 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
 
     Supports error-informed retry: when the orchestrator retries a failed
     chunk, prior error information is injected into the generation context
-    so the LeadContractor can self-correct.
+    so the Primary contractor can self-correct.
 
     Example::
 
@@ -1217,7 +1217,7 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
         project_root: Optional[Path] = None,
     ):
         """
-        Initialize the LeadContractor chunk executor.
+        Initialize the Primary contractor chunk executor.
 
         Args:
             lead_agent: Agent spec for architect/reviewer.
@@ -1442,7 +1442,7 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
 
         # PCA-600: edit mode classification for downstream workflow consumption
         # Stored as dict in metadata (via to_dict()); pass as dict for
-        # downstream LeadContractorWorkflow which uses dict-based access.
+        # downstream PrimaryContractorWorkflow which uses dict-based access.
         edit_mode_info = meta.get("_edit_mode")
         if edit_mode_info:
             gen_ctx["edit_mode"] = edit_mode_info  # dict for workflow consumption
@@ -2629,8 +2629,8 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
         """
         # Dry-run short-circuit
         if context.get("dry_run", False):
-            self.logger.debug("[DRY-RUN] LeadContractor chunk %s", chunk.chunk_id)
-            return True, "Dry-run: LeadContractor execution skipped"
+            self.logger.debug("[DRY-RUN] Primary contractor chunk %s", chunk.chunk_id)
+            return True, "Dry-run: Primary contractor execution skipped"
 
         try:
             generator = self._resolve_generator()
@@ -2649,7 +2649,7 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
             task_desc = self._build_task_description(chunk, context)
 
             self.logger.info(
-                "Generating code for chunk %s via LeadContractor (%d file targets)",
+                "Generating code for chunk %s via Primary contractor (%d file targets)",
                 chunk.chunk_id,
                 len(chunk.file_targets),
             )
@@ -2744,11 +2744,11 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
 
         except Exception as e:
             self.logger.exception(
-                "LeadContractor execution failed for chunk %s: %s",
+                "Primary contractor execution failed for chunk %s: %s",
                 chunk.chunk_id,
                 e,
             )
-            return False, f"LeadContractor execution error: {str(e)}"
+            return False, f"Primary contractor execution error: {str(e)}"
 
 
 # ── Search/replace threshold ─────────────────────────────────────────
@@ -3821,7 +3821,7 @@ class ArtisanChunkExecutor(PrimaryContractorChunkExecutor):
         return False, "tier2_gate_clear"
 
     # ------------------------------------------------------------------
-    # Core execute (replaces LeadContractor path with direct agenerate)
+    # Core execute (replaces Primary contractor path with direct agenerate)
     # ------------------------------------------------------------------
 
     async def execute(

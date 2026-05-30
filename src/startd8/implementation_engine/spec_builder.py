@@ -1451,7 +1451,7 @@ def build_spec(
     """Create an 8-section implementation specification.
 
     This is the primary entry point for spec creation, equivalent to
-    ``LeadContractorWorkflow._create_spec()``.
+    ``PrimaryContractorWorkflow._create_spec()``.
 
     Args:
         agent: Agent to use for spec generation (must have ``.generate()``).

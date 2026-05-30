@@ -1,7 +1,7 @@
 """
 Reviewer for the implementation engine.
 
-Extracted from ``LeadContractorWorkflow._review_draft`` and
+Extracted from ``PrimaryContractorWorkflow._review_draft`` and
 ``_format_review_feedback``.  Extended with convergent review support
 (issue tracking across iterations) and optional pipeline enrichment.
 """
@@ -494,7 +494,7 @@ def review_draft(
 ) -> ReviewResult:
     """Review a draft implementation.
 
-    Extended from ``LeadContractorWorkflow._review_draft()`` with:
+    Extended from ``PrimaryContractorWorkflow._review_draft()`` with:
     - Optional pipeline enrichment (design doc, parameters, conventions)
     - Manifest/call graph context (Phase 4/5/6)
     - Convergent review (prior issue tracking across iterations)

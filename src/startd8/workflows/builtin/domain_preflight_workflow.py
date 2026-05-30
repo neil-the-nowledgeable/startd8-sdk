@@ -424,7 +424,7 @@ class DomainPreflightWorkflow(WorkflowBase):
         These fire at the earliest detection point — before any LLM calls —
         so dry-runs and dress-rehearsals surface the risk in their reports.
         Complements Layer B (chunk-building in context_seed_handlers) and
-        Layer C (post-generation metadata in lead_contractor).
+        Layer C (post-generation metadata in the primary contractor generator).
         """
         checks: List[EnvironmentCheck] = []
         if len(target_files) <= 1:

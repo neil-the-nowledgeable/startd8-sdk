@@ -69,8 +69,8 @@ class PrimaryContractorConfig:
     Attributes:
         task_description: What needs to be implemented
         context: Additional context (existing code, requirements, constraints)
-        lead_agent: Primary agent spec (default: Models.LEAD_CONTRACTOR_LEAD)
-        drafter_agent: Drafter agent spec (default: Models.LEAD_CONTRACTOR_DRAFTER)
+        lead_agent: Primary agent spec (default: Models.PRIMARY_CONTRACTOR_LEAD)
+        drafter_agent: Drafter agent spec (default: Models.PRIMARY_CONTRACTOR_DRAFTER)
         max_iterations: Maximum draft/review cycles (default: 3)
         pass_threshold: Minimum review score to pass (0-100, default: 80)
         output_format: Expected output format guidance for drafter
@@ -79,13 +79,13 @@ class PrimaryContractorConfig:
 
     Note:
         Default models are defined in startd8.model_catalog.Models.
-        Update Models.LEAD_CONTRACTOR_LEAD and Models.LEAD_CONTRACTOR_DRAFTER
+        Update Models.PRIMARY_CONTRACTOR_LEAD and Models.PRIMARY_CONTRACTOR_DRAFTER
         when newer models are available.
     """
     task_description: str
     context: Optional[Dict[str, Any]] = None
-    lead_agent: str = Models.LEAD_CONTRACTOR_LEAD  # Claude Sonnet (latest)
-    drafter_agent: str = Models.LEAD_CONTRACTOR_DRAFTER  # Gemini Flash Lite (cheapest)
+    lead_agent: str = Models.PRIMARY_CONTRACTOR_LEAD  # Claude Sonnet (latest)
+    drafter_agent: str = Models.PRIMARY_CONTRACTOR_DRAFTER  # Gemini Flash Lite (cheapest)
     max_iterations: int = 3
     pass_threshold: int = 80
     output_format: Optional[str] = None
@@ -96,7 +96,7 @@ class PrimaryContractorConfig:
 @dataclass
 class ImplementationSpec:
     """
-    Specification created by Claude (lead contractor).
+    Specification created by Claude (primary contractor).
 
     Contains detailed instructions for the drafter agent.
     """
@@ -148,7 +148,7 @@ class DraftResult:
 @dataclass
 class ReviewResult:
     """
-    Review result from Claude (lead contractor).
+    Review result from Claude (primary contractor).
 
     Extends ReviewFeedback pattern from IterativeDevWorkflow.
     """

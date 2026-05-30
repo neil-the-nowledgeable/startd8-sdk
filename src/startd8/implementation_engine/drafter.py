@@ -1125,7 +1125,7 @@ def create_draft(
 ) -> DraftResult:
     """Create an implementation draft from a spec.
 
-    Equivalent to ``LeadContractorWorkflow._create_draft()``.
+    Equivalent to ``PrimaryContractorWorkflow._create_draft()``.
 
     Supports 4 modes via ``get_drafter_system_prompt()``:
     - **create**: Greenfield generation (no existing files)

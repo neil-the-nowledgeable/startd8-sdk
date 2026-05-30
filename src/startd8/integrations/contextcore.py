@@ -1220,7 +1220,7 @@ class AgentInsightBridge:
 
         Args:
             project_id: Project identifier for scoping insights
-            agent_id: Agent identifier (e.g., "claude", "gpt4", "lead-contractor")
+            agent_id: Agent identifier (e.g., "claude", "gpt4", "my-agent")
             session_id: Optional session identifier for grouping related insights
         """
         self.project_id = project_id

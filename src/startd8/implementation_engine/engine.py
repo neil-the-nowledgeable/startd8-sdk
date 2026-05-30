@@ -2,7 +2,7 @@
 DefaultImplementationEngine — full per-task pipeline orchestrator.
 
 Orchestrates: spec creation -> [draft -> truncation check -> review -> feedback]* -> result.
-Extracted from ``LeadContractorWorkflow._aexecute`` iteration loop.
+Extracted from ``PrimaryContractorWorkflow._aexecute`` iteration loop.
 """
 
 from typing import Any, Optional
@@ -34,7 +34,7 @@ class DefaultImplementationEngine:
     Implements the ``ImplementationEngine`` protocol.
 
     The engine does NOT include an integration/polish phase — that is
-    Prime-specific and remains in LeadContractorWorkflow.
+    Prime-specific and remains in PrimaryContractorWorkflow.
 
     Truncation handling: when a draft is truncated and iterations remain,
     the engine skips the review phase, injects a continuation prompt, and

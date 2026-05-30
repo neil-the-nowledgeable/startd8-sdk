@@ -262,7 +262,7 @@ def _classify_tier_core(
     # splicer + per-element repair = ~2,483 lines of compensatory code).
     # With file-whole thresholds raised to 30 elements / 300 LOC (AC-R3-R4),
     # files below those thresholds use file-whole generation.  Files above
-    # them route to cloud (LeadContractor) — more expensive per-call but
+    # them route to cloud (Primary contractor) — more expensive per-call but
     # eliminates the decomposition failure modes.
     return _emit(ComplexityTier.COMPLEX, "default (no COMPLEX triggers, SIMPLE conditions not fully met)", signals)
 

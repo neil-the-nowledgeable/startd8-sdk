@@ -386,7 +386,7 @@ class MicroPrimeCodeGenerator:
 
     Processes TRIVIAL and SIMPLE elements locally, delegating MODERATE and
     COMPLEX elements to a fallback ``CodeGenerator`` (typically the
-    LeadContractor pattern).
+    Primary contractor pattern).
 
     Args:
         config: Micro Prime engine configuration.

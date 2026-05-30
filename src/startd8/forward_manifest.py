@@ -580,7 +580,7 @@ class ForwardManifest(BaseModel):
                 from startd8.utils.code_extraction import extract_multi_file_code
 
                 per_file = extract_multi_file_code(implementation, files)
-                # Single unmatched file fallback (mirrors the lead-contractor path).
+                # Single unmatched file fallback (mirrors the primary-contractor path).
                 if not per_file and len(files) == 1:
                     per_file = {files[0]: implementation}
 

@@ -85,7 +85,7 @@ class CodeGenerator(Protocol):
     using whatever workflow or model combination they prefer.
 
     Example implementations:
-    - LeadContractorCodeGenerator: Uses lead/drafter pattern
+    - PrimaryContractorCodeGenerator: Uses lead/drafter pattern
     - SingleModelCodeGenerator: Uses one model directly
     """
 

@@ -1,7 +1,7 @@
 # Consolidated contractor prompt templates.
 #
 # Single source of truth for spec, draft, and review prompts.
-# Replaces the former lead_contractor.yaml and implementation_engine.yaml.
+# Replaces the former per-workflow prompt YAMLs and implementation_engine.yaml.
 #
 # Design principles (modeled after micro_prime/prompt_builder.py):
 #   - System prompts: 2-4 lines max (role + core constraint)
