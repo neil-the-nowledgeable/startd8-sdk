@@ -3,7 +3,17 @@
 **Version:** 1.0
 **Date:** 2026-05-30
 **Companion:** `LEAD_CONTRACTOR_REMOVAL_REQUIREMENTS.md` (v0.4), `LEAD_CONTRACTOR_REMOVAL_AUDIT.md` (v1.1)
-**Status:** Phase 4 prep — **OQ-6 live re-verification done**. Consumer edits **not yet staged**.
+**Status:** Phase 4 IN PROGRESS — OQ-6 done; SDK import-alias bridge landed; **ContextCore +
+wayfinder migrated**. 7 smaller/demo consumers remain (bridge keeps them green).
+
+**Progress (2026-05-30):**
+- ✅ SDK transient import-alias bridge committed (`feat/lead-contractor-removal` `d255566b`) — 4 module
+  shims at old paths + `test_lead_contractor_compat_bridge`. All un-migrated consumers stay green.
+- ✅ **ContextCore** migrated (branch `jetson-py310` `9eb336b`) — 5 runner scripts → canonical Primary;
+  no `lead*` SDK dependency remains (Phase-5 safe). WIP left untouched.
+- ✅ **wayfinder** migrated (branch `lead-to-primary-migration` `a767b93`) — same 5 scripts; Phase-5 safe.
+- ⏳ Remaining: `011yBubo`, `contextcore-viewer`, `contextcore-demo-retail`, `wayfinder-demo-retail`,
+  `Gabba-Gallery-migration`, `contextcore-dot-me`, `contextcore-beaver`.
 
 > **⚠ Headline finding — the FR-6 premise is invalidated.** The requirements (FR-6, OQ-3,
 > NFR-3) assume **"ContextCore and wayfinder (the only consumers — maintainer-controlled)."**
@@ -82,8 +92,8 @@ lives (Phase 3 → removed in Phase 5), but should be done so consumers are clea
 **Per-repo gate:** after edits, the consumer's own suite is green against an editable install of the
 `feat/lead-contractor-removal` SDK branch. Checklist row complete ⇒ that repo is "staged/green" (FR-6 acceptance).
 
-- [ ] ContextCore — 3 symbols + 8 module-path files + id strings
-- [ ] wayfinder — 2 symbols + 7 module-path files + id strings
+- [x] ContextCore — 3 symbols + 8 module-path files + id strings
+- [x] wayfinder — 2 symbols + 7 module-path files + id strings
 - [ ] 011yBubo — 2 symbols + 1 module-path file
 - [ ] contextcore-viewer — 2 symbols
 - [ ] contextcore-demo-retail — 2 symbols
