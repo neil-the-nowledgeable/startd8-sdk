@@ -43,7 +43,7 @@ class ClaudeAgent(BaseAgent):
     def __init__(
         self,
         name: str = "claude",
-        model: str = "claude-sonnet-4-6",  # Claude Sonnet 4 - best balance of capability and cost
+        model: str = "claude-opus-4-8",  # Claude Opus 4.8 - most capable (flagship default)
         api_key: Optional[str] = None,
         max_tokens: int = 32768,
         cost_tracker: Optional['CostTracker'] = None,

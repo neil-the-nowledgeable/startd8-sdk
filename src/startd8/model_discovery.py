@@ -16,6 +16,66 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+class _JsonFileStore:
+    """Reusable JSON file-store with atomic writes and malformed-file recovery.
+
+    Shared by :class:`ModelDiscoveryService` (``discovered_models.json``) and
+    ``UserModelStore`` (``user_models.json``) so both recover from corruption
+    and persist atomically in exactly the same way (REQ-TMM-106, PL-TMM-1).
+    """
+
+    def __init__(self, config_dir: Optional[Path], filename: str):
+        if config_dir is None:
+            config_dir = Path.home() / ".startd8"
+        self.config_dir = Path(config_dir)
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.config_file = self.config_dir / filename
+
+    def load_raw(self, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Return the parsed JSON object, or a copy of ``default`` on any failure.
+
+        A missing, unreadable, malformed, or non-object file degrades to the
+        default rather than raising — callers never crash on corruption.
+        """
+        base = {} if default is None else dict(default)
+        if not self.config_file.exists():
+            return base
+        try:
+            with open(self.config_file, 'r') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.warning(f"Failed to load {self.config_file}: {e}")
+            return base
+        if not isinstance(data, dict):
+            logger.warning(
+                f"{self.config_file}: expected a JSON object, got "
+                f"{type(data).__name__}; using default"
+            )
+            return base
+        return data
+
+    def save_raw(self, data: Dict[str, Any]) -> bool:
+        """Atomically persist ``data`` (temp file + ``os.replace``).
+
+        Returns True on success, False on IO failure (without raising) so the
+        in-memory state is preserved on an unwritable path (REQ-TMM-106).
+        """
+        tmp = self.config_file.with_name(self.config_file.name + '.tmp')
+        try:
+            with open(tmp, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp, self.config_file)
+            return True
+        except (IOError, OSError) as e:
+            logger.error(f"Failed to save {self.config_file}: {e}")
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            return False
+
+
 class ModelDiscoveryService:
     """Service for discovering new models from provider APIs"""
     
@@ -29,39 +89,23 @@ class ModelDiscoveryService:
         Args:
             config_dir: Directory to store discovered models config
         """
-        if config_dir is None:
-            config_dir = Path.home() / ".startd8"
-        self.config_dir = Path(config_dir)
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.config_file = self.config_dir / self.CONFIG_FILENAME
+        self._store = _JsonFileStore(config_dir, self.CONFIG_FILENAME)
+        # Preserved for backward compatibility with callers reading these attrs.
+        self.config_dir = self._store.config_dir
+        self.config_file = self._store.config_file
         self._discovered_models: Dict[str, Dict[str, Any]] = {}
         self._load_discovered_models()
-    
+
     def _load_discovered_models(self) -> None:
         """Load discovered models from config file"""
-        if not self.config_file.exists():
-            self._discovered_models = {}
-            return
-        
-        try:
-            with open(self.config_file, 'r') as f:
-                data = json.load(f)
-                self._discovered_models = data.get('models', {})
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"Failed to load discovered models: {e}")
-            self._discovered_models = {}
-    
+        self._discovered_models = self._store.load_raw().get('models', {})
+
     def _save_discovered_models(self) -> None:
         """Save discovered models to config file"""
-        data = {
+        self._store.save_raw({
             'models': self._discovered_models,
             'last_updated': datetime.now().isoformat()
-        }
-        try:
-            with open(self.config_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except IOError as e:
-            logger.error(f"Failed to save discovered models: {e}")
+        })
     
     def discover_anthropic_models(self, api_key: Optional[str] = None) -> List[str]:
         """

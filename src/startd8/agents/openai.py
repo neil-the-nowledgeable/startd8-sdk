@@ -48,7 +48,7 @@ class GPT4Agent(BaseAgent):
     def __init__(
         self,
         name: str = "gpt4",
-        model: str = "gpt-4o",  # GPT-4o - latest flagship model
+        model: str = "gpt-5.5-pro",  # GPT-5.5 Pro - most capable (flagship default)
         api_key: Optional[str] = None,
         max_tokens: int = 16384,
         cost_tracker: Optional['CostTracker'] = None,

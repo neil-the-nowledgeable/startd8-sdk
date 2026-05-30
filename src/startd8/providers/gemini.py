@@ -18,9 +18,10 @@ class GeminiProvider:
     # Official Gemini models (hardcoded baseline)
     # Note: All Gemini 1.x models are retired and return 404
     HARDCODED_MODELS = [
-        # Gemini 3.x family (Latest - November/December 2025)
-        "gemini-3-pro-preview",       # Most powerful, reasoning-first
-        "gemini-3-flash-preview",     # Complex multimodal understanding
+        # Gemini 3.x family (Latest, preview)
+        "gemini-3.1-pro-preview",     # Newest, most powerful (preview)
+        "gemini-3-pro-preview",       # Powerful, reasoning-first (preview)
+        "gemini-3-flash-preview",     # Complex multimodal understanding (preview)
         # Gemini 2.5 family
         "gemini-2.5-pro",             # Advanced reasoning and coding
         "gemini-2.5-flash",           # Fast responses (default in ChatGPT-style)
@@ -77,6 +78,13 @@ class GeminiProvider:
     # Model metadata
     MODEL_INFO = {
         # Gemini 3.x family (Latest)
+        "gemini-3.1-pro-preview": {
+            "name": "Gemini 3.1 Pro",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 1.25,
+            "cost_per_1m_output": 5.00,
+        },
         "gemini-3-pro-preview": {
             "name": "Gemini 3 Pro",
             "context_window": 1000000,

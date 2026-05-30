@@ -45,7 +45,7 @@ class GeminiAgent(BaseAgent):
     def __init__(
         self,
         name: str = "gemini",
-        model: str = "gemini-2.0-flash",  # Gemini 2.0 Flash - latest stable model
+        model: str = "gemini-2.5-pro",  # Gemini 2.5 Pro - most capable stable (flagship default)
         api_key: Optional[str] = None,
         max_tokens: int = 32768,
         temperature: float = 0.7,

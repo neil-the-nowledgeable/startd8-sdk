@@ -18,8 +18,12 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        # Claude 4.6 family (Latest - February 2026)
-        "claude-opus-4-6",            # Claude Opus 4.6 - most intelligent model
+        # Claude 4.8 family (Latest)
+        "claude-opus-4-8",            # Claude Opus 4.8 - most intelligent model
+        # Claude 4.7 family
+        "claude-opus-4-7",            # Claude Opus 4.7
+        # Claude 4.6 family (February 2026)
+        "claude-opus-4-6",            # Claude Opus 4.6
         "claude-sonnet-4-6",          # Claude Sonnet 4.6 - balanced quality/speed
         # Claude 4.5 family (November 2025)
         "claude-opus-4-5",            # Claude Opus 4.5 (alias)

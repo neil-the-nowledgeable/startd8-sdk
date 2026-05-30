@@ -48,9 +48,11 @@ class Models:
     # ==========================================================================
 
     # Flagship - Best quality, highest cost
-    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-6"
+    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-8"
 
-    # Previous flagship
+    # Previous flagships
+    CLAUDE_OPUS_47 = "anthropic:claude-opus-4-7"
+    CLAUDE_OPUS_46 = "anthropic:claude-opus-4-6"
     CLAUDE_OPUS_45 = "anthropic:claude-opus-4-5-20251101"
 
     # Balanced - Good quality/cost tradeoff (recommended for most use cases)
@@ -60,7 +62,7 @@ class Models:
     CLAUDE_SONNET_45 = "anthropic:claude-sonnet-4-5-20250929"
 
     # Fast - Quick responses, lower cost
-    CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251008"
+    CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251001"
 
     # Legacy (for backwards compatibility)
     CLAUDE_SONNET_4 = "anthropic:claude-sonnet-4-20250514"
@@ -70,7 +72,7 @@ class Models:
     # Google Gemini Models
     # ==========================================================================
 
-    # Flagship
+    # Flagship (newest stable; 3.x are preview-only, see below)
     GEMINI_PRO_LATEST = "gemini:gemini-2.5-pro"
 
     # Balanced
@@ -79,28 +81,35 @@ class Models:
     # Fast/Mini - Cheapest, fastest
     GEMINI_FLASH_LITE = "gemini:gemini-2.5-flash-lite"
 
-    # Preview models (may change)
-    GEMINI_3_PRO_PREVIEW = "gemini:gemini-3-pro-preview"
+    # Preview models (may change/deprecate without notice — not used as stable defaults)
+    GEMINI_3_PRO_PREVIEW = "gemini:gemini-3.1-pro-preview"
     GEMINI_3_FLASH_PREVIEW = "gemini:gemini-3-flash-preview"
 
     # ==========================================================================
     # OpenAI Models
     # ==========================================================================
 
-    # Flagship (Reasoning)
-    O3_LATEST = "openai:o3"
+    # Flagship - most capable
+    GPT_FLAGSHIP_LATEST = "openai:gpt-5.5-pro"
 
-    # Balanced
-    GPT4_1_LATEST = "openai:gpt-4.1"
+    # Balanced - standard quality/cost
+    GPT_STANDARD_LATEST = "openai:gpt-5.5"
 
-    # Fast
-    GPT4_LATEST = "openai:gpt-4o"
+    # Fast - smaller, quicker
+    GPT_MINI_LATEST = "openai:gpt-5.4-mini"
 
-    # Mini - Fast, cheap
-    GPT4_MINI = "openai:gpt-4o-mini"
+    # Mini - cheapest, fastest
+    GPT_NANO_LATEST = "openai:gpt-5.4-nano"
 
-    # Legacy aliases
-    GPT5_2_CODEX_LATEST = O3_LATEST
+    # Coding-optimized
+    GPT_CODEX_LATEST = "openai:gpt-5.3-codex"
+
+    # Legacy aliases (kept for backward compatibility; values refreshed to current GA)
+    O3_LATEST = GPT_FLAGSHIP_LATEST
+    GPT4_1_LATEST = GPT_STANDARD_LATEST
+    GPT4_LATEST = GPT_MINI_LATEST
+    GPT4_MINI = GPT_NANO_LATEST
+    GPT5_2_CODEX_LATEST = GPT_CODEX_LATEST
 
     # ==========================================================================
     # Mistral AI Models
@@ -136,6 +145,12 @@ class Models:
     SEMANTIC_VALIDATOR = CLAUDE_HAIKU_LATEST
 
     # ==========================================================================
+    # NVIDIA NIM Models
+    # ==========================================================================
+
+    NEMOTRON_NANO = "nim:nvidia/nemotron-3-nano-30b-a3b"
+
+    # ==========================================================================
     # Ollama Local Models
     # ==========================================================================
 
@@ -149,6 +164,18 @@ class Models:
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # Anthropic
+    "claude-opus-4-8": ModelInfo(
+        provider="anthropic",
+        model_id="claude-opus-4-8",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "claude-opus-4-7": ModelInfo(
+        provider="anthropic",
+        model_id="claude-opus-4-7",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "claude-opus-4-6": ModelInfo(
         provider="anthropic",
         model_id="claude-opus-4-6",
@@ -193,6 +220,18 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     ),
 
     # Gemini
+    "gemini-3.1-pro-preview": ModelInfo(
+        provider="gemini",
+        model_id="gemini-3.1-pro-preview",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "gemini-3-flash-preview": ModelInfo(
+        provider="gemini",
+        model_id="gemini-3-flash-preview",
+        tier="balanced",
+        capabilities={"text", "vision", "code"},
+    ),
     "gemini-2.5-pro": ModelInfo(
         provider="gemini",
         model_id="gemini-2.5-pro",
@@ -213,6 +252,36 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     ),
 
     # OpenAI
+    "gpt-5.5-pro": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.5-pro",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "gpt-5.5": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.5",
+        tier="balanced",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "gpt-5.4-mini": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.4-mini",
+        tier="fast",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "gpt-5.4-nano": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.4-nano",
+        tier="mini",
+        capabilities={"text", "code"},
+    ),
+    "gpt-5.3-codex": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.3-codex",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
     "o3": ModelInfo(
         provider="openai",
         model_id="o3",
@@ -264,12 +333,60 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="mini",
         capabilities={"text", "code"},
     ),
+    # NVIDIA NIM
+    "nvidia/nemotron-3-nano-30b-a3b": ModelInfo(
+        provider="nim",
+        model_id="nvidia/nemotron-3-nano-30b-a3b",
+        tier="reasoning",
+        capabilities={"text", "reasoning", "code"},
+    ),
 }
+
+
+def _load_user_overlay() -> Dict[str, ModelInfo]:
+    """User overlay over ``_MODEL_REGISTRY`` (REQ-TMM-130/131).
+
+    Reads ``user_models.json`` via ``UserModelStore``; records with an invalid
+    tier are already dropped by ``as_catalog_overlay`` (R1-S3). User-added
+    entries take precedence over the baseline registry on id collision. Returns
+    an empty overlay on any failure (REQ-TMM-106) so the catalog never crashes.
+
+    Note: ``get_latest_model`` intentionally does NOT consult this overlay — its
+    tier→constant mapping is unchanged, so overlay models are *resolvable* but
+    never *auto-selected* as a tier default (NR-6).
+    """
+    try:
+        from .user_models import UserModelStore
+
+        overlay_raw = UserModelStore().as_catalog_overlay()
+    except Exception:  # pragma: no cover - overlay must never break the catalog
+        return {}
+
+    result: Dict[str, ModelInfo] = {}
+    for model_id, meta in overlay_raw.items():
+        result[model_id] = ModelInfo(
+            provider=meta["provider"],
+            model_id=model_id,
+            tier=meta["tier"],
+            capabilities=set(meta.get("capabilities") or set()),
+        )
+    return result
+
+
+def _registry_with_overlay() -> Dict[str, ModelInfo]:
+    """Baseline registry merged with the user overlay (user wins on collision)."""
+    merged = dict(_MODEL_REGISTRY)
+    merged.update(_load_user_overlay())
+    return merged
 
 
 def get_model_info(model_id: str) -> Optional[ModelInfo]:
     """
     Get information about a model.
+
+    Consults the user overlay (REQ-TMM-130) before the curated registry, so a
+    user-added model with a valid tier resolves here and takes precedence over
+    a colliding baseline id (REQ-TMM-131).
 
     Args:
         model_id: Model ID (with or without provider prefix)
@@ -280,6 +397,9 @@ def get_model_info(model_id: str) -> Optional[ModelInfo]:
     # Strip provider prefix if present
     if ":" in model_id:
         model_id = model_id.split(":", 1)[1]
+    overlay = _load_user_overlay()
+    if model_id in overlay:
+        return overlay[model_id]
     return _MODEL_REGISTRY.get(model_id)
 
 
@@ -324,10 +444,10 @@ def get_latest_model(
             "mini": Models.GEMINI_FLASH_LITE,
         },
         "openai": {
-            "flagship": Models.O3_LATEST,
-            "balanced": Models.GPT4_1_LATEST,
-            "fast": Models.GPT4_LATEST,
-            "mini": Models.GPT4_MINI,
+            "flagship": Models.GPT_FLAGSHIP_LATEST,
+            "balanced": Models.GPT_STANDARD_LATEST,
+            "fast": Models.GPT_MINI_LATEST,
+            "mini": Models.GPT_NANO_LATEST,
         },
         "mistral": {
             "flagship": Models.MISTRAL_LARGE_LATEST,
@@ -340,6 +460,11 @@ def get_latest_model(
             "balanced": Models.STARTD8_CODER,
             "fast": Models.STARTD8_CODER,
             "mini": Models.STARTD8_CODER,
+        },
+        "nim": {
+            "flagship": Models.NEMOTRON_NANO,
+            "balanced": Models.NEMOTRON_NANO,
+            "reasoning": Models.NEMOTRON_NANO,
         },
     }
 
@@ -361,7 +486,7 @@ def list_models_by_tier(tier: str) -> List[str]:
     """
     return [
         info.full_id
-        for info in _MODEL_REGISTRY.values()
+        for info in _registry_with_overlay().values()
         if info.tier == tier
     ]
 
@@ -378,7 +503,7 @@ def list_models_by_capability(capability: str) -> List[str]:
     """
     return [
         info.full_id
-        for info in _MODEL_REGISTRY.values()
+        for info in _registry_with_overlay().values()
         if capability in info.capabilities
     ]
 
@@ -399,7 +524,7 @@ def get_escalation_target(agent_spec: str) -> Optional[str]:
     if ":" not in agent_spec:
         return None
     provider, model_id = agent_spec.split(":", 1)
-    info = _MODEL_REGISTRY.get(model_id)
+    info = get_model_info(model_id)  # overlay-aware (REQ-TMM-130)
     if info is None:
         return None
     try:

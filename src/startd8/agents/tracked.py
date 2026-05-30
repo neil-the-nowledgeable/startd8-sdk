@@ -439,13 +439,13 @@ def create_tracked_agent(
     # Resolve to tracked agent class
     if provider_lower in ("anthropic", "claude"):
         agent_class = TrackedClaudeAgent
-        model = model or "claude-sonnet-4-6"
+        model = model or "claude-opus-4-8"
     elif provider_lower in ("openai", "gpt", "gpt4"):
         agent_class = TrackedGPT4Agent
-        model = model or "gpt-4o"
+        model = model or "gpt-5.5-pro"
     elif provider_lower in ("gemini", "google"):
         agent_class = TrackedGeminiAgent
-        model = model or "gemini-1.5-pro"
+        model = model or "gemini-2.5-pro"
     else:
         # Fall back to non-tracked agent via resolution
         logger.warning(f"No tracked agent for provider '{provider}', using base agent")
