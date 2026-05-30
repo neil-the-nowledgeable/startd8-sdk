@@ -22,10 +22,13 @@ from startd8.capdevpipe_installer import (
 FAKE_RUN_SH = """#!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [[ " $* " == *" --list-langs "* ]]; then
+    echo "Available language profiles:"
+    echo ""
     for d in "$SCRIPT_DIR"/*/; do
         name="$(basename "$d")"
         if ls "$d"/*-plan.md >/dev/null 2>&1 || ls "$d"/*-requirements.md >/dev/null 2>&1; then
-            echo "$name"
+            echo "  $name/"
+            echo "    plan: $name-plan.md"
         fi
     done
     exit 0

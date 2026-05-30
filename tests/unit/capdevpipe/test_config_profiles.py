@@ -198,6 +198,46 @@ class TestUpdateGitignore:
         assert gi.read_text().count(".cap-dev-pipe/pipeline-output/") == 1
 
 
+class TestParseListedLangs:
+    """The --list-langs parser must read real cap-dev-pipe output, not substrings."""
+
+    REAL_OUTPUT = (
+        "Available language profiles:\n"
+        "\n"
+        "  python/\n"
+        "    plan: python-plan.md\n"
+        "    reqs: python-requirements.md\n"
+        "\n"
+        "  django/\n"
+        "    plan: django-plan.md\n"
+        "    reqs: django-requirements.md\n"
+        "\n"
+    )
+
+    def test_extracts_only_profile_lines(self, installer):
+        langs = installer._parse_listed_langs(self.REAL_OUTPUT)
+        assert langs == ["python", "django"]
+
+    def test_no_profiles_help_text_yields_empty(self, installer):
+        stdout = (
+            "No language profiles found in /tmp/.cap-dev-pipe/\n"
+            "\n"
+            "Create a subdirectory with a *plan*.md and *requirements*.md file.\n"
+        )
+        assert installer._parse_listed_langs(stdout) == []
+
+    def test_substring_does_not_count_as_present(self, installer, cfg_factory, target):
+        """'go' must not verify-pass against a 'django/' profile (substring trap)."""
+        plan = target / "PLAN.md"
+        plan.write_text("p", encoding="utf-8")
+        cfg = cfg_factory(profiles=[ProfileSpec(lang="django", plan=plan, reqs=None)])
+        TestVerify()._install_symlink(installer, cfg)
+        # Manifest records 'django'; verify must list exactly that, not 'go'.
+        vr = installer.verify(target)
+        assert "django" in vr.listed_langs
+        assert "go" not in vr.listed_langs
+
+
 class TestVerify:
     def _install_symlink(self, installer, cfg):
         result = installer.execute(cfg)

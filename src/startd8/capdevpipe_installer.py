@@ -1189,8 +1189,25 @@ class CapDevPipeInstaller:
 
     @staticmethod
     def _parse_listed_langs(stdout: str) -> List[str]:
-        """Best-effort extraction of profile names from ``run.sh --list-langs`` output."""
-        return [line.strip() for line in stdout.splitlines() if line.strip()]
+        """Extract profile names from ``run.sh --list-langs`` output.
+
+        The pipeline prints each profile as an indented ``<lang>/`` line under an
+        "Available language profiles:" header, with ``plan:``/``reqs:`` detail lines
+        beneath it. A profile name is therefore a stripped line that ends with ``/`` and
+        contains no whitespace or ``:``; the header, the detail lines, and the
+        no-profiles help text are all ignored. Returning bare names (not raw lines) lets
+        :meth:`verify` test membership exactly instead of by substring — a substring test
+        would, e.g., count ``go`` as present against a ``django/`` profile.
+        """
+        langs: List[str] = []
+        for raw in stdout.splitlines():
+            line = raw.strip()
+            if not line.endswith("/"):
+                continue
+            name = line[:-1]
+            if name and ":" not in name and not any(c.isspace() for c in name):
+                langs.append(name)
+        return langs
 
     def verify(self, target: Path) -> VerifyResult:
         """Verify the install by subprocess ``run.sh --list-langs`` (FR-11).
@@ -1233,7 +1250,8 @@ class CapDevPipeInstaller:
             [str(run_sh), "--list-langs"], cwd=embed, timeout=SUBPROCESS_TIMEOUT_VERIFY
         )
         listed = self._parse_listed_langs(proc.stdout)
-        missing_profiles = [lang for lang in expected if lang not in proc.stdout]
+        listed_set = set(listed)
+        missing_profiles = [lang for lang in expected if lang not in listed_set]
         passed = proc.returncode == 0 and not missing_profiles and single_source_ok
         if passed:
             message = f"Verified: --list-langs ok; {len(expected)} profile(s) present."
