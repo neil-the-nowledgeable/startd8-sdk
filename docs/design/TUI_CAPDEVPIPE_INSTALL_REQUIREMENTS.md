@@ -1,8 +1,8 @@
 # TUI — Install & Configure cap-dev-pipe — Requirements
 
-**Version:** 0.5 (R3 convergent review triaged & applied)
-**Date:** 2026-05-28
-**Status:** Reviewed against the plan (`TUI_CAPDEVPIPE_INSTALL_PLAN.md`) + Convergent Review R1 applied
+**Version:** 0.6 (R4 implementation-vs-requirements audit — post-ship)
+**Date:** 2026-05-30
+**Status:** R1–R3 convergent reviews applied; **R4 audits the shipped `capdevpipe_installer.py` + TUI handler against the requirements** (2 real bugs fixed, 1 dark feature wired, 3 spec clarifications/open repairs)
 **Component:** startd8 SDK TUI (`startd8 tui` → `ImprovedTUI`, `src/startd8/tui_improved.py`)
 **Related:** `docs/design/TUI_SHARED_WORKFLOW_PLAN.md`, cap-dev-pipe `CLAUDE.md` + `install-cap-dev-pipe.sh`
 
@@ -148,6 +148,17 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   in an existing `pipeline.env` is preserved** across reconcile/`replace-pipeline.env`/`upgrade`
   (see FR-12). *Acceptance:* running with ContextCore absent prompts/flags rather than writing
   an empty `CONTEXTCORE_ROOT`. *(R2-F2 / R2-S6, R3-F5)*
+
+  **On-disk format contract (R4-F2).** `pipeline.env` is consumed by cap-dev-pipe's
+  `pipeline/config.py:load_pipeline_env`, which parses it as plain `key=value`
+  (`line.partition("=")` + `key.strip()`, then strips surrounding quotes) — it is **NOT**
+  shell-sourced. The installer therefore MUST write the canonical bare `KEY="value"` form
+  (matching cap-dev-pipe's own `write_env_templates`): **no `export ` prefix** (an
+  `export FOO=…` line is parsed with the key `"export FOO"`, making `FOO` unreadable) and
+  **no shell-escaping** of values (`$`, spaces are stored literally; the consumer is not a
+  shell). A pre-existing `export KEY=` line for a managed key is rewritten to the bare form.
+  *Acceptance:* the written file round-trips through `load_pipeline_env` to the confirmed
+  values; a test guards against re-introducing an `export` prefix or shell-quoting.
 - **FR-8 Generate project wrapper.** Produce `{project}-cap-dlv-pipe.sh` from the
   template with `PROJECT_NAME` and a chosen `DEFAULT_LANG`; make it executable.
 - **FR-9 Create language profile(s).** Detect candidate plan/requirements docs in the
@@ -166,7 +177,16 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   resolution end-to-end — and surface the result in the TUI. **Verification passes iff**
   the subprocess exits 0 **and** stdout lists every profile the flow created; a non-zero
   exit, a missing profile, or a symlink-resolution error is a failure surfaced with the
-  captured stderr. Verification also asserts the **single-source property** of NFR-3:
+  captured stderr. **Profile presence is decided by parsing `--list-langs` into the set of
+  profile names and testing exact membership — NOT raw substring containment (R4-F1).** The
+  real pipeline prints each profile as an indented `<lang>/` line under an "Available
+  language profiles:" header (with `plan:`/`reqs:` detail lines beneath); a substring test
+  against raw stdout would count `go` as present against a `django/` profile, against a
+  `…-plan.md` basename, or against the header word "language". *Acceptance:* (a) a unit test
+  of the parser asserts it extracts only profile names from real `--list-langs` output and
+  rejects the `go`/`django` substring trap; (b) the verify-fixture's stand-in `run.sh` MUST
+  emit the **real indented `<lang>/` format**, not bare names — an unfaithful fixture hides
+  the matching bug. Verification also asserts the **single-source property** of NFR-3:
   a script run from `.cap-dev-pipe/` resolves `SCRIPT_DIR` to the embedded dir and reads
   the local `design/`+`prompts/`, not the canonical source. A **"skip"-only run that
   created zero profiles is a valid pass** (verification asserts script resolution, not a
@@ -182,10 +202,27 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   unit test (which files change vs preserved); the `upgrade` test includes a shrinking-source
   case; a `replace-pipeline.env` test adds a non-managed key and asserts it survives. *(R2-F6,
   R3-F5)*
+  **Headless drivability (R4-F4).** The re-run modes MUST be selectable through the headless
+  surface (NFR-7), not only the interactive menu: an `InstallConfig.rerun_mode` (or the
+  config-dict `rerun_mode` key) drives `apply_mode` when an install already exists, so the
+  workflow registry can request `upgrade`/`repair`/`reconfigure`/`replace-pipeline.env` without
+  a TUI. A headless re-run with no `rerun_mode` set falls through to the idempotent
+  `execute()` ("ensure installed"). *Acceptance:* a headless install followed by a headless
+  `rerun_mode="repair"` recreates a broken embedded symlink and returns the apply-mode
+  `VerifyResult`. *(An unwired `rerun_mode` field is a dark feature — the acceptance test
+  forbids regressing to it.)*
 - **FR-13 Dry-run preview.** Before writing anything, show the planned actions (dirs,
   symlinks, files) and require confirmation. *Acceptance:* the previewed action list is the
   **same** list `execute()` consumes (FR-16); a test asserts preview == executed set.
   *(R2-F4)*
+  **Fidelity status (R4-F5).** The current implementation computes the preview via
+  `plan_actions(cfg)` and then `execute(cfg)` **recomputes** `plan_actions(cfg)` internally —
+  the two lists are equal only because `plan_actions` is deterministic, and **no test asserts
+  the equality** the acceptance clause requires. To honor FR-16's "single planned action
+  list" literally and make the guarantee testable, `execute()` SHOULD accept the
+  already-computed action list (e.g. `execute(cfg, actions=None)` consuming the preview when
+  provided), and a test MUST assert the previewed list equals the list `execute()` applies.
+  *(Open repair — acceptance criterion specified since R2-F4 but never implemented.)*
 - **FR-14 Summary + next steps.** On completion, show what was created and the exact
   command to run the pipeline (`./.cap-dev-pipe/{project}-cap-dlv-pipe.sh`).
 - **FR-15 Persist preferences.** Remember the cap-dev-pipe source path and default
@@ -202,6 +239,12 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   the missing path (not a raw symlink-resolution error). *Acceptance:* install via symlink,
   rename the source dir, run verify; a dangling-target diagnostic names the missing path.
   *(R2-F3 / R2-S4)*
+  **Interactive reachability (R4-F6).** FR-17's detection is satisfied by `verify()` and
+  `apply_mode(... doctor)`. However the **interactive** re-run menu (`_capdevpipe_choose_mode`)
+  currently omits `doctor`, so the dedicated source-relocation health check is reachable only
+  headlessly. Either add a `doctor` choice to the interactive re-run menu, or document it as
+  headless-only and rely on `verify()` surfacing the dangling-source diagnostic interactively.
+  *(Minor — FR-17's core acceptance is met by `verify()`; this is a surface-completeness gap.)*
 - **FR-18 Install manifest (authoritative inventory).** Every successful install persists a
   manifest at `.cap-dev-pipe/.install-manifest.json` recording the installer-created paths,
   the install **method** (symlink/copy), each path's **resolved target** and the **source
@@ -215,6 +258,21 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   on success, lists every created path, carries a `manifest_version`, and a corrupted entry
   is recreated by `repair`; a copy install's manifest reflects the rsync-produced tree.
   *(R3-F1 / R3-S1·S2·S5)*
+
+  **`created_paths` semantics — managed set, not run-created set (R4-F3).** The persisted
+  `created_paths` is the full set of installer-**managed** paths (every owned-type planned
+  target under `.cap-dev-pipe/`), which on a re-run/`upgrade`/`repair` **includes
+  pre-existing and already-satisfied paths** — it is NOT restricted to paths this particular
+  run physically created. This is the correct inventory for its current consumers
+  (`repair`/drift/`verify`), which need the complete *expected* set. Run-scoped rollback uses
+  a **separate** list. **Consequence for the deferred uninstall (§5):** because the set
+  includes `pipeline.env` (which may hold user-added non-managed keys, FR-7) and any
+  pre-existing content, a future uninstall MUST NOT blindly delete `created_paths` — it must
+  diff against what it can prove it created (or confirm per path). §5's "remove only
+  installer-created paths" guarantee depends on this distinction. *Acceptance:* a re-run over
+  an existing install records the managed set (tests assert `embed`, `embed/run.sh`,
+  `embed/pipeline.env` are present); the uninstall design (when built) is tested to preserve
+  user-edited content.
 
 ---
 
@@ -255,7 +313,9 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   **no questionary/Rich dependency**, so the future workflow registry (and tests) can invoke
   a full install without the TUI. The `run()` handler is a thin caller. *Acceptance:*
   `from startd8.capdevpipe_installer import CapDevPipeInstaller` and run a full install against
-  a temp project with no TUI module imported. *(R3-F2 / R2-S8)*
+  a temp project with no TUI module imported — **and** a headless re-run path exercising an
+  explicit `rerun_mode` (FR-12), so the headless surface covers re-run, not only fresh
+  install. *(R3-F2 / R2-S8; re-run coverage per R4-F4)*
 - **NFR-8 Diagnosability.** The installer records a durable trail distinct from NFR-5's
   user-facing messages: each planned action and every subprocess invocation (and its captured
   stdout/stderr) is logged via the SDK's `get_logger`/OTel pipeline. *Acceptance:* a fault
@@ -273,7 +333,10 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
 - Does **not** install/manage ContextCore or the SDK themselves.
 - **Uninstall / clean removal is deferred beyond v1** (v1 scope = install + configure +
   verify). The **FR-18 install manifest** is designed so a later uninstall can remove only
-  installer-created paths without touching user-edited `design/`/`prompts/`.
+  installer-created paths without touching user-edited `design/`/`prompts/`. **Caveat
+  (R4-F3):** the manifest's `created_paths` is the *managed* set (incl. pre-existing paths
+  and `pipeline.env`), so the uninstall must diff against provably-created paths rather than
+  `rm` the list wholesale — see FR-18's `created_paths` semantics clause.
   *(R2-F5 — accepted as an explicit deferral)*
 
 ---
@@ -299,6 +362,19 @@ Dispositions in Appendix A. Paired with `TUI_CAPDEVPIPE_INSTALL_PLAN.md` v1.2.*
 manifest), new NFR-7 (headless library), new NFR-8 (diagnosability), NFR-6 (source-execution
 trust), and FR-7/FR-12 (non-managed-key lifecycle). Dispositions in Appendix A. Paired with
 `TUI_CAPDEVPIPE_INSTALL_PLAN.md` v1.3.*
+
+*v0.6 — R4 implementation-vs-requirements audit (post-ship; the prior rounds reviewed the
+spec, R4 reviews the code against it). Six findings, all accepted: **R4-F1** FR-11 verify
+used raw-substring matching (a genuinely-absent profile could pass; `go` matched `django/`),
+**fixed** + fixture made faithful; **R4-F2** FR-7 gains the `pipeline.env` on-disk format
+contract (bare `KEY="value"`, no `export`/escaping — matches `load_pipeline_env`); **R4-F3**
+FR-18/§5 clarify `created_paths` is the *managed* set, not run-created (uninstall must not
+blind-`rm` it); **R4-F4** FR-12/NFR-7 require headless re-run-mode drivability (the
+`rerun_mode` field was a dark feature), **fixed**; **R4-F5** FR-13 preview==execute fidelity
+is specified but untested and `execute()` recomputes the plan (open repair); **R4-F6**
+`doctor` is unreachable from the interactive menu (open, minor). Dispositions in Appendix A;
+round R4 in Appendix C. Fixes shipped in commits `f7331446` (R4-F1) and `6da957d5` (R4-F4);
+R4-F2/F3 doc-pinned in `4e1334e0`/`e15eeff5`.*
 
 ---
 
@@ -338,10 +414,16 @@ trust), and FR-7/FR-12 (non-managed-key lifecycle). Dispositions in Appendix A. 
 | R3-F3 | Security | Source-execution trust check before the copy path shells out | NFR-6 |
 | R3-F4 | Ops | Durable diagnosability logging (actions + subprocess output) | NFR-8 (new) |
 | R3-F5 | Data | `pipeline.env` non-managed-key lifecycle (preserved, not clobbered) | FR-7 / FR-12 |
+| R4-F1 | Validation | FR-11 verify must parse `--list-langs` and test **exact** profile membership, not raw substring; fixture must emit the real `<lang>/` format | FR-11 (**fixed** `f7331446`) |
+| R4-F2 | Data | FR-7 `pipeline.env` on-disk format contract: bare `KEY="value"`, no `export`/shell-escaping (matches `load_pipeline_env`) | FR-7 (doc-pinned `4e1334e0`) |
+| R4-F3 | Architecture | FR-18/§5: `created_paths` is the *managed* set (incl. pre-existing + `pipeline.env`), not run-created — uninstall must not blind-`rm` it | FR-18 / §5 (doc-pinned `e15eeff5`) |
+| R4-F4 | Interfaces | FR-12/NFR-7: re-run modes must be headless-drivable via `rerun_mode` (was a dark field) | FR-12 / NFR-7 (**fixed** `6da957d5`) |
+| R4-F5 | Validation | FR-13 preview==execute fidelity is specified but **untested**, and `execute()` recomputes the plan rather than consuming the previewed list | FR-13 (**open repair**) |
+| R4-F6 | Ops | FR-17 `doctor` is unreachable from the interactive re-run menu (headless-only) | FR-17 (**open**, minor) |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
-_None — all R1, R2, and R3 suggestions were accepted._
+_None — all R1, R2, R3, and R4 suggestions were accepted (R4-F5/F6 accepted as tracked open repairs)._
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -445,13 +527,58 @@ _Triaged 2026-05-28: all 5 R3-F items **accepted** → Appendix A. No rejections
 new FR-18, NFR-7, NFR-8, NFR-6 (source-execution clause), and FR-7/FR-12 (non-managed-key
 lifecycle)._
 
+#### Review Round R4 — opus-4.8-1m (implementation-vs-requirements audit) — 2026-05-30
+
+> **Status: TRIAGED 2026-05-30 — all 6 R4-F accepted** (dispositions in Appendix A).
+> R1–R3 reviewed the *spec*; **R4 audits the shipped `capdevpipe_installer.py` + TUI handler
+> against it**, classifying each gap as requirement-incomplete, complete-but-unimplemented,
+> or both. Two were real bugs (fixed), one a dark feature (wired), three spec
+> clarifications (two doc-pinned, two tracked as open repairs).
+
+- **Reviewer**: opus-4.8-1m
+- **Scope**: post-ship gap audit triggered by a `/code-review --fix` of the forward-manifest
+  + cap-dev-pipe-install commits.
+
+**Executive summary (classification):**
+
+- **FR-11 (both — req imprecise + impl wrong).** "lists every profile" was implemented as a
+  raw substring test (`lang not in proc.stdout`), so `go` matched a `django/` profile and a
+  genuinely-absent profile could verify-pass. Invisible because the test fixture emitted bare
+  lang names, not the real indented `<lang>/` format. **Fixed** (`f7331446`).
+- **FR-12 / NFR-7 (both — req incomplete + impl dark feature).** `InstallConfig.rerun_mode`
+  was set by no code and read nowhere; the headless config-dict dropped it. NFR-7 only
+  required headless *fresh install*, never headless re-run. **Fixed** (`6da957d5`).
+- **FR-7 (req incomplete).** No on-disk `pipeline.env` format contract; impl was correct vs
+  `load_pipeline_env` but a future change could break compat without violating any req.
+  Doc-pinned (`4e1334e0`).
+- **FR-18 / §5 (req incomplete/inconsistent).** "installer-created paths" (FR-18) vs the
+  uninstall-safe set (§5) vs the impl's *managed* set — three definitions. Clarified;
+  doc-pinned (`e15eeff5`).
+- **FR-13 / FR-16 (req complete, acceptance unimplemented).** The "preview == executed set"
+  acceptance test does not exist and `execute()` recomputes `plan_actions`. **Open repair.**
+- **FR-17 (surface gap).** `doctor` unreachable interactively. **Open, minor.**
+
+**Numbered suggestions:**
+
+| ID | Area | Severity | Suggestion | Disposition |
+| ---- | ---- | ---- | ---- | ---- |
+| R4-F1 | Validation | high | FR-11: parse `--list-langs` to a profile-name set and test **exact** membership (not substring); fixture must emit the real `<lang>/` format. | **Accepted — fixed** `f7331446` |
+| R4-F2 | Data | medium | FR-7: pin the `pipeline.env` on-disk format contract (bare `KEY="value"`; no `export`/escaping; matches `load_pipeline_env`). | **Accepted — doc-pinned** `4e1334e0` |
+| R4-F3 | Architecture | medium | FR-18/§5: state that `created_paths` is the *managed* set (incl. pre-existing + `pipeline.env`), not run-created; uninstall must diff, not blind-`rm`. | **Accepted — doc-pinned** `e15eeff5` |
+| R4-F4 | Interfaces | high | FR-12/NFR-7: require re-run modes be headless-drivable via `rerun_mode`; forbid the dark-field regression with a test. | **Accepted — fixed** `6da957d5` |
+| R4-F5 | Validation | medium | FR-13: implement the preview==execute acceptance test; have `execute()` consume the previewed action list (FR-16 "single planned list") rather than recompute. | **Accepted — open repair** |
+| R4-F6 | Ops | low | FR-17: add `doctor` to the interactive re-run menu (or document headless-only). | **Accepted — open, minor** |
+
+**Endorsements**: (none.)  **Disagreements**: (none.)
+
 ## Areas Substantially Addressed
 
-| Area | Accepted (R1+R2) | Addressed (≥3)? |
+| Area | Accepted (R1+R2+R4) | Addressed (≥3)? |
 |------|------------------|-----------------|
-| Validation | 6 | ✓ |
+| Validation | 8 | ✓ |
 | Risks | 4 | ✓ |
-| Interfaces | 3 | ✓ |
-| Data | 2 | — |
-| Ops | 1 | — |
+| Interfaces | 4 | ✓ |
+| Data | 3 | ✓ |
+| Ops | 2 | — |
 | Security | 1 | — |
+| Architecture | 1 | — |
