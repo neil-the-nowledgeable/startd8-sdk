@@ -273,6 +273,24 @@ class ForwardDependencies(BaseModel):
     stdlib: list[str] = Field(default_factory=list)
 
 
+class ConventionProvenance(BaseModel):
+    """Provenance for a ``ForwardFileSpec`` populated by the framework-conventions
+    registry (Fix 2 / t-convention-marker).
+
+    Lets the postmortem / Kaizen classifier (postmortem Fix 3) attribute a
+    contract to a specific registry entry and version instead of treating it as
+    plan-declared. Schema is pinned (R1-S6) so downstream consumers can rely on
+    it: ``source`` is always ``"framework-conventions"``; ``pattern`` is the
+    matched filename pattern; ``version`` is the registry version stamp.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source: Literal["framework-conventions"] = "framework-conventions"
+    pattern: str
+    version: str
+
+
 class ForwardFileSpec(BaseModel):
     """Forward-looking file specification with elements, imports, and dependencies.
 
@@ -296,6 +314,7 @@ class ForwardFileSpec(BaseModel):
     imports: list[ForwardImportSpec] = Field(default_factory=list)
     dependencies: Optional[ForwardDependencies] = None
     language: Optional[str] = None  # FR-DFA-009: "python", "dockerfile", "go", etc.
+    convention_provenance: Optional[ConventionProvenance] = None  # Fix 2 / t-convention-marker
 
 
 class ForwardManifest(BaseModel):

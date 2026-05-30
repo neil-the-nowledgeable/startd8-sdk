@@ -409,16 +409,23 @@ class PhaseEmitter:
             from startd8.forward_manifest import ForwardFileSpec, ForwardManifest
             from startd8.micro_prime.lang_detect import detect_language
             from .plan_ingestion_parsing import _extract_imports_from_existing
+            from startd8.forward_manifest_extractor import framework_provenance_for_path
 
             file_specs: Dict[str, "ForwardFileSpec"] = {}
             for fpath, elems in file_elements.items():
                 lang = detect_language(fpath)
                 file_imports = _extract_imports_from_existing(fpath, project_root)
+                _conv_prov = (
+                    framework_provenance_for_path(fpath)
+                    if any(getattr(e, "decomposition_source", None) == "framework-conventions" for e in elems)
+                    else None
+                )
                 file_specs[fpath] = ForwardFileSpec(
                     file=fpath,
                     elements=elems,
                     imports=file_imports,
                     language=lang if lang != "python" else None,
+                    convention_provenance=_conv_prov,
                 )
 
             forward_manifest = ForwardManifest(

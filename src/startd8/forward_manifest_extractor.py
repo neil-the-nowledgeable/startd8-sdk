@@ -30,6 +30,7 @@ import yaml
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
+    ConventionProvenance,
     ForwardElementSpec,
     ForwardFileSpec,
     ForwardManifest,
@@ -118,6 +119,21 @@ def _matches_framework_pattern(filepath: str, pattern: str) -> bool:
         norm = filepath.replace("\\", "/")
         return norm == pattern or norm.endswith("/" + pattern)
     return Path(filepath).name == pattern
+
+
+def framework_provenance_for_path(filepath: str) -> "Optional[ConventionProvenance]":
+    """Return ConventionProvenance for a path matching the framework-config
+    registry, else None (Fix 2 / t-convention-marker). Deterministic from the
+    path plus the registry version; consumable by the postmortem classifier.
+    """
+    for pattern in _FRAMEWORK_CONFIG_DEFAULTS:
+        if _matches_framework_pattern(filepath, pattern):
+            return ConventionProvenance(
+                source="framework-conventions",
+                pattern=pattern,
+                version=FRAMEWORK_CONFIG_REGISTRY_VERSION,
+            )
+    return None
 
 
 def apply_framework_defaults(

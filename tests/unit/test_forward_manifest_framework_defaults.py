@@ -71,3 +71,37 @@ def test_registry_version_stamped_and_populated():
     assert FRAMEWORK_CONFIG_REGISTRY_VERSION
     assert "next.config.mjs" in _FRAMEWORK_CONFIG_DEFAULTS
     assert "tailwind.config.cjs" in _FRAMEWORK_CONFIG_DEFAULTS
+
+
+# ── t-convention-marker (Increment 2): file-level provenance schema ──────────
+
+def test_framework_provenance_for_matching_path():
+    from startd8.forward_manifest_extractor import (
+        FRAMEWORK_CONFIG_REGISTRY_VERSION,
+        framework_provenance_for_path,
+    )
+
+    prov = framework_provenance_for_path("next.config.mjs")
+    assert prov is not None
+    assert prov.source == "framework-conventions"
+    assert prov.pattern == "next.config.mjs"
+    assert prov.version == FRAMEWORK_CONFIG_REGISTRY_VERSION
+
+
+def test_framework_provenance_none_for_non_match():
+    from startd8.forward_manifest_extractor import framework_provenance_for_path
+
+    assert framework_provenance_for_path("src/app.py") is None
+
+
+def test_forward_file_spec_carries_convention_provenance_round_trip():
+    from startd8.forward_manifest import ConventionProvenance, ForwardFileSpec
+
+    prov = ConventionProvenance(pattern="tailwind.config.js", version="1.0.0")
+    fs = ForwardFileSpec(file="tailwind.config.js", convention_provenance=prov)
+    assert fs.convention_provenance is not None
+    assert fs.convention_provenance.source == "framework-conventions"
+    # default None when not a convention file
+    assert ForwardFileSpec(file="src/app.py").convention_provenance is None
+    # serialization round-trip survives the new field
+    assert ForwardFileSpec.model_validate(fs.model_dump()) == fs
