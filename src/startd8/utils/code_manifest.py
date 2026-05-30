@@ -77,6 +77,15 @@ class ElementKind(str, Enum):
     CONSTANT = "constant"
     VARIABLE = "variable"
     TYPE_ALIAS = "type_alias"
+    # Multi-language element kinds (MULTILANG_MANIFEST_VALIDATION FR-3): the native
+    # kinds the per-language parsers (C#/Java/Go/Node) emit that Python's AST never
+    # produces. Additive — existing values/serialization unchanged (NFR-2).
+    INTERFACE = "interface"
+    ENUM = "enum"
+    STRUCT = "struct"
+    RECORD = "record"
+    FIELD = "field"
+    DEFAULT_EXPORT = "default_export"  # JS/TS `export default <expr>` (FR-4)
 
 
 class Visibility(str, Enum):
