@@ -1,0 +1,7 @@
+name: edit_mode
+task_description: "Refactor the logging helper"
+output_format: null
+template_key: null
+context:
+  existing_files:
+    "logger.py": "import logging\n\n\ndef get_logger(name):\n    return logging.getLogger(name)\n"

@@ -1,0 +1,14 @@
+name: rich_context
+task_description: "Implement the user service"
+output_format: null
+template_key: null
+context:
+  plan_context: "Build a REST user service with CRUD endpoints."
+  architectural_context: "Layered architecture: api -> service -> repository."
+  project_objectives:
+    - "Maintainability"
+    - "High test coverage"
+  semantic_conventions:
+    naming: "snake_case"
+  domain_constraints:
+    - "No external network calls in unit tests"

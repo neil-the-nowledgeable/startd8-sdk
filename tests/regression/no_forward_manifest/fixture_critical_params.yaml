@@ -1,0 +1,10 @@
+name: critical_params
+task_description: "Add rate limiting middleware"
+output_format: null
+template_key: null
+context:
+  requirements_text: "Must support 100 requests/sec with a burst of 200."
+  critical_parameters:
+    - "max_rps=100"
+    - "burst=200"
+  domain_constraints: "Pure Python standard library only"
