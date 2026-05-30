@@ -181,6 +181,41 @@ class TestStandaloneHandler:
             == "symlink"
         )
 
+    def test_handler_headless_honors_rerun_mode(
+        self, full_source, target, monkeypatch, tmp_path
+    ):
+        """Headless re-run with an explicit rerun_mode applies that mode (not a dark field)."""
+        import startd8.config as config_mod
+        from startd8.config import ConfigManager
+        from startd8.tui_improved import ImprovedTUI
+        from rich.console import Console
+
+        monkeypatch.setattr(
+            config_mod, "_config_manager", ConfigManager(tmp_path / "cfg")
+        )
+        tui = object.__new__(ImprovedTUI)
+        tui.console = Console()
+        base_config = {
+            "source_path": str(full_source),
+            "target_root": str(target),
+            "method": "symlink",
+            "pipeline_env": {"CONTEXTCORE_ROOT": "/cc", "SDK_ROOT": "/sdk"},
+        }
+
+        # First install (fresh) returns an ExecuteResult.
+        first = tui.install_capdevpipe_flow(base_config)
+        assert first is not None and first.success
+
+        # Break an embedded symlink, then re-run headlessly in 'repair' mode.
+        run_sh = target / EMBED_DIR_NAME / "run.sh"
+        run_sh.unlink()
+        assert not run_sh.exists()
+        vr = tui.install_capdevpipe_flow({**base_config, "rerun_mode": "repair"})
+        # Apply-mode path returns a VerifyResult (per the documented contract) and repair
+        # recreated the missing symlink.
+        assert vr is not None and vr.passed, getattr(vr, "message", vr)
+        assert run_sh.is_symlink()
+
     def test_installer_imports_without_tui_or_questionary(self):
         # NFR-7, robustly: in a *fresh* interpreter, importing/using the installer must not
         # pull in the TUI layer. (A sibling test that imports the TUI would pollute this

@@ -8669,13 +8669,18 @@ Please be thorough, constructive, and specific in your analysis."""
                 return None  # cancelled
 
             state = installer.detect_existing(cfg.target_root)
-            if state.exists and not headless:
-                mode = self._capdevpipe_choose_mode(state)
+            # Existing-install re-run (FR-12). Interactive always prompts for a mode;
+            # headless applies an explicitly-requested ``cfg.rerun_mode`` (the registry /
+            # library surface, NFR-7). Headless with no rerun_mode falls through to
+            # ``execute()``, which is an idempotent "ensure installed" replay.
+            if state.exists and (not headless or cfg.rerun_mode is not None):
+                mode = cfg.rerun_mode if headless else self._capdevpipe_choose_mode(state)
                 if mode is None:
                     return None
                 installer.apply_mode(cfg.target_root, mode, cfg)
                 vr = installer.verify(cfg.target_root)
-                self._capdevpipe_render_verify(cfg, vr, mode=mode)
+                if not headless:
+                    self._capdevpipe_render_verify(cfg, vr, mode=mode)
                 self._persist_capdevpipe_prefs(cfg)
                 return vr
 
@@ -8710,7 +8715,12 @@ Please be thorough, constructive, and specific in your analysis."""
 
     def _capdevpipe_cfg_from_dict(self, config: Dict[str, Any], installer):
         """Build an InstallConfig from a plain dict for headless runs (S8/NFR-7)."""
-        from .capdevpipe_installer import InstallConfig, InstallMethod, ProfileSpec
+        from .capdevpipe_installer import (
+            InstallConfig,
+            InstallMethod,
+            ProfileSpec,
+            ReRunMode,
+        )
 
         source = installer.locate_source(
             Path(config["source_path"]) if config.get("source_path") else None
@@ -8731,6 +8741,11 @@ Please be thorough, constructive, and specific in your analysis."""
             default_lang=config.get("default_lang", "python"),
             profiles=profiles,
         )
+        # FR-12 via the headless surface: honor an explicitly-requested re-run mode so the
+        # workflow registry can drive upgrade/repair/reconfigure/replace-env on an existing
+        # install (previously the field was silently dropped — a dark feature).
+        if config.get("rerun_mode"):
+            cfg.rerun_mode = ReRunMode(config["rerun_mode"])
         cfg.pipeline_env = installer.detect_pipeline_env(cfg)
         return cfg
 
