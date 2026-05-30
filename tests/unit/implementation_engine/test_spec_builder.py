@@ -1,6 +1,5 @@
 """Tests for implementation_engine.spec_builder — spec prompt assembly."""
 
-import pytest
 from unittest.mock import Mock
 
 from startd8.implementation_engine.spec_builder import (
@@ -768,3 +767,55 @@ class TestForwardManifestSectionInjection:
         result = build_spec_prompt("Task", ctx, None)
         assert "## Interface Contract Bindings" not in result
         assert "## Expected Code Elements" not in result
+
+
+class TestForwardManifestEmptyDiagnostic:
+    """FR-2 (forward-manifest draft-time): when a target file has no ForwardFileSpec entry
+    or an empty spec, the prompt still builds AND a structured INFO event
+    `forward_manifest.section.empty` is emitted with {target_files, reason} so the
+    postmortem/Kaizen classifier (Fix 3) can attribute failures instead of "root cause: unknown".
+    """
+
+    EVENT = "forward_manifest.section.empty"
+
+    def _emit_records(self, caplog, ctx):
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="startd8.implementation_engine.spec_builder"):
+            build_spec_prompt("Task", ctx, None)
+        return [
+            r for r in caplog.records
+            if getattr(r, "event", None) == self.EVENT
+        ]
+
+    def test_reason_no_target_files(self, caplog):
+        # No target_files and no forward data -> reason "no_target_files".
+        recs = self._emit_records(caplog, {"plan_context": "x"})
+        assert len(recs) == 1
+        assert recs[0].levelname == "INFO"
+        assert recs[0].reason == "no_target_files"
+        assert recs[0].target_files == []
+
+    def test_reason_missing_entry(self, caplog):
+        # target_files present but no forward_contracts/element_specs supplied -> "missing_entry".
+        recs = self._emit_records(caplog, {"target_files": ["next.config.mjs"]})
+        assert len(recs) == 1
+        assert recs[0].reason == "missing_entry"
+        assert recs[0].target_files == ["next.config.mjs"]
+
+    def test_reason_empty_elements(self, caplog):
+        # forward data supplied but renders empty (whitespace) -> "empty_elements".
+        recs = self._emit_records(
+            caplog,
+            {"target_files": ["mod.py"], "forward_contracts": "   ", "forward_element_specs": ""},
+        )
+        assert len(recs) == 1
+        assert recs[0].reason == "empty_elements"
+
+    def test_no_event_when_section_present(self, caplog):
+        # FR-2 only fires on the empty/missing branch — a populated section emits nothing.
+        recs = self._emit_records(
+            caplog,
+            {"target_files": ["mod.py"], "forward_contracts": "MUST expose config"},
+        )
+        assert recs == []

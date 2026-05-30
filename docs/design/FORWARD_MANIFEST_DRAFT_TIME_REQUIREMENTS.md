@@ -1,8 +1,11 @@
 # Forward Manifest at Draft Time — Requirements
 
-**Version:** 0.5 (R2 audit + FR-3 fully implemented — real `validate_implementation`)
+**Version:** 0.6 (FR-2 structured diagnostic implemented — completes the MVP FR set)
 **Date:** 2026-05-30
-**Status:** R1 CRP applied; R2 audit corrected the FR-3 phantom-API premise **and** the gap is now fully closed — `ForwardManifest.validate_implementation()` is implemented (multi-file Python + task-scoped contracts), reviewer rewired to it
+**Status:** R1 CRP applied; R2 audit corrected the FR-3 phantom-API premise and FR-3 fully
+implemented (`ForwardManifest.validate_implementation()`); **FR-2's structured
+`forward_manifest.section.empty` diagnostic — previously the one unimplemented MVP requirement —
+is now implemented + tested**
 **Component:** startd8 SDK — `implementation_engine/spec_builder.py` + `forward_manifest_extractor.py`
 **Triggered by:** `RUN_003_FORWARD_MANIFEST_GAP_POSTMORTEM.md`
 
@@ -105,6 +108,15 @@ Fix 1 alone improves any feature whose plan **does** declare elements. Fix 1 + F
 
   The structured shape is the postmortem classifier's hook (Fix 3 — out of scope here
   but consumes this event).
+
+  **Status: IMPLEMENTED (2026-05-30).** Previously this MVP requirement was unimplemented — the
+  spec_builder appended the section when present (FR-1) but had no `else` branch, so the
+  empty/missing case built silently with no diagnostic. Now `spec_builder.build_spec_prompt`
+  emits `logger.info("forward_manifest.section.empty", extra={"event": …, "target_files": […],
+  "reason": …})` on the empty branch, with `reason` ∈ {`no_target_files`, `missing_entry`,
+  `empty_elements`}. Covered by `test_spec_builder.py::TestForwardManifestEmptyDiagnostic`
+  (one test per reason + a no-event-when-present guard). Fix 3 (the classifier that *consumes*
+  this event + `convention_provenance`) remains a separate effort.
 - **FR-3 Single-source contract via a real `validate_implementation()` method (R1-F1;
   R2-F1 phantom-API correction; R2-F2 implementation).** The contract `spec_builder`
   injects MUST be the **same contract** `reviewer.py` enforces post-hoc — so the drafter
@@ -339,6 +351,14 @@ file_specs-only→**+interface contracts**. New tests:
 The plan's `t-validate-impl-read` / `t-contract-symmetry` remain obsolete as written (they
 target the phantom signature), but the real method's behavior is now covered by the tests
 above.*
+
+*v0.6 — FR-2 structured diagnostic implemented, completing the MVP FR set. The
+`forward_manifest.section.empty` INFO event (fields `{event, target_files, reason}`,
+`reason` ∈ `no_target_files`/`missing_entry`/`empty_elements`) is emitted on
+`spec_builder.build_spec_prompt`'s empty/missing branch — previously this MVP requirement was
+silently unimplemented (section appended when present via FR-1, but no `else` diagnostic). This
+is the postmortem-classifier hook (Fix 3, still a separate effort, now unblocked). Tests:
+`test_spec_builder.py::TestForwardManifestEmptyDiagnostic` (3 reasons + no-event-when-present).*
 
 ---
 

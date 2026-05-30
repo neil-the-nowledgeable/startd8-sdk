@@ -1178,6 +1178,27 @@ def build_spec_prompt(
     # (RUN_003 postmortem Gap A: the drafter never reliably saw the contract).
     if forward_contracts_section.strip():
         prioritized.append((0, "forward_manifest", forward_contracts_section))
+    else:
+        # FR-2 (forward-manifest draft-time): the prompt still builds when a target file
+        # has no ForwardFileSpec entry or an empty spec — but emit a structured INFO event
+        # so the postmortem/Kaizen classifier (Fix 3) can attribute a downstream failure to
+        # a missing/empty contract rather than "root cause: unknown". INFO (not WARN: this is
+        # expected for many feature/file combos and must not page; not DEBUG: the classifier
+        # must see it). Fields: {target_files, reason}.
+        if not target_files:
+            _fm_empty_reason = "no_target_files"
+        elif forward_contracts is None and forward_element_specs is None:
+            _fm_empty_reason = "missing_entry"
+        else:
+            _fm_empty_reason = "empty_elements"
+        logger.info(
+            "forward_manifest.section.empty",
+            extra={
+                "event": "forward_manifest.section.empty",
+                "target_files": list(target_files) if target_files else [],
+                "reason": _fm_empty_reason,
+            },
+        )
 
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")
