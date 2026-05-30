@@ -359,3 +359,101 @@ class TestCSharpPostmortemScoring:
         code = "public class { broken"
         result = _validate_csharp_file(code, _make_result())
         assert result.contract_compliance == 0.0
+
+
+# ---------------------------------------------------------------------------
+# P0: C# semantic checks wired into disk validation (REQ-KZ-CS-200)
+# ---------------------------------------------------------------------------
+
+class TestCSharpSemanticChecksInDiskValidation:
+    """Verify run_csharp_semantic_checks() results flow into disk compliance."""
+
+    def test_sql_injection_detected_in_cs_file(self):
+        """SQL injection in .cs file produces semantic_issues in disk result."""
+        from startd8.forward_manifest_validator import _validate_csharp_file
+        code = """
+using System;
+using Npgsql;
+
+namespace cartservice.cartstore
+{
+    public class AlloyDBCartStore
+    {
+        public void GetCart(string userId)
+        {
+            cmd.CommandText = $"SELECT * FROM carts WHERE userId='{userId}'";
+        }
+    }
+}
+"""
+        result = _validate_csharp_file(code, _make_result("AlloyDBCartStore.cs"))
+        assert result.ast_valid is True
+        sql_issues = [
+            i for i in result.semantic_issues
+            if isinstance(i, dict) and i.get("category") == "sql_injection_risk"
+        ]
+        assert len(sql_issues) >= 1, (
+            f"Expected sql_injection_risk issue, got: {result.semantic_issues}"
+        )
+
+    def test_console_writeline_detected_in_cs_file(self):
+        from startd8.forward_manifest_validator import _validate_csharp_file
+        code = """
+using System;
+
+namespace X
+{
+    public class Svc
+    {
+        public void DoWork()
+        {
+            Console.WriteLine("debug");
+        }
+    }
+}
+"""
+        result = _validate_csharp_file(code, _make_result("Svc.cs"))
+        console_issues = [
+            i for i in result.semantic_issues
+            if isinstance(i, dict) and i.get("category") == "console_writeline_in_service"
+        ]
+        assert len(console_issues) >= 1
+
+    def test_clean_cs_file_no_semantic_issues(self):
+        from startd8.forward_manifest_validator import _validate_csharp_file
+        code = """
+using System;
+using Microsoft.Extensions.Logging;
+
+namespace X
+{
+    public class Svc
+    {
+        private readonly ILogger<Svc> _logger;
+        public Svc(ILogger<Svc> logger) { _logger = logger; }
+        public void DoWork() { _logger.LogInformation("ok"); }
+    }
+}
+"""
+        result = _validate_csharp_file(code, _make_result("Svc.cs"))
+        semantic_cats = [
+            i.get("category") for i in result.semantic_issues
+            if isinstance(i, dict)
+        ]
+        assert "sql_injection_risk" not in semantic_cats
+        assert "console_writeline_in_service" not in semantic_cats
+
+    def test_csproj_missing_nullable_detected(self):
+        from startd8.forward_manifest_validator import _validate_csproj_file
+        content = """<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+"""
+        result = _validate_csproj_file(content, _make_result("test.csproj"))
+        nullable_issues = [
+            i for i in result.semantic_issues
+            if isinstance(i, dict) and i.get("category") == "missing_nullable_in_csproj"
+        ]
+        assert len(nullable_issues) >= 1

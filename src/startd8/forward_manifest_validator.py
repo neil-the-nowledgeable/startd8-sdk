@@ -831,6 +831,23 @@ def _validate_csharp_file(
     if ns_issues:
         result.semantic_issues.extend(ns_issues)
 
+    # REQ-KZ-CS-200: run the same C# semantic checks here so the text-fallback
+    # path produces the same semantic_issues as the tree-sitter path above —
+    # otherwise SQL-injection / Console.WriteLine / etc. are only detected when
+    # tree-sitter is installed.
+    try:
+        from startd8.validators.csharp_semantic_checks import (
+            run_csharp_semantic_checks,
+        )
+        for sem_issue in run_csharp_semantic_checks(content):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": sem_issue.message,
+            })
+    except ImportError:
+        pass  # csharp_semantic_checks not available
+
     # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
     result.contract_compliance = min(result.contract_compliance, 0.8)
     return result
@@ -923,6 +940,24 @@ def _validate_csproj_file(
                     "severity": "warning",
                     "message": "PackageReference missing Include attribute",
                 })
+
+    # REQ-KZ-CS-200: run csproj-specific semantic checks (e.g.
+    # missing_nullable_in_csproj) — run_csharp_semantic_checks dispatches by
+    # file_path suffix, so passing result.file_path routes to the .csproj branch.
+    try:
+        from startd8.validators.csharp_semantic_checks import (
+            run_csharp_semantic_checks,
+        )
+        for sem_issue in run_csharp_semantic_checks(
+            content, file_path=result.file_path,
+        ):
+            result.semantic_issues.append({
+                "category": sem_issue.check,
+                "severity": sem_issue.severity,
+                "message": sem_issue.message,
+            })
+    except ImportError:
+        pass  # csharp_semantic_checks not available
 
     return result
 
