@@ -246,3 +246,50 @@ class TestFr4DefaultExport:
             elements=[ForwardElementSpec(kind=ElementKind.CONSTANT, name="default")],
         )
         assert _validate_file_spec("tailwind.config.js", legacy_spec, reg) == []
+
+
+class TestReviewFixes:
+    """Fixes from the P1-P5 code review: C# imports (R1-F8), C#/Java per-parse tier
+    (R1-F4), and the FR-1 'never raise' builder contract."""
+
+    def test_csharp_usings_become_imports(self):
+        # R1-F8: C# `using` directives are extractable -> populate FileManifest.imports.
+        m = build_multilang_file_manifest(
+            "S.cs", "using System;\nusing Grpc.Core;\nnamespace D { class C {} }\n"
+        )
+        mods = {i.module for i in m.imports}
+        assert {"System", "Grpc.Core"} <= mods
+
+    def test_csharp_import_contract_enforceable(self):
+        from startd8.forward_manifest import ForwardImportSpec
+
+        m = build_multilang_file_manifest("S.cs", "using System;\nnamespace D { class C {} }\n")
+        reg = ManifestRegistry({"S.cs": m})
+        # Present import -> clean; absent import -> a (tier-calibrated) violation.
+        ok = ForwardFileSpec(
+            file="S.cs", imports=[ForwardImportSpec(kind="import", module="System")]
+        )
+        assert _validate_file_spec("S.cs", ok, reg) == []
+        bad = ForwardFileSpec(
+            file="S.cs", imports=[ForwardImportSpec(kind="import", module="Nonexistent")]
+        )
+        viols = _validate_file_spec("S.cs", bad, reg)
+        assert len(viols) == 1 and viols[0].violation_type == "missing_import"
+
+    def test_java_invalid_source_is_advisory(self):
+        # R1-F4 per-parse: javalang cannot parse garbage -> advisory (not "is javalang installed").
+        from startd8.languages.manifest_adapter import _java_parse_authoritative
+
+        assert _java_parse_authoritative("this is not { valid java [[[") is False
+
+    def test_builder_never_raises_on_parser_failure(self, monkeypatch):
+        # FR-1: a supported-language parser that throws degrades to an empty tier=None
+        # manifest (downstream skips it), never propagating the exception.
+        import startd8.languages.go_parser as gp
+
+        def boom(_src):
+            raise RuntimeError("parser blew up")
+
+        monkeypatch.setattr(gp, "parse_go_source", boom)
+        m = build_multilang_file_manifest("x.go", "package main\n")
+        assert m.elements == [] and m.parser_tier is None  # degraded, no exception
