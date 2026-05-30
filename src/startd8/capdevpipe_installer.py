@@ -568,13 +568,21 @@ class CapDevPipeInstaller:
         actions += self.update_gitignore(cfg)
         return actions
 
-    def execute(self, cfg: InstallConfig) -> ExecuteResult:
-        """Run :meth:`plan_actions` in order, confined to ``target_root`` (FR-16, NFR-6).
+    def execute(
+        self, cfg: InstallConfig, actions: Optional[List[Action]] = None
+    ) -> ExecuteResult:
+        """Run the planned actions in order, confined to ``target_root`` (FR-16, NFR-6).
 
         Applies each action idempotently (skipping those already satisfied) and writes the
         install manifest on success. On failure: the symlink path rolls back its own writes;
         a path containing an external subprocess (copy/rsync) cannot be cleanly reversed, so
         it returns a repairable state instead (R2-S2).
+
+        **Preview fidelity (FR-13 / FR-16 — R4-F5).** Pass the *already-computed* preview list
+        as ``actions`` so the list the TUI showed is the exact list executed — the "single
+        planned action list" the requirement mandates. When ``actions`` is ``None`` the plan is
+        computed here (headless/library callers that skip the preview). Either way the set is
+        deterministic, but consuming the preview removes the recompute-and-hope gap.
 
         Refuses to layer onto a prior **pending** (crashed/incomplete) install (R2-S7): the
         caller should run ``apply_mode(... REPAIR)`` instead. TOCTOU symlink confinement
@@ -590,7 +598,8 @@ class CapDevPipeInstaller:
                     "'repair' to complete it safely rather than layering a second install."
                 ),
             )
-        actions = self.plan_actions(cfg)
+        if actions is None:
+            actions = self.plan_actions(cfg)
         return self._run_actions(actions, cfg)
 
     # -- execution engine (private) ---------------------------------------- #

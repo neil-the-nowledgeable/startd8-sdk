@@ -8654,7 +8654,7 @@ Please be thorough, constructive, and specific in your analysis."""
         this method only gathers inputs (or accepts them) and renders results. In headless
         mode it returns the ``ExecuteResult`` (or the apply-mode ``VerifyResult``).
         """
-        from .capdevpipe_installer import CapDevPipeInstaller
+        from .capdevpipe_installer import CapDevPipeInstaller, ReRunMode
         from .exceptions import Startd8Error
 
         installer = CapDevPipeInstaller()
@@ -8677,8 +8677,13 @@ Please be thorough, constructive, and specific in your analysis."""
                 mode = cfg.rerun_mode if headless else self._capdevpipe_choose_mode(state)
                 if mode is None:
                     return None
-                installer.apply_mode(cfg.target_root, mode, cfg)
-                vr = installer.verify(cfg.target_root)
+                # doctor (FR-17) is a read-only health check: call it directly so its
+                # richer dangling-source diagnostic is what we render, not verify()'s.
+                if mode is ReRunMode.DOCTOR:
+                    vr = installer.doctor(cfg.target_root)
+                else:
+                    installer.apply_mode(cfg.target_root, mode, cfg)
+                    vr = installer.verify(cfg.target_root)
                 if not headless:
                     self._capdevpipe_render_verify(cfg, vr, mode=mode)
                 self._persist_capdevpipe_prefs(cfg)
@@ -8688,7 +8693,9 @@ Please be thorough, constructive, and specific in your analysis."""
             if not headless and not self._capdevpipe_preview_confirm(cfg, actions):
                 return None
 
-            result = installer.execute(cfg)
+            # FR-13/FR-16 (R4-F5): execute consumes the *previewed* action list, so the list
+            # the user confirmed is byte-for-byte the list applied — not an independent recompute.
+            result = installer.execute(cfg, actions=actions)
             if not result.success:
                 self._capdevpipe_render_failure(result)
                 return result
@@ -8880,6 +8887,7 @@ Please be thorough, constructive, and specific in your analysis."""
             "upgrade (refresh scripts; prune orphans)": ReRunMode.UPGRADE,
             "reconfigure (rewrite config/profiles)": ReRunMode.RECONFIGURE,
             "replace-pipeline.env (rewrite managed keys)": ReRunMode.REPLACE_PIPELINE_ENV,
+            "doctor (check for a moved/deleted source)": ReRunMode.DOCTOR,
             "← cancel": None,
         }
         picked = questionary.select(

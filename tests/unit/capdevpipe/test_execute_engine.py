@@ -351,3 +351,47 @@ class TestPlanAndExecuteWiring:
         result = installer.execute(_cfg(fake_source, target))
         assert result.success
         assert (target / EMBED_DIR_NAME / "run.sh").is_symlink()
+
+    def test_execute_consumes_preview_without_recomputing(
+        self, installer, cfg_factory, monkeypatch
+    ):
+        """FR-13/FR-16 (R4-F5): the previewed action list IS the executed list.
+
+        When the preview is passed to execute(), it must NOT recompute plan_actions —
+        otherwise preview and execution can drift. Proven by counting plan_actions calls.
+        """
+        cfg = cfg_factory()
+        calls = {"n": 0}
+        real_plan = installer.plan_actions
+
+        def counting_plan(c):
+            calls["n"] += 1
+            return real_plan(c)
+
+        monkeypatch.setattr(installer, "plan_actions", counting_plan)
+
+        preview = installer.plan_actions(cfg)  # the TUI's preview step -> n == 1
+        assert calls["n"] == 1
+        result = installer.execute(cfg, actions=preview)  # must not recompute
+        assert result.success
+        assert calls["n"] == 1, "execute() recomputed plan_actions instead of consuming preview"
+        # Every applied action came from the previewed list (no surprise writes).
+        preview_targets = {a.target for a in preview}
+        assert {a.target for a in result.actions_applied} <= preview_targets
+
+    def test_execute_without_actions_still_plans(
+        self, installer, cfg_factory, monkeypatch
+    ):
+        """Headless/library callers that skip the preview get a computed plan (back-compat)."""
+        cfg = cfg_factory()
+        calls = {"n": 0}
+        real_plan = installer.plan_actions
+
+        def counting_plan(c):
+            calls["n"] += 1
+            return real_plan(c)
+
+        monkeypatch.setattr(installer, "plan_actions", counting_plan)
+        result = installer.execute(cfg)  # no actions -> execute computes them
+        assert result.success
+        assert calls["n"] == 1

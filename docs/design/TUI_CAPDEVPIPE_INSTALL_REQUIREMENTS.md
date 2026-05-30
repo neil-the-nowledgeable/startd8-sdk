@@ -215,14 +215,13 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   symlinks, files) and require confirmation. *Acceptance:* the previewed action list is the
   **same** list `execute()` consumes (FR-16); a test asserts preview == executed set.
   *(R2-F4)*
-  **Fidelity status (R4-F5).** The current implementation computes the preview via
-  `plan_actions(cfg)` and then `execute(cfg)` **recomputes** `plan_actions(cfg)` internally —
-  the two lists are equal only because `plan_actions` is deterministic, and **no test asserts
-  the equality** the acceptance clause requires. To honor FR-16's "single planned action
-  list" literally and make the guarantee testable, `execute()` SHOULD accept the
-  already-computed action list (e.g. `execute(cfg, actions=None)` consuming the preview when
-  provided), and a test MUST assert the previewed list equals the list `execute()` applies.
-  *(Open repair — acceptance criterion specified since R2-F4 but never implemented.)*
+  **Fidelity status (R4-F5 — fixed).** Previously the preview computed `plan_actions(cfg)`
+  and `execute(cfg)` independently **recomputed** it, equal only by determinism and with no
+  test guarding the equality. Now `execute(cfg, actions=None)` consumes the already-computed
+  preview when provided — the TUI passes its previewed list straight through, so the confirmed
+  list IS the executed list — and a test asserts `execute()` does not recompute `plan_actions`
+  when given the preview. Headless/library callers that skip the preview still get a computed
+  plan. *(Acceptance specified since R2-F4; implemented under R4-F5.)*
 - **FR-14 Summary + next steps.** On completion, show what was created and the exact
   command to run the pipeline (`./.cap-dev-pipe/{project}-cap-dlv-pipe.sh`).
 - **FR-15 Persist preferences.** Remember the cap-dev-pipe source path and default
@@ -239,12 +238,16 @@ In scope: **install + configure + verify**. Out of scope: *running* the pipeline
   the missing path (not a raw symlink-resolution error). *Acceptance:* install via symlink,
   rename the source dir, run verify; a dangling-target diagnostic names the missing path.
   *(R2-F3 / R2-S4)*
-  **Interactive reachability (R4-F6).** FR-17's detection is satisfied by `verify()` and
-  `apply_mode(... doctor)`. However the **interactive** re-run menu (`_capdevpipe_choose_mode`)
-  currently omits `doctor`, so the dedicated source-relocation health check is reachable only
-  headlessly. Either add a `doctor` choice to the interactive re-run menu, or document it as
-  headless-only and rely on `verify()` surfacing the dangling-source diagnostic interactively.
-  *(Minor — FR-17's core acceptance is met by `verify()`; this is a surface-completeness gap.)*
+  **Interactive reachability (R4-F6 — fixed).** A `doctor` choice is now in the interactive
+  re-run menu (`_capdevpipe_choose_mode`), and the flow special-cases it to call
+  `installer.doctor()` directly (rendering its dangling-source diagnostic) rather than
+  `apply_mode`+`verify` (which would only log it). **Source-location nuance:** `doctor`
+  compares against the **manifest's recorded** `source_path`, but the flow still requires *a*
+  valid source to build its `InstallConfig` (via `locate_source`). The intended workflow is
+  "my source moved → re-enter the flow pointing at the new (valid) location → `doctor` reports
+  the manifest's old path is gone → re-point via `upgrade`." *Acceptance (added):* a headless
+  install, then a moved source + `rerun_mode="doctor"` pointing at the relocated checkout,
+  returns a non-passing `VerifyResult` whose `dangling_source` names the missing original path.
 - **FR-18 Install manifest (authoritative inventory).** Every successful install persists a
   manifest at `.cap-dev-pipe/.install-manifest.json` recording the installer-created paths,
   the install **method** (symlink/copy), each path's **resolved target** and the **source
@@ -371,10 +374,11 @@ contract (bare `KEY="value"`, no `export`/escaping — matches `load_pipeline_en
 FR-18/§5 clarify `created_paths` is the *managed* set, not run-created (uninstall must not
 blind-`rm` it); **R4-F4** FR-12/NFR-7 require headless re-run-mode drivability (the
 `rerun_mode` field was a dark feature), **fixed**; **R4-F5** FR-13 preview==execute fidelity
-is specified but untested and `execute()` recomputes the plan (open repair); **R4-F6**
-`doctor` is unreachable from the interactive menu (open, minor). Dispositions in Appendix A;
-round R4 in Appendix C. Fixes shipped in commits `f7331446` (R4-F1) and `6da957d5` (R4-F4);
-R4-F2/F3 doc-pinned in `4e1334e0`/`e15eeff5`.*
+(`execute(cfg, actions=)` now consumes the previewed list; no-recompute test added);
+**R4-F6** `doctor` added to the interactive menu (flow renders its dangling-source
+diagnostic). Dispositions in Appendix A; round R4 in Appendix C. Fixes shipped in commits
+`f7331446` (R4-F1) and `6da957d5` (R4-F4); R4-F2/F3 doc-pinned in `4e1334e0`/`e15eeff5`;
+R4-F5/F6 in this change.*
 
 ---
 
@@ -418,8 +422,8 @@ R4-F2/F3 doc-pinned in `4e1334e0`/`e15eeff5`.*
 | R4-F2 | Data | FR-7 `pipeline.env` on-disk format contract: bare `KEY="value"`, no `export`/shell-escaping (matches `load_pipeline_env`) | FR-7 (doc-pinned `4e1334e0`) |
 | R4-F3 | Architecture | FR-18/§5: `created_paths` is the *managed* set (incl. pre-existing + `pipeline.env`), not run-created — uninstall must not blind-`rm` it | FR-18 / §5 (doc-pinned `e15eeff5`) |
 | R4-F4 | Interfaces | FR-12/NFR-7: re-run modes must be headless-drivable via `rerun_mode` (was a dark field) | FR-12 / NFR-7 (**fixed** `6da957d5`) |
-| R4-F5 | Validation | FR-13 preview==execute fidelity is specified but **untested**, and `execute()` recomputes the plan rather than consuming the previewed list | FR-13 (**open repair**) |
-| R4-F6 | Ops | FR-17 `doctor` is unreachable from the interactive re-run menu (headless-only) | FR-17 (**open**, minor) |
+| R4-F5 | Validation | `execute(cfg, actions=)` consumes the previewed list; test asserts no recompute (preview == executed) | FR-13 (**fixed**) |
+| R4-F6 | Ops | `doctor` added to interactive menu; flow renders `doctor()`'s dangling-source diagnostic | FR-17 (**fixed**) |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -554,9 +558,11 @@ lifecycle)._
 - **FR-18 / §5 (req incomplete/inconsistent).** "installer-created paths" (FR-18) vs the
   uninstall-safe set (§5) vs the impl's *managed* set — three definitions. Clarified;
   doc-pinned (`e15eeff5`).
-- **FR-13 / FR-16 (req complete, acceptance unimplemented).** The "preview == executed set"
-  acceptance test does not exist and `execute()` recomputes `plan_actions`. **Open repair.**
-- **FR-17 (surface gap).** `doctor` unreachable interactively. **Open, minor.**
+- **FR-13 / FR-16 (req complete, acceptance unimplemented → fixed).** The "preview ==
+  executed set" acceptance test did not exist and `execute()` recomputed `plan_actions`.
+  `execute(cfg, actions=)` now consumes the preview; no-recompute test added. **Fixed.**
+- **FR-17 (surface gap → fixed).** `doctor` was unreachable interactively; added to the menu
+  and the flow renders `doctor()`'s diagnostic. **Fixed.**
 
 **Numbered suggestions:**
 
@@ -566,10 +572,14 @@ lifecycle)._
 | R4-F2 | Data | medium | FR-7: pin the `pipeline.env` on-disk format contract (bare `KEY="value"`; no `export`/escaping; matches `load_pipeline_env`). | **Accepted — doc-pinned** `4e1334e0` |
 | R4-F3 | Architecture | medium | FR-18/§5: state that `created_paths` is the *managed* set (incl. pre-existing + `pipeline.env`), not run-created; uninstall must diff, not blind-`rm`. | **Accepted — doc-pinned** `e15eeff5` |
 | R4-F4 | Interfaces | high | FR-12/NFR-7: require re-run modes be headless-drivable via `rerun_mode`; forbid the dark-field regression with a test. | **Accepted — fixed** `6da957d5` |
-| R4-F5 | Validation | medium | FR-13: implement the preview==execute acceptance test; have `execute()` consume the previewed action list (FR-16 "single planned list") rather than recompute. | **Accepted — open repair** |
-| R4-F6 | Ops | low | FR-17: add `doctor` to the interactive re-run menu (or document headless-only). | **Accepted — open, minor** |
+| R4-F5 | Validation | medium | FR-13: implement the preview==execute acceptance test; have `execute()` consume the previewed action list (FR-16 "single planned list") rather than recompute. | **Accepted — fixed** (`execute(cfg, actions=)` + no-recompute test) |
+| R4-F6 | Ops | low | FR-17: add `doctor` to the interactive re-run menu (or document headless-only). | **Accepted — fixed** (menu choice + flow renders `doctor()`) |
 
 **Endorsements**: (none.)  **Disagreements**: (none.)
+
+**Triage note (2026-05-30):** all six R4-F accepted. R4-F1/F4 were already fixed during the
+`/code-review --fix`; R4-F5/F6 implemented in this audit pass; R4-F2/F3 are doc/contract
+pins (no behavior change). No open items remain.
 
 ## Areas Substantially Addressed
 
