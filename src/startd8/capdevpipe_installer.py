@@ -308,6 +308,14 @@ class Manifest:
 
     method: InstallMethod
     source_path: Path
+    #: The full set of installer-*managed* paths (every owned-type planned target), NOT
+    #: only paths this particular run physically created — a re-run/upgrade/repair records
+    #: pre-existing and already-satisfied targets here too. This is the right inventory for
+    #: repair/drift (the current consumers), which need the complete expected set. Run-scoped
+    #: rollback uses a separate list (``_run_actions.newly_created``). NOTE for the P2
+    #: uninstall (#?): do NOT blind-``rm`` this list — it includes ``pipeline.env`` (which may
+    #: hold user-added non-managed keys) and any pre-existing content. Uninstall must diff
+    #: against what it can prove it created, or confirm per path.
     created_paths: List[Path] = field(default_factory=list)
     profiles: List[str] = field(default_factory=list)
     state: ManifestState = ManifestState.COMPLETE
