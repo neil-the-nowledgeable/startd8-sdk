@@ -1,5 +1,5 @@
-// Lead Contractor Progress dashboard.
-// Migrated from dashboards/lead-contractor-progress.json
+// Primary Contractor Progress dashboard.
+// Migrated from dashboards/primary-contractor-progress.json
 local config = (import '../config.libsonnet')._config;
 local dashboards = import '../lib/dashboards.libsonnet';
 local panels = import '../lib/panels.libsonnet';
@@ -12,9 +12,9 @@ local mimirDatasource = { type: 'prometheus', uid: '${datasource}' };
 local lokiDatasource = { type: 'loki', uid: '${loki}' };
 
 local baseDashboard = dashboards.dashboard(
-  '[BEAVER] Lead Contractor Progress',
-  'contextcore-beaver-lead-contractor-progress',
-  description='Track project progress with StartD8 SDK Lead Contractor integration - task status and execution traces from Tempo',
+  '[BEAVER] Primary Contractor Progress',
+  'contextcore-primary-contractor-progress',
+  description='Track project progress with StartD8 SDK Primary Contractor integration - task status and execution traces from Tempo',
   tags=['contextcore', 'beaver', 'project-tracking'],
 ) {
   time: { from: 'now-7d', to: 'now' },
@@ -27,8 +27,8 @@ local baseDashboard = dashboards.dashboard(
         name: 'project',
         label: 'Project',
         type: 'custom',
-        query: 'beaver-lead-contractor,ajidamoo-squirrel,contextcore,contextcore-tui-fixes,asabikeshiinh-localization,startd8-sdk',
-        current: { text: 'beaver-lead-contractor', value: 'beaver-lead-contractor' },
+        query: 'contextcore,contextcore-tui-fixes,asabikeshiinh-localization,startd8-sdk',
+        current: { text: 'contextcore', value: 'contextcore' },
       },
     ],
   },
@@ -203,7 +203,7 @@ dashboards.withPanels(baseDashboard, [
 
   // Custom workflow panel (contextcore-workflow-panel plugin)
   {
-    title: 'Trigger Lead Contractor Workflow',
+    title: 'Trigger Primary Contractor Workflow',
     type: 'contextcore-workflow-panel',
     gridPos: { h: 10, w: 12, x: 0, y: 50 },
     options: {
@@ -219,15 +219,15 @@ dashboards.withPanels(baseDashboard, [
   panels.text(
     'Workflow API Info',
     |||
-      ## Lead Contractor Workflow
+      ## Primary Contractor Workflow
 
       ### REST API Endpoints
-      - `POST /workflows/lead-contractor/run` — Run with default config
-      - `POST /workflows/lead-contractor/run` with JSON body — Run with custom config
+      - `POST /workflows/primary-contractor/run` — Run with default config
+      - `POST /workflows/primary-contractor/run` with JSON body — Run with custom config
 
       ### CLI Alternative
       ```bash
-      startd8 run-workflow lead-contractor --project $project
+      startd8 run-workflow primary-contractor --project $project
       ```
     |||,
   ) { gridPos: { h: 10, w: 12, x: 12, y: 50 } },

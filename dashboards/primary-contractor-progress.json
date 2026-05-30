@@ -2,9 +2,9 @@
   "annotations": {
     "list": []
   },
-  "uid": "contextcore-beaver-lead-contractor-progress",
-  "title": "[BEAVER] Lead Contractor Progress",
-  "description": "Track project progress with StartD8 SDK Lead Contractor integration - task status and execution traces from Tempo",
+  "uid": "contextcore-primary-contractor-progress",
+  "title": "[BEAVER] Primary Contractor Progress",
+  "description": "Track project progress with StartD8 SDK Primary Contractor integration - task status and execution traces from Tempo",
   "tags": [
     "contextcore",
     "startd8",
@@ -33,22 +33,14 @@
         "label": "Project",
         "type": "custom",
         "current": {
-          "text": "beaver-lead-contractor",
-          "value": "beaver-lead-contractor"
+          "text": "contextcore",
+          "value": "contextcore"
         },
         "options": [
           {
-            "text": "beaver-lead-contractor",
-            "value": "beaver-lead-contractor",
-            "selected": true
-          },
-          {
-            "text": "ajidamoo-squirrel",
-            "value": "ajidamoo-squirrel"
-          },
-          {
             "text": "contextcore",
-            "value": "contextcore"
+            "value": "contextcore",
+            "selected": true
           },
           {
             "text": "contextcore-tui-fixes",
@@ -63,7 +55,7 @@
             "value": "startd8-sdk"
           }
         ],
-        "query": "beaver-lead-contractor,ajidamoo-squirrel,contextcore,contextcore-tui-fixes,asabikeshiinh-localization,startd8-sdk"
+        "query": "contextcore,contextcore-tui-fixes,asabikeshiinh-localization,startd8-sdk"
       }
     ]
   },
@@ -887,7 +879,7 @@
     },
     {
       "id": 50,
-      "title": "Trigger Lead Contractor Workflow - ${project}",
+      "title": "Trigger Primary Contractor Workflow - ${project}",
       "type": "contextcore-workflow-panel",
       "gridPos": {
         "h": 10,
@@ -915,7 +907,7 @@
         "y": 50
       },
       "options": {
-        "content": "### Lead Contractor Workflow\n\nThis panel triggers workflows via the Beaver Lead Contractor API.\n\n**Endpoints:**\n- `POST /workflow/dry-run` - Preview steps without executing\n- `POST /workflow/execute` - Run the workflow\n- `GET /workflow/status/{id}` - Check execution status\n\n**CLI Alternative:**\n```bash\n# Dry run\npython3 scripts/lead_contractor/run_workflow.py --project $project --dry-run\n\n# Execute\npython3 scripts/lead_contractor/run_workflow.py --project $project\n```\n\n**Note:** The workflow API must be running at the configured URL for the trigger panel to work.",
+        "content": "### Primary Contractor Workflow\n\nThis panel triggers workflows via the Primary Contractor API.\n\n**Endpoints:**\n- `POST /workflow/dry-run` - Preview steps without executing\n- `POST /workflow/execute` - Run the workflow\n- `GET /workflow/status/{id}` - Check execution status\n\n**CLI Alternative:**\n```bash\n# Dry run\npython3 scripts/primary_contractor/run_workflow.py --project $project --dry-run\n\n# Execute\npython3 scripts/primary_contractor/run_workflow.py --project $project\n```\n\n**Note:** The workflow API must be running at the configured URL for the trigger panel to work.",
         "mode": "markdown"
       }
     }
