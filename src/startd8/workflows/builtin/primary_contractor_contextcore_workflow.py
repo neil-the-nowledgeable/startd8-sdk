@@ -52,14 +52,14 @@ from ...utils.agent_resolution import resolve_agent_spec
 from ...logging_config import get_logger
 
 # Import existing Primary Contractor components
-from .lead_contractor_workflow import (
+from .primary_contractor_workflow import (
     PrimaryContractorWorkflow,
     SPEC_PROMPT_TEMPLATE,
     DRAFT_PROMPT_TEMPLATE,
     REVIEW_PROMPT_TEMPLATE,
     INTEGRATION_PROMPT_TEMPLATE,
 )
-from .lead_contractor_models import (
+from .primary_contractor_models import (
     PrimaryContractorResult,
     WorkflowPhase,
 )

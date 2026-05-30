@@ -1410,7 +1410,7 @@ class Test{class_name}:
             Dict mapping task_id → list of downstream file paths that were
             pre-stubbed. Empty dict if no downstream files found.
         """
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         from startd8.utils.code_extraction import STUB_SENTINEL

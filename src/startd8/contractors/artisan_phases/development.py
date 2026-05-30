@@ -1252,7 +1252,7 @@ class PrimaryContractorChunkExecutor(ChunkExecutor):
         if self._generator is not None:
             return self._generator
 
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             PrimaryContractorCodeGenerator,
         )
 

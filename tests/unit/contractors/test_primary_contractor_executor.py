@@ -457,7 +457,7 @@ class TestDetectDownstreamFiles:
     """
 
     def test_detects_f002_plus_pattern(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         design_doc = (
@@ -471,7 +471,7 @@ class TestDetectDownstreamFiles:
         assert result == ["src/pkg/artifact_generators.py"]
 
     def test_detects_downstream_task_phrase(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         design_doc = "artifact_generators.py — implemented by downstream tasks\n"
@@ -482,7 +482,7 @@ class TestDetectDownstreamFiles:
         assert result == ["src/pkg/artifact_generators.py"]
 
     def test_detects_later_task_phrase(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         design_doc = "module.py will be implemented by later tasks in F-003\n"
@@ -493,7 +493,7 @@ class TestDetectDownstreamFiles:
         assert result == ["src/pkg/module.py"]
 
     def test_non_downstream_not_flagged(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         design_doc = (
@@ -507,7 +507,7 @@ class TestDetectDownstreamFiles:
         assert result == []
 
     def test_empty_design_doc(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         result = _detect_downstream_files(
@@ -517,7 +517,7 @@ class TestDetectDownstreamFiles:
         assert result == []
 
     def test_empty_unmatched(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         result = _detect_downstream_files(
@@ -527,7 +527,7 @@ class TestDetectDownstreamFiles:
         assert result == []
 
     def test_mixed_downstream_and_real(self):
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             _detect_downstream_files,
         )
         design_doc = (

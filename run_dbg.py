@@ -1,6 +1,6 @@
 from unittest.mock import Mock, patch
-from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
-from startd8.workflows.builtin.lead_contractor_models import ImplementationSpec
+from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
+from startd8.workflows.builtin.primary_contractor_models import ImplementationSpec
 from startd8.forward_manifest_validator import ContractViolation
 import logging
 

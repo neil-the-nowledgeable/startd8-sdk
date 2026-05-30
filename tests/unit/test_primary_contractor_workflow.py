@@ -8,14 +8,14 @@ Claude acts as lead contractor and cheaper models draft code.
 import pytest
 from unittest.mock import Mock, patch
 
-from startd8.workflows.builtin.lead_contractor_workflow import (
+from startd8.workflows.builtin.primary_contractor_workflow import (
     LeadContractorWorkflow,
     SPEC_PROMPT_TEMPLATE,
     DRAFT_PROMPT_TEMPLATE,
     REVIEW_PROMPT_TEMPLATE,
     INTEGRATION_PROMPT_TEMPLATE,
 )
-from startd8.workflows.builtin.lead_contractor_models import (
+from startd8.workflows.builtin.primary_contractor_models import (
     LeadContractorConfig,
     ImplementationSpec,
     ReviewResult,
@@ -400,7 +400,7 @@ class TestSpecPromptPhase1:
 
     def test_plan_context_truncated_in_spec(self):
         """PC-B1: Plan context in spec prompt is truncated to 16KB with marker."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
             _PLAN_CONTEXT_MAX_CHARS,
             _TRUNCATION_MARKER,
@@ -423,7 +423,7 @@ class TestSpecPromptPhase1:
 
     def test_arch_context_truncated(self):
         """PC-B2: Large architectural context is truncated to 4KB."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
             _ARCH_CONTEXT_MAX_CHARS,
             _TRUNCATION_MARKER,
@@ -439,7 +439,7 @@ class TestSpecPromptPhase1:
 
     def test_no_duplication_in_context_str(self):
         """PC-A2, PC-A3: Popped keys do not appear in context_str."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {
             "plan_context": "plan",
@@ -465,7 +465,7 @@ class TestSpecPromptPhase1:
 
     def test_section_builders_used(self):
         """PC-A1: Spec prompt is built from section helpers."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {
             "plan_context": "Plan text",
@@ -589,7 +589,7 @@ class TestExistingFilesBudget:
 
     def test_existing_files_budget_40kb(self):
         """_EXISTING_FILES_BUDGET_BYTES is 40KB."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _EXISTING_FILES_BUDGET_BYTES,
         )
 
@@ -601,7 +601,7 @@ class TestSpecPromptPhase2:
 
     def test_plan_context_edit_framing(self):
         """PC-F1: With existing_files, plan section has edit preamble."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {
             "plan_context": "Add feature X to the service.",
@@ -615,7 +615,7 @@ class TestSpecPromptPhase2:
 
     def test_plan_context_create_framing(self):
         """PC-F1: Without existing_files, plan section has create preamble."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {"plan_context": "Implement feature X from scratch."}
         prompt = LeadContractorWorkflow._build_spec_prompt(
@@ -626,7 +626,7 @@ class TestSpecPromptPhase2:
 
     def test_arch_context_edit_framing(self):
         """PC-F2: With edit mode, arch section has edit prefix."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {
             "architectural_context": {"objectives": ["O1"], "constraints": ["C1"]},
@@ -640,7 +640,7 @@ class TestSpecPromptPhase2:
 
     def test_quantitative_spec_constraint(self):
         """PC-Q1: With existing_files totaling 100 lines, spec preamble includes line count."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         # 100 lines of content
         content_100_lines = "\n".join([f"line {i}" for i in range(100)])
@@ -657,7 +657,7 @@ class TestSpecPromptPhase2:
 
     def test_edit_min_pct_configurable(self):
         """PC-Q3: edit_min_pct from context overrides default."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         content_100_lines = "\n".join([f"line {i}" for i in range(100)])
         context = {
@@ -673,7 +673,7 @@ class TestSpecPromptPhase2:
 
     def test_create_mode_has_implement_preamble(self):
         """PC-F3: Create mode has 'Implement' task verb in preamble."""
-        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+        from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
 
         context = {"plan_context": "Implement feature X from scratch."}
         prompt = LeadContractorWorkflow._build_spec_prompt(
@@ -684,7 +684,7 @@ class TestSpecPromptPhase2:
 
     def test_build_output_format_edit_includes_min_lines(self):
         """PC-Q2: build_output_format passes min_output_lines for edit mode."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
+        from startd8.workflows.builtin.primary_contractor_workflow import _build_output_format
 
         content_100 = "\n".join([f"line {i}" for i in range(100)])
         result = _build_output_format(
@@ -702,7 +702,7 @@ class TestPhase4YAMLExternalization:
 
     def test_format_lead_prompt_uses_yaml_when_available(self):
         """_format_lead_prompt returns YAML content when template exists."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _format_lead_prompt
+        from startd8.workflows.builtin.primary_contractor_workflow import _format_lead_prompt
 
         result = _format_lead_prompt(
             "plan_context_edit_framing",
@@ -713,7 +713,7 @@ class TestPhase4YAMLExternalization:
 
     def test_format_lead_prompt_uses_fallback_when_yaml_missing(self):
         """AC-5: _format_lead_prompt uses fallback when template missing."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _format_lead_prompt,
             _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
         )
@@ -727,7 +727,7 @@ class TestPhase4YAMLExternalization:
 
     def test_format_lead_prompt_with_placeholders(self):
         """_format_lead_prompt formats placeholders in fallback path."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _format_lead_prompt
+        from startd8.workflows.builtin.primary_contractor_workflow import _format_lead_prompt
 
         result = _format_lead_prompt(
             "nonexistent_template_xyz",
@@ -759,7 +759,7 @@ class TestPhase4YAMLExternalization:
         self, mock_get_template
     ):
         """AC-5: Spec prompt builds with fallback when YAML templates unavailable."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
 
@@ -795,7 +795,7 @@ class TestPhase3DrafterSystemPrompt:
 
     def test_drafter_create_system_prompt(self):
         """PC-M2: Without existing_files, returns create_system."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+        from startd8.workflows.builtin.primary_contractor_workflow import _get_drafter_system_prompt
 
         prompt, mode = _get_drafter_system_prompt(existing_files=None)
         assert prompt is not None
@@ -805,7 +805,7 @@ class TestPhase3DrafterSystemPrompt:
 
     def test_drafter_edit_system_prompt(self):
         """PC-M2: With existing_files (all < 50 lines), returns edit_system."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+        from startd8.workflows.builtin.primary_contractor_workflow import _get_drafter_system_prompt
 
         existing = {"src/foo.py": "def bar():\n    pass\n" * 5}  # ~25 lines
         prompt, mode = _get_drafter_system_prompt(existing_files=existing)
@@ -816,7 +816,7 @@ class TestPhase3DrafterSystemPrompt:
 
     def test_drafter_search_replace_system_prompt(self):
         """PC-M2: With existing_files and file ≥50 lines, returns search_replace_system."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+        from startd8.workflows.builtin.primary_contractor_workflow import _get_drafter_system_prompt
 
         content_60_lines = "\n".join([f"line {i}" for i in range(60)])
         existing = {"src/large.py": content_60_lines}
@@ -827,7 +827,7 @@ class TestPhase3DrafterSystemPrompt:
 
     def test_draft_edit_ordering(self):
         """PC-O2: With existing_files, existing_files_section appears before spec in prompt."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             DRAFT_EDIT_PROMPT_TEMPLATE,
             _build_existing_files_section,
         )
@@ -848,7 +848,7 @@ class TestPhase3DrafterSystemPrompt:
         assert idx_spec >= 0
         assert idx_section < idx_spec
 
-    @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
+    @patch('startd8.workflows.builtin.primary_contractor_workflow.resolve_agent_spec')
     def test_drafter_receives_system_prompt(self, mock_resolve):
         """PC-M2/P3.8: Drafter generate() is called with system_prompt when existing_files present."""
         def make_token_usage(in_tok, out_tok):
@@ -918,7 +918,7 @@ class TestPromptTemplates:
 
     def test_draft_prompt_template_format(self):
         """Test draft prompt template can be formatted (single-file)."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
+        from startd8.workflows.builtin.primary_contractor_workflow import _build_output_format
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec="Detailed spec...",
             feedback="No feedback yet",
@@ -931,7 +931,7 @@ class TestPromptTemplates:
 
     def test_draft_prompt_template_multi_file(self):
         """Test draft prompt template with multi-file output format."""
-        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
+        from startd8.workflows.builtin.primary_contractor_workflow import _build_output_format
         target_files = ["src/main.py", "data/output.csv"]
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec="Multi-file spec",
@@ -976,7 +976,7 @@ class TestPromptTemplates:
 class TestWorkflowExecution:
     """Tests for workflow execution with mocked agents."""
 
-    @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
+    @patch('startd8.workflows.builtin.primary_contractor_workflow.resolve_agent_spec')
     def test_workflow_run_success(self, mock_resolve):
         """Test successful workflow execution."""
         # Create mock token usage objects with was_truncated=False
@@ -1022,7 +1022,7 @@ class TestWorkflowExecution:
         assert "lead_cost" in result.metadata
         assert "drafter_cost" in result.metadata
 
-    @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
+    @patch('startd8.workflows.builtin.primary_contractor_workflow.resolve_agent_spec')
     def test_workflow_run_agent_resolution_failure(self, mock_resolve):
         """Test workflow fails gracefully when agent resolution fails."""
         mock_resolve.side_effect = Exception("API key not found")
@@ -1035,7 +1035,7 @@ class TestWorkflowExecution:
         assert result.success is False
         assert "Failed to resolve agents" in result.error
 
-    @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
+    @patch('startd8.workflows.builtin.primary_contractor_workflow.resolve_agent_spec')
     def test_workflow_tracks_iterations(self, mock_resolve):
         """Test workflow correctly tracks iteration count."""
         # Create mock token usage objects with was_truncated=False

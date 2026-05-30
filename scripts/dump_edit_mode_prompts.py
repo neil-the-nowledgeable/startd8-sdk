@@ -50,7 +50,7 @@ from startd8.contractors.context_seed_handlers import (
     _load_enriched_seed,
     _parse_tasks,
 )
-from startd8.workflows.builtin.lead_contractor_workflow import (
+from startd8.workflows.builtin.primary_contractor_workflow import (
     DRAFT_EDIT_PROMPT_TEMPLATE,
     DRAFT_PROMPT_TEMPLATE,
     LeadContractorWorkflow,

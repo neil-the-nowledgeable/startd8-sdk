@@ -23,7 +23,7 @@ __all__ = [
 class SpecResult:
     """Implementation specification produced by the spec builder.
 
-    Structurally matches ``ImplementationSpec`` from ``lead_contractor_models``
+    Structurally matches ``ImplementationSpec`` from ``primary_contractor_models``
     with conversion methods for backward compatibility.
     """
 
@@ -52,7 +52,7 @@ class SpecResult:
 
     def to_implementation_spec(self) -> Any:
         """Convert to ``ImplementationSpec`` for PrimaryContractorWorkflow compatibility."""
-        from startd8.workflows.builtin.lead_contractor_models import ImplementationSpec
+        from startd8.workflows.builtin.primary_contractor_models import ImplementationSpec
 
         return ImplementationSpec(
             spec_id=self.spec_id,

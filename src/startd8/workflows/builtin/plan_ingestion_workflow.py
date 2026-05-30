@@ -2517,7 +2517,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             # __init__.py first: it's the package root that other files
             # import from.  Consistent ordering improves LLM output format
             # compliance and matches the MULTI_FILE_OUTPUT_FORMAT contract
-            # in lead_contractor_workflow.py.
+            # in primary_contractor_workflow.py.
             mapped_artifacts = feature_to_artifacts.get(feat.feature_id, [])
             resolved_target_files = list(feat.target_files)
             if (

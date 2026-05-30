@@ -23,7 +23,7 @@ class TestDraftResultRawResponse:
     """Fix 1: raw_response field is populated on DraftResult."""
 
     def test_draft_result_preserves_raw_response(self):
-        from startd8.workflows.builtin.lead_contractor_models import DraftResult
+        from startd8.workflows.builtin.primary_contractor_models import DraftResult
 
         draft = DraftResult(
             draft_id="d-1",
@@ -34,7 +34,7 @@ class TestDraftResultRawResponse:
         assert draft.raw_response == "```python\nextracted code only\n```\nSome commentary"
 
     def test_draft_result_raw_response_defaults_empty(self):
-        from startd8.workflows.builtin.lead_contractor_models import DraftResult
+        from startd8.workflows.builtin.primary_contractor_models import DraftResult
 
         draft = DraftResult(draft_id="d-2", iteration=1, implementation="code")
         assert draft.raw_response == ""
@@ -42,7 +42,7 @@ class TestDraftResultRawResponse:
     def test_multi_file_split_uses_raw_response(self):
         """Generator should prefer raw_response over final_implementation
         for extract_multi_file_code when raw_response is available."""
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             LeadContractorCodeGenerator,
         )
         from startd8.utils.code_extraction import extract_multi_file_code
@@ -73,7 +73,7 @@ class TestIntegrationMultiFileDirective:
     """Fix 2: _integrate_final receives multi-file context."""
 
     def test_build_multi_file_directive_with_existing_files(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
 
@@ -90,7 +90,7 @@ class TestIntegrationMultiFileDirective:
         assert "PRESERVE" in directive
 
     def test_build_multi_file_directive_empty_for_single_file(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
 
@@ -101,7 +101,7 @@ class TestIntegrationMultiFileDirective:
         assert directive == ""
 
     def test_build_multi_file_directive_empty_without_existing(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
 
@@ -129,10 +129,10 @@ class TestSizeRegressionDetection:
 
     def test_size_regression_detected_in_draft(self):
         """1000-line existing file -> 10-line draft => was_truncated=True."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
-        from startd8.workflows.builtin.lead_contractor_models import (
+        from startd8.workflows.builtin.primary_contractor_models import (
             ImplementationSpec,
         )
 
@@ -178,10 +178,10 @@ class TestSizeRegressionDetection:
 
     def test_no_false_positive_for_small_files(self):
         """30-line existing file -> 5-line draft => NOT flagged (below threshold)."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             LeadContractorWorkflow,
         )
-        from startd8.workflows.builtin.lead_contractor_models import (
+        from startd8.workflows.builtin.primary_contractor_models import (
             ImplementationSpec,
         )
 

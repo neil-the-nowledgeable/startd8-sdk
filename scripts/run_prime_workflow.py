@@ -51,7 +51,7 @@ _src = str(Path(__file__).resolve().parent.parent / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from startd8.contractors.generators.lead_contractor import (  # noqa: E402
+from startd8.contractors.generators.primary_contractor import (  # noqa: E402
     LeadContractorCodeGenerator,
 )
 from startd8.contractors.prime_contractor import PrimeContractorWorkflow  # noqa: E402

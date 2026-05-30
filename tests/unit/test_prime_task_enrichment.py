@@ -192,7 +192,7 @@ class TestConstraintFormatting:
 
     def test_list_constraints_formatted_as_bullets(self):
         """Domain constraints list should become a bullet-list string in the prompt."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
 
@@ -214,7 +214,7 @@ class TestConstraintFormatting:
 
     def test_no_constraints_placeholder(self):
         """When no domain constraints, placeholder text should appear."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
 

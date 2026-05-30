@@ -45,7 +45,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from startd8.contractors.cli_helpers import add_workflow_args, apply_workflow_args
-from startd8.contractors.generators.lead_contractor import LeadContractorCodeGenerator
+from startd8.contractors.generators.primary_contractor import LeadContractorCodeGenerator
 from startd8.contractors.prime_contractor import PrimeContractorWorkflow
 from startd8.contractors.queue import FeatureSpec
 from startd8.utils.prime_task_enrichment import extract_target_files

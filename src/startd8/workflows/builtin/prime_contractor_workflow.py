@@ -4,7 +4,7 @@ PrimeContractorWorkflow adapter — WorkflowBase wrapper for CLI/registry integr
 Exposes the PrimeContractorWorkflow through `startd8 workflow run prime-contractor`
 with all relevant configuration options (micro-prime, complexity routing, etc.).
 
-Pattern follows lead_contractor_workflow.py.
+Pattern follows primary_contractor_workflow.py.
 """
 
 import json
@@ -149,7 +149,7 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
             5. Apply task filter, run workflow, convert result
         """
         from ...contractors.prime_contractor import PrimeContractorWorkflow
-        from ...contractors.generators.lead_contractor import PrimaryContractorCodeGenerator
+        from ...contractors.generators.primary_contractor import PrimaryContractorCodeGenerator
         from ...contractors.queue import FeatureStatus
 
         started_at = datetime.now(timezone.utc)

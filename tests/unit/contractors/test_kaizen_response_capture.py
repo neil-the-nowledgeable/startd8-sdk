@@ -236,7 +236,7 @@ class TestToSummaryRawResponse:
 
     def test_to_summary_includes_raw_response_in_drafts(self) -> None:
         """DraftResult.raw_response should appear in to_summary() drafts_raw."""
-        from startd8.workflows.builtin.lead_contractor_models import (
+        from startd8.workflows.builtin.primary_contractor_models import (
             DraftResult,
             ImplementationSpec,
             PrimaryContractorResult,
@@ -282,7 +282,7 @@ class TestGeneratorRawResponseForwarding:
 
     def test_prefers_raw_response_over_implementation(self) -> None:
         """draft_raw_response should use raw_response when available."""
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             PrimaryContractorCodeGenerator,
         )
         from startd8.workflows.models import WorkflowResult, WorkflowMetrics

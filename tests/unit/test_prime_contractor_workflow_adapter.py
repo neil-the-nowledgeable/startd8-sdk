@@ -81,7 +81,7 @@ class TestValidation:
 
 
 _PCW_PATH = "startd8.contractors.prime_contractor.PrimeContractorWorkflow"
-_GEN_PATH = "startd8.contractors.generators.lead_contractor.LeadContractorCodeGenerator"
+_GEN_PATH = "startd8.contractors.generators.primary_contractor.LeadContractorCodeGenerator"
 
 
 def _make_mock_wf(run_return=None):

@@ -424,7 +424,7 @@ def _run_prime_walkthrough(
         from startd8.contractors.prime_contractor import (
             PrimeContractorWorkflow,
         )
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             LeadContractorCodeGenerator,
         )
         from startd8.contractors.queue import FeatureStatus

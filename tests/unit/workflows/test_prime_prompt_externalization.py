@@ -104,7 +104,7 @@ class TestBackwardCompatibility:
 
     def test_spec_prompt_constant_matches_yaml(self):
         """Test 7: SPEC_PROMPT_TEMPLATE constant matches consolidated YAML."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
         from startd8.implementation_engine.prompts import get_template
@@ -113,7 +113,7 @@ class TestBackwardCompatibility:
 
     def test_build_output_format_single_file(self):
         """Test 8a: _build_output_format() returns single-file format."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             SINGLE_FILE_OUTPUT_FORMAT,
             _build_output_format,
         )
@@ -126,7 +126,7 @@ class TestBackwardCompatibility:
 
     def test_build_output_format_multi_file(self):
         """Test 8b: _build_output_format() returns multi-file format."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_output_format,
         )
 
@@ -136,8 +136,8 @@ class TestBackwardCompatibility:
         assert "Checklist" in result
 
     def test_all_six_constants_loadable(self):
-        """All 6 prompt constants are importable from lead_contractor_workflow."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        """All 6 prompt constants are importable from primary_contractor_workflow."""
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             DRAFT_PROMPT_TEMPLATE,
             INTEGRATION_PROMPT_TEMPLATE,
             MULTI_FILE_OUTPUT_FORMAT,
@@ -287,7 +287,7 @@ class TestProtocolGuidance:
 
     def test_spec_prompt_contains_core_placeholders(self):
         """Test 15: Spec prompt contains required placeholders."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             SPEC_PROMPT_TEMPLATE,
         )
 

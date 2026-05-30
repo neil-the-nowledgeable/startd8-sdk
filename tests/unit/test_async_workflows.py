@@ -7,8 +7,8 @@ Verifies that _aexecute() exists on workflows that make async agent calls.
 import pytest
 
 from startd8.workflows.builtin.critical_review_workflow import CriticalReviewWorkflow
-from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
-from startd8.workflows.builtin.lead_contractor_contextcore_workflow import LeadContractorContextCoreWorkflow
+from startd8.workflows.builtin.primary_contractor_workflow import LeadContractorWorkflow
+from startd8.workflows.builtin.primary_contractor_contextcore_workflow import LeadContractorContextCoreWorkflow
 from startd8.workflows.builtin.pipeline_workflow import PipelineWorkflow
 from startd8.workflows.builtin.plain_language_workflow import PlainLanguageWorkflow
 from startd8.workflows.builtin.policy_analysis_workflow import PolicyAnalysisWorkflow

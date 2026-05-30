@@ -68,16 +68,16 @@ def __getattr__(name: str):
         from .architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
         return ArchitecturalReviewLogWorkflow
     elif name == "PrimaryContractorWorkflow":
-        from .lead_contractor_workflow import PrimaryContractorWorkflow
+        from .primary_contractor_workflow import PrimaryContractorWorkflow
         return PrimaryContractorWorkflow
     elif name == "PrimaryContractorContextCoreWorkflow":
-        from .lead_contractor_contextcore_workflow import PrimaryContractorContextCoreWorkflow
+        from .primary_contractor_contextcore_workflow import PrimaryContractorContextCoreWorkflow
         return PrimaryContractorContextCoreWorkflow
     elif name == "LeadContractorWorkflow":
-        from .lead_contractor_workflow import LeadContractorWorkflow
+        from .primary_contractor_workflow import LeadContractorWorkflow
         return LeadContractorWorkflow
     elif name == "LeadContractorContextCoreWorkflow":
-        from .lead_contractor_contextcore_workflow import LeadContractorContextCoreWorkflow
+        from .primary_contractor_contextcore_workflow import LeadContractorContextCoreWorkflow
         return LeadContractorContextCoreWorkflow
     elif name == "PolicyAnalysisWorkflow":
         from .policy_analysis_workflow import PolicyAnalysisWorkflow

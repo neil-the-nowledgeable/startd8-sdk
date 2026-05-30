@@ -190,7 +190,7 @@ class TestLeadContractorOutputDirResolution:
 
     def test_relative_path_resolved_to_absolute(self) -> None:
         """A relative output_dir is resolved to absolute on construction."""
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             LeadContractorCodeGenerator,
         )
 
@@ -199,7 +199,7 @@ class TestLeadContractorOutputDirResolution:
 
     def test_absolute_path_preserved(self, tmp_path: Path) -> None:
         """An absolute output_dir stays absolute."""
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             LeadContractorCodeGenerator,
         )
 
@@ -210,7 +210,7 @@ class TestLeadContractorOutputDirResolution:
 
     def test_none_output_dir_stays_relative(self) -> None:
         """When output_dir=None, the default 'generated' stays relative."""
-        from startd8.contractors.generators.lead_contractor import (
+        from startd8.contractors.generators.primary_contractor import (
             LeadContractorCodeGenerator,
         )
 

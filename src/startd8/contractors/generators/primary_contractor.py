@@ -314,7 +314,7 @@ class PrimaryContractorCodeGenerator:
         """Inner generate logic wrapped by OTel span."""
         try:
             # Import the workflow
-            from startd8.workflows.builtin.lead_contractor_workflow import (
+            from startd8.workflows.builtin.primary_contractor_workflow import (
                 PrimaryContractorWorkflow,
             )
 

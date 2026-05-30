@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture()
 def lead_workflow():
     """Create a LeadContractorWorkflow instance for testing."""
-    from startd8.workflows.builtin.lead_contractor_workflow import (
+    from startd8.workflows.builtin.primary_contractor_workflow import (
         LeadContractorWorkflow,
     )
     return LeadContractorWorkflow()

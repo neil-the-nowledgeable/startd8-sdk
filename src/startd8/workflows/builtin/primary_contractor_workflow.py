@@ -63,7 +63,7 @@ from ...implementation_engine.models import (
     ReviewResult as _IEReviewResult,
 )
 
-from .lead_contractor_models import (
+from .primary_contractor_models import (
     ImplementationSpec,
     DraftResult,
     ReviewResult,
@@ -888,7 +888,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
             iteration=iteration,
         )
 
-        # Convert to lead_contractor_models.ReviewResult
+        # Convert to primary_contractor_models.ReviewResult
         passed = ie_review.passed
         blocking = list(ie_review.blocking_issues)
 
@@ -1635,7 +1635,7 @@ class PrimaryContractorWorkflow(WorkflowBase):
 
     def _format_review_feedback(self, review: ReviewResult) -> str:
         """Format review into feedback. Delegates to implementation_engine.reviewer."""
-        # Convert lead_contractor_models.ReviewResult to engine ReviewResult
+        # Convert primary_contractor_models.ReviewResult to engine ReviewResult
         engine_review = _IEReviewResult(
             review_id=review.review_id,
             iteration=review.iteration,

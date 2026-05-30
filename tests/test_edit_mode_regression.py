@@ -265,7 +265,7 @@ class TestBuildExistingFilesSection:
 
     @pytest.fixture(autouse=True)
     def _import_func(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_existing_files_section,
         )
         self.build = _build_existing_files_section
@@ -356,7 +356,7 @@ class TestBuildOutputFormat:
 
     @pytest.fixture(autouse=True)
     def _import_func(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_output_format,
         )
         self.build = _build_output_format
@@ -707,7 +707,7 @@ class TestGoldenOutputPromptSnapshot:
 
     def test_edit_mode_prompt_structure(self):
         """Assert key phrases appear in correct positions in edit-mode prompt."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_output_format,
             _build_existing_files_section,
         )
@@ -818,7 +818,7 @@ class TestPI001Regression:
 
     def test_build_existing_files_for_pi001(self, pi001_existing_content):
         """_build_existing_files_section produces non-empty section for PI-001."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_existing_files_section,
         )
 
@@ -831,7 +831,7 @@ class TestPI001Regression:
 
     def test_build_output_format_edit_for_pi001(self, pi001_existing_content):
         """_build_output_format selects edit template for PI-001."""
-        from startd8.workflows.builtin.lead_contractor_workflow import (
+        from startd8.workflows.builtin.primary_contractor_workflow import (
             _build_output_format,
         )
 
