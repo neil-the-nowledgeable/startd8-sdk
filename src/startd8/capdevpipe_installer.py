@@ -959,6 +959,15 @@ class CapDevPipeInstaller:
 
         Each managed key is replaced in place if present (first occurrence) else appended;
         comments, blank lines, and non-managed keys pass through unchanged.
+
+        Format note (do NOT "fix" to ``export KEY=`` or add shell-escaping): cap-dev-pipe's
+        ``pipeline/config.py:load_pipeline_env`` parses this file as plain ``key=value`` via
+        ``line.partition("=")`` and ``key.strip()`` — it does NOT shell-source it. An
+        ``export `` prefix would be captured *into the key* (``"export CONTEXTCORE_ROOT"``),
+        making the value unreadable; ``$``/spaces in values are stored literally and need no
+        escaping. The bare ``KEY="value"`` form here matches the canonical ``write_env_templates``
+        output exactly. The ``(export\\s+)?`` in the match below only tolerates a pre-existing
+        ``export`` line, rewriting it to the canonical bare form.
         """
         seen: set = set()
         out: List[str] = []
