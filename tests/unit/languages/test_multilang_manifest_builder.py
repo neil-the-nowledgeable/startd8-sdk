@@ -115,3 +115,69 @@ class TestFr5SeverityCalibration:
         assert len(viols) == 1
         assert viols[0].severity == "warning"
         assert viols[0].tier == TIER_ADVISORY
+
+
+GO_SRC = (
+    "package main\n"
+    'import "fmt"\n'
+    "func Hello() string { return \"hi\" }\n"
+    "type Greeter struct{}\n"
+)
+NODE_SRC = "export function hello() {}\nexport class Greeter {}\n"
+VUE_SRC = "<script setup>\nfunction hello() {}\n</script>\n<template><div/></template>\n"
+
+
+class TestAdvisoryTierAdapters:
+    """Phase 3 (FR-2 advisory tier): Go/Node/Vue regex parsers feed the registry at the
+    advisory tier — extraction works and a miss is a `warning`, never blocking."""
+
+    def test_go_extraction_and_advisory_tier(self):
+        m = build_multilang_file_manifest("svc.go", GO_SRC)
+        names = {e.name for e in m.elements}
+        assert {"Hello", "Greeter"} <= names
+        assert m.parser_tier == TIER_ADVISORY
+        assert any(i.module == "fmt" for i in m.imports)
+
+    def test_nodejs_extraction_and_advisory_tier(self):
+        m = build_multilang_file_manifest("app.ts", NODE_SRC)
+        names = {e.name for e in m.elements}
+        assert {"hello", "Greeter"} <= names
+        assert m.parser_tier == TIER_ADVISORY
+
+    def test_vue_extraction_and_advisory_tier(self):
+        m = build_multilang_file_manifest("App.vue", VUE_SRC)
+        assert "hello" in {e.name for e in m.elements}
+        assert m.parser_tier == TIER_ADVISORY
+
+    def test_node_jsx_routes_to_node_adapter(self):
+        m = build_multilang_file_manifest("Component.jsx", NODE_SRC)
+        assert m.parser_tier == TIER_ADVISORY
+        assert "hello" in {e.name for e in m.elements}
+
+
+class TestAdvisoryEndToEndSeverity:
+    """FR-5 acceptance via a REAL advisory parse (not a simulated tier): a Go/Node file whose
+    spec declares a missing element yields a `warning` (tier=advisory), never a blocking error."""
+
+    def test_go_missing_element_is_warning_not_error(self):
+        m = build_multilang_file_manifest("svc.go", GO_SRC)
+        reg = ManifestRegistry({"svc.go": m})
+        # Use a non-callable kind: ForwardElementSpec (like Element) requires a Signature
+        # for callable kinds, and the missing-element assertion doesn't need one.
+        spec = ForwardFileSpec(
+            file="svc.go",
+            elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="NotThere")],
+        )
+        viols = _validate_file_spec("svc.go", spec, reg)
+        assert len(viols) == 1
+        assert viols[0].severity == "warning"   # advisory → never blocks
+        assert viols[0].tier == TIER_ADVISORY
+
+    def test_node_present_element_no_violation(self):
+        m = build_multilang_file_manifest("app.ts", NODE_SRC)
+        reg = ManifestRegistry({"app.ts": m})
+        spec = ForwardFileSpec(
+            file="app.ts",
+            elements=[ForwardElementSpec(kind=ElementKind.CLASS, name="Greeter")],
+        )
+        assert _validate_file_spec("app.ts", spec, reg) == []

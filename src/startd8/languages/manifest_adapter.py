@@ -5,9 +5,12 @@ Bridges the per-language parsers (``parse_csharp_source`` / ``parse_go_source`` 
 :class:`~startd8.utils.code_manifest.Element` / ``FileManifest`` shape consumed by
 ``ManifestRegistry`` and ``forward_manifest_validator``.
 
-**Phase 1 (this commit)** establishes the single, total, non-colliding ``kind``-string →
-:class:`ElementKind` map (FR-3) and the ``map_parser_kind`` helper. The element/import
-adapters and the ``build_multilang_file_manifest`` dispatcher (FR-1/FR-2) land in Phase 2.
+Phase 1 established the total, non-colliding ``kind``-string → :class:`ElementKind` map (FR-3)
+and ``map_parser_kind``. Phase 2 added the ``build_multilang_file_manifest`` dispatcher (FR-1),
+the element adapter (FR-2), and the FR-5 confidence-tier stamping for the **authoritative** tier
+(Python/C#/Java). Phase 3 adds the **advisory** tier (Go, Node/JS/TS, Vue — regex parsers, so a
+miss is a ``warning`` not an ``error``). Phase 4 (DEFAULT_EXPORT) and Phase 5 (wire into
+``validate_implementation``) remain.
 
 The map is **non-colliding**: each parser ``kind`` string has exactly one ``ElementKind``
 target, and no ``ElementKind`` member is introduced twice. ``type_alias`` already exists on
@@ -52,6 +55,9 @@ _CALLABLE_KINDS = frozenset({
 _CSHARP_EXT = {".cs"}
 _JAVA_EXT = {".java"}
 _PYTHON_EXT = {".py"}
+_GO_EXT = {".go"}
+_NODE_EXT = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx"}
+_VUE_EXT = {".vue"}
 
 
 #: The total ``kind``-string → :class:`ElementKind` map (FR-3 / R1-F5).
@@ -226,14 +232,57 @@ def _adapt_java(rel_path: str, source: str) -> FileManifest:
     return _make_manifest(rel_path, source, elements, imports, tier)
 
 
+def _adapt_go(rel_path: str, source: str) -> FileManifest:
+    # Regex-based parser → always advisory tier (FR-5): a miss is a `warning`, never blocks.
+    from startd8.languages.go_parser import parse_go_imports, parse_go_source
+
+    elements = [
+        _adapt_element(e.kind, e.name, e.line_number, e.line_number, parent=e.parent_type)
+        for e in parse_go_source(source)
+    ]
+    imports = [
+        ImportEntry(
+            kind="import",
+            module=mod,
+            span=Span(start_line=0, start_col=0, end_line=0, end_col=0),
+        )
+        for mod in parse_go_imports(source)
+    ]
+    return _make_manifest(rel_path, source, elements, imports, TIER_ADVISORY)
+
+
+def _adapt_node_elements(rel_path, source, node_elements) -> FileManifest:
+    # Shared by Node/JS/TS and Vue (both yield NodeElement). Regex → advisory tier.
+    # No Node/JS import parser exists yet (R1-F8): imports is an empty list, so a contract
+    # MUST NOT declare `imports` for these files until an import parser lands.
+    elements = [
+        _adapt_element(e.kind, e.name, e.line, e.line, parent=e.parent_class)
+        for e in node_elements
+    ]
+    return _make_manifest(rel_path, source, elements, [], TIER_ADVISORY)
+
+
+def _adapt_nodejs(rel_path: str, source: str) -> FileManifest:
+    from startd8.languages.nodejs_parser import parse_nodejs_source
+
+    return _adapt_node_elements(rel_path, source, parse_nodejs_source(source))
+
+
+def _adapt_vue(rel_path: str, source: str) -> FileManifest:
+    from startd8.languages.vue_sfc import parse_vue_sfc_script_elements
+
+    return _adapt_node_elements(rel_path, source, parse_vue_sfc_script_elements(source))
+
+
 def build_multilang_file_manifest(rel_path: str, source: str) -> FileManifest:
     """Build a :class:`FileManifest` for any supported language (FR-1).
 
     Dispatches by extension: Python → the existing ``generate_file_manifest`` (authoritative,
     behavior unchanged — NFR-1); C# → tree-sitter/regex via ``parse_csharp``; Java → javalang/
-    regex via ``parse_java_source``. The produced manifest carries a ``parser_tier`` (FR-5).
-    Unsupported extensions (Go/Node/Vue land in Phase 3) return an **empty-but-valid**
-    manifest with ``parser_tier=None`` — degrade, never raise.
+    regex via ``parse_java_source`` (authoritative tier). Go → ``parse_go_source``; Node/JS/TS →
+    ``parse_nodejs_source``; Vue → ``parse_vue_sfc_script_elements`` (advisory tier — regex). The
+    produced manifest carries a ``parser_tier`` (FR-5). Genuinely unsupported extensions return an
+    **empty-but-valid** manifest with ``parser_tier=None`` — degrade, never raise.
     """
     ext = Path(rel_path).suffix.lower()
     if ext in _PYTHON_EXT:
@@ -246,7 +295,13 @@ def build_multilang_file_manifest(rel_path: str, source: str) -> FileManifest:
         return _adapt_csharp(rel_path, source)
     if ext in _JAVA_EXT:
         return _adapt_java(rel_path, source)
-    # Unsupported (Go/Node/Vue = Phase 3): empty, tier-less, never raises.
+    if ext in _GO_EXT:
+        return _adapt_go(rel_path, source)
+    if ext in _NODE_EXT:
+        return _adapt_nodejs(rel_path, source)
+    if ext in _VUE_EXT:
+        return _adapt_vue(rel_path, source)
+    # Genuinely unsupported language: empty, tier-less, never raises.
     logger.info(
         "manifest_adapter: no element extractor for %s (ext %r) — empty manifest",
         rel_path, ext,
