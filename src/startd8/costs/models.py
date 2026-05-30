@@ -93,14 +93,24 @@ class CostRecord(BaseModel):
     provider: str = Field(description="Provider (anthropic, openai, etc.)")
 
     # Token usage
-    input_tokens: int = Field(description="Input tokens used")
+    input_tokens: int = Field(description="Input tokens used (non-cached)")
     output_tokens: int = Field(description="Output tokens generated")
     total_tokens: int = Field(description="Total tokens")
+    cache_creation_input_tokens: int = Field(
+        default=0, description="Input tokens written to cache (billed at write multiplier)"
+    )
+    cache_read_input_tokens: int = Field(
+        default=0, description="Input tokens read from cache (billed at read multiplier)"
+    )
 
     # Cost breakdown
-    input_cost: float = Field(description="Cost for input tokens")
+    input_cost: float = Field(description="Cost for input tokens (includes cache read/write cost)")
     output_cost: float = Field(description="Cost for output tokens")
     total_cost: float = Field(description="Total cost in USD")
+    pricing_estimated: bool = Field(
+        default=False,
+        description="True when the rate used was a flagged estimate or fallback, not a confirmed published price",
+    )
 
     # Source tracking (SDK vs external tools)
     source_type: UsageSource = Field(

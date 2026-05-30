@@ -338,6 +338,8 @@ class BaseAgent(ABC):
                 model=self.model,
                 input_tokens=token_usage.input,
                 output_tokens=token_usage.output,
+                cache_creation_input_tokens=getattr(token_usage, "cache_creation_input_tokens", None),
+                cache_read_input_tokens=getattr(token_usage, "cache_read_input_tokens", None),
                 tags=effective_tags,
                 project=effective_project,
                 prompt_id=prompt_id,

@@ -11,6 +11,7 @@ Manages pricing data for different LLM models with support for:
 from typing import Dict, Optional, Tuple
 from pathlib import Path
 import json
+import re
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
@@ -20,11 +21,20 @@ logger = get_logger(__name__)
 
 
 class ModelPricing(BaseModel):
-    """Pricing for a specific model"""
+    """Pricing for a specific model.
+
+    Cache multipliers express Anthropic prompt-caching economics relative to the
+    base input rate (REQ-CT-1): a cache *read* (hit) bills at 0.1x base input, a
+    5-minute cache *write* bills at 1.25x base input. They are overridable per
+    model for providers with different cache economics.
+    """
     model: str
     provider: str
     input_cost_per_million: float
     output_cost_per_million: float
+    cache_read_multiplier: float = 0.1
+    cache_write_multiplier: float = 1.25
+    estimated: bool = False  # True when the rate is a proxy, not a confirmed published price
     effective_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     notes: Optional[str] = None
 
@@ -58,6 +68,24 @@ class PricingService:
     
     # Default pricing (updated January 2026)
     DEFAULT_PRICING: Dict[str, ModelPricing] = {
+        # Anthropic Claude 4.8 / 4.7 (current flagship defaults; rates estimated
+        # from the 4.6 Opus tier until confirmed — REQ-CT-4)
+        "claude-opus-4-8": ModelPricing(
+            model="claude-opus-4-8",
+            provider="anthropic",
+            input_cost_per_million=5.0,
+            output_cost_per_million=25.0,
+            estimated=True,
+            notes="Estimated from Opus 4.6 tier; update when published rate confirmed.",
+        ),
+        "claude-opus-4-7": ModelPricing(
+            model="claude-opus-4-7",
+            provider="anthropic",
+            input_cost_per_million=5.0,
+            output_cost_per_million=25.0,
+            estimated=True,
+            notes="Estimated from Opus 4.6 tier; update when published rate confirmed.",
+        ),
         # Anthropic Claude 4.6 family
         "claude-opus-4-6": ModelPricing(
             model="claude-opus-4-6",
@@ -130,6 +158,33 @@ class PricingService:
             output_cost_per_million=1.25
         ),
 
+        # OpenAI GPT-5.x family (current defaults; rates estimated from the
+        # nearest GPT-4.x/o3 tier until confirmed — REQ-CT-4)
+        "gpt-5.5-pro": ModelPricing(
+            model="gpt-5.5-pro", provider="openai",
+            input_cost_per_million=10.0, output_cost_per_million=40.0,
+            estimated=True, notes="Estimated (flagship/o3 tier); confirm published rate.",
+        ),
+        "gpt-5.5": ModelPricing(
+            model="gpt-5.5", provider="openai",
+            input_cost_per_million=2.5, output_cost_per_million=10.0,
+            estimated=True, notes="Estimated (GPT-4o tier); confirm published rate.",
+        ),
+        "gpt-5.4-mini": ModelPricing(
+            model="gpt-5.4-mini", provider="openai",
+            input_cost_per_million=0.4, output_cost_per_million=1.6,
+            estimated=True, notes="Estimated (4.1-mini tier); confirm published rate.",
+        ),
+        "gpt-5.4-nano": ModelPricing(
+            model="gpt-5.4-nano", provider="openai",
+            input_cost_per_million=0.1, output_cost_per_million=0.4,
+            estimated=True, notes="Estimated (4.1-nano tier); confirm published rate.",
+        ),
+        "gpt-5.3-codex": ModelPricing(
+            model="gpt-5.3-codex", provider="openai",
+            input_cost_per_million=2.5, output_cost_per_million=10.0,
+            estimated=True, notes="Estimated (GPT-4o tier); confirm published rate.",
+        ),
         # OpenAI GPT-4.1 family (1M context)
         "gpt-4.1": ModelPricing(
             model="gpt-4.1",
@@ -208,6 +263,11 @@ class PricingService:
         ),
 
         # Google Gemini 3.x family
+        "gemini-3.1-pro-preview": ModelPricing(
+            model="gemini-3.1-pro-preview", provider="google",
+            input_cost_per_million=1.25, output_cost_per_million=5.0,
+            estimated=True, notes="Estimated (Gemini 2.5/3 Pro tier); confirm published rate.",
+        ),
         "gemini-3-pro-preview": ModelPricing(
             model="gemini-3-pro-preview",
             provider="google",
@@ -265,6 +325,13 @@ class PricingService:
             input_cost_per_million=0.075,
             output_cost_per_million=0.30
         ),
+        # NVIDIA NIM
+        "nvidia/nemotron-3-nano-30b-a3b": ModelPricing(
+            model="nvidia/nemotron-3-nano-30b-a3b",
+            provider="nim",
+            input_cost_per_million=0.30,
+            output_cost_per_million=0.30
+        ),
     }
     
     # Provider detection patterns
@@ -272,6 +339,7 @@ class PricingService:
         "anthropic": ["claude"],
         "openai": ["gpt", "o1", "o3", "o4", "davinci", "curie"],
         "google": ["gemini", "palm"],
+        "nim": ["nemotron", "nvidia"],
     }
     
     def __init__(self, pricing_file: Optional[Path] = None):
@@ -311,53 +379,110 @@ class PricingService:
         
         logger.info(f"Saved pricing for {len(self._pricing)} models to {path}")
     
+    # Trailing date-suffix patterns used by providers for dated model variants:
+    # Anthropic `-YYYYMMDD` (claude-sonnet-4-5-20250929) and OpenAI `-YYYY-MM-DD`
+    # (gpt-5.5-2026-04-23). Stripping these lets a dated id resolve to its undated
+    # family entry WITHOUT the unsafe bare-prefix collapse (REQ-CT-3).
+    _DATE_SUFFIX_RE = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
+
+    # Conservative fallback rate when a model is unknown (flagged estimated).
+    _FALLBACK_INPUT_PER_M = 3.0
+    _FALLBACK_OUTPUT_PER_M = 15.0
+
+    def resolve_pricing(self, model: str) -> Tuple[ModelPricing, bool]:
+        """Resolve a model to pricing, family-safely (REQ-CT-3/CT-5).
+
+        Resolution order: exact key → same-id with a trailing date suffix stripped
+        → conservative *estimated* fallback. Crucially this never maps a model to a
+        DIFFERENT family's rate (the old ``startswith(key.rsplit('-',1)[0])`` collapse
+        could price ``gpt-5.5-pro`` as ``gpt-4.1``).
+
+        Returns ``(pricing, estimated)`` where ``estimated`` is True when the rate is
+        a flagged proxy or the fallback.
+        """
+        exact = self._pricing.get(model)
+        if exact is not None:
+            return exact, exact.estimated
+
+        undated = self._DATE_SUFFIX_RE.sub("", model)
+        if undated != model:
+            base = self._pricing.get(undated)
+            if base is not None:
+                return base, base.estimated
+
+        logger.warning(
+            "No pricing entry for model %r; using estimated fallback "
+            "($%.2f/$%.2f per M). Add an entry via update_pricing for accuracy.",
+            model, self._FALLBACK_INPUT_PER_M, self._FALLBACK_OUTPUT_PER_M,
+        )
+        return (
+            ModelPricing(
+                model=model,
+                provider=self.get_provider_for_model(model) or "unknown",
+                input_cost_per_million=self._FALLBACK_INPUT_PER_M,
+                output_cost_per_million=self._FALLBACK_OUTPUT_PER_M,
+                estimated=True,
+                notes="Fallback estimate — no pricing entry for this model.",
+            ),
+            True,
+        )
+
     def get_pricing(self, model: str) -> Optional[ModelPricing]:
-        """Get pricing for a model"""
-        # Exact match
-        if model in self._pricing:
-            return self._pricing[model]
-        
-        # Try prefix match (for versioned models)
-        for key, pricing in self._pricing.items():
-            if model.startswith(key.rsplit('-', 1)[0]):
-                return pricing
-        
+        """Get pricing for a model (exact or date-normalized only).
+
+        Returns None when the model has no real entry — preserving the historical
+        "None means unknown" contract. For cost calculation use ``resolve_pricing``,
+        which adds the flagged fallback.
+        """
+        exact = self._pricing.get(model)
+        if exact is not None:
+            return exact
+        undated = self._DATE_SUFFIX_RE.sub("", model)
+        if undated != model:
+            return self._pricing.get(undated)
         return None
-    
+
     def calculate_cost_breakdown(
-        self, 
-        model: str, 
-        input_tokens: int, 
-        output_tokens: int
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
     ) -> Tuple[float, float]:
         """
-        Calculate cost breakdown for input and output tokens.
-        
+        Calculate cost breakdown for input and output tokens, cache-aware (REQ-CT-1).
+
+        ``input_tokens`` is the NON-cached input (Anthropic reports cache tokens
+        separately). The returned input cost folds in cache economics:
+        ``input·rate + cache_creation·rate·write_mult + cache_read·rate·read_mult``.
+        Defaults keep the no-cache result identical to the prior implementation.
+
         Returns:
             Tuple of (input_cost, output_cost) in USD
         """
-        pricing = self.get_pricing(model)
-        
-        if pricing:
-            input_cost = (input_tokens / 1_000_000) * pricing.input_cost_per_million
-            output_cost = (output_tokens / 1_000_000) * pricing.output_cost_per_million
-        else:
-            # Fallback to conservative estimate
-            logger.warning(f"No pricing for model {model}, using fallback")
-            input_cost = (input_tokens / 1_000_000) * 3.0
-            output_cost = (output_tokens / 1_000_000) * 15.0
-        
+        pricing, _estimated = self.resolve_pricing(model)
+        in_rate = pricing.input_cost_per_million / 1_000_000
+        input_cost = (
+            input_tokens * in_rate
+            + cache_creation_input_tokens * in_rate * pricing.cache_write_multiplier
+            + cache_read_input_tokens * in_rate * pricing.cache_read_multiplier
+        )
+        output_cost = output_tokens * (pricing.output_cost_per_million / 1_000_000)
         return input_cost, output_cost
     
     def calculate_total_cost(
-        self, 
-        model: str, 
-        input_tokens: int, 
-        output_tokens: int
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
     ) -> float:
-        """Calculate total cost for a model call"""
+        """Calculate total cost for a model call (cache-aware)."""
         input_cost, output_cost = self.calculate_cost_breakdown(
-            model, input_tokens, output_tokens
+            model, input_tokens, output_tokens,
+            cache_creation_input_tokens, cache_read_input_tokens,
         )
         return input_cost + output_cost
     

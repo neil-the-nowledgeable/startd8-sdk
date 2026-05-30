@@ -18,6 +18,11 @@ from ..logging_config import get_logger, correlation_id
 
 logger = get_logger(__name__)
 
+# Cost values are rounded to this many decimal places (nano-dollar) so that
+# per-record rounding is deterministic and summaries reconcile to the sum of
+# their records (REQ-CT-6).
+_USD_PRECISION = 9
+
 # Module-level context var for cost tracking attribution (Issue #3)
 _cost_context: ContextVar[Dict[str, Any]] = ContextVar(
     'cost_context',
@@ -138,7 +143,9 @@ class CostTracker:
         response_id: Optional[str] = None,
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        cache_creation_input_tokens: Optional[int] = None,
+        cache_read_input_tokens: Optional[int] = None,
     ) -> CostRecord:
         """
         Record a cost for an API call.
@@ -160,6 +167,9 @@ class CostTracker:
         Returns:
             Created CostRecord
         """
+        cache_creation = cache_creation_input_tokens or 0
+        cache_read = cache_read_input_tokens or 0
+
         if not self.enabled:
             # Return a zero-cost record when disabled
             return CostRecord(
@@ -169,6 +179,8 @@ class CostTracker:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
+                cache_creation_input_tokens=cache_creation,
+                cache_read_input_tokens=cache_read,
                 input_cost=0.0,
                 output_cost=0.0,
                 total_cost=0.0,
@@ -185,16 +197,21 @@ class CostTracker:
         context_tags = context.get("tags", [])
         effective_tags = list(set((tags or []) + context_tags))
         
-        # Calculate costs
+        # Calculate costs (cache-aware) and capture whether the rate is estimated.
+        _pricing, pricing_estimated = self.pricing.resolve_pricing(model)
         input_cost, output_cost = self.pricing.calculate_cost_breakdown(
-            model, input_tokens, output_tokens
+            model, input_tokens, output_tokens,
+            cache_creation, cache_read,
         )
-        total_cost = input_cost + output_cost
-        
+        # Deterministic precision: round to nano-dollar so aggregations reconcile (REQ-CT-6).
+        input_cost = round(input_cost, _USD_PRECISION)
+        output_cost = round(output_cost, _USD_PRECISION)
+        total_cost = round(input_cost + output_cost, _USD_PRECISION)
+
         # Detect provider if not provided
         if provider is None:
             provider = self.pricing.get_provider_for_model(model) or "unknown"
-        
+
         # Create record
         record = CostRecord(
             agent_name=agent_name,
@@ -203,9 +220,12 @@ class CostTracker:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
+            cache_creation_input_tokens=cache_creation,
+            cache_read_input_tokens=cache_read,
             input_cost=input_cost,
             output_cost=output_cost,
             total_cost=total_cost,
+            pricing_estimated=pricing_estimated,
             tags=effective_tags,
             project=project,
             prompt_id=prompt_id,
