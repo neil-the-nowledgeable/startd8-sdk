@@ -201,28 +201,38 @@ class TestReviewDraft:
             sys_prompt = call_args.kwargs["system_prompt"]
             assert "senior" in sys_prompt.lower() or "reviewing" in sys_prompt.lower()
 
-    def test_flcm_contract_validation_appends_blocking(self):
-        """FLCM violations are appended as blocking issues."""
-        review_text = "### Score: 85\n### Verdict: PASS\n"
-        agent = self._make_agent(review_text)
+    def test_flcm_contract_validation_detects_missing_element(self):
+        """FLCM now runs the REAL validator (FR-3 repair, no phantom method).
+
+        A spec element absent from the drafted code yields a violation; a
+        present element yields none. This proves the path is no longer dormant.
+        """
+        from startd8.implementation_engine.reviewer import _validate_against_manifest
+        from startd8.forward_manifest import ForwardFileSpec, ForwardElementSpec
+        from startd8.utils.code_manifest import ElementKind
 
         fm = Mock()
-        fm.contracts = [Mock()]
-        violation = Mock()
-        violation.severity = "error"
-        violation.violation_type = "missing_method"
-        violation.contract_id = "C-001"
-        violation.expected = "def process()"
-        violation.actual = "not found"
-        fm.validate_implementation = Mock(return_value=[violation])
+        fm.contracts = []
+        fm.file_specs = {
+            "mod.py": ForwardFileSpec(
+                file="mod.py",
+                elements=[
+                    ForwardElementSpec(kind=ElementKind.CONSTANT, name="EXPECTED_CONST")
+                ],
+            )
+        }
 
-        result = review_draft(
-            agent, "task", self._make_spec(), "code",
-            forward_manifest=fm, target_files=["app.py"],
+        # Missing the prescribed constant -> one violation.
+        viols = _validate_against_manifest(fm, "x = 1\n", target_files=["mod.py"])
+        assert len(viols) == 1
+        assert viols[0]["violation_type"] == "missing_constant"
+        assert viols[0]["severity"] == "error"
+
+        # Present -> no violation.
+        ok = _validate_against_manifest(
+            fm, "EXPECTED_CONST = 1\n", target_files=["mod.py"]
         )
-
-        assert result.passed is False
-        assert any("missing_method" in b for b in result.blocking_issues)
+        assert ok == []
 
     def test_flcm_no_contracts_attr_skipped(self):
         """FLCM validation skipped when manifest has no contracts."""

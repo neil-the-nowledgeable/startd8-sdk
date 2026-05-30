@@ -259,28 +259,65 @@ def _validate_against_manifest(
 ) -> List[Dict[str, str]]:
     """Run post-generation contract validation against the ForwardManifest.
 
-    Returns a list of violation dicts with ``severity``, ``violation_type``,
-    ``contract_id``, ``expected``, and ``actual`` keys.
-
-    Gracefully returns empty list on import failure or missing methods.
+    FR-3 repair (RUN_003): the previous implementation looked up a
+    ``validate_implementation`` method that never existed on ``ForwardManifest``
+    (``getattr(..., None)`` always returned ``None`` -> dormant enforcement).
+    This builds a single-file ``ManifestRegistry`` from the drafted code and
+    runs the real per-file validator (``_validate_file_spec``) for each target
+    file, scoped to ``target_files`` to avoid project-wide false positives.
+    Python files only; other languages and any parse error degrade gracefully
+    to an empty list.
     """
     try:
         if not hasattr(forward_manifest, "contracts"):
             return []
-        validate_fn = getattr(forward_manifest, "validate_implementation", None)
-        if validate_fn is None:
+        file_specs = getattr(forward_manifest, "file_specs", None)
+        if not file_specs:
             return []
-        violations = validate_fn(implementation, target_files=target_files)
-        return [
-            {
-                "severity": getattr(v, "severity", "warning"),
-                "violation_type": getattr(v, "violation_type", "unknown"),
-                "contract_id": getattr(v, "contract_id", ""),
-                "expected": getattr(v, "expected", ""),
-                "actual": getattr(v, "actual", ""),
-            }
-            for v in (violations or [])
-        ]
+
+        import tempfile
+        from pathlib import Path as _Path
+
+        from startd8.forward_manifest_validator import _validate_file_spec
+        from startd8.utils.code_manifest import generate_file_manifest
+        from startd8.utils.manifest_registry import ManifestRegistry
+
+        # Scope to the files this draft produced; fall back to all specs.
+        scoped = [p for p in (target_files or []) if p in file_specs]
+        if not scoped:
+            scoped = list(file_specs.keys())
+
+        out: List[Dict[str, str]] = []
+        with tempfile.TemporaryDirectory() as _td:
+            tdir = _Path(_td)
+            for rel in scoped:
+                spec = file_specs.get(rel)
+                if spec is None:
+                    continue
+                # The structural validator parses Python ASTs only.
+                if not str(rel).endswith(".py"):
+                    continue
+                abs_path = tdir / _Path(rel).name
+                try:
+                    abs_path.write_text(implementation)
+                    file_manifest = generate_file_manifest(abs_path, tdir)
+                except Exception as exc:  # noqa: BLE001 - degrade gracefully
+                    logger.debug(
+                        "FLCM: could not build manifest for %s: %s", rel, exc
+                    )
+                    continue
+                registry = ManifestRegistry({rel: file_manifest})
+                for v in _validate_file_spec(rel, spec, registry):
+                    out.append(
+                        {
+                            "severity": getattr(v, "severity", "warning"),
+                            "violation_type": getattr(v, "violation_type", "unknown"),
+                            "contract_id": getattr(v, "contract_id", ""),
+                            "expected": getattr(v, "expected", ""),
+                            "actual": getattr(v, "actual", "") or "",
+                        }
+                    )
+        return out
     except (ImportError, ModuleNotFoundError) as exc:
         logger.debug(
             "FLCM contract validation not available: %s", exc,

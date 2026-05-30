@@ -1170,6 +1170,14 @@ def build_spec_prompt(
     # P0: Core context (always kept)
     ctx_section = build_spec_context_section(context, output_format, target_files)
     prioritized: List[tuple] = [(0, "context", ctx_section)]
+    # FR-1 / FR-1a (forward-manifest at draft time): inject the forward-manifest
+    # contract section at P0 so it is (a) governed by enforce_prompt_budget and
+    # protected from eviction, and (b) rendered ahead of lower-priority context
+    # (P0 sorts first within context_sections). Previously this text was passed
+    # only as a standalone, un-budgeted format kwarg rendered AFTER all context
+    # (RUN_003 postmortem Gap A: the drafter never reliably saw the contract).
+    if forward_contracts_section.strip():
+        prioritized.append((0, "forward_manifest", forward_contracts_section))
 
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")
@@ -1390,7 +1398,10 @@ def build_spec_prompt(
         "requirements_section": requirements_section,
         "context_sections": context_sections,
         "critical_parameters_section": critical_parameters_section,
-        "forward_contracts_section": forward_contracts_section,
+        # FR-1: forward-manifest content now flows through context_sections at P0
+        # (see the prioritized.append above). Keep the placeholder bound to an
+        # empty string to avoid duplicate rendering and preserve template shape.
+        "forward_contracts_section": "",
         "domain_constraints": domain_constraints_str,
     }
     if selected_key == "spec_from_design":

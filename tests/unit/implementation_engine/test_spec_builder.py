@@ -713,3 +713,58 @@ class TestExtractCodeLanguagePreference:
         )
         result = extract_code_from_response(response, language=None)
         assert "larger block" in result
+
+
+class TestForwardManifestSectionInjection:
+    """FR-1 / FR-1a / FR-4 (Forward Manifest at draft time): the forward-manifest
+    contract section must be injected at P0, governed by the prompt token budget,
+    and rendered ahead of lower-priority context. Repairs RUN_003 postmortem Gap A,
+    where the section was passed as a standalone un-budgeted kwarg rendered last.
+    """
+
+    def test_forward_contracts_present_via_context_sections(self):
+        # FR-1: presence — the contract text reaches the spec prompt.
+        ctx = {"forward_contracts": "MUST expose a config constant"}
+        result = build_spec_prompt("Task", ctx, None)
+        assert "MUST expose a config constant" in result
+        assert "## Interface Contract Bindings" in result
+
+    def test_forward_element_specs_present(self):
+        ctx = {"forward_element_specs": "CONSTANT config: NextConfig"}
+        result = build_spec_prompt("Task", ctx, None)
+        assert "CONSTANT config: NextConfig" in result
+        assert "## Expected Code Elements" in result
+
+    def test_forward_manifest_rendered_before_lower_priority(self):
+        # FR-1a: the P0 forward-manifest section's render position must precede
+        # any surviving lower-priority section. 'requirements_context' is P1.
+        ctx = {
+            "forward_contracts": "MUST expose a config constant",
+            "requirements_context": "Lower-priority requirements context block",
+        }
+        result = build_spec_prompt("Task", ctx, None)
+        assert "## Interface Contract Bindings" in result
+        assert "## Requirements Context" in result
+        assert result.index("## Interface Contract Bindings") < result.index(
+            "## Requirements Context"
+        )
+
+    def test_forward_manifest_survives_budget_pressure(self):
+        # FR-4 / NFR-2: under budget pressure a giant P3 reference implementation
+        # is evicted while the P0 forward-manifest section is retained.
+        giant_reference = "REF_LINE\n" * 6000  # ~48k chars, far over the 4096-token budget
+        ctx = {
+            "forward_contracts": "MUST expose a config constant",
+            "reference_implementation": giant_reference,
+        }
+        result = build_spec_prompt("Task", ctx, None)
+        assert "MUST expose a config constant" in result
+        assert "## Reference Implementation" not in result
+
+    def test_no_forward_data_no_section(self):
+        # FR-8 / NFR-1: when no forward-manifest data is present, neither the
+        # contract-bindings nor expected-elements headers appear.
+        ctx = {"plan_context": "Some plan text"}
+        result = build_spec_prompt("Task", ctx, None)
+        assert "## Interface Contract Bindings" not in result
+        assert "## Expected Code Elements" not in result

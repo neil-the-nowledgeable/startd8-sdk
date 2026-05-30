@@ -68,6 +68,90 @@ _SOURCE_PRECEDENCE: dict[str, int] = {
     "human-yaml": 3,
 }
 
+
+# ──────────────────────────────────────────────────────────────────────────
+# Fix 2 — Framework-conventions registry (RUN_003 postmortem Gap B).
+# When deterministic extraction yields an empty element list for a canonical
+# framework configuration file, inject a default ForwardElementSpec so the
+# drafter receives a non-empty contract.  Slotted at the "deterministic"
+# precedence tier: any plan-declared (human-yaml/proto/reference) elements
+# override these for free, and the collision rule below ensures a non-empty
+# deterministic result is never overwritten by a convention.
+# ──────────────────────────────────────────────────────────────────────────
+
+#: Registry version — NFR-5 (auditable, version-stamped).
+FRAMEWORK_CONFIG_REGISTRY_VERSION = "1.0.0"
+
+#: filename pattern -> list[(ElementKind, name, type_annotation)].
+#: Patterns are filename-anchored with EXACT extensions (no shell globs); the
+#: only path-qualified entry is prisma/schema.prisma.  Pure default-export
+#: configs use the sentinel name "default" (FR-5) pending a DEFAULT_EXPORT kind.
+_FRAMEWORK_CONFIG_DEFAULTS: "dict[str, list[tuple[ElementKind, str, Optional[str]]]]" = {
+    # Next.js — `const config = {...}; export default config` (named binding).
+    "next.config.js": [(ElementKind.CONSTANT, "config", "NextConfig")],
+    "next.config.mjs": [(ElementKind.CONSTANT, "config", "NextConfig")],
+    "next.config.ts": [(ElementKind.CONSTANT, "config", "NextConfig")],
+    # JSON documents — modeled as a single default object (sentinel name).
+    "tsconfig.json": [(ElementKind.CONSTANT, "default", "TSConfig")],
+    "package.json": [(ElementKind.CONSTANT, "default", "PackageJson")],
+    "prisma/schema.prisma": [(ElementKind.CONSTANT, "default", "PrismaSchema")],
+    # Pure default-export configs — `export default defineConfig({...})`.
+    "vite.config.js": [(ElementKind.CONSTANT, "default", "UserConfig")],
+    "vite.config.ts": [(ElementKind.CONSTANT, "default", "UserConfig")],
+    "vite.config.mjs": [(ElementKind.CONSTANT, "default", "UserConfig")],
+    "vite.config.cjs": [(ElementKind.CONSTANT, "default", "UserConfig")],
+    "jest.config.js": [(ElementKind.CONSTANT, "default", "JestConfig")],
+    "jest.config.ts": [(ElementKind.CONSTANT, "default", "JestConfig")],
+    "jest.config.mjs": [(ElementKind.CONSTANT, "default", "JestConfig")],
+    "jest.config.cjs": [(ElementKind.CONSTANT, "default", "JestConfig")],
+    "jest.config.json": [(ElementKind.CONSTANT, "default", "JestConfig")],
+    "tailwind.config.js": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
+    "tailwind.config.ts": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
+    "tailwind.config.mjs": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
+    "tailwind.config.cjs": [(ElementKind.CONSTANT, "default", "TailwindConfig")],
+}
+
+
+def _matches_framework_pattern(filepath: str, pattern: str) -> bool:
+    """Filename-anchored match. Only prisma/schema.prisma is path-qualified."""
+    if pattern == "prisma/schema.prisma":
+        norm = filepath.replace("\\", "/")
+        return norm == pattern or norm.endswith("/" + pattern)
+    return Path(filepath).name == pattern
+
+
+def apply_framework_defaults(
+    file_elements: "dict[str, list[ForwardElementSpec]]",
+) -> None:
+    """Fill empty element lists for canonical framework config files (Fix 2).
+
+    Collision rule (R1-S4): a convention only fills a path whose deterministic
+    element list is EMPTY.  A non-empty deterministic/plan-declared list always
+    wins — empty output is treated as "no contribution", never "empty success".
+    Override granularity is full-source per file (no per-element merge).
+    Mutates *file_elements* in place.
+    """
+    for filepath, specs in list(file_elements.items()):
+        if specs:
+            continue  # non-empty deterministic/plan-declared elements win
+        for pattern, default_entries in _FRAMEWORK_CONFIG_DEFAULTS.items():
+            if not _matches_framework_pattern(filepath, pattern):
+                continue
+            file_elements[filepath] = [
+                ForwardElementSpec(
+                    kind=kind,
+                    name=name,
+                    type_annotation=type_ann,
+                    decomposition_source="framework-conventions",
+                )
+                for (kind, name, type_ann) in default_entries
+            ]
+            logger.debug(
+                "Fix 2: framework default applied to %s via pattern %r (%d element(s))",
+                filepath, pattern, len(default_entries),
+            )
+            break
+
 _PROTOCOL_MAP: dict[str, str] = {
     "grpc": "gRPC transport",
     "http": "HTTP transport",
@@ -455,6 +539,10 @@ class DeterministicExtractor:
 
         # REQ-3.1.1: Link self/cls-bearing functions to their parent class.
         self._link_methods_to_classes(file_elements)
+
+        # Fix 2 — fill empty contracts for canonical framework config files
+        # (collision rule: non-empty deterministic/plan-declared elements win).
+        apply_framework_defaults(file_elements)
 
         # Field-level supplement from prior specs
         if prior_file_specs:

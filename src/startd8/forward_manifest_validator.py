@@ -247,7 +247,7 @@ def _validate_import_path(
         
     req_lib = contract.target_path
     
-    for file_path, file_manifest in registry._manifest_map.items():
+    for file_path, file_manifest in registry._manifests.items():
         actual_imports = [imp.module for imp in (file_manifest.imports or [])]
         found = any(req_lib in acc_imp for acc_imp in actual_imports)
         
@@ -258,7 +258,7 @@ def _validate_import_path(
     # Check if we searched all files and found nothing
     # Actually, import_path contracts are usually globally verified:
     global_imports = set()
-    for file_manifest in registry._manifest_map.values():
+    for file_manifest in registry._manifests.values():
         for imp in (file_manifest.imports or []):
              global_imports.add(imp.module)
              
