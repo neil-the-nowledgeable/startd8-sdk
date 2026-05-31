@@ -226,6 +226,18 @@ def _classify_tier_core(
             signals,
         )
 
+    # --- RUN-007 FR-7: under-specified (empty-fillable, non-registry) spec must
+    # not route to the no-LLM SIMPLE tier — that path ships an unfilled stem-name
+    # stub. Route to the real-LLM path instead. Fires only when fillability is
+    # known False; the Step-2 emission gate is the authoritative suppressor and
+    # this aligns the classifier with it. ---
+    if signals.has_fillable_elements is False:
+        return _emit(
+            ComplexityTier.COMPLEX,
+            "empty-fillable spec — under-specified, not SIMPLE (FR-7)",
+            signals,
+        )
+
     # --- SIMPLE: all must pass ---
     if (
         signals.manifest_coverage == "full"
