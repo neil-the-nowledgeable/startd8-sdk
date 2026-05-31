@@ -379,6 +379,7 @@ class _FileProcessingState:
     stub_escalated: list = dataclasses.field(default_factory=list)  # list[str]
     reg_hits: int = 0
     reg_misses: int = 0
+    empty_spec_refused: list = dataclasses.field(default_factory=list)  # FR-2: refused empty-spec targets
 
 
 class MicroPrimeCodeGenerator:
@@ -629,6 +630,13 @@ class MicroPrimeCodeGenerator:
                 ", ".join(st.bypass_files),
             )
 
+        # FR-2.2/FR-9 (RUN-007): evaluate empty-fillable targets whose skeleton
+        # was suppressed at the Step-2 gate. They route through bypass→fallback
+        # (cloud file-whole, fed the task description); each must be satisfied
+        # with real, non-stub content or be recorded as a structured refusal —
+        # never silently skipped and never counted as success.
+        st.empty_spec_refused = self._collect_empty_spec_refusals(st, context)
+
         # Phase 5b: Element-escalated files respect escalation_enabled
         if st.escalated_files and not self._config.escalation_enabled:
             logger.warning(
@@ -653,19 +661,22 @@ class MicroPrimeCodeGenerator:
                 safe_key = str(fp).replace("/", "_").replace(".", "_")
                 gen_responses[f"draft_{safe_key}"] = skeleton
 
+        _metadata = self._build_generation_metadata(
+            st, local_file_count,
+            micro_prime_only=st.element_escalation_attempt_count == 0,
+            lead_agent_spec=getattr(self, "lead_agent", None),
+            drafter_agent_spec=getattr(self, "drafter_agent", None),
+        )
+        _error = self._empty_spec_refusal_error(st, _metadata)
         return GenerationResult(
-            success=st.effective_file_count > 0,
+            success=st.effective_file_count > 0 and not st.empty_spec_refused,
             generated_files=st.generated_files,
             input_tokens=st.total_input,
             output_tokens=st.total_output,
             cost_usd=st.element_escalation_attempt_cost,
             model=f"{self._config.provider}:{self._config.model}",
-            metadata=self._build_generation_metadata(
-                st, local_file_count,
-                micro_prime_only=st.element_escalation_attempt_count == 0,
-                lead_agent_spec=getattr(self, "lead_agent", None),
-                drafter_agent_spec=getattr(self, "drafter_agent", None),
-            ),
+            metadata=_metadata,
+            error=_error,
             responses=gen_responses,
         )
 
@@ -1214,6 +1225,59 @@ class MicroPrimeCodeGenerator:
         meta.update(extra)
         return meta
 
+    def _collect_empty_spec_refusals(
+        self, st: "_FileProcessingState", context: Dict[str, Any],
+    ) -> List[str]:
+        """FR-2.2/FR-9 (RUN-007): return empty-fillable targets (skeleton
+        suppressed at the Step-2 gate) that escalation did NOT satisfy with real,
+        non-stub content. Such targets are refused — they fail the feature and
+        must never be silently skipped or counted as success.
+        """
+        files = set((context or {}).get("_empty_spec_files") or ())
+        if not files:
+            return []
+        from startd8.element_fillability import is_empty_stem_type_artifact
+        refused: List[str] = []
+        for fp in sorted(files):
+            produced = next(
+                (p for p in st.generated_files
+                 if str(p).replace("\\", "/").endswith(fp)),
+                None,
+            )
+            content = ""
+            if produced is not None:
+                try:
+                    content = Path(produced).read_text(
+                        encoding="utf-8", errors="replace",
+                    )
+                except OSError:
+                    content = ""
+            if (not content.strip()) or is_empty_stem_type_artifact(fp, content):
+                refused.append(fp)
+                logger.error(
+                    "FR-2 refusal: empty-spec target %s not satisfied by "
+                    "escalation (no fillable spec; escalation produced "
+                    "empty/stub output)", fp,
+                )
+        return refused
+
+    def _empty_spec_refusal_error(
+        self, st: "_FileProcessingState", metadata: Dict[str, Any],
+    ) -> Optional[str]:
+        """Stamp refusal attribution into *metadata* (FR-2.2) and return the
+        structured error message, or None when there is no refusal."""
+        if not st.empty_spec_refused:
+            return None
+        if isinstance(metadata, dict):
+            metadata["refused_targets"] = list(st.empty_spec_refused)
+            metadata["refusal_root_cause"] = "empty_spec_refusal"
+            metadata["refusal_pipeline_stage"] = "micro_prime_escalation"
+        return (
+            "MissingTemplateError: empty-spec target(s) refused — no fillable "
+            "spec and escalation produced no real content: "
+            + ", ".join(st.empty_spec_refused)
+        )
+
     def _generate_with_fallback(
         self,
         st: _FileProcessingState,
@@ -1252,14 +1316,7 @@ class MicroPrimeCodeGenerator:
         local_files_kept = sum(1 for fp in target_files if fp not in st.escalated_files)
         local_success = True if local_files_kept == 0 else (st.effective_file_count > 0)
 
-        return GenerationResult(
-            success=fallback_result.success and local_success,
-            generated_files=st.generated_files,
-            input_tokens=st.total_input,
-            output_tokens=st.total_output,
-            cost_usd=fallback_result.cost_usd + st.element_escalation_attempt_cost,
-            model=f"micro-prime+{fallback_result.model}",
-            metadata={
+        _fb_metadata = {
                 **self._build_generation_metadata(
                     st, local_file_count,
                     fallback_files_delegated=len(st.escalated_files),
@@ -1273,7 +1330,20 @@ class MicroPrimeCodeGenerator:
                             "review_raw_response", "lead_agent_spec",
                             "drafter_agent_spec", "lead_cost",
                             "drafter_cost", "cost_efficiency_ratio")},
-            },
+        }
+        _fb_error = self._empty_spec_refusal_error(st, _fb_metadata)
+        return GenerationResult(
+            success=(
+                fallback_result.success and local_success
+                and not st.empty_spec_refused
+            ),
+            generated_files=st.generated_files,
+            input_tokens=st.total_input,
+            output_tokens=st.total_output,
+            cost_usd=fallback_result.cost_usd + st.element_escalation_attempt_cost,
+            model=f"micro-prime+{fallback_result.model}",
+            metadata=_fb_metadata,
+            error=_fb_error,
         )
 
     def _with_escalation_context(
@@ -1851,11 +1921,50 @@ class MicroPrimeCodeGenerator:
         )
 
         from startd8.micro_prime.engine import _is_non_python_file
+        from startd8.element_fillability import is_empty_fillable_spec
+        from startd8.forward_manifest_extractor import framework_provenance_for_path
+        from pathlib import PurePosixPath as _PPP
+
+        # Source extensions whose deterministic assemblers emit a stem-named
+        # stub for an element-less spec (the run-007 defect). Non-source files
+        # (Dockerfile/YAML/JSON/HTML) use passthrough and are NOT gated.
+        _STUB_PRONE_SOURCE_EXTS = {
+            ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+            ".go", ".java", ".cs",
+        }
 
         for file_path in target_files:
             file_spec = manifest.file_specs.get(file_path)
             if file_spec is None:
                 logger.debug("No file_spec for %s, skipping skeleton", file_path)
+                continue
+
+            # FR-1 (RUN-007): an empty-fillable source spec with no framework
+            # registry match would have a stem-named stub assembled
+            # (`export class value-model {}`). Suppress the skeleton so the file
+            # routes to bypass→fallback escalation / refusal (Step 4) instead of
+            # shipping an unfilled stub. Registry configs are exempt — their
+            # DEFAULT_EXPORT/CONSTANT defaults are fillable, and the collision
+            # rule can leave a CLASS-only registry path that must NOT escalate
+            # (FR-7 tie-break).
+            if (
+                _PPP(file_path).suffix.lower() in _STUB_PRONE_SOURCE_EXTS
+                and is_empty_fillable_spec(getattr(file_spec, "elements", None) or [])
+                and framework_provenance_for_path(file_path) is None
+            ):
+                logger.info(
+                    "FR-1: empty-fillable spec for %s — suppressing skeleton, "
+                    "routing to escalation/refusal (no unfilled stub shipped)",
+                    file_path,
+                )
+                if context is not None:
+                    _ss = context.get("skeleton_sources")
+                    if isinstance(_ss, dict):
+                        _ss.pop(file_path, None)
+                    _et = context.get("element_tiers")
+                    if isinstance(_et, dict):
+                        _et.pop(file_path, None)
+                    context.setdefault("_empty_spec_files", set()).add(file_path)
                 continue
 
             # FR-DFA-003: Dockerfile skeleton = existing content (passthrough)
