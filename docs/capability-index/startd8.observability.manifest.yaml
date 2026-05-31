@@ -153,6 +153,8 @@ metrics:
   source_file: src/startd8/events/otel_bridge.py
   labels:
   - event_type
+  category: pipeline_innate
+  orientation: system
 - name: repair_attempts_total
   instrument: counter
   unit: attempts
@@ -162,6 +164,8 @@ metrics:
   labels:
   - outcome
   - error_category
+  category: pipeline_innate
+  orientation: system
 - name: repair_success_total
   instrument: counter
   unit: repairs
@@ -170,6 +174,8 @@ metrics:
   source_file: src/startd8/repair/orchestrator.py
   labels:
   - error_category
+  category: pipeline_innate
+  orientation: system
 - name: repair_steps_applied
   instrument: counter
   unit: steps
@@ -179,18 +185,24 @@ metrics:
   labels:
   - step_name
   - outcome
+  category: pipeline_innate
+  orientation: system
 - name: repair_wall_clock_ms
   instrument: histogram
   unit: ms
   description: Wall-clock time per repair attempt
   meter: startd8.repair
   source_file: src/startd8/repair/orchestrator.py
+  category: pipeline_innate
+  orientation: system
 - name: repair_cost_avoided_usd
   instrument: counter
   unit: USD
   description: Estimated regeneration cost avoided by repair
   meter: startd8.repair
   source_file: src/startd8/repair/orchestrator.py
+  category: pipeline_innate
+  orientation: system
 spans:
 - name_pattern: agent.generate:{agent_name}
   kind: CLIENT
@@ -222,6 +234,8 @@ spans:
   - workflow.name
   - workflow.version
   - workflow.success
+  category: pipeline_innate
+  orientation: system
 - name_pattern: pipeline.{name}
   kind: INTERNAL
   source_file: src/startd8/orchestration.py
@@ -232,6 +246,8 @@ spans:
   - pipeline.total_tokens
   - pipeline.total_cost
   - pipeline.total_time_ms
+  category: pipeline_innate
+  orientation: system
 - name_pattern: pipeline.{name}.step.{step_name}
   kind: INTERNAL
   source_file: src/startd8/orchestration.py
@@ -244,6 +260,8 @@ spans:
   - cost
   - response_time_ms
   - retry_count
+  category: pipeline_innate
+  orientation: system
 - name_pattern: '{caller_defined_name}'
   kind: INTERNAL
   source_file: src/startd8/contractors/adapters/contextcore.py
@@ -251,6 +269,8 @@ spans:
   - project.id
   - agent.id
   attributes_dynamic: true
+  category: project_observability
+  orientation: system
 - name_pattern: artisan.workflow.{workflow_id}
   kind: INTERNAL
   source_file: src/startd8/contractors/artisan_contractor.py
@@ -259,6 +279,8 @@ spans:
   - workflow.phase_count
   - workflow.cost_budget
   - workflow.dry_run
+  category: project_observability
+  orientation: system
 - name_pattern: artisan.workflow.{workflow_id}.phase.{phase}
   kind: INTERNAL
   source_file: src/startd8/contractors/artisan_contractor.py
@@ -267,12 +289,16 @@ spans:
   - phase.status
   - phase.duration_ms
   - phase.cost
+  category: project_observability
+  orientation: system
 - name_pattern: PhaseRunner.run
   kind: INTERNAL
   source_file: src/startd8/contractors/artisan_phases/runner.py
   attributes:
   - phase.count
   - phase.total_cost
+  category: project_observability
+  orientation: system
 - name_pattern: phase.{phase_type}.attempt.{attempt_number}
   kind: INTERNAL
   source_file: src/startd8/contractors/artisan_phases/runner.py
@@ -280,6 +306,8 @@ spans:
   - phase.type
   - attempt.number
   - attempt.status
+  category: project_observability
+  orientation: system
 - name_pattern: repair.attempt
   kind: INTERNAL
   source_file: src/startd8/repair/orchestrator.py
@@ -290,6 +318,8 @@ spans:
   - repair.success
   events:
   - repair.step.{step_name}
+  category: pipeline_innate
+  orientation: system
 event_types:
 - name: AGENT_CALL_START
   event_group: agent

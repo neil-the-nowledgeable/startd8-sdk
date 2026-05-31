@@ -21,15 +21,11 @@ from .taxonomy_enums import is_valid_category, is_valid_orientation
 # now. Each entry is owned by a follow-up: project spans → cat-4 Phase 2;
 # pipeline-innate internals → a later pass. The list MUST shrink to empty; removing
 # an entry requires annotating that module's descriptors in the same change.
-GRANDFATHERED_SOURCES: FrozenSet[str] = frozenset({
-    "src/startd8/events/otel_bridge.py",          # event-bus bridge — later pass
-    "src/startd8/repair/orchestrator.py",         # repair pipeline — pipeline_innate, later
-    "src/startd8/orchestration.py",               # pipeline orchestration — pipeline_innate, later
-    "src/startd8/workflows/base.py",              # workflow base — pipeline_innate, later
-    "src/startd8/contractors/adapters/contextcore.py",   # project obs — cat-4
-    "src/startd8/contractors/artisan_contractor.py",     # project obs (phase spans) — cat-4
-    "src/startd8/contractors/artisan_phases/runner.py",  # project obs (phase/task spans) — cat-4
-})
+# Empty: every collector-instrumented module now declares its taxonomy axes. cat-4
+# annotated the project-obs contractors; B/pipeline-catalog annotated the pipeline-innate
+# modules (events, repair, orchestration, workflows, complexity). A module with unset
+# axes is now a real violation, not a tolerated bootstrap gap.
+GRANDFATHERED_SOURCES: FrozenSet[str] = frozenset()
 
 
 @dataclass

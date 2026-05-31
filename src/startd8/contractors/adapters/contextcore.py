@@ -25,7 +25,10 @@ from ..protocols import (
 logger = get_logger(__name__)
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Project Observability (REQ-OBS-SHARED-001): ContextCore task-tracking integration spans.
 _OTEL_DESCRIPTORS = {
+    "category": "project_observability",
+    "orientation": "system",
     "spans": [
         {
             "name_pattern": "{caller_defined_name}",

@@ -20,7 +20,10 @@ except ImportError:
     _OTEL_AVAILABLE = False
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Pipeline-innate (REQ-OBS-SHARED-001): the SDK's own event-bus telemetry.
 _OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
     "metrics": [
         {
             "name": "startd8.events.total",

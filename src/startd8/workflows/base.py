@@ -30,7 +30,10 @@ except ImportError:
     _tracer = None
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Pipeline-innate (REQ-OBS-SHARED-001): workflow execution telemetry.
 _OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
     "spans": [
         {
             "name_pattern": "workflow.{workflow_id}",

@@ -46,7 +46,10 @@ from typing import Any, Optional, Protocol, Sequence, Type, runtime_checkable
 from startd8.logging_config import get_logger
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Project Observability (REQ-OBS-SHARED-001): development-lifecycle phase/task spans.
 _OTEL_DESCRIPTORS = {
+    "category": "project_observability",
+    "orientation": "system",
     "spans": [
         {
             "name_pattern": "PhaseRunner.run",
