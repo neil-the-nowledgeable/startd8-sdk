@@ -904,3 +904,48 @@ class TestCoverageGate:
         )
         assert not result.passed
         assert any("unavailable" in f for f in result.failures)
+
+
+class TestValidateExtendedArtifact:
+    """Run-007 Finding 1: content scoring against expected_output_contracts."""
+
+    def test_all_markers_present_scores_full(self):
+        from startd8.validators.observability_artifact_checks import validate_extended_artifact
+
+        contract = {"completeness_markers": ["selector", "endpoints", "interval"], "max_lines": 50}
+        content = "selector:\n  matchLabels: {}\nendpoints:\n  - interval: 30s\n"
+        r = validate_extended_artifact(content, contract)
+        assert r.score == 1.0
+        assert r.checks_total == 4  # 3 markers + max_lines
+        assert r.issues == []
+
+    def test_missing_markers_lower_score(self):
+        from startd8.validators.observability_artifact_checks import validate_extended_artifact
+
+        contract = {
+            "completeness_markers": ["Overview", "Risks", "Escalation", "Procedures"],
+            "max_lines": 300,
+        }
+        content = "# Runbook\n## Overview\n## Escalation\n"  # 2 of 4 markers
+        r = validate_extended_artifact(content, contract)
+        assert r.checks_passed == 3  # Overview + Escalation + max_lines
+        assert r.checks_total == 5
+        assert r.score == round(3 / 5, 4)
+        assert any("Risks" in i.message for i in r.issues)
+        assert any("Procedures" in i.message for i in r.issues)
+
+    def test_exceeding_max_lines_fails_that_check(self):
+        from startd8.validators.observability_artifact_checks import validate_extended_artifact
+
+        contract = {"completeness_markers": ["groups"], "max_lines": 3}
+        content = "groups:\n" + "\n".join(f"  - x{i}" for i in range(10))
+        r = validate_extended_artifact(content, contract)
+        assert any("exceeds max_lines" in i.message for i in r.issues)
+        assert r.checks_passed == 1  # marker present, size failed
+
+    def test_empty_contract_scores_full(self):
+        from startd8.validators.observability_artifact_checks import validate_extended_artifact
+
+        r = validate_extended_artifact("anything", {})
+        assert r.score == 1.0
+        assert r.checks_total == 0
