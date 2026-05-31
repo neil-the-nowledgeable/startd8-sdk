@@ -24,16 +24,20 @@ class TestPrettierPostGeneration:
         return NodeLanguageProfile()
 
     def test_formats_js_files_when_prettier_available(self, tmp_path):
+        # REQ-PLI-NODE-P1: post_generation_cleanup runs prettier best-effort and
+        # returns a list of WARNING strings (empty on success), consumed by the
+        # integration engine as ``cleanup_warnings``. A successful run (exit 0)
+        # produces no warnings.
         js_file = tmp_path / "server.js"
         js_file.write_text("const x=1;")
         profile = self._profile()
 
         with mock.patch("shutil.which", return_value="/usr/bin/prettier"):
             with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
                 result = profile.post_generation_cleanup([js_file], tmp_path)
 
-        assert len(result) == 1
-        assert str(js_file) in result
+        assert result == []  # no warnings on success
         mock_run.assert_called_once()
         assert "prettier" in mock_run.call_args[0][0][0]
 

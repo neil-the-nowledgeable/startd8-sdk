@@ -44,11 +44,27 @@ def _get_build_file_map() -> dict[str, str]:
     """
     LanguageRegistry.discover()
     mapping: dict[str, str] = {}
+    owners: dict[str, LanguageProfile] = {}
     for profile in LanguageRegistry._profiles.values():
         for pattern in profile.build_file_patterns:
             # Skip glob patterns like *.csproj — only exact filenames
-            if "*" not in pattern:
-                mapping[pattern] = profile.language_id
+            if "*" in pattern:
+                continue
+            existing = owners.get(pattern)
+            if existing is not None and existing is not profile:
+                # Collision: a dialect that inherits a generic host build file
+                # (e.g. Vue inheriting ``package.json`` from its Node host) must
+                # yield to the host, so the generic file resolves to the host
+                # language rather than the more specific dialect. Order-independent.
+                if isinstance(profile, type(existing)):
+                    # profile is a subclass (dialect) of the existing owner (host)
+                    continue
+                if not isinstance(existing, type(profile)):
+                    # Unrelated profiles collide — keep the first-seen owner stable
+                    continue
+                # existing is a subclass of profile → replace dialect with host
+            owners[pattern] = profile
+            mapping[pattern] = profile.language_id
     return mapping
 
 

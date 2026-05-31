@@ -771,6 +771,16 @@ def _validate_non_python_file(
         result.error = f"language_mismatch:{mismatch}"
         return result
 
+    # Universal empty-file guard — an empty generated file is never valid,
+    # regardless of type (XML, .properties, unknown extensions, etc.). Code
+    # validators (Go, C#) also flag this, but enforcing it here covers every
+    # dispatch branch uniformly.
+    if not content.strip():
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "empty_file"
+        return result
+
     suffix = abs_path.suffix.lower()
     name = abs_path.name.lower()
 
@@ -806,6 +816,8 @@ def _validate_non_python_file(
         result = _validate_csproj_file(content, result)
     elif suffix == ".sln":
         result = _validate_sln_file(content, result)
+    elif suffix == ".xml":
+        result = _validate_xml_file(content, result)
 
     return result
 
@@ -1586,14 +1598,13 @@ def _validate_go_file(
             result.error = f"Python fingerprint in .go file: {fp!r}"
             return result
 
-    # Package declaration check
+    # Package declaration check — a .go file without a package clause cannot
+    # compile, so this is a hard error (not a soft quality deduction).
     if not re.search(r'^\s*package\s+\w+', content, re.MULTILINE):
-        result.semantic_issues.append({
-            "category": "go_structure",
-            "severity": "warning",
-            "message": "missing package declaration",
-        })
-        result.contract_compliance = max(0.0, result.contract_compliance - 0.3)
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = "missing_package_declaration"
+        return result
 
     # Balanced braces check
     depth = 0
@@ -1610,7 +1621,7 @@ def _validate_go_file(
     if depth != 0:
         result.ast_valid = False
         result.contract_compliance = 0.5
-        result.error = f"unbalanced_braces (depth={depth})"
+        result.error = "unbalanced_braces"
         return result
 
     # Go semantic checks — feed into disk quality score
@@ -1628,6 +1639,27 @@ def _validate_go_file(
     # Stub counting (Criterion 4 — postmortem scoring parity)
     result.stubs_remaining = _count_stubs_text(content, ".go")
 
+    return result
+
+
+def _validate_xml_file(
+    content: str,
+    result: DiskComplianceResult,
+) -> DiskComplianceResult:
+    """Validate generic XML file well-formedness (REQ-MLT-XML).
+
+    Empty content is handled by the universal empty-file guard in
+    ``validate_disk_compliance`` before this runs; here we only check that the
+    XML parses. Malformed/unclosed markup yields a hard ``xml_parse_error``.
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        ET.fromstring(content)
+    except ET.ParseError as exc:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"xml_parse_error: {exc}"
     return result
 
 

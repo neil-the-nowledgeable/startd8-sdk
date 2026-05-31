@@ -211,11 +211,12 @@ def _check_interface_file_contains_class(
         ):
             issues.append(SemanticIssue(
                 check="interface_file_contains_class",
-                severity="error",
+                severity="warning",
                 message=(
                     f"Interface file `{name}` contains a class declaration — "
                     f"IFoo.cs should contain ONLY the interface definition. "
-                    f"Other files expecting the interface will fail to compile"
+                    f"Misplacing the class here can leave the interface undefined "
+                    f"for consumers"
                 ),
                 line=i,
             ))

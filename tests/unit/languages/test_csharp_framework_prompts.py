@@ -184,10 +184,14 @@ class TestCSharpSystemPrompt:
         # ("Do NOT wrap in a Python script") — verify the role is C#, not Python
         assert "expert C#" in prompt or "expert c#" in prompt.lower()
 
-    def test_drafter_defaults_to_python_without_role(self):
+    def test_drafter_defaults_to_language_neutral_without_role(self):
+        # REQ-PE-500: with no language_role provided, the drafter must fall back
+        # to a language-neutral role rather than assuming Python. The word
+        # "Python" must NOT leak into the default role/standards text.
         from startd8.implementation_engine.drafter import get_drafter_system_prompt
         prompt, mode = get_drafter_system_prompt()
-        assert "Python" in prompt or "python" in prompt.lower()
+        assert "senior software engineer" in prompt.lower()
+        assert mode == "create"
 
 
 # ---------------------------------------------------------------------------

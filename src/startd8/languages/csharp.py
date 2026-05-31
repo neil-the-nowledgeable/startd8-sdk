@@ -626,7 +626,8 @@ class CSharpLanguageProfile:
             "(e.g., `src/CartService/Services/` → `namespace CartService.Services;`)",
             "- PascalCase for types, methods, and public members",
             "- camelCase for local variables and private fields (prefix with `_`)",
-            "- **File-scoped namespaces REQUIRED**: `namespace Foo.Bar;` "
+            "- **File-scoped namespaces** are REQUIRED — write file-scoped "
+            "namespaces such as `namespace Foo.Bar;` "
             "(NEVER block-scoped `namespace Foo.Bar { ... }`)",
             "- Enable nullable reference types (`<Nullable>enable</Nullable>` in .csproj)",
             "- Prefer async/await for I/O-bound operations",
