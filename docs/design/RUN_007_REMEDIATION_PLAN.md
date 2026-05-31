@@ -14,7 +14,7 @@ This plan implements the v0.3 requirements. Every FR maps to a step; every step 
 
 | # | Step | FR | Files | Verify |
 |---|------|----|----|--------|
-| **0** | **Discovery/blocking:** pin the Node stem→CLASS synthesizer; **prove the dollar budget signal is observable at the micro-prime escalation site** (R1-S3 — if not, re-home FR-4 to orchestration); confirm `validate_disk_compliance` is Python-only AST (R1-S4); confirm the seed carries description/AC for escalation input, else refuse (R5-S4) | OQ-1/3/4, FR-4 | seed/spec construction, `prime_adapter.py`, `engine.py`, `forward_manifest_validator.py` | trace + a repro test for `lib/value-model.ts`; a budget-exhausted fixture observed at the escalation decision |
+| **0 ✅ DONE** | **Discovery/blocking** — see "Step 0 Findings" below. OQ-1 (synthesizer = `element_deriver` T0), OQ-3 (budget NOT at micro-prime → orchestration), OQ-4 (validator Python-only AST), R5-S4 (seed has `description`, no AC) all resolved | OQ-1/3/4, FR-4 | `seeds/element_deriver.py`, `seeds/builder.py`, `prime_adapter.py`, `prime_contractor.py`, `forward_manifest_validator.py` | ✅ empirically confirmed `derive_elements_for_file('lib/value-model.ts', contracts=None)` → lone `CLASS name='value-model'` |
 | **1** | **Positive fillability classifier** `is_fillable(element)` (NOT `kind != CLASS`): data/behaviour-bearing + registry `DEFAULT_EXPORT`/`CONSTANT` fillable; empty CLASS/STRUCT/INTERFACE/ENUM/TYPE_ALIAS not. Plus `MissingTemplateError` + shared `is_empty_stem_type_artifact()` | FR-0, FR-2, FR-5 | `micro_prime/` shared util, exceptions module | unit matrix over all `ElementKind`s; only data-bearing/registry cases fillable; refusal type imports |
 | **2** | **One shared gate** in `_generate_skeletons` (folds old Step 3): empty-fillable spec + no registry → do NOT emit skeleton; **clear stale `skeleton_sources`/`element_tiers`** (R4-S1/R6-F1); set escalation flag. **Co-land with Step 4** (R5-S1) | FR-1, FR-7, FR-10 | `prime_adapter._generate_skeletons` (~1955–2069) | unit: empty spec → no skeleton + stale context cleared + escalation flag; registry match → skeleton still emitted |
 | **3** | **All deterministic assembler empty-element branches** (not just Java/C#): Java `:253`, C# `:337`, **Go `:204` incl. `package main` silent-empty** (R5-S2), Python DFA `from __future__` stub (R1-S1) | FR-1 | `java/csharp/go_file_assembler.py`, `utils/file_assembler.py` | unit: each language, empty elements → no stem-type / no silent-empty file shipped |
@@ -25,7 +25,20 @@ This plan implements the v0.3 requirements. Every FR maps to a step; every step 
 
 **Sequencing note (revised — R5-S1 co-landing constraint):** Step 1 first (predicate + error type). **Steps 2 and 4 MUST co-land** (or Step 4 first): suppressing skeleton emission (Step 2) before the empty-spec escalation entrypoint (Step 4) exists opens a **silent-bypass window** — `_is_file_ollama_whole_eligible` requires stub markers a suppressed empty class lacks, so file-whole is skipped and the feature bypasses both fix branches. Then Step 3 (all assemblers), Step 5 (classifier authority), Step 6 (detector), Step 7 (regression). Fix 3 (single ledger) remains deferred.
 
-**Open questions gating code (Step 0):** OQ-3 (budget reach — likely NO per R1-S3) and OQ-4 (validator parse reuse — NO per R1-S4) plus the escalation-input-context check (R5-S4) are resolved in Step 0 before Steps 1–7.
+**Open questions gating code (Step 0):** all resolved — see findings below.
+
+---
+
+## Step 0 — Discovery Findings (RESOLVED 2026-05-31, branch `fix/run-007-empty-spec-remediation`)
+
+| Q | Finding | Code anchor | Implication for Steps 1–7 |
+|---|---------|-------------|---------------------------|
+| **OQ-1** — Node stem→CLASS synthesizer | `element_deriver.derive_elements_for_file` **T0** unconditionally emits a stem-named `CLASS` (raw `PurePosixPath(stem)`, **unsanitized** → `value-model`); methods only at **T2 if `contracts` exist**. Empirically: empty-contract `.ts` → lone `CLASS`. Wired live via `seeds/builder.py:233 enrich_forward_manifest`. | `seeds/element_deriver.py:79,84,87-108`; `seeds/builder.py:233` | Step 1's `is_fillable` must treat a member-less `CLASS` as non-fillable → Step 2 gate catches it **without** editing the deriver. **Optional hardening:** also make T0 not synthesize a bare CLASS when nothing fillable, and sanitize the identifier (the `value-model` hyphen is a latent second bug). |
+| **OQ-3** — does the $ budget reach the escalation site? | **NO.** Only `token_budget=4096` is passed into micro-prime; no cost signal. The budget lives at orchestration: `prime_contractor.py` `max_cost_usd` vs `self.total_cost_usd`. | `prime_adapter.py:2666`; `prime_contractor.py:3560,3634,4963` | **FR-4 enforced at orchestration** (Step 4 hooks the `total_cost_usd >= max_cost_usd` check before dispatching an escalation), NOT inside the micro-prime escalation decision. |
+| **OQ-4** — can FR-5 reuse an existing parse? | **NO.** `validate_disk_compliance` routes non-`.py` to `_validate_non_python_file`; `ast.parse` only runs for `.py`. | `forward_manifest_validator.py:392,406,748` | Step 6 detector is net-new in the non-Python path, reusing `NodeLanguageProfile.validate_syntax` for JS/TS (R4-S2/R6-F2). |
+| **R5-S4** — escalation input | Prime seed has a required **`description`** (the escalation input). **No `acceptance_criteria`** in the Prime seed model (AC only in the dormant Artisan path). | `seeds/models.py:107`; `artisan_phases/plan_deconstruction.py:102` | Step 4 feeds the seed `description`; a thin/empty description → immediate refusal (not vacuous escalation). |
+
+**Net:** no blocker found; all four resolutions are *favourable* to the v0.3 design (the FR-0 fillability gate handles OQ-1 by construction; FR-4 cleanly re-homes to the orchestration budget that already exists). Steps 1–7 are unblocked. One **new optional hardening** surfaced: sanitize/skip the `element_deriver` T0 CLASS synthesis at source (defence-in-depth beyond the Step-2 gate).
 
 ---
 
