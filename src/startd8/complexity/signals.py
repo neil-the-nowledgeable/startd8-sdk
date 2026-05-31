@@ -230,6 +230,31 @@ def extract_signals_from_feature(
         except (AttributeError, TypeError):
             pass
 
+    # RUN-007 FR-7: is any covered spec fillable (data/behaviour-bearing) or a
+    # framework-config registry match? If all covered specs are empty-fillable
+    # AND non-registry, the feature is under-specified and must NOT route to the
+    # no-LLM SIMPLE tier (classify_tier guard). None = unknown (no manifest /
+    # no covered specs) → no guard, the Step-2 emission gate stays authoritative.
+    has_fillable_elements: Optional[bool] = None
+    if manifest is not None and target_files:
+        try:
+            from startd8.element_fillability import is_fillable_spec
+            from startd8.forward_manifest_extractor import (
+                framework_provenance_for_path,
+            )
+            _file_specs = getattr(manifest, "file_specs", None) or {}
+            _covered = [tf for tf in target_files if tf in _file_specs]
+            if _covered:
+                has_fillable_elements = any(
+                    is_fillable_spec(
+                        getattr(_file_specs[tf], "elements", None) or []
+                    )
+                    or framework_provenance_for_path(tf) is not None
+                    for tf in _covered
+                )
+        except (ImportError, AttributeError, TypeError):
+            has_fillable_elements = None
+
     return TaskComplexitySignals(
         blast_radius=blast_radius,
         caller_count=caller_count,
@@ -243,6 +268,7 @@ def extract_signals_from_feature(
         has_cross_file_edges=has_cross_file_edges,
         manifest_coverage=manifest_coverage,
         file_extension=file_extension,
+        has_fillable_elements=has_fillable_elements,
     )
 
 

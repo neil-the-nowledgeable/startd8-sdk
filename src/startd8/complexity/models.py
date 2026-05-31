@@ -76,6 +76,11 @@ class TaskComplexitySignals:
     # elevated to minimum MODERATE tier to prevent under-provisioned
     # generation for code with asymmetric blast radius.  (SP-PL-002)
     security_sensitive: bool = False
+    # RUN-007 FR-7: whether any covered target spec is fillable (has data/
+    # behaviour-bearing elements) OR matches a framework-config registry entry.
+    # False = under-specified (empty-fillable) → must NOT route to the no-LLM
+    # SIMPLE tier. None = unknown (no manifest) → no guard applied.
+    has_fillable_elements: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging."""

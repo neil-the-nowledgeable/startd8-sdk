@@ -72,7 +72,8 @@ class TestTaskComplexitySignals:
     def test_to_dict_contains_all_fields(self):
         signals = TaskComplexitySignals()
         d = signals.to_dict()
-        assert len(d) == 13  # includes security_sensitive (SP-PL-002)
+        assert len(d) == 14  # +has_fillable_elements (RUN-007 FR-7)
+        assert "has_fillable_elements" in d
 
 
 # ── ComplexityRoutingConfig ──────────────────────────────────────────

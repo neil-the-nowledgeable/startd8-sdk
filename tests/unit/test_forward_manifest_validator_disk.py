@@ -4,6 +4,7 @@ import pytest
 
 from startd8.forward_manifest_validator import (
     DiskComplianceResult,
+    compute_disk_quality_score,
     validate_disk_compliance,
 )
 from startd8.forward_manifest import (
@@ -796,3 +797,89 @@ class TestReversePrefixResolution:
             and "langchain" in str(i.get("symbol", ""))
         ]
         assert len(import_issues) == 0
+
+
+# ---------------------------------------------------------------------------
+# RUN-007 FR-5/FR-6: empty stem-named type artifact detector (Fix 2 / C-1)
+# ---------------------------------------------------------------------------
+
+
+class TestEmptyStemStubDetector:
+    """The disk validator must FAIL the run-007 empty-stub shape so the
+    postmortem can SEE it (the C-1 gap that hid 9 stubs). FR-5 requires a hard
+    verdict (ast_valid=False / score floor), NOT ordinary stub counting — an
+    empty ``{}`` body carries zero stub markers."""
+
+    # The 9 run-007 stub shapes (six TS/TSX + Go PascalCase + hyphen variants).
+    RUN007_SHAPES = [
+        ("lib/env.ts", "\nexport class env {\n\n}\n"),
+        ("lib/db.ts", "\nexport class db {\n\n}\n"),
+        ("app/layout.tsx", "\nexport class layout {\n\n}\n"),
+        ("app/page.tsx", "\nexport class page {\n\n}\n"),
+        ("lib/value-model.ts", "\nexport class value-model {\n\n}\n"),  # hyphen
+        ("app/api/profile/route.ts", "\nexport class route {\n\n}\n"),
+        ("lib/config.ts", "export class config { // TODO implement\n}\n"),  # comment-only body
+        ("lib/cache.js", "module.exports = {}\nexport class cache {}\n"),
+        ("model/value-model.go", "package model\n\ntype ValueModel struct {\n}\n"),
+    ]
+
+    @pytest.mark.parametrize("rel_path,content", RUN007_SHAPES)
+    def test_run007_shapes_fail_with_low_score(self, tmp_path, rel_path, content):
+        rel = _write_py(tmp_path, rel_path, content)
+        result = validate_disk_compliance(rel, str(tmp_path))
+        # Hard verdict: ast_valid forced False (FR-5).
+        assert result.ast_valid is False
+        # Score short-circuits to 0.0 via ast_valid=False (well below 0.3).
+        assert compute_disk_quality_score(result) <= 0.3
+        # Detector surfaces a structured error + semantic issue.
+        assert result.error is not None and result.error.startswith("empty_stem_stub")
+        cats = [
+            i.get("category") for i in result.semantic_issues
+            if isinstance(i, dict)
+        ]
+        assert "empty_stem_stub" in cats
+        err_sev = [
+            i.get("severity") for i in result.semantic_issues
+            if isinstance(i, dict) and i.get("category") == "empty_stem_stub"
+        ]
+        assert err_sev == ["error"]
+
+    # --- FR-6: legitimately-minimal files must NOT be flagged ---
+
+    def test_index_barrel_not_flagged(self, tmp_path):
+        rel = _write_py(
+            tmp_path, "lib/index.ts",
+            "export * from './a'\nexport * from './b'\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is not False
+        assert (result.error or "").startswith("empty_stem_stub") is False
+
+    def test_dts_ambient_declaration_not_flagged(self, tmp_path):
+        # Path("foo.d.ts").suffix == ".ts", so this routes through the same
+        # path; the .d.ts name exemption must skip it.
+        rel = _write_py(
+            tmp_path, "types/foo.d.ts",
+            "export interface foo {}\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is not False
+        assert (result.error or "").startswith("empty_stem_stub") is False
+
+    def test_real_class_with_method_not_flagged(self, tmp_path):
+        rel = _write_py(
+            tmp_path, "lib/Env.ts",
+            "export class Env {\n  get() { return 1 }\n}\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is not False
+        assert (result.error or "").startswith("empty_stem_stub") is False
+
+    def test_function_module_not_flagged(self, tmp_path):
+        rel = _write_py(
+            tmp_path, "lib/util.ts",
+            "export function util() { return 1 }\n",
+        )
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is not False
+        assert (result.error or "").startswith("empty_stem_stub") is False
