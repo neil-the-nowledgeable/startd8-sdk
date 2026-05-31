@@ -39,6 +39,8 @@ __all__ = [
     "extract_referenced_metrics",
     "CoverageGateResult",
     "evaluate_coverage_gate",
+    "ExtendedArtifactValidationResult",
+    "validate_extended_artifact",
     "has_rate_panel",
     "has_error_panel",
     "has_duration_panel",
@@ -817,6 +819,90 @@ def evaluate_coverage_gate(
         metric_coverage=metric_coverage,
         artifact_type_coverage=artifact_type_coverage,
     )
+
+
+# ---------------------------------------------------------------------------
+# Extended-artifact content validation (Run-007 Finding 1)
+#
+# Scores any generated artifact against its declared contract — the
+# completeness_markers it must contain and its max_lines budget — so the five
+# non-triplet types (service_monitor, loki_rule, notification_policy, runbook,
+# capability_index) and the Grafana JSON are checked, not just present.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExtendedArtifactValidationResult:
+    """Result of scoring an artifact against its expected_output_contract."""
+
+    checks_passed: int = 0
+    checks_total: int = 0
+    issues: List[ObservabilityIssue] = field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        return self.checks_passed / self.checks_total if self.checks_total else 1.0
+
+    def to_quality(self) -> Dict[str, Any]:
+        return {
+            "score": round(self.score, 4),
+            "checks_passed": self.checks_passed,
+            "checks_total": self.checks_total,
+            "issues": [
+                {"check": i.check, "severity": i.severity, "message": i.message}
+                for i in self.issues
+            ],
+            "repairs_applied": [],
+        }
+
+
+def validate_extended_artifact(
+    content: str,
+    contract: Dict[str, Any],
+) -> ExtendedArtifactValidationResult:
+    """Validate an artifact's content against its declared output contract.
+
+    Two dimensions:
+    - **completeness_markers**: each required marker (a YAML key, markdown
+      heading, or PromQL/LogQL token) must appear in the content. One check per
+      marker.
+    - **max_lines**: the content must not exceed the contract's line budget
+      (one check, only when ``max_lines`` is declared).
+
+    Marker matching is a case-sensitive substring test, which is uniform across
+    YAML keys (``panels:``), markdown sections (``## Risks``), and expression
+    tokens (``expr``). An empty/contract-less input scores 1.0 (nothing to check).
+    """
+    result = ExtendedArtifactValidationResult()
+    markers = contract.get("completeness_markers") or []
+
+    for marker in markers:
+        result.checks_total += 1
+        if marker and str(marker) in content:
+            result.checks_passed += 1
+        else:
+            result.issues.append(
+                ObservabilityIssue(
+                    "OBS-EXT-100", "warning", f"missing completeness marker '{marker}'"
+                )
+            )
+
+    max_lines = contract.get("max_lines")
+    if isinstance(max_lines, int) and max_lines > 0:
+        result.checks_total += 1
+        line_count = content.count("\n") + 1 if content else 0
+        if line_count <= max_lines:
+            result.checks_passed += 1
+        else:
+            result.issues.append(
+                ObservabilityIssue(
+                    "OBS-EXT-101",
+                    "warning",
+                    f"{line_count} lines exceeds max_lines {max_lines}",
+                )
+            )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

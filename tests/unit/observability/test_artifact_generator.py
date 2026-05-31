@@ -863,11 +863,14 @@ class TestMetricCoverageInQualityReport:
 
         quality = json.loads((output / "observability-quality.json").read_text())
         svc = quality["services"]["strtd8"]
-        assert "metric_coverage" in svc
-        assert svc["metric_coverage"]["expected_count"] == 11  # 1 convention + 10 declared
-        # Increment 1 adds domain panels, so most declared metrics are now covered.
-        assert svc["metric_coverage"]["score"] > 0.5
+        # Run-007 Finding 3: coverage is split into dashboarded vs alerted.
+        assert "metric_coverage_dashboarded" in svc
+        assert "metric_coverage_alerted" in svc
+        # Domain metrics are dashboarded (Increment 1 panels) but mostly not alerted.
+        assert svc["metric_coverage_dashboarded"] > 0.5
+        assert svc["metric_coverage_alerted"] <= svc["metric_coverage_dashboarded"]
         assert "avg_metric_coverage_score" in quality["aggregate"]
+        assert "avg_metric_coverage_alerted" in quality["aggregate"]
 
 
 # ---------------------------------------------------------------------------
@@ -1404,5 +1407,77 @@ class TestExtendedGenerators:
         result = generate_capability_index([grpc_service], business, report)
         assert result.artifact_type == "capability_index"
         doc = yaml.safe_load(result.content)
-        assert doc["services"] == ["checkout-api"]
-        assert "alert_rule" in doc["observability_capabilities"]["artifact_types_generated"]
+        # Run-007 Finding 2: conformant capability-manifest schema.
+        assert "manifest_id" in doc
+        assert doc["version"] == "1.0.0"
+        assert isinstance(doc["capabilities"], list) and doc["capabilities"]
+        cap = doc["capabilities"][0]
+        assert set(cap) >= {"capability_id", "category", "maturity", "summary", "evidence"}
+        assert any("alert_rule" in c["capability_id"] for c in doc["capabilities"])
+
+
+# ---------------------------------------------------------------------------
+# Run-007 Finding 1: every generated artifact is scored, not just the triplet
+# ---------------------------------------------------------------------------
+
+_EXTENDED_CONTRACTS = {
+    "service_monitor": {"completeness_markers": ["selector", "endpoints", "interval"], "max_lines": 50},
+    "loki_rule": {"completeness_markers": ["groups", "rules", "expr"], "max_lines": 150},
+    "notification_policy": {"completeness_markers": ["receivers", "routes"], "max_lines": 150},
+    "runbook": {"completeness_markers": ["Overview", "Risks", "Escalation", "Procedures"], "max_lines": 300},
+    "capability_index": {"completeness_markers": ["capabilities", "version", "manifest_id"], "max_lines": 500},
+    "dashboard": {"completeness_markers": ["panels", "templating", "title"], "max_lines": 300},
+}
+
+
+class TestAllArtifactsScored:
+    def _metadata(self):
+        return {
+            "project_id": "startd8/run-007",
+            "artifact_types": {k: {} for k in (
+                "prometheus_rule", "dashboard", "slo_definition",
+                "service_monitor", "loki_rule", "notification_policy",
+                "runbook", "capability_index",
+            )},
+            "expected_output_contracts": _EXTENDED_CONTRACTS,
+            "instrumentation_hints": {
+                "strtd8": {
+                    "service_id": "strtd8",
+                    "transport": "http",
+                    "metrics": {
+                        "convention_based": [
+                            {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"},
+                        ],
+                        "manifest_declared": [
+                            {"name": "startd8_cost_total", "type": "counter", "source": "manifest"},
+                        ],
+                    },
+                },
+            },
+        }
+
+    def test_scored_equals_generated_and_composite_drops(self, tmp_path):
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(json.dumps(self._metadata()))
+        out = tmp_path / "obs"
+
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+
+        q = json.loads((out / "observability-quality.json").read_text())
+        agg = q["aggregate"]
+        # Finding 1 acceptance: every generated artifact is scored.
+        assert agg["artifacts_scored"] == agg["artifacts_generated"]
+        # runbook is missing Risks/Procedures markers → composite must drop below 1.0.
+        assert agg["avg_composite_score"] < 1.0
+
+    def test_runbook_scored_against_its_markers(self, tmp_path):
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(json.dumps(self._metadata()))
+        out = tmp_path / "obs"
+
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path, output_dir=out
+        )
+        runbook = next(a for a in report.artifacts if a.artifact_type == "runbook")
+        assert runbook.quality is not None  # now scored (was unscored pre-Finding-1)
+        assert runbook.quality["score"] < 1.0  # missing Risks/Procedures sections
