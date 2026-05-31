@@ -1,7 +1,7 @@
 # Project Observability — Requirements (Taxonomy Category 4)
 
 **Date:** 2026-05-31
-**Status:** Draft v0.1 — surfacing existing telemetry as formal requirements
+**Status:** Draft v0.2 — post-planning self-reflective update (requirements only; no code this pass)
 **Lineage:** Instantiates **Category 4 — Project Observability** of
 `OBSERVABILITY_ARTIFACT_TAXONOMY_REQUIREMENTS.md` (the "reserved — signals emitted, no generator"
 row). Evidence base: a read-only telemetry inventory of `src/startd8/` (task_tracking_emitter,
@@ -12,7 +12,39 @@ phase execution, complexity/blast-radius, delivery & output quality, velocity.
 
 ---
 
-## 0. Motivation
+## 0. Planning Insights (self-reflective update, v0.1 → v0.2)
+
+> A planning pass traced the startd8↔ContextCore seam, the descriptor manifest, and the JSON
+> delivery-signal emission paths. Headline: **the ownership seam is already clean in code** —
+> ContextCore is an *optional* import (graceful `_enabled=False` if absent); startd8 writes state
+> files, ContextCore reads them. So the category-4 work is mostly **documentation + descriptor
+> declaration**, not decoupling. Two requirements were over-optimistic and are corrected.
+
+| v0.1 assumption | Planning discovery | Impact |
+|-----------------|--------------------|--------|
+| REQ-PRO-001: boundary needs drawing (maybe code) | Code seam is **already clean** — ContextCore optional-import + file-consumer pattern, no hard dep, no bidirectional coupling | 001 = **pure documentation** (S): mirror the boundary in code comments; the doc was ~95% right |
+| REQ-PRO-002: add `task_tracking_emitter` to the OTel descriptor manifest | `task_tracking_emitter` emits **no OTel** — only JSON state files (a *separate channel* to ContextCore). The real descriptor gap is the **`phase.*`/`task.*` OTel SPANS** (artisan runners + `development.py`) that ARE emitted but not declared | 002 **refined**: declare the *spans*; the state-file emitter stays out of the OTel manifest (it has no OTel) |
+| REQ-PRO-003: surface delivery signals (implied metric-ify) | Kaizen/improvement/velocity are **post-run async JSON** (postmortem runs in a thread after the run); no inline emit point — metric-ifying needs re-architecture | 003 **split**: *declare-only* (manifest schema + sample SLI queries) is S and in scope; *metric emission* is L and deferred (resolves OQ-1 → declare-only) |
+| REQ-PRO-004: startd8 emits live progress deltas | `task_tracking_emitter` is a **one-time** emitter; `percent_complete` is structurally **always 0** from startd8 (zero-point seed only). Live progress is computed by ContextCore from the state files | 004 **reframed**: progress is **ContextCore-owned**; startd8 emits only the seed. Do **not** build a delta emitter (wrong-owner accidental complexity). Resolves OQ-2 → ContextCore |
+| (not in v0.1) | "**task**" names two different things: the **work-item** hierarchy (epic/story/task in `task_tracking_emitter`, state files) vs **codegen `task.*` span attributes** (`development.py` chunk attrs: complexity_tier/blast_radius) — a naming collision | **NEW REQ-PRO-008**: disambiguate the two "task" concepts in `otel_conventions.py` + descriptors |
+| (not in v0.1) | The descriptor-schema change (add `category`/`orientation`) is the **same** change the AI-agent doc needs — one keystone serving cats 4 **and** 5 (and the taxonomy's declare-don't-guess) | **Convergence**: the `_OTEL_DESCRIPTORS` manifest is the **shared spine**; REQ-PRO-002/005 reference the AAO schema change, not duplicate it |
+| (not in v0.1) | **Three overlapping quality scorers**: ImprovementTracker (6-cat doc quality), Kaizen RootCause (16×9), `query_security_score` — no unified quality taxonomy; and `complexity/classifier.py` creates an OTel histogram it **never records to** (dead) | Catalogued in Appendix C; the dead histogram is a quick win |
+
+**Resolved open questions:**
+- **OQ-1 → declare-only.** Delivery signals are post-run JSON; declare their schema + SLI queries in
+  the manifest now; defer metric emission (REQ-PRO-003).
+- **OQ-2 → ContextCore owns progress.** startd8 seeds the zero-point; ContextCore computes deltas
+  (REQ-PRO-004).
+- **OQ-3 → externally owned.** `install_completeness_percent` is produced by ContextCore / the
+  cap-dev-pipe installer, not startd8 — ceded regardless of which category it lands in.
+
+*Essential complexity: declare the existing project spans (with category/orientation) in the one
+shared descriptor manifest + draw the (already-clean) ownership boundary in docs. The rest
+(metric-ifying post-run JSON, live progress deltas) is either deferred or the wrong owner.*
+
+---
+
+## 0.1 Motivation
 
 The SDK already produces a substantial body of *development-lifecycle* telemetry — task state,
 phase/task spans, complexity signals, and rich delivery-quality data (Kaizen, improvement deltas,
@@ -107,41 +139,61 @@ project signals are **not in the descriptor catalog** that drives the taxonomy g
 
 ### 3.1 Draw the ownership boundary
 
-**REQ-PRO-001 (ownership boundary, PRO-D1/D2).** The boundary MUST be documented and respected:
+**REQ-PRO-001 (ownership boundary — documentation; seam already clean).** Planning confirmed the
+code seam is already clean (ContextCore is an optional import with graceful degradation; startd8
+writes state files that ContextCore reads — no hard dependency, no bidirectional coupling). So this
+is a **documentation** requirement, not a decoupling one: the boundary MUST be stated in the docs
+and mirrored in code comments (on `task_tracking_emitter.emit_task_tracking_artifacts()` and
+`contextcore.py`'s `TaskTrackerWrapper`):
 - **startd8 produces** the raw lifecycle signals — task **state files** (SpanState v2), phase/task
   **OTel spans**, complexity span attributes, and Kaizen/improvement/velocity **JSON artifacts**.
 - **ContextCore owns** the metric-ified gauges (`contextcore_task_progress`/`status`/
-  `install_completeness_percent`) and the burndown/velocity dashboards.
+  `install_completeness_percent`), the **live progress computation** (the deltas off the seeded
+  zero-point — REQ-PRO-004), and the burndown/velocity dashboards.
 The observability artifact generator MUST NOT claim startd8 emits the `contextcore_*` gauges; where
 declared, they are reported as **ContextCore-owned** (honest-skip, mirroring the taxonomy's
 `capability_index` cede, REQ-OAT-011).
 
 ### 3.2 Close the descriptor-manifest gap
 
-**REQ-PRO-002 (declare the spans, PRO-D4).** The `task.*` and `phase.*` span conventions
-(`otel_conventions.py`) MUST be declared in `_OTEL_DESCRIPTORS` with
-`category = project_observability` and `orientation = system`, and the emitting modules MUST be added
-to `collector.py`'s `_INSTRUMENTED_MODULES`, so project spans are in the descriptor catalog that
-feeds generation (consistent with the AI-agent doc's REQ-AAO-008 loop).
+**REQ-PRO-002 (declare the project SPANS, PRO-D4 — refined).** The `phase.*` and codegen `task.*`
+span attributes that are **already emitted** (by `artisan_phases/runner.py`, `artisan_contractor.py`,
+`development.py`) MUST be declared in `_OTEL_DESCRIPTORS` with `category = project_observability`
+and `orientation = system`, and those emitting modules added to `collector.py`'s
+`_INSTRUMENTED_MODULES`, so the project spans enter the descriptor catalog that feeds generation
+(same loop as AI-agent REQ-AAO-008). **Scope correction (planning):** this covers the OTel **spans**
+only — `task_tracking_emitter` emits **no OTel** (it writes JSON state files on a *separate* channel
+to ContextCore) and MUST **not** be added to the OTel manifest. The `category`/`orientation` schema
+fields are the **same** addition the AI-agent doc specifies (REQ-AAO-004) — this requirement
+**reuses** that single shared schema change (the descriptor manifest is the shared spine for
+categories 4 & 5), it does not duplicate it.
 
 ### 3.3 Surface the delivery-quality signals
 
-**REQ-PRO-003 (make delivery quality observable, PRO-D3).** The JSON-only delivery signals MUST be
-made discoverable and, where they answer an operational question, observable:
-- Kaizen failure distribution: `root_cause` counts, `pipeline_stage` failure rates, dual-scoring
-  PASS/PARTIAL/FAIL ratio;
-- delivery velocity & trend, persistent-failure count;
-- document/output quality improvement deltas.
-Per signal, decide: (a) emit as an OTel metric (so it's dashboard-able), or (b) keep as a JSON
-artifact but **declare it in the manifest** so the catalog is complete. At minimum the manifest MUST
-list them (no silent JSON-only project-health signals).
+**REQ-PRO-003 (make delivery quality discoverable — declare-only now; metric-ify deferred).**
+Planning found these signals (Kaizen `root_cause`/`pipeline_stage`/dual-score, velocity/trend,
+persistent-failure, quality-improvement deltas) are **post-run async JSON** (postmortem runs in a
+thread after the run) with no inline emit point. So the requirement splits:
+- **REQ-PRO-003a (declare-only — in scope, S):** these signals MUST be **declared in the manifest**
+  (their JSON schema + sample SLI/PromQL query forms) as a hand-authored section, so the catalog has
+  no silent JSON-only project-health signals and the generator can reference them.
+- **REQ-PRO-003b (metric emission — deferred, L):** emitting them as live OTel metrics is deferred —
+  it requires re-architecting Kaizen from post-run analysis into in-process instrumentation, which is
+  out of scope for this pass.
+
+(Resolves OQ-1: declare-only.) Note: the collector auto-discovers descriptors but **SLO/alert/JSON-schema
+sections are hand-maintained** — so REQ-PRO-003a and REQ-PRO-007 are authored sections, not
+auto-generated.
 
 ### 3.4 Live progress (optional/phased)
 
-**REQ-PRO-004 (progress deltas, PRO-D5).** For live burndown, startd8 SHOULD emit `task.updated`
-events carrying a `percent_complete` delta as tasks advance (not only the zero-point). If deferred,
-the SDK MUST document that progress is **point-in-time** (seeded), with live movement owned by the
-ContextCore consumer.
+**REQ-PRO-004 (progress ownership — reframed: ContextCore, not startd8).** Planning showed
+`task_tracking_emitter` is a **one-time** emitter and `percent_complete` is structurally **always 0**
+from startd8 (a zero-point seed). Building a `task.updated` delta emitter in startd8 would put
+progress computation in the **wrong owner** and add accidental complexity. The requirement is
+therefore to **document that live progress is ContextCore-owned** — startd8 provides the seeded
+zero-point; ContextCore computes the deltas from the state files + run telemetry. startd8 MUST NOT
+build a progress-delta emitter. (Resolves OQ-2.)
 
 ### 3.5 Orientation & artifacts
 
@@ -158,7 +210,19 @@ cost-outlier) since it owns those signals.
 
 **REQ-PRO-007 (project SLIs/SLOs — system).** Definable from owned signals: delivery success rate
 (`tasks_passed / tasks_attempted`), velocity trend, quality-improvement trend, blast-radius
-distribution, persistent-failure count (objective: 0).
+distribution, persistent-failure count (objective: 0). These are **hand-authored** manifest sections
+(the collector auto-discovers descriptors, not SLI/SLO templates — see REQ-PRO-003).
+
+**REQ-PRO-008 (disambiguate the two "task" concepts — from planning).** The token "task" denotes two
+distinct things and the requirements/code MUST disambiguate them, or routing and dashboards conflate
+them:
+- **work-item task** — the epic/story/**task** hierarchy in `task_tracking_emitter` (state files,
+  ContextCore-bound; the burndown unit);
+- **codegen task** — the `task.*` span attributes in `development.py`/`otel_conventions.py`
+  (per-chunk codegen: `complexity_tier`, `blast_radius`, `attempts`, `cost`).
+The descriptor declarations (REQ-PRO-002) and `otel_conventions.py` MUST name these distinctly (e.g.
+`workitem.*` vs `codegen.task.*`) so the manifest, SLIs, and any generated artifacts don't merge a
+plan's work-items with code-generation chunk telemetry.
 
 ---
 
@@ -202,8 +266,33 @@ orientation · `REQ-PRO-006` generate-vs-cede · `REQ-PRO-007` project SLIs.
 
 ---
 
-*Draft v0.1 — surfaces the SDK's development-lifecycle telemetry (task state files, phase/task spans,
-complexity attrs, and JSON-only Kaizen/improvement/velocity signals) as Category-4 requirements. The
-defining finding: Category 4 is split-ownership — startd8 produces raw signals; ContextCore owns the
-gauges + burndown dashboards (the `contextcore_task_*` metrics are declared-but-not-SDK-emitted).
-Names 6 findings and 7 requirements. Candidate for a reflective-requirements + CRP pass.*
+*(v0.1 footer superseded by the v0.2 summary below.)*
+
+## Appendix C — pre-existing accidental complexity to eliminate (opportunistic)
+
+Catalogued by the planning pass; the code-alignment follow-up SHOULD remove these. Effort S/M/L.
+
+| # | Smell | Location | Why accidental | Distillation | Effort |
+|---|-------|----------|----------------|--------------|--------|
+| C-1 | **"task" naming collision** | `otel_conventions.py`, `task_tracking_emitter.py`, `development.py` | work-item task vs codegen-chunk `task.*` attrs share the name | disambiguate (`workitem.*` vs `codegen.task.*`) (REQ-PRO-008) | S |
+| C-2 | **Dead OTel histogram** | `complexity/classifier.py:23–35` | creates a tier histogram but **never records** to it | remove, or actually `record()` tier classifications | S |
+| C-3 | **Constants declared but call-sites use raw strings** | `otel_conventions.py` (AttributeKeys) vs `development.py:5327`, `runner.py:525` | span-attr names defined as constants but set via literal strings → drift | use the constants everywhere; a parity check ties declared↔emitted | M |
+| C-4 | **Span-name pattern mismatch** | `artisan_contractor.py` (`artisan.workflow.{id}.phase.{phase}`) vs `runner.py` (`phase.{type}.attempt.{n}`) | two patterns for phase spans; unclear if same hierarchy | reconcile/​document the phase-span hierarchy | S |
+| C-5 | **Three overlapping quality scorers** | `improvement_tracking.py` (6-cat doc quality) · Kaizen `prime_postmortem.py` (16 root-cause × 9 stage) · `query_prime/kaizen_metrics.py` (`query_security_score`) | three independent quality taxonomies, no unifying model | document the three lenses; a unified quality signal hierarchy is a *separate, larger* effort (flag, don't fold in) | L (deferred) |
+| C-6 | **SpanState v2 schema duplicated** across producer + external consumer | `task_tracking_emitter._build_state_file()` hardcodes the schema ContextCore also depends on | the contract lives in two repos with no shared definition | document the schema-version contract explicitly (a shared dataclass is hard across the repo boundary) | M |
+| C-7 | **Descriptor schema lacks category/orientation** | `observability/manifest.py` | the routing fields cats 4 & 5 need aren't in the schema | add two fields — **shared** with AI-agent REQ-AAO-004 (one change, two categories) | S |
+
+**Net:** C-1/C-2/C-7 are S quick wins (C-7 is shared with the AI-agent doc — one change). C-3/C-4/C-6
+are M documentation/parity tidy-ups. C-5 (three quality scorers) is real but **larger scope** — flagged
+for a separate consolidation, not folded into this pass to avoid scope creep.
+
+---
+
+*v0.2 — Post-planning self-reflective update. Confirmed the ownership seam is already clean (001 →
+documentation), refined 002 (spans not state-files; reuses the shared descriptor-schema change),
+split 003 (declare-only in scope / metric-ify deferred — Kaizen is post-run async), reframed 004
+(progress is ContextCore-owned; don't build a delta emitter), added 008 (disambiguate the two "task"
+concepts), resolved 3 open questions, and catalogued 7 accidental-complexity items (Appendix C). Net
+finding: category-4 is mostly documentation + declaring existing spans in the one shared descriptor
+manifest — the boundary is clean and the heavy lifting (metrics, progress) is deferred or
+ContextCore's.*
