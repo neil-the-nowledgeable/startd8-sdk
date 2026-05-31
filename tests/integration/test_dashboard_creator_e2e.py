@@ -302,3 +302,96 @@ class TestDashboardCreatorPipeline:
         assert result.output["check"] == "passed"
         # No files should have been written
         assert "json_path" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# ISSUE_8 regression: raw-PromQL timeseries/histogram panels with thresholds
+# must compile against the real mixin (previously crashed with
+# "RUNTIME ERROR: function has no parameter thresholds").
+# ---------------------------------------------------------------------------
+
+_REAL_MIXIN_VENDOR = Path(__file__).resolve().parents[2] / "startd8-mixin" / "vendor"
+_HAS_REAL_MIXIN = _HAS_JSONNET and _REAL_MIXIN_VENDOR.exists()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not _HAS_REAL_MIXIN, reason="jsonnet + real startd8-mixin/vendor required"
+)
+class TestIssue8ThresholdRegression:
+    """Raw-PromQL specs with thresholds on timeseries/histogram panels compile.
+
+    Reproduces ISSUE_8: the mixin's timeseries and histogram panel constructors
+    lacked a `thresholds` parameter (which stat/gauge/barGauge already had), so a
+    spec emitting `panels.timeseries(..., thresholds=[...])` failed Jsonnet
+    compilation. Fixed by adding `thresholds=[]` to both constructors.
+    """
+
+    def _spec(self):
+        return {
+            "title": "Issue 8 Threshold Dashboard",
+            "uid": "cc-issue8-threshold-regression",
+            "variables": [
+                {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}
+            ],
+            "panels": [
+                {
+                    "type": "timeseries",
+                    "title": "Error Rate",
+                    "expr": 'rate(http_server_duration_count{status=~"5.."}[5m])',
+                    "unit": "percentunit",
+                    "thresholds": [
+                        {"value": None, "color": "green"},
+                        {"value": 0.01, "color": "red"},
+                    ],
+                },
+                {
+                    "type": "histogram",
+                    "title": "Latency Distribution",
+                    "expr": "histogram_quantile(0.99, rate(http_server_duration_bucket[5m]))",
+                    "unit": "s",
+                    "thresholds": [
+                        {"value": None, "color": "green"},
+                        {"value": 0.5, "color": "red"},
+                    ],
+                },
+            ],
+        }
+
+    def test_timeseries_and_histogram_thresholds_compile(self, tmp_path):
+        workflow = DashboardCreatorWorkflow()
+        result = workflow.run({"spec": self._spec(), "output_dir": str(tmp_path)})
+
+        assert result.success is True, f"compile failed: {getattr(result, 'error', None)}"
+        produced = tmp_path / "cc-issue8-threshold-regression.json"
+        assert produced.is_file()
+        dash = json.loads(produced.read_text())
+        # Both panels rendered, each carrying a multi-step threshold config.
+        threshold_panels = [
+            p
+            for p in dash["panels"]
+            if len(
+                p.get("fieldConfig", {}).get("defaults", {}).get("thresholds", {}).get("steps", [])
+            )
+            > 1
+        ]
+        assert len(threshold_panels) == 2
+
+    def test_timeseries_without_thresholds_still_palette_classic(self, tmp_path):
+        """Backward-compat: omitting thresholds keeps the prior palette-classic output."""
+        spec = {
+            "title": "No Threshold Dashboard",
+            "uid": "cc-issue8-no-threshold",
+            "variables": [
+                {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}
+            ],
+            "panels": [
+                {"type": "timeseries", "title": "Requests", "expr": "rate(http_server_duration_count[5m])"},
+            ],
+        }
+        result = DashboardCreatorWorkflow().run({"spec": spec, "output_dir": str(tmp_path)})
+        assert result.success is True
+        dash = json.loads((tmp_path / "cc-issue8-no-threshold.json").read_text())
+        defaults = dash["panels"][0]["fieldConfig"]["defaults"]
+        assert defaults["color"]["mode"] == "palette-classic"
+        assert "thresholds" not in defaults
