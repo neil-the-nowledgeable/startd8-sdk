@@ -583,6 +583,10 @@ class MicroPrimeCodeGenerator:
             remaining_bypass.append(bp_file)
         st.bypass_files = remaining_bypass
 
+        # FR-4 (RUN-007): when the cost budget is exhausted, empty-spec targets
+        # are refused before a (costly) escalation is dispatched.
+        self._apply_budget_refusal(st, context)
+
         # Phase 5a: FR-DFA-001 — Bypass files always delegate to fallback
         # (regardless of escalation_enabled).  These are files MP fundamentally
         # cannot process (no ForwardFileSpec / no skeleton), NOT files where
@@ -1224,6 +1228,45 @@ class MicroPrimeCodeGenerator:
         meta.update(self._micro_prime_otel_profile_labels())
         meta.update(extra)
         return meta
+
+    def _cost_budget_remaining(self, context: Dict[str, Any]) -> Optional[float]:
+        """RUN-007 FR-4: remaining dollar budget threaded from orchestration
+        (`prime_contractor._build_generation_context`). None = no ceiling.
+
+        The dollar budget is owned by the orchestration layer, not the
+        micro-prime escalation site (Step-0 OQ-3), so it arrives via context.
+        """
+        if not context:
+            return None
+        val = context.get("_cost_budget_remaining_usd")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    def _apply_budget_refusal(
+        self, st: "_FileProcessingState", context: Dict[str, Any],
+    ) -> List[str]:
+        """FR-4 (RUN-007): if the cost budget is exhausted, remove empty-spec
+        targets from the bypass→fallback set so they are refused (never
+        escalated, never stubbed). Returns the held (budget-refused) paths;
+        ``_collect_empty_spec_refusals`` records them as refused afterwards.
+        """
+        remaining = self._cost_budget_remaining(context)
+        if remaining is None or remaining > 0:
+            return []
+        empties = set((context or {}).get("_empty_spec_files") or ())
+        held = [f for f in st.bypass_files if f in empties]
+        if held:
+            st.bypass_files = [f for f in st.bypass_files if f not in empties]
+            logger.error(
+                "FR-4: cost budget exhausted (remaining=$%.4f) — refusing "
+                "%d empty-spec target(s) without escalation: %s",
+                remaining, len(held), ", ".join(held),
+            )
+        return held
 
     def _collect_empty_spec_refusals(
         self, st: "_FileProcessingState", context: Dict[str, Any],

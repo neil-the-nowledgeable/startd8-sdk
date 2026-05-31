@@ -133,3 +133,46 @@ class TestEmptySpecRefusal:
         meta = {}
         assert gen._empty_spec_refusal_error(st, meta) is None
         assert "refusal_root_cause" not in meta
+
+
+# ---------------------------------------------------------------------------
+# FR-4 — cost-budget guard (refuse-before-escalate when budget exhausted)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestBudgetGuard:
+    def _gen(self):
+        return MicroPrimeCodeGenerator()
+
+    def test_budget_remaining_parsing(self):
+        gen = self._gen()
+        assert gen._cost_budget_remaining(None) is None
+        assert gen._cost_budget_remaining({}) is None
+        assert gen._cost_budget_remaining({"_cost_budget_remaining_usd": None}) is None
+        assert gen._cost_budget_remaining({"_cost_budget_remaining_usd": 1.5}) == 1.5
+        assert gen._cost_budget_remaining({"_cost_budget_remaining_usd": "bad"}) is None
+
+    def test_exhausted_budget_refuses_empty_spec_before_escalation(self):
+        gen = self._gen()
+        st = _FileProcessingState()
+        st.bypass_files = ["lib/value-model.ts", "go.mod"]  # one empty-spec, one legit bypass
+        ctx = {"_empty_spec_files": {"lib/value-model.ts"}, "_cost_budget_remaining_usd": 0.0}
+        held = gen._apply_budget_refusal(st, ctx)
+        assert held == ["lib/value-model.ts"]              # pulled from escalation
+        assert st.bypass_files == ["go.mod"]               # legit bypass untouched
+
+    def test_budget_available_does_not_refuse(self):
+        gen = self._gen()
+        st = _FileProcessingState()
+        st.bypass_files = ["lib/value-model.ts"]
+        ctx = {"_empty_spec_files": {"lib/value-model.ts"}, "_cost_budget_remaining_usd": 5.0}
+        assert gen._apply_budget_refusal(st, ctx) == []
+        assert st.bypass_files == ["lib/value-model.ts"]   # still escalates
+
+    def test_no_budget_ceiling_does_not_refuse(self):
+        gen = self._gen()
+        st = _FileProcessingState()
+        st.bypass_files = ["lib/value-model.ts"]
+        ctx = {"_empty_spec_files": {"lib/value-model.ts"}}  # no _cost_budget_remaining_usd
+        assert gen._apply_budget_refusal(st, ctx) == []
+        assert st.bypass_files == ["lib/value-model.ts"]
