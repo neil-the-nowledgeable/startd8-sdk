@@ -6,6 +6,16 @@ state files and NDJSON event logs with zero-point initialization.
 
 Outputs are consumable by ContextCoreTaskSource, ContextCoreTaskRunner, and
 the /time-series-progress-tracker skill.
+
+Ownership boundary (REQ-PRO-001, Project Observability):
+    startd8 PRODUCES the raw lifecycle signals — task state files (SpanState v2),
+    a one-time zero-point seed, and the NDJSON event log. ContextCore OWNS the
+    metric-ified gauges (``contextcore_task_progress``/``status``/
+    ``install_completeness_percent``), the live progress computation (deltas off
+    the seed — ``percent_complete`` is structurally 0 from startd8), and the
+    burndown/velocity dashboards. startd8 MUST NOT build a progress-delta emitter
+    (REQ-PRO-004): the observability generator reports the ``contextcore_*`` gauges
+    as ContextCore-owned (``route_state=contextcore_owned``), not startd8-emitted.
 """
 
 from __future__ import annotations

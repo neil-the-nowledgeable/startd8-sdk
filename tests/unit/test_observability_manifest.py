@@ -79,8 +79,86 @@ class TestManifestRoundTrip:
         )
         assert SpanDescriptor.from_dict(span.to_dict()) == span
 
-        evt = EventTypeDescriptor(name="TEST_EVENT", category="test")
+        evt = EventTypeDescriptor(name="TEST_EVENT", event_group="test")
         assert EventTypeDescriptor.from_dict(evt.to_dict()) == evt
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy axes (REQ-OBS-SHARED-001) + collector pass-through (R3-F1)
+# ---------------------------------------------------------------------------
+
+
+class TestTaxonomyAxes:
+    """category/orientation fields, their serialization, and the collector
+    pass-through that the R3 review found was silently dropping fields."""
+
+    def test_descriptor_axes_round_trip(self):
+        m = MetricDescriptor(
+            name="x.y", instrument="counter", unit="1", description="d",
+            category="ai_agent_observability", orientation="system",
+        )
+        m2 = MetricDescriptor.from_dict(m.to_dict())
+        assert m2.category == "ai_agent_observability"
+        assert m2.orientation == "system"
+
+        s = SpanDescriptor(
+            name_pattern="a.{id}", category="project_observability", orientation="system",
+        )
+        s2 = SpanDescriptor.from_dict(s.to_dict())
+        assert s2.category == "project_observability"
+        assert s2.orientation == "system"
+
+    def test_empty_axes_omitted(self):
+        # Backward-compat: unset axes do not appear in the serialized form.
+        d = MetricDescriptor(
+            name="a", instrument="counter", unit="1", description="d"
+        ).to_dict()
+        assert "category" not in d
+        assert "orientation" not in d
+
+    def test_collector_passes_axes_and_optional_fields_through(self, monkeypatch):
+        # R3-F1 (critical): collect_*_descriptors() must NOT drop category/
+        # orientation/prometheus_name/dashboard_hints from the _OTEL_DESCRIPTORS
+        # dicts, or the generated manifest carries empty axes.
+        from startd8.observability import collector
+
+        fake = {
+            "metrics": [{
+                "name": "fake.metric", "instrument": "counter", "unit": "1",
+                "description": "d", "prometheus_name": "fake_metric",
+                "dashboard_hints": {"panel": "stat"},
+                "category": "ai_agent_observability", "orientation": "system",
+            }],
+            "spans": [{
+                "name_pattern": "fake.{id}",
+                "category": "project_observability", "orientation": "system",
+            }],
+        }
+        monkeypatch.setattr(collector, "_load_descriptors", lambda mp, sf: fake)
+
+        m = next(x for x in collector.collect_metric_descriptors() if x.name == "fake.metric")
+        assert m.category == "ai_agent_observability"
+        assert m.orientation == "system"
+        assert m.prometheus_name == "fake_metric"
+        assert m.dashboard_hints == {"panel": "stat"}
+        assert m.to_dict()["category"] == "ai_agent_observability"
+
+        s = next(x for x in collector.collect_span_descriptors() if x.name_pattern == "fake.{id}")
+        assert s.category == "project_observability"
+        assert s.orientation == "system"
+
+    def test_enum_axis_serializes_to_plain_string(self):
+        # Defensive: a Category/Orientation enum member must serialize to its
+        # str value, not a PyYAML !!python/object tag.
+        from startd8.observability.taxonomy_enums import Category, Orientation
+
+        d = MetricDescriptor(
+            name="e", instrument="counter", unit="1", description="d",
+            category=Category.AI_AGENT, orientation=Orientation.SYSTEM,
+        ).to_dict()
+        assert d["category"] == "ai_agent_observability"
+        assert d["orientation"] == "system"
+        assert "python/object" not in yaml.dump(d)
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +177,15 @@ class TestSessionMetrics:
         ]
         assert len(session_metrics) == 7
 
+        # Dotted OTel-native names (REQ-AAO-003 / Phase 2).
         expected = {
-            "startd8_active_sessions",
-            "startd8_requests_total",
-            "startd8_tokens_total",
-            "startd8_response_time_ms",
-            "startd8_context_usage_ratio",
-            "startd8_truncations_total",
-            "startd8_cost_total",
+            "startd8.active.sessions",
+            "startd8.requests.total",
+            "startd8.tokens.total",
+            "startd8.response.time_ms",
+            "startd8.context.usage_ratio",
+            "startd8.truncations.total",
+            "startd8.session.cost.total",
         }
         actual = {m.name for m in session_metrics}
         assert actual == expected
@@ -134,11 +213,31 @@ class TestCostMetrics:
 
 
 class TestTotalMetricCount:
-    """All 12 metrics present."""
+    """Declared metrics are real — parity, not a brittle magic count (REQ-OBS-SHARED-002)."""
 
-    def test_total_metric_count(self):
+    def test_declared_metrics_are_emitted(self):
+        # Replaces the old `len(metrics) == 12` magic assertion: the meaningful
+        # invariant is that every DECLARED metric has an actual emission site.
+        from startd8.observability.parity import check_metric_bijection
+
         manifest = generate_manifest()
-        assert len(manifest.metrics) == 12
+        assert manifest.metrics, "manifest declares no metrics"
+        result = check_metric_bijection(manifest)
+        assert result.declared_not_emitted == [], (
+            f"declared metrics with no emission site: {result.declared_not_emitted}"
+        )
+
+    def test_no_hard_parity_violations_in_bootstrap(self):
+        # Bootstrap mode: no declared-not-emitted, no un-owned emitted-not-declared,
+        # no un-tolerated exported-name collisions. Known gaps live in the registry.
+        from startd8.observability.parity import run_parity
+
+        result = run_parity()
+        assert result.ok, (
+            f"hard parity violations: emitted_not_declared={result.emitted_not_declared}, "
+            f"collisions={result.exported_name_collisions}, "
+            f"declared_not_emitted={result.declared_not_emitted}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -155,11 +254,20 @@ class TestEventTypes:
         manifest = generate_manifest()
         assert len(manifest.event_types) == len(EventType)
 
-    def test_event_categories_assigned(self):
+    def test_event_groups_assigned(self):
+        # EventTypeDescriptor.category was renamed to event_group (REQ-OBS-SHARED-001a).
         manifest = generate_manifest()
         for evt in manifest.event_types:
-            assert evt.category, f"Event {evt.name} has no category"
-            assert evt.category != "unknown", f"Event {evt.name} has 'unknown' category"
+            assert evt.event_group, f"Event {evt.name} has no event_group"
+            assert evt.event_group != "unknown", f"Event {evt.name} has 'unknown' event_group"
+
+    def test_legacy_category_key_deserializes_via_alias(self):
+        # R2-F4: saved YAML using the old `category` key must still load for one
+        # release; output uses `event_group` only.
+        legacy = {"name": "AGENT_CALL_START", "category": "agent"}
+        evt = EventTypeDescriptor.from_dict(legacy)
+        assert evt.event_group == "agent"
+        assert evt.to_dict() == {"name": "AGENT_CALL_START", "event_group": "agent"}
 
 
 # ---------------------------------------------------------------------------
@@ -168,13 +276,21 @@ class TestEventTypes:
 
 
 class TestSpans:
-    """9 span patterns exist (5 base + 4 artisan)."""
+    """Span descriptors are present and correspond to real span sites."""
 
-    def test_all_spans_present(self):
+    def test_spans_present_and_have_sites(self):
+        # Replaces the old `len(spans) == 9` magic assertion: assert spans exist and
+        # each declared name-pattern matches a real span site (or is dynamic).
+        from startd8.observability.parity import check_span_name_patterns
+
         manifest = generate_manifest()
-        assert len(manifest.spans) == 9
+        assert manifest.spans, "manifest declares no spans"
+        missing = check_span_name_patterns(manifest)
+        assert missing == [], f"declared span patterns with no runtime site: {missing}"
 
-    def test_span_patterns(self):
+    def test_known_span_patterns_present(self):
+        # Content check made non-brittle: the known patterns are a SUBSET (additions
+        # are allowed without breaking the test).
         manifest = generate_manifest()
         patterns = {s.name_pattern for s in manifest.spans}
         expected = {
@@ -188,7 +304,7 @@ class TestSpans:
             "PhaseRunner.run",
             "phase.{phase_type}.attempt.{attempt_number}",
         }
-        assert patterns == expected
+        assert expected <= patterns, f"missing expected span patterns: {expected - patterns}"
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,40 @@ except ImportError:
     _elements_escalated_counter = None
     _template_hits_counter = None
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. Module-level taxonomy defaults (REQ-OBS-SHARED-001): Micro Prime routing
+# counters are innate codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "micro_prime.elements_local",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Elements processed locally by Micro Prime",
+            "meter": "startd8.micro_prime",
+            "labels": ["tier", "file_path"],
+        },
+        {
+            "name": "micro_prime.elements_escalated",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Elements escalated to fallback generator",
+            "meter": "startd8.micro_prime",
+            "labels": ["reason", "file_path"],
+        },
+        {
+            "name": "micro_prime.template_hits",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Elements resolved by template registry",
+            "meter": "startd8.micro_prime",
+            "labels": ["file_path"],
+        },
+    ],
+}
+
 
 # Size-regression threshold: if filled skeleton is below this ratio of the
 # existing target file (by semantic line count), escalate to the fallback

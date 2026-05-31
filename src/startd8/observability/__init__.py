@@ -24,6 +24,14 @@ from .manifest import (
     ObservabilityManifest,
     generate_manifest,
 )
+from .taxonomy_enums import (
+    Category,
+    Orientation,
+    CATEGORY_VALUES,
+    ORIENTATION_VALUES,
+    is_valid_category,
+    is_valid_orientation,
+)
 
 __all__ = [
     "MetricDescriptor",
@@ -35,4 +43,11 @@ __all__ = [
     "AlertTemplate",
     "ObservabilityManifest",
     "generate_manifest",
+    # Taxonomy axes — single source of truth (REQ-OBS-SHARED-001).
+    "Category",
+    "Orientation",
+    "CATEGORY_VALUES",
+    "ORIENTATION_VALUES",
+    "is_valid_category",
+    "is_valid_orientation",
 ]

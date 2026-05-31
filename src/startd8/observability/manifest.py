@@ -7,10 +7,20 @@ dashboards, alerts, and SLOs.
 """
 
 from dataclasses import dataclass, field
-from pathlib import Path
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+
+def _axis_value(value: Any) -> str:
+    """Coerce a taxonomy axis to its plain string value.
+
+    Real descriptors declare plain strings, but a ``Category``/``Orientation``
+    enum member may be passed programmatically; ``str``-enums serialize to a
+    ``!!python/object`` tag under PyYAML, so normalize to the underlying value.
+    """
+    return value.value if isinstance(value, Enum) else value
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +66,10 @@ class MetricDescriptor:
     labels: List[str] = field(default_factory=list)
     prometheus_name: Optional[str] = None
     dashboard_hints: Optional[Dict[str, Any]] = None
+    # Taxonomy axes (REQ-OBS-SHARED-001). "" = unset (compat bridge, not an
+    # accepted end state — see the completeness gate). Domains: taxonomy_enums.
+    category: str = ""
+    orientation: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -74,6 +88,10 @@ class MetricDescriptor:
             d["prometheus_name"] = self.prometheus_name
         if self.dashboard_hints:
             d["dashboard_hints"] = self.dashboard_hints
+        if self.category:
+            d["category"] = _axis_value(self.category)
+        if self.orientation:
+            d["orientation"] = _axis_value(self.orientation)
         return d
 
     @classmethod
@@ -88,6 +106,8 @@ class MetricDescriptor:
             labels=d.get("labels", []),
             prometheus_name=d.get("prometheus_name"),
             dashboard_hints=d.get("dashboard_hints"),
+            category=d.get("category", ""),
+            orientation=d.get("orientation", ""),
         )
 
 
@@ -101,6 +121,9 @@ class SpanDescriptor:
     attributes: List[str] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
     attributes_dynamic: bool = False
+    # Taxonomy axes (REQ-OBS-SHARED-001). "" = unset. Domains: taxonomy_enums.
+    category: str = ""
+    orientation: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -115,6 +138,10 @@ class SpanDescriptor:
             d["events"] = self.events
         if self.attributes_dynamic:
             d["attributes_dynamic"] = True
+        if self.category:
+            d["category"] = _axis_value(self.category)
+        if self.orientation:
+            d["orientation"] = _axis_value(self.orientation)
         return d
 
     @classmethod
@@ -126,6 +153,8 @@ class SpanDescriptor:
             attributes=d.get("attributes", []),
             events=d.get("events", []),
             attributes_dynamic=d.get("attributes_dynamic", False),
+            category=d.get("category", ""),
+            orientation=d.get("orientation", ""),
         )
 
 
@@ -134,13 +163,17 @@ class EventTypeDescriptor:
     """Describes a StartD8 EventBus event type."""
 
     name: str
-    category: str  # agent, cost, pipeline, truncation, job, enhancement, storage, system
+    # Instrument-grouping axis (agent, cost, pipeline, truncation, job,
+    # enhancement, storage, system) — NOT the 5-category observability taxonomy.
+    # Renamed from `category` to `event_group` (REQ-OBS-SHARED-001a) so `category`
+    # means the taxonomy uniformly across descriptor classes.
+    event_group: str
     data_fields: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "name": self.name,
-            "category": self.category,
+            "event_group": self.event_group,
         }
         if self.data_fields:
             d["data_fields"] = self.data_fields
@@ -148,9 +181,11 @@ class EventTypeDescriptor:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "EventTypeDescriptor":
+        # Accept the legacy `category` key as an alias for one release so saved
+        # manifests/YAML still deserialize (REQ-OBS-SHARED-001a).
         return cls(
             name=d["name"],
-            category=d.get("category", ""),
+            event_group=d.get("event_group", d.get("category", "")),
             data_fields=d.get("data_fields", []),
         )
 

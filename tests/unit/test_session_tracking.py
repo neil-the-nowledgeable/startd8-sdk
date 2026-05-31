@@ -429,3 +429,34 @@ class TestSessionTrackerThreadSafety:
         metrics = tracker.get_session(session_id)
         assert metrics.request_count == 100
         assert metrics.total_input_tokens == 10000
+
+
+class TestOutcomeVocabulary:
+    """REQ-AAO-009: the requests counter's `status` label carries the outcome
+    vocabulary error > truncated > retried > success (first match wins)."""
+
+    def _capture_outcome(self, **flags):
+        from unittest.mock import MagicMock
+
+        tracker = SessionTracker(enable_otel=False)
+        sid = tracker.start_session(agent_name="claude", model="m")
+        # Force the OTel path with a mock counter to capture the status label.
+        tracker._otel_enabled = True
+        counter = MagicMock()
+        tracker._otel_requests_counter = counter
+        tracker.record_request(sid, input_tokens=1, output_tokens=1, response_time_ms=1, **flags)
+        # First positional arg is the increment; second is the attributes dict.
+        _value, attrs = counter.add.call_args[0]
+        return attrs["status"]
+
+    def test_clean_success(self):
+        assert self._capture_outcome(success=True) == "success"
+
+    def test_error_takes_precedence(self):
+        assert self._capture_outcome(success=False, truncated=True, retried=True) == "error"
+
+    def test_truncated_over_retried(self):
+        assert self._capture_outcome(success=True, truncated=True, retried=True) == "truncated"
+
+    def test_retried(self):
+        assert self._capture_outcome(success=True, truncated=False, retried=True) == "retried"

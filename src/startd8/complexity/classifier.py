@@ -35,6 +35,26 @@ except Exception:  # pragma: no cover – OTel may not be installed
     pass
 
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. The live histogram is emitted-but-was-undeclared (CAT45 §A-1); declaring it
+# here closes the parity gap. Module-level taxonomy defaults (REQ-OBS-SHARED-001):
+# tier classification is innate codegen-pipeline routing, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "complexity.tier_distribution",
+            "instrument": "histogram",
+            "unit": "1",
+            "description": "Distribution of complexity tier classifications",
+            "meter": "startd8.complexity",
+            "labels": ["tier"],
+        },
+    ],
+}
+
+
 def classify_tier(
     signals: TaskComplexitySignals,
     config: ComplexityRoutingConfig | None = None,

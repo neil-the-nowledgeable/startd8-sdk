@@ -31,10 +31,19 @@ _INSTRUMENTED_MODULES = [
     ("startd8.contractors.artisan_contractor", "src/startd8/contractors/artisan_contractor.py"),
     ("startd8.contractors.artisan_phases.runner", "src/startd8/contractors/artisan_phases/runner.py"),
     ("startd8.repair.orchestrator", "src/startd8/repair/orchestrator.py"),
+    # cat-4 / B: previously-undeclared live emitters, now cataloged (CAT45 §A-1, §D).
+    ("startd8.complexity.classifier", "src/startd8/complexity/classifier.py"),
+    ("startd8.element_registry", "src/startd8/element_registry.py"),
+    ("startd8.micro_prime.prime_adapter", "src/startd8/micro_prime/prime_adapter.py"),
+    ("startd8.micro_prime.repair", "src/startd8/micro_prime/repair.py"),
+    ("startd8.workflows.builtin.plan_ingestion_mottainai", "src/startd8/workflows/builtin/plan_ingestion_mottainai.py"),
+    ("startd8.security_prime.otel", "src/startd8/security_prime/otel.py"),
+    ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
 ]
 
-# Event type → category mapping (derived from EventType enum grouping).
-_EVENT_CATEGORIES = {
+# Event type → instrument-group mapping (derived from EventType enum grouping).
+# This is the EventTypeDescriptor.event_group axis, NOT the observability taxonomy.
+_EVENT_GROUPS = {
     "AGENT_CALL_START": "agent",
     "AGENT_CALL_COMPLETE": "agent",
     "AGENT_CALL_ERROR": "agent",
@@ -106,6 +115,10 @@ def collect_metric_descriptors() -> List[MetricDescriptor]:
 
     for module_path, source_file in _INSTRUMENTED_MODULES:
         desc = _load_descriptors(module_path, source_file)
+        # Module-level taxonomy defaults — a module's signals usually share a
+        # category/orientation; declare once at the top level, override per-entry.
+        mod_category = desc.get("category", "")
+        mod_orientation = desc.get("orientation", "")
         for m in desc.get("metrics", []):
             if m["name"] in seen_names:
                 continue
@@ -119,6 +132,13 @@ def collect_metric_descriptors() -> List[MetricDescriptor]:
                     meter=m.get("meter", ""),
                     source_file=source_file,
                     labels=m.get("labels", []),
+                    # Pass through optional + taxonomy fields (REQ-OBS-SHARED-001,
+                    # R3-F1): without this the collector silently drops them and
+                    # the generated manifest carries empty axes.
+                    prometheus_name=m.get("prometheus_name"),
+                    dashboard_hints=m.get("dashboard_hints"),
+                    category=m.get("category", mod_category),
+                    orientation=m.get("orientation", mod_orientation),
                 )
             )
     return result
@@ -130,6 +150,8 @@ def collect_span_descriptors() -> List[SpanDescriptor]:
 
     for module_path, source_file in _INSTRUMENTED_MODULES:
         desc = _load_descriptors(module_path, source_file)
+        mod_category = desc.get("category", "")
+        mod_orientation = desc.get("orientation", "")
         for s in desc.get("spans", []):
             result.append(
                 SpanDescriptor(
@@ -139,6 +161,10 @@ def collect_span_descriptors() -> List[SpanDescriptor]:
                     attributes=s.get("attributes", []),
                     events=s.get("events", []),
                     attributes_dynamic=s.get("attributes_dynamic", False),
+                    # Pass through taxonomy fields (REQ-OBS-SHARED-001, R3-F1);
+                    # fall back to the module-level default.
+                    category=s.get("category", mod_category),
+                    orientation=s.get("orientation", mod_orientation),
                 )
             )
     return result
@@ -150,11 +176,11 @@ def collect_event_types() -> List[EventTypeDescriptor]:
 
     result: List[EventTypeDescriptor] = []
     for member in EventType:
-        category = _EVENT_CATEGORIES.get(member.name, "unknown")
+        event_group = _EVENT_GROUPS.get(member.name, "unknown")
         result.append(
             EventTypeDescriptor(
                 name=member.name,
-                category=category,
+                event_group=event_group,
             )
         )
     return result

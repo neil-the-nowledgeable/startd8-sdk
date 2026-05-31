@@ -45,6 +45,78 @@ except ImportError:
     _mpa_registry_hits = None
     _mpa_registry_misses = None
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. Declares the FULL mottainai.* meter family: the 4 emitters created here PLUS
+# `mottainai.skeleton_sources_forwarded` (context_seed/phases/scaffold.py) and
+# `mottainai.implement_prompt_narrowed`/`mottainai.tokens_avoided_estimate`
+# (contractors/artisan_phases/development.py). All share the `startd8.mottainai`
+# meter; declaring them in one carrier module keeps a single collector registration
+# while the parity scanner still verifies every emission site. Module-level taxonomy
+# defaults (REQ-OBS-SHARED-001): pre-assembly (Mottainai) metrics are innate
+# codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "mottainai.elements_classified",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Elements classified at ingestion time",
+            "meter": "startd8.mottainai",
+            "labels": ["tier", "phase"],
+        },
+        {
+            "name": "mottainai.elements_pre_filled",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Elements filled without LLM (template or registry)",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+        {
+            "name": "mottainai.registry_hits",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Cross-run element reuse hits at ingestion",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+        {
+            "name": "mottainai.registry_misses",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Cross-run element reuse misses at ingestion",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+        {
+            "name": "mottainai.skeleton_sources_forwarded",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Skeletons consumed from seed (vs. recomputed)",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+        {
+            "name": "mottainai.implement_prompt_narrowed",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Tasks receiving edit-mode prompts from pre-assembly",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+        {
+            "name": "mottainai.tokens_avoided_estimate",
+            "instrument": "counter",
+            "unit": "tokens",
+            "description": "Estimated input+output tokens saved by pre-assembly",
+            "meter": "startd8.mottainai",
+            "labels": ["phase"],
+        },
+    ],
+}
+
 
 def _element_context_checksum(
     element: ForwardElementSpec,

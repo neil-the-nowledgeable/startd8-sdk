@@ -798,6 +798,9 @@ def get_repair_frequency(project_root: Path) -> Dict[str, dict]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _OTEL_DESCRIPTORS: dict = {
+    # Pipeline-innate (REQ-OBS-SHARED-001): post-generation repair pipeline telemetry.
+    "category": "pipeline_innate",
+    "orientation": "system",
     "metrics": [
         {
             "name": "repair_attempts_total",

@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
 _OTEL_DESCRIPTORS = {
+    # Module-level taxonomy defaults (REQ-OBS-SHARED-001): agent-call spans are
+    # AI-agent observability, system-oriented.
+    "category": "ai_agent_observability",
+    "orientation": "system",
     "spans": [
         {
             "name_pattern": "agent.generate:{agent_name}",

@@ -8,6 +8,15 @@ Core Concept:
     Tasks ARE Spans - Each workflow execution becomes a ContextCore task span,
     with phases, reviews, and costs tracked as span events and attributes.
 
+Ownership boundary (REQ-PRO-001, Project Observability):
+    This adapter is an OPTIONAL import with graceful degradation — startd8 writes
+    state files and emits spans; ContextCore reads them and OWNS the metric-ified
+    gauges, live progress, and burndown dashboards. The seam is one-directional:
+    startd8 does not reach into ContextCore beyond this wrapper, and the
+    observability generator surfaces the ``contextcore_*`` gauges as
+    ContextCore-owned (``route_state=contextcore_owned``), excluded from startd8's
+    artifact-coverage denominator (REQ-OAT-052), not as a startd8 emission.
+
 Components:
     - ContextCoreConfig: Configuration for ContextCore integration
     - WorkflowTaskSpec: Specification for a single workflow task
