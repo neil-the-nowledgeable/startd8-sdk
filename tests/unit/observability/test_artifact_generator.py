@@ -1067,3 +1067,104 @@ class TestGrafanaJsonE2E:
             p.get("fieldConfig", {}).get("defaults", {}).get("thresholds")
             for p in dash["panels"]
         )
+
+
+# ---------------------------------------------------------------------------
+# Closure 3A / Gap 2: honest coverage reporting for unimplemented artifact types
+# ---------------------------------------------------------------------------
+
+# The eight artifact types the onboarding contract declares (gap analysis §1.1).
+DECLARED_8 = {
+    "capability_index": {},
+    "dashboard": {},
+    "loki_rule": {},
+    "notification_policy": {},
+    "prometheus_rule": {},
+    "runbook": {},
+    "service_monitor": {},
+    "slo_definition": {},
+}
+
+
+def _meta_with_declared_types(artifact_types):
+    return {
+        "project_id": "startd8/run-003",
+        "artifact_types": artifact_types,
+        "instrumentation_hints": {
+            "strtd8": {
+                "service_id": "strtd8",
+                "transport": "http",
+                "metrics": {
+                    "convention_based": [
+                        {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"},
+                    ],
+                },
+            },
+        },
+    }
+
+
+class TestUnimplementedArtifactTypeReporting:
+    def test_declared_artifact_types_parsing(self):
+        from startd8.observability.artifact_generator import _declared_artifact_types
+
+        assert _declared_artifact_types({"artifact_types": DECLARED_8}) == sorted(DECLARED_8)
+        assert _declared_artifact_types({"artifact_types": ["dashboard", "runbook"]}) == [
+            "dashboard",
+            "runbook",
+        ]
+        assert _declared_artifact_types({}) == []
+
+    def test_unimplemented_types_recorded_as_skipped(self, tmp_path):
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(json.dumps(_meta_with_declared_types(DECLARED_8)))
+        out = tmp_path / "obs"
+
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+
+        idx = yaml.safe_load((out / "observability-manifest.yaml").read_text())
+        summary = idx["summary"]
+        # 5 declared types are not produced by the triplet generator.
+        assert summary["artifacts_skipped"] == 5
+        assert summary["artifact_type_coverage"] == round(3 / 8, 4)
+        assert summary["unimplemented_artifact_types"] == [
+            "capability_index",
+            "loki_rule",
+            "notification_policy",
+            "runbook",
+            "service_monitor",
+        ]
+        skipped_types = {a["type"] for a in idx["artifacts"] if a["status"] == "skipped"}
+        assert skipped_types == set(summary["unimplemented_artifact_types"])
+
+    def test_no_declared_types_no_coverage_fields(self, tmp_path):
+        # Metadata without artifact_types → no coverage section, no synthetic skips.
+        meta = _meta_with_declared_types(None)
+        del meta["artifact_types"]
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(json.dumps(meta))
+        out = tmp_path / "obs"
+
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+
+        summary = yaml.safe_load((out / "observability-manifest.yaml").read_text())["summary"]
+        assert "artifact_type_coverage" not in summary
+        assert "unimplemented_artifact_types" not in summary
+
+    def test_full_implementation_scores_one(self, tmp_path):
+        # When only the implemented types are declared, coverage is 1.0 and nothing is skipped for type-coverage.
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(
+            json.dumps(
+                _meta_with_declared_types(
+                    {"dashboard": {}, "prometheus_rule": {}, "slo_definition": {}}
+                )
+            )
+        )
+        out = tmp_path / "obs"
+
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+
+        summary = yaml.safe_load((out / "observability-manifest.yaml").read_text())["summary"]
+        assert summary["artifact_type_coverage"] == 1.0
+        assert summary["unimplemented_artifact_types"] == []

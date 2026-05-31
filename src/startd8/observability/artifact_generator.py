@@ -104,6 +104,8 @@ class GenerationReport:
     artifacts: List[ArtifactResult] = field(default_factory=list)
     services_processed: int = 0
     services_skipped: int = 0
+    # Artifact types the onboarding contract declares as required (Closure 3A).
+    declared_artifact_types: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,18 @@ _DEFAULT_THRESHOLDS = {
     "latency_p99": "500ms",
     "throughput": "100rps",
 }
+
+# Declared onboarding artifact_types this generator actually produces, keyed by
+# the declared type name (Closure 3A). prometheus_rule ← alert_rule output;
+# dashboard ← Grafana JSON (Gap 4); slo_definition ← slo output. Declared types
+# absent here (service_monitor, notification_policy, loki_rule, runbook,
+# capability_index) are recorded as honest, explicit skips rather than silently
+# implying full coverage.
+_IMPLEMENTED_ARTIFACT_TYPES = frozenset({
+    "dashboard",
+    "prometheus_rule",
+    "slo_definition",
+})
 
 # OTel instrument type → Grafana panel type
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {
@@ -1627,6 +1641,11 @@ def generate_observability_artifacts(
         [s for s in services if not s.convention_metrics]
     )
 
+    # Closure 3A / Gap 2: record declared-but-unimplemented artifact types as
+    # explicit skips so coverage reporting is honest, not silently partial.
+    report.declared_artifact_types = _declared_artifact_types(metadata)
+    _record_unimplemented_artifact_types(report)
+
     # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
     # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
     # too (side-effect-free; renders via a temp dir) so drift detection stays
@@ -1659,6 +1678,46 @@ def generate_observability_artifacts(
         )
 
     return report
+
+
+def _declared_artifact_types(metadata: Dict[str, Any]) -> List[str]:
+    """Extract the declared artifact_types from onboarding metadata (Closure 3A).
+
+    Accepts either a dict (keyed by type name) or a list of type names.
+    """
+    decl = metadata.get("artifact_types")
+    if isinstance(decl, dict):
+        return sorted(decl.keys())
+    if isinstance(decl, list):
+        return sorted(str(t) for t in decl if t)
+    return []
+
+
+def _record_unimplemented_artifact_types(report: GenerationReport) -> None:
+    """Emit explicit skipped entries for declared-but-unimplemented types (Closure 3A / Gap 2).
+
+    The onboarding contract may declare more artifact types than this triplet
+    generator produces. Rather than silently covering a subset (a
+    "looks-like-success" failure where artifacts_skipped reads 0), record each
+    unimplemented declared type as a skipped artifact so the manifest honestly
+    reports the shortfall.
+    """
+    project_id = report.project_id or "project"
+    for atype in report.declared_artifact_types:
+        if atype in _IMPLEMENTED_ARTIFACT_TYPES:
+            continue
+        report.artifacts.append(
+            ArtifactResult(
+                artifact_type=atype,
+                service_id=project_id,
+                output_path=f"(not generated: {atype})",
+                status="skipped",
+                error_message=(
+                    "declared in onboarding artifact_types but not implemented "
+                    "by the observability triplet generator"
+                ),
+            )
+        )
 
 
 def _convert_dashboards_to_grafana_json(
@@ -1780,6 +1839,25 @@ def _write_index(
     skipped = sum(1 for a in report.artifacts if a.status == "skipped")
     errored = sum(1 for a in report.artifacts if a.status == "error")
 
+    summary: Dict[str, Any] = {
+        "services_processed": report.services_processed,
+        "services_skipped": report.services_skipped,
+        "artifacts_generated": generated,
+        "artifacts_skipped": skipped,
+        "artifacts_errored": errored,
+    }
+
+    # Closure 3A / Gap 2: honest artifact-type coverage against the declared contract.
+    if report.declared_artifact_types:
+        declared = set(report.declared_artifact_types)
+        implemented = declared & _IMPLEMENTED_ARTIFACT_TYPES
+        unimplemented = sorted(declared - _IMPLEMENTED_ARTIFACT_TYPES)
+        summary["declared_artifact_types"] = sorted(declared)
+        summary["unimplemented_artifact_types"] = unimplemented
+        summary["artifact_type_coverage"] = round(
+            len(implemented) / len(declared), 4
+        )
+
     index: Dict[str, Any] = {
         "manifest_id": "observability-artifacts",
         "version": "1.0.0",
@@ -1788,13 +1866,7 @@ def _write_index(
         "source": {
             "onboarding_metadata": str(onboarding_path),
         },
-        "summary": {
-            "services_processed": report.services_processed,
-            "services_skipped": report.services_skipped,
-            "artifacts_generated": generated,
-            "artifacts_skipped": skipped,
-            "artifacts_errored": errored,
-        },
+        "summary": summary,
         "artifacts": [
             {
                 "type": a.artifact_type,
