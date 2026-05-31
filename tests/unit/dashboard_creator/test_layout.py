@@ -6,6 +6,7 @@ from startd8.dashboard_creator.layout import (
     apply_layout,
     auto_group_rows,
     auto_layout,
+    nest_collapsed_rows,
 )
 from startd8.dashboard_creator.models import DashboardSpec, GridPos, PanelSpec, PanelType
 
@@ -158,3 +159,69 @@ class TestApplyLayout:
         result = apply_layout(spec)
         assert result is not spec
         assert result.title == spec.title
+
+
+# ---------------------------------------------------------------------------
+# nest_collapsed_rows (DC-110 / REQ-DCR-AES-033)
+# ---------------------------------------------------------------------------
+
+
+def _row(title, collapsed=True):
+    return {"type": "row", "title": title, "collapsed": collapsed, "panels": []}
+
+
+def _text(title):
+    return {"type": "text", "title": title, "id": title}
+
+
+class TestNestCollapsedRows:
+    def test_collapsed_row_absorbs_trailing_siblings(self):
+        dash = {"panels": [
+            _row("Welcome"), _text("w1"),
+            _row("Services"), _text("s1"),
+        ]}
+        nest_collapsed_rows(dash)
+        # top level is now just the two rows; each nests its text
+        assert [p["type"] for p in dash["panels"]] == ["row", "row"]
+        assert [c["title"] for c in dash["panels"][0]["panels"]] == ["w1"]
+        assert [c["title"] for c in dash["panels"][1]["panels"]] == ["s1"]
+
+    def test_expanded_rows_keep_siblings(self):
+        dash = {"panels": [
+            _row("A", collapsed=False), _text("a1"), _text("a2"),
+        ]}
+        nest_collapsed_rows(dash)
+        # expanded row owns nothing; panels stay top-level siblings
+        assert [p["type"] for p in dash["panels"]] == ["row", "text", "text"]
+        assert dash["panels"][0]["panels"] == []
+
+    def test_next_row_ends_ownership(self):
+        dash = {"panels": [
+            _row("A"), _text("a1"),
+            _row("B", collapsed=False), _text("b1"),
+        ]}
+        nest_collapsed_rows(dash)
+        assert [c["title"] for c in dash["panels"][0]["panels"]] == ["a1"]
+        # b1 follows an EXPANDED row -> stays a top-level sibling
+        assert dash["panels"][-1] == _text("b1")
+
+    def test_idempotent(self):
+        dash = {"panels": [_row("A"), _text("a1"), _row("B"), _text("b1")]}
+        once = nest_collapsed_rows(dash)
+        twice = nest_collapsed_rows({"panels": [p for p in once["panels"]]})
+        assert once["panels"] == twice["panels"]
+
+    def test_no_content_lost(self):
+        dash = {"panels": [_row("A"), _text("a1"), _row("B"), _text("b1")]}
+        nest_collapsed_rows(dash)
+        texts = [c["title"] for r in dash["panels"] for c in r.get("panels", [])]
+        assert sorted(texts) == ["a1", "b1"]
+
+    def test_rowless_dashboard_untouched(self):
+        dash = {"panels": [_text("x"), _text("y")]}
+        nest_collapsed_rows(dash)
+        assert [p["title"] for p in dash["panels"]] == ["x", "y"]
+
+    def test_missing_panels_key_is_safe(self):
+        assert nest_collapsed_rows({}) == {}
+        assert nest_collapsed_rows({"panels": None}) == {"panels": None}

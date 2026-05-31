@@ -5,7 +5,7 @@ Transforms a flat list of PanelSpec into a properly ordered and
 positioned list ready for Jsonnet generation.
 """
 
-from typing import List
+from typing import List, Optional
 
 from startd8.dashboard_creator.models import DashboardSpec, GridPos, PanelSpec, PanelType
 
@@ -120,3 +120,50 @@ def apply_layout(spec: DashboardSpec) -> DashboardSpec:
     panels = auto_group_rows(spec.panels)
     panels = auto_layout(panels)
     return spec.model_copy(update={"panels": panels})
+
+
+def nest_collapsed_rows(dashboard: dict) -> dict:
+    """DC-110 / REQ-DCR-AES-033: enforce Grafana's collapsed-row nesting invariant.
+
+    Grafana requires a **collapsed** row to own the panels that follow it (up to the
+    next row) via ``row["panels"]``; an **expanded** row (``collapsed: false``) leaves
+    them as top-level siblings positioned by ``gridPos``. The generator emits collapsed
+    rows with an empty ``panels: []`` and the content as top-level siblings — an invalid
+    combination that Grafana's renderer mis-handles, swallowing the trailing sections
+    (only the first few render). Verified against the play.grafana.org corpus: 244/248
+    real collapsed rows nest their panels.
+
+    This post-compile pass folds each collapsed row's trailing siblings into its
+    ``panels[]``. Operates on the compiled dashboard JSON (panels already carry ``id``
+    and ``gridPos``), is **pure on structure, idempotent**, and leaves expanded rows /
+    row-less dashboards untouched.
+
+    Args:
+        dashboard: Compiled Grafana dashboard model (mutated in place and returned).
+
+    Returns:
+        The same ``dashboard`` dict with collapsed rows nesting their section panels.
+    """
+    panels = dashboard.get("panels")
+    if not isinstance(panels, list):
+        return dashboard
+
+    result: List[dict] = []
+    owner: Optional[dict] = None  # the open collapsed row currently absorbing siblings
+    for panel in panels:
+        if not isinstance(panel, dict):
+            result.append(panel)
+            continue
+        if panel.get("type") == "row":
+            # A row (collapsed or not) ends the previous collapsed row's ownership.
+            owner = panel if panel.get("collapsed") else None
+            if owner is not None and not isinstance(panel.get("panels"), list):
+                panel["panels"] = []
+            result.append(panel)
+        elif owner is not None:
+            owner["panels"].append(panel)  # nest under the open collapsed row
+        else:
+            result.append(panel)
+
+    dashboard["panels"] = result
+    return dashboard

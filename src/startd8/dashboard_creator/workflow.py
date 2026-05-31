@@ -21,7 +21,7 @@ from startd8.dashboard_creator.config_merge import (
 from startd8.dashboard_creator.discovery import discover_mixin, detect_toolchain
 from startd8.dashboard_creator.generator import generate_dashboard_jsonnet
 from startd8.dashboard_creator.json_validator import validate_dashboard_json
-from startd8.dashboard_creator.layout import apply_layout
+from startd8.dashboard_creator.layout import apply_layout, nest_collapsed_rows
 from startd8.dashboard_creator.manifest_sync import sync_manifest
 from startd8.dashboard_creator.mixin_update import derive_mixin_entry, update_mixin_imports
 from startd8.dashboard_creator.models import DashboardSpec, PanelType
@@ -416,6 +416,12 @@ class DashboardCreatorWorkflow(WorkflowBase):
             step_name="validate_json",
             output="JSON validation passed",
         ))
+
+        # 8.5 Enforce Grafana's collapsed-row nesting invariant (DC-110 / REQ-DCR-AES-033).
+        # A collapsed row must own its section panels via row.panels[]; otherwise Grafana
+        # hides the trailing sections. Pure, idempotent; expanded/row-less dashboards are
+        # untouched. Applied before persist + provision so both emit valid JSON.
+        nest_collapsed_rows(json_result.dashboard_json)
 
         if is_check:
             self._emit_progress(on_progress, 10, 10, "Check complete")
