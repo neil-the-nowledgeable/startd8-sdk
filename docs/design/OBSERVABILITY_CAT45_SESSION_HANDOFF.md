@@ -29,8 +29,9 @@ nothing yet* (the generator wiring is the next big piece).
   is now **empty**; `run_parity()` is a clean bijection (`ok=True`, `bootstrap_undeclared=[]`,
   no hard violations). 23 emitters declared (the 22 prefix-cluster ones + `complexity.tier_distribution`,
   whose declaration `e48e8f71` claimed but the stash incident dropped — never recovered until now).
-  Manifest YAML regenerated 17→40 metrics (additive; SLO/alert preserved). **Resume point is now
-  Signal 4 step 2 (C — generator `route_state` consumption).**
+  Manifest YAML regenerated 17→40 metrics (additive; SLO/alert preserved). **B done; C (REQ-OAT-023
+  keystone + route_state) also DONE — see Signal 4 step 2. Resume point is now C2 (REQ-OAT-050/051
+  orientation-aware quality scoring) or step 3 (`task.*` disambiguation).**
 
 ---
 
@@ -88,7 +89,20 @@ New modules: `observability/taxonomy_enums.py`, `manifest_validation.py`, `parit
    (`pipeline_innate/system`; `complexity.tier_distribution` was the dropped 23rd), 7 carrier
    modules registered in `collector._INSTRUMENTED_MODULES`, `parity.EMITTER_EXCLUSIONS` emptied.
    `run_parity().bootstrap_undeclared == []`, obs+manifest suites green (230). YAML regenerated.
-2. **Then C — generator route_state consumption (#11).** Teach
+2. **~~Then C — generator route_state consumption (#11)~~ ✅ DONE (keystone scope).**
+   Implemented the REQ-OAT-023 keystone in `artifact_generator.py`: single type-keyed
+   registry (`_ARTIFACT_TYPE_REGISTRY`, REQ-OAT-070a) distinct from the legacy 4-value
+   `_ARTIFACT_TYPE_TO_CATEGORY`; `category`/`orientation`/`declared_type`/`runtime_type`/
+   `route_state`/`skip_reason`/`owner` on `ArtifactResult`, stamped centrally in `_generate_one`;
+   `classify_route_state`/`classify_route_states` (REQ-OBS-SHARED-004, incl. the stale
+   `contextcore_task_*`→`contextcore_owned` clause); honest skips + `owned_elsewhere`
+   coverage-denominator exclusion + per-category coverage (REQ-OAT-052); declared-first metric
+   classification w/ `inferred` recording (REQ-OAT-024) + REQ-OAT-041 "awaiting cat-4/5 home" count.
+   Human onboarding dashboards reuse the existing `portal_spec_builder` (NOT rebuilt).
+   **Deferred to C2:** REQ-OAT-050/051 orientation-aware quality scoring + the D-9 validator-runner
+   refactor. New tests: `test_route_state.py` (28). Obs+manifest suites green (258 total).
+
+   ~~2-orig. Then C — generator route_state consumption (#11).~~ Teach
    `observability/artifact_generator.py` (which ALREADY generates 8 artifact types) to:
    (a) read `route_state` from `manifest_declared` (via `onboarding_bridge`) — route
    `sdk_emitted`→produced, `contextcore_owned`→`skip_reason=owned_elsewhere`/`owner`

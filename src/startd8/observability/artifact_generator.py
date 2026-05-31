@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
+from .taxonomy_enums import Category, Orientation, RouteState
+
 try:
     from startd8.logging_config import get_logger
 
@@ -38,6 +40,11 @@ class ConventionMetric:
     name: str  # e.g. "rpc.server.duration"
     type: str  # e.g. "histogram", "counter"
     source: str  # e.g. "otel_semconv:grpc"
+    # REQ-OAT-024 "declare, don't guess": when onboarding metadata carries the
+    # structural facts, read them; otherwise the classifier infers (and records
+    # the inference). "" = not declared upstream.
+    category: str = ""        # declared five-category taxonomy, if present
+    route_state: str = ""     # declared route_state, if present (e.g. onboarding_bridge sets sdk_emitted)
 
 
 @dataclass
@@ -85,7 +92,7 @@ class DerivationTrace:
 class ArtifactResult:
     """Result of generating a single artifact file."""
 
-    artifact_type: str  # "alert_rule", "dashboard_spec", "slo_definition"
+    artifact_type: str  # runtime label, e.g. "alert_rule", "dashboard_spec", "slo_definition"
     service_id: str
     output_path: str  # relative path within output dir
     status: str  # "generated", "skipped", "error"
@@ -93,6 +100,20 @@ class ArtifactResult:
     derivations: List[DerivationTrace] = field(default_factory=list)
     error_message: Optional[str] = None
     quality: Optional[Dict[str, Any]] = None  # REQ-KZ-OBS-706a: {score, checks_passed, checks_total, issues, repairs_applied}
+    # Taxonomy keystone (REQ-OAT-023): the five-category domain, the orientation
+    # axis, and the declared/runtime type pair. Assigned centrally from
+    # _ARTIFACT_TYPE_REGISTRY (REQ-OAT-070a), not hand-set per call site.
+    # "" = unset (compat default for records built before stamping).
+    category: str = ""        # five-category taxonomy (taxonomy_enums.Category)
+    orientation: str = ""     # human | system | bridge (taxonomy_enums.Orientation)
+    declared_type: str = ""   # contract/onboarding name (distinct from runtime artifact_type)
+    runtime_type: str = ""    # internal generator label (mirrors artifact_type)
+    # Emit-vs-cede provenance (REQ-OBS-SHARED-004 / REQ-OAT-052). route_state
+    # drives ownership/coverage, NOT category. skip_reason/owner are set only on
+    # honest skips; ceded records carry NO source_checksum.
+    route_state: str = ""     # taxonomy_enums.RouteState
+    skip_reason: Optional[str] = None  # "owned_elsewhere" | "unimplemented"
+    owner: Optional[str] = None        # e.g. "contextcore" for owned_elsewhere skips
 
 
 @dataclass
@@ -106,6 +127,10 @@ class GenerationReport:
     services_skipped: int = 0
     # Artifact types the onboarding contract declares as required (Closure 3A).
     declared_artifact_types: List[str] = field(default_factory=list)
+    # Per-metric / per-declared-type route_state classification (REQ-OBS-SHARED-004).
+    # Each row: {name, category, route_state, status, classification_source, [owner]}.
+    # The authoritative emit-vs-cede provenance surface, NOT inferred from category.
+    route_states: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +165,191 @@ _IMPLEMENTED_ARTIFACT_TYPES = frozenset({
     "runbook",
     "capability_index",
 })
+
+
+# ---------------------------------------------------------------------------
+# Single type-keyed artifact registry (REQ-OAT-070a / REQ-OAT-023 keystone)
+# ---------------------------------------------------------------------------
+#
+# ONE place to add an artifact type: a declarative row, never a new dispatch or
+# validation branch (REQ-OAT-070). Keyed by the *declared* (contract/onboarding)
+# type; each row projects category (five-category taxonomy) + orientation
+# (human|system|bridge) + the internal runtime label + requires_declaration +
+# order (producers before consumers, REQ-OAT-070a R3-F2). The taxonomy `category`
+# here is INDEPENDENT of the legacy 4-value `_ARTIFACT_TYPE_TO_CATEGORY`
+# (observe/integration/action/reference) below, which feeds the capability-index
+# schema only — do not conflate (REQ-OAT-023 correction, CRP R2-F1).
+
+
+@dataclass(frozen=True)
+class ArtifactTypeSpec:
+    """One declarative registry row (REQ-OAT-070a)."""
+
+    declared_type: str
+    runtime_type: str
+    category: str        # Category value (five-category taxonomy)
+    orientation: str     # Orientation value
+    requires_declaration: bool
+    order: int
+
+
+_ARTIFACT_TYPE_REGISTRY: Dict[str, ArtifactTypeSpec] = {
+    spec.declared_type: spec
+    for spec in [
+        # Triplet — always produced (no declaration gate). runtime != declared
+        # for the first two (the contract names differ from the generator labels).
+        ArtifactTypeSpec("prometheus_rule", "alert_rule", Category.SERVICE.value, Orientation.BRIDGE.value, False, 10),
+        ArtifactTypeSpec("dashboard", "dashboard_spec", Category.SERVICE.value, Orientation.HUMAN.value, False, 20),
+        ArtifactTypeSpec("slo_definition", "slo_definition", Category.SERVICE.value, Orientation.SYSTEM.value, False, 30),
+        # Extended per-service generators — produced only when declared.
+        ArtifactTypeSpec("service_monitor", "service_monitor", Category.SERVICE.value, Orientation.SYSTEM.value, True, 40),
+        ArtifactTypeSpec("notification_policy", "notification_policy", Category.SERVICE.value, Orientation.BRIDGE.value, True, 50),
+        ArtifactTypeSpec("loki_rule", "loki_rule", Category.SERVICE.value, Orientation.BRIDGE.value, True, 60),
+        ArtifactTypeSpec("runbook", "runbook", Category.SERVICE.value, Orientation.HUMAN.value, True, 70),
+        # Project-level artifacts (consumers — emitted after per-service rows).
+        ArtifactTypeSpec("capability_index", "capability_index", Category.PROJECT.value, Orientation.HUMAN.value, False, 80),
+        ArtifactTypeSpec("onboarding_portal", "portal", Category.PROJECT.value, Orientation.HUMAN.value, True, 90),
+    ]
+}
+
+# Runtime label -> declared type, so records stamped from a generator's runtime
+# label resolve to their declared identity. The rendered Grafana JSON (runtime
+# "dashboard", _convert_dashboards_to_grafana_json) shares declared "dashboard".
+_RUNTIME_TO_DECLARED: Dict[str, str] = {
+    **{spec.runtime_type: spec.declared_type for spec in _ARTIFACT_TYPE_REGISTRY.values()},
+    "dashboard": "dashboard",  # rendered Grafana JSON shares the dashboard contract
+}
+
+
+def resolve_artifact_spec(label: str) -> Optional[ArtifactTypeSpec]:
+    """Resolve a declared OR runtime artifact label to its registry row (REQ-OAT-070a)."""
+    if label in _ARTIFACT_TYPE_REGISTRY:
+        return _ARTIFACT_TYPE_REGISTRY[label]
+    declared = _RUNTIME_TO_DECLARED.get(label)
+    if declared is not None:
+        return _ARTIFACT_TYPE_REGISTRY.get(declared)
+    return None
+
+
+def _stamp_taxonomy(result: ArtifactResult) -> ArtifactResult:
+    """Centrally assign category/orientation/declared_type/runtime_type from the
+    registry (REQ-OAT-023 — assigned once here, not per call site). Unknown labels
+    leave the axes unset (logged once by the caller) rather than guessing."""
+    spec = resolve_artifact_spec(result.artifact_type)
+    if spec is not None:
+        result.category = spec.category
+        result.orientation = spec.orientation
+        result.declared_type = spec.declared_type
+        result.runtime_type = result.artifact_type
+    return result
+
+
+# ---------------------------------------------------------------------------
+# route_state classification (REQ-OBS-SHARED-004 / REQ-OAT-040 / REQ-OAT-024)
+# ---------------------------------------------------------------------------
+
+
+def _infer_metric_category(metric_name: str) -> str:
+    """Name-pattern fallback for a metric's taxonomy category (REQ-OAT-040).
+
+    FALLBACK ONLY — used when onboarding metadata does not declare ``category``
+    (REQ-OAT-024). Callers MUST record the result as ``inferred`` so the upstream
+    declaration gap stays visible rather than silently authoritative. Returns ""
+    when no pattern matches.
+    """
+    n = metric_name.lower()
+    if n.startswith("contextcore"):
+        return Category.PROJECT.value
+    if n.startswith("startd8"):
+        return Category.AI_AGENT.value
+    if n.startswith(("http", "rpc")) or ".server." in n or ".client." in n:
+        return Category.SERVICE.value
+    return ""
+
+
+def classify_route_state(
+    metric_name: str,
+    *,
+    sdk_emitted: bool = False,
+    is_convention: bool = False,
+    declared: str = "",
+) -> RouteState:
+    """Classify a metric's emit-vs-cede provenance (REQ-OBS-SHARED-004).
+
+    Routing is by explicit provenance, NOT inferred from category. The
+    ``contextcore`` prefix wins over ``sdk_emitted`` so STALE ``contextcore_task_*``
+    entries still listed in onboarding metadata classify as ``contextcore_owned``
+    on read (REQ-OBS-SHARED-004 stale-metadata clause), never mis-attributed to
+    the SDK. A declared route_state (when upstream provides one) is honored first.
+    """
+    if declared:
+        try:
+            return RouteState(declared)
+        except ValueError:
+            pass
+    if metric_name.lower().startswith("contextcore"):
+        return RouteState.CONTEXTCORE_OWNED
+    if sdk_emitted:
+        return RouteState.SDK_EMITTED
+    if is_convention:
+        return RouteState.EXTERNAL_CONVENTION
+    # An otherwise-unclassifiable, externally-observed metric (no SDK meter site).
+    return RouteState.EXTERNAL_CONVENTION
+
+
+_ROUTE_STATE_STATUS_TEXT: Dict[RouteState, str] = {
+    RouteState.SDK_EMITTED: "SDK-emitted (in-process) — produced",
+    RouteState.CONTEXTCORE_OWNED: "ContextCore-owned — skipped (owned elsewhere)",
+    RouteState.DECLARED_UNIMPLEMENTED: "declared, no generator yet — skipped",
+    RouteState.EXTERNAL_CONVENTION: "externally-observed convention metric — produced",
+}
+
+
+def classify_route_states(services: List[ServiceHints]) -> List[Dict[str, Any]]:
+    """Build per-metric route_state report rows (REQ-OBS-SHARED-004).
+
+    Walks every metric in the onboarding hints (declared + convention),
+    classifies provenance + taxonomy category, and records whether the category
+    was declared upstream or ``inferred`` (REQ-OAT-024). Each row carries a
+    user-visible status string (R3-F6). Deduplicated by metric name.
+    """
+    rows: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    def _row(m: ConventionMetric, *, sdk_emitted: bool, is_convention: bool) -> Dict[str, Any]:
+        rs = classify_route_state(
+            m.name, sdk_emitted=sdk_emitted, is_convention=is_convention,
+            declared=m.route_state,
+        )
+        declared_cat = bool(m.category)
+        cat = m.category or _infer_metric_category(m.name)
+        if not cat and is_convention:
+            cat = Category.SERVICE.value
+        row: Dict[str, Any] = {
+            "name": m.name,
+            "category": cat,
+            "route_state": rs.value,
+            "status": _ROUTE_STATE_STATUS_TEXT[rs],
+            "classification_source": "declared" if declared_cat else "inferred",
+        }
+        if rs is RouteState.CONTEXTCORE_OWNED:
+            row["owner"] = "contextcore"
+        return row
+
+    for svc in services:
+        for m in svc.declared_metrics:
+            if m.name in seen:
+                continue
+            seen.add(m.name)
+            rows.append(_row(m, sdk_emitted=True, is_convention=False))
+        for m in svc.convention_metrics:
+            if m.name in seen:
+                continue
+            seen.add(m.name)
+            rows.append(_row(m, sdk_emitted=False, is_convention=True))
+
+    rows.sort(key=lambda r: r["name"])
+    return rows
 
 # Quality-report composite blend (Run-007 Findings 1 & 3): structural = mean of
 # all scored artifacts; coverage = mean(dashboarded, alerted).
@@ -264,6 +474,8 @@ def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
             name=m.get("name", ""),
             type=m.get("type", ""),
             source=m.get("source", ""),
+            category=m.get("category", ""),
+            route_state=m.get("route_state", ""),
         )
         for m in raw
         if isinstance(m, dict) and m.get("name")
@@ -1774,19 +1986,25 @@ def _generate_one(
     artifact_type: str,
     output_prefix: str,
 ) -> ArtifactResult:
-    """Generate, validate, and score a single artifact. Catches exceptions."""
+    """Generate, validate, and score a single artifact. Catches exceptions.
+
+    Central taxonomy assignment site (REQ-OAT-023): every result is stamped with
+    category/orientation/declared_type/runtime_type from the registry here, so the
+    ~7 generator functions never hand-set those axes.
+    """
     try:
         result = gen_fn(service, business)
-        return _repair_and_validate(result, business, transport=service.transport)
+        result = _repair_and_validate(result, business, transport=service.transport)
+        return _stamp_taxonomy(result)
     except Exception:
         logger.exception("%s generation failed for %s", artifact_type, service.service_id)
-        return ArtifactResult(
+        return _stamp_taxonomy(ArtifactResult(
             artifact_type=artifact_type,
             service_id=service.service_id,
             output_path=f"{output_prefix}/{service.service_id}-{output_prefix}.yaml",
             status="error",
             error_message="Generation raised exception",
-        )
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -1945,19 +2163,30 @@ def generate_observability_artifacts(
 
     report.declared_artifact_types = _declared_artifact_types(metadata)
 
-    # Closure 3B: native extended generators, produced only for declared types.
+    # REQ-OBS-SHARED-004: classify every metric's emit-vs-cede provenance up front,
+    # by explicit route_state (not category). Surfaced in the index summary so the
+    # report shows who emits / why skipped, with declared-vs-inferred visibility.
+    report.route_states = classify_route_states(services)
+
+    # REQ-OAT-052: declared types ceded to another component (e.g. capability_index
+    # owned by onboarding/ContextCore). Read from explicit metadata, not guessed.
+    owned_elsewhere = _owned_elsewhere_types(metadata)
+
+    # Closure 3B: native extended generators, produced only for declared types that
+    # this SDK actually owns (ceded types are recorded as owned_elsewhere skips below).
     declared = set(report.declared_artifact_types)
     for atype, (gen_fn, output_prefix) in _EXTENDED_PER_SERVICE_GENERATORS.items():
-        if atype not in declared:
+        if atype not in declared or atype in owned_elsewhere:
             continue
         for service in services:
             report.artifacts.append(
                 _generate_one(gen_fn, service, business, atype, output_prefix)
             )
 
-    # Closure 3A / Gap 2: record any declared-but-unimplemented artifact types as
-    # explicit skips so coverage reporting is honest, not silently partial.
-    _record_unimplemented_artifact_types(report)
+    # Closure 3A / Gap 2 + REQ-OAT-052: record declared-but-unproduced types as
+    # explicit skips carrying skip_reason (owned_elsewhere | unimplemented) + owner,
+    # so coverage reporting is honest, not silently partial.
+    _record_unimplemented_artifact_types(report, owned_elsewhere)
 
     # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
     # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
@@ -1982,13 +2211,22 @@ def generate_observability_artifacts(
     # Closure 3B: project-level capability index runs last so its inventory
     # reflects every artifact produced this run (triplet + extended + dashboard
     # JSON + portal).
-    if "capability_index" in declared:
+    if "capability_index" in declared and "capability_index" not in owned_elsewhere:
         try:
             report.artifacts.append(
                 generate_capability_index(services, business, report)
             )
         except Exception:
             logger.exception("capability_index generation failed")
+
+    # REQ-OAT-023 (keystone): stamp taxonomy axes on every artifact built OUTSIDE
+    # _generate_one (rendered Grafana JSON, portal, capability_index) in one place,
+    # so category/orientation/declared_type/runtime_type are universal. Idempotent;
+    # records already stamped (status="generated"/"error" via _generate_one) are
+    # left as-is. Skip records get route_state in _record_unimplemented (below).
+    for _a in report.artifacts:
+        if not _a.category:
+            _stamp_taxonomy(_a)
 
     # Run-007 Finding 1: score the extended types + Grafana JSON against their
     # declared contracts so every generated artifact is scored, not just the triplet.
@@ -2024,6 +2262,44 @@ def _declared_artifact_types(metadata: Dict[str, Any]) -> List[str]:
     return []
 
 
+def _owned_elsewhere_types(metadata: Dict[str, Any]) -> Dict[str, str]:
+    """Declared artifact types ceded to another component (REQ-OAT-011/052).
+
+    Read from explicit onboarding metadata, NOT guessed (REQ-OAT-024): when
+    ``artifact_types`` is a dict whose entry carries an ``owner`` (or a
+    ``route_state`` of ``contextcore_owned``), that type is owned elsewhere and is
+    excluded from the ``artifact_type_coverage`` denominator so a correct cede does
+    not read as <1.0 coverage (REQ-OAT-052 R4-F2). Returns ``{declared_type: owner}``.
+    """
+    decl = metadata.get("artifact_types")
+    owners: Dict[str, str] = {}
+    if isinstance(decl, dict):
+        for t, v in decl.items():
+            if not isinstance(v, dict):
+                continue
+            owner = v.get("owner")
+            if owner:
+                owners[str(t)] = str(owner)
+            elif v.get("route_state") == RouteState.CONTEXTCORE_OWNED.value:
+                owners[str(t)] = "contextcore"
+    return owners
+
+
+def _coverage_by_category(counted: Set[str]) -> Dict[str, float]:
+    """Per-category artifact-type coverage (REQ-OAT-052), over the post-cede
+    denominator. Each declared type is bucketed by its registry taxonomy category;
+    coverage is the produced fraction within the category."""
+    by_cat: Dict[str, List[bool]] = {}
+    for atype in counted:
+        spec = _ARTIFACT_TYPE_REGISTRY.get(atype)
+        cat = spec.category if spec else "uncategorized"
+        by_cat.setdefault(cat, []).append(atype in _IMPLEMENTED_ARTIFACT_TYPES)
+    return {
+        cat: round(sum(flags) / len(flags), 4)
+        for cat, flags in sorted(by_cat.items())
+    }
+
+
 def _score_extended_artifacts(
     report: GenerationReport,
     contracts: Dict[str, Any],
@@ -2053,31 +2329,52 @@ def _score_extended_artifacts(
         a.quality = validate_extended_artifact(a.content, contract).to_quality()
 
 
-def _record_unimplemented_artifact_types(report: GenerationReport) -> None:
-    """Emit explicit skipped entries for declared-but-unimplemented types (Closure 3A / Gap 2).
+def _record_unimplemented_artifact_types(
+    report: GenerationReport,
+    owned_elsewhere: Optional[Dict[str, str]] = None,
+) -> None:
+    """Emit explicit skip records for declared-but-unproduced types (Closure 3A / Gap 2 + REQ-OAT-052).
 
-    The onboarding contract may declare more artifact types than this triplet
-    generator produces. Rather than silently covering a subset (a
-    "looks-like-success" failure where artifacts_skipped reads 0), record each
-    unimplemented declared type as a skipped artifact so the manifest honestly
-    reports the shortfall.
+    The onboarding contract may declare more artifact types than this SDK
+    produces. Rather than silently covering a subset (a "looks-like-success"
+    failure where artifacts_skipped reads 0), record each unproduced declared type
+    as a skip carrying a typed ``skip_reason`` + ``owner`` + ``route_state``:
+    - ``owned_elsewhere`` (REQ-OAT-011/052): ceded to another component — excluded
+      from the coverage denominator;
+    - ``unimplemented`` (Gap 2): declared but no generator yet.
+    Skip records carry NO ``source_checksum`` (no input slice; REQ-OAT-052), and
+    are stamped with taxonomy axes from the registry where known (REQ-OAT-023).
     """
+    owned_elsewhere = owned_elsewhere or {}
     project_id = report.project_id or "project"
     for atype in report.declared_artifact_types:
-        if atype in _IMPLEMENTED_ARTIFACT_TYPES:
-            continue
-        report.artifacts.append(
-            ArtifactResult(
+        if atype in owned_elsewhere:
+            owner = owned_elsewhere[atype]
+            report.artifacts.append(_stamp_taxonomy(ArtifactResult(
                 artifact_type=atype,
                 service_id=project_id,
-                output_path=f"(not generated: {atype})",
+                output_path=f"(owned by {owner}: {atype})",
                 status="skipped",
-                error_message=(
-                    "declared in onboarding artifact_types but not implemented "
-                    "by the observability triplet generator"
-                ),
-            )
-        )
+                error_message=f"declared but owned by {owner}; produced elsewhere",
+                skip_reason="owned_elsewhere",
+                owner=owner,
+                route_state=RouteState.CONTEXTCORE_OWNED.value,
+            )))
+            continue
+        if atype in _IMPLEMENTED_ARTIFACT_TYPES:
+            continue
+        report.artifacts.append(_stamp_taxonomy(ArtifactResult(
+            artifact_type=atype,
+            service_id=project_id,
+            output_path=f"(not generated: {atype})",
+            status="skipped",
+            error_message=(
+                "declared in onboarding artifact_types but not implemented "
+                "by the observability triplet generator"
+            ),
+            skip_reason="unimplemented",
+            route_state=RouteState.DECLARED_UNIMPLEMENTED.value,
+        )))
 
 
 def _log_provision_outcome(result: Any, service_id: str) -> None:
@@ -2237,15 +2534,41 @@ def _write_index(
         "artifacts_errored": errored,
     }
 
-    # Closure 3A / Gap 2: honest artifact-type coverage against the declared contract.
+    # REQ-OAT-052: honest, route-aware artifact-type coverage. Types ceded to
+    # another component (skip_reason=owned_elsewhere) are EXCLUDED from the declared
+    # denominator so a correct cede does not read as a false <1.0 FAIL (R4-F2).
     if report.declared_artifact_types:
         declared = set(report.declared_artifact_types)
-        implemented = declared & _IMPLEMENTED_ARTIFACT_TYPES
-        unimplemented = sorted(declared - _IMPLEMENTED_ARTIFACT_TYPES)
+        owned = {a.artifact_type for a in report.artifacts if a.skip_reason == "owned_elsewhere"}
+        counted = declared - owned  # the REQ-OAT-052 denominator
+        implemented = counted & _IMPLEMENTED_ARTIFACT_TYPES
+        unimplemented = sorted(counted - _IMPLEMENTED_ARTIFACT_TYPES)
         summary["declared_artifact_types"] = sorted(declared)
+        summary["owned_elsewhere_artifact_types"] = sorted(owned)
         summary["unimplemented_artifact_types"] = unimplemented
-        summary["artifact_type_coverage"] = round(
-            len(implemented) / len(declared), 4
+        summary["artifact_type_coverage"] = (
+            round(len(implemented) / len(counted), 4) if counted else 1.0
+        )
+        # REQ-OAT-052: coverage reported per category.
+        summary["artifact_type_coverage_by_category"] = _coverage_by_category(counted)
+
+    # REQ-OBS-SHARED-004: surface emit-vs-cede provenance counts + the inferred-vs-declared
+    # gap (REQ-OAT-024), so the report shows who emits / why skipped, not silent.
+    if report.route_states:
+        rs_counts: Dict[str, int] = {}
+        inferred = 0
+        for r in report.route_states:
+            rs_counts[r["route_state"]] = rs_counts.get(r["route_state"], 0) + 1
+            if r.get("classification_source") == "inferred":
+                inferred += 1
+        summary["metric_route_state_counts"] = rs_counts
+        summary["metric_classifications_inferred"] = inferred
+        # REQ-OAT-041: cat-4/5 (project / AI-agent) metrics have no generator yet;
+        # surface the count so the "awaiting a cat-4/5 home" gap is visible, not
+        # silently mixed into service observability.
+        summary["metrics_awaiting_category_home"] = sum(
+            1 for r in report.route_states
+            if r.get("category") in (Category.PROJECT.value, Category.AI_AGENT.value)
         )
 
     index: Dict[str, Any] = {
@@ -2263,10 +2586,19 @@ def _write_index(
                 "service": a.service_id,
                 "path": a.output_path,
                 "status": a.status,
+                # Taxonomy keystone (REQ-OAT-023) + provenance (REQ-OBS-SHARED-004).
+                **({"category": a.category} if a.category else {}),
+                **({"orientation": a.orientation} if a.orientation else {}),
+                **({"declared_type": a.declared_type} if a.declared_type else {}),
+                **({"route_state": a.route_state} if a.route_state else {}),
+                **({"skip_reason": a.skip_reason} if a.skip_reason else {}),
+                **({"owner": a.owner} if a.owner else {}),
                 **({"quality_score": a.quality["score"]} if a.quality else {}),
             }
             for a in report.artifacts
         ],
+        # Per-metric route_state classification (REQ-OBS-SHARED-004 validation surface).
+        "metric_route_states": report.route_states,
         "derivation_rules": list(seen_rules.values()),
     }
 
