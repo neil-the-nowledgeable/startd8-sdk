@@ -1627,6 +1627,12 @@ def generate_observability_artifacts(
         [s for s in services if not s.convention_metrics]
     )
 
+    # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
+    # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
+    # too (side-effect-free; renders via a temp dir) so drift detection stays
+    # consistent — only the disk write below is gated on dry_run.
+    _convert_dashboards_to_grafana_json(report)
+
     # Portal generation — after per-service artifacts (REQ-OBP-103a)
     if portal:
         portal_result = _generate_portal_artifact(
@@ -1653,6 +1659,87 @@ def generate_observability_artifacts(
         )
 
     return report
+
+
+def _convert_dashboards_to_grafana_json(
+    report: GenerationReport,
+) -> None:
+    """Render each dashboard spec to deployable Grafana JSON (Gap 4 / Closure 4A).
+
+    Routes every generated dashboard_spec through DashboardCreatorWorkflow
+    (jsonnet → Grafana JSON) and records a ``dashboard`` artifact at the
+    contracted path ``grafana/dashboards/{service}-dashboard.json`` — the format
+    and location ``onboarding-metadata.json`` artifact_types.dashboard declares.
+    The obs-{service} uid is preserved (enforce_uid=False) so alert/SLO
+    dashboard_url links stay valid. Degrades gracefully: if the jsonnet
+    toolchain/mixin is unavailable, the conversion is recorded as ``skipped``
+    rather than failing the run.
+    """
+    specs = [
+        a
+        for a in report.artifacts
+        if a.artifact_type == "dashboard_spec" and a.status == "generated" and a.content
+    ]
+    if not specs:
+        return
+
+    try:
+        from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
+    except ImportError:
+        logger.warning(
+            "DashboardCreatorWorkflow unavailable; skipping Grafana JSON conversion"
+        )
+        return
+
+    import tempfile
+
+    workflow = DashboardCreatorWorkflow()
+    for art in specs:
+        service_id = art.service_id
+        rel_path = f"grafana/dashboards/{service_id}-dashboard.json"
+        try:
+            spec_dict = yaml.safe_load(art.content)
+        except yaml.YAMLError:
+            logger.warning("Could not parse dashboard spec for %s", service_id)
+            continue
+
+        content = ""
+        status = "skipped"
+        error_message: Optional[str] = None
+        try:
+            with tempfile.TemporaryDirectory() as staging:
+                result = workflow.run(
+                    {"spec": spec_dict, "output_dir": staging, "enforce_uid": False}
+                )
+                if result.success:
+                    uid = spec_dict.get("uid", f"obs-{service_id}")
+                    produced = Path(staging) / f"{uid}.json"
+                    if produced.is_file():
+                        content = produced.read_text()
+                        status = "generated"
+                    else:
+                        error_message = "workflow reported success but no JSON file found"
+                else:
+                    error_message = getattr(result, "error", None) or "conversion failed"
+        except Exception as exc:  # toolchain missing, compile error, etc.
+            logger.exception("Grafana JSON conversion failed for %s", service_id)
+            error_message = f"conversion raised: {exc}"
+
+        if status != "generated":
+            logger.warning(
+                "Grafana JSON conversion skipped for %s: %s", service_id, error_message
+            )
+
+        report.artifacts.append(
+            ArtifactResult(
+                artifact_type="dashboard",
+                service_id=service_id,
+                output_path=rel_path,
+                status=status,
+                content=content,
+                error_message=error_message,
+            )
+        )
 
 
 def _write_artifacts(artifacts: List[ArtifactResult], output_dir: Path) -> None:

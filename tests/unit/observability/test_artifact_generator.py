@@ -910,3 +910,160 @@ class TestDatabasePanels:
         # http_service fixture has no detected_databases
         spec = yaml.safe_load(generate_dashboard_spec(http_service, business).content)
         assert not any(p.get("group") == "Database" for p in spec["panels"])
+
+
+# ---------------------------------------------------------------------------
+# A' / Gap 4: dashboard spec -> deployable Grafana JSON via DashboardCreatorWorkflow
+# ---------------------------------------------------------------------------
+
+
+class _FakeResult:
+    def __init__(self, success, error=None):
+        self.success = success
+        self.error = error
+
+
+class _FakeWorkflow:
+    """Stand-in for DashboardCreatorWorkflow that avoids the jsonnet toolchain."""
+
+    def __init__(self, *, succeed=True, write=True, raises=False):
+        self._succeed = succeed
+        self._write = write
+        self._raises = raises
+        self.last_config = None
+
+    def run(self, config):
+        self.last_config = config
+        if self._raises:
+            raise RuntimeError("toolchain exploded")
+        if self._succeed and self._write:
+            uid = config["spec"]["uid"]
+            out = Path(config["output_dir"])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f"{uid}.json").write_text(json.dumps({"uid": uid, "panels": []}))
+        return _FakeResult(self._succeed, None if self._succeed else "compile failed")
+
+
+def _report_with_dashboard_spec(service_id="strtd8", uid="obs-strtd8"):
+    from startd8.observability.artifact_generator import ArtifactResult, GenerationReport
+
+    report = GenerationReport(project_id="p", generated_at="t")
+    report.artifacts.append(
+        ArtifactResult(
+            artifact_type="dashboard_spec",
+            service_id=service_id,
+            output_path=f"dashboards/{service_id}-dashboard-spec.yaml",
+            status="generated",
+            content=yaml.dump({"title": f"{service_id} Observability", "uid": uid, "panels": []}),
+        )
+    )
+    return report
+
+
+class TestGrafanaJsonConversion:
+    def test_success_emits_dashboard_at_contracted_path(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        fake = _FakeWorkflow()
+        monkeypatch.setattr(wf_mod, "DashboardCreatorWorkflow", lambda: fake)
+
+        report = _report_with_dashboard_spec()
+        _convert_dashboards_to_grafana_json(report)
+
+        dash = [a for a in report.artifacts if a.artifact_type == "dashboard"]
+        assert len(dash) == 1
+        assert dash[0].status == "generated"
+        assert dash[0].output_path == "grafana/dashboards/strtd8-dashboard.json"
+        assert json.loads(dash[0].content)["uid"] == "obs-strtd8"
+
+    def test_uid_convention_preserved_via_enforce_uid_false(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        fake = _FakeWorkflow()
+        monkeypatch.setattr(wf_mod, "DashboardCreatorWorkflow", lambda: fake)
+
+        _convert_dashboards_to_grafana_json(_report_with_dashboard_spec())
+        # The obs-{service} uid must reach the workflow unchanged, with enforcement off.
+        assert fake.last_config["enforce_uid"] is False
+        assert fake.last_config["spec"]["uid"] == "obs-strtd8"
+
+    def test_workflow_failure_degrades_to_skipped(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        monkeypatch.setattr(
+            wf_mod, "DashboardCreatorWorkflow", lambda: _FakeWorkflow(succeed=False)
+        )
+        report = _report_with_dashboard_spec()
+        _convert_dashboards_to_grafana_json(report)
+
+        dash = [a for a in report.artifacts if a.artifact_type == "dashboard"][0]
+        assert dash.status == "skipped"
+        assert "compile failed" in (dash.error_message or "")
+
+    def test_workflow_exception_degrades_to_skipped(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        monkeypatch.setattr(
+            wf_mod, "DashboardCreatorWorkflow", lambda: _FakeWorkflow(raises=True)
+        )
+        report = _report_with_dashboard_spec()
+        _convert_dashboards_to_grafana_json(report)
+
+        dash = [a for a in report.artifacts if a.artifact_type == "dashboard"][0]
+        assert dash.status == "skipped"
+        assert "conversion raised" in (dash.error_message or "")
+
+
+# Toolchain-gated real compile (jsonnet binary + mixin vendor present).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_HAS_TOOLCHAIN = (
+    __import__("shutil").which("jsonnet") is not None
+    and (_REPO_ROOT / "startd8-mixin" / "vendor").exists()
+)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _HAS_TOOLCHAIN, reason="jsonnet + startd8-mixin/vendor required")
+class TestGrafanaJsonE2E:
+    def test_observability_spec_compiles_to_grafana_json(self, tmp_path):
+        meta = {
+            "project_id": "startd8/run-003",
+            "instrumentation_hints": {
+                "strtd8": {
+                    "service_id": "strtd8",
+                    "transport": "http",
+                    "metrics": {
+                        "convention_based": [
+                            {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"},
+                        ],
+                    },
+                },
+            },
+        }
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        out = tmp_path / "observability"
+
+        generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
+
+        gj = out / "grafana" / "dashboards" / "strtd8-dashboard.json"
+        assert gj.is_file(), "contracted Grafana JSON must be written"
+        dash = json.loads(gj.read_text())
+        assert dash["uid"] == "obs-strtd8"  # obs uid convention preserved
+        # threshold panels (the ISSUE_8 crash class) now compile successfully
+        assert any(
+            p.get("fieldConfig", {}).get("defaults", {}).get("thresholds")
+            for p in dash["panels"]
+        )

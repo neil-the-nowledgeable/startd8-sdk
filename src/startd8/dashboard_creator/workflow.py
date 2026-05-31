@@ -247,13 +247,21 @@ class DashboardCreatorWorkflow(WorkflowBase):
         ))
 
         # 3. Enforce UID
-        self._emit_progress(on_progress, 2, 10, "Enforcing UID")
-        try:
-            spec = enforce_uid(spec)
-        except ValidationError as exc:
-            return WorkflowResult.from_error(
-                self.metadata.workflow_id, f"UID enforcement failed: {exc}"
-            )
+        # Callers with their own uid convention (e.g. the observability artifact
+        # generator, which standardizes on obs-{service} and wires that uid into
+        # alert/SLO dashboard_url links) can opt out via enforce_uid=False. A None
+        # uid is still auto-generated so the dashboard always has one.
+        if config.get("enforce_uid", True):
+            self._emit_progress(on_progress, 2, 10, "Enforcing UID")
+            try:
+                spec = enforce_uid(spec)
+            except ValidationError as exc:
+                return WorkflowResult.from_error(
+                    self.metadata.workflow_id, f"UID enforcement failed: {exc}"
+                )
+        elif spec.uid is None:
+            from startd8.dashboard_creator.validation import generate_uid_from_title
+            spec = spec.model_copy(update={"uid": generate_uid_from_title(spec.title)})
 
         logger.info("Dashboard UID: %s", spec.uid)
 
