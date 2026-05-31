@@ -653,6 +653,7 @@ class SessionTracker:
         cost: float = 0.0,
         success: bool = True,
         truncated: bool = False,
+        retried: bool = False,
     ) -> None:
         """
         Record a request in a session.
@@ -665,6 +666,12 @@ class SessionTracker:
             cost: Cost of the request in USD
             success: Whether the request succeeded
             truncated: Whether the response was truncated
+            retried: Whether the request succeeded only after a retry
+
+        The ``status`` label on the requests counter carries the outcome vocabulary
+        (REQ-AAO-009): ``error`` > ``truncated`` > ``retried`` > ``success`` (first
+        match wins), so success/error/truncated/retry rates are queryable directly
+        without reconstructing them from ``failed_requests`` deltas.
         """
         with self._lock:
             if session_id not in self._sessions:
@@ -705,12 +712,22 @@ class SessionTracker:
                 metrics.agent_name, metrics.model, metrics.project_id
             )
 
+            # Outcome vocabulary (REQ-AAO-009), first match wins.
+            if not success:
+                outcome = "error"
+            elif truncated:
+                outcome = "truncated"
+            elif retried:
+                outcome = "retried"
+            else:
+                outcome = "success"
+
             # OpenTelemetry metrics (preferred)
             if self._otel_enabled:
                 if self._otel_requests_counter:
                     self._otel_requests_counter.add(1, {
                         **base_attrs,
-                        "status": "success" if success else "error",
+                        "status": outcome,
                     })
 
                 if self._otel_tokens_counter:
