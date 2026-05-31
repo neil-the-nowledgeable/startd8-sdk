@@ -92,6 +92,33 @@ Two requirement sources govern this work:
 | **Plan: ~10 tests** | **PASS (9)** | `test_kaizen_quality.py::TestDualQualityScoring` — 9 tests. Meets plan estimate. |
 | REQ-KZ mapping | **PARTIAL** | Feeds REQ-KZ-300 (`kaizen-metrics.json`) via `avg_assembly_delta`. The scoring formula itself is new capability. |
 
+#### KZ-FP-1: `ast_valid=False → 0.0` is a false-positive amplifier (2026-05-31, run-007)
+
+**Issue.** `compute_disk_quality_score` returns **0.0** whenever `ast_valid=False`
+(`forward_manifest_validator.py:567-568`) — it short-circuits *before* the weighted formula. This
+is correct when `ast_valid` means "the file genuinely does not parse," but the disk validators set
+`ast_valid=False` for **non-syntax** reasons too: a strict-JSON parse of a JSONC `tsconfig.json`
+(run-007), a substring contamination fingerprint matching valid non-Python code (audit F1), an
+unknown-tag YAML (audit F2). When any of those misfire, an otherwise-perfect file
+(`requirement_score 1.0`) is annihilated to `0.0` and flips to `FAIL:disk_quality`. The binary
+collapse is what turned a cosmetic comment into a hard run failure — the scoring is the *amplifier*,
+the dialect/heuristic check is the *trigger*.
+
+**Requirement.** Two-sided:
+1. **Source side (the real fix):** `ast_valid=False` MUST be reserved for genuine parse/syntax
+   failure. Dialect tolerance (JSONC), anchored fingerprints, and tool-absence handling keep valid
+   code from ever reaching the `0.0` branch — see `MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md`
+   Layer 5 (REQ-MLT-500…505). REQ-MLT-501/502/503/504 are ✅ DONE; 505 is the open backlog.
+2. **Scoring side (defence in depth, OPEN):** consider distinguishing "did not parse" (→ 0.0,
+   justified) from "failed an advisory heuristic / could not be validated" (→ weighted penalty, not
+   annihilation), mirroring the parser-confidence tiering of `MULTILANG_MANIFEST_VALIDATION_REQUIREMENTS.md`
+   FR-5. Until then, the source-side guards are the safeguard.
+
+**Diagnostics.** When the NR-10 disk-quality floor flips `success→False`, the post-mortem now
+derives `root_cause`/`pipeline_stage`/`error_message` from the `disk_compliance` result
+(`prime_postmortem.py`) instead of emitting a blind `unknown / unknown / (none)` — so a disk-quality
+failure is always diagnosable.
+
 ---
 
 ## 3. REQ-KZ Coverage Assessment

@@ -17,6 +17,7 @@ from startd8.forward_manifest import ForwardManifest, InterfaceContract, Forward
 from startd8.logging_config import get_logger
 from startd8.utils.manifest_registry import ManifestRegistry, _flatten_elements
 from startd8.utils.code_manifest import ElementKind
+from startd8.languages._validation_utils import detect_python_contamination
 
 logger = get_logger(__name__)
 
@@ -839,14 +840,14 @@ def _validate_csharp_file(
         result.error = "empty_file"
         return result
 
-    # Python fingerprint guard
-    _py_fingerprints = ("def ", "import os", "from __future__", "self.")
-    for fp in _py_fingerprints:
-        if fp in content:
-            result.ast_valid = False
-            result.contract_compliance = 0.0
-            result.error = f"Python fingerprint in .cs file: {fp!r}"
-            return result
+    # Python fingerprint guard (line-anchored — substring scans false-flag
+    # valid C# like an identifier named `self`/`def` or text in a string).
+    _cs_fp = detect_python_contamination(content, "csharp")
+    if _cs_fp:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"Python fingerprint in .cs file: {_cs_fp!r}"
+        return result
 
     # Try tree-sitter first (REQ-CS-200 Tier 1)
     try:
@@ -1424,7 +1425,29 @@ def _validate_package_json(
 # tsconfig.json, VS Code configs, etc.) and must not be flagged as JSON errors.
 _JSONC_FILENAMES = frozenset({
     "tsconfig.json", "jsconfig.json", "devcontainer.json",
+    # VS Code workspace/user config (all JSONC):
+    "settings.json", "launch.json", "tasks.json", "extensions.json",
+    "argv.json", "keybindings.json",
+    # Tooling configs that allow comments:
+    ".babelrc", ".babelrc.json", ".eslintrc", ".eslintrc.json",
+    ".jshintrc", "tslint.json",
 })
+
+
+def _is_jsonc_filename(name: str) -> bool:
+    """True if *name* is a JSON-with-Comments file by convention.
+
+    Covers the exact allowlist plus ``*.jsonc`` and the ``tsconfig.*.json`` /
+    ``jsconfig.*.json`` variant families (e.g. ``tsconfig.build.json``,
+    ``tsconfig.app.json``) that the bare-name allowlist would miss (audit F3).
+    """
+    n = name.lower()
+    if n in _JSONC_FILENAMES or n.endswith(".jsonc"):
+        return True
+    return (
+        (n.startswith("tsconfig.") or n.startswith("jsconfig."))
+        and n.endswith(".json")
+    )
 
 
 def _strip_jsonc(text: str) -> str:
@@ -1481,8 +1504,7 @@ def _validate_json_file(
     constructs. Plain data ``.json`` files stay strict.
     """
     import json as _json
-    name = filename.lower()
-    is_jsonc = name in _JSONC_FILENAMES or name.endswith(".jsonc")
+    is_jsonc = _is_jsonc_filename(filename)
     try:
         _json.loads(content)
     except _json.JSONDecodeError as exc:
@@ -1517,14 +1539,14 @@ def _validate_java_file(
     3. Package declaration present
     4. No Python fingerprints
     """
-    # Python fingerprint guard
-    _py_fingerprints = ("def ", "import os", "from __future__", "self.", "#!/usr/bin/env python")
-    for fp in _py_fingerprints:
-        if fp in content:
-            result.ast_valid = False
-            result.contract_compliance = 0.0
-            result.error = f"Python fingerprint in .java file: {fp!r}"
-            return result
+    # Python fingerprint guard (line-anchored — substring scans false-flag
+    # valid Java like an identifier named `self`/`def` or text in a string).
+    _java_fp = detect_python_contamination(content, "java")
+    if _java_fp:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"Python fingerprint in .java file: {_java_fp!r}"
+        return result
 
     # Try javalang parse
     try:
@@ -1653,14 +1675,14 @@ def _validate_go_file(
         result.error = "empty_file"
         return result
 
-    # Python fingerprint guard
-    _py_fingerprints = ("def ", "import os", "from __future__", "self.")
-    for fp in _py_fingerprints:
-        if fp in content:
-            result.ast_valid = False
-            result.contract_compliance = 0.0
-            result.error = f"Python fingerprint in .go file: {fp!r}"
-            return result
+    # Python fingerprint guard (line-anchored — substring scans false-flag
+    # valid Go like a struct field `x.self` or text in a string).
+    _go_fp = detect_python_contamination(content, "go")
+    if _go_fp:
+        result.ast_valid = False
+        result.contract_compliance = 0.0
+        result.error = f"Python fingerprint in .go file: {_go_fp!r}"
+        return result
 
     # Package declaration check — a .go file without a package clause cannot
     # compile, so this is a hard error (not a soft quality deduction).

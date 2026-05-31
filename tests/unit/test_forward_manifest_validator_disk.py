@@ -695,6 +695,16 @@ class TestJsonValidation:
         result = validate_disk_compliance(rel, str(tmp_path))
         assert result.ast_valid is False
 
+    def test_tsconfig_variant_files_are_jsonc(self, tmp_path):
+        # tsconfig.*.json variants + VS Code configs are JSONC too (audit F3 —
+        # the original 3-name allowlist missed tsconfig.app.json/settings.json).
+        body = '{\n  // comment\n  "compilerOptions": { "strict": true },\n}\n'
+        for fname in ("tsconfig.app.json", "tsconfig.build.json",
+                      "settings.json", "jsconfig.base.json"):
+            rel = _write_file(tmp_path, fname, body)
+            result = validate_disk_compliance(rel, str(tmp_path))
+            assert result.ast_valid is True, f"{fname} should be treated as JSONC"
+
 
 class TestHtmlPassthrough:
     def test_html_keeps_defaults(self, tmp_path):
