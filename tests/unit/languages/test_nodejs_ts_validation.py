@@ -124,7 +124,7 @@ class TestTypescriptValidationFallback:
 
 
 # ---------------------------------------------------------------------------
-# REQ-NODE-MP-301 — toolchain-absence discrimination + JSX handling
+# REQ-NODE-MP-304 (toolchain-noise discrimination) + REQ-NODE-MP-303 (JSX)
 # ---------------------------------------------------------------------------
 
 class TestToolchainDegradation:

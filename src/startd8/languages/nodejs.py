@@ -43,7 +43,7 @@ class NodeLanguageProfile:
 
     @property
     def syntax_check_command(self) -> Optional[List[str]]:
-        # Intentionally None: ``node --check`` is extension-blind and breaks on
+        # Intentionally None (REQ-NODE-MP-305): ``node --check`` is extension-blind and breaks on
         # ``.tsx``/``.jsx`` (Node >= 23 routes them through the ESM loader and
         # raises ERR_UNKNOWN_FILE_EXTENSION before parsing). Defer ALL Node
         # syntax checking to ``validate_syntax``, which dispatches per file type
@@ -364,13 +364,13 @@ class NodeLanguageProfile:
         Uses ``--isolatedModules --skipLibCheck`` to check syntax without
         needing a project context or node_modules.
 
-        Two robustness guards (REQ-NODE-MP-301):
+        Two robustness guards:
 
-        * **JSX**: when the file is ``.tsx``/``.jsx`` (or the code contains JSX),
-          the temp file gets a ``.tsx`` suffix and ``--jsx preserve`` so ``tsc``
-          parses JSX instead of rejecting it ("Cannot use JSX unless the
-          '--jsx' flag is provided").
-        * **Toolchain absence**: if TypeScript is not actually installed (e.g.
+        * **JSX** (REQ-NODE-MP-303): when the file is ``.tsx``/``.jsx`` (or the
+          code contains JSX), the temp file gets a ``.tsx`` suffix and
+          ``--jsx preserve`` so ``tsc`` parses JSX instead of rejecting it
+          ("Cannot use JSX unless the '--jsx' flag is provided").
+        * **Toolchain absence** (REQ-NODE-MP-304): if TypeScript is not installed (e.g.
           only the ``npx`` shim exists and prints "This is not the tsc command
           you are looking for"), the non-zero exit is *not* a syntax error.
           Real ``tsc`` diagnostics always contain ``error TS####``; output
@@ -694,7 +694,7 @@ _JSX_INDICATORS: tuple[re.Pattern[str], ...] = (
 
 
 def _looks_like_jsx(code: str) -> bool:
-    """Heuristic: code contains JSX markup — REQ-NODE-MP-301."""
+    """Heuristic: code contains JSX markup — REQ-NODE-MP-303."""
     return any(p.search(code) for p in _JSX_INDICATORS)
 
 
