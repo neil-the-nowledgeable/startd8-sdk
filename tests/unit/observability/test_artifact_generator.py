@@ -565,6 +565,30 @@ class TestDriftDetection:
         result = check_drift(meta_path, output, manifest_yaml)
         assert result == 0
 
+    def test_drift_ignores_toolchain_dependent_dashboard(
+        self, tmp_path, onboarding_metadata, manifest_yaml, monkeypatch
+    ):
+        """Drift must not flip when the derived Grafana JSON is absent because the
+        jsonnet toolchain happened to be unavailable on the drift-check run."""
+        import startd8.observability.artifact_generator as gen
+
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(onboarding_metadata))
+        output = tmp_path / "observability"
+
+        # First generation: dashboard JSON produced and recorded in the index.
+        gen.generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+        )
+
+        # Simulate the toolchain being unavailable on the drift-check run.
+        monkeypatch.setattr(
+            gen, "_convert_dashboards_to_grafana_json", lambda *a, **k: None
+        )
+        assert gen.check_drift(meta_path, output, manifest_yaml) == 0
+
     def test_new_service_detected(self, tmp_path, onboarding_metadata, manifest_yaml):
         meta_path = tmp_path / "onboarding-metadata.json"
         meta_path.write_text(json.dumps(onboarding_metadata))

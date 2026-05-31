@@ -259,9 +259,21 @@ class DashboardCreatorWorkflow(WorkflowBase):
                 return WorkflowResult.from_error(
                     self.metadata.workflow_id, f"UID enforcement failed: {exc}"
                 )
-        elif spec.uid is None:
-            from startd8.dashboard_creator.validation import generate_uid_from_title
-            spec = spec.model_copy(update={"uid": generate_uid_from_title(spec.title)})
+        else:
+            # enforce_uid opted out: still backfill a missing uid and cap length
+            # to Grafana's 40-char limit (the only invariant enforce_uid checks
+            # that the caller cannot reasonably waive).
+            from startd8.dashboard_creator.validation import (
+                _UID_MAX_LENGTH,
+                generate_uid_from_title,
+            )
+
+            if spec.uid is None:
+                spec = spec.model_copy(
+                    update={"uid": generate_uid_from_title(spec.title)}
+                )
+            elif len(spec.uid) > _UID_MAX_LENGTH:
+                spec = spec.model_copy(update={"uid": spec.uid[:_UID_MAX_LENGTH]})
 
         logger.info("Dashboard UID: %s", spec.uid)
 

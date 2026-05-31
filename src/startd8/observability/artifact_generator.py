@@ -1578,7 +1578,7 @@ def generate_runbook(
 def generate_capability_index(
     services: List[ServiceHints],
     business: BusinessContext,
-    report: "GenerationReport",
+    report: GenerationReport,
 ) -> ArtifactResult:
     """Generate a project-level observability capability inventory."""
     project_id = business.project_id or report.project_id or "project"
@@ -2367,16 +2367,20 @@ def check_drift(
         dry_run=True,
     )
 
-    # Build keyed sets for comparison
+    # Build keyed sets for comparison. The derived "dashboard" (Grafana JSON) is
+    # excluded: it is a 1:1 render of "dashboard_spec" (already compared) and its
+    # presence depends on the jsonnet toolchain being available, which would
+    # otherwise make drift flip on environment rather than on real change.
+    _DERIVED_TYPES = {"dashboard"}
     existing_keys = {
         (a["type"], a["service"])
         for a in existing_index.get("artifacts", [])
-        if a.get("status") == "generated"
+        if a.get("status") == "generated" and a.get("type") not in _DERIVED_TYPES
     }
     fresh_keys = {
         (a.artifact_type, a.service_id)
         for a in report.artifacts
-        if a.status == "generated"
+        if a.status == "generated" and a.artifact_type not in _DERIVED_TYPES
     }
 
     new_artifacts = fresh_keys - existing_keys
