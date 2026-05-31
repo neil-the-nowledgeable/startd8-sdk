@@ -1168,3 +1168,69 @@ class TestUnimplementedArtifactTypeReporting:
         summary = yaml.safe_load((out / "observability-manifest.yaml").read_text())["summary"]
         assert summary["artifact_type_coverage"] == 1.0
         assert summary["unimplemented_artifact_types"] == []
+
+
+# ---------------------------------------------------------------------------
+# #3: CLI coverage gate wiring (scripts/generate_observability_artifacts.py)
+# ---------------------------------------------------------------------------
+
+
+def _load_cli_module():
+    import importlib.util
+
+    repo = Path(__file__).resolve().parents[3]
+    path = repo / "scripts" / "generate_observability_artifacts.py"
+    spec = importlib.util.spec_from_file_location("gen_obs_cli", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _write_reports(out, *, metric_coverage=None, artifact_type_coverage=None):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "observability-quality.json").write_text(
+        json.dumps({"aggregate": {"avg_metric_coverage_score": metric_coverage}})
+    )
+    (out / "observability-manifest.yaml").write_text(
+        yaml.dump({"summary": {"artifact_type_coverage": artifact_type_coverage}})
+    )
+
+
+class TestCliCoverageGate:
+    def test_no_thresholds_no_gate(self, tmp_path):
+        import types
+
+        mod = _load_cli_module()
+        args = types.SimpleNamespace(
+            min_metric_coverage=None, min_artifact_type_coverage=None, dry_run=False
+        )
+        assert mod._apply_coverage_gate(args, tmp_path) is False
+
+    def test_gate_fails_below_threshold(self, tmp_path):
+        import types
+
+        mod = _load_cli_module()
+        _write_reports(tmp_path, metric_coverage=0.23, artifact_type_coverage=0.375)
+        args = types.SimpleNamespace(
+            min_metric_coverage=0.5, min_artifact_type_coverage=0.5, dry_run=False
+        )
+        assert mod._apply_coverage_gate(args, tmp_path) is True  # FAILED
+
+    def test_gate_passes_at_threshold(self, tmp_path):
+        import types
+
+        mod = _load_cli_module()
+        _write_reports(tmp_path, metric_coverage=0.9, artifact_type_coverage=1.0)
+        args = types.SimpleNamespace(
+            min_metric_coverage=0.8, min_artifact_type_coverage=0.5, dry_run=False
+        )
+        assert mod._apply_coverage_gate(args, tmp_path) is False  # passed
+
+    def test_gate_skipped_in_dry_run(self, tmp_path):
+        import types
+
+        mod = _load_cli_module()
+        args = types.SimpleNamespace(
+            min_metric_coverage=0.9, min_artifact_type_coverage=None, dry_run=True
+        )
+        assert mod._apply_coverage_gate(args, tmp_path) is False

@@ -98,6 +98,26 @@ def main() -> int:
         metavar="URL",
         help="Provision portal to Grafana at URL (e.g. http://localhost:3000)",
     )
+    parser.add_argument(
+        "--min-metric-coverage",
+        type=float,
+        default=None,
+        metavar="FRACTION",
+        help=(
+            "Fail (non-zero exit) when the average semantic metric-coverage "
+            "score is below this fraction (0.0-1.0). Opt-in; unset = no gate."
+        ),
+    )
+    parser.add_argument(
+        "--min-artifact-type-coverage",
+        type=float,
+        default=None,
+        metavar="FRACTION",
+        help=(
+            "Fail (non-zero exit) when artifact-type coverage (declared types "
+            "produced / declared) is below this fraction. Opt-in; unset = no gate."
+        ),
+    )
     args = parser.parse_args()
 
     onboarding = Path(args.onboarding_metadata)
@@ -219,7 +239,62 @@ def main() -> int:
         provenance_path = onboarding.parent / "run-provenance.json"
         _append_to_provenance(provenance_path, output)
 
-    return 1 if errored > 0 else 0
+    # Coverage gate (opt-in): fail the run when semantic coverage is too thin.
+    gate_failed = _apply_coverage_gate(args, output)
+
+    return 1 if (errored > 0 or gate_failed) else 0
+
+
+def _apply_coverage_gate(args, output: Path) -> bool:
+    """Evaluate the opt-in coverage gate; returns True if the gate FAILED.
+
+    Reads the average metric-coverage from observability-quality.json and the
+    artifact-type coverage from observability-manifest.yaml, then checks them
+    against the --min-*-coverage thresholds. No thresholds set → no gate.
+    """
+    if args.min_metric_coverage is None and args.min_artifact_type_coverage is None:
+        return False
+
+    if args.dry_run:
+        print("\n[coverage gate] skipped in --dry-run (no quality report written)")
+        return False
+
+    from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+    metric_coverage = None
+    quality_path = output / "observability-quality.json"
+    if quality_path.is_file():
+        try:
+            quality = json.loads(quality_path.read_text())
+            metric_coverage = quality.get("aggregate", {}).get("avg_metric_coverage_score")
+        except (ValueError, OSError):
+            pass
+
+    artifact_type_coverage = None
+    manifest_path = output / "observability-manifest.yaml"
+    if manifest_path.is_file():
+        try:
+            import yaml
+
+            idx = yaml.safe_load(manifest_path.read_text()) or {}
+            artifact_type_coverage = idx.get("summary", {}).get("artifact_type_coverage")
+        except (ValueError, OSError):
+            pass
+
+    result = evaluate_coverage_gate(
+        metric_coverage=metric_coverage,
+        artifact_type_coverage=artifact_type_coverage,
+        min_metric_coverage=args.min_metric_coverage,
+        min_artifact_type_coverage=args.min_artifact_type_coverage,
+    )
+
+    if result.passed:
+        print("\n[coverage gate] PASS")
+    else:
+        print("\n[coverage gate] FAIL")
+        for failure in result.failures:
+            print(f"  - {failure}")
+    return not result.passed
 
 
 def _write_quality_to_kaizen_metrics(

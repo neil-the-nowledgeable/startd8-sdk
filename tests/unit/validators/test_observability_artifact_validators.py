@@ -857,3 +857,50 @@ class TestCompositeBlend:
 
         blended = compute_service_composite(1.0, 1.0, 1.0, metric_coverage=1.0)
         assert blended == pytest.approx(1.0)
+
+
+class TestCoverageGate:
+    def test_no_thresholds_always_passes(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(metric_coverage=0.1, artifact_type_coverage=0.1)
+        assert result.passed
+        assert result.failures == []
+
+    def test_metric_coverage_below_minimum_fails(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=0.23, min_metric_coverage=0.5
+        )
+        assert not result.passed
+        assert any("metric_coverage" in f for f in result.failures)
+
+    def test_artifact_type_coverage_below_minimum_fails(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            artifact_type_coverage=0.375, min_artifact_type_coverage=0.5
+        )
+        assert not result.passed
+        assert any("artifact_type_coverage" in f for f in result.failures)
+
+    def test_passes_when_at_or_above_minimum(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=0.8,
+            artifact_type_coverage=1.0,
+            min_metric_coverage=0.8,
+            min_artifact_type_coverage=0.5,
+        )
+        assert result.passed
+
+    def test_missing_score_with_threshold_is_a_failure(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=None, min_metric_coverage=0.5
+        )
+        assert not result.passed
+        assert any("unavailable" in f for f in result.failures)

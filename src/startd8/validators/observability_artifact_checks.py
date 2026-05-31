@@ -37,6 +37,8 @@ __all__ = [
     "MetricCoverageResult",
     "compute_metric_coverage",
     "extract_referenced_metrics",
+    "CoverageGateResult",
+    "evaluate_coverage_gate",
     "has_rate_panel",
     "has_error_panel",
     "has_duration_panel",
@@ -740,6 +742,80 @@ def compute_metric_coverage(
         expected=sorted(expected),
         covered=sorted(covered),
         uncovered=sorted(uncovered),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Coverage gate — make the semantic-coverage scores actionable
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CoverageGateResult:
+    """Outcome of evaluating coverage scores against minimum thresholds.
+
+    A gate lets a caller (CLI / pipeline) fail when generated observability is
+    structurally clean but semantically thin — low metric coverage (Gap 3) or a
+    partial artifact-type contract (Gap 2) — instead of passing silently.
+    """
+
+    passed: bool
+    failures: List[str] = field(default_factory=list)
+    metric_coverage: Optional[float] = None
+    artifact_type_coverage: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "failures": self.failures,
+            "metric_coverage": self.metric_coverage,
+            "artifact_type_coverage": self.artifact_type_coverage,
+        }
+
+
+def evaluate_coverage_gate(
+    *,
+    metric_coverage: Optional[float] = None,
+    artifact_type_coverage: Optional[float] = None,
+    min_metric_coverage: Optional[float] = None,
+    min_artifact_type_coverage: Optional[float] = None,
+) -> CoverageGateResult:
+    """Evaluate coverage scores against optional minimum thresholds.
+
+    Only thresholds that are set are enforced; unset thresholds are ignored, so
+    a caller that configures neither always passes (gate is opt-in). When a
+    threshold is set but its score is unavailable, that is a failure — the gate
+    cannot vouch for a number it does not have.
+    """
+    failures: List[str] = []
+
+    if min_metric_coverage is not None:
+        if metric_coverage is None:
+            failures.append(
+                f"metric_coverage unavailable but minimum {min_metric_coverage:.2f} required"
+            )
+        elif metric_coverage < min_metric_coverage:
+            failures.append(
+                f"metric_coverage {metric_coverage:.2f} below minimum {min_metric_coverage:.2f}"
+            )
+
+    if min_artifact_type_coverage is not None:
+        if artifact_type_coverage is None:
+            failures.append(
+                f"artifact_type_coverage unavailable but minimum "
+                f"{min_artifact_type_coverage:.2f} required"
+            )
+        elif artifact_type_coverage < min_artifact_type_coverage:
+            failures.append(
+                f"artifact_type_coverage {artifact_type_coverage:.2f} below minimum "
+                f"{min_artifact_type_coverage:.2f}"
+            )
+
+    return CoverageGateResult(
+        passed=not failures,
+        failures=failures,
+        metric_coverage=metric_coverage,
+        artifact_type_coverage=artifact_type_coverage,
     )
 
 
