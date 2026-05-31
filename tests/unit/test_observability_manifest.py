@@ -212,11 +212,31 @@ class TestCostMetrics:
 
 
 class TestTotalMetricCount:
-    """All 12 metrics present."""
+    """Declared metrics are real — parity, not a brittle magic count (REQ-OBS-SHARED-002)."""
 
-    def test_total_metric_count(self):
+    def test_declared_metrics_are_emitted(self):
+        # Replaces the old `len(metrics) == 12` magic assertion: the meaningful
+        # invariant is that every DECLARED metric has an actual emission site.
+        from startd8.observability.parity import check_metric_bijection
+
         manifest = generate_manifest()
-        assert len(manifest.metrics) == 12
+        assert manifest.metrics, "manifest declares no metrics"
+        result = check_metric_bijection(manifest)
+        assert result.declared_not_emitted == [], (
+            f"declared metrics with no emission site: {result.declared_not_emitted}"
+        )
+
+    def test_no_hard_parity_violations_in_bootstrap(self):
+        # Bootstrap mode: no declared-not-emitted, no un-owned emitted-not-declared,
+        # no un-tolerated exported-name collisions. Known gaps live in the registry.
+        from startd8.observability.parity import run_parity
+
+        result = run_parity()
+        assert result.ok, (
+            f"hard parity violations: emitted_not_declared={result.emitted_not_declared}, "
+            f"collisions={result.exported_name_collisions}, "
+            f"declared_not_emitted={result.declared_not_emitted}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -255,13 +275,21 @@ class TestEventTypes:
 
 
 class TestSpans:
-    """9 span patterns exist (5 base + 4 artisan)."""
+    """Span descriptors are present and correspond to real span sites."""
 
-    def test_all_spans_present(self):
+    def test_spans_present_and_have_sites(self):
+        # Replaces the old `len(spans) == 9` magic assertion: assert spans exist and
+        # each declared name-pattern matches a real span site (or is dynamic).
+        from startd8.observability.parity import check_span_name_patterns
+
         manifest = generate_manifest()
-        assert len(manifest.spans) == 9
+        assert manifest.spans, "manifest declares no spans"
+        missing = check_span_name_patterns(manifest)
+        assert missing == [], f"declared span patterns with no runtime site: {missing}"
 
-    def test_span_patterns(self):
+    def test_known_span_patterns_present(self):
+        # Content check made non-brittle: the known patterns are a SUBSET (additions
+        # are allowed without breaking the test).
         manifest = generate_manifest()
         patterns = {s.name_pattern for s in manifest.spans}
         expected = {
@@ -275,7 +303,7 @@ class TestSpans:
             "PhaseRunner.run",
             "phase.{phase_type}.attempt.{attempt_number}",
         }
-        assert patterns == expected
+        assert expected <= patterns, f"missing expected span patterns: {expected - patterns}"
 
 
 # ---------------------------------------------------------------------------
