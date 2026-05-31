@@ -1,7 +1,7 @@
 # Project Observability — Implementation Plan
 
 **Date:** 2026-05-31
-**Status:** Plan v0.2 (paired with `OBSERVABILITY_PROJECT_REQUIREMENTS.md` v0.3; CRP R1 amendments applied)
+**Status:** Plan v0.3 (paired with `OBSERVABILITY_PROJECT_REQUIREMENTS.md` v0.3; spine R2+R3 propagated into phase tables)
 **Scope:** SDK modules — `observability/manifest.py` + `collector.py`, `otel_conventions.py`,
 `contractors/artisan_phases/runner.py` + `artisan_contractor.py`, `contractors/development.py`,
 `complexity/classifier.py`, doc/comments on `task_tracking_emitter.py` + `integrations/contextcore.py`.
@@ -19,11 +19,11 @@ live progress) is deferred or ContextCore's. Distill first; declare, don't build
 that carries `category`/`orientation` is **shared with the AI-agent doc** — land it once.
 
 ```
-Phase 0  Cleanups / distillation                  C-1, C-2, C-4
-Phase 1  Shared keystone: descriptor schema fields  REQ-PRO-002/005 (= AI-agent REQ-AAO-004; ONE change)
-Phase 2  Declare the project spans                  REQ-PRO-002, 008
-Phase 3  Document the ownership boundary            REQ-PRO-001, 004
-Phase 4  Declare delivery signals + SLIs (authored)  REQ-PRO-003a, 006, 007
+Phase 0  Cleanups / distillation                  C-1(codegen.task.* — before P2), C-2(declare histogram), C-4
+Phase 1  Depend on cat-5 keystone (NOT re-add)     REQ-PRO-002/005; SHARED-005 I1 (dependency edge)
+Phase 2  Declare the project spans                  REQ-PRO-002, 008; SHARED-002 (subset + name-pattern)
+Phase 3  Document the ownership boundary            REQ-PRO-001, 004; SHARED-004 contextcore_owned route
+Phase 4  Declare delivery signals + SLIs (authored)  REQ-PRO-003a, 006, 007 (+ CI sample-validation, R1-S5)
 Phase 5  (deferred) metric-ify; live progress        REQ-PRO-003b (L); progress = ContextCore
 ```
 
@@ -33,23 +33,26 @@ Phase 5  (deferred) metric-ify; live progress        REQ-PRO-003b (L); progress 
 
 | Step | Change | Files | Removes |
 |------|--------|-------|---------|
-| 0.1 | Disambiguate the two "task" concepts — rename codegen `task.*` span attrs to `codegen.task.*` (or keep `task.*` for work-items and namespace the chunk attrs), and document the split | otel_conventions.py, development.py, runner.py | C-1 (REQ-PRO-008) |
-| 0.2 | Remove the **dead** tier histogram in `complexity/classifier.py:23–35` (created, never recorded) — or wire a `record()` if tier-rate is wanted | complexity/classifier.py | C-2 |
-| 0.3 | Reconcile/document the phase-span naming (`artisan.workflow.{id}.phase.{phase}` vs `phase.{type}.attempt.{n}`) | artisan_contractor.py, runner.py | C-4 |
+| 0.1 | Disambiguate the two "task" concepts — **committed scheme** (REQ-PRO-008/R1-F2): work-item keeps `task.*` (ContextCore/SpanState-v2 canonical), codegen chunk attrs rename to **`codegen.task.*`**. **MUST land before Phase 2.1** declares descriptors (reverse-dep `REQ-OBS-SHARED-005` I3 / R2-F6 — otherwise parity encodes the `task.status` polysemy as a passing subset) | otel_conventions.py, development.py, runner.py | C-1 (REQ-PRO-008) |
+| 0.2 | **Declare** (not delete) the **live** `complexity.tier_distribution` histogram — it is recorded at `classifier.py:277` (CAT45 §A-1 corrects the "dead" claim); add it to `_OTEL_DESCRIPTORS` with `category=pipeline_innate`/`orientation=system`. This is the first catch of the parity test, not a removal | complexity/classifier.py | C-2 (now *declare*, not remove) |
+| 0.3 | Reconcile/document the phase-span naming (`artisan.workflow.{id}.phase.{phase}` vs `phase.{type}.attempt.{n}`) — feeds the SHARED-002(d) span **name-pattern** parity check (R3-F4) | artisan_contractor.py, runner.py | C-4 |
 
-**Validation:** suite green; the renamed attrs are emitted under the new names; no consumer of the
-old codegen `task.*` names remains (grep).
+**Validation:** suite green; renamed codegen attrs emitted under `codegen.task.*` with no consumer of
+the old names (grep); the tier histogram appears in `generate_manifest()` output (declared); Phase 0.1
+lands before Phase 2.1.
 
 ---
 
-## Phase 1 — Shared keystone: descriptor schema fields (REQ-PRO-002/005 = AAO-004)
+## Phase 1 — Depend on the cat-5 keystone (NOT a second add) (REQ-PRO-002/005; `REQ-OBS-SHARED-005`)
 
 | Step | Change | Files |
 |------|--------|-------|
-| 1.1 | Add `category` + `orientation` fields to `MetricDescriptor`/`SpanDescriptor` (additive defaults). **This is the same change the AI-agent doc specifies (REQ-AAO-004)** — land it once; both categories consume it | observability/manifest.py |
+| 1.1 | **Dependency edge, not a change** (`REQ-OBS-SHARED-005` I1 / R1-S1): the `category`/`orientation` schema fields, collector pass-through, and parity helper are landed **once** by the cat-5 plan Phase 0.4/1. This plan **rebases on that landing** and adds only its *additive* work (Phase 2–3). It does **not** re-add the fields | — (consumes cat-5 keystone) |
 
-**Cross-doc:** sequence so this is shared with the AI-agent plan's Phase-0.4/1.1, not done twice.
-**Validation:** existing descriptors still construct; `generate_manifest()` includes the new fields.
+**Cross-doc:** cat-5 owns the descriptor manifest most directly and lands the keystone (incl. collector
+pass-through, R3-F1); cat-4 must not duplicate the diff (I1).
+**Validation:** the cat-4 history shows a dependency, not a duplicate schema add (one diff total across
+both plans adds the fields + helper).
 
 ---
 
@@ -59,10 +62,11 @@ old codegen `task.*` names remains (grep).
 |------|--------|-------|
 | 2.1 | Declare the already-emitted `phase.*` and `codegen.task.*` span attributes in `_OTEL_DESCRIPTORS` with `category=project_observability`, `orientation=system` | runner.py, artisan_contractor.py, development.py |
 | 2.2 | Add those modules to `collector.py._INSTRUMENTED_MODULES`. **Do NOT** add `task_tracking_emitter` (it emits no OTel — state-file channel only) | collector.py |
-| 2.3 | Add the descriptor↔emission **parity test** (shared with AI-agent REQ-AAO-012) so declared attrs ⊆ emitted attrs — closing the C-3 drift risk | tests/ |
+| 2.3 | Enroll project spans in the **shared kind-aware parity helper** (`REQ-OBS-SHARED-002`, landed by cat-5) — for spans this is the **subset** relation (declared attrs ⊆ emitted) **plus** the **name-pattern** check (every `SpanDescriptor.name_pattern` matches a runtime span site or is `attributes_dynamic`, R3-F4). Reuses the helper; does not define a new relation. Requires Phase 0.1 (`codegen.task.*`) already landed | tests/ (fixtures only) |
 
-**Validation:** parity test passes (and fails on a deliberately mis-declared attr); project spans
-appear in `generate_manifest()` output with category/orientation.
+**Validation:** the shared parity helper passes on project spans under the subset + name-pattern checks
+(and fails on a mis-declared attr or a `name_pattern` with no runtime site); project spans appear in
+`generate_manifest()` output with category/orientation; fixtures use the renamed `codegen.task.*` attrs.
 
 ---
 
@@ -71,10 +75,12 @@ appear in `generate_manifest()` output with category/orientation.
 | Step | Change | Files |
 |------|--------|-------|
 | 3.1 | Add docstrings/comments stating the boundary: startd8 writes state files + spans + Kaizen JSON; **ContextCore owns** the gauges, **live progress computation**, and burndown dashboards | task_tracking_emitter.py, integrations/contextcore.py |
-| 3.2 | Confirm the generator reports declared `contextcore_*` gauges as **ContextCore-owned honest-skip** (taxonomy REQ-OAT-011), not startd8-emitted | (cross-ref taxonomy generator) |
+| 3.2 | Specify that the generator routes declared `contextcore_*` gauges as **`route_state=contextcore_owned`** (`REQ-OBS-SHARED-004`/R2-F3/R3-F6): skip record carries `skip_reason=owned_elsewhere`, `owner=contextcore`, **no** `source_checksum`, and is **excluded from the `artifact_type_coverage` denominator** (REQ-OAT-052) — a cede is not `coverage<1.0`. Includes stale-metadata handling: classify run-007's still-declared `contextcore_task_*` as `contextcore_owned` on read (R1-F5) | (cross-ref taxonomy generator) |
 
 **Validation:** docs/comments present; no code reaches into ContextCore beyond the optional wrapper;
-no progress-delta emitter is added (REQ-PRO-004 explicitly avoids it).
+no progress-delta emitter is added (REQ-PRO-004); a generator fed the cede yields
+`route_state=contextcore_owned`, `owner=contextcore`, `artifact_type_coverage=1.0`; run-007 metadata
+classifies `contextcore_*` as owned, not mis-attributed.
 
 ---
 
@@ -105,11 +111,15 @@ SLI query forms present; cede documented.
 
 | REQ-PRO | Phase | REQ-PRO | Phase |
 |---------|-------|---------|-------|
-| 001 | 3.1 | 005 | 1.1 |
-| 002 | 1.1 + 2 | 006 | 4.2 |
+| 001 | 3.1, 3.2 | 005 | 1.1 (via cat-5 keystone) |
+| 002 | 1.1 (dep) + 2 | 006 | 4.2 |
 | 003a | 4.1 | 007 | 4.1 |
-| 003b (deferred) | 5 | 008 | 0.1 |
+| 003b (deferred) | 5 | 008 | 0.1 (`codegen.task.*`, before P2) |
 | 004 | 3.1 (document; no emitter) | — | — |
+
+**Shared-spine traceability:** `REQ-OBS-SHARED-001` → cat-5 Phase 0.4 (consumed here Phase 1.1);
+`-002` → Phase 2.3 (subset + name-pattern); `-003` → Phase 2 (layer separation); `-004` → Phase 3.2
+(`contextcore_owned` route); `-005` I1 → Phase 1.1 (dependency), I3 → Phase 0.1 (rename before P2).
 
 ## CRP R1 plan amendments (cat-4/5 combined review)
 

@@ -1,7 +1,7 @@
 # AI Agent Observability — Implementation Plan
 
 **Date:** 2026-05-31
-**Status:** Plan v0.2 (paired with `OBSERVABILITY_AI_AGENT_REQUIREMENTS.md` v0.3; CRP R1 amendments applied)
+**Status:** Plan v0.3 (paired with `OBSERVABILITY_AI_AGENT_REQUIREMENTS.md` v0.3; spine R2+R3 propagated into phase tables)
 **Scope:** SDK modules — `src/startd8/observability/manifest.py`, `src/startd8/session_tracking.py`,
 `src/startd8/costs/otel_metrics.py` + `tracker.py`, `src/startd8/agents/` (label helper, outcome
 labels), `src/startd8/events/otel_bridge.py`. The **category-5 artifact generator** that *consumes*
@@ -19,10 +19,10 @@ routing-aware source of truth** (the keystone); the rest is wiring and small add
 taxonomy pass, expect a **net-negative** line delta in the cleanup phases.
 
 ```
-Phase 0  Cleanups / distillation                 C-1, C-2, C-3, C-6
-Phase 1  Keystone: descriptor schema + parity     REQ-AAO-001/004/012 (+ C-5/C-6)
-Phase 2  Standardize metric names to dotted       REQ-AAO-003 (C-4)
-Phase 3  Close the descriptor→metadata loop        REQ-AAO-008
+Phase 0  Cleanups / distillation                 C-1, C-2, C-3, C-6; SHARED-001(collector,enum-src), 001a
+Phase 1  Keystone: descriptor schema + parity     REQ-AAO-001/004/012; SHARED-001/002/005 (lands once)
+Phase 2  Standardize metric names to dotted       REQ-AAO-003 (C-4); SHARED-002(b) exported-name identity
+Phase 3  Close the descriptor→metadata loop        REQ-AAO-008; SHARED-004 sdk_emitted route
 Phase 4  Fill signal gaps                          REQ-AAO-009 (010/011 reserved)
 Phase 5  Category-5 artifact definitions           REQ-AAO-005/006/007 (generation = taxonomy follow-up)
 ```
@@ -35,26 +35,37 @@ Phase 5  Category-5 artifact definitions           REQ-AAO-005/006/007 (generati
 |------|--------|-------|---------|
 | 0.1 | Document the **distinct semantics** of `startd8.cost.*` (global) vs `startd8_cost_total` (per-session) in both modules' docstrings; add a guard/log warning if the same `correlation_id`'s cost is recorded via both APIs (REQ-AAO-002) | costs/tracker.py, session_tracking.py | C-1 |
 | 0.2 | Extract a shared label helper for `{agent_name, model, project_id}` used by both the agent path and session_tracking | agents/, session_tracking.py | C-2 |
-| 0.3 | Remove (or gate behind explicit opt-in) the **dead Prometheus fallback** `session_tracking.py:438–503` once OTel-only is confirmed | session_tracking.py | C-3 |
-| 0.4 | Add `category` + `orientation` fields to `MetricDescriptor`/`SpanDescriptor` (defaults so existing descriptors still construct) | observability/manifest.py | C-6 (also REQ-AAO-004) |
+| 0.3 | Retire the **deprecated opt-in Prometheus path** — it is *reachable* (gated by `prometheus_port` + `not _otel_enabled`), not dead; removal spans `session_tracking.py:336–337, 438–503` **and** the recording sites `611/810/895` + `_prom_*` attrs (code-verification §A-2). Until retired, the parity test (1.2) **excludes** it via the bijection-exception list (R2-F2) | session_tracking.py | C-3 |
+| 0.4 | Add `category` + `orientation` to `MetricDescriptor`/`SpanDescriptor`, typed from **one code-level enum source** imported by both manifest + taxonomy-registry validation (`REQ-OBS-SHARED-001`/R3-F7); **co-land collector pass-through** in `collect_metric_descriptors()`/`collect_span_descriptors()` so the axes (and existing `prometheus_name`/`dashboard_hints`) survive into the manifest — fields are silently dropped otherwise (R3-F1, **critical**) | observability/manifest.py, collector.py | C-6 (also `REQ-OBS-SHARED-001`) |
+| 0.5 | Rename `EventTypeDescriptor.category` → `event_group` (the 8-value instrument-grouping axis) so `category` means the taxonomy uniformly; `from_dict` accepts legacy `category` as alias for one release, `to_dict` emits only `event_group` (`REQ-OBS-SHARED-001a`/R2-F4) | observability/manifest.py, collector.py:157, tests/unit/test_observability_manifest.py:82 | category polysemy (§C) |
 
-**Validation:** full suite green; for 0.3, confirm no consumer of the Prometheus path (grep); for
-0.1, a unit test that double-recording the same correlation_id triggers the guard.
+**Validation:** full suite green; for 0.3, confirm no consumer of the opt-in Prometheus path (grep) and
+that an OTLP capture still carries `startd8_*` session metrics after removal (R1-S6); for 0.4, a
+`generate_manifest().to_dict()` round-trip fixture proves an annotated descriptor's axes survive
+collector collection (R3-F1); for 0.5, old YAML with `event_types[].category` deserializes via the
+`event_group` alias; for 0.1, a unit test that double-recording the same correlation_id triggers the
+single-WARN guard.
 
 ---
 
-## Phase 1 — Keystone: descriptor schema + parity (REQ-AAO-001/004/012)
+## Phase 1 — Keystone: descriptor schema + parity (REQ-AAO-001/004/012; `REQ-OBS-SHARED-001/002/005`)
 
-Makes the manifest authoritative and routing-aware before anything consumes it.
+Makes the manifest authoritative and routing-aware before anything consumes it. This phase is the
+**keystone that lands once** (`REQ-OBS-SHARED-005` I1); the cat-4 plan depends on it.
 
 | Step | Change | Files |
 |------|--------|-------|
-| 1.1 | Populate `category` + `orientation` on **every** `_OTEL_DESCRIPTORS` entry (cost/session = agent obs; task_* = project obs; per the requirements Appendix A orientation map) | all modules declaring descriptors |
-| 1.2 | Add the **descriptor↔emission parity test** (REQ-AAO-012): assert every declared descriptor maps to an actual `meter.create_*`/span emission and vice-versa — fail on declared-but-not-emitted or emitted-but-not-declared | tests/ + a small introspection helper |
+| 1.1 | Populate `category` + `orientation` on **every** `_OTEL_DESCRIPTORS` entry (cost/session = agent obs; task_* = project obs; per the requirements Appendix A orientation map). After landing, a **completeness gate** reports any descriptor with unset axes **by source file** — empty is a compat bridge, not an end state (R3-F5) | all modules declaring descriptors |
+| 1.2 | Add the **kind-aware descriptor↔emission parity test** (`REQ-OBS-SHARED-002`) as a parent of named sub-checks: **(b) dual-name identity** — match canonical OTel *and* exported `prometheus_name`, reject exported-name collisions (R3-F2); **(c) repo-wide emitter universe** — scan all `meter.create_*` sites (not just `_INSTRUMENTED_MODULES`) against descriptors-or-an-owned-exclusion-registry (R3-F3); **(d) span name-pattern parity** + `attributes_dynamic` semantics (R3-F4); **metrics bijection** with documented **exceptions** (indirect emitters, observable gauges, opt-in Prom path) (R2-F2); spans **subset** with an optional **required-attr allowlist** for gate/contract attrs (R2-F7) | tests/ + a small introspection helper |
 | 1.3 | Add the currently-undocumented signals to descriptors where missing (so the catalog is complete, REQ-AAO-001) | session_tracking.py, agents/tracked.py |
+| 1.4 | Ship 1.2 in **bootstrap mode** — an explicit allowlisted known-gap list (seed: `complexity.tier_distribution`, `element_registry` instruments) the helper reports but does not hard-fail; removing an item requires declaring that descriptor in the same PR; list shrinks to empty → hard-fail (`REQ-OBS-SHARED-005` I4 / R2-F9) | tests/ + CI |
 
-**Validation:** parity test passes (and *fails* on a deliberately mis-declared descriptor); every
-descriptor carries category+orientation; `generate_manifest()` output includes the new fields.
+**Validation:** parity names each failing sub-check (a)–(e); *passes* with the indirection/
+observable-gauge exceptions; *fails* on the tier histogram until declared, on an exported-name
+collision, on a `name_pattern` with no runtime site, and on an allowlisted contract attr declared-but-
+absent; every descriptor carries category+orientation and they survive `generate_manifest().to_dict()`
+(collector pass-through from 0.4); the bootstrap allowlist is documented and shrinks via descriptor
+declarations.
 
 ---
 
@@ -73,12 +84,14 @@ metric names byte-for-byte (so Grafana/Prom consumers are unaffected); descripto
 
 | Step | Change | Files |
 |------|--------|-------|
-| 3.1 | Wire `generate_manifest()` output to populate onboarding-metadata `manifest_declared` (each entry carrying name/type/unit/labels/**category**/**orientation**) — the SDK becomes its own "declare, don't guess" producer | observability/manifest.py + a small bridge |
+| 3.1 | Wire `generate_manifest()` output to populate onboarding-metadata `manifest_declared` (each entry carrying name/type/unit/labels/**category**/**orientation**) — the SDK becomes its own "declare, don't guess" producer. Each entry is `route_state=sdk_emitted` by virtue of having a `meter.create_*` site, so the (future) generator routes it as **produced** without inference (`REQ-OBS-SHARED-004`/R3-F6) | observability/manifest.py + a small bridge |
 
 **Validation:** a generated onboarding metadata's `manifest_declared` for the SDK's own metrics is
-produced from the manifest (not hand-authored), carries category+orientation, and matches the
-descriptor catalog. **Cross-doc:** this satisfies taxonomy REQ-OAT-024 for SDK-emitted metrics
-without the REQ-OAT-025 exporter change (reconcile into the taxonomy doc post-CRP).
+produced from the manifest (not hand-authored, proven by mutating a descriptor → the entry changes,
+R1-S5), carries category+orientation, and matches the descriptor catalog. **Cross-doc:** this satisfies
+taxonomy REQ-OAT-024 for SDK-emitted metrics without the REQ-OAT-025 exporter change (`REQ-OBS-SHARED-004`
+`sdk_emitted` route); the generator's other three `route_state`s (`contextcore_owned`,
+`declared_unimplemented`, `external_convention`) are generator-side (REQ-OAT-041), cross-referenced.
 
 ---
 
@@ -121,7 +134,12 @@ template metadata; the **generation** of dashboards/alerts/SLOs is the taxonomy 
 | 003 | 2 | 009 | 4.1 |
 | 004 | 0.4 + 1.1 | 010 (reserved) | 4.2 |
 | 005 | 5.3 | 011 (reserved) | 4.3 |
-| 006 | 5.1 | 012 (parity) | 1.2 |
+| 006 | 5.1 | 012 (parity) | 1.2, 1.4 |
+
+**Shared-spine traceability:** `REQ-OBS-SHARED-001` (schema + collector pass-through + enum source) →
+Phase 0.4; `-001a` (event_group rename) → Phase 0.5; `-002` (kind-aware parity sub-checks) → Phase
+1.2; `-002(b)` (exported-name identity) → Phase 2; `-004` (`sdk_emitted` route) → Phase 3.1; `-005`
+I1/I2 (one-diff keystone + collector co-land) → Phase 0.4–1, I4 (bootstrap allowlist) → Phase 1.4.
 
 ## CRP R1 plan amendments (cat-4/5 combined review)
 
