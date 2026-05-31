@@ -165,12 +165,23 @@ class TestNodeProfile:
         assert p.supports_extension(".mjs")
         assert p.supports_extension(".cjs")
 
-    def test_syntax_uses_node_check(self):
+    def test_syntax_command_is_none_defers_to_validate_syntax(self):
+        # REQ-NODE-MP-301: ``node --check`` is extension-blind and breaks on
+        # ``.tsx``/``.jsx`` (Node >= 23). The profile intentionally returns None
+        # so consumers fall back to the extension-aware ``validate_syntax``.
         p = NodeLanguageProfile()
-        cmd = p.syntax_check_command
-        assert cmd is not None
-        assert "node" in cmd[0]
-        assert "--check" in cmd
+        assert p.syntax_check_command is None
+
+    def test_validate_syntax_accepts_valid_tsx(self):
+        # REQ-NODE-MP-301: valid JSX/TSX must not be rejected as a syntax error.
+        p = NodeLanguageProfile()
+        tsx = (
+            "export default function L(): JSX.Element {\n"
+            "  return (<div><span>hi</span></div>)\n"
+            "}\n"
+        )
+        ok, _ = p.validate_syntax(tsx, filename_hint="layout.tsx")
+        assert ok is True
 
 
 @pytest.mark.unit

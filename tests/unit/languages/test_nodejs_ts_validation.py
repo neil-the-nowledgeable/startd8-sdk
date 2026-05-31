@@ -121,3 +121,61 @@ class TestTypescriptValidationFallback:
             "function add(a, b) { return a + b; }"
         )
         assert valid is True
+
+
+# ---------------------------------------------------------------------------
+# REQ-NODE-MP-301 — toolchain-absence discrimination + JSX handling
+# ---------------------------------------------------------------------------
+
+class TestToolchainDegradation:
+    """A non-zero tsc exit is only a failure if it carries a real diagnostic."""
+
+    def test_npx_install_noise_is_not_a_syntax_error(self, profile):
+        """`npx tsc` without typescript installed prints an install prompt and
+        exits non-zero; that must degrade to a best-effort PASS, not a
+        false failure that triggers a spurious escalation."""
+        from unittest.mock import MagicMock
+        noise = "This is not the tsc command you are looking for"
+        with patch("shutil.which", side_effect=lambda t: "/usr/bin/npx" if t == "npx" else None):
+            with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout=noise, stderr="")):
+                valid, err = profile._validate_typescript("const x: number = 5;")
+        assert valid is True
+        assert err == ""
+
+    def test_real_tsc_diagnostic_is_a_failure(self, profile):
+        """Output containing `error TS####` is a genuine syntax error."""
+        from unittest.mock import MagicMock
+        diag = "tmp.ts(1,5): error TS1005: ';' expected."
+        with patch("shutil.which", side_effect=lambda t: "/usr/bin/tsc" if t == "tsc" else None):
+            with patch("subprocess.run", return_value=MagicMock(returncode=2, stdout=diag, stderr="")):
+                valid, err = profile._validate_typescript("const x: = 5;")
+        assert valid is False
+        assert "error TS1005" in err
+
+
+class TestJsxHandling:
+    """JSX/TSX files must validate with a .tsx temp + --jsx (latent CI bug)."""
+
+    def test_looks_like_jsx(self):
+        from startd8.languages.nodejs import _looks_like_jsx
+        assert _looks_like_jsx("return (<div><span>hi</span></div>)")
+        assert _looks_like_jsx("const x = <Foo />")
+        assert not _looks_like_jsx("const x: number = a < b ? 1 : 2")
+
+    def test_tsx_temp_suffix_and_jsx_flag(self, profile):
+        """A .tsx file is written to a .tsx temp and tsc gets --jsx preserve."""
+        from unittest.mock import MagicMock
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("shutil.which", side_effect=lambda t: "/usr/bin/tsc" if t == "tsc" else None):
+            with patch("subprocess.run", side_effect=fake_run):
+                valid, _ = profile._validate_typescript(
+                    "export default () => (<div/>)", filename_hint="app/layout.tsx",
+                )
+        assert valid is True
+        assert "--jsx" in captured["cmd"]
+        assert captured["cmd"][-1].endswith(".tsx")

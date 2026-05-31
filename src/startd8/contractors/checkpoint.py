@@ -256,6 +256,24 @@ class IntegrationCheckpoint:
         # Default: Python
         return ["python3", "-m", "py_compile", str(file_path)]
 
+    def _call_validate_syntax(self, code: str, filename: str) -> tuple[bool, str]:
+        """Invoke the profile's ``validate_syntax``, passing ``filename_hint``
+        when the profile accepts it (nodejs/vue), else falling back to the
+        protocol's ``(code)`` signature. The extension carried by *filename* is
+        the ground-truth signal for JS-vs-TS-vs-JSX dispatch.
+        """
+        profile = self._language_profile
+        if profile is None:
+            return True, ""
+        try:
+            import inspect
+            params = inspect.signature(profile.validate_syntax).parameters
+            if "filename_hint" in params:
+                return profile.validate_syntax(code, filename_hint=filename)
+        except (TypeError, ValueError):
+            pass
+        return profile.validate_syntax(code)
+
     def _get_lint_command(self, file_path: Path) -> Optional[List[str]]:
         """Return lint command for a file, using language profile if available."""
         if self._language_profile is not None:
@@ -298,7 +316,7 @@ class IntegrationCheckpoint:
                         errors.append(f"{file_path.name}: could not read ({exc})")
                         continue
                     checked += 1
-                    ok, err_msg = self._language_profile.validate_syntax(code)
+                    ok, err_msg = self._call_validate_syntax(code, file_path.name)
                     if not ok:
                         errors.append(f"{file_path.name}: {err_msg}")
                 continue

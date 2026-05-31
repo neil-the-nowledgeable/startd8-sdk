@@ -43,7 +43,13 @@ class NodeLanguageProfile:
 
     @property
     def syntax_check_command(self) -> Optional[List[str]]:
-        return ["node", "--check", "{file}"]
+        # Intentionally None: ``node --check`` is extension-blind and breaks on
+        # ``.tsx``/``.jsx`` (Node >= 23 routes them through the ESM loader and
+        # raises ERR_UNKNOWN_FILE_EXTENSION before parsing). Defer ALL Node
+        # syntax checking to ``validate_syntax``, which dispatches per file type
+        # (node --check for JS, tsc for TS/TSX). Consumers that fall back to
+        # ``validate_syntax`` when this is None therefore get correct behavior.
+        return None
 
     @property
     def lint_command(self) -> Optional[List[str]]:
@@ -316,7 +322,7 @@ class NodeLanguageProfile:
             or _looks_like_typescript(code)
         )
         if is_ts:
-            return self._validate_typescript(code)
+            return self._validate_typescript(code, filename_hint=filename_hint)
         return self._validate_javascript(code)
 
     def _validate_javascript(self, code: str) -> tuple[bool, str]:
@@ -350,30 +356,54 @@ class NodeLanguageProfile:
                 except OSError:
                     pass
 
-    def _validate_typescript(self, code: str) -> tuple[bool, str]:
+    def _validate_typescript(
+        self, code: str, *, filename_hint: str = "",
+    ) -> tuple[bool, str]:
         """Validate TypeScript syntax via ``tsc --noEmit`` — REQ-NODE-MP-300.
 
         Uses ``--isolatedModules --skipLibCheck`` to check syntax without
         needing a project context or node_modules.
+
+        Two robustness guards (REQ-NODE-MP-301):
+
+        * **JSX**: when the file is ``.tsx``/``.jsx`` (or the code contains JSX),
+          the temp file gets a ``.tsx`` suffix and ``--jsx preserve`` so ``tsc``
+          parses JSX instead of rejecting it ("Cannot use JSX unless the
+          '--jsx' flag is provided").
+        * **Toolchain absence**: if TypeScript is not actually installed (e.g.
+          only the ``npx`` shim exists and prints "This is not the tsc command
+          you are looking for"), the non-zero exit is *not* a syntax error.
+          Real ``tsc`` diagnostics always contain ``error TS####``; output
+          lacking that signature is treated as a best-effort PASS rather than a
+          false failure that would trigger a spurious escalation.
         """
         import shutil
         import subprocess
         import tempfile
 
+        is_jsx = filename_hint.endswith((".tsx", ".jsx")) or _looks_like_jsx(code)
+        suffix = ".tsx" if is_jsx else ".ts"
+
         tmp = None
         try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".ts", mode="w", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=suffix, mode="w", delete=False)
             tmp.write(code)
             tmp.flush()
             tmp.close()
 
+            base = ["--noEmit", "--isolatedModules", "--skipLibCheck"]
+            if is_jsx:
+                base += ["--jsx", "preserve"]
+
             tsc = shutil.which("tsc")
             if tsc:
-                cmd = [tsc, "--noEmit", "--isolatedModules", "--skipLibCheck", tmp.name]
+                cmd = [tsc, *base, tmp.name]
             else:
                 npx = shutil.which("npx")
                 if npx:
-                    cmd = [npx, "tsc", "--noEmit", "--isolatedModules", "--skipLibCheck", tmp.name]
+                    # --no-install: fail fast instead of attempting a network
+                    # download when typescript is absent.
+                    cmd = [npx, "--no-install", "tsc", *base, tmp.name]
                 else:
                     return True, ""  # tsc not available — best-effort pass
 
@@ -382,7 +412,12 @@ class NodeLanguageProfile:
             )
             if result.returncode == 0:
                 return True, ""
-            return False, result.stdout.strip() or result.stderr.strip()
+            output = (result.stdout.strip() or result.stderr.strip())
+            if not _is_real_tsc_diagnostic(output):
+                # Toolchain noise (tsc/typescript not installed), not a syntax
+                # error — degrade gracefully so callers don't mis-escalate.
+                return True, ""
+            return False, output
         except FileNotFoundError:
             return True, ""  # tsc not installed — best-effort
         except subprocess.TimeoutExpired:
@@ -636,6 +671,31 @@ _TS_INDICATORS: tuple[re.Pattern[str], ...] = tuple(
 def _looks_like_typescript(code: str) -> bool:
     """Heuristic: code contains TypeScript-specific syntax — REQ-NODE-MP-300."""
     return any(p.search(code) for p in _TS_INDICATORS)
+
+
+# A real ``tsc`` diagnostic always carries an ``error TS####`` code. Any non-zero
+# exit whose output lacks this signature is toolchain noise (typescript not
+# installed, npx install prompt, etc.) rather than a genuine syntax error.
+_TSC_DIAGNOSTIC = re.compile(r"error TS\d+", re.IGNORECASE)
+
+
+def _is_real_tsc_diagnostic(output: str) -> bool:
+    """True if *output* contains a genuine TypeScript compiler diagnostic."""
+    return bool(_TSC_DIAGNOSTIC.search(output))
+
+
+# JSX detection: a tag-open immediately followed by an identifier/fragment, or a
+# self-closing tag. Deliberately conservative to avoid matching TS generics.
+_JSX_INDICATORS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"<\s*[A-Za-z][\w.]*[^>]*>.*</\s*[A-Za-z][\w.]*\s*>", re.DOTALL),
+    re.compile(r"<\s*[A-Za-z][\w.]*[^>]*/\s*>"),  # self-closing
+    re.compile(r"<>\s*.*</>", re.DOTALL),          # fragment
+)
+
+
+def _looks_like_jsx(code: str) -> bool:
+    """Heuristic: code contains JSX markup — REQ-NODE-MP-301."""
+    return any(p.search(code) for p in _JSX_INDICATORS)
 
 
 def detect_module_system(project_root: Path) -> str:
