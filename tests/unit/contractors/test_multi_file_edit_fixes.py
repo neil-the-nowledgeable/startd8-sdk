@@ -112,10 +112,14 @@ class TestIntegrationMultiFileDirective:
         assert directive == ""
 
     def test_integration_prompt_has_multi_file_directive(self):
-        """The YAML template includes the {multi_file_directive} placeholder."""
-        from startd8.workflows.builtin.prompts import get_template
+        """The integration template includes the {multi_file_directive} placeholder.
 
-        template = get_template("lead_contractor", "integration")
+        Templates were consolidated into implementation_engine/prompts/contractor_prompts.yaml;
+        the old workflows/builtin/prompts/lead_contractor.yaml is now a deprecated stub.
+        """
+        from startd8.implementation_engine.prompts import get_template
+
+        template = get_template("integration")
         assert "{multi_file_directive}" in template
 
 
