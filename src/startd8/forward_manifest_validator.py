@@ -687,6 +687,63 @@ def _detect_language_mismatch(content: str, file_path: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Non-Python stub counting (Criterion 4 parity). Restored after a branch merge
+# dropped the original b886cdf2/e585e16b additions — the non-Python disk
+# validators must populate ``stubs_remaining`` (else postmortem scoring defaults
+# to 1.0 for non-Python files regardless of stub content).
+# ---------------------------------------------------------------------------
+
+#: Extension → compiled stub patterns, loaded lazily from LanguageRegistry profiles.
+_STUB_PATTERNS_CACHE: dict[str, list[re.Pattern[str]]] = {}
+
+_STUB_EXT_TO_LANG: dict[str, str] = {
+    ".java": "java", ".go": "go", ".cs": "csharp",
+    ".js": "nodejs", ".mjs": "nodejs", ".cjs": "nodejs",
+}
+
+
+def _get_stub_patterns(suffix: str) -> list[re.Pattern[str]]:
+    """Return compiled stub patterns for a file extension, cached."""
+    if suffix in _STUB_PATTERNS_CACHE:
+        return _STUB_PATTERNS_CACHE[suffix]
+    patterns: list[re.Pattern[str]] = []
+    lang_id = _STUB_EXT_TO_LANG.get(suffix)
+    if lang_id:
+        try:
+            from startd8.languages.registry import LanguageRegistry
+            LanguageRegistry.discover()
+            profile = LanguageRegistry.get(lang_id)
+            if profile:
+                for pat_str in profile.stub_patterns:
+                    try:
+                        patterns.append(re.compile(pat_str))
+                    except re.error:
+                        pass
+        except (ImportError, AttributeError):
+            pass
+    _STUB_PATTERNS_CACHE[suffix] = patterns
+    return patterns
+
+
+def _count_stubs_text(content: str, suffix: str) -> int:
+    """Count stub markers in non-Python source via language-specific patterns.
+
+    Uses the ``stub_patterns`` property from the language profile resolved by file
+    extension. Returns 0 when no patterns are available.
+    """
+    patterns = _get_stub_patterns(suffix)
+    if not patterns:
+        return 0
+    count = 0
+    for line in content.splitlines():
+        for pat in patterns:
+            if pat.search(line):
+                count += 1
+                break  # one match per line is enough
+    return count
+
+
 def _validate_non_python_file(
     abs_path: Path,
     result: DiskComplianceResult,
@@ -877,6 +934,10 @@ def _validate_csharp_file(
 
     # Text fallback passes — cap at 0.8 (no tree-sitter confirmation)
     result.contract_compliance = min(result.contract_compliance, 0.8)
+
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".cs")
+
     return result
 
 
@@ -1287,6 +1348,9 @@ def _validate_js_file(
     except ImportError:
         pass
 
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".js")
+
     return result
 
 
@@ -1446,6 +1510,9 @@ def _validate_java_file(
     except ImportError:
         pass  # java_semantic_checks not available
 
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".java")
+
     return result
 
 
@@ -1557,6 +1624,9 @@ def _validate_go_file(
             })
     except ImportError:
         pass
+
+    # Stub counting (Criterion 4 — postmortem scoring parity)
+    result.stubs_remaining = _count_stubs_text(content, ".go")
 
     return result
 
