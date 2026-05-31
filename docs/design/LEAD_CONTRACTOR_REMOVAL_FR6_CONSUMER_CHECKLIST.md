@@ -3,17 +3,27 @@
 **Version:** 1.0
 **Date:** 2026-05-30
 **Companion:** `LEAD_CONTRACTOR_REMOVAL_REQUIREMENTS.md` (v0.4), `LEAD_CONTRACTOR_REMOVAL_AUDIT.md` (v1.1)
-**Status:** Phase 4 IN PROGRESS — OQ-6 done; SDK import-alias bridge landed; **ContextCore +
-wayfinder migrated**. 7 smaller/demo consumers remain (bridge keeps them green).
+**Status:** Phase 4 CONSUMER MIGRATION COMPLETE — OQ-6 done; SDK import-alias bridge landed; all
+code consumers migrated to canonical `Primary*` (Phase-5 safe). Ready for Phase 5 once the
+requirements re-decision (§3) is folded in.
 
-**Progress (2026-05-30):**
-- ✅ SDK transient import-alias bridge committed (`feat/lead-contractor-removal` `d255566b`) — 4 module
-  shims at old paths + `test_lead_contractor_compat_bridge`. All un-migrated consumers stay green.
-- ✅ **ContextCore** migrated (branch `jetson-py310` `9eb336b`) — 5 runner scripts → canonical Primary;
-  no `lead*` SDK dependency remains (Phase-5 safe). WIP left untouched.
-- ✅ **wayfinder** migrated (branch `lead-to-primary-migration` `a767b93`) — same 5 scripts; Phase-5 safe.
-- ⏳ Remaining: `011yBubo`, `contextcore-viewer`, `contextcore-demo-retail`, `wayfinder-demo-retail`,
-  `Gabba-Gallery-migration`, `contextcore-dot-me`, `contextcore-beaver`.
+**Progress (2026-05-30) — all code consumers migrated:**
+- ✅ SDK transient import-alias bridge (`feat/lead-contractor-removal` `d255566b`) — 4 module shims +
+  `test_lead_contractor_compat_bridge`.
+- ✅ **ContextCore** — `jetson-py310` `9eb336b` (5 runner scripts). WIP untouched.
+- ✅ **wayfinder** — branch `lead-to-primary-migration` `a767b93` (same 5 scripts).
+- ✅ **011yBubo** — `lead-to-primary-migration` `9c918ab` (`run_code_review_fixes.py`).
+- ✅ **contextcore-demo-retail** — `lead-to-primary-migration` `3458139` (`personas/run_prime_contractor.py`).
+- ✅ **wayfinder-demo-retail** — `lead-to-primary-migration` `5b784db` (`demo/run_self_tracking_demo.py`).
+- ✅ **Gabba-Gallery-migration** — submodule `gabba-stockpile` branch `lead-to-primary-migration` `9b8fbc8`
+  (`scripts/startd8/phase5_polish.py`). Parent repo still references the old submodule SHA — bump the
+  submodule pointer when merging.
+- ✅ **contextcore-dot-me** — 2 demo files migrated + verified, **but the dir is NOT a git repo**, so the
+  edits are applied/uncommitted. Put it under VCS or accept the working-copy edit.
+- ➖ **contextcore-viewer**, **contextcore-beaver** — NOT code consumers; lead appears only in `.md`
+  docs (markdown code-blocks). No code migration needed; optional doc cleanup.
+
+Every migrated file compiles and carries **no `lead*` SDK dependency** (verified) → safe through Phase 5.
 
 > **⚠ Headline finding — the FR-6 premise is invalidated.** The requirements (FR-6, OQ-3,
 > NFR-3) assume **"ContextCore and wayfinder (the only consumers — maintainer-controlled)."**
@@ -94,13 +104,13 @@ lives (Phase 3 → removed in Phase 5), but should be done so consumers are clea
 
 - [x] ContextCore — 3 symbols + 8 module-path files + id strings
 - [x] wayfinder — 2 symbols + 7 module-path files + id strings
-- [ ] 011yBubo — 2 symbols + 1 module-path file
-- [ ] contextcore-viewer — 2 symbols
-- [ ] contextcore-demo-retail — 2 symbols
-- [ ] wayfinder-demo-retail — 1 symbol
-- [ ] Gabba-Gallery-migration — generator symbol + 1 module-path file
-- [ ] contextcore-dot-me — 1 symbol + 1 module-path file
-- [ ] contextcore-beaver — 1 symbol
+- [x] 011yBubo — 2 symbols + 1 module-path file
+- [x] contextcore-viewer — 2 symbols
+- [x] contextcore-demo-retail — 2 symbols
+- [x] wayfinder-demo-retail — 1 symbol
+- [x] Gabba-Gallery-migration — generator symbol + 1 module-path file
+- [x] contextcore-dot-me — 1 symbol + 1 module-path file
+- [x] contextcore-beaver — 1 symbol
 
 ---
 
