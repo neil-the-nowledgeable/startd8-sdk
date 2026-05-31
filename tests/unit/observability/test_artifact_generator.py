@@ -917,19 +917,27 @@ class TestDatabasePanels:
 # ---------------------------------------------------------------------------
 
 
+class _FakeStep:
+    def __init__(self, step_name, output):
+        self.step_name = step_name
+        self.output = output
+
+
 class _FakeResult:
-    def __init__(self, success, error=None):
+    def __init__(self, success, error=None, steps=None):
         self.success = success
         self.error = error
+        self.steps = steps or []
 
 
 class _FakeWorkflow:
     """Stand-in for DashboardCreatorWorkflow that avoids the jsonnet toolchain."""
 
-    def __init__(self, *, succeed=True, write=True, raises=False):
+    def __init__(self, *, succeed=True, write=True, raises=False, provision_succeeds=True):
         self._succeed = succeed
         self._write = write
         self._raises = raises
+        self._provision_succeeds = provision_succeeds
         self.last_config = None
 
     def run(self, config):
@@ -941,7 +949,17 @@ class _FakeWorkflow:
             out = Path(config["output_dir"])
             out.mkdir(parents=True, exist_ok=True)
             (out / f"{uid}.json").write_text(json.dumps({"uid": uid, "panels": []}))
-        return _FakeResult(self._succeed, None if self._succeed else "compile failed")
+        steps = []
+        if config.get("provision"):
+            # Mirror the real workflow: provisioning is warn-don't-fail (a push
+            # failure still returns success=True with a 'provision' step note).
+            if self._provision_succeeds:
+                steps.append(_FakeStep("provision", "Provisioned: /d/uid"))
+            else:
+                steps.append(_FakeStep("provision", "Provisioning failed: boom"))
+        return _FakeResult(
+            self._succeed, None if self._succeed else "compile failed", steps=steps
+        )
 
 
 def _report_with_dashboard_spec(service_id="strtd8", uid="obs-strtd8"):
@@ -1024,6 +1042,50 @@ class TestGrafanaJsonConversion:
         dash = [a for a in report.artifacts if a.artifact_type == "dashboard"][0]
         assert dash.status == "skipped"
         assert "conversion raised" in (dash.error_message or "")
+
+    def test_no_provision_url_means_no_provision_config(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        fake = _FakeWorkflow()
+        monkeypatch.setattr(wf_mod, "DashboardCreatorWorkflow", lambda: fake)
+        _convert_dashboards_to_grafana_json(_report_with_dashboard_spec())
+        assert "provision" not in fake.last_config
+
+    def test_provision_url_threads_into_workflow_config(self, monkeypatch):
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        fake = _FakeWorkflow()
+        monkeypatch.setattr(wf_mod, "DashboardCreatorWorkflow", lambda: fake)
+        _convert_dashboards_to_grafana_json(
+            _report_with_dashboard_spec(), provision_url="http://grafana:3000"
+        )
+        assert fake.last_config["provision"] is True
+        assert fake.last_config["grafana_url"] == "http://grafana:3000"
+
+    def test_provision_failure_is_warn_dont_fail(self, monkeypatch):
+        """A failed push must not demote the generated dashboard artifact."""
+        import startd8.dashboard_creator.workflow as wf_mod
+        from startd8.observability.artifact_generator import (
+            _convert_dashboards_to_grafana_json,
+        )
+
+        monkeypatch.setattr(
+            wf_mod,
+            "DashboardCreatorWorkflow",
+            lambda: _FakeWorkflow(provision_succeeds=False),
+        )
+        report = _report_with_dashboard_spec()
+        _convert_dashboards_to_grafana_json(report, provision_url="http://grafana:3000")
+
+        dash = [a for a in report.artifacts if a.artifact_type == "dashboard"][0]
+        # Dashboard still generated despite the provisioning failure.
+        assert dash.status == "generated"
 
 
 # Toolchain-gated real compile (jsonnet binary + mixin vendor present).

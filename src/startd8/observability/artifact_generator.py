@@ -1601,6 +1601,7 @@ def generate_observability_artifacts(
     portal: bool = False,
     portal_persona: str = "operator",
     portal_provision_url: Optional[str] = None,
+    dashboard_provision_url: Optional[str] = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -1649,8 +1650,11 @@ def generate_observability_artifacts(
     # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
     # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
     # too (side-effect-free; renders via a temp dir) so drift detection stays
-    # consistent — only the disk write below is gated on dry_run.
-    _convert_dashboards_to_grafana_json(report)
+    # consistent — only the disk write below is gated on dry_run. Provisioning,
+    # when requested, only happens on a real (non-dry-run) render.
+    _convert_dashboards_to_grafana_json(
+        report, provision_url=None if dry_run else dashboard_provision_url
+    )
 
     # Portal generation — after per-service artifacts (REQ-OBP-103a)
     if portal:
@@ -1720,8 +1724,25 @@ def _record_unimplemented_artifact_types(report: GenerationReport) -> None:
         )
 
 
+def _log_provision_outcome(result: Any, service_id: str) -> None:
+    """Surface the workflow's provision step outcome for a service dashboard.
+
+    The workflow provisions warn-don't-fail (a push failure keeps result.success
+    True and records a 'provision' step note), so we read that step and log it.
+    """
+    for step in getattr(result, "steps", None) or []:
+        if getattr(step, "step_name", "") == "provision":
+            output = getattr(step, "output", "")
+            if "failed" in output.lower() or "error" in output.lower():
+                logger.warning("Provisioning %s: %s", service_id, output)
+            else:
+                logger.info("Provisioning %s: %s", service_id, output)
+            return
+
+
 def _convert_dashboards_to_grafana_json(
     report: GenerationReport,
+    provision_url: Optional[str] = None,
 ) -> None:
     """Render each dashboard spec to deployable Grafana JSON (Gap 4 / Closure 4A).
 
@@ -1733,6 +1754,11 @@ def _convert_dashboards_to_grafana_json(
     dashboard_url links stay valid. Degrades gracefully: if the jsonnet
     toolchain/mixin is unavailable, the conversion is recorded as ``skipped``
     rather than failing the run.
+
+    When ``provision_url`` is set, each dashboard is also pushed to that Grafana
+    instance (idempotent upsert by uid; auth via the GRAFANA_API_TOKEN env var).
+    Provisioning is warn-don't-fail: a push failure logs a warning but the
+    dashboard artifact is still recorded as generated.
     """
     specs = [
         a
@@ -1767,15 +1793,23 @@ def _convert_dashboards_to_grafana_json(
         error_message: Optional[str] = None
         try:
             with tempfile.TemporaryDirectory() as staging:
-                result = workflow.run(
-                    {"spec": spec_dict, "output_dir": staging, "enforce_uid": False}
-                )
+                config: Dict[str, Any] = {
+                    "spec": spec_dict,
+                    "output_dir": staging,
+                    "enforce_uid": False,
+                }
+                if provision_url:
+                    config["provision"] = True
+                    config["grafana_url"] = provision_url
+                result = workflow.run(config)
                 if result.success:
                     uid = spec_dict.get("uid", f"obs-{service_id}")
                     produced = Path(staging) / f"{uid}.json"
                     if produced.is_file():
                         content = produced.read_text()
                         status = "generated"
+                        if provision_url:
+                            _log_provision_outcome(result, service_id)
                     else:
                         error_message = "workflow reported success but no JSON file found"
                 else:

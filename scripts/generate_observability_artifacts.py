@@ -99,6 +99,15 @@ def main() -> int:
         help="Provision portal to Grafana at URL (e.g. http://localhost:3000)",
     )
     parser.add_argument(
+        "--provision",
+        default=None,
+        metavar="URL",
+        help=(
+            "Provision per-service dashboards to Grafana at URL (idempotent upsert "
+            "by uid; auth via GRAFANA_API_TOKEN). Warn-don't-fail. Opt-in."
+        ),
+    )
+    parser.add_argument(
         "--min-metric-coverage",
         type=float,
         default=None,
@@ -136,6 +145,7 @@ def main() -> int:
             manifest_path=manifest,
             dry_run=args.dry_run,
             portal=False,  # We'll generate portals individually below
+            dashboard_provision_url=args.provision,
         )
         for persona in ("operator", "engineer", "manager"):
             from startd8.observability.artifact_generator import _generate_portal_artifact
@@ -168,6 +178,7 @@ def main() -> int:
             portal=args.portal,
             portal_persona=args.portal_persona,
             portal_provision_url=args.portal_provision,
+            dashboard_provision_url=args.provision,
         )
 
     # Print summary
@@ -209,30 +220,28 @@ def main() -> int:
             score_str = f" score={a.quality['score']:.0%}" if a.quality else ""
             print(f"  {marker} {a.output_path} ({a.status}{score_str})")
 
-    # REQ-OPI-500: Dashboard spec → /dbrd-cr8r handoff details
-    dashboards = [
-        a for a in report.artifacts
-        if a.artifact_type == "dashboard_spec" and a.status == "generated"
+    # Deployable Grafana JSON (Gap 4): dashboards are now compiled directly to
+    # grafana/dashboards/{service}-dashboard.json — no separate /dbrd-cr8r step.
+    grafana_dashboards = [
+        a for a in report.artifacts if a.artifact_type == "dashboard"
     ]
-    if dashboards and not args.dry_run:
-        print(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        print(f"  │  Dashboard Specs Ready for Grafana Compilation          │")
-        print(f"  ├─────────────────────────────────────────────────────────┤")
-        for d in dashboards:
-            spec_path = output / d.output_path
-            score_str = f" (quality: {d.quality['score']:.0%})" if d.quality else ""
-            print(f"  │  {d.service_id}{score_str}")
-            print(f"  │    spec: {spec_path}")
-        print(f"  ├─────────────────────────────────────────────────────────┤")
-        print(f"  │  To compile to Grafana JSON:                            │")
-        print(f"  │    /dbrd-cr8r --spec <path>                             │")
-        print(f"  │                                                         │")
-        print(f"  │  To compile + provision to Grafana:                     │")
-        print(f"  │    /dbrd-cr8r --spec <path> --provision                 │")
-        print(f"  │                                                         │")
-        print(f"  │  Pipeline: DashboardSpec YAML → Jsonnet → Grafana JSON  │")
-        print(f"  │  Requires: jsonnet toolchain (go-jsonnet or jsonnet)     │")
-        print(f"  └─────────────────────────────────────────────────────────┘")
+    if grafana_dashboards and not args.dry_run:
+        produced = [d for d in grafana_dashboards if d.status == "generated"]
+        skipped_dash = [d for d in grafana_dashboards if d.status != "generated"]
+        print("\n  Grafana dashboards (deployable JSON):")
+        for d in produced:
+            print(f"    + {output / d.output_path}")
+        for d in skipped_dash:
+            print(f"    ~ {d.service_id}: not compiled ({d.error_message})")
+        if args.provision:
+            print(f"  Provisioned to Grafana at {args.provision} "
+                  f"(idempotent upsert; see logs for per-dashboard status).")
+        elif produced:
+            print("  To deploy: import the JSON above, commit it for GitOps, or "
+                  "re-run with --provision <grafana-url>.")
+        if skipped_dash:
+            print("  (Dashboards skipped when the jsonnet toolchain / startd8-mixin "
+                  "is unavailable; the YAML specs remain under dashboards/.)")
 
     # Best-effort provenance append
     if not args.dry_run and generated > 0:
