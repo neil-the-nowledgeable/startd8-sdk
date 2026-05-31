@@ -584,3 +584,95 @@ class TestScanDirectoryDedup:
 
         inventory = scan_directory(tmp_path)
         assert len(inventory.entries) == 0
+
+
+class TestCurrentRunDirNotSelfExcluded:
+    """Regression: scan_directory must not exclude the current run's own dir.
+
+    All pipeline output is namespaced under run-NNN-TIMESTAMP/, so when
+    _run_todo_scan_and_inject() scans <...>/run-107-.../generated/, the
+    /run-NNN-/ filter previously excluded 100% of files → zero TODOs found.
+    """
+
+    def test_scans_files_under_current_run_dir(self, tmp_path):
+        gen = tmp_path / "run-107-online-boutique" / "plan-ingestion" / "generated"
+        gen.mkdir(parents=True)
+        content = textwrap.dedent("""\
+            def initStats():
+                # TODO: implement stats
+                pass
+        """)
+        (gen / "service.py").write_text(content, encoding="utf-8")
+
+        inventory = scan_directory(gen)
+        todos = [e for e in inventory.entries if "implement stats" in e.raw_text]
+        assert len(todos) == 1, "current run's own files must not be self-excluded"
+
+    def test_sibling_runs_still_excluded_from_broad_root(self, tmp_path):
+        """Root NOT under a run dir → nested run-NNN- siblings still excluded."""
+        stale = tmp_path / "run-042-old"
+        stale.mkdir()
+        (stale / "svc.py").write_text(
+            "def initStats():\n    # TODO: implement stats\n    pass\n",
+            encoding="utf-8",
+        )
+        inventory = scan_directory(tmp_path)
+        assert len(inventory.entries) == 0
+
+
+class TestJavaInitMethodClassification:
+    """Regression: Java instrumentation-init stubs must classify as B, not C.
+
+    The reference AdService keeps a guard clause + logging + dead variables in
+    initStats()/initTracing(), which dropped the stub ratio below 0.5 so the
+    "Implement OpenTelemetry X" TODO fell through to Category C and was dropped
+    by the A/B-only injection filter — identical Go TODOs classified as B.
+    """
+
+    def test_java_init_method_with_boilerplate_is_category_b(self):
+        src = textwrap.dedent("""\
+            class AdService {
+              private static void initStats() {
+                if (System.getenv("DISABLE_STATS") != null) {
+                  logger.info("Stats disabled.");
+                  return;
+                }
+                logger.info("Stats enabled, but temporarily unavailable");
+                long sleepTime = 10;
+                int maxAttempts = 5;
+                // TODO(arbrown) Implement OpenTelemetry stats
+              }
+            }
+        """)
+        lines = src.splitlines()
+        entries = scan_todos("AdService.java", src, "java")
+        impl = [e for e in entries if "Implement OpenTelemetry" in e.raw_text]
+        assert impl, "TODO should be detected"
+        classified = classify_todo(impl[0], lines)
+        assert classified.category == "B"
+
+    def test_non_init_method_instrumentation_todo_stays_c(self):
+        """Guard: the override is scoped to init/setup methods only.
+
+        A non-init method with a substantive (non-stub) body keeps Category C
+        even when its TODO carries instrumentation vocabulary — the override
+        must not promote arbitrary methods.
+        """
+        src = textwrap.dedent("""\
+            class Foo {
+              private void handleRequest() {
+                validate(input);
+                var r = lookup(id);
+                persist(r);
+                // TODO(arbrown) Implement OpenTelemetry stats
+                notify(r);
+                audit(r);
+              }
+            }
+        """)
+        lines = src.splitlines()
+        entries = scan_todos("Foo.java", src, "java")
+        todo = [e for e in entries if "Implement OpenTelemetry" in e.raw_text]
+        assert todo
+        classified = classify_todo(todo[0], lines)
+        assert classified.category == "C"

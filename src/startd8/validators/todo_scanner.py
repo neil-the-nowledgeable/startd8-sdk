@@ -56,6 +56,15 @@ _INSTRUMENTATION_VOCAB = frozenset({
     "setuptelemetry", "setupmetrics", "setuptracing",
 })
 
+# Function-name fragments that mark an instrumentation-initialization method.
+# A method whose name contains one of these AND whose TODO asks to "implement"
+# is treated as an unimplemented stub regardless of guard/logging boilerplate.
+_INSTRUMENTATION_INIT_FNS = frozenset({
+    "initstats", "inittracing", "initmetrics", "initprofiler",
+    "inittelemetry", "setuptelemetry", "setupmetrics", "setuptracing",
+    "initobservability", "setupobservability",
+})
+
 # Security vocabulary — words that indicate database/query security context
 _SECURITY_VOCAB = frozenset({
     "sql", "query", "select", "insert", "update", "delete",
@@ -399,7 +408,20 @@ def _check_category_b(
 
     # Check if containing function is a stub (mostly empty body)
     is_stub = _is_stub_body(lines, idx, language, containing_function)
-    if not is_stub:
+    # An instrumentation-init method (initStats/initTracing/setupTelemetry…)
+    # whose TODO says "implement" is an unimplemented stub even when its body
+    # carries a guard clause, logging, or dead variables (the Java/Go reference
+    # services keep `logger.info("…temporarily unavailable")` + a TODO). The
+    # ratio heuristic in `_is_stub_body` undercounts these; the body has no
+    # actual instrumentation work, only the placeholder. Without this, identical
+    # "Implement OpenTelemetry X" TODOs classify as B in Go (near-empty body)
+    # but C in Java (guard+logging body) and get dropped by the A/B filter.
+    fn_compact = fn_lower.replace("_", "")
+    is_init_method = any(
+        kw in fn_compact for kw in _INSTRUMENTATION_INIT_FNS
+    )
+    todo_text_implements = "implement" in todo_line
+    if not is_stub and not (is_init_method and todo_text_implements):
         return None
 
     result: Dict[str, Any] = {
@@ -697,11 +719,21 @@ def scan_directory(
     if extensions is None:
         extensions = (".java", ".go", ".py", ".js", ".ts", ".cs", ".gradle", ".xml")
 
+    # The scan root may itself live under a run-NNN- directory — all pipeline
+    # output is namespaced this way (…/pipeline-output/<proj>/run-107-…/). That
+    # run is the *current* target, NOT a stale prior run, so its files must be
+    # scanned. Only OTHER run-NNN- directories (stale siblings nested under the
+    # root) are excluded. Previously this filter excluded the current run's own
+    # output, so a scan rooted inside run-107-… returned zero TODOs.
+    root_run_match = _STALE_RUN_DIR.search(str(d))
+    current_run = root_run_match.group() if root_run_match else None
+
     all_entries: List[TodoEntry] = []
     for ext in extensions:
         for f in d.rglob(f"*{ext}"):
-            # Exclude stale prior-run directories
-            if _STALE_RUN_DIR.search(str(f)):
+            # Exclude stale prior-run directories, but never the current run.
+            f_run_match = _STALE_RUN_DIR.search(str(f))
+            if f_run_match and f_run_match.group() != current_run:
                 continue
             entries = scan_file(f, instrumentation_contract)
             all_entries.extend(entries)
