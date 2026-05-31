@@ -22,11 +22,19 @@ def _load_file(name: str) -> dict[str, Any]:
     path = _PROMPTS_DIR / f"{name}.yaml"
     try:
         with path.open(encoding="utf-8") as f:
-            return yaml.safe_load(f)
+            data = yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError(
             f"Prompt YAML file not found for phase '{name}': {path}"
         ) from None
+    if data is None:
+        # Empty / comment-only file (e.g. a deprecated stub). Give a clear error
+        # instead of letting a downstream ``None.get(...)`` raise a cryptic AttributeError.
+        raise KeyError(
+            f"Prompt YAML '{name}' ({path}) is empty or a deprecated stub — "
+            f"templates may have moved to implementation_engine/prompts/contractor_prompts.yaml"
+        )
+    return data
 
 
 def get_template(phase: str, prompt_name: str) -> str:

@@ -2,6 +2,7 @@
 Pytest configuration and shared fixtures
 """
 
+import os
 import pytest
 import tempfile
 import shutil
@@ -12,6 +13,27 @@ from startd8 import AgentFramework
 from startd8.models import Prompt, AgentResponse, Benchmark, TokenUsage
 from startd8.agents import MockAgent
 from startd8.storage import FileSystemStorage
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip @pytest.mark.integration tests unless STARTD8_RUN_INTEGRATION=1.
+
+    Integration tests make **live** LLM API calls (e.g. real anthropic:claude-sonnet
+    requests via implementation_engine.engine), which incur real charges. They are
+    therefore opt-in: a normal ``pytest`` run (or CI) skips them so it can never
+    accidentally bill the configured API key. Run them explicitly with:
+
+        STARTD8_RUN_INTEGRATION=1 pytest -m integration ...
+    """
+    if os.getenv("STARTD8_RUN_INTEGRATION") == "1":
+        return
+    skip_integration = pytest.mark.skip(
+        reason="live-API integration test — set STARTD8_RUN_INTEGRATION=1 to run "
+        "(makes real, billable LLM calls)"
+    )
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
 
 
 @pytest.fixture

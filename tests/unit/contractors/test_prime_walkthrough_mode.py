@@ -127,6 +127,25 @@ def _make_workflow(tmp_path: Path, **overrides: Any) -> PrimeContractorWorkflow:
     wf._skeleton_sources = {}
     wf.stash_ref = None
     wf.merge_strategy = MagicMock()
+    # Code-gen context attrs read by _build_generation_context() (mirror __init__ defaults;
+    # this fixture bypasses __init__ via __new__, so they must be set explicitly).
+    wf.edit_min_pct = 80
+    wf._security_contract = None
+    wf._instrumentation_contract = None
+    wf._guidance_context = None
+    wf._expected_output_contracts = None
+    wf._design_calibration_hints = None
+    wf._resolved_artifact_params = None
+    # Review / quality-gate attrs (also __init__-set; read on the code-gen + review path).
+    wf._enable_todo_completion = False
+    wf._language_profile = None
+    wf._quality_accumulator = None
+    wf._review_adapter = None
+    wf._review_agent = None
+    wf.quality_gate_enabled = True
+    wf.quality_gate_threshold = 0.5
+    wf.review_enabled = True
+    wf.review_results = {}
 
     # Stub methods that aren't under test
     wf._save_queue_state_with_mode = MagicMock()
