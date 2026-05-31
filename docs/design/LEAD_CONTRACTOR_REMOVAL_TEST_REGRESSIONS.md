@@ -2,9 +2,11 @@
 
 **Filed:** 2026-05-31
 **Filed by:** agent:claude-code (multilang-manifest-validation session)
-**Owning effort:** Lead-Contractor Removal (see `LEAD_CONTRACTOR_REMOVAL_REQUIREMENTS.md`,
-`LEAD_CONTRACTOR_REMOVAL_AUDIT.md`)
-**Status:** OPEN — 29 failing tests in `tests/unit/contractors/`
+**Owning effort:** ~~Lead-Contractor Removal~~ — **MIS-ATTRIBUTED** (see §7). These were
+pre-existing debt across other efforts (REQ-ICD-106, prompt consolidation, and live-API
+integration tests), not caused by the lead-removal or multilang merges.
+**Status:** ✅ **RESOLVED 2026-05-31** — 29 failed → **0 failed** (643 passed, 17 skipped).
+See §7 for resolution + attribution evidence.
 
 ---
 
@@ -128,5 +130,42 @@ constraint:
 source .venv/bin/activate
 python3 -m pytest tests/unit/contractors/ -q -p no:cacheprovider --tb=line \
   -k "manifest or postmortem or integrat or disk or assembler"
-# => 29 failed, 647 passed
+# Before: 29 failed, 647 passed
+# After:  0 failed, 643 passed, 17 skipped   (~3s, ZERO live API calls)
 ```
+
+---
+
+## 7. Resolution (2026-05-31)
+
+**Attribution correction.** The "Owning effort: Lead-Contractor Removal" header was wrong. An
+independent check ran the doc's repro at commit `8e73d602` (the base *before* any lead-removal
+or multilang work) and at current main: **the same 29 failed in both**. They are pre-existing
+debt from other efforts, not regressions from the lead-removal/multilang merges.
+
+**Root causes were 3 distinct problems, not one** (the §2 histogram conflated them):
+
+| # | Real cause | Tests | Fix |
+|---|-----------|-------|-----|
+| A | Orphaned tests for code **intentionally deleted** in `d356def8` (REQ-ICD-106) — `_accumulate_manifest`, `_get_upstream_contracts`, `spec_builder._build_accumulated_contracts_section` were superseded by the seed-based `security_contract` flow (covered by `test_security_contract_wiring.py`). | 17 | Removed the obsolete `TestAccumulateManifest` / `TestGetUpstreamContracts` / `TestAccumulatedContractsSection` from `test_manifest_accumulation.py`; kept the still-valid `TestDrafterUpstreamContracts`. |
+| B | **Real `PrimeContractorWorkflow` bug** — `_build_generation_context()` read 6 seed-loaded attrs (`_security_contract`, `_instrumentation_contract`, `_guidance_context`, `_expected_output_contracts`, `_design_calibration_hints`, `_resolved_artifact_params`) that were initialized only in `load_seed_context()`. A standalone run (no seed) crashed with `AttributeError`. | ~3 | Default all 6 to `None` in `__init__` (`load_seed_context()` still overrides). |
+| B′ | Prompt-template drift + a fixture that bypasses `__init__` and drifted behind it. | 3 | `test_multi_file_edit_fixes`: retarget to live `implementation_engine.prompts.get_template('integration')` (the old `workflows/builtin/prompts/lead_contractor.yaml` is a deprecated stub) + harden `_load_file` against `None`/stub YAML. `test_prime_walkthrough_mode._make_workflow`: add the code-gen/review attrs it omitted. |
+| C | **LIVE API charges** — the 9 `@pytest.mark.integration` tests make real `anthropic:claude-sonnet-4-5` calls via `implementation_engine.engine` (confirmed: real `req_011C…` IDs, key authenticated, rejected only on credit balance). A funded key would be billed on every default `pytest`/CI run. | 9 | `tests/conftest.py` `pytest_collection_modifyitems` **skips all `@pytest.mark.integration` tests unless `STARTD8_RUN_INTEGRATION=1`**. Default/CI runs can no longer make billable LLM calls; integration tests are explicit opt-in. |
+
+**Result:** 29 failed → **0 failed (643 passed, 17 skipped)** in ~3s with **zero live API calls**.
+
+**Commits (local on `main`):** `82b9b2e9` (Group A + B) and `a16842e9` (Group B′ + C; originally
+`bafc897c`, re-applied after a parallel merge orphaned it).
+
+**Behavior change to note:** the conftest guard makes integration tests opt-in **project-wide**.
+Any pytest/CI job that previously ran them by default now skips them unless it sets
+`STARTD8_RUN_INTEGRATION=1`. To run them deliberately (with a funded key):
+
+```bash
+STARTD8_RUN_INTEGRATION=1 python3 -m pytest -m integration tests/unit/contractors/test_implement_phase_integration.py
+```
+
+**Out of scope / still open (separate efforts, NOT in this doc's 29):** the whole
+`tests/unit/contractors/ -m "not integration"` run surfaces ~16 additional pre-existing failures
+elsewhere, and `test_security_contract_wiring.py` has 2 of its own — both belong to their owning
+efforts, not lead-removal.
