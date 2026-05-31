@@ -264,6 +264,10 @@ class CostTracker:
                 self._otel_metrics = False  # Prevent retrying
         if self._otel_metrics:
             self._otel_metrics.record(record)
+            # Flag if this call's cost is also recorded via SessionTracker
+            # (distinct families; double-recording double-counts — REQ-AAO-002).
+            from .double_record_guard import note_cost_recorded
+            note_cost_recorded("cost_tracker", record.correlation_id)
 
         logger.debug(
             f"Recorded cost: ${total_cost:.6f} for {model}",
