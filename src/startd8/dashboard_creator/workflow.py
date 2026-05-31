@@ -247,13 +247,33 @@ class DashboardCreatorWorkflow(WorkflowBase):
         ))
 
         # 3. Enforce UID
-        self._emit_progress(on_progress, 2, 10, "Enforcing UID")
-        try:
-            spec = enforce_uid(spec)
-        except ValidationError as exc:
-            return WorkflowResult.from_error(
-                self.metadata.workflow_id, f"UID enforcement failed: {exc}"
+        # Callers with their own uid convention (e.g. the observability artifact
+        # generator, which standardizes on obs-{service} and wires that uid into
+        # alert/SLO dashboard_url links) can opt out via enforce_uid=False. A None
+        # uid is still auto-generated so the dashboard always has one.
+        if config.get("enforce_uid", True):
+            self._emit_progress(on_progress, 2, 10, "Enforcing UID")
+            try:
+                spec = enforce_uid(spec)
+            except ValidationError as exc:
+                return WorkflowResult.from_error(
+                    self.metadata.workflow_id, f"UID enforcement failed: {exc}"
+                )
+        else:
+            # enforce_uid opted out: still backfill a missing uid and cap length
+            # to Grafana's 40-char limit (the only invariant enforce_uid checks
+            # that the caller cannot reasonably waive).
+            from startd8.dashboard_creator.validation import (
+                _UID_MAX_LENGTH,
+                generate_uid_from_title,
             )
+
+            if spec.uid is None:
+                spec = spec.model_copy(
+                    update={"uid": generate_uid_from_title(spec.title)}
+                )
+            elif len(spec.uid) > _UID_MAX_LENGTH:
+                spec = spec.model_copy(update={"uid": spec.uid[:_UID_MAX_LENGTH]})
 
         logger.info("Dashboard UID: %s", spec.uid)
 

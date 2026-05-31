@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -49,6 +49,10 @@ class ServiceHints:
     language: Optional[str] = None
     detected_databases: List[str] = field(default_factory=list)
     convention_metrics: List[ConventionMetric] = field(default_factory=list)
+    # Domain-specific metrics declared in the manifest (Closure 1 / Gap 1).
+    # Distinct from convention_metrics: these describe what *this* service does
+    # (e.g. token burn, cost, truncations) rather than generic OTel HTTP semconv.
+    declared_metrics: List[ConventionMetric] = field(default_factory=list)
 
 
 @dataclass
@@ -100,6 +104,8 @@ class GenerationReport:
     artifacts: List[ArtifactResult] = field(default_factory=list)
     services_processed: int = 0
     services_skipped: int = 0
+    # Artifact types the onboarding contract declares as required (Closure 3A).
+    declared_artifact_types: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +124,22 @@ _DEFAULT_THRESHOLDS = {
     "latency_p99": "500ms",
     "throughput": "100rps",
 }
+
+# Declared onboarding artifact_types this generator actually produces, keyed by
+# the declared type name. prometheus_rule ← alert_rule output; dashboard ←
+# Grafana JSON (Gap 4); slo_definition ← slo output; the remaining five are
+# native extended generators (Closure 3B), produced when declared. Any declared
+# type NOT in this set is still recorded as an honest, explicit skip (Gap 2).
+_IMPLEMENTED_ARTIFACT_TYPES = frozenset({
+    "dashboard",
+    "prometheus_rule",
+    "slo_definition",
+    "service_monitor",
+    "notification_policy",
+    "loki_rule",
+    "runbook",
+    "capability_index",
+})
 
 # OTel instrument type → Grafana panel type
 _INSTRUMENT_TO_PANEL: Dict[str, str] = {
@@ -223,6 +245,26 @@ def _is_non_service_entry(
     return False
 
 
+def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
+    """Parse a list of raw metric dicts into ConventionMetric objects.
+
+    Shared by both ``convention_based`` and ``manifest_declared`` metric sets,
+    which carry the same ``{name, type, source}`` schema. Entries without a
+    name are dropped. Non-list input yields an empty list.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [
+        ConventionMetric(
+            name=m.get("name", ""),
+            type=m.get("type", ""),
+            source=m.get("source", ""),
+        )
+        for m in raw
+        if isinstance(m, dict) and m.get("name")
+    ]
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
@@ -252,16 +294,11 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             logger.warning("Service %s has no transport field; skipping", svc_id)
             continue
 
-        metrics_raw = hint.get("metrics", {}).get("convention_based", [])
-        convention_metrics = [
-            ConventionMetric(
-                name=m.get("name", ""),
-                type=m.get("type", ""),
-                source=m.get("source", ""),
-            )
-            for m in metrics_raw
-            if m.get("name")
-        ]
+        metrics = hint.get("metrics", {})
+        convention_metrics = _parse_metric_set(metrics.get("convention_based", []))
+        # Closure 1 / Gap 1: also consume manifest_declared domain metrics so
+        # artifacts describe what *this* service does, not just generic HTTP.
+        declared_metrics = _parse_metric_set(metrics.get("manifest_declared", []))
 
         services.append(
             ServiceHints(
@@ -270,6 +307,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 language=hint.get("language"),
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,
+                declared_metrics=declared_metrics,
             )
         )
 
@@ -559,7 +597,26 @@ def generate_alert_rules(
                 }
             )
 
-    if not rules:
+    # REQ-OAG-205: runbook_url annotation on every active alert (placeholder URL).
+    for rule in rules:
+        rule.setdefault("annotations", {})["runbook_url"] = (
+            f"https://runbooks.example.com/{service.service_id}/{rule['alert']}"
+        )
+
+    # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
+    # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
+    todo_block = _domain_alert_todo_block(service)
+    if todo_block:
+        derivations.append(
+            DerivationTrace(
+                field="domain_alert_todos",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{len(service.declared_metrics)} declared metrics → TODO alert stubs",
+                tier="manifest",
+            )
+        )
+
+    if not rules and not todo_block:
         return ArtifactResult(
             artifact_type="alert_rule",
             service_id=service.service_id,
@@ -590,7 +647,7 @@ def generate_alert_rules(
         service_id=service.service_id,
         output_path=f"alerts/{service.service_id}-alerts.yaml",
         status="generated",
-        content=header + body,
+        content=header + body + todo_block,
         derivations=derivations,
     )
 
@@ -686,6 +743,14 @@ def generate_dashboard_spec(
     # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
     _ensure_red_coverage(panels, service, business, derivations)
 
+    # Closure 1 / Gap 1: add domain panels for manifest_declared metrics,
+    # grouped by intent (Cost & Tokens, Sessions, Health, Progress). These are
+    # additive — the convention-based RED panels above remain the baseline.
+    _add_domain_panels(panels, service, derivations)
+
+    # REQ-OAG-107: DB latency panels when databases were detected.
+    _add_database_panels(panels, service, derivations)
+
     if not panels:
         return ArtifactResult(
             artifact_type="dashboard_spec",
@@ -695,6 +760,9 @@ def generate_dashboard_spec(
             derivations=derivations,
             error_message="No convention metrics to build panels from",
         )
+
+    # REQ-OAG-105 / Gap 5: stamp gridPos on every panel at generation time.
+    _assign_gridpos(panels)
 
     # Build tags
     tags = ["generated", "observability", service.transport]
@@ -763,6 +831,226 @@ def _panel_group(metric_name: str) -> str:
     if "request" in name_lower:
         return "Throughput"
     return "General"
+
+
+# ---------------------------------------------------------------------------
+# Domain (manifest_declared) metric helpers — Closure 1 / Gap 1
+# ---------------------------------------------------------------------------
+
+
+def _domain_metric_type(metric: ConventionMetric) -> str:
+    """Resolve the instrument type of a declared metric.
+
+    Prefers the explicit ``type`` field; falls back to inferring from the
+    Prometheus-style name suffix when type is absent.
+    """
+    if metric.type:
+        return metric.type
+    name = metric.name.lower()
+    if name.endswith("_total"):
+        return "counter"
+    if name.endswith(("_ratio", "_percent", "_status", "_count")):
+        return "gauge"
+    return "gauge"
+
+
+def _domain_panel_group(metric_name: str) -> str:
+    """Group a declared metric into an intent-based dashboard row.
+
+    Domain metrics describe product behaviour, so they are grouped by what the
+    operator cares about (cost, sessions, health, progress) rather than by RED.
+    """
+    name = metric_name.lower()
+    if "cost" in name or "token" in name:
+        return "Cost & Tokens"
+    if "session" in name:
+        return "Sessions"
+    if "truncation" in name or "context_usage" in name or "context_ratio" in name:
+        return "Health"
+    if "task" in name or "progress" in name or "status" in name or "completeness" in name:
+        return "Progress"
+    return "Domain Metrics"
+
+
+def _domain_unit(metric_name: str) -> str:
+    """Infer a Grafana unit for a declared metric from its name."""
+    name = metric_name.lower()
+    if "ratio" in name or "percent" in name:
+        return "percentunit"
+    if name.endswith("_ms") or "_time_ms" in name:
+        return "ms"
+    if "cost" in name:
+        return "none"
+    return "short"
+
+
+def _domain_query(metric: ConventionMetric, service_id: str) -> str:
+    """Build a PromQL query for a declared metric.
+
+    Counters become rate panels; gauges/ratios are read directly. Declared
+    metric names are already Prometheus-style, so (unlike convention metrics)
+    no ``_total`` suffix is appended to names that already carry it.
+    """
+    name = metric.name
+    mtype = _domain_metric_type(metric)
+    label = f'{{service="{service_id}"}}'
+    if mtype == "counter":
+        target = name if name.endswith("_total") else f"{name}_total"
+        return f"rate({target}{label}[$__rate_interval])"
+    return f"{name}{label}"
+
+
+def _pascal(text: str) -> str:
+    """Convert a snake/dot/dash name to PascalCase (startd8_cost_total → Startd8CostTotal)."""
+    cleaned = text.replace(".", " ").replace("_", " ").replace("-", " ")
+    return "".join(w.title() for w in cleaned.split())
+
+
+def _domain_alert_todo_block(service: ServiceHints) -> str:
+    """Build a commented-out alert stub block for declared metrics.
+
+    Policy (TODO-when-absent): the manifest carries no thresholds for domain
+    metrics, so rather than silently omitting them, each declared metric is
+    emitted as a commented-out alert stub with a ``<THRESHOLD>`` placeholder.
+    The active rules in the file stay valid Prometheus YAML; the stubs make the
+    missing domain alerts visible to the operator. Returns "" when there are no
+    declared metrics.
+    """
+    if not service.declared_metrics:
+        return ""
+
+    lines = [
+        "",
+        "# " + "-" * 73,
+        "# TODO: domain-metric alerts (Closure 1 / Gap 1)",
+        "# The manifest_declared metrics below have no threshold in the manifest, so",
+        "# no active alert is emitted (policy: TODO-when-absent). Set a threshold and",
+        "# uncomment to activate.",
+        "# " + "-" * 73,
+    ]
+    for metric in service.declared_metrics:
+        expr = _domain_query(metric, service.service_id)
+        alert_name = _alert_name(service.service_id, _pascal(metric.name) + "High")
+        lines.extend(
+            [
+                f"#  - alert: {alert_name}",
+                f"#    expr: {expr} > <THRESHOLD>",
+                "#    for: 5m",
+                "#    labels:",
+                "#      severity: warning",
+                f"#      service: {service.service_id}",
+                "#    annotations:",
+                f'#      summary: "{service.service_id} {metric.name} above threshold"',
+                '#      todo: "Set <THRESHOLD>; no manifest value available"',
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _add_domain_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Append a panel per manifest_declared metric (Closure 1 / Gap 1).
+
+    Mutates ``panels`` in place. Skips declared metrics whose query already
+    appears among existing panels (dedup against convention panels), so a
+    metric is never visualised twice.
+    """
+    if not service.declared_metrics:
+        return
+
+    existing_exprs = {str(p.get("expr", "")) for p in panels}
+    added = 0
+    for metric in service.declared_metrics:
+        query = _domain_query(metric, service.service_id)
+        if query in existing_exprs:
+            continue
+        mtype = _domain_metric_type(metric)
+        unit = _domain_unit(metric.name)
+        # Ratios/percents read best on a gauge; counters (rate) and other
+        # gauges read best as a timeseries.
+        if unit == "percentunit":
+            panel_type = "gauge"
+        elif mtype == "counter":
+            panel_type = "timeseries"
+        else:
+            panel_type = "timeseries"
+        panels.append(
+            {
+                "type": panel_type,
+                "title": _panel_title(metric.name),
+                "expr": query,
+                "unit": unit,
+                "group": _domain_panel_group(metric.name),
+            }
+        )
+        existing_exprs.add(query)
+        added += 1
+
+    if added:
+        derivations.append(
+            DerivationTrace(
+                field="domain_panels",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{added} declared metrics → panels",
+                tier="manifest",
+            )
+        )
+
+
+def _add_database_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Add a DB latency panel per detected database (REQ-OAG-107).
+
+    Only fires when the service has ``detected_databases``. Uses the OTel
+    ``db.client.operation.duration`` histogram scoped by ``db_system``.
+    """
+    if not service.detected_databases:
+        return
+    for db in service.detected_databases:
+        expr = (
+            "histogram_quantile(0.99, "
+            f'rate(db_client_operation_duration_bucket{{service="{service.service_id}",'
+            f'db_system="{db}"}}[$__rate_interval]))'
+        )
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": f"{db.title()} Operation Latency (p99)",
+                "expr": expr,
+                "unit": "s",
+                "group": "Database",
+            }
+        )
+    derivations.append(
+        DerivationTrace(
+            field="database_panels",
+            source=f"instrumentation_hints.{service.service_id}.detected_databases",
+            transformation=f"{len(service.detected_databases)} databases → latency panels",
+            tier="manifest",
+        )
+    )
+
+
+def _assign_gridpos(panels: List[Dict[str, Any]]) -> None:
+    """Assign a 2-column grid layout to every panel (REQ-OAG-105).
+
+    Positions are stamped at generation time so each panel ships deployable,
+    which also makes the downstream ``repair_gridpos`` autofix a no-op — closing
+    Gap 5 at the source rather than relying on a repair that did not fire.
+    Mirrors the repair schema (half-width 12, height 8) for layout consistency.
+    Panels that already carry a ``gridPos`` are left untouched.
+    """
+    w, h = 12, 8
+    for i, panel in enumerate(panels):
+        panel.setdefault(
+            "gridPos", {"h": h, "w": w, "x": (i % 2) * 12, "y": (i // 2) * h}
+        )
 
 
 def _ensure_red_coverage(
@@ -1083,6 +1371,256 @@ def generate_slo_definitions(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4c: Extended artifact generators (Closure 3B / Gap 2)
+#
+# Native generators for the declared artifact types beyond the RED triplet.
+# Contract-driven: only produced when the onboarding metadata declares the type
+# in artifact_types. Each is derived from ServiceHints + BusinessContext, so
+# they carry the same per-service provenance as the triplet.
+# ---------------------------------------------------------------------------
+
+
+def generate_service_monitor(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate a Prometheus-Operator ServiceMonitor CRD for a service."""
+    derivations: List[DerivationTrace] = []
+    scrape_interval = "30s"
+    doc: Dict[str, Any] = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "ServiceMonitor",
+        "metadata": {
+            "name": service.service_id,
+            "labels": {
+                "app": service.service_id,
+                "managed-by": "startd8-observability",
+            },
+        },
+        "spec": {
+            "selector": {"matchLabels": {"app": service.service_id}},
+            "endpoints": [
+                {"port": "metrics", "path": "/metrics", "interval": scrape_interval}
+            ],
+        },
+    }
+    derivations.append(
+        DerivationTrace(
+            field="service_monitor.selector",
+            source="service_id",
+            transformation=f"app={service.service_id}",
+            tier="default",
+        )
+    )
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} (transport: {service.transport})\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="service_monitor",
+        service_id=service.service_id,
+        output_path=f"service-monitors/{service.service_id}-servicemonitor.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_notification_policy(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate an Alertmanager routing policy scoped to a service."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    receiver = f"{service.service_id}-{severity}"
+    doc: Dict[str, Any] = {
+        "route": {
+            "routes": [
+                {
+                    "matchers": [f"service = {service.service_id}"],
+                    "receiver": receiver,
+                    "group_by": ["alertname", "service"],
+                    "group_wait": "30s",
+                    "repeat_interval": "4h",
+                }
+            ]
+        },
+        "receivers": [
+            {
+                "name": receiver,
+                # Configure a real integration (webhook/email/slack) on deploy.
+                "webhook_configs": [{"url": "REPLACE_WITH_WEBHOOK_URL"}],
+            }
+        ],
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} — notification routing by severity\n"
+        f"# TODO: replace REPLACE_WITH_WEBHOOK_URL with a real receiver target\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="notification_policy",
+        service_id=service.service_id,
+        output_path=f"notifications/{service.service_id}-notification-policy.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_loki_rule(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate a Loki ruler alerting rule for a service's error logs."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    expr = (
+        f'sum(rate({{service="{service.service_id}"}} |= "error" [5m])) > 0'
+    )
+    doc: Dict[str, Any] = {
+        "groups": [
+            {
+                "name": f"{service.service_id}.logs",
+                "rules": [
+                    {
+                        "alert": _alert_name(service.service_id, "HighErrorLogRate"),
+                        "expr": expr,
+                        "for": "5m",
+                        "labels": {"severity": severity, "service": service.service_id},
+                        "annotations": {
+                            "summary": (
+                                f"{service.service_id} is emitting error-level logs"
+                            ),
+                            "dashboard_url": f"/d/obs-{service.service_id}",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} — Loki log-based alerting\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="loki_rule",
+        service_id=service.service_id,
+        output_path=f"loki-rules/{service.service_id}-loki-rules.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_runbook(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate an incident runbook (markdown) for a service."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    avail = business.availability or "—"
+    latency = business.latency_p99 or "—"
+    lines = [
+        f"# Runbook: {service.service_id}",
+        "",
+        f"> Generated by startd8 observability artifact generator.",
+        "",
+        "## Service summary",
+        "",
+        f"- **Transport:** {service.transport}",
+        f"- **Language:** {service.language or 'unknown'}",
+        f"- **Criticality:** {business.criticality} (alert severity: {severity})",
+        f"- **Availability target:** {avail}",
+        f"- **Latency p99 target:** {latency}",
+    ]
+    if service.detected_databases:
+        lines.append(f"- **Databases:** {', '.join(service.detected_databases)}")
+    lines += [
+        "",
+        "## Dashboards",
+        "",
+        f"- Grafana: `/d/obs-{service.service_id}`",
+        "",
+        "## Alerts",
+        "",
+        f"- Latency / error-rate / availability alerts fire at severity "
+        f"**{severity}** (see `alerts/{service.service_id}-alerts.yaml`).",
+        "",
+        "## First response",
+        "",
+        "1. Open the dashboard above; check the RED panels (rate, errors, duration).",
+        "2. Correlate with recent deploys and the error-rate panel.",
+        "3. Check logs for error spikes "
+        f"(`{{service=\"{service.service_id}\"}} |= \"error\"`).",
+        "",
+        "## Escalation",
+        "",
+        f"- {'Page on-call immediately.' if severity == 'critical' else 'Notify the owning team.'}",
+        f"- Owner: {business.owner or 'TODO: set manifest.spec.business.owner'}",
+        "",
+    ]
+    return ArtifactResult(
+        artifact_type="runbook",
+        service_id=service.service_id,
+        output_path=f"runbooks/{service.service_id}-runbook.md",
+        status="generated",
+        content="\n".join(lines),
+        derivations=derivations,
+    )
+
+
+def generate_capability_index(
+    services: List[ServiceHints],
+    business: BusinessContext,
+    report: GenerationReport,
+) -> ArtifactResult:
+    """Generate a project-level observability capability inventory."""
+    project_id = business.project_id or report.project_id or "project"
+    by_type: Dict[str, int] = {}
+    for a in report.artifacts:
+        if a.status == "generated":
+            by_type[a.artifact_type] = by_type.get(a.artifact_type, 0) + 1
+    doc: Dict[str, Any] = {
+        "project_id": project_id,
+        "project_name": business.project_name,
+        "generated_at": report.generated_at,
+        "services": sorted(s.service_id for s in services),
+        "observability_capabilities": {
+            "artifact_types_generated": sorted(by_type.keys()),
+            "artifact_counts": by_type,
+            "service_count": len(services),
+        },
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Project-level capability index for {project_id}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="capability_index",
+        service_id=project_id,
+        output_path="capability-index.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+    )
+
+
+# Declared-type-name → (per-service generator, output_prefix). Contract-driven:
+# only generated when the onboarding metadata declares the type (Closure 3B).
+_EXTENDED_PER_SERVICE_GENERATORS = {
+    "service_monitor": (generate_service_monitor, "service-monitors"),
+    "notification_policy": (generate_notification_policy, "notifications"),
+    "loki_rule": (generate_loki_rule, "loki-rules"),
+    "runbook": (generate_runbook, "runbooks"),
+}
+
+
+# ---------------------------------------------------------------------------
 # Phase 4.5: Validate-with-autofix (REQ-KZ-OBS-700 + 710)
 # ---------------------------------------------------------------------------
 
@@ -1317,6 +1855,7 @@ def generate_observability_artifacts(
     portal: bool = False,
     portal_persona: str = "operator",
     portal_provision_url: Optional[str] = None,
+    dashboard_provision_url: Optional[str] = None,
 ) -> GenerationReport:
     """Top-level orchestrator.
 
@@ -1357,6 +1896,31 @@ def generate_observability_artifacts(
         [s for s in services if not s.convention_metrics]
     )
 
+    report.declared_artifact_types = _declared_artifact_types(metadata)
+
+    # Closure 3B: native extended generators, produced only for declared types.
+    declared = set(report.declared_artifact_types)
+    for atype, (gen_fn, output_prefix) in _EXTENDED_PER_SERVICE_GENERATORS.items():
+        if atype not in declared:
+            continue
+        for service in services:
+            report.artifacts.append(
+                _generate_one(gen_fn, service, business, atype, output_prefix)
+            )
+
+    # Closure 3A / Gap 2: record any declared-but-unimplemented artifact types as
+    # explicit skips so coverage reporting is honest, not silently partial.
+    _record_unimplemented_artifact_types(report)
+
+    # Gap 4 / Closure 4A: render dashboard specs to deployable Grafana JSON at the
+    # contracted grafana/dashboards/{service}-dashboard.json path. Runs in dry_run
+    # too (side-effect-free; renders via a temp dir) so drift detection stays
+    # consistent — only the disk write below is gated on dry_run. Provisioning,
+    # when requested, only happens on a real (non-dry-run) render.
+    _convert_dashboards_to_grafana_json(
+        report, provision_url=None if dry_run else dashboard_provision_url
+    )
+
     # Portal generation — after per-service artifacts (REQ-OBP-103a)
     if portal:
         portal_result = _generate_portal_artifact(
@@ -1368,12 +1932,183 @@ def generate_observability_artifacts(
         if portal_result is not None:
             report.artifacts.append(portal_result)
 
+    # Closure 3B: project-level capability index runs last so its inventory
+    # reflects every artifact produced this run (triplet + extended + dashboard
+    # JSON + portal).
+    if "capability_index" in declared:
+        try:
+            report.artifacts.append(
+                generate_capability_index(services, business, report)
+            )
+        except Exception:
+            logger.exception("capability_index generation failed")
+
     if not dry_run:
+        # Gap 3 / Closure 2: expected metric set per service (declared + convention)
+        # drives the semantic metric-coverage score in the quality report.
+        service_metrics: Dict[str, Set[str]] = {
+            s.service_id: {m.name for m in s.convention_metrics}
+            | {m.name for m in s.declared_metrics}
+            for s in services
+        }
         _write_artifacts(report.artifacts, output_dir)
         _write_index(report, business, onboarding_metadata_path, output_dir)
-        _write_quality_report(report.artifacts, output_dir)
+        _write_quality_report(
+            report.artifacts, output_dir, service_metrics=service_metrics
+        )
 
     return report
+
+
+def _declared_artifact_types(metadata: Dict[str, Any]) -> List[str]:
+    """Extract the declared artifact_types from onboarding metadata (Closure 3A).
+
+    Accepts either a dict (keyed by type name) or a list of type names.
+    """
+    decl = metadata.get("artifact_types")
+    if isinstance(decl, dict):
+        return sorted(decl.keys())
+    if isinstance(decl, list):
+        return sorted(str(t) for t in decl if t)
+    return []
+
+
+def _record_unimplemented_artifact_types(report: GenerationReport) -> None:
+    """Emit explicit skipped entries for declared-but-unimplemented types (Closure 3A / Gap 2).
+
+    The onboarding contract may declare more artifact types than this triplet
+    generator produces. Rather than silently covering a subset (a
+    "looks-like-success" failure where artifacts_skipped reads 0), record each
+    unimplemented declared type as a skipped artifact so the manifest honestly
+    reports the shortfall.
+    """
+    project_id = report.project_id or "project"
+    for atype in report.declared_artifact_types:
+        if atype in _IMPLEMENTED_ARTIFACT_TYPES:
+            continue
+        report.artifacts.append(
+            ArtifactResult(
+                artifact_type=atype,
+                service_id=project_id,
+                output_path=f"(not generated: {atype})",
+                status="skipped",
+                error_message=(
+                    "declared in onboarding artifact_types but not implemented "
+                    "by the observability triplet generator"
+                ),
+            )
+        )
+
+
+def _log_provision_outcome(result: Any, service_id: str) -> None:
+    """Surface the workflow's provision step outcome for a service dashboard.
+
+    The workflow provisions warn-don't-fail (a push failure keeps result.success
+    True and records a 'provision' step note), so we read that step and log it.
+    """
+    for step in getattr(result, "steps", None) or []:
+        if getattr(step, "step_name", "") == "provision":
+            output = getattr(step, "output", "")
+            if "failed" in output.lower() or "error" in output.lower():
+                logger.warning("Provisioning %s: %s", service_id, output)
+            else:
+                logger.info("Provisioning %s: %s", service_id, output)
+            return
+
+
+def _convert_dashboards_to_grafana_json(
+    report: GenerationReport,
+    provision_url: Optional[str] = None,
+) -> None:
+    """Render each dashboard spec to deployable Grafana JSON (Gap 4 / Closure 4A).
+
+    Routes every generated dashboard_spec through DashboardCreatorWorkflow
+    (jsonnet → Grafana JSON) and records a ``dashboard`` artifact at the
+    contracted path ``grafana/dashboards/{service}-dashboard.json`` — the format
+    and location ``onboarding-metadata.json`` artifact_types.dashboard declares.
+    The obs-{service} uid is preserved (enforce_uid=False) so alert/SLO
+    dashboard_url links stay valid. Degrades gracefully: if the jsonnet
+    toolchain/mixin is unavailable, the conversion is recorded as ``skipped``
+    rather than failing the run.
+
+    When ``provision_url`` is set, each dashboard is also pushed to that Grafana
+    instance (idempotent upsert by uid; auth via the GRAFANA_API_TOKEN env var).
+    Provisioning is warn-don't-fail: a push failure logs a warning but the
+    dashboard artifact is still recorded as generated.
+    """
+    specs = [
+        a
+        for a in report.artifacts
+        if a.artifact_type == "dashboard_spec" and a.status == "generated" and a.content
+    ]
+    if not specs:
+        return
+
+    try:
+        from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
+    except ImportError:
+        logger.warning(
+            "DashboardCreatorWorkflow unavailable; skipping Grafana JSON conversion"
+        )
+        return
+
+    import tempfile
+
+    workflow = DashboardCreatorWorkflow()
+    for art in specs:
+        service_id = art.service_id
+        rel_path = f"grafana/dashboards/{service_id}-dashboard.json"
+        try:
+            spec_dict = yaml.safe_load(art.content)
+        except yaml.YAMLError:
+            logger.warning("Could not parse dashboard spec for %s", service_id)
+            continue
+
+        content = ""
+        status = "skipped"
+        error_message: Optional[str] = None
+        try:
+            with tempfile.TemporaryDirectory() as staging:
+                config: Dict[str, Any] = {
+                    "spec": spec_dict,
+                    "output_dir": staging,
+                    "enforce_uid": False,
+                }
+                if provision_url:
+                    config["provision"] = True
+                    config["grafana_url"] = provision_url
+                result = workflow.run(config)
+                if result.success:
+                    uid = spec_dict.get("uid", f"obs-{service_id}")
+                    produced = Path(staging) / f"{uid}.json"
+                    if produced.is_file():
+                        content = produced.read_text()
+                        status = "generated"
+                        if provision_url:
+                            _log_provision_outcome(result, service_id)
+                    else:
+                        error_message = "workflow reported success but no JSON file found"
+                else:
+                    error_message = getattr(result, "error", None) or "conversion failed"
+        except Exception as exc:  # toolchain missing, compile error, etc.
+            logger.exception("Grafana JSON conversion failed for %s", service_id)
+            error_message = f"conversion raised: {exc}"
+
+        if status != "generated":
+            logger.warning(
+                "Grafana JSON conversion skipped for %s: %s", service_id, error_message
+            )
+
+        report.artifacts.append(
+            ArtifactResult(
+                artifact_type="dashboard",
+                service_id=service_id,
+                output_path=rel_path,
+                status=status,
+                content=content,
+                error_message=error_message,
+            )
+        )
 
 
 def _write_artifacts(artifacts: List[ArtifactResult], output_dir: Path) -> None:
@@ -1414,6 +2149,25 @@ def _write_index(
     skipped = sum(1 for a in report.artifacts if a.status == "skipped")
     errored = sum(1 for a in report.artifacts if a.status == "error")
 
+    summary: Dict[str, Any] = {
+        "services_processed": report.services_processed,
+        "services_skipped": report.services_skipped,
+        "artifacts_generated": generated,
+        "artifacts_skipped": skipped,
+        "artifacts_errored": errored,
+    }
+
+    # Closure 3A / Gap 2: honest artifact-type coverage against the declared contract.
+    if report.declared_artifact_types:
+        declared = set(report.declared_artifact_types)
+        implemented = declared & _IMPLEMENTED_ARTIFACT_TYPES
+        unimplemented = sorted(declared - _IMPLEMENTED_ARTIFACT_TYPES)
+        summary["declared_artifact_types"] = sorted(declared)
+        summary["unimplemented_artifact_types"] = unimplemented
+        summary["artifact_type_coverage"] = round(
+            len(implemented) / len(declared), 4
+        )
+
     index: Dict[str, Any] = {
         "manifest_id": "observability-artifacts",
         "version": "1.0.0",
@@ -1422,13 +2176,7 @@ def _write_index(
         "source": {
             "onboarding_metadata": str(onboarding_path),
         },
-        "summary": {
-            "services_processed": report.services_processed,
-            "services_skipped": report.services_skipped,
-            "artifacts_generated": generated,
-            "artifacts_skipped": skipped,
-            "artifacts_errored": errored,
-        },
+        "summary": summary,
         "artifacts": [
             {
                 "type": a.artifact_type,
@@ -1474,6 +2222,7 @@ def _write_index(
 def _write_quality_report(
     artifacts: List[ArtifactResult],
     output_dir: Path,
+    service_metrics: Optional[Dict[str, Set[str]]] = None,
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -1481,13 +2230,20 @@ def _write_quality_report(
     alongside the aggregate summary.  Uses ``compute_service_composite`` from
     ``startd8.validators.observability_artifact_checks`` when available;
     otherwise falls back to a simple average.
+
+    When ``service_metrics`` (service_id → expected metric names) is provided,
+    a semantic ``metric_coverage_score`` is computed per service and blended
+    into the composite (Gap 3 / Closure 2), so a structurally-clean triplet
+    that ignores the service's domain metrics no longer scores near-perfect.
     """
     try:
         from startd8.validators.observability_artifact_checks import (
+            compute_metric_coverage,
             compute_service_composite,
         )
     except ImportError:  # pragma: no cover
         compute_service_composite = None  # type: ignore[assignment]
+        compute_metric_coverage = None  # type: ignore[assignment]
 
     scored = [a for a in artifacts if a.quality and a.status == "generated"]
     if not scored:
@@ -1495,6 +2251,7 @@ def _write_quality_report(
 
     # ---- per-service breakdown ----
     services: Dict[str, Dict[str, Any]] = {}
+    service_contents: Dict[str, List[str]] = {}
     for a in scored:
         svc = services.setdefault(a.service_id, {})
         svc[a.artifact_type] = {
@@ -1504,14 +2261,31 @@ def _write_quality_report(
             "issues": a.quality.get("issues", []),
             "repairs_applied": a.quality.get("repairs_applied", []),
         }
+        if a.content:
+            service_contents.setdefault(a.service_id, []).append(a.content)
 
-    # compute per-service composite
+    # compute per-service composite (blended with metric coverage when available)
     for svc_id, svc_data in services.items():
         dash_score = svc_data.get("dashboard_spec", {}).get("score", 0.0)
         alert_score = svc_data.get("alert_rule", {}).get("score", 0.0)
         slo_score = svc_data.get("slo_definition", {}).get("score", 0.0)
+
+        coverage_score: Optional[float] = None
+        if (
+            service_metrics
+            and compute_metric_coverage is not None
+            and svc_id in service_metrics
+        ):
+            cov = compute_metric_coverage(
+                service_metrics[svc_id], service_contents.get(svc_id, [])
+            )
+            coverage_score = cov.score
+            svc_data["metric_coverage"] = cov.to_dict()
+
         if compute_service_composite is not None:
-            composite = compute_service_composite(dash_score, alert_score, slo_score)
+            composite = compute_service_composite(
+                dash_score, alert_score, slo_score, metric_coverage=coverage_score
+            )
         else:
             present = [
                 s
@@ -1538,6 +2312,15 @@ def _write_quality_report(
     aggregate["avg_composite_score"] = (
         round(sum(composites) / len(composites), 4) if composites else 0.0
     )
+    coverages = [
+        s["metric_coverage"]["score"]
+        for s in services.values()
+        if "metric_coverage" in s
+    ]
+    if coverages:
+        aggregate["avg_metric_coverage_score"] = round(
+            sum(coverages) / len(coverages), 4
+        )
     aggregate["total_issues"] = total_issues
     aggregate["total_repairs"] = total_repairs
 
@@ -1584,16 +2367,20 @@ def check_drift(
         dry_run=True,
     )
 
-    # Build keyed sets for comparison
+    # Build keyed sets for comparison. The derived "dashboard" (Grafana JSON) is
+    # excluded: it is a 1:1 render of "dashboard_spec" (already compared) and its
+    # presence depends on the jsonnet toolchain being available, which would
+    # otherwise make drift flip on environment rather than on real change.
+    _DERIVED_TYPES = {"dashboard"}
     existing_keys = {
         (a["type"], a["service"])
         for a in existing_index.get("artifacts", [])
-        if a.get("status") == "generated"
+        if a.get("status") == "generated" and a.get("type") not in _DERIVED_TYPES
     }
     fresh_keys = {
         (a.artifact_type, a.service_id)
         for a in report.artifacts
-        if a.status == "generated"
+        if a.status == "generated" and a.artifact_type not in _DERIVED_TYPES
     }
 
     new_artifacts = fresh_keys - existing_keys

@@ -74,7 +74,7 @@
   },
 
   // Time series panel
-  timeseries(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', overrides=[], legendMode='list', legendPlacement='bottom', legendCalcs=[], fillOpacity=10, lineWidth=1, drawStyle='line', stacking='none', lineInterpolation='linear'):: {
+  timeseries(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', overrides=[], legendMode='list', legendPlacement='bottom', legendCalcs=[], fillOpacity=10, lineWidth=1, drawStyle='line', stacking='none', lineInterpolation='linear', thresholds=[]):: {
     title: title,
     type: 'timeseries',
     datasource: datasource,
@@ -82,7 +82,8 @@
     fieldConfig: {
       defaults: {
         [if unit != '' then 'unit']: unit,
-        color: { mode: 'palette-classic' },
+        color: { mode: if std.length(thresholds) > 0 then 'thresholds' else 'palette-classic' },
+        [if std.length(thresholds) > 0 then 'thresholds']: { mode: 'absolute', steps: thresholds },
         custom: {
           drawStyle: drawStyle,
           lineInterpolation: lineInterpolation,
@@ -204,14 +205,14 @@
   },
 
   // Histogram panel
-  histogram(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit=''):: {
+  histogram(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', thresholds=[]):: {
     title: title,
     type: 'histogram',
     datasource: datasource,
     targets: targets,
     fieldConfig: {
       defaults: {
-        color: { mode: 'palette-classic' },
+        color: { mode: if std.length(thresholds) > 0 then 'thresholds' else 'palette-classic' },
         custom: {
           fillOpacity: 80,
           gradientMode: 'none',
@@ -222,7 +223,7 @@
         mappings: [],
         thresholds: {
           mode: 'absolute',
-          steps: [{ color: 'green', value: null }],
+          steps: if std.length(thresholds) > 0 then thresholds else [{ color: 'green', value: null }],
         },
         [if unit != '' then 'unit']: unit,
       },

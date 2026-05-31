@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
@@ -34,6 +34,11 @@ __all__ = [
     "repair_gridpos",
     "repair_slo_target",
     "compute_service_composite",
+    "MetricCoverageResult",
+    "compute_metric_coverage",
+    "extract_referenced_metrics",
+    "CoverageGateResult",
+    "evaluate_coverage_gate",
     "has_rate_panel",
     "has_error_panel",
     "has_duration_panel",
@@ -628,13 +633,190 @@ def validate_slo(
 # ---------------------------------------------------------------------------
 
 
+# Composite blend weights when semantic metric-coverage is available
+# (Gap 3 / Closure 2). Structural form still dominates, but ignoring a
+# service's domain metrics now visibly drags the headline number down.
+_STRUCTURAL_WEIGHT = 0.7
+_COVERAGE_WEIGHT = 0.3
+
+
 def compute_service_composite(
     dashboard_score: float,
     alert_score: float,
     slo_score: float,
+    metric_coverage: Optional[float] = None,
 ) -> float:
-    """Per-service composite = weighted average (REQ-KZ-OBS-303)."""
-    return (dashboard_score * 0.35) + (alert_score * 0.35) + (slo_score * 0.30)
+    """Per-service composite = weighted average (REQ-KZ-OBS-303).
+
+    The structural composite is a weighted average of the three artifact
+    scores (form: well-formed YAML, valid panels, etc.). When ``metric_coverage``
+    is provided (Gap 3 / Closure 2), it is blended in so the headline score
+    reflects *semantic relevance* — a triplet that ignores the service's domain
+    metrics scores high structurally but low on coverage, and the composite
+    drops accordingly. Omitting ``metric_coverage`` preserves the legacy
+    structural-only behaviour for backward compatibility.
+    """
+    structural = (dashboard_score * 0.35) + (alert_score * 0.35) + (slo_score * 0.30)
+    if metric_coverage is None:
+        return structural
+    return round(structural * _STRUCTURAL_WEIGHT + metric_coverage * _COVERAGE_WEIGHT, 6)
+
+
+# ---------------------------------------------------------------------------
+# Semantic metric-coverage check (Gap 3 / Closure 2)
+# ---------------------------------------------------------------------------
+
+_METRIC_SUFFIXES = ("_bucket", "_count", "_sum", "_total")
+
+
+@dataclass
+class MetricCoverageResult:
+    """Fraction of a service's expected metrics referenced by its artifacts."""
+
+    score: float = 1.0
+    expected: List[str] = field(default_factory=list)
+    covered: List[str] = field(default_factory=list)
+    uncovered: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "score": self.score,
+            "expected_count": len(self.expected),
+            "covered_count": len(self.covered),
+            "uncovered": self.uncovered,
+        }
+
+
+def _normalize_metric_name(name: str) -> str:
+    """Normalize a metric name to its base form for coverage comparison.
+
+    Converts OTel dot-notation to Prometheus underscores and strips the
+    histogram/counter suffixes PromQL appends (``_bucket``/``_count``/``_sum``/
+    ``_total``), so ``http.server.duration`` and ``http_server_duration_bucket``
+    compare equal.
+    """
+    base = name.replace(".", "_")
+    for suf in _METRIC_SUFFIXES:
+        if base.endswith(suf):
+            return base[: -len(suf)]
+    return base
+
+
+def extract_referenced_metrics(contents: Iterable[Optional[str]]) -> Set[str]:
+    """Collect base metric names referenced across artifact contents.
+
+    Comment lines (YAML ``#`` headers and the commented-out domain-alert TODO
+    stubs) are excluded, so a metric only counts as *referenced* when it appears
+    in an active expression — not merely as a suggested-but-disabled stub.
+    """
+    referenced: Set[str] = set()
+    for content in contents:
+        if not content:
+            continue
+        for line in content.splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            for raw in _extract_metric_names(line):
+                referenced.add(_normalize_metric_name(raw))
+    return referenced
+
+
+def compute_metric_coverage(
+    expected_metrics: Iterable[str],
+    artifact_contents: Iterable[Optional[str]],
+) -> MetricCoverageResult:
+    """Compute semantic metric-coverage for a service (Gap 3 / Closure 2).
+
+    Coverage = |expected ∩ referenced| / |expected|, where ``expected`` is the
+    service's declared + convention metrics and ``referenced`` is the set of
+    metrics that appear in at least one active artifact expression. An empty
+    expected set scores 1.0 (nothing to cover).
+    """
+    expected = {_normalize_metric_name(m) for m in expected_metrics if m}
+    referenced = extract_referenced_metrics(artifact_contents)
+    covered = expected & referenced
+    uncovered = expected - referenced
+    score = len(covered) / len(expected) if expected else 1.0
+    return MetricCoverageResult(
+        score=round(score, 4),
+        expected=sorted(expected),
+        covered=sorted(covered),
+        uncovered=sorted(uncovered),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Coverage gate — make the semantic-coverage scores actionable
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CoverageGateResult:
+    """Outcome of evaluating coverage scores against minimum thresholds.
+
+    A gate lets a caller (CLI / pipeline) fail when generated observability is
+    structurally clean but semantically thin — low metric coverage (Gap 3) or a
+    partial artifact-type contract (Gap 2) — instead of passing silently.
+    """
+
+    passed: bool
+    failures: List[str] = field(default_factory=list)
+    metric_coverage: Optional[float] = None
+    artifact_type_coverage: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "failures": self.failures,
+            "metric_coverage": self.metric_coverage,
+            "artifact_type_coverage": self.artifact_type_coverage,
+        }
+
+
+def evaluate_coverage_gate(
+    *,
+    metric_coverage: Optional[float] = None,
+    artifact_type_coverage: Optional[float] = None,
+    min_metric_coverage: Optional[float] = None,
+    min_artifact_type_coverage: Optional[float] = None,
+) -> CoverageGateResult:
+    """Evaluate coverage scores against optional minimum thresholds.
+
+    Only thresholds that are set are enforced; unset thresholds are ignored, so
+    a caller that configures neither always passes (gate is opt-in). When a
+    threshold is set but its score is unavailable, that is a failure — the gate
+    cannot vouch for a number it does not have.
+    """
+    failures: List[str] = []
+
+    if min_metric_coverage is not None:
+        if metric_coverage is None:
+            failures.append(
+                f"metric_coverage unavailable but minimum {min_metric_coverage:.2f} required"
+            )
+        elif metric_coverage < min_metric_coverage:
+            failures.append(
+                f"metric_coverage {metric_coverage:.2f} below minimum {min_metric_coverage:.2f}"
+            )
+
+    if min_artifact_type_coverage is not None:
+        if artifact_type_coverage is None:
+            failures.append(
+                f"artifact_type_coverage unavailable but minimum "
+                f"{min_artifact_type_coverage:.2f} required"
+            )
+        elif artifact_type_coverage < min_artifact_type_coverage:
+            failures.append(
+                f"artifact_type_coverage {artifact_type_coverage:.2f} below minimum "
+                f"{min_artifact_type_coverage:.2f}"
+            )
+
+    return CoverageGateResult(
+        passed=not failures,
+        failures=failures,
+        metric_coverage=metric_coverage,
+        artifact_type_coverage=artifact_type_coverage,
+    )
 
 
 # ---------------------------------------------------------------------------

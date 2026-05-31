@@ -740,3 +740,167 @@ class TestDerivationCompletenessIntegration:
         unused, incorrect = validate_derivation_completeness([], [])
         assert unused == []
         assert incorrect == []
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 / Closure 2: semantic metric-coverage
+# ---------------------------------------------------------------------------
+
+# The thirteen metrics the pipeline discovered for strtd8 (3 convention + 10 declared).
+STRTD8_EXPECTED = [
+    "http.server.duration",
+    "http.server.request.body.size",
+    "http.server.response.body.size",
+    "startd8_tokens_total",
+    "startd8_cost_total",
+    "startd8_active_sessions",
+    "startd8_context_usage_ratio",
+    "startd8_truncations_total",
+    "startd8_requests_total",
+    "startd8_response_time_ms",
+    "contextcore_task_progress",
+    "contextcore_task_status",
+    "contextcore_install_completeness_percent",
+]
+
+
+class TestMetricNameNormalization:
+    def test_strips_otel_dots_and_prom_suffixes(self):
+        from startd8.validators.observability_artifact_checks import _normalize_metric_name
+
+        assert _normalize_metric_name("http.server.duration") == "http_server_duration"
+        assert _normalize_metric_name("http_server_duration_bucket") == "http_server_duration"
+        assert _normalize_metric_name("startd8_cost_total") == "startd8_cost"
+        assert _normalize_metric_name("foo_count") == "foo"
+        assert _normalize_metric_name("plain_gauge") == "plain_gauge"
+
+
+class TestExtractReferencedMetrics:
+    def test_excludes_comment_lines(self):
+        from startd8.validators.observability_artifact_checks import extract_referenced_metrics
+
+        content = (
+            "panels:\n"
+            '- expr: rate(http_server_duration_count{service="s"}[5m])\n'
+            "# TODO: domain-metric alerts\n"
+            '#    expr: rate(startd8_cost_total{service="s"}[5m]) > <THRESHOLD>\n'
+        )
+        referenced = extract_referenced_metrics([content])
+        assert "http_server_duration" in referenced
+        # The commented-out stub must NOT count as referenced.
+        assert "startd8_cost" not in referenced
+
+    def test_handles_none_and_empty(self):
+        from startd8.validators.observability_artifact_checks import extract_referenced_metrics
+
+        assert extract_referenced_metrics([None, "", "   "]) == set()
+
+
+class TestMetricCoverage:
+    def test_run003_scenario_low_coverage(self):
+        """Old run-003 artifacts reference only the 3 convention metrics → 3/13."""
+        from startd8.validators.observability_artifact_checks import compute_metric_coverage
+
+        dashboard = (
+            "panels:\n"
+            '- expr: histogram_quantile(0.99, rate(http_server_duration_bucket{service="strtd8"}[5m]))\n'
+            '- expr: rate(http_server_request_body_size_total{service="strtd8"}[5m])\n'
+            '- expr: rate(http_server_response_body_size_total{service="strtd8"}[5m])\n'
+        )
+        cov = compute_metric_coverage(STRTD8_EXPECTED, [dashboard])
+        assert cov.score == round(3 / 13, 4)
+        assert len(cov.expected) == 13
+        assert len(cov.covered) == 3
+        assert "startd8_cost" in cov.uncovered
+
+    def test_full_coverage_when_domain_metrics_present(self):
+        from startd8.validators.observability_artifact_checks import compute_metric_coverage
+
+        exprs = []
+        for m in STRTD8_EXPECTED:
+            prom = m.replace(".", "_")
+            if prom.endswith("_total"):
+                exprs.append(f'- expr: rate({prom}{{service="strtd8"}}[5m])')
+            else:
+                exprs.append(f'- expr: {prom}{{service="strtd8"}}')
+        content = "panels:\n" + "\n".join(exprs)
+        cov = compute_metric_coverage(STRTD8_EXPECTED, [content])
+        assert cov.score == 1.0
+        assert cov.uncovered == []
+
+    def test_empty_expected_scores_one(self):
+        from startd8.validators.observability_artifact_checks import compute_metric_coverage
+
+        cov = compute_metric_coverage([], ["panels: []"])
+        assert cov.score == 1.0
+
+
+class TestCompositeBlend:
+    def test_coverage_drags_composite_down(self):
+        from startd8.validators.observability_artifact_checks import compute_service_composite
+
+        structural_only = compute_service_composite(0.9167, 1.0, 1.0)
+        blended = compute_service_composite(0.9167, 1.0, 1.0, metric_coverage=round(3 / 13, 4))
+        assert blended < structural_only
+        # Structural ~0.97 must drop appreciably when only 3/13 metrics are covered.
+        assert blended < 0.8
+
+    def test_none_coverage_preserves_legacy_behaviour(self):
+        from startd8.validators.observability_artifact_checks import compute_service_composite
+
+        assert compute_service_composite(0.9, 0.8, 1.0) == pytest.approx(
+            0.9 * 0.35 + 0.8 * 0.35 + 1.0 * 0.30
+        )
+
+    def test_full_coverage_barely_moves_composite(self):
+        from startd8.validators.observability_artifact_checks import compute_service_composite
+
+        blended = compute_service_composite(1.0, 1.0, 1.0, metric_coverage=1.0)
+        assert blended == pytest.approx(1.0)
+
+
+class TestCoverageGate:
+    def test_no_thresholds_always_passes(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(metric_coverage=0.1, artifact_type_coverage=0.1)
+        assert result.passed
+        assert result.failures == []
+
+    def test_metric_coverage_below_minimum_fails(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=0.23, min_metric_coverage=0.5
+        )
+        assert not result.passed
+        assert any("metric_coverage" in f for f in result.failures)
+
+    def test_artifact_type_coverage_below_minimum_fails(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            artifact_type_coverage=0.375, min_artifact_type_coverage=0.5
+        )
+        assert not result.passed
+        assert any("artifact_type_coverage" in f for f in result.failures)
+
+    def test_passes_when_at_or_above_minimum(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=0.8,
+            artifact_type_coverage=1.0,
+            min_metric_coverage=0.8,
+            min_artifact_type_coverage=0.5,
+        )
+        assert result.passed
+
+    def test_missing_score_with_threshold_is_a_failure(self):
+        from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+        result = evaluate_coverage_gate(
+            metric_coverage=None, min_metric_coverage=0.5
+        )
+        assert not result.passed
+        assert any("unavailable" in f for f in result.failures)

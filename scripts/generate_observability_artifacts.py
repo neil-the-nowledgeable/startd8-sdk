@@ -98,6 +98,35 @@ def main() -> int:
         metavar="URL",
         help="Provision portal to Grafana at URL (e.g. http://localhost:3000)",
     )
+    parser.add_argument(
+        "--provision",
+        default=None,
+        metavar="URL",
+        help=(
+            "Provision per-service dashboards to Grafana at URL (idempotent upsert "
+            "by uid; auth via GRAFANA_API_TOKEN). Warn-don't-fail. Opt-in."
+        ),
+    )
+    parser.add_argument(
+        "--min-metric-coverage",
+        type=float,
+        default=None,
+        metavar="FRACTION",
+        help=(
+            "Fail (non-zero exit) when the average semantic metric-coverage "
+            "score is below this fraction (0.0-1.0). Opt-in; unset = no gate."
+        ),
+    )
+    parser.add_argument(
+        "--min-artifact-type-coverage",
+        type=float,
+        default=None,
+        metavar="FRACTION",
+        help=(
+            "Fail (non-zero exit) when artifact-type coverage (declared types "
+            "produced / declared) is below this fraction. Opt-in; unset = no gate."
+        ),
+    )
     args = parser.parse_args()
 
     onboarding = Path(args.onboarding_metadata)
@@ -116,6 +145,7 @@ def main() -> int:
             manifest_path=manifest,
             dry_run=args.dry_run,
             portal=False,  # We'll generate portals individually below
+            dashboard_provision_url=args.provision,
         )
         for persona in ("operator", "engineer", "manager"):
             from startd8.observability.artifact_generator import _generate_portal_artifact
@@ -148,6 +178,7 @@ def main() -> int:
             portal=args.portal,
             portal_persona=args.portal_persona,
             portal_provision_url=args.portal_provision,
+            dashboard_provision_url=args.provision,
         )
 
     # Print summary
@@ -189,37 +220,90 @@ def main() -> int:
             score_str = f" score={a.quality['score']:.0%}" if a.quality else ""
             print(f"  {marker} {a.output_path} ({a.status}{score_str})")
 
-    # REQ-OPI-500: Dashboard spec → /dbrd-cr8r handoff details
-    dashboards = [
-        a for a in report.artifacts
-        if a.artifact_type == "dashboard_spec" and a.status == "generated"
+    # Deployable Grafana JSON (Gap 4): dashboards are now compiled directly to
+    # grafana/dashboards/{service}-dashboard.json — no separate /dbrd-cr8r step.
+    grafana_dashboards = [
+        a for a in report.artifacts if a.artifact_type == "dashboard"
     ]
-    if dashboards and not args.dry_run:
-        print(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        print(f"  │  Dashboard Specs Ready for Grafana Compilation          │")
-        print(f"  ├─────────────────────────────────────────────────────────┤")
-        for d in dashboards:
-            spec_path = output / d.output_path
-            score_str = f" (quality: {d.quality['score']:.0%})" if d.quality else ""
-            print(f"  │  {d.service_id}{score_str}")
-            print(f"  │    spec: {spec_path}")
-        print(f"  ├─────────────────────────────────────────────────────────┤")
-        print(f"  │  To compile to Grafana JSON:                            │")
-        print(f"  │    /dbrd-cr8r --spec <path>                             │")
-        print(f"  │                                                         │")
-        print(f"  │  To compile + provision to Grafana:                     │")
-        print(f"  │    /dbrd-cr8r --spec <path> --provision                 │")
-        print(f"  │                                                         │")
-        print(f"  │  Pipeline: DashboardSpec YAML → Jsonnet → Grafana JSON  │")
-        print(f"  │  Requires: jsonnet toolchain (go-jsonnet or jsonnet)     │")
-        print(f"  └─────────────────────────────────────────────────────────┘")
+    if grafana_dashboards and not args.dry_run:
+        produced = [d for d in grafana_dashboards if d.status == "generated"]
+        skipped_dash = [d for d in grafana_dashboards if d.status != "generated"]
+        print("\n  Grafana dashboards (deployable JSON):")
+        for d in produced:
+            print(f"    + {output / d.output_path}")
+        for d in skipped_dash:
+            print(f"    ~ {d.service_id}: not compiled ({d.error_message})")
+        if args.provision:
+            print(f"  Provisioned to Grafana at {args.provision} "
+                  f"(idempotent upsert; see logs for per-dashboard status).")
+        elif produced:
+            print("  To deploy: import the JSON above, commit it for GitOps, or "
+                  "re-run with --provision <grafana-url>.")
+        if skipped_dash:
+            print("  (Dashboards skipped when the jsonnet toolchain / startd8-mixin "
+                  "is unavailable; the YAML specs remain under dashboards/.)")
 
     # Best-effort provenance append
     if not args.dry_run and generated > 0:
         provenance_path = onboarding.parent / "run-provenance.json"
         _append_to_provenance(provenance_path, output)
 
-    return 1 if errored > 0 else 0
+    # Coverage gate (opt-in): fail the run when semantic coverage is too thin.
+    gate_failed = _apply_coverage_gate(args, output)
+
+    return 1 if (errored > 0 or gate_failed) else 0
+
+
+def _apply_coverage_gate(args, output: Path) -> bool:
+    """Evaluate the opt-in coverage gate; returns True if the gate FAILED.
+
+    Reads the average metric-coverage from observability-quality.json and the
+    artifact-type coverage from observability-manifest.yaml, then checks them
+    against the --min-*-coverage thresholds. No thresholds set → no gate.
+    """
+    if args.min_metric_coverage is None and args.min_artifact_type_coverage is None:
+        return False
+
+    if args.dry_run:
+        print("\n[coverage gate] skipped in --dry-run (no quality report written)")
+        return False
+
+    from startd8.validators.observability_artifact_checks import evaluate_coverage_gate
+
+    metric_coverage = None
+    quality_path = output / "observability-quality.json"
+    if quality_path.is_file():
+        try:
+            quality = json.loads(quality_path.read_text())
+            metric_coverage = quality.get("aggregate", {}).get("avg_metric_coverage_score")
+        except (ValueError, OSError):
+            pass
+
+    artifact_type_coverage = None
+    manifest_path = output / "observability-manifest.yaml"
+    if manifest_path.is_file():
+        try:
+            import yaml
+
+            idx = yaml.safe_load(manifest_path.read_text()) or {}
+            artifact_type_coverage = idx.get("summary", {}).get("artifact_type_coverage")
+        except (ValueError, OSError):
+            pass
+
+    result = evaluate_coverage_gate(
+        metric_coverage=metric_coverage,
+        artifact_type_coverage=artifact_type_coverage,
+        min_metric_coverage=args.min_metric_coverage,
+        min_artifact_type_coverage=args.min_artifact_type_coverage,
+    )
+
+    if result.passed:
+        print("\n[coverage gate] PASS")
+    else:
+        print("\n[coverage gate] FAIL")
+        for failure in result.failures:
+            print(f"  - {failure}")
+    return not result.passed
 
 
 def _write_quality_to_kaizen_metrics(
