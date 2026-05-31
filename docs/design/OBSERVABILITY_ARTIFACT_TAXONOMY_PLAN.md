@@ -1,7 +1,7 @@
 # Observability Artifact Taxonomy — Implementation Plan
 
 **Date:** 2026-05-31
-**Status:** Plan v0.2 — post-CRP-review (R1 triaged: 9/9 S-suggestions applied; paired with requirements v0.4)
+**Status:** Plan v0.3 — post-CRP R1–R4 (4 rounds, 3 models; all S-suggestions applied; paired with requirements v0.5)
 **Scope:** SDK modules — `src/startd8/observability/artifact_generator.py`,
 `src/startd8/validators/observability_artifact_checks.py`,
 `scripts/generate_observability_artifacts.py`. The auto-satisfy *consumer* (REQ-OAT-031b) is
@@ -27,6 +27,41 @@ Phase 4  Orientation-aware validation + 3-way coverage  REQ-OAT-050/051/060/061/
 Phase 5  Metadata declare-don't-guess + routing + report REQ-OAT-020/022/024/040/041/030/031a; D-7, D-11
 Phase 6  (deferred, cross-repo) auto-satisfy consumer    REQ-OAT-031b  [plan-ingestion]
 ```
+
+## CRP R2–R4 plan amendments (code-grounded)
+
+The R2–R4 rounds read the implementation and amended these phases (full dispositions in Appendix A;
+requirements in OBSERVABILITY_ARTIFACT_TAXONOMY_REQUIREMENTS.md v0.5):
+
+- **Phase 1 (keystone) — table is a repurpose, not a sibling (R2-S1/S2).** `_ARTIFACT_TYPE_TO_CATEGORY`
+  (`:1584`) holds `observe/integration/action/reference`, a *different* axis read only by
+  `generate_capability_index:1631`. Phase 1 MUST introduce a distinctly-named five-category map (or
+  rename+value-migrate) and **land the Phase-3.2 capability_index revert before/with it** so no run
+  leaks five-category strings into the capability schema. Phase-1 validation MUST also assert
+  category-3 artifacts are **excluded from the per-service `services` dict immediately** (R4-S5) and
+  extend the Phase-0.5 golden baseline to cover the table repurpose (R2-S4).
+- **Phase 2 — one registry (R2-S5), `requires_declaration` (R3-S1), ordering (R3-S2).** Replace the
+  two-table design (Phase 2.1 dispatch `(category,type)` + Phase 2.2 scoring `(category,orientation)`)
+  with **one** `declared_type → {runtime_type, category, orientation, generator, validator_set,
+  output_path, scope, requires_declaration}` registry (REQ-OAT-070a). The orchestrator MUST honour
+  `requires_declaration` (triplet unconditional; extended only-if-declared) and an ordered iteration
+  (spec before its JSON conversion).
+- **Phase 0.4 — delete the CLI loop (R4-S4) + list return (R3-S3).** Moving persona fan-out inside the
+  generator changes its return to `List[ArtifactResult]` → orchestrator (`:1980`) MUST `extend` not
+  `append`; and the legacy CLI `--portal-persona=all` reload loop (`scripts:139–171`) MUST be
+  **deleted**, not just bypassed (else D-10 persists).
+- **Phase 3.3 — skip_reason/owner (R2-S6).** The skip record carries `skip_reason`
+  (`owned_elsewhere`|`unimplemented`) + `owner`, no `source_checksum`.
+- **Phase 4.3 — aggregate rollup + orientation-keyed inputs (R2-S3, R4-S3).** Replace the count-pooled
+  mean (`_write_quality_report:2433`) with a mean of per-metric composites (missing axes = 0); collect
+  coverage inputs **by orientation from the registry**, covering `alert_rule`↔`prometheus_rule` /
+  `dashboard_spec`↔`dashboard` aliases (not type-string compares).
+- **Phase 4.5 (new) — cross-artifact migration (R4-S2).** Migrate `validate_cross_artifact_consistency`
+  + kaizen `cross_artifact_issues` to registry `declared_type`+`orientation`, or mark
+  out-of-scope-legacy — else portal/alias renames silently kill detection while scores stay green.
+- **Phase 5.6 (new) — index consolidation (R4-S1).** Name **one** canonical retrospective index
+  (`generation_report`); demote `observability-manifest.yaml` to a thin summary + pointer, or retire
+  it with CLI/kaizen readers migrated. Forbid duplicate per-artifact inventories.
 
 ---
 
@@ -221,6 +256,20 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 | R1-S7 | Sequence-harden Phase 3 vs Phase 2 | R1 | Phase 3 sequencing preamble | 2026-05-31 |
 | R1-S8 | dashboard_spec demotion: orphaned-readers + counts | R1 | Phase 4.4 validation | 2026-05-31 |
 | R1-S9 | Persona move single-load assertion | R1 | Phase 0.4 validation | 2026-05-31 |
+| R2-S1 | Table repurpose/retire, not sibling | R2 (opus-4-8) | Phase-1 amendment: distinctly-named five-cat map + update generate_capability_index reader | 2026-05-31 |
+| R2-S2 | Phase 1↔3 capability_index window | R2 | Phase-1 amendment: land Phase-3.2 revert before/with the repurpose | 2026-05-31 |
+| R2-S3 | Aggregate rollup not pooled mean | R2 | Phase-4.3 amendment (missing axes=0) | 2026-05-31 |
+| R2-S4 | Golden baseline covers Phase 1 | R2 | Phase-0.5/Phase-1 validation amendment | 2026-05-31 |
+| R2-S5 | Single type-keyed registry | R2 | Phase-2 amendment (one registry; projections) | 2026-05-31 |
+| R2-S6 | skip_reason/owner on skip record | R2 | Phase-3.3 amendment | 2026-05-31 |
+| R3-S1 | requires_declaration flag | R3 (opus-4-8-1m) | Phase-2 amendment (registry column; orchestrator honours it) | 2026-05-31 |
+| R3-S2 | dispatch ordering (spec before JSON) | R3 | Phase-2 amendment (ordered registry) | 2026-05-31 |
+| R3-S3 | portal list return type | R3 | Phase-0.4 amendment (extend not append) | 2026-05-31 |
+| R4-S1 | index consolidation | R4 (composer-2.5-fast) | NEW Phase-5.6 (one canonical index; demote/retire manifest) | 2026-05-31 |
+| R4-S2 | cross-artifact migration | R4 | NEW Phase-4.5 (registry-keyed, or out-of-scope-legacy) | 2026-05-31 |
+| R4-S3 | orientation-keyed coverage (aliases) | R4 | Phase-4.3 amendment | 2026-05-31 |
+| R4-S4 | delete CLI persona loop | R4 | Phase-0.4 amendment (delete, not bypass) | 2026-05-31 |
+| R4-S5 | exclude pseudo-service in Phase 1 | R4 | Phase-1 validation amendment | 2026-05-31 |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -265,6 +314,84 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 
 **Disagreements** (prior untriaged items this reviewer would reject): none — first round.
 
+#### Review Round R2 — claude-opus-4-8 — 2026-05-31
+
+- **Reviewer**: claude-opus-4-8
+- **Date**: 2026-05-31 17:10:00 UTC
+- **Scope**: Plan review (S-prefix), **code-grounded**. R1 caught the obvious sequencing/validation gaps; this round read the target modules and focuses on interactions the plan's phase ordering creates with the *existing* implementation (the keystone's collision with `_ARTIFACT_TYPE_TO_CATEGORY`, the coverage rollup, and the capability_index migration window).
+
+**Executive summary (top risks / gaps / opportunities):**
+- Phase 1.1 calls `_ARTIFACT_TYPE_TO_ORIENTATION` a "sibling of existing `_ARTIFACT_TYPE_TO_CATEGORY`," but the existing table holds a *different axis* (`observe/integration/action/reference`, `artifact_generator.py:1584`), not the five-category enum — the keystone repurposes a live field, not just adds a sibling.
+- Phase ordering (1 repurposes the category table; 3 removes its only reader `generate_capability_index`) creates a **window** where the masquerade emits new-taxonomy category strings into the capability schema.
+- Phase 4.3's "equal 1/3" fixes the per-metric value but inherits the existing **count-pooled** aggregate (`_write_quality_report:2433`) which is not equal-weight across services missing an axis.
+- The Phase-0.5 golden baseline guards Phase 2, but the riskiest *semantic* change is Phase 1's table repurpose; the baseline should cover it too.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-S1 | Architecture | high | Phase 1.1 MUST treat `_ARTIFACT_TYPE_TO_CATEGORY` as a **repurpose/retire**, not an additive sibling: the existing table maps to `observe/integration/action/reference` (`artifact_generator.py:1584`), a different axis than the five-category enum. Add a Phase-1 step to introduce a distinctly-named five-category table (or rename + value-migrate) and update its sole reader `generate_capability_index` (line 1631). | The plan's "sibling of existing `_ARTIFACT_TYPE_TO_CATEGORY`" framing under-counts the work and risks silently overloading a field that an existing artifact reads (requirements R2-F1). | Phase 1, new step 1.0 or 1.1 note | Grep: only the new five-category map feeds `category` on `ArtifactResult`; legacy 4-value set retired or explicitly mapped |
+| R2-S2 | Ops | medium | Sequence-harden Phase 1 vs Phase 3: Phase 1 repurposes the category table while `generate_capability_index` (still emitted, `:1985`) reads it at line 1631 until Phase 3.2 reverts the masquerade. Land the **revert (3.2) or the table-reader update before/with** the Phase-1 repurpose, so no run emits new-taxonomy category strings into the capability schema. | Cross-phase interaction the per-phase validation misses: Phase 1 changes table semantics, Phase 3 removes the consumer; between them the masquerade leaks `service_observability` etc. into a capability manifest (requirements R2-F1). | Phase 1 / Phase 3 sequencing note | Test: at the Phase-1 PR boundary, capability_index output (if still produced) carries no five-category enum value |
+| R2-S3 | Validation | medium | Phase 4.3 MUST specify the **aggregate** coverage rollup, not just the per-metric 1/3: replace the existing count-pooled mean (`_write_quality_report:2433`, `(sum(dash)+sum(alert))/(len(dash)+len(alert))`) with a mean of per-metric/per-service composites where missing axes score 0. Add a validation row. | R1-S5 pinned the per-metric ≈0.33 but not the rollup; the inherited pooled mean is availability-weighted, so the headline `avg_metric_coverage_score` is not equal-1/3 when a service has no bridge artifacts (requirements R2-F2). | Phase 4, Step 4.3 + Validation | Test: two services, one with no alerts, yield the documented equal-weight aggregate, not the pooled value |
+| R2-S4 | Risks | medium | Extend the Phase-0.5 golden baseline + diff guard to cover **Phase 1's table repurpose** (capability_index / quality-report `category` strings), not only Phase 2's dispatch/scoring refactor. | The plan treats Phase 1 as behavior-collapsing-for-free, but repurposing `_ARTIFACT_TYPE_TO_CATEGORY` changes the `category` value emitted by `generate_capability_index` (line 1631) and the quality report — an observable output change that the byte/score baseline should catch (extends CRP R1-S2). | Phase 0 Step 0.5 / Phase 1 Validation | Golden diff: Phase-1 output changes are limited to intended new `category`/`orientation` fields; no unintended capability-schema drift |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-S5 | Architecture | medium | Phase 2.1 (`(category, artifact_type)` dispatch table) and Phase 2.2 (`(category, orientation)` scoring dispatcher) SHOULD derive from a **single type-keyed registry** rather than two independently-keyed tables, so the two-axis model does not become a new D-1/D-5-style smell. | Two composite keys for one artifact must be kept consistent by hand; a single `type → {category, orientation, generator, validator_set, scope}` row makes both projections derived (requirements R2-F4). | Phase 2 preamble / Steps 2.1–2.2 | Code review: one registry; dispatch and scoring both index it; adding a type is one row |
+| R2-S6 | Ops | low | Phase 3.3 honest-skip needs a **`skip_reason`/`owner`** on the skip record: the existing `_record_unimplemented_artifact_types` (line 2056) emits a single "not implemented" reason, but REQ-OAT-011/052 want "owned by onboarding" distinguished from "unimplemented." | Without the reason field the honest-skip cannot say *why* (owned elsewhere vs not built), and REQ-OAT-052's "with owner" is unmet (requirements R2-F3). | Phase 3, Step 3.3 | Test: onboarding-owned `capability_index` skip carries `skip_reason=owned_elsewhere`/`owner=onboarding` |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): R1-S2 (golden baseline) — R2-S4 extends it to Phase 1. R1-S5 (3-way blend weights) — R2-S3 extends it to the aggregate rollup. R1-S7 (Phase 3 vs 2 sequencing) — R2-S2 adds the Phase-1↔3 capability_index window.
+
+**Disagreements** (prior untriaged items this reviewer would reject): none.
+
+#### Review Round R3 — claude-opus-4-8-1m — 2026-05-31
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-31 17:50:00 UTC
+- **Scope**: Plan review (S-prefix), **code-grounded**. Focused on hidden complexity traps in the implementation details of Phases 0 and 2.
+
+**Executive summary (top risks / gaps / opportunities):**
+- Phase 2.1 unifies the dispatch loop but misses that the triplet is currently generated *unconditionally* while extended artifacts are generated *conditionally* (only if declared). Unifying them naively will break behavior.
+- Phase 2.1 unification also risks breaking ordering dependencies. `_convert_dashboards_to_grafana_json` runs after `dashboard_spec` is generated.
+- Phase 0.4 moves the persona fan-out inside the generator, changing its return type from a single `ArtifactResult` to a `List`, which breaks the orchestrator's `append` logic.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-S1 | Architecture | high | Phase 2.1 MUST add a `requires_declaration: bool` (or `always_generate: bool`) column to the unified dispatch table. The orchestrator must check this flag: generate the legacy triplet unconditionally (as it does today), but generate extended artifacts only if they exist in `declared_artifact_types`. | The current code uses two separate loops with different generation conditions (`_GENERATORS` vs `_EXTENDED_PER_SERVICE_GENERATORS`). A single loop without this flag will either skip required triplet artifacts or generate unrequested extended ones (requirements R3-F1). | Phase 2, Step 2.1 | Code review: The dispatch table explicitly encodes the condition, and the orchestrator loop respects it |
+| R3-S2 | Architecture | medium | Phase 2.1 MUST explicitly document that the dispatch table's iteration order is topologically sorted, ensuring `dashboard_spec` is generated before the `dashboard` JSON converter runs. | `_convert_dashboards_to_grafana_json` requires `dashboard_spec` to already be in `report.artifacts`. Moving it into a unified dispatch loop introduces a hard ordering dependency that the plan overlooks (requirements R3-F2). | Phase 2, Step 2.1 | Test: The JSON conversion runs successfully and finds the spec in the report when triggered from the unified dispatch loop |
+| R3-S3 | Ops | medium | Phase 0.4 MUST note that moving `--portal-persona=all` inside `_generate_portal_artifact` changes its return type from `Optional[ArtifactResult]` to `List[ArtifactResult]`, requiring the orchestrator (`artifact_generator.py:1980`) to `extend` rather than `append` to `report.artifacts`. | The plan treats this as a pure move, but `ArtifactResult` is a single object. Fanning out personas means returning multiple artifacts. A simple move without updating the signature and caller will cause type errors or nested lists. | Phase 0, Step 0.4 | Code review: The orchestrator handles a list return from the portal generator correctly |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R2-S1: Retiring the old category table is required.
+- R2-S5: Single type-keyed registry is the correct architectural end-state.
+
+**Disagreements** (prior untriaged items this reviewer would reject): none.
+
+#### Review Round R4 — composer-2.5-fast — 2026-05-31
+
+- **Reviewer**: composer-2.5-fast
+- **Date**: 2026-05-31 18:15:00 UTC
+- **Scope**: Plan review (S-prefix), **code-grounded**. R1–R3 covered dispatch/scoring unification; this round targets **index consolidation**, **type-alias migration**, and **CLI end-user gates** visible in the three target modules today.
+
+**Executive summary (top risks / gaps / opportunities):**
+- Phase 5 adds `generation_report` but leaves `_write_index` (`observability-manifest.yaml`) producing a parallel artifact inventory — triple-index accidental complexity unless Phase 5.6 specifies retirement.
+- Internal `alert_rule` vs declared `prometheus_rule` breaks bridge metric coverage in `_write_quality_report:2351` today; Phase 4.3 orientation refactor must not repeat this via string compares.
+- `--min-artifact-type-coverage` reads manifest `artifact_type_coverage` which penalizes honest onboarding-owned skips — operators see false FAIL.
+- Phase 0.4 must delete the CLI `--portal-persona=all` re-load loop (`scripts/generate_observability_artifacts.py:139–171`), not only move fan-out into the generator.
+- Cross-artifact validation (`validate_cross_artifact_consistency`) is absent from plan phases but still feeds kaizen postmortem — type renames will silently degrade it.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R4-S1 | Architecture | high | Phase 5.6 MUST specify **index consolidation**: either repurpose `_write_index` to emit `generation_report` (renaming the file) and drop duplicate artifact lists from `observability-manifest.yaml`, or mark manifest deprecated in the same PR that adds `generation_report`. Add a validation row asserting **one** canonical per-artifact inventory file. | REQ-OAT-030 names `_write_index` as the producer seam; Phase 5.5 adds a second inventory without a removal step — permanent dual-writer complexity (requirements R4-F1). End users and CLI gates already read manifest (`generate_observability_artifacts.py:283`). | Phase 5, Step 5.6 + Validation | Test: grep shows one file holds full per-artifact `{type,category,orientation,checksum}` inventory; manifest lacks duplicate list or carries `deprecated: true` |
+| R4-S2 | Validation | medium | Phase 4 MUST add a step (e.g. 4.5) to migrate **`validate_cross_artifact_consistency`** and kaizen cross-artifact emission to use **declared_type + orientation** from the unified registry instead of hard-coded type names (`dashboard`, `alert_rule`, `portal`). | Cross-artifact checks predate the taxonomy but still run from the CLI (`generate_observability_artifacts.py:395–427`); Phase 3.4 portal split and prometheus/alert alias normalization will silently stop detection while per-artifact scores stay green — parallel validation path smell (requirements R4-F5). | Phase 4 (new step 4.5) | Test: fixture with alert referencing unvisualized metric still populates `cross_artifact_issues` after portal split |
+| R4-S3 | Validation | medium | Phase 4.3 MUST replace `_write_quality_report`'s type-string content pools (`:2349–2352`, `alert_rule` only) with **orientation-keyed collection** from the registry, including `prometheus_rule`/`dashboard` declared aliases (requirements R4-F3). | Bridge metric coverage ignores `prometheus_rule` artifacts today; Phase 4's 3-way blend inherits this bug if not explicitly fixed — headline `avg_metric_coverage_score` misleads operators (Ask 4). | Phase 4, Step 4.3 + Validation | Test: declared `prometheus_rule` with live rules yields non-zero bridge coverage component |
+| R4-S4 | Ops | medium | Phase 0.4 MUST **delete** the CLI `--portal-persona=all` branch that reloads metadata per persona (`scripts/generate_observability_artifacts.py:139–171`) once fan-out moves into the generator; keeping both paths preserves D-10 (triple metadata load). | Plan Step 0.4 says "CLI calls the generator once" but does not require removing the legacy CLI loop; partial migration leaves accidental complexity and violates the single-load assertion in Phase 0 Validation (extends R1-S9). | Phase 0, Step 0.4 + Validation | Test: `--portal-persona=all` invokes generator once; no `load_onboarding_metadata` in CLI for persona fan-out |
+| R4-S5 | Validation | low | Phase 1 Validation MUST assert category-3 artifacts (`capability_index`/future inventory, portal) are **excluded from the per-service `services` dict** in `observability-quality.json` immediately — not deferred to Phase 4 — so D-2 spurious composites do not pollute `--min-metric-coverage` gates during the migration window. | D-2 documents fake project-level service entries in quality JSON today (`generate_capability_index:1653`, `_write_quality_report:2334`); Phase 1 adds `category` but plan validation only checks field presence, not exclusion from per-service composites. | Phase 1 Validation row | Test: quality JSON `services` keys are runtime service IDs only; no `project_id` pseudo-service composite |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): R2-S1/S2 (Phase 1↔3 sequencing). R2-S3 (aggregate rollup). R3-S1/S2 (dispatch flags + ordering). R3-S3 (portal list return type). Plan Phase 5.6 existence for REQ-OAT-032 — R4-S1 strengthens it with concrete retirement criteria.
+
+**Disagreements** (prior untriaged items this reviewer would reject): none.
+
 ---
 
 ## Requirements Coverage Matrix — R1
@@ -296,3 +423,38 @@ Analysis only (not triage). Maps each requirement to the plan phase/step that ad
 | REQ-OAT-061 (bridge: both sub-dimensions) | Phase 4.1 | Partial | Runbook/dashboard-link failure mode + runbook production ownership unspecified (R1-F5) |
 | REQ-OAT-062 (mixed-orientation files: score off-orientation subset) | Phase 4.2 | Covered | — |
 | REQ-OAT-070 (extension by table, not control flow) | Phase 2.1, 2.2 (enforced) | Partial | Guards per-`type` branches but not `(category,orientation)`-keyed branches in scoring dispatcher (R1-F6) |
+
+## Requirements Coverage Matrix — R2 (code-grounded deltas only)
+
+Analysis only (not triage). Lists requirements whose coverage changes once the existing implementation is inspected; rows not listed are unchanged from R1.
+
+| Requirement | Plan Phase / Step | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| REQ-OAT-023 (keystone: category+orientation; assigned from lookup tables) | Phase 1.1–1.4 | Partial | Plan assumes `_ARTIFACT_TYPE_TO_CATEGORY` is the 5-cat table; in code (`:1584`) it holds `observe/integration/action/reference`. No step repurposes/retires it or updates its reader `generate_capability_index:1631` (R2-S1 / R2-F1) |
+| REQ-OAT-051 (orientation metric coverage, 3-way) | Phase 4.3 | Partial | Per-metric 1/3 fixed (R1) but **aggregate** rollup unspecified; inherits count-pooled mean (`:2433`), not equal-weight across axis-missing services (R2-S3 / R2-F2) |
+| REQ-OAT-052 (honest skip with owner) | Phase 3.3 | Partial | Existing skip path (`:2056`) emits one reason; no `skip_reason`/`owner` to distinguish onboarding-owned (011) from unimplemented (R2-S6 / R2-F3) |
+| REQ-OAT-070 (extension by table) | Phase 2.1, 2.2 | Partial | Two differently-keyed tables — `(category,artifact_type)` dispatch vs `(category,orientation)` scoring — not one type-keyed registry; a new consistency burden (R2-S5 / R2-F4) |
+| REQ-OAT-062 (mixed-orientation files) | Phase 4.2 | Partial | Denominator rule for a dual-scored file (1 artifact vs 2 toward scored==generated) unstated (R2-F5) |
+
+## Requirements Coverage Matrix — R3 (code-grounded deltas only)
+
+Analysis only (not triage). Lists requirements whose coverage changes once the complexity of unified dispatch is inspected; rows not listed are unchanged from R2.
+
+| Requirement | Plan Phase / Step | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| REQ-OAT-042 (orchestration dispatch by category) | Phase 2.1 | Partial | Unifying dispatch naively breaks the existing conditional vs unconditional generation behavior (`_GENERATORS` vs `_EXTENDED_PER_SERVICE_GENERATORS`). Missing a `requires_declaration` flag (R3-S1 / R3-F1). |
+| REQ-OAT-042 (orchestration dispatch by category) | Phase 2.1 | Partial | Unifying dispatch ignores hard ordering dependencies (`dashboard` JSON conversion depends on `dashboard_spec`). Topologically sorted iteration order is unstated (R3-S2 / R3-F2). |
+| REQ-OAT-051 / 052 (coverage vs skips) | Phase 3.3 | Partial | Skips exempt the artifact from the scored denominator, but the interaction with *metric* coverage is unstated. A skipped artifact shouldn't grant a free pass to uncovered metrics (R3-F3). |
+
+## Requirements Coverage Matrix — R4 (code-grounded deltas only)
+
+Analysis only (not triage). Lists requirements whose coverage changes once type-alias drift and index overlap are inspected; rows not listed are unchanged from R3.
+
+| Requirement | Plan Phase / Step | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| REQ-OAT-032 (prospective vs retrospective; single authoritative index) | Phase 5.6 | Partial | Step 5.6 says "keep distinct" but does not retire `_write_index` / `observability-manifest.yaml` duplicate inventory — three overlapping indexes remain (R4-S1 / R4-F1) |
+| REQ-OAT-030 (`generation_report` producer) | Phase 5.5 | Partial | Producer seam still documented as `_write_index` in requirements §4.5 while plan adds a separate file — dual-writer unless consolidated (R4-F1) |
+| REQ-OAT-051 (orientation metric coverage) | Phase 4.3 | Partial | Coverage collection still type-string-based in code (`alert_rule` only); declared `prometheus_rule` alias not covered (R4-S3 / R4-F3) |
+| REQ-OAT-052 (honest skip + coverage gates) | Phase 3.3 | Partial | `artifact_type_coverage` in manifest penalizes `owned_elsewhere` skips — CLI gate false FAIL (R4-F2) |
+| REQ-OAT-023 (keystone fields on every record) | Phase 1.1–1.4 | Partial | No `declared_type` vs runtime alias on `ArtifactResult`; registry cannot unify reporting (R4-F4) |
+| REQ-OAT-050 (validation) | Phase 4 | Partial | Cross-artifact consistency validators not in plan; will silently break on type renames (R4-S2 / R4-F5) |
