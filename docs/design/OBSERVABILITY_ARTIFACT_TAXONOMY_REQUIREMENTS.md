@@ -1,9 +1,9 @@
 # Observability Artifact Taxonomy — Requirements
 
 **Date:** 2026-05-31
-**Status:** Draft v0.3 — post-planning self-reflective update (requirements only; no code this
-pass). Two-axis model: artifact = (category = *what is observed*, orientation = *who consumes /
-acts on it*).
+**Status:** Draft v0.4 — post-CRP-review (R1 triaged: 9/9 F-suggestions applied). Requirements only;
+no code this pass. Two-axis model: artifact = (category = *what is observed*, orientation = *who
+consumes / acts on it*).
 **Lineage:** Consolidates and re-frames `OBSERVABILITY_GENERATION_GAP_ANALYSIS.md`,
 `OBSERVABILITY_GENERATION_FOLLOWUP_RUN007.md`, `UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md`,
 and the pipeline-innate concerns in `cap-dev-pipe/design/pipeline-requirements.md` (REQ-CDP-*).
@@ -218,7 +218,10 @@ Each `artifact_types.<type>` entry keeps its existing fields (`output_path`, `ou
 **REQ-OAT-022 (backward compatibility).** A flat `artifact_types` view MUST remain derivable
 from `artifact_categories` (union of all categories' types) so existing readers do not break
 during migration. Producers SHOULD emit both during the transition; the nested form is
-authoritative.
+authoritative. To keep the flatten deterministic (CRP R1-F3): an artifact type belongs to
+**exactly one** category — the same type key appearing under two categories is an **error**, not a
+merge — and the flat view's iteration order is **category-declaration order** then within-category
+order, so readers that iterate see a stable sequence.
 
 **REQ-OAT-023 (keystone).** Every emitted artifact record (`ArtifactResult`, and entries in the
 generation manifest / `generation_report`) MUST carry an explicit `category` field (five-category
@@ -245,6 +248,16 @@ classification, and when used MUST be recorded in the generation report as an *i
 declared) classification, so the gap is visible. This requirement exists because planning showed
 REQ-OAT-040, implemented naively, would *add* accidental complexity (brittle metric-name lists);
 declaring the facts upstream removes it.
+
+**REQ-OAT-025 (upstream producer — cross-referenced, out of scope).** REQ-OAT-024 requires the
+generator to *read* declared structural facts, but onboarding metadata is produced **upstream** by
+the cap-dev-pipe onboarding exporter. For "declare, don't guess" to have an actual producer (and not
+silently degrade to heuristic-only), the onboarding exporter MUST emit `kind` per
+`instrumentation_hints` entry and `category` (and optionally `orientation`) per declared metric.
+This is specified here as a cross-referenced contract (mirroring the REQ-OAT-031a/031b split); the
+exporter change is tracked in cap-dev-pipe, out of this SDK module's scope. Until it lands, the
+generator's heuristic fallback (REQ-OAT-024) is the *primary* path and MUST record each
+classification as `inferred`, so the dependency gap is visible, not silent. (CRP R1-F7/S4.)
 
 ---
 
@@ -282,7 +295,11 @@ category can have its own preconditions, deploy path, and validators.
 
 **REQ-OAT-050.** Quality validation MUST be both **category-aware and orientation-aware**. Every
 generated artifact MUST be scored (closing run-007 Finding 1: `artifacts_scored ==
-artifacts_generated`), using validators appropriate to its `(category, orientation)`:
+artifacts_generated`). Honest skips (REQ-OAT-052 — declared-but-unproduced types) are **excluded
+from the scored denominator**: a skip is neither generated nor scored, so it does not break the
+`scored == generated` invariant and is **not** counted as a 0-score artifact (which would distort
+coverage) (CRP R1-F8/S6). Scoring uses validators appropriate to the artifact's
+`(category, orientation)`:
 - **human-oriented** → clarity / completeness / layout / audience-fit (e.g. dashboard has the
   expected panels & navigation; runbook has all required sections);
 - **system-oriented** → schema correctness / parseability / definition validity (e.g. SLO has a
@@ -306,10 +323,12 @@ the orientation axis, generalizing the run-007 dashboarded/alerted split:
 - `metric_coverage_bridge` — referenced by an active (non-commented) alert / notification path.
 
 `metric_coverage_human` ≡ the prior `metric_coverage_dashboarded`; `metric_coverage_bridge` ≡
-the prior `metric_coverage_alerted` (names retained as aliases for continuity). All three fold
-into the composite so a metric that is *visualized but neither SLI'd nor alerted* reads as
-partially covered, not 1.0. These are **service / project / agent** observability dimensions and
-MUST NOT be applied to pipeline-innate artifacts.
+the prior `metric_coverage_alerted` (names retained as aliases for continuity). The composite MUST
+fold the three with **equal 1/3 weights** unless a weighting is explicitly documented, so the
+headline value is defined and stable (CRP R1-F4): a metric covered on exactly one axis (e.g.
+visualized but neither SLI'd nor alerted) reads **≈0.33**, not 1.0 and not 0.0. These are
+**service / project / agent** observability dimensions and MUST NOT be applied to pipeline-innate
+artifacts.
 
 **REQ-OAT-052 (category-aware honest skip).** Coverage reporting MUST be reported per category.
 A declared-but-unproduced type MUST be reported as a skip **with its category and owner** (e.g.
@@ -325,7 +344,12 @@ and reporting MUST treat the two axes separately.
 **REQ-OAT-061.** Bridge artifacts (`prometheus_rule`/`alert_rule` alerting, `loki_rule`
 alerting, `notification_policy`) MUST be validated and reported on **both** the system and human
 sub-dimensions (REQ-OAT-050), so the system→human handoff (a valid alert that is nonetheless
-unactionable, or a route with no target) is independently visible.
+unactionable, or a route with no target) is independently visible. Resolution of the runbook
+boundary (CRP R1-F5): this generator **does** produce per-service `runbook` artifacts
+(`service × human`); a bridge artifact whose `runbook_url`/`dashboard` link points at an artifact
+that was **not** produced scores the bridge artifact's **human half as partial** (the handoff is
+broken), which is distinct from — and does not double-count with — the runbook's own
+human-orientation coverage.
 
 **REQ-OAT-062 (mixed-orientation files).** When a single artifact file contains rules of
 differing orientation (e.g. a `prometheus_rule` with both recording and alerting rules), the
@@ -343,15 +367,32 @@ permanent guard against the accidental complexity Appendix D removes (five dispa
 two scoring paths): once dispatch and validation are table-driven, the cost of a new type is one
 row, and the taxonomy cannot silently re-accrete special-case control flow. Any change that would
 add a per-type `if/elif` branch to orchestration or scoring is a violation of this requirement and
-MUST instead extend the relevant table.
+MUST instead extend the relevant table. This prohibition explicitly extends to
+**`(category, orientation)`-keyed branches**, not just per-`type` branches (CRP R1-F6): the scoring
+dispatcher selects validators from a `(category, orientation) → [validators]` table, and the bridge
+"both halves" check (REQ-OAT-050/061) MUST be a property of that table's validator-set for the
+`bridge` orientation — **not** an `if orientation == "bridge"` branch in the dispatch body, which
+would re-accrete the special-case control flow the table is meant to eliminate.
+
+**REQ-OAT-071 (net-removal acceptance criterion).** The code-alignment pass's headline claim is that
+the taxonomy *removes* more complexity than it adds (§0). To keep that falsifiable (CRP R1-F1/S1),
+the follow-up PR MUST report the net line delta across the three production modules
+(`artifact_generator.py`, `observability_artifact_checks.py`, the CLI — **excluding tests/docs**)
+and that delta SHOULD be **non-positive**; a positive delta is permitted only with a recorded
+rationale in the PR. This is a **reviewed acceptance criterion**, deliberately **not** an automated
+hard line-count CI gate — a rigid line-count fail would itself become accidental complexity (gamed
+counts, false failures on legitimate additions). The diff-stat is evidence for the reviewer, not a
+build blocker.
 
 ### 4.5 Pipeline-innate: generation index, reuse, and serial runs
 
 **REQ-OAT-030 (`generation_report`).** The pipeline MUST emit a `generation_report` (category 3)
 that indexes *what was generated this run*, grouped by category, with per-artifact
-`{type, category, service, output_path, status, checksum?}` and links to the run provenance.
-This is the artifact the user described as "a capability index that indexes what has been
-generated."
+`{type, category, orientation, service, output_path, status, source_checksum, staleness_inputs}`
+and links to the run provenance. Every record carries `category` **and** `orientation` (consistent
+with the REQ-OAT-023 keystone), and `source_checksum`/`staleness_inputs` are **mandatory** for the
+producer (consistent with REQ-OAT-031a — they are not optional) (CRP R1-F9). This is the artifact
+the user described as "a capability index that indexes what has been generated."
 
 > **Scope split (planning insight).** REQ-OAT-031 has a **producer** half and a **consumer** half.
 > The producer half — emit `generation_report` with per-artifact source checksums — lives in this
@@ -361,9 +402,17 @@ generated."
 > here as a cross-referenced contract the producer must satisfy. The checksums exist solely for
 > the consumer; this module has no use for them itself.
 
-**REQ-OAT-031a (producer — in scope).** `generation_report` MUST record, per artifact, a
-`source_checksum` derived from the inputs that determined it (onboarding metadata + manifest),
-so a later run can detect staleness without re-deriving the artifact.
+**REQ-OAT-031a (producer — in scope).** `generation_report` MUST record, per artifact, the data
+that **fully determines** the consumer's freshness test (REQ-OAT-031b) — since the contract is the
+only coordination point across the SDK↔plan-ingestion seam, it must be exhaustive (CRP R1-F2/S3):
+- `source_checksum` over the **per-artifact input slice** (only the metadata + manifest fields that
+  actually determined *this* artifact), **not** a whole-file hash — a whole-file hash over-invalidates
+  (every artifact regenerates on any unrelated metadata edit, a Mottainai loss), a too-narrow hash
+  misses real changes (stale reuse);
+- a `generator_version` / template-hash component, so a generator/template change invalidates even
+  when inputs are unchanged;
+- a `staleness_inputs: [...]` list naming the fields that fed the checksum, so the consumer's
+  freshness predicate is determined by the report alone (the consumer cannot see SDK internals).
 
 **REQ-OAT-031b (consumer — plan-ingestion, cross-referenced).** When a pipeline run targets
 a project that was previously generated, plan-ingestion MUST load the prior
@@ -484,3 +533,94 @@ The code-alignment pass should net **remove** lines, not add them.
 (013 revert-not-migrate, 050 effort S–M), resolved 2 questions, and catalogued 11 pre-existing
 accidental-complexity items (Appendix D) the implementation should remove. Net finding: the
 taxonomy is a simplification — implementation removes more complexity than it adds.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-F{n}` for this requirements doc).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table. This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID. Endorsement counts inform priority but do not auto-apply suggestions.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| R1-F1 | Measurable net-removal invariant | R1 (opus-4-8) | Applied as **REQ-OAT-071**, but as a *reviewed* acceptance criterion (diff-stat evidence), **not** a hard CI line-count gate — a rigid gate is itself accidental complexity | 2026-05-31 |
+| R1-F2 | Checksum granularity + generator_version + staleness_inputs | R1 | Applied to **REQ-OAT-031a** (per-artifact input slice; generator/template hash; `staleness_inputs` list) | 2026-05-31 |
+| R1-F3 | Flatten precedence / duplicate-key rule | R1 | Applied to **REQ-OAT-022** (type ∈ exactly one category → dup is error; order = category-declaration order) | 2026-05-31 |
+| R1-F4 | Specify 3-way coverage blend weights | R1 | Applied to **REQ-OAT-051** (equal 1/3; single-axis ≈0.33) | 2026-05-31 |
+| R1-F5 | Runbook ownership + bridge-link failure mode | R1 | Applied to **REQ-OAT-061** (generator produces runbooks; unresolvable link → bridge human-half partial, no double-count) | 2026-05-31 |
+| R1-F6 | Forbid `(category,orientation)` if/elif in dispatcher | R1 | Applied to **REQ-OAT-070** (bridge dual-check is a table validator-set property, not a branch) | 2026-05-31 |
+| R1-F7 | Upstream exporter requirement for declare-don't-guess | R1 | Applied as **REQ-OAT-025** (cap-dev-pipe onboarding exporter MUST emit `kind`/metric-`category`; fallback recorded as `inferred`) | 2026-05-31 |
+| R1-F8 | Skip vs scored denominator | R1 | Applied to **REQ-OAT-050** (skips excluded from denominator; not 0-score) | 2026-05-31 |
+| R1-F9 | generation_report record schema consistency | R1 | Applied to **REQ-OAT-030** (record carries category+orientation; checksum/staleness mandatory for producer) | 2026-05-31 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-05-31
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-31 00:00:00 UTC
+- **Scope**: Requirements review (F-prefix) for the two-axis observability artifact taxonomy. Sponsor focus asks answered first; then ambiguity / testability / completeness suggestions.
+
+##### Sponsor focus-ask answers (orchestrator triages later; not triage)
+
+**Ask 1 — Accidental complexity: does the design actually remove it?**
+- **Summary answer:** Partial — net-removal is plausible for the *current* 3 implemented categories, but the two-axis model introduces three new structures (orientation lookup table, unified dispatch table, 3-way coverage blend) whose own complexity is asserted but never bounded.
+- **Rationale:** §0 and Appendix D credibly show D-2/D-4/D-7 collapsing once `category`/`orientation` are first-class (REQ-OAT-023/024). But the §0 closing claim "essential complexity is two declarative axes + two lookup tables + one dispatch table + one validation runner" is a *target*, not a verified invariant — there is no acceptance criterion that the net line delta is negative, and REQ-OAT-070 forbids new branches without stating how the table itself is prevented from growing per-`(category,orientation)` special cases (e.g. the bridge "both halves" path in REQ-OAT-050 is itself a conditional). The 5-category enum where only 3 are implemented (§1) is justified by REQ-OAT-041 (declared home for already-emitted metrics) — that is genuine, not speculative, so it is *not* over-abstraction.
+- **Assumptions / conditions:** Net-removal holds only if Phases 0–2 land before features (plan's distillation-first ordering) *and* a measured line-delta gate exists; otherwise the claim is unfalsifiable.
+- **Suggested improvements:** Add REQ-OAT-071 (measurable invariant: code-alignment pass MUST net-remove lines, asserted by a diff-stat check in the follow-up PR) and tighten REQ-OAT-070 to forbid `(category, orientation)`-keyed `if/elif` in the scoring dispatcher, not just per-`type` branches (see R1-F1, R1-F6).
+
+**Ask 2 — Producer/consumer scope boundary (REQ-OAT-031 split).**
+- **Summary answer:** Mostly clean, but the boundary is *under-specified on the producer side* — the producer is told to emit `source_checksum` but never told what determines staleness, so the consumer's freshness test is unspecified across the seam.
+- **Rationale:** REQ-OAT-031a says the checksum is "derived from the inputs that determined it (onboarding metadata + manifest)" but does not pin (a) checksum *granularity* — whole-metadata-file vs the per-artifact slice of metadata that actually fed this artifact — or (b) whether template/generator-version is part of the staleness key. REQ-OAT-031b step 2 ("fresh = source-checksum unchanged") then silently inherits that ambiguity: a coarse whole-file checksum invalidates every artifact on any metadata edit (Mottainai violation), while a too-narrow one misses template changes (stale reuse). The producer "has no use for [checksums] itself" (§4.5 note) — correct — but that makes the contract the *only* coordination point, so it must be exhaustive.
+- **Assumptions / conditions:** The consumer (cap-dev-pipe) cannot see SDK generator internals, so everything it needs must be in `generation_report`.
+- **Suggested improvements:** REQ-OAT-031a MUST specify checksum granularity (per-artifact input-slice) and MUST include a `generator_version` / template-hash component; add a `staleness_inputs: [...]` field per artifact record so the consumer's freshness predicate is fully determined by the report (see R1-F2).
+
+**Ask 3 — Nested `artifact_categories` backward-compat (REQ-OAT-020/022/024).**
+- **Summary answer:** Migration is safe for *flat-only* readers but REQ-OAT-022 omits flatten precedence rules, and "declare, don't guess" (REQ-OAT-024) is not realistic without a stated upstream (cap-dev-pipe onboarding-export) change.
+- **Rationale:** REQ-OAT-022 says the flat view is the "union of all categories' types" but does not say what happens on a *duplicate type key* across categories (can't occur today, but the spec permits cat-4/5 to reserve overlapping names) or how ordering is preserved for readers that iterate. More critically, REQ-OAT-024 requires onboarding metadata to *declare* `kind:` and per-metric `category`/`orientation` — but §0 itself notes onboarding metadata is produced upstream; nothing in this doc requires the cap-dev-pipe onboarding exporter to emit those fields, so the generator's "read, don't guess" path has no producer until that cross-repo change exists. Without it, REQ-OAT-024's heuristic "fallback" silently becomes the *primary* path.
+- **Assumptions / conditions:** Existing readers (onboarding export, plan-ingestion) currently consume flat `artifact_types`.
+- **Suggested improvements:** Add flatten precedence + duplicate-key rule to REQ-OAT-022; add an explicit cross-referenced upstream requirement (REQ-OAT-025, mirroring the 031b pattern) obligating the cap-dev-pipe onboarding exporter to emit `kind`/metric-`category` so REQ-OAT-024 is satisfiable (see R1-F3, R1-F7).
+
+**Ask 4 — Orientation-aware validation & coverage (REQ-OAT-050/051/060/061/062).**
+- **Summary answer:** The taxonomy is crisp for clear cases but has at least two genuinely ambiguous boundaries (runbook; recording-rule subset of a bridge file), and the 3-way composite blend can distort the headline score unless weighting is specified.
+- **Rationale:** Appendix A flags `runbook` as "borderline category … stays with service for now" and §1.2 lists it human-oriented — fine — but REQ-OAT-061's bridge actionability check requires "runbook/dashboard links resolvable," which presumes runbooks *exist as scored artifacts*; nothing says whether a missing-but-linked runbook fails the alert (bridge) or is a separate human-artifact gap. For coverage, REQ-OAT-051 folds human/system/bridge "into the composite" but never gives the blend weights, so a metric visualized (human ✓) but un-SLI'd and un-alerted could read 0.33 or some weighted value — the headline is undefined and could mislead (Ask 4's distortion concern). REQ-OAT-062's "score the off-orientation subset" is crisp.
+- **Assumptions / conditions:** Bridge artifacts can reference artifacts (runbooks) that this generator may not itself produce.
+- **Suggested improvements:** Specify the 3-way blend (equal-weight 1/3 each, or document the chosen weights) and state whether an unresolvable runbook link is a bridge-partial vs a separate coverage gap; clarify runbook scoring ownership (see R1-F4, R1-F5).
+
+##### Numbered suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | Add a measurable net-removal invariant (REQ-OAT-071): the code-alignment pass MUST produce a non-positive net line delta across the three modules, asserted by a diff-stat check in the follow-up PR | §0 asserts "the taxonomy is a net simplification" and the closing line claims "implementation removes more complexity than it adds," but no requirement makes this falsifiable; an unmeasured simplification claim can silently regress into addition | New REQ-OAT-071 under §4.4 (extensibility invariant), or §5 migration | CI/diff-stat: `git diff --stat` on the follow-up PR shows net deletions in `artifact_generator.py` + `observability_artifact_checks.py` + CLI |
+| R1-F2 | Interfaces | high | REQ-OAT-031a MUST specify (a) checksum *granularity* = the per-artifact slice of onboarding metadata + manifest that determined that artifact (not whole-file), and (b) inclusion of a `generator_version`/template-hash component; add a per-record `staleness_inputs` listing | As written ("derived from the inputs that determined it") the checksum scope is ambiguous; whole-file → over-invalidation (Mottainai loss), too-narrow → stale reuse; the consumer (031b) can only be correct if the report fully determines freshness | REQ-OAT-031a body | Unit test: editing an unrelated service's metadata does NOT change artifact X's `source_checksum`; bumping `generator_version` DOES |
+| R1-F3 | Data | high | Add flatten precedence + duplicate-key resolution to REQ-OAT-022: define behavior when the same artifact-type key appears under two categories, and state that flat-view iteration order is category-declaration order | "union of all categories' types" is underspecified for collisions and ordering; readers that iterate `artifact_types` (onboarding export, plan-ingestion) could see nondeterministic order or silent overwrite | REQ-OAT-022 | Test: a metadata fixture with a duplicate type key produces a deterministic, documented flat view (error or first-wins, as decided) |
+| R1-F4 | Validation | medium | Specify the 3-way coverage composite blend in REQ-OAT-051 (e.g. equal 1/3 weights for human/system/bridge, or document chosen weights) and define the value for a metric covered on only one axis | REQ-OAT-051 says all three "fold into the composite" so a partially-covered metric "reads as partially covered, not 1.0," but never gives weights; the headline coverage number is currently undefined and Ask 4 flags possible distortion | REQ-OAT-051 | Test: a metric on a dashboard only (human ✓, system ✗, bridge ✗) yields the documented composite (e.g. 0.33), not 1.0 and not 0.0 |
+| R1-F5 | Validation | medium | Clarify runbook scoring ownership and the bridge-link failure mode: state whether an unresolvable `runbook`/`dashboard` link in a bridge artifact (REQ-OAT-061) scores the *alert* as partial, or is reported as a separate human-artifact coverage gap, and whether this generator produces `runbook` artifacts at all | Appendix A marks runbook "borderline … stays with service for now" and REQ-OAT-061 requires "runbook/dashboard links resolvable," but ownership/production of runbooks is unstated, creating an ambiguous validation case (Ask 4) | §1.2 + REQ-OAT-061 | Test: a bridge alert linking a nonexistent runbook scores per the documented rule (bridge-partial vs separate gap) |
+| R1-F6 | Architecture | medium | Strengthen REQ-OAT-070 to forbid `(category, orientation)`-keyed `if/elif` in the scoring dispatcher, not only per-`type` branches; the bridge "both halves" path (REQ-OAT-050) is itself a conditional that could re-accrete special-case control flow | REQ-OAT-070 guards against per-type branches but the unified scoring dispatcher (Phase 2 / REQ-OAT-050) must branch on orientation to run the bridge dual-check; without an explicit table-driven mandate, orientation handling becomes the next accidental-complexity vector | REQ-OAT-070 | Code review: scoring dispatcher selects validators via a `(category,orientation)→validators` table; no orientation `if/elif` in the dispatch body |
+| R1-F7 | Interfaces | high | Add a cross-referenced upstream requirement (REQ-OAT-025, mirroring 031b) obligating the cap-dev-pipe onboarding exporter to emit `kind` per instrumentation-hints entry and `category`/`orientation` per declared metric, so REQ-OAT-024 "declare, don't guess" has an actual producer | REQ-OAT-024 requires the generator to *read* declared structural facts, but §0 notes onboarding metadata is produced upstream and no requirement makes the exporter emit them; without it the heuristic "fallback" silently becomes the primary path, defeating the requirement | New REQ-OAT-025 under §3 (or §4.5 cross-reference style) | Integration: an onboarding-metadata fixture from the updated exporter carries `kind`/metric-`category`; generator path takes the declared branch, not the inferred fallback |
+
+##### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F8 | Risks | medium | Resolve the REQ-OAT-050 vs REQ-OAT-052 interaction: a declared-but-unproduced type is an "honest skip" (052), but REQ-OAT-050 requires "artifacts_scored == artifacts_generated" — state explicitly that skips are excluded from the scored denominator, not counted as 0-score artifacts | The Finding-1 invariant (scored == generated) and the honest-skip mechanism can conflict: if a skip is counted as a generated-but-unscored artifact the invariant breaks; if counted as score 0 it distorts coverage. The boundary is currently implicit | REQ-OAT-050 / REQ-OAT-052 | Test: a project declaring `capability_index` (owned by onboarding) shows an honest skip AND `artifacts_scored == artifacts_generated` still holds (skip not in denominator) |
+| R1-F9 | Data | low | REQ-OAT-030's per-artifact record `{type, category, service, output_path, status, checksum?}` makes `orientation` optional/absent, but REQ-OAT-023 (keystone) requires every record carry `orientation`; align the two field lists | REQ-OAT-023 mandates `orientation` on "entries in the generation manifest / generation_report," yet the REQ-OAT-030 record schema omits it (and marks checksum optional though 031a makes it mandatory for the producer) — an internal inconsistency an implementer would have to guess through | REQ-OAT-030 record schema | Schema test: every `generation_report` artifact entry has non-null `category` AND `orientation`; producer entries have non-null `source_checksum` |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): none — R1 is the first round; no prior untriaged suggestions exist.
+
+**Disagreements** (prior untriaged items this reviewer would reject): none — first round.
