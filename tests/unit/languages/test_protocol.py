@@ -166,14 +166,14 @@ class TestNodeProfile:
         assert p.supports_extension(".cjs")
 
     def test_syntax_command_is_none_defers_to_validate_syntax(self):
-        # REQ-NODE-MP-301: ``node --check`` is extension-blind and breaks on
+        # REQ-NODE-MP-305: ``node --check`` is extension-blind and breaks on
         # ``.tsx``/``.jsx`` (Node >= 23). The profile intentionally returns None
         # so consumers fall back to the extension-aware ``validate_syntax``.
         p = NodeLanguageProfile()
         assert p.syntax_check_command is None
 
     def test_validate_syntax_accepts_valid_tsx(self):
-        # REQ-NODE-MP-301: valid JSX/TSX must not be rejected as a syntax error.
+        # REQ-NODE-MP-303: valid JSX/TSX must not be rejected as a syntax error.
         p = NodeLanguageProfile()
         tsx = (
             "export default function L(): JSX.Element {\n"

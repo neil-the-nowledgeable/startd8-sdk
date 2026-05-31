@@ -1,8 +1,11 @@
 # Node.js MicroPrime Requirements — Refinement & Enhancement
 
-> **Version:** 1.2.0
+> **Version:** 1.3.0
 > **Status:** DRAFT (post-Hayai cross-reference)
-> **Date:** 2026-03-24
+> **Date:** 2026-05-31
+> **Changelog:**
+>   - **1.3.0 (2026-05-31):** Production findings from prime-contractor run-005 (Next.js/TypeScript target). The v1.1 TypeScript validation (REQ-NODE-MP-300) shipped three gaps that false-failed valid code: JSX/TSX rejected by a `.ts` temp suffix (REQ-NODE-MP-303), `npx tsc` install-noise misread as a syntax error (REQ-NODE-MP-304), and a second un-wired consumer — `IntegrationCheckpoint.check_syntax()` running `node --check` on `.tsx` (REQ-NODE-MP-305). All three resolved.
+>   - **1.2.0 (2026-03-24):** Post-Hayai cross-reference baseline.
 > **Parent:** [REQ-MP-12xx Polyglot MicroPrime Enablement](../micro-prime/REQ-MP-12xx_POLYGLOT_MICROPRIME_ENABLEMENT.md)
 > **Related:**
 >   - [KAIZEN_NODEJS_REQUIREMENTS.md](KAIZEN_NODEJS_REQUIREMENTS.md) — Node.js quality measurement and feedback
@@ -31,7 +34,7 @@
 | Full-function mode for Node.js | DONE (REQ-MPL-102) | Non-Python forced to `full_function` |
 | Pre-extraction fence strip | DONE (REQ-MPL-103) | Fences stripped before validation |
 | Repair language guard | DONE (REQ-MPL-100) | `bare_statement_wrap` no-op for Node.js |
-| Syntax validation via `node --check` | DONE | `_try_parse()` dispatches to `node --check` for `.js` files |
+| Syntax validation (JS via `node --check`, TS/TSX via `tsc`) | DONE (v1.3) | `validate_syntax()` is the single dispatch point; `syntax_check_command` is `None` so both `_try_parse()` and `IntegrationCheckpoint.check_syntax()` defer to it (REQ-NODE-MP-303/304/305) |
 | Splicer dispatch | DONE | `splice_body_into_skeleton()` → Node.js splicer wired |
 | Node.js parser (regex) | DONE | `nodejs_parser.py` — functions, classes, methods, arrows, const-functions |
 | Node.js splicer (brace-match) | DONE | `nodejs_splicer.py` — body replacement for functions, arrows, class methods |
@@ -59,7 +62,8 @@
 | **Splicer never exercised** | Node.js splicer dispatch wired but no splices expected | Incremental generation unavailable | Depends on function-level decomposition (same root cause) | OPEN |
 | **Python AST decomposer bottleneck** | `FunctionBodyDecomposer` uses `ast.parse()` — can't decompose JS/TS files | Multi-function Node.js files stay as single elements | Decomposer is Python-only | OPEN |
 | ~~**`sanitize_code_examples()` is a no-op**~~ | ~~Node.js profile returns text unchanged~~ | ~~Anti-patterns propagate~~ | | **DONE** (v1.1) |
-| ~~**TypeScript validation gap**~~ | ~~`node --check` validates `.js` only~~ | ~~TS syntax errors undetected~~ | | **DONE** (v1.1) |
+| ~~**TypeScript validation gap**~~ | ~~`node --check` validates `.js` only~~ | ~~TS syntax errors undetected~~ | | **DONE** (v1.1; hardened v1.3 — see REQ-NODE-MP-303/304/305) |
+| ~~**TS/TSX false-positive validation**~~ (run-005) | ~~`.tsx` JSX rejected; npx install-noise misread as syntax error; `node --check` on `.tsx` in checkpoint~~ | ~~Valid code false-failed; 50% escalation + 1 checkpoint fail~~ | `.ts` temp suffix, non-zero-exit-as-error, static `node --check` template | **DONE** (v1.3) |
 | **No formatter guarantee** | Post-gen cleanup depends on `prettier` being installed | Inconsistent formatting | Node.js ecosystem doesn't ship a standard formatter | ACCEPTED RISK |
 | ~~**Module system drift**~~ | ~~CJS/ESM not enforced as P0~~ | ~~Generated code may mix~~ | | **DONE** (v1.1) |
 
@@ -313,8 +317,8 @@ Add TypeScript-aware validation path in `validate_syntax()`:
 - OR if the caller provides a filename hint ending in `.ts`/`.tsx`
 
 **Validation options (priority order):**
-1. `tsc --noEmit --isolatedModules --skipLibCheck` on a temp `.ts` file — `--isolatedModules` validates syntax without resolving imports (no node_modules needed); `--skipLibCheck` avoids failing on missing `.d.ts` files. This catches TS-specific SYNTAX errors (malformed type annotations, invalid generics) which is the actual gap. Full type checking (`--strict`) would require a working project context which doesn't exist during element validation.
-2. `npx tsc --noEmit --isolatedModules --skipLibCheck` fallback (slower, uses npx resolution)
+1. `tsc --noEmit --isolatedModules --skipLibCheck` on a temp file — `--isolatedModules` validates syntax without resolving imports (no node_modules needed); `--skipLibCheck` avoids failing on missing `.d.ts` files. This catches TS-specific SYNTAX errors (malformed type annotations, invalid generics) which is the actual gap. Full type checking (`--strict`) would require a working project context which doesn't exist during element validation. **The temp file suffix and `--jsx` flag depend on whether the code is JSX — see REQ-NODE-MP-303.**
+2. `npx --no-install tsc --noEmit --isolatedModules --skipLibCheck` fallback (slower, uses npx resolution; `--no-install` prevents network downloads). **A non-zero exit is only a failure when it carries a real `error TS####` diagnostic — see REQ-NODE-MP-304.**
 3. Best-effort pass: return `(True, "")` when tsc unavailable (same pattern as `node --check` when node missing)
 
 **Implementation:**
@@ -322,7 +326,7 @@ Add TypeScript-aware validation path in `validate_syntax()`:
 def validate_syntax(self, code: str, *, filename_hint: str = "") -> tuple[bool, str]:
     is_ts = filename_hint.endswith((".ts", ".tsx")) or _looks_like_typescript(code)
     if is_ts:
-        return self._validate_typescript(code)
+        return self._validate_typescript(code, filename_hint=filename_hint)  # thread hint (REQ-NODE-MP-303)
     return self._validate_javascript(code)
 ```
 
@@ -355,6 +359,53 @@ The `js_syntax_validate` step should detect `.ts` and use TypeScript validation 
 **Acceptance criteria:**
 - `_try_parse()` called with a `.ts` file path dispatches to `_validate_typescript()`
 - `_try_parse()` called with a `.js` file path dispatches to `_validate_javascript()` (no regression)
+
+---
+
+## 4b. Phase 3 Hardening: Production Findings from run-005 (v1.3)
+
+**Context:** prime-contractor `run-005` (Next.js 14 + TypeScript target, Node v26, TypeScript not installed in the sandbox) exposed three defects in the v1.1 TypeScript-validation implementation. All three were **false positives on valid code** — the local Ollama model's output was correct; the validator rejected it. Symptoms: one INTEGRATE checkpoint failure (`app/layout.tsx`) and a 50% MicroPrime escalation rate (`env` + `layout` elements, `ast_failure`). See [the run-005 post-mortem](../../../) (`pipeline-output/startd8/run-005-*/plan-ingestion/prime-postmortem-report.json`).
+
+### REQ-NODE-MP-303: JSX/TSX Validation
+
+**Problem:** REQ-NODE-MP-300 option 1 specified writing TS code to a temp **`.ts`** file. `tsc` only parses JSX in files with a `.tsx` extension, and only when `--jsx` is set. A valid `app/layout.tsx` (React/Next.js) written to a `.ts` temp therefore fails with *"Cannot use JSX unless the '--jsx' flag is provided"* — a false syntax error. (In run-005 the npx-noise gap, REQ-NODE-MP-304, masked this; it would surface in any environment where TypeScript *is* installed, e.g. CI.)
+
+**Requirement:** When the file is `.tsx`/`.jsx` (by `filename_hint`) **or** the code contains JSX markup, `_validate_typescript()` MUST:
+- write the temp file with a `.tsx` suffix, and
+- pass `--jsx preserve` to `tsc`.
+
+JSX detection uses a conservative `_looks_like_jsx()` heuristic (matched tag-pair, self-closing tag, or fragment) so JSX without a filename hint still routes correctly. It MUST NOT match TypeScript generics (`a < b`, `Array<T>`).
+
+**Acceptance criteria:**
+- Valid `.tsx`/JSX returns `(True, "")` when tsc is installed.
+- `_looks_like_jsx("return (<div><span>x</span></div>)")` is `True`; `_looks_like_jsx("const x: number = a < b ? 1 : 2")` is `False`.
+- The `tsc` command for a `.tsx` file contains `--jsx` and targets a `.tsx` temp.
+
+### REQ-NODE-MP-304: Toolchain-Noise Discrimination
+
+**Problem:** REQ-NODE-MP-300 option 3 ("best-effort pass when tsc unavailable") only covered tsc being *fully absent* (`FileNotFoundError`, i.e. no `npx`). When `npx` exists but TypeScript is **not installed**, `npx tsc` runs and exits non-zero with an install prompt (`"This is not the tsc command you are looking for"`). The v1.1 implementation treated any non-zero exit as a syntax error, so **every** `.ts`/`.tsx` element false-failed and escalated — the direct cause of run-005's 50% escalation rate on valid code.
+
+**Requirement:** A non-zero `tsc` exit is a syntax failure **only** when its combined output contains a genuine compiler diagnostic matching `error TS\d+`. Output lacking that signature is toolchain noise and MUST degrade to a best-effort PASS `(True, "")`. The npx invocation MUST use `--no-install` so it fails fast instead of attempting a network download during validation.
+
+**Acceptance criteria:**
+- npx install-noise (no `error TS####`) → `(True, "")`, no escalation.
+- A real `error TS1005` diagnostic → `(False, <diagnostic>)`.
+- No network access is attempted during validation.
+
+### REQ-NODE-MP-305: Checkpoint Syntax-Check Dispatch (second consumer)
+
+**Problem:** REQ-NODE-MP-302 wired the *repair* path (`_try_parse()`) to thread the filename, but there is a **second** consumer of syntax validation: `IntegrationCheckpoint.check_syntax()` (INTEGRATE / post-merge). It used `LanguageProfile.syntax_check_command` — a static `node --check {file}` template — run against the file on disk with its **real** extension. On Node ≥ 23, `node --check foo.tsx` raises `ERR_UNKNOWN_FILE_EXTENSION` (the ESM loader rejects `.tsx`/`.jsx` before parsing). In run-005 this marked a valid `app/layout.tsx` as a checkpoint failure, independent of the MicroPrime path. (`.ts` passed because Node ≥ 23 natively strips `.ts` types; `.tsx` needs a *transform*, not just stripping.)
+
+**Requirement:**
+- `NodeLanguageProfile.syntax_check_command` MUST return `None`, so the static, extension-blind template is never run. All Node syntax checking flows through the extension-aware `validate_syntax()`.
+- `IntegrationCheckpoint.check_syntax()` MUST, when `syntax_check_command is None`, call `validate_syntax(code, filename_hint=<file name>)`, passing the hint **signature-safely** (only `nodejs`/`vue` accept the kwarg; others retain the `(code)` protocol signature).
+
+**Rationale (robustness — why "return None" over "special-case in checkpoint"):** Returning `None` removes the false capability claim *at the source*, so every consumer — checkpoint today, any future caller — gets correct behavior. Special-casing `.tsx`/`.jsx` inside the language-agnostic checkpoint would patch one call site, leave the misleading `node --check {file}` template as a latent landmine, and push language-specific extension knowledge into the wrong layer.
+
+**Acceptance criteria:**
+- `NodeLanguageProfile().syntax_check_command is None`.
+- `IntegrationCheckpoint(...).check_syntax([Path("app/layout.tsx")])` passes for a valid layout.
+- `.js`/`.mjs`/`.cjs` files still validate (via `_validate_javascript` → `node --check` on a temp file) — no regression.
 
 ---
 
