@@ -177,14 +177,15 @@ class TestSessionMetrics:
         ]
         assert len(session_metrics) == 7
 
+        # Dotted OTel-native names (REQ-AAO-003 / Phase 2).
         expected = {
-            "startd8_active_sessions",
-            "startd8_requests_total",
-            "startd8_tokens_total",
-            "startd8_response_time_ms",
-            "startd8_context_usage_ratio",
-            "startd8_truncations_total",
-            "startd8_cost_total",
+            "startd8.active.sessions",
+            "startd8.requests.total",
+            "startd8.tokens.total",
+            "startd8.response.time_ms",
+            "startd8.context.usage_ratio",
+            "startd8.truncations.total",
+            "startd8.session.cost.total",
         }
         actual = {m.name for m in session_metrics}
         assert actual == expected

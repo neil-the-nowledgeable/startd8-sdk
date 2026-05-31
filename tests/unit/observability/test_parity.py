@@ -66,6 +66,33 @@ class TestMetricBijection:
         assert r.ok
 
 
+class TestExportNamePreservation:
+    """Phase 2 dotted rename preserves the exported Prometheus names byte-for-byte
+    for the 6 round-tripping session metrics; the cost metric changes intentionally
+    (R1-S4 golden baseline; the documented dot->underscore model — the live OTel
+    Prometheus exporter's unit/_total suffixes are an integration-level concern)."""
+
+    # dotted OTel name -> expected exported Prometheus name
+    GOLDEN = {
+        "startd8.active.sessions": "startd8_active_sessions",
+        "startd8.requests.total": "startd8_requests_total",
+        "startd8.tokens.total": "startd8_tokens_total",
+        "startd8.response.time_ms": "startd8_response_time_ms",
+        "startd8.context.usage_ratio": "startd8_context_usage_ratio",
+        "startd8.truncations.total": "startd8_truncations_total",
+        # Intentionally NOT startd8_cost_total — disambiguated from the global metric.
+        "startd8.session.cost.total": "startd8_session_cost_total",
+    }
+
+    def test_dotted_names_reproduce_golden_export_names(self):
+        for dotted, expected in self.GOLDEN.items():
+            assert exported_name(dotted) == expected, f"{dotted} -> {exported_name(dotted)} != {expected}"
+
+    def test_session_cost_no_longer_collides_with_global(self):
+        # The global cost metric keeps startd8_cost_total; the per-session one moved.
+        assert exported_name("startd8.session.cost.total") != exported_name("startd8.cost.total")
+
+
 class TestRealManifestParity:
     def test_real_manifest_passes_in_bootstrap_mode(self):
         # No declared-not-emitted, no un-owned emitted-not-declared, the known

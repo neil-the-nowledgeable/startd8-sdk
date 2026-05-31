@@ -17,14 +17,17 @@ OpenTelemetry Integration:
     code-verification §A-2); a Prometheus exporter on the OTel SDK reproduces
     the same metric names.
 
-    Metrics exported:
-    - startd8_active_sessions: Number of active sessions (up/down counter)
-    - startd8_requests_total: Total API requests (counter)
-    - startd8_tokens_total: Total tokens processed (counter)
-    - startd8_response_time_ms: Response time distribution (histogram)
-    - startd8_context_usage_ratio: Context window usage 0-1 (observable gauge)
-    - startd8_truncations_total: Truncation events (counter)
-    - startd8_cost_total: Total cost in USD (counter)
+    Metric instrument names are dotted OTel-native (REQ-AAO-003); the Prometheus
+    export (dot->underscore, in parentheses) is preserved byte-for-byte from the
+    previous underscore names — EXCEPT the per-session cost metric, disambiguated
+    from the global ``startd8.cost.total`` (R3-F2 exported-name collision):
+    - startd8.active.sessions      (startd8_active_sessions)      up/down counter
+    - startd8.requests.total       (startd8_requests_total)       counter
+    - startd8.tokens.total         (startd8_tokens_total)         counter
+    - startd8.response.time_ms     (startd8_response_time_ms)     histogram
+    - startd8.context.usage_ratio  (startd8_context_usage_ratio)  observable gauge
+    - startd8.truncations.total    (startd8_truncations_total)    counter
+    - startd8.session.cost.total   (startd8_session_cost_total)   counter [disambiguated]
 """
 
 import uuid
@@ -45,7 +48,7 @@ _OTEL_DESCRIPTORS = {
     "orientation": "system",
     "metrics": [
         {
-            "name": "startd8_active_sessions",
+            "name": "startd8.active.sessions",
             "instrument": "up_down_counter",
             "unit": "sessions",
             "description": "Number of active sessions",
@@ -53,7 +56,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["agent_name", "model", "project_id"],
         },
         {
-            "name": "startd8_requests_total",
+            "name": "startd8.requests.total",
             "instrument": "counter",
             "unit": "requests",
             "description": "Total number of requests",
@@ -61,7 +64,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["agent_name", "model", "project_id", "status"],
         },
         {
-            "name": "startd8_tokens_total",
+            "name": "startd8.tokens.total",
             "instrument": "counter",
             "unit": "tokens",
             "description": "Total tokens processed",
@@ -69,7 +72,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["agent_name", "model", "project_id", "direction"],
         },
         {
-            "name": "startd8_response_time_ms",
+            "name": "startd8.response.time_ms",
             "instrument": "histogram",
             "unit": "ms",
             "description": "Response time in milliseconds",
@@ -77,7 +80,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["agent_name", "model", "project_id"],
         },
         {
-            "name": "startd8_context_usage_ratio",
+            "name": "startd8.context.usage_ratio",
             "instrument": "observable_gauge",
             "unit": "ratio",
             "description": "Context window usage ratio (0-1)",
@@ -85,7 +88,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["session_id", "agent_name", "model", "project_id"],
         },
         {
-            "name": "startd8_truncations_total",
+            "name": "startd8.truncations.total",
             "instrument": "counter",
             "unit": "events",
             "description": "Total truncation events",
@@ -93,7 +96,7 @@ _OTEL_DESCRIPTORS = {
             "labels": ["agent_name", "model", "project_id"],
         },
         {
-            "name": "startd8_cost_total",
+            "name": "startd8.session.cost.total",
             "instrument": "counter",
             "unit": "USD",
             "description": "Total cost in USD",
@@ -362,28 +365,28 @@ class SessionTracker:
 
             # Active sessions (using UpDownCounter for gauge-like behavior)
             self._otel_active_sessions = self._otel_meter.create_up_down_counter(
-                name="startd8_active_sessions",
+                name="startd8.active.sessions",
                 description="Number of active sessions",
                 unit="sessions",
             )
 
             # Total requests counter
             self._otel_requests_counter = self._otel_meter.create_counter(
-                name="startd8_requests_total",
+                name="startd8.requests.total",
                 description="Total number of requests",
                 unit="requests",
             )
 
             # Total tokens counter
             self._otel_tokens_counter = self._otel_meter.create_counter(
-                name="startd8_tokens_total",
+                name="startd8.tokens.total",
                 description="Total tokens processed",
                 unit="tokens",
             )
 
             # Response time histogram
             self._otel_response_time = self._otel_meter.create_histogram(
-                name="startd8_response_time_ms",
+                name="startd8.response.time_ms",
                 description="Response time in milliseconds",
                 unit="ms",
             )
@@ -391,7 +394,7 @@ class SessionTracker:
             # Context usage gauge (using observable gauge with callback)
             # We'll update this via the callback pattern
             self._otel_context_usage = self._otel_meter.create_observable_gauge(
-                name="startd8_context_usage_ratio",
+                name="startd8.context.usage_ratio",
                 description="Context window usage ratio (0-1)",
                 unit="ratio",
                 callbacks=[self._observe_context_usage],
@@ -399,14 +402,14 @@ class SessionTracker:
 
             # Truncation counter
             self._otel_truncations = self._otel_meter.create_counter(
-                name="startd8_truncations_total",
+                name="startd8.truncations.total",
                 description="Total truncation events",
                 unit="events",
             )
 
             # Cost counter
             self._otel_cost_counter = self._otel_meter.create_counter(
-                name="startd8_cost_total",
+                name="startd8.session.cost.total",
                 description="Total cost in USD",
                 unit="USD",
             )

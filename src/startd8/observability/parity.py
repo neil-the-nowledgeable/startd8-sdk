@@ -57,10 +57,10 @@ EMITTER_EXCLUSIONS: List[EmitterExclusion] = [
     EmitterExclusion("pipeline.artifact_inventory.", "utils", "inventory metric not yet cataloged", prefix=True),
 ]
 
-# Exported names where a collision is known and resolved by a later pass. The
-# startd8.cost.total / startd8_cost_total clash is fixed by the Phase 2 dotted rename
-# (session startd8_cost_total -> startd8.session.cost.total).
-BOOTSTRAP_NAME_COLLISIONS = frozenset({"startd8_cost_total"})
+# Exported names where a collision is known and resolved by a later pass. (Empty:
+# the startd8.cost.total / startd8_cost_total clash was resolved in Phase 2 by
+# disambiguating the per-session cost metric to startd8.session.cost.total.)
+BOOTSTRAP_NAME_COLLISIONS = frozenset()
 
 
 def _src_root() -> Path:
