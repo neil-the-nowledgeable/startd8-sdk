@@ -79,8 +79,86 @@ class TestManifestRoundTrip:
         )
         assert SpanDescriptor.from_dict(span.to_dict()) == span
 
-        evt = EventTypeDescriptor(name="TEST_EVENT", category="test")
+        evt = EventTypeDescriptor(name="TEST_EVENT", event_group="test")
         assert EventTypeDescriptor.from_dict(evt.to_dict()) == evt
+
+
+# ---------------------------------------------------------------------------
+# Taxonomy axes (REQ-OBS-SHARED-001) + collector pass-through (R3-F1)
+# ---------------------------------------------------------------------------
+
+
+class TestTaxonomyAxes:
+    """category/orientation fields, their serialization, and the collector
+    pass-through that the R3 review found was silently dropping fields."""
+
+    def test_descriptor_axes_round_trip(self):
+        m = MetricDescriptor(
+            name="x.y", instrument="counter", unit="1", description="d",
+            category="ai_agent_observability", orientation="system",
+        )
+        m2 = MetricDescriptor.from_dict(m.to_dict())
+        assert m2.category == "ai_agent_observability"
+        assert m2.orientation == "system"
+
+        s = SpanDescriptor(
+            name_pattern="a.{id}", category="project_observability", orientation="system",
+        )
+        s2 = SpanDescriptor.from_dict(s.to_dict())
+        assert s2.category == "project_observability"
+        assert s2.orientation == "system"
+
+    def test_empty_axes_omitted(self):
+        # Backward-compat: unset axes do not appear in the serialized form.
+        d = MetricDescriptor(
+            name="a", instrument="counter", unit="1", description="d"
+        ).to_dict()
+        assert "category" not in d
+        assert "orientation" not in d
+
+    def test_collector_passes_axes_and_optional_fields_through(self, monkeypatch):
+        # R3-F1 (critical): collect_*_descriptors() must NOT drop category/
+        # orientation/prometheus_name/dashboard_hints from the _OTEL_DESCRIPTORS
+        # dicts, or the generated manifest carries empty axes.
+        from startd8.observability import collector
+
+        fake = {
+            "metrics": [{
+                "name": "fake.metric", "instrument": "counter", "unit": "1",
+                "description": "d", "prometheus_name": "fake_metric",
+                "dashboard_hints": {"panel": "stat"},
+                "category": "ai_agent_observability", "orientation": "system",
+            }],
+            "spans": [{
+                "name_pattern": "fake.{id}",
+                "category": "project_observability", "orientation": "system",
+            }],
+        }
+        monkeypatch.setattr(collector, "_load_descriptors", lambda mp, sf: fake)
+
+        m = next(x for x in collector.collect_metric_descriptors() if x.name == "fake.metric")
+        assert m.category == "ai_agent_observability"
+        assert m.orientation == "system"
+        assert m.prometheus_name == "fake_metric"
+        assert m.dashboard_hints == {"panel": "stat"}
+        assert m.to_dict()["category"] == "ai_agent_observability"
+
+        s = next(x for x in collector.collect_span_descriptors() if x.name_pattern == "fake.{id}")
+        assert s.category == "project_observability"
+        assert s.orientation == "system"
+
+    def test_enum_axis_serializes_to_plain_string(self):
+        # Defensive: a Category/Orientation enum member must serialize to its
+        # str value, not a PyYAML !!python/object tag.
+        from startd8.observability.taxonomy_enums import Category, Orientation
+
+        d = MetricDescriptor(
+            name="e", instrument="counter", unit="1", description="d",
+            category=Category.AI_AGENT, orientation=Orientation.SYSTEM,
+        ).to_dict()
+        assert d["category"] == "ai_agent_observability"
+        assert d["orientation"] == "system"
+        assert "python/object" not in yaml.dump(d)
 
 
 # ---------------------------------------------------------------------------
@@ -155,11 +233,20 @@ class TestEventTypes:
         manifest = generate_manifest()
         assert len(manifest.event_types) == len(EventType)
 
-    def test_event_categories_assigned(self):
+    def test_event_groups_assigned(self):
+        # EventTypeDescriptor.category was renamed to event_group (REQ-OBS-SHARED-001a).
         manifest = generate_manifest()
         for evt in manifest.event_types:
-            assert evt.category, f"Event {evt.name} has no category"
-            assert evt.category != "unknown", f"Event {evt.name} has 'unknown' category"
+            assert evt.event_group, f"Event {evt.name} has no event_group"
+            assert evt.event_group != "unknown", f"Event {evt.name} has 'unknown' event_group"
+
+    def test_legacy_category_key_deserializes_via_alias(self):
+        # R2-F4: saved YAML using the old `category` key must still load for one
+        # release; output uses `event_group` only.
+        legacy = {"name": "AGENT_CALL_START", "category": "agent"}
+        evt = EventTypeDescriptor.from_dict(legacy)
+        assert evt.event_group == "agent"
+        assert evt.to_dict() == {"name": "AGENT_CALL_START", "event_group": "agent"}
 
 
 # ---------------------------------------------------------------------------

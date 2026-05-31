@@ -33,8 +33,9 @@ _INSTRUMENTED_MODULES = [
     ("startd8.repair.orchestrator", "src/startd8/repair/orchestrator.py"),
 ]
 
-# Event type → category mapping (derived from EventType enum grouping).
-_EVENT_CATEGORIES = {
+# Event type → instrument-group mapping (derived from EventType enum grouping).
+# This is the EventTypeDescriptor.event_group axis, NOT the observability taxonomy.
+_EVENT_GROUPS = {
     "AGENT_CALL_START": "agent",
     "AGENT_CALL_COMPLETE": "agent",
     "AGENT_CALL_ERROR": "agent",
@@ -119,6 +120,13 @@ def collect_metric_descriptors() -> List[MetricDescriptor]:
                     meter=m.get("meter", ""),
                     source_file=source_file,
                     labels=m.get("labels", []),
+                    # Pass through optional + taxonomy fields (REQ-OBS-SHARED-001,
+                    # R3-F1): without this the collector silently drops them and
+                    # the generated manifest carries empty axes.
+                    prometheus_name=m.get("prometheus_name"),
+                    dashboard_hints=m.get("dashboard_hints"),
+                    category=m.get("category", ""),
+                    orientation=m.get("orientation", ""),
                 )
             )
     return result
@@ -139,6 +147,9 @@ def collect_span_descriptors() -> List[SpanDescriptor]:
                     attributes=s.get("attributes", []),
                     events=s.get("events", []),
                     attributes_dynamic=s.get("attributes_dynamic", False),
+                    # Pass through taxonomy fields (REQ-OBS-SHARED-001, R3-F1).
+                    category=s.get("category", ""),
+                    orientation=s.get("orientation", ""),
                 )
             )
     return result
@@ -150,11 +161,11 @@ def collect_event_types() -> List[EventTypeDescriptor]:
 
     result: List[EventTypeDescriptor] = []
     for member in EventType:
-        category = _EVENT_CATEGORIES.get(member.name, "unknown")
+        event_group = _EVENT_GROUPS.get(member.name, "unknown")
         result.append(
             EventTypeDescriptor(
                 name=member.name,
-                category=category,
+                event_group=event_group,
             )
         )
     return result
