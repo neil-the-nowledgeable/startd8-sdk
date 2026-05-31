@@ -664,6 +664,37 @@ class TestJsonValidation:
         assert result.ast_valid is False
         assert "json_error" in result.error
 
+    def test_tsconfig_jsonc_with_comments_is_valid(self, tmp_path):
+        # tsconfig.json is JSONC — comments and trailing commas are legal and
+        # must NOT be flagged as syntax errors (run-007 false-positive).
+        content = (
+            "{\n"
+            '  "$schema": "https://json.schemastore.org/tsconfig",\n'
+            "  /* Language & Environment */\n"
+            '  "compilerOptions": {\n'
+            '    "target": "ES2017",  // ECMAScript target\n'
+            '    "jsx": "preserve",\n'
+            "  },\n"  # trailing comma — legal in JSONC
+            "}\n"
+        )
+        rel = _write_file(tmp_path, "tsconfig.json", content)
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is True
+        assert result.contract_compliance == pytest.approx(1.0)
+
+    def test_tsconfig_with_real_error_still_fails(self, tmp_path):
+        # JSONC tolerance must not mask a genuine structural error.
+        rel = _write_file(tmp_path, "tsconfig.json", '{ "a": }\n')
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is False
+        assert "json_error" in result.error
+
+    def test_plain_json_with_comment_still_fails(self, tmp_path):
+        # A data .json file is NOT JSONC — comments remain invalid.
+        rel = _write_file(tmp_path, "data.json", '{\n  // nope\n  "a": 1\n}\n')
+        result = validate_disk_compliance(rel, str(tmp_path))
+        assert result.ast_valid is False
+
 
 class TestHtmlPassthrough:
     def test_html_keeps_defaults(self, tmp_path):
