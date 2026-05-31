@@ -152,6 +152,38 @@ class TruncationError(Startd8Error):
         self.truncation_indicators = truncation_indicators or []
         self.original_input = original_input
 
+
+class MissingTemplateError(Startd8Error):
+    """Structured refusal for an empty-fillable spec — RUN-007 FR-2.
+
+    Raised when a feature has zero fillable elements (FR-0) and no
+    ``FRAMEWORK_CONFIG_DEFAULTS`` match, and file-whole escalation either could
+    not run (budget exhausted / provider unavailable — FR-4) or still produced
+    an empty/stub artifact. The feature is refused as a real failure rather than
+    shipping an unfilled basename-class skeleton.
+
+    Carries attribution so the post-mortem is not blind to refusals (FR-2.2):
+    ``root_cause`` / ``pipeline_stage`` default to the empty-spec refusal
+    classification.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        file_path: str = None,
+        feature_id: str = None,
+        reason: str = "empty_spec",
+        root_cause: str = "empty_spec_refusal",
+        pipeline_stage: str = "micro_prime_escalation",
+    ):
+        super().__init__(message)
+        self.file_path = file_path
+        self.feature_id = feature_id
+        self.reason = reason
+        self.root_cause = root_cause
+        self.pipeline_stage = pipeline_stage
+
     def __str__(self):
         parts = [super().__str__()]
         if self.step_name:
