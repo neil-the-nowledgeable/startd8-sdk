@@ -1,7 +1,7 @@
 # AI Agent Observability — Requirements (Taxonomy Category 5)
 
 **Date:** 2026-05-31
-**Status:** Draft v0.2 — post-planning self-reflective update (requirements only; no code this pass)
+**Status:** Draft v0.3 — combined cat-4/5 CRP R1 triaged (8 F-suggestions applied; shared spine extracted to `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md`)
 **Lineage:** Instantiates **Category 5 — AI Agent Observability** of
 `OBSERVABILITY_ARTIFACT_TAXONOMY_REQUIREMENTS.md` (the "reserved — signals emitted, no generator"
 row). Evidence base: a read-only telemetry inventory of `src/startd8/` (costs/, session_tracking,
@@ -152,7 +152,11 @@ path); `startd8_cost_total`/`startd8_tokens_total` are **per-session** (emitted 
 semantics** (global vs per-session, which to use when) and to **guard against double-invocation** —
 a caller feeding the same call's cost to *both* APIs double-counts. This is a documentation +
 guard-rail requirement, **not** a deduplication of redundant emission (the v0.1 "double-counting"
-framing was a misdiagnosis — the families serve different questions).
+framing was a misdiagnosis — the families serve different questions). **Guard contract (R1-F5):**
+the detection key is a single `correlation_id` recorded via *both* `CostTracker.record_cost()` and
+`SessionTracker.record_request()`; the action is a **single WARN log** (not drop, not raise — the
+families are legitimately distinct, so the guard surfaces the likely misuse without altering either
+emission path).
 
 **REQ-AAO-003 (naming — resolved to standardize on dotted).** Planning confirmed the split is
 **accidental**: `session_tracking.py` hand-codes underscore names (`startd8_cost_total`) while
@@ -169,6 +173,12 @@ the existing underscore names, downstream Prometheus/Grafana consumers are unaff
 two-axis taxonomy so it routes correctly: the raw metrics/SLI definitions are **system**-oriented;
 agent dashboards are **human**-oriented; agent alerts & budget/notification policies are **bridge**.
 This is the data that satisfies the taxonomy's REQ-OAT-024 (declare, don't guess) for agent metrics.
+
+> **Schema contract owned by `REQ-OBS-SHARED-001`** (R1-F1/F7). The exact `category`/`orientation`
+> field names, enum domains (`orientation` ∈ {`system`,`human`,`bridge`}; `category` ∈ the 5-value
+> taxonomy incl. `ai_agent_observability`), and `""` defaults are defined **once** in
+> `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md` and referenced here by ID — not restated — so the
+> cat-4 and cat-5 implementations cannot diverge on spelling or default.
 
 ### 3.3 Category-5 artifacts to generate
 
@@ -207,6 +217,13 @@ from **declared facts**, not heuristics.
 > about (REQ-OAT-024/025) *for these SDK-emitted metrics*. The exporter dependency remains only for
 > non-SDK / service-level metrics. This is flagged for reconciliation into the taxonomy doc once its
 > CRP settles (not edited here to avoid the active review).
+>
+> **Emit-vs-cede contrast (R1-F2/F8).** Cat 5 = **SDK emits** (every metric has an in-process
+> `meter.create_*` site) → produced artifacts, **no** `skip_reason`. This is the mirror image of cat 4
+> = **SDK produces then cedes** to ContextCore (`contextcore_*` gauges surface as
+> `skip_reason=owned_elsewhere`/`owner=contextcore`). The reason no cede vocabulary appears in *this*
+> doc is precisely that cat-5 metrics have an emission site; a reviewer should not "fix" the asymmetry.
+> The single-generator routing contract for both manifests is `REQ-OBS-SHARED-004`.
 
 ### 3.5 Fill the signal gaps (where instrumentation is missing)
 
@@ -217,21 +234,25 @@ truncation **event** exists but is not a label. The remaining work is small: add
 retry rates are queryable directly, without reconstructing them from `failed_requests` deltas.
 
 **REQ-AAO-010 (eval hook, AAO-D4).** There MUST be a path to attach an eval/quality score to an agent
-call (span attribute + optional metric), so output quality is observable, not just throughput. (May
-be reserved/phased.)
+call (span attribute + optional metric), so output quality is observable, not just throughput.
+**Scope (R1-F4): OUT this pass** — reserved under the `startd8.agent.eval.*` namespace; no "may".
 
 **REQ-AAO-011 (tool use, AAO-D5).** Agentic tool calls SHOULD be instrumented — count, success/failure,
-latency per tool — so tool-augmented workflows are observable. (May be reserved/phased.)
+latency per tool — so tool-augmented workflows are observable.
+**Scope (R1-F4): OUT this pass** — reserved under the `startd8.agent.tool.*` namespace; no "may".
 
 ### 3.6 Keep the source of truth honest
 
 **REQ-AAO-012 (descriptor↔emission parity — new, from planning).** Because the descriptor manifest
 becomes the authoritative source feeding artifact generation (REQ-AAO-008), the **declared**
-descriptors MUST match the **emitted** metrics/spans. There MUST be a test asserting parity — every
-`_OTEL_DESCRIPTORS` entry corresponds to an actual `meter.create_*`/span emission and vice-versa — so
-the manifest cannot silently drift (declared-but-not-emitted, or emitted-but-not-declared). Planning
-found no such validation today; without it, a generator driven by the manifest would produce
-dashboards/alerts for metrics that don't exist (or miss ones that do).
+descriptors MUST match the **emitted** metrics/spans. There MUST be a test asserting parity so the
+manifest cannot silently drift. **The relation is kind-aware and owned by `REQ-OBS-SHARED-002`**
+(R1-F6/F7): **metrics → bijection** (every descriptor ⇔ a `meter.create_*` site, both directions);
+**spans → subset** (declared attrs ⊆ emitted, because span attribute sets are open). The earlier
+"and vice-versa" wording implied bijection for *all* kinds and drifted against the project plan's
+"subset" — the shared requirement reconciles this to one kind-aware relation referenced by both
+plans. Planning found no such validation today; the first thing it catches is the live-but-undeclared
+`complexity.tier_distribution` histogram (see `OBSERVABILITY_CAT45_CODE_VERIFICATION.md` §A-1).
 
 ---
 
@@ -307,3 +328,102 @@ naming split to "standardize on dotted" (003), added 1 requirement (012 descript
 surfaced the cross-doc convergence (the SDK is its own declare-don't-guess producer), and catalogued
 6 accidental-complexity items (Appendix C). Net finding: the infrastructure largely exists — this is
 mostly wiring + cleanup, not new machinery.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-F{n}`).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table. This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID. Endorsement counts inform priority but do not auto-apply suggestions.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| R1-F1 | Inline schema-field contract (names/enums/defaults) | claude-opus-4-8-1m | Owned by new `REQ-OBS-SHARED-001`; REQ-AAO-004 now references it by ID | 2026-05-31 |
+| R1-F2 | State emit-vs-cede contrast in §3.4 | claude-opus-4-8-1m | Added emit-vs-cede note under REQ-AAO-008; cede contract = `REQ-OBS-SHARED-004` | 2026-05-31 |
+| R1-F3/F9 | Authoritative vs projection of REQ-OAT-070a registry | claude-opus-4-8-1m | Resolved in `REQ-OBS-SHARED-003`: separate layers (telemetry-decl vs artifact-dispatch), shared enum vocabulary, vocabulary-level (not row-level) reconciliation | 2026-05-31 |
+| R1-F4 | Commit in/out for AAO-010/011 (drop "may") | claude-opus-4-8-1m | Both marked **OUT this pass** with reserved namespaces | 2026-05-31 |
+| R1-F5 | AAO-002 guard: detection key + action | claude-opus-4-8-1m | Specified: same `correlation_id` via both APIs → single WARN | 2026-05-31 |
+| R1-F6 | AAO-012 parity relation (bijection vs subset) | claude-opus-4-8-1m | Kind-aware (`REQ-OBS-SHARED-002`): metrics bijection, spans subset | 2026-05-31 |
+| R1-F7 | One shared requirement (REQ-OBS-SHARED-001) | claude-opus-4-8-1m | Created `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md`; AAO-004/008/012 reference by ID | 2026-05-31 |
+| R1-F8 | Cross-ref cat-4 cede vocabulary for single generator | claude-opus-4-8-1m | `REQ-OBS-SHARED-004` (one generator, two manifests) | 2026-05-31 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-05-31
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-31 18:46:04 UTC
+- **Scope**: Requirements quality (F-prefix) for AI Agent Observability (cat 5), weighted toward the 5 cross-doc focus asks on the shared `_OTEL_DESCRIPTORS` descriptor-registry spine vs the project-obs doc (cat 4) and the settled taxonomy registry (REQ-OAT-070a).
+
+##### Focus-ask answers (sponsor cross-doc concerns 1–5)
+
+**Ask 1 — Spine consistency (AAO-004/008/012 vs PRO-002/005: same schema change + parity test, or drift?).**
+- **Summary answer:** Partial — both docs *intend* one shared change and say so in prose, but neither states the schema/parity contract in a single normative place, so two PRs can still diverge.
+- **Rationale:** REQ-AAO-004 ("add category + orientation to the descriptor schema") and REQ-PRO-002 ("reuses that single shared schema change … does not duplicate it") describe the *same* `MetricDescriptor`/`SpanDescriptor` field addition, and REQ-AAO-012 / PRO plan Phase 2.3 describe the *same* parity test. But the normative text lives in two docs with only narrative cross-references ("same change the AI-agent doc specifies"); there is no shared requirement ID owning the field names, defaults, and enum values, so the two implementations can drift on, e.g., `orientation` enum spelling or default.
+- **Assumptions / conditions:** Holds unless the orchestrator designates one doc (AAO) as the normative owner of the schema-field contract and PRO references it by ID rather than restating it.
+- **Suggested improvements:** Promote the schema-field + parity-test contract to a single shared requirement (see R1-F1 / cross-doc R1-F8) that both AAO-004/012 and PRO-002 reference by ID; specify field names, the `orientation` enum (`system`/`human`/`bridge`), and the `category` enum values inline so both PRs cannot diverge.
+
+**Ask 2 — Emit-vs-cede asymmetry coherent and implementable?**
+- **Summary answer:** Yes, coherent — cat 5 (SDK emits its own metrics → is its own declare-don't-guess producer) and cat 4 (SDK produces raw signals, ContextCore owns gauges) are genuinely different ownership shapes, and this doc states its side precisely.
+- **Rationale:** §3.4 / REQ-AAO-008 are explicit that the SDK's descriptors carry category+orientation so "the SDK is its own declare, don't guess producer," dissolving the REQ-OAT-025 exporter dependency *for SDK-emitted metrics only* (boundary stated). The asymmetry is real because cat-5 metrics have an in-process `meter.create_*` emission site, whereas cat-4 gauges (`contextcore_task_*`) have none in startd8. The one imprecision is that this doc does not name the *cede* vocabulary (`skip_reason=owned_elsewhere`/`owner`) that the cat-4 doc must use — but that is a cat-4 obligation, not a cat-5 gap.
+- **Assumptions / conditions:** None for the cat-5 side; the cede precision is the project doc's responsibility (see PRO R1-F cross-doc).
+- **Suggested improvements:** Add one sentence to §3.4 explicitly contrasting "cat 5 = emit (no cede)" against "cat 4 = produce-then-cede" so a reader of this doc alone understands why no `skip_reason` appears here (see R1-F2).
+
+**Ask 3 — Do these descriptors fit the taxonomy's single type-keyed registry (REQ-OAT-070a), or introduce a parallel metric-side registry?**
+- **Summary answer:** Depends — as written, `category`/`orientation` are stored as *independent fields per descriptor*, which conflicts with REQ-OAT-070a's rule that they are **derived projections, never independently maintained**.
+- **Rationale:** REQ-OAT-070a (taxonomy, settled) mandates a single `declared_type`-keyed registry where `category`/`orientation` are projections of the registry row, "never independently authored on each artifact." REQ-AAO-004/008 instead add `category`+`orientation` as *fields on each `_OTEL_DESCRIPTORS` entry*, hand-populated per descriptor (plan step 1.1: "populate category + orientation on every entry"). That is a metric-side parallel store of the same axes the taxonomy says must be derived — a drift surface the taxonomy explicitly designed away. The dotted-vs-underscore naming (REQ-AAO-003) is orthogonal and does not interact with the registry collision.
+- **Assumptions / conditions:** Holds if the metric descriptor is treated as an artifact-type-keyed entry that the taxonomy registry could project from; if the descriptor manifest is a strictly separate concern (telemetry-declaration vs artifact-type-dispatch), the two registries are legitimately different layers and there is no conflict.
+- **Suggested improvements:** Add a requirement (R1-F3) stating whether the descriptor `category`/`orientation` are authoritative or are projections sourced from the taxonomy REQ-OAT-070a registry, and a parity assertion that the two never disagree for a given signal.
+
+**Ask 4 — Shared "descriptor schema keystone" + parity test concretely sequenced, or two PRs each add it?**
+- **Summary answer:** Partial — both plans name a shared keystone but the sequencing instruction is soft ("sequence so this is shared"); nothing makes one PR land it and the other depend on it.
+- **Rationale:** AAO plan Phase 0.4/1.1–1.2 and PRO plan Phase 1.1/2.3 each independently list "add category+orientation fields" and "add the parity test." Both before-code checklists say it is shared, but neither names the landing PR/branch or makes the second category's work *blocked on* the first. Both target the same branch (`feat/observability-followup-run007`), which reduces but does not eliminate the double-add hazard.
+- **Assumptions / conditions:** Holds unless the orchestrator records an explicit ordering (one keystone PR, both categories rebase on it).
+- **Suggested improvements:** S-side plan suggestion (see PLAN R1-S) to name the keystone landing step once and have cat-4 declare an explicit dependency edge on it.
+
+**Ask 5 — Deferred-vs-in-scope boundary: is the in-scope work genuinely small and the deferred work clearly elsewhere/later?**
+- **Summary answer:** Yes for cat 5 — this doc defers no metric-emission (it already emits), reserves only eval/tool-use (REQ-AAO-010/011 marked "may be reserved/phased"), and scopes the generator out (§4) to taxonomy REQ-OAT-041.
+- **Rationale:** §4 cleanly excludes the generator; REQ-AAO-010/011 are explicitly phased; the in-scope set (catalog + 2 schema fields + parity test + name standardization + label additions) is small and wiring-shaped. The one soft edge: REQ-AAO-010/011 say "may be reserved" — "may" leaves the in-scope boundary to implementer discretion rather than a committed line.
+- **Assumptions / conditions:** None material.
+- **Suggested improvements:** Replace "may be reserved/phased" with a committed in/out marker for REQ-AAO-010/011 (see R1-F4).
+
+##### Numbered suggestions (F-prefix → requirements)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Interfaces | high | Specify the descriptor schema-field contract inline in REQ-AAO-004: exact field names (`category`, `orientation`), the `orientation` enum (`system`\|`human`\|`bridge`), the `category` enum (incl. `ai_agent_observability`, `project_observability`), and default values — rather than the prose "add 2 schema fields". | REQ-AAO-004 is the normative owner of the schema change that PRO-002 reuses; without an inline contract the two categories' PRs can diverge on enum spelling/defaults (focus Ask 1). | REQ-AAO-004 (§3.2) | Schema unit test asserts the two fields exist with the named enum domains and defaults; PRO-002 references REQ-AAO-004 by ID. |
+| R1-F2 | Architecture | medium | Add one sentence to §3.4 / REQ-AAO-008 contrasting "cat 5 = SDK emits (no cede)" vs "cat 4 = SDK produces then cedes to ContextCore", and state explicitly that no `skip_reason`/`owner` appears in cat-5 because every cat-5 metric has an in-process emission site. | A reader of this doc alone cannot tell why the cede vocabulary present in the cat-4 doc is absent here; making the emit-vs-cede boundary explicit prevents a future reviewer from "fixing" the asymmetry (focus Ask 2). | §3.4 after the cross-doc convergence note | Doc review: the sentence names both ownership shapes and ties the absence of `skip_reason` to the in-process emission site. |
+| R1-F3 | Data | high | State whether the descriptor `category`/`orientation` fields are **authoritative** or are **projections** of the taxonomy single type-keyed registry (REQ-OAT-070a, which forbids independently-maintained category/orientation), and require a parity assertion that descriptor-declared axes never disagree with the registry for the same signal. | REQ-OAT-070a (settled) makes category/orientation derived projections; REQ-AAO-004/008 hand-populate them per descriptor — a parallel metric-side store the taxonomy designed away (focus Ask 3). The doc must declare which is source-of-truth. | New REQ-AAO-013 under §3.4, or a clause in REQ-AAO-008 | Test: for each signal, descriptor `(category,orientation)` equals the value projected from the REQ-OAT-070a registry (or the doc explicitly declares the descriptor manifest a separate layer). |
+| R1-F4 | Validation | low | Replace "(May be reserved/phased.)" on REQ-AAO-010 and REQ-AAO-011 with a committed in-scope / out-of-scope marker and, if out, a reserved namespace note (mirroring §4's generator exclusion). | "May" leaves the in/out boundary to implementer discretion, weakening the "in-scope work is genuinely small" claim (focus Ask 5); a committed marker makes the deferral testable in the before-code checklist. | REQ-AAO-010, REQ-AAO-011 (§3.5) | Checklist item: each of 010/011 carries an explicit in/out marker; no "may" remains on scope lines. |
+| R1-F5 | Risks | medium | REQ-AAO-002's double-invocation guard MUST specify the **detection key and action**: detect when the same `correlation_id` is recorded via both `CostTracker.record_cost()` and `SessionTracker.record_request()`, and define whether the guard warns, drops the duplicate, or raises. | REQ-AAO-002 says "guard against double-invocation" and Appendix C C-1 says "warns on double-invocation" but the requirement itself does not commit to key or action — an implementer cannot build/test the guard from the requirement alone. | REQ-AAO-002 (§3.1) | Unit test: recording the same `correlation_id` cost via both APIs triggers the specified action (e.g. one WARN log) deterministically. |
+
+### Stress-test / adversarial pass
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F6 | Validation | medium | REQ-AAO-012 (descriptor↔emission parity) MUST state its **enforcement boundary**: does parity require *exact* bijection (every descriptor ⇔ every `meter.create_*`/span), or descriptor ⊆ emitted? The PRO plan Phase 2.3 asserts "declared attrs ⊆ emitted attrs" (subset), while AAO-012 reads as bijection ("and vice-versa"). | The two docs share one parity test (focus Ask 1/4) but specify different relations (bijection here vs subset in PRO 2.3) — the shared test cannot satisfy both; this is a latent cross-doc contradiction in the very mechanism meant to prevent drift. | REQ-AAO-012 (§3.6) | Test: the parity helper's relation (bijection vs subset) is documented identically in both docs and the single shared test enforces exactly that relation. |
+
+##### Cross-doc consistency (cats 4 & 5)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F7 | Architecture | high | Create ONE shared requirement (proposed `REQ-OBS-SHARED-001`) owning the descriptor schema change (`category`/`orientation` fields + enums + defaults) AND the descriptor↔emission parity test, and have AAO-004/008/012 and PRO-002/005 reference it by ID instead of each restating it. | Today the schema change and parity test are described in both docs with only narrative cross-links ("same change the AI-agent doc specifies"); one normative owner eliminates the drift risk the shared spine was meant to remove (Ask 1). Note: PRO plan 2.3 says "subset" while AAO-012 says "bijection" — proof the duplication is already drifting (see R1-F6). | New top-level shared requirement referenced from §3.2/§3.4/§3.6 here and §3.2 in PRO | Both docs cite the same requirement ID; a single schema/parity test module is referenced by both plans; no field/enum/relation is defined in two places. |
+| R1-F8 | Interfaces | medium | Make the emit-vs-cede asymmetry implementable by cross-referencing the cat-4 cede mechanism: state here that the cat-4 cede uses the taxonomy `skip_reason=owned_elsewhere`/`owner` honest-skip (REQ-OAT-011/052), and that cat-5 metrics never use it because they emit in-process — so a generator reading the manifest routes cat-5 as produced and cat-4 gauges as owned_elsewhere. | Ask 2 asks whether the asymmetry is "precise enough to implement." It is coherent but the cat-5 doc never names the cede vocabulary the generator must apply to the *other* side; naming it here closes the loop so the single generator handles both manifests uniformly. | §3.4 cross-doc convergence note | Test: a generator fed both manifests emits cat-5 metrics as produced artifacts and cat-4 `contextcore_*` as skips with `skip_reason=owned_elsewhere`. |
+| R1-F9 | Data | high | Resolve the registry-model question (Ask 3) at the cross-doc level: declare in BOTH docs whether the `_OTEL_DESCRIPTORS` metric-side `category`/`orientation` are projections of the taxonomy REQ-OAT-070a `declared_type`-keyed registry or a deliberately separate telemetry-declaration layer — and if separate, add a reconciliation assertion that the two registries never disagree for an overlapping signal. | REQ-OAT-070a (settled) forbids independently-maintained category/orientation; both cat-4/5 docs hand-populate them on descriptors. Either they are projections (then say from-where) or a second registry exists (then bound it). Leaving it implicit reintroduces exactly the parallel-table accidental complexity the taxonomy R2-F4 removed. | New shared clause referenced from REQ-AAO-008 and REQ-PRO-002 | Cross-doc test: for any signal present in both the descriptor manifest and the taxonomy registry, `(category,orientation)` agree; doc states which side is authoritative. |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): none — this is Round R1 (first encounter); no prior untriaged suggestions exist.

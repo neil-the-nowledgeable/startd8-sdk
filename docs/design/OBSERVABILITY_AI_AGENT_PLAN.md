@@ -1,7 +1,7 @@
 # AI Agent Observability — Implementation Plan
 
 **Date:** 2026-05-31
-**Status:** Plan v0.1 (paired with `OBSERVABILITY_AI_AGENT_REQUIREMENTS.md` v0.2)
+**Status:** Plan v0.2 (paired with `OBSERVABILITY_AI_AGENT_REQUIREMENTS.md` v0.3; CRP R1 amendments applied)
 **Scope:** SDK modules — `src/startd8/observability/manifest.py`, `src/startd8/session_tracking.py`,
 `src/startd8/costs/otel_metrics.py` + `tracker.py`, `src/startd8/agents/` (label helper, outcome
 labels), `src/startd8/events/otel_bridge.py`. The **category-5 artifact generator** that *consumes*
@@ -123,16 +123,135 @@ template metadata; the **generation** of dashboards/alerts/SLOs is the taxonomy 
 | 005 | 5.3 | 011 (reserved) | 4.3 |
 | 006 | 5.1 | 012 (parity) | 1.2 |
 
+## CRP R1 plan amendments (cat-4/5 combined review)
+
+These amend the phases above; applied from CRP R1 (see Appendix A). The shared spine is now owned by
+`OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md`.
+
+- **Phase 1 is the keystone landing (R1-S1, `REQ-OBS-SHARED-005`).** This plan lands the
+  `category`/`orientation` schema fields **and** the parity helper **once**; the cat-4 (project) plan
+  declares an explicit dependency edge on this landing and does **not** re-add them. Exactly one diff
+  in history adds the fields.
+- **Phase 1.2 parity is kind-aware (R1-S2, `REQ-OBS-SHARED-002`).** Metrics → **bijection**; spans →
+  **subset**. Replaces the ambiguous "and vice-versa" (which read as universal bijection and drifted
+  against the project plan's "subset"). One helper, one documented relation, referenced by both plans.
+- **Phase 1.1 registry layering (R1-S3, `REQ-OBS-SHARED-003`).** Descriptor `category`/`orientation`
+  are authoritative for the **telemetry-declaration** layer — a *separate* layer from the taxonomy
+  artifact-dispatch registry (REQ-OAT-070a). They share the enum vocabulary, not rows; the
+  reconciliation check is vocabulary-level (no stray enum value), not row-level. Hand-populating axes
+  here is therefore not the parallel-table the taxonomy forbids.
+- **Phase 2 rename — captured baseline + rollback (R1-S4).** Before renaming, capture the current
+  Prometheus-exported names to a golden file; assert the post-rename export equals it byte-for-byte;
+  rollback = revert the rename commit. "Reproduces automatically" is not sufficient validation.
+- **Phase 3 — prove generated-from-manifest (R1-S5).** Validation MUST mutate one descriptor and
+  assert the corresponding `manifest_declared` entry changes (a hand-authored copy would not) — proving
+  the declare-don't-guess wiring, not just catalog-match.
+- **Phase 0.3 — positive OTLP proof, correctly scoped (R1-S6 + code-verification §A-2).** The
+  Prometheus path is **reachable opt-in** (gated by `prometheus_port` + `not _otel_enabled`), not
+  dead; retiring it spans `session_tracking.py:336, 438–503` **and** the recording sites at 611/810/895
+  + `_prom_*` attrs. Gate removal on a behavioral check that an OTLP capture still carries the
+  `startd8_*` session metrics after removal — a grep alone can miss late-bound usage.
+
 ## Before-code checklist
 
 - [ ] Every v0.2 requirement maps to a phase; every step traces to a requirement / Appendix-C item.
-- [ ] Phase 0 net-removes lines (dead Prometheus path, deduped labels).
-- [ ] Parity test (1.2) fails on a deliberately mis-declared descriptor before it's trusted (3.1).
-- [ ] Phase 2 rename verified to preserve the exported Prometheus metric names (no consumer break).
-- [ ] Cross-doc: the Phase-3 loop's effect on taxonomy REQ-OAT-024/025 is reconciled post-CRP.
+- [ ] Phase 0 net-removes lines (Prometheus opt-in path, deduped labels).
+- [ ] Parity test (1.2) is kind-aware and fails on a deliberately mis-declared metric (bijection) and a
+  non-subset span attr before it's trusted (3.1).
+- [ ] Phase 2 rename verified byte-for-byte against a captured golden baseline (R1-S4).
+- [ ] Phase 1 keystone (schema + parity) lands once; cat-4 plan depends on it, doesn't re-add (R1-S1).
+- [ ] Cross-doc: the Phase-3 loop's effect on taxonomy REQ-OAT-024/025 is reconciled (`REQ-OBS-SHARED-004`).
 
 ---
 
 *Plan v0.1 — paired with requirements v0.2. Six phases; Phases 0–1 distill + establish the
 trustworthy descriptor manifest, Phases 2–4 are wiring/small additions, Phase 5 defines artifacts
 that the taxonomy category-5 generator (deferred) consumes. Net: mostly wiring + cleanup.*
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-S{n}`).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table. This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID. Endorsement counts inform priority but do not auto-apply suggestions.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| R1-S1 | Name the shared keystone as a single landing; cat-4 depends on it | claude-opus-4-8-1m | CRP R1 amendment + `REQ-OBS-SHARED-005` | 2026-05-31 |
+| R1-S2 | Fix parity relation (bijection vs subset) | claude-opus-4-8-1m | Kind-aware via `REQ-OBS-SHARED-002` | 2026-05-31 |
+| R1-S3 | Descriptor axes authoritative vs projection | claude-opus-4-8-1m | `REQ-OBS-SHARED-003` separate-layer resolution | 2026-05-31 |
+| R1-S4 | Phase 2 byte-for-byte baseline + rollback | claude-opus-4-8-1m | Golden file of pre-rename exported names | 2026-05-31 |
+| R1-S5 | Phase 3 fixture proves generated-from-manifest | claude-opus-4-8-1m | Mutate-descriptor test | 2026-05-31 |
+| R1-S6 | Phase 0.3 positive OTLP proof, not grep-only | claude-opus-4-8-1m | + code-verification §A-2: scope is opt-in path (336/438-503/611/810/895), not "dead" | 2026-05-31 |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-05-31
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-31 18:46:04 UTC
+- **Scope**: Plan quality (S-prefix) for AI Agent Observability (cat 5), weighted toward the shared descriptor-registry spine sequencing vs the project-obs plan (cat 4) and taxonomy code-alignment.
+
+##### Executive summary
+
+- The shared "schema keystone" (Phase 0.4 + 1.1) and parity test (Phase 1.2) are the cross-doc spine but are NOT sequenced as a single landing step — both this plan and the PRO plan list them independently against the same branch, risking a double-add.
+- Phase 1.2 parity-test relation is ambiguous ("and vice-versa" = bijection) while the PRO plan Phase 2.3 states "subset"; the shared test cannot satisfy both relations.
+- Phase 1.1 populates `category`/`orientation` per descriptor, which the settled taxonomy REQ-OAT-070a treats as derived projections — the plan should state whether the descriptor store is authoritative or projected.
+- Phase 3's manifest→`manifest_declared` wiring is the keystone value (declare-don't-guess) but lacks a fixture-based validation that the metadata is produced from the manifest, not hand-authored.
+- Phase 0.3 (remove dead Prometheus fallback) has a grep-only gate; for a deletion crossing an export boundary, add a positive proof that OTLP export still carries the affected metrics.
+- Phase 2 rename relies on the Prometheus dots→underscores transform; the validation should assert byte-for-byte parity against a captured baseline, not just "reproduces … automatically".
+- No ops/rollback note for the Phase 2 metric rename (a name change is observable-breaking if the transform assumption is wrong).
+- Security area is untouched (acceptable — observation-only, no new surface), noted for domain exhaustiveness.
+
+##### Numbered suggestions (S-prefix → plan)
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-S1 | Architecture | high | Name the shared schema keystone as a single landing step (one PR/commit) and have the cat-4 (PRO) plan declare an explicit dependency edge on it; reference the PRO plan's Phase 1.1 by name so the two plans cannot both add the `category`/`orientation` fields. | Phase 0.4 and Phase 1.1 both add the fields, and the PRO plan Phase 1.1 also adds them "land it once" — but neither plan names the landing PR or blocks the other; same branch reduces but does not remove the double-add hazard (focus Ask 4). | "Guiding principle" / Phase 1 header | Cross-plan: exactly one diff adds the descriptor fields; the other plan's traceability shows a dependency, not a duplicate step. |
+| R1-S2 | Validation | high | Fix the parity-test relation: Phase 1.2 says "every declared descriptor maps to an emission and vice-versa" (bijection) but the PRO plan Phase 2.3 says "declared attrs ⊆ emitted attrs" (subset). Pick one relation for the SHARED test and state it identically in both plans. | The parity test is the shared anti-drift mechanism; if the two plans specify different relations, the single test cannot be shared (focus Ask 1/4). Spans (open attribute sets) may justify subset while metrics justify bijection — decide and document. | Phase 1.2 + cross-ref PRO 2.3 | Test: the shared parity helper documents one relation; running it against the cat-5 manifest and cat-4 spans both pass under that one relation. |
+| R1-S3 | Data | high | In Phase 1.1, state whether descriptor `category`/`orientation` are authoritative or are projections of the taxonomy REQ-OAT-070a `declared_type`-keyed registry (which forbids independently-maintained category/orientation), and add a reconciliation check if separate. | Hand-populating the axes per descriptor (Phase 1.1) reintroduces the parallel-table accidental complexity the taxonomy R2-F4 removed; the plan must pick a source of truth (focus Ask 3). | Phase 1 step 1.1 | Test: descriptor axes equal the registry projection for overlapping signals, or the plan documents the descriptor manifest as a separate layer with a reconciliation assertion. |
+| R1-S4 | Ops | medium | Add a rollback/compat note and a byte-for-byte baseline assertion to Phase 2: capture the current Prometheus-exported metric names BEFORE the rename and diff the post-rename export against that captured baseline (not just "reproduces … automatically"). | A metric rename is observable-breaking if the dots→underscores transform assumption is even slightly wrong (e.g. an existing name that doesn't round-trip); the checklist item "preserve the exported names" needs a concrete captured baseline. | Phase 2 validation + before-code checklist | CI: golden file of pre-rename exported names; post-rename export equals it byte-for-byte; rollback = revert the rename commit. |
+| R1-S5 | Validation | medium | Phase 3 validation should use a fixture asserting `manifest_declared` is **generated from** `generate_manifest()` (e.g. a tampered manifest entry shows up in the metadata), proving the metadata is not hand-authored. | Phase 3 is the keystone "declare-don't-guess" payoff; "produced from the manifest (not hand-authored)" is the value claim but the validation only says it "matches the descriptor catalog" — which a hand-authored copy would also satisfy. | Phase 3 validation | Test: mutate one descriptor → the corresponding `manifest_declared` entry changes; a hand-authored copy would not. |
+| R1-S6 | Risks | medium | Phase 0.3 (remove dead Prometheus fallback) should add a positive proof, not just a grep: assert that after removal the OTLP export still carries the session/cost metrics, since the deletion crosses the export boundary. | A grep for consumers can miss reflection/late-bound usage; a deletion at an export boundary deserves a behavioral check that telemetry still flows. | Phase 0.3 validation | Integration: with the fallback removed, an OTLP capture still contains `startd8_*` session metrics. |
+
+##### Cross-doc note (cats 4 & 5 sequencing)
+
+The cat-4 (PRO) plan and this plan share three concrete artifacts: (1) the `MetricDescriptor`/`SpanDescriptor` `category`+`orientation` fields, (2) the descriptor↔emission parity test, and (3) the same target branch `feat/observability-followup-run007`. Recommend the orchestrator land the schema fields + parity test in cat-5 Phase 1 FIRST (this plan owns the descriptor manifest most directly), then have the cat-4 plan rebase and only ADD project-span descriptors + the ownership-boundary docs. This matches focus Ask 4's "land once, shared" intent and avoids the ordering hazard with the taxonomy code-alignment (REQ-OAT-070a registry) noted in R1-S3.
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with): none — Round R1 (first encounter); no prior untriaged suggestions exist.
+
+---
+
+## Requirements Coverage Matrix — R1
+
+Mapping each AI-agent requirement → plan phase/step → Covered / Partial / Gap (analysis only; not triage).
+
+| Requirement | Plan Step(s) | Coverage | Gaps |
+| ---- | ---- | ---- | ---- |
+| REQ-AAO-001 (catalog) | 1.1, 1.3 | Covered | — |
+| REQ-AAO-002 (two cost families: doc + guard) | 0.1 | Partial | Guard detection-key + action (warn/drop/raise) not specified (see R1-F5). |
+| REQ-AAO-003 (standardize on dotted names) | 2.1 | Partial | No captured byte-for-byte export baseline / rollback note (see R1-S4). |
+| REQ-AAO-004 (orientation/schema fields) | 0.4, 1.1 | Partial | Field/enum/default contract not specified inline; shared-keystone landing not sequenced (R1-F1, R1-S1); registry-projection question open (R1-S3). |
+| REQ-AAO-005 (agent dashboard — human) | 5.3 | Covered | Generation deferred to taxonomy generator (acknowledged). |
+| REQ-AAO-006 (SLI/SLO — system) | 5.1 | Covered | Definitions only; generation deferred. |
+| REQ-AAO-007 (alerts — bridge) | 5.2 | Covered | Definitions only; generation deferred. |
+| REQ-AAO-008 (close descriptor→metadata loop) | 3.1 | Partial | Validation doesn't prove metadata is generated-from-manifest vs hand-authored (R1-S5); emit-vs-cede contrast not stated (R1-F2/F8). |
+| REQ-AAO-009 (outcome labels truncated/retried) | 4.1 | Covered | — |
+| REQ-AAO-010 (eval hook) | 4.2 (reserved) | Partial | "May be reserved" — in/out not committed (R1-F4). |
+| REQ-AAO-011 (tool-use telemetry) | 4.3 (reserved) | Partial | "May be reserved" — in/out not committed (R1-F4). |
+| REQ-AAO-012 (descriptor↔emission parity) | 1.2 | Partial | Parity relation (bijection vs PRO's subset) inconsistent across docs (R1-S2/R1-F6); registry alignment (R1-F3/F9). |
