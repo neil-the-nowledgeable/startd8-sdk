@@ -38,7 +38,11 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Module-level taxonomy defaults (REQ-OBS-SHARED-001): all session/agent telemetry
+# is AI-agent observability, system-oriented (raw metrics).
 _OTEL_DESCRIPTORS = {
+    "category": "ai_agent_observability",
+    "orientation": "system",
     "metrics": [
         {
             "name": "startd8_active_sessions",

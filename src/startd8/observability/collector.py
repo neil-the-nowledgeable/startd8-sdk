@@ -107,6 +107,10 @@ def collect_metric_descriptors() -> List[MetricDescriptor]:
 
     for module_path, source_file in _INSTRUMENTED_MODULES:
         desc = _load_descriptors(module_path, source_file)
+        # Module-level taxonomy defaults — a module's signals usually share a
+        # category/orientation; declare once at the top level, override per-entry.
+        mod_category = desc.get("category", "")
+        mod_orientation = desc.get("orientation", "")
         for m in desc.get("metrics", []):
             if m["name"] in seen_names:
                 continue
@@ -125,8 +129,8 @@ def collect_metric_descriptors() -> List[MetricDescriptor]:
                     # the generated manifest carries empty axes.
                     prometheus_name=m.get("prometheus_name"),
                     dashboard_hints=m.get("dashboard_hints"),
-                    category=m.get("category", ""),
-                    orientation=m.get("orientation", ""),
+                    category=m.get("category", mod_category),
+                    orientation=m.get("orientation", mod_orientation),
                 )
             )
     return result
@@ -138,6 +142,8 @@ def collect_span_descriptors() -> List[SpanDescriptor]:
 
     for module_path, source_file in _INSTRUMENTED_MODULES:
         desc = _load_descriptors(module_path, source_file)
+        mod_category = desc.get("category", "")
+        mod_orientation = desc.get("orientation", "")
         for s in desc.get("spans", []):
             result.append(
                 SpanDescriptor(
@@ -147,9 +153,10 @@ def collect_span_descriptors() -> List[SpanDescriptor]:
                     attributes=s.get("attributes", []),
                     events=s.get("events", []),
                     attributes_dynamic=s.get("attributes_dynamic", False),
-                    # Pass through taxonomy fields (REQ-OBS-SHARED-001, R3-F1).
-                    category=s.get("category", ""),
-                    orientation=s.get("orientation", ""),
+                    # Pass through taxonomy fields (REQ-OBS-SHARED-001, R3-F1);
+                    # fall back to the module-level default.
+                    category=s.get("category", mod_category),
+                    orientation=s.get("orientation", mod_orientation),
                 )
             )
     return result

@@ -15,7 +15,11 @@ except ImportError:
     _OTEL_AVAILABLE = False
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Module-level taxonomy defaults (REQ-OBS-SHARED-001): cost telemetry is AI-agent
+# observability, system-oriented.
 _OTEL_DESCRIPTORS = {
+    "category": "ai_agent_observability",
+    "orientation": "system",
     "metrics": [
         {
             "name": "startd8.cost.total",
