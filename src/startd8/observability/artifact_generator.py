@@ -49,6 +49,10 @@ class ServiceHints:
     language: Optional[str] = None
     detected_databases: List[str] = field(default_factory=list)
     convention_metrics: List[ConventionMetric] = field(default_factory=list)
+    # Domain-specific metrics declared in the manifest (Closure 1 / Gap 1).
+    # Distinct from convention_metrics: these describe what *this* service does
+    # (e.g. token burn, cost, truncations) rather than generic OTel HTTP semconv.
+    declared_metrics: List[ConventionMetric] = field(default_factory=list)
 
 
 @dataclass
@@ -223,6 +227,26 @@ def _is_non_service_entry(
     return False
 
 
+def _parse_metric_set(raw: Any) -> List[ConventionMetric]:
+    """Parse a list of raw metric dicts into ConventionMetric objects.
+
+    Shared by both ``convention_based`` and ``manifest_declared`` metric sets,
+    which carry the same ``{name, type, source}`` schema. Entries without a
+    name are dropped. Non-list input yields an empty list.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [
+        ConventionMetric(
+            name=m.get("name", ""),
+            type=m.get("type", ""),
+            source=m.get("source", ""),
+        )
+        for m in raw
+        if isinstance(m, dict) and m.get("name")
+    ]
+
+
 def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
     """Extract per-service instrumentation hints from onboarding metadata.
 
@@ -252,16 +276,11 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
             logger.warning("Service %s has no transport field; skipping", svc_id)
             continue
 
-        metrics_raw = hint.get("metrics", {}).get("convention_based", [])
-        convention_metrics = [
-            ConventionMetric(
-                name=m.get("name", ""),
-                type=m.get("type", ""),
-                source=m.get("source", ""),
-            )
-            for m in metrics_raw
-            if m.get("name")
-        ]
+        metrics = hint.get("metrics", {})
+        convention_metrics = _parse_metric_set(metrics.get("convention_based", []))
+        # Closure 1 / Gap 1: also consume manifest_declared domain metrics so
+        # artifacts describe what *this* service does, not just generic HTTP.
+        declared_metrics = _parse_metric_set(metrics.get("manifest_declared", []))
 
         services.append(
             ServiceHints(
@@ -270,6 +289,7 @@ def extract_service_hints(metadata: Dict[str, Any]) -> List[ServiceHints]:
                 language=hint.get("language"),
                 detected_databases=hint.get("detected_databases", []),
                 convention_metrics=convention_metrics,
+                declared_metrics=declared_metrics,
             )
         )
 
@@ -559,7 +579,20 @@ def generate_alert_rules(
                 }
             )
 
-    if not rules:
+    # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
+    # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
+    todo_block = _domain_alert_todo_block(service)
+    if todo_block:
+        derivations.append(
+            DerivationTrace(
+                field="domain_alert_todos",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{len(service.declared_metrics)} declared metrics → TODO alert stubs",
+                tier="manifest",
+            )
+        )
+
+    if not rules and not todo_block:
         return ArtifactResult(
             artifact_type="alert_rule",
             service_id=service.service_id,
@@ -590,7 +623,7 @@ def generate_alert_rules(
         service_id=service.service_id,
         output_path=f"alerts/{service.service_id}-alerts.yaml",
         status="generated",
-        content=header + body,
+        content=header + body + todo_block,
         derivations=derivations,
     )
 
@@ -686,6 +719,11 @@ def generate_dashboard_spec(
     # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
     _ensure_red_coverage(panels, service, business, derivations)
 
+    # Closure 1 / Gap 1: add domain panels for manifest_declared metrics,
+    # grouped by intent (Cost & Tokens, Sessions, Health, Progress). These are
+    # additive — the convention-based RED panels above remain the baseline.
+    _add_domain_panels(panels, service, derivations)
+
     if not panels:
         return ArtifactResult(
             artifact_type="dashboard_spec",
@@ -763,6 +801,173 @@ def _panel_group(metric_name: str) -> str:
     if "request" in name_lower:
         return "Throughput"
     return "General"
+
+
+# ---------------------------------------------------------------------------
+# Domain (manifest_declared) metric helpers — Closure 1 / Gap 1
+# ---------------------------------------------------------------------------
+
+
+def _domain_metric_type(metric: ConventionMetric) -> str:
+    """Resolve the instrument type of a declared metric.
+
+    Prefers the explicit ``type`` field; falls back to inferring from the
+    Prometheus-style name suffix when type is absent.
+    """
+    if metric.type:
+        return metric.type
+    name = metric.name.lower()
+    if name.endswith("_total"):
+        return "counter"
+    if name.endswith(("_ratio", "_percent", "_status", "_count")):
+        return "gauge"
+    return "gauge"
+
+
+def _domain_panel_group(metric_name: str) -> str:
+    """Group a declared metric into an intent-based dashboard row.
+
+    Domain metrics describe product behaviour, so they are grouped by what the
+    operator cares about (cost, sessions, health, progress) rather than by RED.
+    """
+    name = metric_name.lower()
+    if "cost" in name or "token" in name:
+        return "Cost & Tokens"
+    if "session" in name:
+        return "Sessions"
+    if "truncation" in name or "context_usage" in name or "context_ratio" in name:
+        return "Health"
+    if "task" in name or "progress" in name or "status" in name or "completeness" in name:
+        return "Progress"
+    return "Domain Metrics"
+
+
+def _domain_unit(metric_name: str) -> str:
+    """Infer a Grafana unit for a declared metric from its name."""
+    name = metric_name.lower()
+    if "ratio" in name or "percent" in name:
+        return "percentunit"
+    if name.endswith("_ms") or "_time_ms" in name:
+        return "ms"
+    if "cost" in name:
+        return "none"
+    return "short"
+
+
+def _domain_query(metric: ConventionMetric, service_id: str) -> str:
+    """Build a PromQL query for a declared metric.
+
+    Counters become rate panels; gauges/ratios are read directly. Declared
+    metric names are already Prometheus-style, so (unlike convention metrics)
+    no ``_total`` suffix is appended to names that already carry it.
+    """
+    name = metric.name
+    mtype = _domain_metric_type(metric)
+    label = f'{{service="{service_id}"}}'
+    if mtype == "counter":
+        target = name if name.endswith("_total") else f"{name}_total"
+        return f"rate({target}{label}[$__rate_interval])"
+    return f"{name}{label}"
+
+
+def _pascal(text: str) -> str:
+    """Convert a snake/dot/dash name to PascalCase (startd8_cost_total → Startd8CostTotal)."""
+    cleaned = text.replace(".", " ").replace("_", " ").replace("-", " ")
+    return "".join(w.title() for w in cleaned.split())
+
+
+def _domain_alert_todo_block(service: ServiceHints) -> str:
+    """Build a commented-out alert stub block for declared metrics.
+
+    Policy (TODO-when-absent): the manifest carries no thresholds for domain
+    metrics, so rather than silently omitting them, each declared metric is
+    emitted as a commented-out alert stub with a ``<THRESHOLD>`` placeholder.
+    The active rules in the file stay valid Prometheus YAML; the stubs make the
+    missing domain alerts visible to the operator. Returns "" when there are no
+    declared metrics.
+    """
+    if not service.declared_metrics:
+        return ""
+
+    lines = [
+        "",
+        "# " + "-" * 73,
+        "# TODO: domain-metric alerts (Closure 1 / Gap 1)",
+        "# The manifest_declared metrics below have no threshold in the manifest, so",
+        "# no active alert is emitted (policy: TODO-when-absent). Set a threshold and",
+        "# uncomment to activate.",
+        "# " + "-" * 73,
+    ]
+    for metric in service.declared_metrics:
+        expr = _domain_query(metric, service.service_id)
+        alert_name = _alert_name(service.service_id, _pascal(metric.name) + "High")
+        lines.extend(
+            [
+                f"#  - alert: {alert_name}",
+                f"#    expr: {expr} > <THRESHOLD>",
+                "#    for: 5m",
+                "#    labels:",
+                "#      severity: warning",
+                f"#      service: {service.service_id}",
+                "#    annotations:",
+                f'#      summary: "{service.service_id} {metric.name} above threshold"',
+                '#      todo: "Set <THRESHOLD>; no manifest value available"',
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _add_domain_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Append a panel per manifest_declared metric (Closure 1 / Gap 1).
+
+    Mutates ``panels`` in place. Skips declared metrics whose query already
+    appears among existing panels (dedup against convention panels), so a
+    metric is never visualised twice.
+    """
+    if not service.declared_metrics:
+        return
+
+    existing_exprs = {str(p.get("expr", "")) for p in panels}
+    added = 0
+    for metric in service.declared_metrics:
+        query = _domain_query(metric, service.service_id)
+        if query in existing_exprs:
+            continue
+        mtype = _domain_metric_type(metric)
+        unit = _domain_unit(metric.name)
+        # Ratios/percents read best on a gauge; counters (rate) and other
+        # gauges read best as a timeseries.
+        if unit == "percentunit":
+            panel_type = "gauge"
+        elif mtype == "counter":
+            panel_type = "timeseries"
+        else:
+            panel_type = "timeseries"
+        panels.append(
+            {
+                "type": panel_type,
+                "title": _panel_title(metric.name),
+                "expr": query,
+                "unit": unit,
+                "group": _domain_panel_group(metric.name),
+            }
+        )
+        existing_exprs.add(query)
+        added += 1
+
+    if added:
+        derivations.append(
+            DerivationTrace(
+                field="domain_panels",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{added} declared metrics → panels",
+                tier="manifest",
+            )
+        )
 
 
 def _ensure_red_coverage(

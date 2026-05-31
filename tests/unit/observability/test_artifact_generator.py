@@ -624,3 +624,182 @@ class TestProvenance:
 
         # Should not raise
         _append_to_provenance(tmp_path / "missing.json", tmp_path / "obs")
+
+
+# ---------------------------------------------------------------------------
+# Closure 1 / Gap 1: manifest_declared domain metrics
+# ---------------------------------------------------------------------------
+
+# The ten domain metrics the pipeline discovered for strtd8 (gap analysis §1.1).
+STRTD8_DECLARED = [
+    {"name": "startd8_tokens_total", "type": "counter", "source": "manifest"},
+    {"name": "startd8_cost_total", "type": "counter", "source": "manifest"},
+    {"name": "startd8_active_sessions", "type": "gauge", "source": "manifest"},
+    {"name": "startd8_context_usage_ratio", "type": "gauge", "source": "manifest"},
+    {"name": "startd8_truncations_total", "type": "counter", "source": "manifest"},
+    {"name": "startd8_requests_total", "type": "counter", "source": "manifest"},
+    {"name": "startd8_response_time_ms", "type": "gauge", "source": "manifest"},
+    {"name": "contextcore_task_progress", "type": "gauge", "source": "manifest"},
+    {"name": "contextcore_task_status", "type": "gauge", "source": "manifest"},
+    {"name": "contextcore_install_completeness_percent", "type": "gauge", "source": "manifest"},
+]
+
+
+@pytest.fixture
+def strtd8_service():
+    return ServiceHints(
+        service_id="strtd8",
+        transport="http",
+        language="python",
+        convention_metrics=HTTP_METRICS,
+        declared_metrics=[
+            ConventionMetric(m["name"], m["type"], m["source"]) for m in STRTD8_DECLARED
+        ],
+    )
+
+
+class TestDeclaredMetricExtraction:
+    def test_extract_populates_declared_metrics(self):
+        metadata = {
+            "project_id": "startd8/run-003-20260528t2314",
+            "instrumentation_hints": {
+                "strtd8": {
+                    "service_id": "strtd8",
+                    "transport": "http",
+                    "metrics": {
+                        "convention_based": [
+                            {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"},
+                        ],
+                        "manifest_declared": STRTD8_DECLARED,
+                    },
+                },
+            },
+        }
+        services = extract_service_hints(metadata)
+        assert len(services) == 1
+        svc = services[0]
+        assert len(svc.convention_metrics) == 1
+        assert len(svc.declared_metrics) == 10
+        names = {m.name for m in svc.declared_metrics}
+        assert "startd8_cost_total" in names
+        assert "startd8_tokens_total" in names
+
+    def test_missing_manifest_declared_is_empty(self):
+        metadata = {
+            "instrumentation_hints": {
+                "svc": {
+                    "transport": "http",
+                    "metrics": {"convention_based": []},
+                },
+            },
+        }
+        services = extract_service_hints(metadata)
+        assert services[0].declared_metrics == []
+
+
+class TestDomainMetricHelpers:
+    def test_panel_group_intent(self):
+        from startd8.observability.artifact_generator import _domain_panel_group
+
+        assert _domain_panel_group("startd8_cost_total") == "Cost & Tokens"
+        assert _domain_panel_group("startd8_tokens_total") == "Cost & Tokens"
+        assert _domain_panel_group("startd8_active_sessions") == "Sessions"
+        assert _domain_panel_group("startd8_truncations_total") == "Health"
+        assert _domain_panel_group("startd8_context_usage_ratio") == "Health"
+        assert _domain_panel_group("contextcore_task_progress") == "Progress"
+        assert _domain_panel_group("something_else") == "Domain Metrics"
+
+    def test_metric_type_inference_from_name(self):
+        from startd8.observability.artifact_generator import _domain_metric_type
+
+        assert _domain_metric_type(ConventionMetric("x_total", "", "")) == "counter"
+        assert _domain_metric_type(ConventionMetric("x_ratio", "", "")) == "gauge"
+        # explicit type wins over name inference
+        assert _domain_metric_type(ConventionMetric("x_total", "gauge", "")) == "gauge"
+
+    def test_query_counter_vs_gauge(self):
+        from startd8.observability.artifact_generator import _domain_query
+
+        counter = ConventionMetric("startd8_cost_total", "counter", "manifest")
+        gauge = ConventionMetric("startd8_active_sessions", "gauge", "manifest")
+        assert _domain_query(counter, "strtd8") == (
+            'rate(startd8_cost_total{service="strtd8"}[$__rate_interval])'
+        )
+        # already-_total names are not double-suffixed
+        assert "_total_total" not in _domain_query(counter, "strtd8")
+        assert _domain_query(gauge, "strtd8") == 'startd8_active_sessions{service="strtd8"}'
+
+
+class TestDomainDashboardPanels:
+    def test_dashboard_contains_cost_and_token_panels(self, strtd8_service, business):
+        """Gap-analysis acceptance test: dashboard must surface domain metrics."""
+        result = generate_dashboard_spec(strtd8_service, business)
+        assert result.status == "generated"
+        assert "startd8_cost_total" in result.content
+        assert "startd8_tokens_total" in result.content
+
+        spec = yaml.safe_load(result.content)
+        groups = {p.get("group") for p in spec["panels"]}
+        assert "Cost & Tokens" in groups
+        assert "Sessions" in groups
+
+    def test_ratio_metric_uses_percentunit_gauge(self, strtd8_service, business):
+        spec = yaml.safe_load(generate_dashboard_spec(strtd8_service, business).content)
+        ratio_panels = [
+            p for p in spec["panels"]
+            if "startd8_context_usage_ratio" in str(p.get("expr", ""))
+        ]
+        assert ratio_panels
+        assert ratio_panels[0]["type"] == "gauge"
+        assert ratio_panels[0]["unit"] == "percentunit"
+
+    def test_no_declared_metrics_leaves_baseline_unchanged(self, http_service, business):
+        """A service with no declared metrics gets only convention panels."""
+        spec = yaml.safe_load(generate_dashboard_spec(http_service, business).content)
+        for p in spec["panels"]:
+            assert "startd8_" not in str(p.get("expr", ""))
+
+    def test_domain_panel_derivation_recorded(self, strtd8_service, business):
+        result = generate_dashboard_spec(strtd8_service, business)
+        fields = {d.field for d in result.derivations}
+        assert "domain_panels" in fields
+
+
+class TestDomainAlertTodos:
+    def test_alerts_contain_commented_todo_block(self, strtd8_service, business):
+        result = generate_alert_rules(strtd8_service, business)
+        assert result.status == "generated"
+        assert "TODO: domain-metric alerts" in result.content
+        assert "startd8_cost_total" in result.content
+        assert "<THRESHOLD>" in result.content
+
+    def test_todo_stubs_are_not_active_rules(self, strtd8_service, business):
+        """Declared-metric alerts are commented out, not parsed as active rules."""
+        result = generate_alert_rules(strtd8_service, business)
+        # Strip the trailing commented TODO block before parsing YAML.
+        active = "\n".join(
+            ln for ln in result.content.splitlines() if not ln.lstrip().startswith("#")
+        )
+        parsed = yaml.safe_load(active)
+        rule_names = [
+            r["alert"] for g in parsed["groups"] for r in g["rules"]
+        ]
+        # No active rule references a domain metric.
+        assert not any("Cost" in n or "Token" in n for n in rule_names)
+
+    def test_declared_only_service_still_emits_file(self, business):
+        """A service with declared metrics but no alertable convention metrics
+        still produces an alerts file (with the TODO block), not a skip."""
+        svc = ServiceHints(
+            service_id="domain-only",
+            transport="http",
+            convention_metrics=[],
+            declared_metrics=[ConventionMetric("startd8_cost_total", "counter", "manifest")],
+        )
+        result = generate_alert_rules(svc, business)
+        assert result.status == "generated"
+        assert "TODO: domain-metric alerts" in result.content
+
+    def test_no_declared_metrics_no_todo_block(self, http_service, business):
+        result = generate_alert_rules(http_service, business)
+        assert "TODO: domain-metric alerts" not in result.content
