@@ -5,6 +5,7 @@ import pytest
 from startd8.dashboard_creator.config_merge import get_default_config
 from startd8.dashboard_creator.models import (
     DashboardSpec,
+    GridPos,
     PanelSpec,
     TargetSpec,
     VariableSpec,
@@ -12,6 +13,8 @@ from startd8.dashboard_creator.models import (
 from startd8.dashboard_creator.validation import (
     enforce_uid,
     generate_uid_from_title,
+    layout_grid_warnings,
+    validate_row_placement,
     validate_spec,
 )
 from startd8.exceptions import ValidationError
@@ -209,3 +212,154 @@ class TestValidateSpec:
         )
         errors = validate_spec(spec, self._config())
         assert any("unknownVarMetric" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# validate_row_placement
+# ---------------------------------------------------------------------------
+
+
+class TestValidateRowPlacement:
+    def test_no_row_panels_ok(self):
+        spec = DashboardSpec(
+            title="T",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(type="stat", title="A", expr="up", gridPos=GridPos(h=4, w=6, x=0, y=0)),
+            ],
+        )
+        assert validate_row_placement(spec) == []
+
+    def test_content_below_row_ok(self):
+        spec = DashboardSpec(
+            title="T",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(
+                    type="row",
+                    title="Section",
+                    gridPos=GridPos(h=1, w=24, x=0, y=0),
+                ),
+                PanelSpec(
+                    type="stat",
+                    title="KPI",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=0, y=1),
+                ),
+            ],
+        )
+        assert validate_row_placement(spec) == []
+
+    def test_content_same_y_as_row_fails(self):
+        spec = DashboardSpec(
+            title="T",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(
+                    type="row",
+                    title="Section",
+                    gridPos=GridPos(h=1, w=24, x=0, y=0),
+                ),
+                PanelSpec(
+                    type="stat",
+                    title="Bad",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=0, y=0),
+                ),
+            ],
+        )
+        err = validate_row_placement(spec)
+        assert len(err) == 1
+        assert "Bad" in err[0]
+        assert "y >= 1" in err[0]
+
+    def test_row_without_gridpos_fails(self):
+        spec = DashboardSpec(
+            title="T",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(type="row", title="Section"),
+                PanelSpec(type="stat", title="A", expr="up", gridPos=GridPos(h=4, w=6, x=0, y=1)),
+            ],
+        )
+        err = validate_row_placement(spec)
+        assert len(err) == 1
+        assert "no gridPos" in err[0]
+
+
+# ---------------------------------------------------------------------------
+# layout_grid_warnings
+# ---------------------------------------------------------------------------
+
+
+class TestLayoutGridWarnings:
+    def test_all_explicit_no_warning(self):
+        spec = DashboardSpec(
+            title="Test",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(
+                    type="stat",
+                    title="A",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=0, y=1),
+                ),
+                PanelSpec(
+                    type="stat",
+                    title="B",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=6, y=1),
+                ),
+            ],
+        )
+        assert layout_grid_warnings(spec) == []
+
+    def test_all_implicit_no_warning(self):
+        spec = DashboardSpec(
+            title="Test",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(type="stat", title="A", expr="up"),
+                PanelSpec(type="stat", title="B", expr="up"),
+            ],
+        )
+        assert layout_grid_warnings(spec) == []
+
+    def test_mixed_emits_warning(self):
+        spec = DashboardSpec(
+            title="Test",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(
+                    type="stat",
+                    title="With",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=0, y=1),
+                ),
+                PanelSpec(type="stat", title="Without", expr="up"),
+            ],
+        )
+        w = layout_grid_warnings(spec)
+        assert len(w) == 1
+        assert "mixed explicit and implicit" in w[0].lower()
+        assert "With" in w[0]
+        assert "Without" in w[0]
+
+    def test_row_panels_ignored(self):
+        spec = DashboardSpec(
+            title="Test",
+            uid="cc-startd8-test",
+            panels=[
+                PanelSpec(type="row", title="R1"),
+                PanelSpec(
+                    type="stat",
+                    title="A",
+                    expr="up",
+                    gridPos=GridPos(h=4, w=6, x=0, y=1),
+                ),
+                PanelSpec(type="stat", title="B", expr="up"),
+            ],
+        )
+        w = layout_grid_warnings(spec)
+        assert len(w) == 1
+        assert "B" in w[0]

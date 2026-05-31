@@ -393,3 +393,57 @@ The SDK's `--check` mode (set-difference validation between generated and commit
 5. **Index file**: Produce `observability-manifest.yaml` summarizing all generated artifacts + derivation rules.
 6. **Drift detection**: `--check` mode comparing against prior generation output.
 7. **Pipeline integration**: Add call to cap-dev-pipe wrapper script between EXPORT and INGESTION.
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-F{n}` for requirements).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-05-29
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-29 (UTC)
+- **Scope**: Requirements review driven by `OBSERVABILITY_GENERATION_GAP_ANALYSIS.md` (test run `run-003-20260528T2314`). Focus: whether the generator's observed blind spots are covered by current FRs. **Cross-doc note:** the gaps were evaluated against `FORWARD_MANIFEST_DRAFT_TIME_*` and found to be a **separate subsystem** (observability `artifact_generator.py` vs code-gen `spec_builder`/`extractor`); they belong here, not there. No new standalone requirements doc is warranted — these amendments + one plain bug fix (plan R1-S5) cover the actionable surface.
+
+**Executive summary**
+
+- **Gap 1 (highest value, in-scope-by-intent):** §Part 3 already states the manifest's per-metric `dashboard_hints` "represent what a derived DashboardSpec *would* contain" but "have **zero consumer code** — this is the missing link." Yet no FR (6.2/6.3/6.4) actually requires consuming `manifest_declared` metrics. The implemented generator reads **only** `convention_based` (`artifact_generator.py:256`), so all 10 domain metrics for `strtd8` (`startd8_cost_total`, `startd8_tokens_total`, `startd8_active_sessions`, `startd8_context_usage_ratio`, `startd8_truncations_total`, `contextcore_task_progress`, …) never reach any artifact. The artifacts are byte-identical to any HTTP service. **The requirement gestures at the missing link but never pins it** → R1-F1.
+- **Gap 3:** quality scoring (via `validators/observability_artifact_checks.py`) is purely structural — no requirement ties the score to *semantic relevance* (does the artifact reference the service's actual metrics?). A boilerplate triplet scores 0.97 while ignoring 10 of 13 metrics → R1-F2.
+- **Gap 2:** §7 Non-Goals deliberately scopes to the triplet ("All 8 artifact types" excluded). That decision stands. But the generator's `observability-manifest.yaml` reports `artifacts_skipped: 0` against an onboarding contract that declares 8 `artifact_types` and 8 coverage `gaps` — a clean-success report on 3/8 coverage. Honest reconciliation is unspecified → R1-F3.
+- **Gap 4:** §7 ("generator produces spec files; provisioning separate") + the plan's Risk table ("Phase 3 test loads generated YAML into model") imply the output must be a valid `DashboardSpec`. No FR binds that round-trip as an acceptance criterion, and the onboarding contract declares the dashboard as Grafana JSON at a different path — contract drift → R1-F4.
+
+**Numbered suggestions**
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Data | high | Add an FR (extend §6.2/6.3/6.4) requiring the generator to consume **`metrics.manifest_declared`** (and the manifest's per-metric `dashboard_hints`) in addition to `convention_based`. Pin the mapping: declared counters → rate/throughput panels + a derived alert where a threshold is inferable; declared gauges/ratios → timeseries or gauge panels + SLI where user-facing; group panels by hint/intent (e.g. "Cost & Tokens", "Sessions", "Health"). Convention RED triplet remains the baseline; declared metrics are additive. | §Part 3 already names this "the missing link" but no FR mandates it. The implementation reads only `convention_based` (`artifact_generator.py:256`); `manifest_declared` appears nowhere in the module. Without this FR the generator will keep emitting service-agnostic boilerplate. **Acceptance:** for a service with ≥1 `manifest_declared` metric, the generated DashboardSpec references ≥1 declared metric (e.g. `strtd8` dashboard contains `startd8_cost_total`). | §6.3 Dashboard Spec Generation (primary); mirror in §6.2 Alert + §6.4 SLO | Unit test: feed an onboarding fixture with `manifest_declared` metrics; assert each generated artifact references at least the named declared metrics; re-running against `run-003` metadata produces a cost/token panel. |
+| R1-F2 | Validation | high | Add a requirement for a **semantic metric-coverage dimension** to the quality score: `metric_coverage = (metrics referenced by ≥1 artifact) / (declared + convention metrics for the service)`. Surface it as a distinct field in `observability-quality.json` and fold it into the composite so the headline number drops when domain metrics are ignored. Optionally add an **artifact-type-coverage** field (declared types produced ÷ declared types required). | The current validators (`observability_artifact_checks.py`, OBS-100/101/200/710) verify form only; nothing measures whether artifacts use the service's real metrics. That is why the run-003 triplet scored 0.97 while referencing 3 of 13 metrics. The score is read as "is this useful observability?" but answers "is this valid YAML?" | §6 (new sub-section, e.g. 6.9 Semantic Quality) | Depends on R1-F1. Re-score the **existing** run-003 artifacts: metric-coverage MUST come out low (≈3/13), proving the check bites; a post-F1 run MUST score materially higher. |
+| R1-F3 | Ops | medium | Add an FR (extend §6.8 Graceful Degradation / index generation) requiring the generator's `observability-manifest.yaml` + `observability-quality.json` to **reconcile against the declared artifact contract**: for each `artifact_type` the onboarding metadata declares but the triplet generator does not produce, emit an explicit `status: skipped` entry with `reason: "not implemented by triplet generator (see Non-Goal §7)"`. The summary's `artifacts_skipped` MUST reflect these. | This keeps the §7 Non-Goal (don't generate the other 5 types) **and** removes the silent-success failure: today `artifacts_skipped: 0` + composite 0.97 reads as full coverage when the declared contract has 8 types and 8 coverage gaps. No new generators — reporting honesty only. | §6.8 / index spec | Test: run against an onboarding metadata declaring 8 `artifact_types`; assert the manifest lists 5 `skipped` entries with reasons and `artifacts_skipped == 5`. |
+| R1-F4 | Interfaces | medium | Add an acceptance criterion binding the generated dashboard YAML to the **`DashboardSpec` model** consumed by `DashboardCreatorWorkflow` (`dashboard_creator/models.py`): the emitted file MUST validate/parse cleanly into `DashboardSpec`. Separately, reconcile the onboarding contract: `artifact_types.dashboard` declares Grafana JSON at `grafana/dashboards/{target}-dashboard.json`, but the generator emits a YAML spec at `dashboards/{service}-dashboard-spec.yaml`. State which is the contract and document the `/dbrd-cr8r` hand-off. | The plan's Risk table promises "Phase 3 test loads generated YAML into model" but no FR makes it an acceptance gate, and the format/path the onboarding metadata advertises does not match what is produced — an integration consumer following the declared contract would look for JSON that never appears. | §6.3 Dashboard Spec Generation; §Part 3 (DashboardSpec note) | Round-trip test: `DashboardSpec` loads the generated `*-dashboard-spec.yaml` with zero errors; a doc note pins spec-file-vs-JSON responsibility between the generator and `/dbrd-cr8r`. |
+
+**Endorsements**: (none — R1 is the first round.)
+
+**Disagreements**: (none — first round.)

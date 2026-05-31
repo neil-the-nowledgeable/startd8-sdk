@@ -30,13 +30,26 @@ _STDLIB_HEURISTIC = frozenset({
 })
 
 
-def _derive_package(file_path: str) -> str:
+def _derive_package(
+    file_path: str,
+    dir_packages: Optional[Dict[str, str]] = None,
+) -> str:
     """Derive Go package name from file path.
 
     Go convention: package name = directory name (lowercase, single word).
     ``main.go`` in the root → ``package main``.
+
+    REQ-KZ-GO-606: When *dir_packages* is provided, reuse the package name
+    already assigned to sibling files in the same directory.  This ensures
+    all ``.go`` files in a directory share the same ``package`` declaration.
     """
     p = PurePosixPath(file_path)
+    parent_dir = str(p.parent)
+
+    # REQ-KZ-GO-606: If a sibling already established the package, reuse it.
+    if dir_packages and parent_dir in dir_packages:
+        return dir_packages[parent_dir]
+
     name = p.stem  # e.g., "main" from "main.go"
 
     # Special case: main.go → package main
@@ -137,16 +150,28 @@ class GoDeterministicFileAssembler:
         results: Dict[str, str] = {}
         file_specs = manifest.file_specs if hasattr(manifest, "file_specs") else {}
         if isinstance(file_specs, dict):
-            items = file_specs.items()
+            items = list(file_specs.items())
         else:
             items = [(getattr(fs, "file", ""), fs) for fs in file_specs]
+
+        # REQ-KZ-GO-606: First pass — seed directory→package map from main.go
+        # files so sibling files in the same directory get the same package.
+        dir_packages: Dict[str, str] = {}
+        for file_path, _ in items:
+            if PurePosixPath(file_path).name == "main.go":
+                dir_packages[str(PurePosixPath(file_path).parent)] = "main"
 
         for file_path, file_spec in items:
             if not file_path.endswith(".go"):
                 continue
-            content = self.render_file(file_spec)
+            content = self.render_file(file_spec, dir_packages=dir_packages)
             if content:
                 results[file_path] = content
+                # Record this file's package for later siblings
+                pkg = _derive_package(file_path, dir_packages)
+                parent_dir = str(PurePosixPath(file_path).parent)
+                if parent_dir not in dir_packages:
+                    dir_packages[parent_dir] = pkg
                 if output_dir:
                     from pathlib import Path
                     out_path = Path(output_dir) / file_path
@@ -154,7 +179,11 @@ class GoDeterministicFileAssembler:
                     out_path.write_text(content, encoding="utf-8")
         return results
 
-    def render_file(self, file_spec: Any) -> Optional[str]:
+    def render_file(
+        self,
+        file_spec: Any,
+        dir_packages: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
         """Render a single Go file from a ForwardFileSpec."""
         file_path = getattr(file_spec, "file", "")
         if not file_path.endswith(".go"):
@@ -165,8 +194,8 @@ class GoDeterministicFileAssembler:
         # Skeleton marker
         sections.append(GO_SKELETON_SENTINEL)
 
-        # Package declaration
-        package = _derive_package(file_path)
+        # Package declaration (REQ-KZ-GO-606: propagate from siblings)
+        package = _derive_package(file_path, dir_packages)
         sections.append(f"package {package}")
 
         # Import block
@@ -237,5 +266,16 @@ class GoDeterministicFileAssembler:
                 ret = getattr(sig, "return_annotation", "") or ""
 
             sections.append(_render_func_stub(name, params, ret, receiver))
+
+        # REQ-KZ-GO-604: Type-only files need at least one panic stub so that
+        # _skeleton_has_stubs() returns True and the file-whole generation path
+        # is eligible.  Without this, the skeleton passes through unchanged.
+        if type_elements and not func_elements:
+            sections.append(
+                f"// placeholder — file-whole generation will replace this skeleton.\n"
+                f"func init() {{\n"
+                f"\t{GO_STUB_BODY}\n"
+                f"}}"
+            )
 
         return "\n\n".join(sections) + "\n"

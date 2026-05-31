@@ -10,11 +10,13 @@ from startd8.providers import (
     ProviderRegistry,
     AnthropicProvider,
     OpenAIProvider,
+    OpenAICompatibleProvider,
+    NIMProvider,
     MockProvider,
     GeminiProvider,
     OllamaProvider
 )
-from startd8.agents import BaseAgent, MockAgent
+from startd8.agents import BaseAgent, MockAgent, OpenAICompatibleAgent
 from startd8.exceptions import ConfigurationError
 
 
@@ -205,6 +207,82 @@ class TestOpenAIProvider:
         assert "name" in info
         assert info["context_window"] == 8192
 
+    def test_validate_config_custom_endpoint_requires_key(self):
+        """Custom endpoints need api_key/api_key_env when not local."""
+        provider = OpenAIProvider()
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ConfigurationError, match="custom endpoint"):
+                provider.validate_config({
+                    "base_url": "https://integrate.api.nvidia.com/v1",
+                })
+
+    @patch.dict('os.environ', {'NVIDIA_API_KEY': 'test-key'}, clear=True)
+    def test_validate_config_custom_endpoint_api_key_env(self):
+        """Custom endpoints can use api_key_env."""
+        provider = OpenAIProvider()
+        assert provider.validate_config({
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "api_key_env": "NVIDIA_API_KEY",
+        }) is True
+
+    def test_create_agent_with_base_url_returns_compatible_agent(self):
+        """Passing base_url delegates to OpenAICompatibleAgent."""
+        provider = OpenAIProvider()
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI'), \
+             patch('startd8.agents.openai.AsyncOpenAI'):
+            agent = provider.create_agent(
+                "nvidia/nemotron-3-nano-30b-a3b",
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key="test-key",
+            )
+        assert isinstance(agent, OpenAICompatibleAgent)
+
+
+class TestOpenAICompatibleProvider:
+    """Test generic OpenAI-compatible provider."""
+
+    def test_provider_properties(self):
+        provider = OpenAICompatibleProvider()
+        assert provider.name == "openai-compatible"
+        assert provider.display_name == "OpenAI-Compatible Endpoint"
+
+    def test_validate_config_requires_base_url(self):
+        provider = OpenAICompatibleProvider()
+        with pytest.raises(ConfigurationError, match="base_url"):
+            provider.validate_config({})
+
+    def test_validate_config_localhost_needs_no_key(self):
+        provider = OpenAICompatibleProvider()
+        assert provider.validate_config({"base_url": "http://localhost:11434/v1"}) is True
+
+    def test_validate_config_remote_requires_key(self):
+        provider = OpenAICompatibleProvider()
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ConfigurationError, match="non-local"):
+                provider.validate_config({"base_url": "https://example.com/v1"})
+
+
+class TestNIMProvider:
+    """Test NVIDIA NIM provider."""
+
+    def test_provider_properties(self):
+        provider = NIMProvider()
+        assert provider.name == "nim"
+        assert provider.display_name == "NVIDIA NIM"
+        assert "nvidia/nemotron-3-nano-30b-a3b" in provider.supported_models
+
+    @patch.dict('os.environ', {'NVIDIA_API_KEY': 'test-key'}, clear=True)
+    def test_validate_config_uses_nvidia_env_var(self):
+        provider = NIMProvider()
+        assert provider.validate_config({}) is True
+
+    def test_validate_config_without_key(self):
+        provider = NIMProvider()
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ConfigurationError, match="NVIDIA API key required"):
+                provider.validate_config({})
+
 
 class TestGeminiProvider:
     """Test GeminiProvider implementation"""
@@ -243,6 +321,13 @@ class TestOllamaProvider:
         
         # Should always pass
         assert provider.validate_config({}) == True
+
+    def test_validate_config_remote_without_key_fails(self):
+        """Remote endpoints without auth should fail validation."""
+        provider = OllamaProvider()
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ConfigurationError, match="Prefer NIMProvider"):
+                provider.validate_config({"base_url": "https://integrate.api.nvidia.com/v1"})
     
     def test_env_vars(self):
         """Test Ollama doesn't need env vars"""
@@ -260,6 +345,13 @@ class TestProviderRegistry:
     def teardown_method(self):
         """Clear registry after each test"""
         ProviderRegistry.clear()
+
+    def test_builtin_registry_contains_new_endpoint_providers(self):
+        """Registry should include explicit endpoint providers."""
+        ProviderRegistry.discover(force=True)
+        providers = ProviderRegistry.list_providers()
+        assert "openai-compatible" in providers
+        assert "nim" in providers
     
     def test_register_provider(self):
         """Test registering a provider"""

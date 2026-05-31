@@ -2417,6 +2417,11 @@ def dashboard_create(
         False, "--print-template", help="Print a YAML spec template and exit"
     ),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose output"),
+    skip_row_validation: bool = typer.Option(
+        False,
+        "--skip-row-validation",
+        help="Skip ROW vs content gridPos validation (not recommended)",
+    ),
 ):
     """Generate a Grafana dashboard from a declarative YAML/JSON spec.
 
@@ -2465,6 +2470,8 @@ def dashboard_create(
         wf_config["grafana_url"] = os.environ["GRAFANA_URL"]
     if allow_insecure:
         wf_config["allow_insecure"] = True
+    if skip_row_validation:
+        wf_config["skip_row_validation"] = True
 
     if verbose:
         def _on_progress(current, total, message):

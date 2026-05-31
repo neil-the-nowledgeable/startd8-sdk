@@ -1,9 +1,9 @@
 # Kaizen for Prime Contractor — Go Language Requirements
 
-> **Version:** 1.1.0
-> **Status:** DRAFT (post-implementation-planning review)
-> **Date:** 2026-03-22
-> **Previous:** 1.0.0 (2026-03-18)
+> **Version:** 1.2.0
+> **Status:** DRAFT (post-Run-120 evaluation)
+> **Date:** 2026-03-24
+> **Previous:** 1.1.0 (2026-03-22)
 > **Parent:** [KAIZEN_PRIME_REQUIREMENTS.md](../prime/KAIZEN_PRIME_REQUIREMENTS.md)
 > **Language Profile:** `GoLanguageProfile` (`src/startd8/languages/go.py`)
 > **Related:** [MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md](MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md)
@@ -67,6 +67,40 @@ Trivial/simple Go tasks (HTML, go.mod, low-LOC .go files)
 ```
 
 This is documented in detail in [MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md](MULTI_LANGUAGE_TEMPLATE_AND_VALIDATION_REQUIREMENTS.md). The requirements in this document address Go-specific detection and prevention of this class of failure.
+
+### Run-120 Findings: Empty Skeleton Pass-Through (7 files)
+
+Run-120 (40 features, 100% pipeline completion, $4.88) fixed the Run-066 contamination problem (0/40 Python artifacts) but revealed a **skeleton assembly failure** in 7 Go files. All 7 were written to disk as bare skeletons despite Ollama successfully generating correct code for each.
+
+**Affected files:** `quote.go`, `tracker.go`, `money/money.go`, `rpc.go`, `middleware.go`, `product_catalog.go`, `validator/validator.go`
+
+**Root cause chain (confirmed by code trace):**
+
+```
+Go DFA renders type-only skeleton (no func elements in manifest)
+  → Skeleton has `type X interface {}` but NO `panic("not implemented")` stubs
+  → _skeleton_has_stubs() returns False (engine.py:2670)
+  → File-whole generation path SKIPPED (requires stubs)
+  → Element-by-element: Ollama generates correct code (result.code populated)
+  → splice_body_into_skeleton() calls Go splicer
+  → Go splicer searches for `func` declarations — finds only `type` declaration
+  → splice_result.code = None — element marked FAILED (engine.py:2388)
+  → Post-splice defect detection: SKELETON_MARKER = "# [STARTD8-SKELETON]" (Python #)
+    but Go sentinel = "// [STARTD8-SKELETON]" — no match (engine.py:2446)
+  → _skeleton_has_stubs() still False — both guards miss
+  → Bare skeleton assigned as filled_skeleton (engine.py:2472)
+  → prime_adapter strips _SKELETON_MARKER (Python #) — Go sentinel survives (line 907-909)
+  → _detect_assembly_defect() checks Python marker — no match (line 220)
+  → validate_disk_compliance() defaults to 1.0 for non-.py files
+  → Postmortem reports 0.99 PASS (false positive)
+```
+
+**Three independent failures compound:**
+1. **DFA gap:** Type-only files get no stubs, making them invisible to every downstream gate
+2. **Sentinel mismatch:** `SKELETON_MARKER` in `models.py` and `prime_adapter.py` uses Python `#` prefix; Go uses `//`. Neither the engine nor the adapter detects the Go marker.
+3. **Scoring gap:** `validate_disk_compliance()` returns 1.0 default for non-`.py` files (REQ-KZ-GO-100 not yet implemented)
+
+**Secondary issue — package name derivation:** The 5 non-test skeleton files declare `package shippingservice`/`package frontend`/`package productcatalogservice` (directory-derived) instead of `package main`. The DFA's `_derive_package()` only returns `main` for files named `main.go`; it has no mechanism to check sibling package declarations.
 
 ---
 
@@ -480,6 +514,8 @@ Summary of Go's generation path through the Prime Contractor pipeline:
 
 Trivial Go tasks (tasks classified as TRIVIAL by the complexity classifier) MUST produce language-appropriate skeletons, NOT Python stubs. This is the primary prevention measure for Run-066.
 
+> **Run-120 update:** The contamination prevention is working. The remaining gap is that type-only files (files whose manifest contains only `class`-kind elements and no `func` elements) produce skeletons with no `panic("not implemented")` stubs, which blocks both the file-whole and splice paths. See REQ-KZ-GO-604 for the fix.
+
 **`.go` file skeleton:**
 ```go
 package <name>
@@ -559,6 +595,71 @@ The body splicer (`go_splicer.py`) provides splice statistics that feed quality 
 
 **Quality signal:** `splice_ratio = functions_spliced / (functions_spliced + functions_skipped)` — a splice ratio below 0.5 indicates the generated code is structurally incompatible with the skeleton.
 
+### REQ-KZ-GO-604: Type-Only Skeleton Stub Generation (Run-120 Fix)
+
+**Problem:** `GoDeterministicFileAssembler.render_file()` (line 201-214) generates `type X interface {}` for files whose manifest has only `class`-kind elements. This skeleton has no `panic("not implemented")` stubs, which causes:
+- `_skeleton_has_stubs()` returns `False` → file-whole path skipped
+- Go splicer finds no `func` declarations → splice returns `None` → element fails
+- Generated code (correct, in `result.code`) is discarded
+
+**Requirement:** When a Go file's manifest has `class`-kind elements but no `func` elements, the DFA MUST still emit at least one `panic("not implemented")` stub function. This makes the skeleton visible to both the file-whole eligibility gate and the splicer.
+
+**Implementation — option A (minimal, recommended):** In `go_file_assembler.py`, after rendering type elements (line 206-220), if `func_elements` is empty AND `type_elements` is non-empty, extract function signatures from the type elements' `api_signatures` attribute (if available) and render them as stub functions via `_render_func_stub()`. If no `api_signatures` exist, emit a single placeholder:
+
+```go
+// placeholder — file-whole generation will replace this skeleton entirely.
+func init() {
+	panic("not implemented")
+}
+```
+
+This is sufficient because `_skeleton_has_stubs()` only needs one `panic(...)` to return `True`, which unlocks the file-whole path. The file-whole path replaces the entire skeleton with Ollama's output — the placeholder is never kept.
+
+**Implementation — option B (alternative):** Modify `_is_file_ollama_whole_eligible()` at `engine.py:2670` to add a fallback: if `_skeleton_has_stubs()` returns `False` AND the skeleton has fewer than N semantic lines (e.g., 10), treat it as eligible. An empty skeleton is a stronger signal for file-whole replacement than a stub-bearing skeleton.
+
+**Option A is preferred** because it fixes the problem at the source (the DFA) rather than adding a special case to the engine. Option B would also need the sentinel mismatch fixed (REQ-KZ-GO-605) to work end-to-end.
+
+### REQ-KZ-GO-605: Language-Aware Skeleton Marker (Run-120 Fix)
+
+**Problem:** Three constants define the skeleton marker independently:
+- `models.py:19`: `SKELETON_MARKER = "# [STARTD8-SKELETON]"` (Python `#`)
+- `prime_adapter.py:170`: `_SKELETON_MARKER = "# [STARTD8-SKELETON]"` (Python `#`)
+- `go_file_assembler.py:21`: `GO_SKELETON_SENTINEL = "// [STARTD8-SKELETON]"` (Go `//`)
+
+The engine (`engine.py:2446`) and adapter (`prime_adapter.py:220, 907-909`) only check/strip the Python-prefixed marker. Go skeletons pass through undetected.
+
+**Requirement:** The skeleton marker detection and stripping logic MUST recognize both `# [STARTD8-SKELETON]` and `// [STARTD8-SKELETON]`.
+
+**Implementation (minimal):** Change the check sites to match the bracket-delimited portion `[STARTD8-SKELETON]` instead of the comment-prefixed form. This is language-agnostic and covers Go, Java, C#, and Node.js (all use `//`):
+
+1. `engine.py:2446`: `"[STARTD8-SKELETON]" in current_skeleton`
+2. `prime_adapter.py:220`: `"[STARTD8-SKELETON]" in content`
+3. `prime_adapter.py:907-909`: Strip lines containing `[STARTD8-SKELETON]`
+
+No new constants needed. The existing `GO_SKELETON_SENTINEL`, `SKELETON_MARKER`, and `_SKELETON_MARKER` remain for their respective assemblers — only the detection/strip logic changes.
+
+### REQ-KZ-GO-606: Package Name Propagation for Sibling Files
+
+**Problem:** `_derive_package()` in `go_file_assembler.py` returns `"main"` only when the filename is `main.go`. Other files in the same directory (e.g., `quote.go` alongside `main.go`) get the directory name as their package (`shippingservice`). In Go, all `.go` files in one directory MUST share the same package declaration.
+
+**Requirement:** The DFA MUST produce consistent `package` declarations for all `.go` files in the same directory.
+
+**Implementation (minimal):** In `_derive_package()`, accept an optional `sibling_packages: dict[str, str]` parameter (mapping directory → package name). When the DFA renders a file in a directory that already has a rendered file, reuse that file's package name. The `render_specs()` method builds this mapping as it iterates:
+
+```python
+def render_specs(self, manifest, output_dir=None):
+    results = {}
+    dir_packages: dict[str, str] = {}  # directory → package name
+    # First pass: find main.go files to seed directory packages
+    for file_path, _ in items:
+        if PurePosixPath(file_path).name == "main.go":
+            dir_packages[str(PurePosixPath(file_path).parent)] = "main"
+    # Second pass: render with consistent packages
+    ...
+```
+
+This is a two-pass approach over the already-loaded manifest — no filesystem access needed.
+
 ---
 
 ## 8. Traceability Matrix
@@ -573,6 +674,9 @@ The body splicer (`go_splicer.py`) provides splice statistics that feed quality 
 | No Go feedback hints | REQ-KZ-GO-500, 501 | K-3 (no feedback loop) | SDK + cap-dev-pipe: kaizen config |
 | MicroPrime bypass for Go | REQ-KZ-GO-600, 601 | (new — Go-specific) | SDK: template registry + routing |
 | Parser/splicer not scored | REQ-KZ-GO-602, 603 | K-5b (no archive index for Go) | SDK: Kaizen metrics integration |
+| Type-only skeleton pass-through (Run-120) | REQ-KZ-GO-604 | (new — Run-120) | SDK: `go_file_assembler.py` |
+| Python-only skeleton marker detection (Run-120) | REQ-KZ-GO-605 | (new — Run-120) | SDK: `models.py`, `engine.py`, `prime_adapter.py` |
+| Package name inconsistency in DFA (Run-120) | REQ-KZ-GO-606 | (new — Run-120) | SDK: `go_file_assembler.py` |
 
 ---
 
@@ -601,6 +705,10 @@ The body splicer (`go_splicer.py`) provides splice statistics that feed quality 
 | `test_contamination_skip_comment` | REQ-KZ-GO-402b: `import os` after `//` not flagged | New: `tests/unit/validators/test_go_semantic_checks.py` |
 | `test_go_kaizen_all_6_categories` | REQ-KZ-GO-501: All 6 semantic categories have suggestion mappings | New: `tests/unit/contractors/test_go_kaizen_suggestions.py` |
 | `test_semantic_repair_config_activation` | REQ-KZ-GO-403d: Repair fires when config includes Go categories | New: `tests/unit/repair/test_go_semantic_repair.py` |
+| `test_go_dfa_type_only_has_stub` | REQ-KZ-GO-604: Type-only Go files get a `panic("not implemented")` stub | New: `tests/unit/utils/test_go_file_assembler.py` |
+| `test_skeleton_marker_detects_go_sentinel` | REQ-KZ-GO-605: `[STARTD8-SKELETON]` detection works for Go `//` prefix | Extend: `tests/unit/micro_prime/test_engine.py` |
+| `test_skeleton_strip_removes_go_sentinel` | REQ-KZ-GO-605: Adapter strips Go `// [STARTD8-SKELETON]` marker | Extend: `tests/unit/micro_prime/test_prime_adapter.py` |
+| `test_go_dfa_package_main_propagation` | REQ-KZ-GO-606: Sibling files in `main.go` directory get `package main` | New: `tests/unit/utils/test_go_file_assembler.py` |
 
 ### Existing Test Coverage
 
@@ -633,7 +741,13 @@ The following existing test files validate Go language support and should be ext
 0c. ~~**Fence strip repair**~~ (REQ-KZ-GO-402) — **Already satisfied.** `FenceStripStep` is language-agnostic and already in Go's `go_syntax_error` route. Zero work. Remove from backlog.
 0d. **Multi-match contamination detection** (REQ-KZ-GO-402a item 3) — Remove `break` from `_check_python_contamination()`, collect all matching fingerprints. ~10 min, 2-line change, improves postmortem reporting and enables the strip step to see all patterns.
 
-**P0 batch (Run-066 root cause):**
+**P0a batch (Run-120 root cause — skeleton pass-through):**
+
+0e. **Language-aware skeleton marker** (REQ-KZ-GO-605) — Change 3 check sites to match `[STARTD8-SKELETON]` instead of `# [STARTD8-SKELETON]`. ~15 min, 3 string edits. Unblocks defect detection for all non-Python languages.
+0f. **Type-only skeleton stub generation** (REQ-KZ-GO-604) — Add placeholder `panic("not implemented")` stub to type-only Go skeletons. ~20 min, 5-line change in `go_file_assembler.py`. Unblocks file-whole path for the 7 affected files.
+0g. **Package name propagation** (REQ-KZ-GO-606) — Two-pass DFA rendering to propagate `package main` to sibling files. ~30 min. Prevents compilation failures.
+
+**P0b batch (Run-066 root cause — contamination):**
 
 1. **Contamination detection hardening** (REQ-KZ-GO-100, 201, 402b) — Line-level detection with context awareness (skip raw strings, comments). Prevents false positives in quality scores.
 2. **Quality scoring** (REQ-KZ-GO-300, 301) — Required for Kaizen metrics. Depends on contamination detection.
@@ -652,4 +766,4 @@ The following existing test files validate Go language support and should be ext
 9. **Parser/splicer Kaizen integration** (REQ-KZ-GO-602, 603) — Metrics richness.
 10. **Phase 3: `unchecked_error` text repair** (REQ-KZ-GO-403b) — Text-based `if err != nil` insertion for the simple case. Depends on Phase 2 proving the Go repair infrastructure.
 
-Each step is independently valuable and can be shipped incrementally. Quick wins 0a-0d are pre-requisites that de-risk everything downstream. Steps 1-3 address the Run-066 root cause and should be treated as a single P0 batch.
+Each step is independently valuable and can be shipped incrementally. Quick wins 0a-0g are pre-requisites that de-risk everything downstream. Steps 0e-0g address the Run-120 skeleton pass-through root cause and should be treated as the highest priority P0a batch — they fix the 7 non-functional files. Steps 1-3 address the Run-066 contamination root cause (P0b). Run-120 confirmed that P0b is working (0/40 contamination), so P0a now takes priority.

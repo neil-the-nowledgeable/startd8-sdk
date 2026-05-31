@@ -29,6 +29,7 @@ from startd8.dashboard_creator.requirements_parser import (
     parse_requirements,
     requirements_to_yaml,
 )
+from startd8.dashboard_creator.validation import layout_grid_warnings, validate_row_placement
 from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
 
 __all__ = [
@@ -68,4 +69,7 @@ __all__ = [
     # Requirements parser (DC-301)
     "parse_requirements",
     "requirements_to_yaml",
+    # Layout validation
+    "layout_grid_warnings",
+    "validate_row_placement",
 ]

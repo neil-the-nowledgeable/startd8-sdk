@@ -632,7 +632,7 @@ def _parse_single_panel(block: str, row_title: str) -> Optional[PanelSpec]:
     }
 
     # Grid
-    grid_str = fields.get("Grid", "")
+    grid_str = fields.get("Grid", "") or fields.get("Grid position", "")
     if grid_str:
         try:
             kwargs["gridPos"] = _parse_grid(grid_str)

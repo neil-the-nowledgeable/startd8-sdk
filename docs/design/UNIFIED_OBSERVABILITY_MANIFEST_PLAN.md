@@ -994,3 +994,79 @@ After all phases, validate against real pipeline output:
 | Convention metric names change in OTel spec | Metric names come from ContextCore's `_PROTOCOL_METRICS` table, not hardcoded here. We consume whatever hints provide. |
 | PromQL syntax errors in generated queries | Phase 2/3 tests include PromQL syntax validation (balanced braces, valid function names). |
 | Pipeline wrapper script has diverged from symlinked canonical | Modify via the symlink target (`~/Documents/dev/cap-dev-pipe/`), not the local copy. |
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-S{n}` for plan).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1 — claude-opus-4-8-1m — 2026-05-29
+
+- **Reviewer**: claude-opus-4-8-1m
+- **Date**: 2026-05-29 (UTC)
+- **Scope**: Plan review driven by `OBSERVABILITY_GENERATION_GAP_ANALYSIS.md` (run `run-003-20260528T2314`). Maps the gap findings to concrete plan tasks. Pairs with REQUIREMENTS R1-F1..R1-F4. Gap 5 (gridPos autofix inert) is a plain implementation bug with no FR — captured as plan task R1-S5.
+
+**Executive summary**
+
+- The Implementation Sequence (steps 2–4) sources artifacts from **convention metrics only** ("Build `DashboardSpec` from convention metrics per service"). No step reads `manifest_declared` — so the plan, as written, would reproduce the run-003 boilerplate even if executed perfectly. Needs an explicit task (R1-S1) implementing REQUIREMENTS R1-F1.
+- No plan task implements a semantic/coverage score; the only quality surface is structural validation. R1-S2 adds it.
+- No plan task reconciles the generated index against the declared 8-type contract; the index reports clean success. R1-S3 adds the honest-skip reporting.
+- The Risk Mitigation table *names* a "Phase 3 test loads generated YAML into model" but no task makes it an executable acceptance gate, and the spec-vs-Grafana-JSON contract drift is untracked. R1-S4 tasks it.
+- The gridPos autofix is wired (`artifact_generator.py:1121–1134`, `autofix=True`) but inert: run-003's `observability-quality.json` shows `OBS-100h` present with `repairs_applied: []`. Plain bug → R1-S5.
+
+**Numbered suggestions**
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-S1 | Architecture | high | Add a task: extend `extract_service_hints` (`artifact_generator.py:226–283`) to carry `manifest_declared` metrics on `ServiceHints` (alongside `convention_metrics`), and extend `generate_dashboard_spec` / `generate_alert_rules` / `generate_slo_definitions` to emit panels/alerts/SLIs from them. Amend Implementation Sequence steps 2–4 from "convention metrics" to "convention + declared metrics." | Implements REQUIREMENTS R1-F1 — the single highest-leverage fix. Today line 256 reads only `convention_based`; this is the seam. Without changing the plan's "convention metrics" wording the implementer will faithfully reproduce the blind spot. | Implementation Sequence steps 2–4; new task in the phase decomposition | Unit test on the extended extractor: `ServiceHints.declared_metrics` populated from a fixture; generator output references them. End-to-end: re-run on `run-003` metadata → dashboard contains `startd8_cost_total`. |
+| R1-S2 | Validation | high | Add a task implementing a **metric-coverage scorer** in `validators/observability_artifact_checks.py` (or a sibling) and wiring it into `_write_quality_report`: compute referenced-vs-available metric ratio per service, emit `metric_coverage_score`, fold into composite. | Implements REQUIREMENTS R1-F2. The validator currently scores structure only (OBS-100/101/200/710). A new dimension is needed so the score reflects relevance. | New task after the artifact-generation phase | Regression proof: scorer run on the **current** run-003 artifacts yields low metric coverage (≈0.23); post-R1-S1 run yields high coverage. |
+| R1-S3 | Ops | medium | Add a task to `_write_index` / `_write_quality_report` (`artifact_generator.py:1378+`) that reads the onboarding metadata's declared `artifact_types` and emits a `status: skipped` artifact entry (with `reason`) for each declared type the triplet generator does not produce; update `summary.artifacts_skipped` accordingly. | Implements REQUIREMENTS R1-F3. Preserves the §7 Non-Goal (no new generators) while ending the clean-success-on-3/8 reporting. The data is already in the metadata (`artifact_types`, `coverage.gaps`). | New task in the index/reporting step (Sequence step 5) | Test: onboarding metadata with 8 declared `artifact_types` → manifest shows 5 `skipped` entries; `artifacts_skipped == 5`. |
+| R1-S4 | Validation | medium | Promote the Risk-table line "Phase 3 test loads generated YAML into model" into an explicit task: a round-trip test that loads each generated `*-dashboard-spec.yaml` into `dashboard_creator/models.py:DashboardSpec` and asserts zero validation errors; plus a doc note reconciling the spec-YAML output path with the onboarding contract's declared Grafana-JSON path and the `/dbrd-cr8r` hand-off. | Implements REQUIREMENTS R1-F4. A risk-table sentence is not a test; the contract drift (YAML spec vs declared `grafana/dashboards/{target}-dashboard.json`) is currently unowned. | Phase 3 testing section; Risk Mitigation row upgraded to a task | `DashboardSpec`-parse test green on a generated artifact; note committed under `docs/design/notes/`. |
+| R1-S5 | Risks | low | Add a bug-fix task: the gridPos autofix (`artifact_generator.py:1121–1134`, `validators/...repair_gridpos`) runs with `autofix=True` but does not take effect — run-003 shows `OBS-100h` present and `repairs_applied: []`. Verify `repair_gridpos` mutates the parsed spec and that re-validation runs on the repaired content; populate `repairs_applied`. | Plain implementation bug, no FR needed. Currently every generated dashboard ships without panel layout despite a repair existing. | New hardening task (or fold into R1-S1's dashboard work) | Regression: a regenerated dashboard has `gridPos` on every panel and `OBS-100h` no longer appears; `repairs_applied` non-empty when a fix is made. |
+
+**Endorsements**: (none — R1 is the first round.)
+
+**Disagreements**: (none — first round.)
+
+---
+
+## Requirements Coverage Matrix — R1
+
+Analysis only (not triage). Maps each requirement section in `UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md` to plan step(s)/task(s) and assesses coverage **as of pre-R1-triage** (i.e., what the plan covers today). Gaps are linked to the closing suggestion ID.
+
+| Requirement Section | Plan Step(s) / Task(s) | Coverage | Gap / Closing Suggestion |
+| ---- | ---- | ---- | ---- |
+| §6.1 Core artifact generator script | Impl Sequence 1 (wire inputs) | Full | — |
+| §6.2 Alert rule generation | Impl Sequence 2 | **Partial** | Convention-only; declared metrics not alerted → **R1-S1** (FR R1-F1) |
+| §6.3 Dashboard spec generation | Impl Sequence 3 | **Partial** | "from convention metrics" only; declared metrics + `dashboard_hints` unused → **R1-S1** (FR R1-F1). Output-format/`DashboardSpec` round-trip unbound → **R1-S4** (FR R1-F4) |
+| §6.4 SLO definition generation | Impl Sequence 4 | **Partial** | Convention-only; declared user-facing metrics get no SLI → **R1-S1** (FR R1-F1) |
+| §6.5 Derivation traceability | Derivation-rule tracing (manifest headers) | Full | — (works; verified in run-003 provenance) |
+| §6.6 Pipeline integration | Impl Sequence 7 | Full | — |
+| §6.7 Drift detection | Impl Sequence 6 (`--check`) | Full | — |
+| §6.8 Graceful degradation | Skip/empty handling | **Partial** | No reconciliation against declared 8-type contract; index reports clean success on 3/8 → **R1-S3** (FR R1-F3) |
+| §Part 3 "dashboard_hints … missing link" | (none) | **Gap** | Declared-metric consumption has zero plan task → **R1-S1** (FR R1-F1) |
+| Quality scoring (validators) | Structural checks (OBS-100/101/200/710) | **Partial** | Structural only; no semantic/metric-coverage dimension → **R1-S2** (FR R1-F2) |
+| gridPos autofix correctness | Risk table (implied) | **Gap (bug)** | Autofix inert in run-003 → **R1-S5** (no FR; plain bug) |

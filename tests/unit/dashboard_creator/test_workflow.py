@@ -323,6 +323,67 @@ class TestPhase3Layout:
             # Layout is applied because panel has no gridPos
             assert "layout" in step_names
 
+    def test_row_placement_step_recorded(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain
+    ):
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({"spec": valid_spec, "dry_run": True})
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            assert "row_placement" in step_names
+            rp = [s for s in result.steps if s.step_name == "row_placement"][0]
+            assert "no row panels" in rp.output.lower()
+
+    def test_invalid_row_overlap_fails_before_generate(
+        self, workflow, mock_mixin, mock_toolchain
+    ):
+        bad_spec = {
+            "title": "Bad Rows",
+            "uid": "cc-startd8-bad-rows",
+            "panels": [
+                {"type": "row", "title": "R", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
+                {
+                    "type": "stat",
+                    "title": "Overlap",
+                    "expr": "up",
+                    "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+                },
+            ],
+        }
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({"spec": bad_spec, "dry_run": True})
+            assert result.success is False
+            assert "Row placement validation failed" in (result.error or "")
+
+    def test_skip_row_validation_bypasses_overlap_check(
+        self, workflow, mock_mixin, mock_toolchain
+    ):
+        bad_spec = {
+            "title": "Bad Rows",
+            "uid": "cc-startd8-bad-rows",
+            "panels": [
+                {"type": "row", "title": "R", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
+                {
+                    "type": "stat",
+                    "title": "Overlap",
+                    "expr": "up",
+                    "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+                },
+            ],
+        }
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({
+                "spec": bad_spec,
+                "dry_run": True,
+                "skip_row_validation": True,
+            })
+            assert result.success is True
+            rp = [s for s in result.steps if s.step_name == "row_placement"][0]
+            assert "Skipped" in rp.output
+
 
 class TestPhase3ManifestSync:
     """DC-201: Manifest sync integration in workflow."""

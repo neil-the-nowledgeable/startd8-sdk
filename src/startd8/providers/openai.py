@@ -1,11 +1,21 @@
 """
-OpenAI GPT provider implementation
+OpenAI-family provider implementations.
+
+This module provides:
+- OpenAIProvider: OpenAI's hosted API, with optional delegation to a
+  compatible endpoint when ``base_url`` is provided
+- OpenAICompatibleProvider: generic provider for arbitrary OpenAI-compatible
+  endpoints (Together, Groq, self-hosted gateways, etc.)
+- NIMProvider: NVIDIA NIM-specific OpenAI-compatible provider
+- OllamaProvider: local Ollama runtime provider
 """
 
 from typing import List, Dict, Any, Optional
+import ipaddress
 import os
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ..agents import GPT4Agent, OpenAICompatibleAgent
 from ..exceptions import ConfigurationError
@@ -18,7 +28,13 @@ class OpenAIProvider:
     
     # Official OpenAI models (hardcoded baseline)
     HARDCODED_MODELS = [
-        # GPT-4.1 family (Latest - April 2025, 1M context)
+        # GPT-5.x family (Latest)
+        "gpt-5.5-pro",          # Most capable flagship
+        "gpt-5.5",              # Standard flagship
+        "gpt-5.4-mini",         # Fast, cost-efficient
+        "gpt-5.4-nano",         # Ultra-fast, lowest cost
+        "gpt-5.3-codex",        # Coding-optimized
+        # GPT-4.1 family (April 2025, 1M context)
         "gpt-4.1",              # Best for coding and instruction following
         "gpt-4.1-mini",         # Fast, cost-efficient
         "gpt-4.1-nano",         # Ultra-fast, lowest cost
@@ -213,32 +229,52 @@ class OpenAIProvider:
         model: str, 
         name: Optional[str] = None,
         **config
-    ) -> GPT4Agent:
+    ):
         """
         Create an OpenAI GPT agent instance.
+        
+        When ``base_url`` is provided, returns an ``OpenAICompatibleAgent``
+        targeting that endpoint (useful for NVIDIA NIM, Azure OpenAI, or
+        any OpenAI-compatible API). Otherwise returns a standard
+        ``GPT4Agent`` pointing at api.openai.com.
         
         Args:
             model: GPT model identifier
             name: Optional agent name (defaults to model-based name)
             **config: Configuration options
                 - api_key: OpenAI API key (or use OPENAI_API_KEY env var)
+                - base_url: Custom API endpoint (triggers OpenAICompatibleAgent)
                 - max_tokens: Maximum tokens to generate (default 16384)
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
         # Decision 37A: be permissive about model IDs.
-        # Keep a curated list for suggestions, but allow unknown models so users
-        # can use newly released IDs without waiting for an SDK update.
         if model not in self.supported_models:
             logger.warning(
                 f"OpenAIProvider: model '{model}' not in supported_models list; "
                 f"continuing anyway."
             )
         
-        # Generate a friendly name if not provided
         if name is None:
-            # Use model name as-is or create short version
             name = model.replace("gpt-", "gpt").replace("-preview", "")
+        
+        base_url = config.get('base_url')
+        if base_url is not None:
+            return OpenAICompatibleAgent(
+                name=name,
+                model=model,
+                api_key=config.get('api_key'),
+                api_key_env=config.get('api_key_env'),
+                base_url=base_url,
+                max_tokens=config.get('max_tokens', 16384),
+                cost_tracker=config.get('cost_tracker'),
+                budget_manager=config.get('budget_manager'),
+                timeout_config=config.get('timeout_config'),
+                retry_config=config.get('retry_config'),
+                enable_retry=config.get('enable_retry', False),
+                use_connection_pool=config.get('use_connection_pool', False),
+                system_prompt=config.get('system_prompt'),
+            )
         
         return GPT4Agent(
             name=name,
@@ -261,9 +297,19 @@ class OpenAIProvider:
         Raises:
             ConfigurationError: If configuration is invalid
         """
+        base_url = config.get('base_url')
+        api_key_env = config.get('api_key_env')
+        env_api_key = os.getenv(api_key_env) if api_key_env else None
+
         # Check for API key
-        api_key = config.get('api_key') or os.getenv('OPENAI_API_KEY')
+        api_key = config.get('api_key') or env_api_key or os.getenv('OPENAI_API_KEY')
         if not api_key:
+            if base_url:
+                raise ConfigurationError(
+                    "API key required for authenticated custom endpoint. "
+                    "Pass api_key, set api_key_env, or set OPENAI_API_KEY. "
+                    "For NVIDIA NIM, prefer NIMProvider or set api_key_env='NVIDIA_API_KEY'."
+                )
             raise ConfigurationError(
                 "OpenAI API key required. "
                 "Set OPENAI_API_KEY environment variable or pass api_key in config."
@@ -286,7 +332,7 @@ class OpenAIProvider:
         return True
     
     def get_required_env_vars(self) -> List[str]:
-        """Return required environment variables"""
+        """Return required environment variables for the default OpenAI path."""
         return ['OPENAI_API_KEY']
     
     def get_model_info(self, model: str) -> Optional[Dict[str, Any]]:
@@ -307,8 +353,172 @@ class OpenAIProvider:
         ]
 
 
+def _base_url_is_local(base_url: str) -> bool:
+    """Treat loopback and RFC1918 private addresses as local — these don't
+    require an API key. Captures localhost, 127.0.0.0/8, 10.0.0.0/8,
+    172.16.0.0/12, 192.168.0.0/16, plus IPv6 loopback/private. Hostnames
+    other than 'localhost' are conservatively treated as non-local.
+    """
+    host = urlparse(base_url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
+class OpenAICompatibleProvider:
+    """Provider for arbitrary OpenAI-compatible endpoints.
+
+    Use this when you want provider-registry ergonomics with a custom
+    ``base_url`` and optional custom API-key env var.
+    """
+
+    DEFAULT_MODELS = ["custom-model"]
+
+    @property
+    def name(self) -> str:
+        return "openai-compatible"
+
+    @property
+    def display_name(self) -> str:
+        return "OpenAI-Compatible Endpoint"
+
+    @property
+    def supported_models(self) -> List[str]:
+        return self.DEFAULT_MODELS.copy()
+
+    def create_agent(
+        self,
+        model: str,
+        name: Optional[str] = None,
+        **config,
+    ) -> OpenAICompatibleAgent:
+        """Create an agent for a custom OpenAI-compatible endpoint."""
+        if name is None:
+            name = model.replace("/", "-")
+
+        base_url = config.get('base_url')
+        if not base_url:
+            raise ConfigurationError(
+                "base_url is required for OpenAICompatibleProvider."
+            )
+
+        return OpenAICompatibleAgent(
+            name=name,
+            model=model,
+            api_key=config.get('api_key'),
+            api_key_env=config.get('api_key_env'),
+            base_url=base_url,
+            max_tokens=config.get('max_tokens', 16384),
+            cost_tracker=config.get('cost_tracker'),
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
+            system_prompt=config.get('system_prompt'),
+        )
+
+    def validate_config(self, config: Dict[str, Any]) -> bool:
+        """Validate a custom OpenAI-compatible endpoint configuration."""
+        base_url = config.get('base_url')
+        if not base_url:
+            raise ConfigurationError(
+                "base_url is required for OpenAICompatibleProvider."
+            )
+
+        api_key_env = config.get('api_key_env')
+        api_key = config.get('api_key')
+        env_api_key = os.getenv(api_key_env) if api_key_env else None
+        is_local = _base_url_is_local(base_url)
+
+        if not is_local and not (api_key or env_api_key):
+            raise ConfigurationError(
+                "API key required for non-local OpenAI-compatible endpoint. "
+                "Pass api_key or set api_key_env."
+            )
+
+        max_tokens = config.get('max_tokens')
+        if max_tokens is not None:
+            if not isinstance(max_tokens, int) or max_tokens <= 0:
+                raise ConfigurationError(
+                    f"max_tokens must be a positive integer, got: {max_tokens}"
+                )
+        return True
+
+    def get_required_env_vars(self) -> List[str]:
+        """OpenAI-compatible endpoints are config-driven; no fixed env var."""
+        return []
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
+        return ['text-generation', 'json-mode', 'custom-endpoint']
+
+
+class NIMProvider(OpenAICompatibleProvider):
+    """Provider for NVIDIA NIM OpenAI-compatible endpoints."""
+
+    NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+    NIM_MODELS = [
+        "nvidia/nemotron-3-nano-30b-a3b",
+    ]
+
+    @property
+    def name(self) -> str:
+        return "nim"
+
+    @property
+    def display_name(self) -> str:
+        return "NVIDIA NIM"
+
+    @property
+    def supported_models(self) -> List[str]:
+        return self.NIM_MODELS.copy()
+
+    def create_agent(
+        self,
+        model: str,
+        name: Optional[str] = None,
+        **config,
+    ) -> OpenAICompatibleAgent:
+        """Create an agent for NVIDIA NIM."""
+        config = dict(config)
+        config.setdefault('base_url', self.NIM_BASE_URL)
+        config.setdefault('api_key_env', 'NVIDIA_API_KEY')
+        return super().create_agent(model=model, name=name, **config)
+
+    def validate_config(self, config: Dict[str, Any]) -> bool:
+        """Validate NVIDIA NIM configuration."""
+        api_key = config.get('api_key')
+        api_key_env = config.get('api_key_env', 'NVIDIA_API_KEY')
+        env_api_key = os.getenv(api_key_env)
+        if not (api_key or env_api_key):
+            raise ConfigurationError(
+                "NVIDIA API key required. "
+                "Set NVIDIA_API_KEY or pass api_key in config."
+            )
+
+        nim_config = dict(config)
+        nim_config.setdefault('base_url', self.NIM_BASE_URL)
+        nim_config.setdefault('api_key_env', api_key_env)
+        return super().validate_config(nim_config)
+
+    def get_required_env_vars(self) -> List[str]:
+        return ['NVIDIA_API_KEY']
+
+
 class OllamaProvider:
-    """Provider for Ollama (local LLM runtime)"""
+    """Provider for Ollama (local LLM runtime).
+
+    For authenticated remote endpoints like NVIDIA NIM, prefer
+    ``NIMProvider`` or ``OpenAICompatibleProvider`` so validation and
+    metadata match the endpoint semantics.
+    """
     
     # Common Ollama models (user may have others installed)
     COMMON_MODELS = [
@@ -347,7 +557,7 @@ class OllamaProvider:
             model: Ollama model identifier
             name: Optional agent name
             **config: Configuration options
-                - base_url: Ollama API URL (default: http://localhost:11434/v1)
+                - base_url: API URL (default: http://localhost:11434/v1)
                 - max_tokens: Maximum tokens to generate
         """
         if name is None:
@@ -362,7 +572,7 @@ class OllamaProvider:
         return OpenAICompatibleAgent(
             name=name,
             model=model,
-            api_key=None,  # Ollama doesn't need API key for localhost
+            api_key=config.get('api_key'),
             base_url=base_url,
             max_tokens=config.get('max_tokens', 4096),
             cost_tracker=config.get('cost_tracker'),
@@ -371,11 +581,21 @@ class OllamaProvider:
             retry_config=config.get('retry_config'),
             enable_retry=config.get('enable_retry', False),
             use_connection_pool=config.get('use_connection_pool', False),
+            system_prompt=config.get('system_prompt'),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
-        """Validate Ollama configuration"""
-        # Ollama doesn't require API key for local use
+        """Validate Ollama configuration."""
+        base_url = config.get('base_url')
+        if base_url and not any(host in base_url for host in ('localhost', '127.0.0.1')):
+            api_key = config.get('api_key')
+            api_key_env = config.get('api_key_env')
+            env_api_key = os.getenv(api_key_env) if api_key_env else None
+            if not (api_key or env_api_key):
+                raise ConfigurationError(
+                    "Remote non-local endpoint passed to OllamaProvider without API key. "
+                    "Prefer NIMProvider or OpenAICompatibleProvider for authenticated endpoints."
+                )
         return True
     
     def get_required_env_vars(self) -> List[str]:

@@ -8,7 +8,7 @@ without modifying core SDK code.
 from .protocol import AgentProvider
 from .registry import ProviderRegistry
 from .anthropic import AnthropicProvider
-from .openai import OpenAIProvider, OllamaProvider
+from .openai import OpenAIProvider, OpenAICompatibleProvider, NIMProvider, OllamaProvider
 from .mock import MockProvider
 from .gemini import GeminiProvider
 from .mistral import MistralProvider
@@ -18,6 +18,8 @@ __all__ = [
     'ProviderRegistry',
     'AnthropicProvider',
     'OpenAIProvider',
+    'OpenAICompatibleProvider',
+    'NIMProvider',
     'OllamaProvider',
     'MockProvider',
     'GeminiProvider',

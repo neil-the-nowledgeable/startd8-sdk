@@ -116,6 +116,14 @@ def repair_gridpos(dashboard: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]
     if not panels:
         return dashboard, []
 
+    has_group = any(
+        isinstance(p, dict) and p.get("group") for p in panels
+    )
+    if has_group:
+        # Grouped specs are laid out by DashboardCreatorWorkflow.apply_layout (row
+        # panels + content). A flat 2×2 grid here overlaps ROW panels in Grafana.
+        return dashboard, []
+
     needs_repair = any("gridPos" not in p for p in panels)
     if not needs_repair:
         return dashboard, []

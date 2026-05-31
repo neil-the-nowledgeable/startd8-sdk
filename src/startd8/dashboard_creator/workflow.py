@@ -26,7 +26,12 @@ from startd8.dashboard_creator.manifest_sync import sync_manifest
 from startd8.dashboard_creator.mixin_update import derive_mixin_entry, update_mixin_imports
 from startd8.dashboard_creator.models import DashboardSpec, PanelType
 from startd8.dashboard_creator.output import persist_dashboard
-from startd8.dashboard_creator.validation import enforce_uid, validate_spec
+from startd8.dashboard_creator.validation import (
+    enforce_uid,
+    layout_grid_warnings,
+    validate_row_placement,
+    validate_spec,
+)
 from startd8.exceptions import ConfigurationError, ValidationError
 from startd8.logging_config import get_logger
 from startd8.workflows.base import WorkflowBase
@@ -132,6 +137,15 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     required=False,
                     description="Path to observability-manifest.yaml for sync",
                 ),
+                WorkflowInput(
+                    name="skip_row_validation",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description=(
+                        "Skip row placement validation (ROW panels vs content gridPos.y)"
+                    ),
+                ),
             ],
         )
 
@@ -208,7 +222,9 @@ class DashboardCreatorWorkflow(WorkflowBase):
         2. Discover mixin + toolchain
         3. Enforce UID (DC-006)
         4. Merge config overrides + hydrate defaults (DC-005)
-        5. Validate spec (DC-007)
+        5. Validate spec (DC-007); log layout_grid_warnings for mixed gridPos
+        5.5 Apply layout if needed (DC-108/109)
+        5.6 Validate row placement (ROW vs content gridPos.y) unless skip_row_validation
         6. Generate Jsonnet (DC-100–DC-104)
         7. Compile Jsonnet (DC-105)
         8. Validate JSON (DC-106)
@@ -299,6 +315,9 @@ class DashboardCreatorWorkflow(WorkflowBase):
                 f"Spec validation failed: {'; '.join(validation_errors)}",
             )
 
+        for layout_warn in layout_grid_warnings(spec):
+            logger.warning("%s", layout_warn)
+
         step_results.append(StepResult(
             step_name="validate",
             output="Spec validation passed",
@@ -314,6 +333,30 @@ class DashboardCreatorWorkflow(WorkflowBase):
             step_results.append(StepResult(
                 step_name="layout",
                 output=f"Applied layout ({len(spec.panels)} panels)",
+            ))
+
+        # 5.6 Row placement: content panels must sit below each ROW header (gridPos.y)
+        skip_row = bool(config.get("skip_row_validation", False))
+        if not skip_row:
+            row_errors = validate_row_placement(spec)
+            if row_errors:
+                return WorkflowResult.from_error(
+                    self.metadata.workflow_id,
+                    f"Row placement validation failed: {'; '.join(row_errors)}",
+                )
+            row_count = sum(1 for p in spec.panels if p.type == PanelType.ROW)
+            step_results.append(StepResult(
+                step_name="row_placement",
+                output=(
+                    f"Row placement OK ({row_count} row panel(s))"
+                    if row_count
+                    else "Row placement skipped (no row panels)"
+                ),
+            ))
+        else:
+            step_results.append(StepResult(
+                step_name="row_placement",
+                output="Skipped (skip_row_validation=True)",
             ))
 
         # 6. Generate Jsonnet

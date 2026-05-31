@@ -23,6 +23,7 @@ from startd8.dashboard_creator.requirements_parser import (
     _parse_grid,
     _parse_panels,
     _parse_promql,
+    _parse_single_panel,
     _parse_thresholds,
     _parse_transformations,
     _parse_variable_table,
@@ -83,6 +84,24 @@ class TestParseGrid:
     def test_invalid(self):
         with pytest.raises(ValueError, match="Cannot parse"):
             _parse_grid("invalid")
+
+
+class TestParseSinglePanelGridAlias:
+    """`- **Grid position**:` is accepted as an alias for `- **Grid**:`."""
+
+    def test_grid_position_sets_gridpos(self):
+        block = textwrap.dedent(
+            """\
+            #### Panel 1: KPI
+            - **Type**: stat
+            - **PromQL**: `up`
+            - **Grid position**: h=5 w=5 x=0 y=1
+            - **Description**: Test
+            """
+        )
+        p = _parse_single_panel(block, "Row 1")
+        assert p is not None
+        assert p.gridPos == GridPos(h=5, w=5, x=0, y=1)
 
 
 class TestParseThresholds:

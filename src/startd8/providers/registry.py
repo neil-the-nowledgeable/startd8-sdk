@@ -237,6 +237,18 @@ class ProviderRegistry:
             pass
 
         try:
+            from .openai import OpenAICompatibleProvider
+            _register_if_missing("openai-compatible", OpenAICompatibleProvider, "OpenAI-Compatible")
+        except ImportError:
+            pass
+
+        try:
+            from .openai import NIMProvider
+            _register_if_missing("nim", NIMProvider, "NVIDIA NIM")
+        except ImportError:
+            pass
+
+        try:
             from .openai import OllamaProvider
             _register_if_missing("ollama", OllamaProvider, "Ollama")
         except ImportError:

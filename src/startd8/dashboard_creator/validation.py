@@ -146,6 +146,96 @@ def validate_spec(
     return errors
 
 
+def validate_row_placement(spec: DashboardSpec) -> List[str]:
+    """Validate that panels below each ROW header sit **below** the row row header.
+
+    Grafana row panels occupy a horizontal band at ``gridPos.y`` with height ``h``
+    (typically 1). Every following panel until the next ROW must have
+    ``gridPos.y >= row_y + row_h`` so content does not overlap the row title.
+
+    **When this applies:** specs that include ``PanelType.ROW`` (e.g. from
+    ``group`` in ``auto_group_rows`` or explicit ``type: row`` in YAML).
+
+    **When it is a no-op:** specs with no ROW panels return an empty list.
+
+    Run **after** ``apply_layout`` so ROW panels have ``gridPos`` assigned.
+
+    Returns:
+        Error strings (empty if valid). Non-empty should fail the workflow.
+    """
+    errors: List[str] = []
+    panels = spec.panels
+    i = 0
+    while i < len(panels):
+        p = panels[i]
+        if p.type != PanelType.ROW:
+            i += 1
+            continue
+
+        if p.gridPos is None:
+            errors.append(
+                f"Row placement: row panel '{p.title}' has no gridPos; "
+                "cannot validate content below the row header."
+            )
+            i += 1
+            continue
+
+        row_y = p.gridPos.y
+        row_h = p.gridPos.h if p.gridPos.h else 1
+        min_content_y = row_y + row_h
+
+        j = i + 1
+        while j < len(panels) and panels[j].type != PanelType.ROW:
+            cp = panels[j]
+            if cp.gridPos is None:
+                errors.append(
+                    f"Row placement: panel '{cp.title}' has no gridPos after layout; "
+                    f"cannot verify it is below row '{p.title}'."
+                )
+            else:
+                if cp.gridPos.y < min_content_y:
+                    errors.append(
+                        f"Row placement: panel '{cp.title}' has gridPos.y={cp.gridPos.y}, "
+                        f"but row '{p.title}' occupies y={row_y}..{row_y + row_h - 1}; "
+                        f"content must be at y >= {min_content_y}."
+                    )
+            j += 1
+        i = j
+    return errors
+
+
+def layout_grid_warnings(spec: DashboardSpec) -> List[str]:
+    """Detect mixed explicit/implicit ``gridPos`` among non-row panels.
+
+    When some panels have ``gridPos`` and others do not, ``apply_layout`` in
+    the Jsonnet workflow will auto-place missing panels with default
+    ``h=8`` / ``w=12``, which often diverges from narrative "row" sections in
+    requirements documents.
+
+    Returns:
+        Human-readable warning strings (empty if nothing to flag).
+    """
+    warnings: List[str] = []
+    positioned: List[str] = []
+    missing: List[str] = []
+    for panel in spec.panels:
+        if panel.type == PanelType.ROW:
+            continue
+        if panel.gridPos is None:
+            missing.append(panel.title)
+        else:
+            positioned.append(panel.title)
+    if positioned and missing:
+        warnings.append(
+            "Layout: mixed explicit and implicit gridPos among data panels. "
+            "Panels without gridPos will be auto-placed (default h=8 w=12) and may "
+            "not match requirements row narrative. "
+            f"With gridPos: {positioned[:5]}{'...' if len(positioned) > 5 else ''}; "
+            f"missing: {missing[:5]}{'...' if len(missing) > 5 else ''}"
+        )
+    return warnings
+
+
 def _collect_expressions(spec: DashboardSpec) -> List[str]:
     """Collect all expression strings from panels and variables."""
     exprs: List[str] = []
