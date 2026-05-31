@@ -803,3 +803,44 @@ class TestDomainAlertTodos:
     def test_no_declared_metrics_no_todo_block(self, http_service, business):
         result = generate_alert_rules(http_service, business)
         assert "TODO: domain-metric alerts" not in result.content
+
+
+class TestMetricCoverageInQualityReport:
+    """Gap 3 / Closure 2: quality report surfaces semantic metric-coverage."""
+
+    def _metadata_with_declared(self):
+        return {
+            "project_id": "startd8/run-003-20260528t2314",
+            "instrumentation_hints": {
+                "strtd8": {
+                    "service_id": "strtd8",
+                    "transport": "http",
+                    "language": "python",
+                    "metrics": {
+                        "convention_based": [
+                            {"name": "http.server.duration", "type": "histogram", "source": "otel_semconv:http"},
+                        ],
+                        "manifest_declared": STRTD8_DECLARED,
+                    },
+                },
+            },
+        }
+
+    def test_quality_report_has_metric_coverage(self, tmp_path, manifest_yaml):
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(self._metadata_with_declared()))
+        output = tmp_path / "observability"
+
+        generate_observability_artifacts(
+            onboarding_metadata_path=meta_path,
+            output_dir=output,
+            manifest_path=manifest_yaml,
+        )
+
+        quality = json.loads((output / "observability-quality.json").read_text())
+        svc = quality["services"]["strtd8"]
+        assert "metric_coverage" in svc
+        assert svc["metric_coverage"]["expected_count"] == 11  # 1 convention + 10 declared
+        # Increment 1 adds domain panels, so most declared metrics are now covered.
+        assert svc["metric_coverage"]["score"] > 0.5
+        assert "avg_metric_coverage_score" in quality["aggregate"]

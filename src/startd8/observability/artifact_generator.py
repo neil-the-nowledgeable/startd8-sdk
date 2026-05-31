@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -1574,9 +1574,18 @@ def generate_observability_artifacts(
             report.artifacts.append(portal_result)
 
     if not dry_run:
+        # Gap 3 / Closure 2: expected metric set per service (declared + convention)
+        # drives the semantic metric-coverage score in the quality report.
+        service_metrics: Dict[str, Set[str]] = {
+            s.service_id: {m.name for m in s.convention_metrics}
+            | {m.name for m in s.declared_metrics}
+            for s in services
+        }
         _write_artifacts(report.artifacts, output_dir)
         _write_index(report, business, onboarding_metadata_path, output_dir)
-        _write_quality_report(report.artifacts, output_dir)
+        _write_quality_report(
+            report.artifacts, output_dir, service_metrics=service_metrics
+        )
 
     return report
 
@@ -1679,6 +1688,7 @@ def _write_index(
 def _write_quality_report(
     artifacts: List[ArtifactResult],
     output_dir: Path,
+    service_metrics: Optional[Dict[str, Set[str]]] = None,
 ) -> None:
     """Write standalone observability-quality.json (REQ-KZ-OBS-730b).
 
@@ -1686,13 +1696,20 @@ def _write_quality_report(
     alongside the aggregate summary.  Uses ``compute_service_composite`` from
     ``startd8.validators.observability_artifact_checks`` when available;
     otherwise falls back to a simple average.
+
+    When ``service_metrics`` (service_id → expected metric names) is provided,
+    a semantic ``metric_coverage_score`` is computed per service and blended
+    into the composite (Gap 3 / Closure 2), so a structurally-clean triplet
+    that ignores the service's domain metrics no longer scores near-perfect.
     """
     try:
         from startd8.validators.observability_artifact_checks import (
+            compute_metric_coverage,
             compute_service_composite,
         )
     except ImportError:  # pragma: no cover
         compute_service_composite = None  # type: ignore[assignment]
+        compute_metric_coverage = None  # type: ignore[assignment]
 
     scored = [a for a in artifacts if a.quality and a.status == "generated"]
     if not scored:
@@ -1700,6 +1717,7 @@ def _write_quality_report(
 
     # ---- per-service breakdown ----
     services: Dict[str, Dict[str, Any]] = {}
+    service_contents: Dict[str, List[str]] = {}
     for a in scored:
         svc = services.setdefault(a.service_id, {})
         svc[a.artifact_type] = {
@@ -1709,14 +1727,31 @@ def _write_quality_report(
             "issues": a.quality.get("issues", []),
             "repairs_applied": a.quality.get("repairs_applied", []),
         }
+        if a.content:
+            service_contents.setdefault(a.service_id, []).append(a.content)
 
-    # compute per-service composite
+    # compute per-service composite (blended with metric coverage when available)
     for svc_id, svc_data in services.items():
         dash_score = svc_data.get("dashboard_spec", {}).get("score", 0.0)
         alert_score = svc_data.get("alert_rule", {}).get("score", 0.0)
         slo_score = svc_data.get("slo_definition", {}).get("score", 0.0)
+
+        coverage_score: Optional[float] = None
+        if (
+            service_metrics
+            and compute_metric_coverage is not None
+            and svc_id in service_metrics
+        ):
+            cov = compute_metric_coverage(
+                service_metrics[svc_id], service_contents.get(svc_id, [])
+            )
+            coverage_score = cov.score
+            svc_data["metric_coverage"] = cov.to_dict()
+
         if compute_service_composite is not None:
-            composite = compute_service_composite(dash_score, alert_score, slo_score)
+            composite = compute_service_composite(
+                dash_score, alert_score, slo_score, metric_coverage=coverage_score
+            )
         else:
             present = [
                 s
@@ -1743,6 +1778,15 @@ def _write_quality_report(
     aggregate["avg_composite_score"] = (
         round(sum(composites) / len(composites), 4) if composites else 0.0
     )
+    coverages = [
+        s["metric_coverage"]["score"]
+        for s in services.values()
+        if "metric_coverage" in s
+    ]
+    if coverages:
+        aggregate["avg_metric_coverage_score"] = round(
+            sum(coverages) / len(coverages), 4
+        )
     aggregate["total_issues"] = total_issues
     aggregate["total_repairs"] = total_repairs
 
