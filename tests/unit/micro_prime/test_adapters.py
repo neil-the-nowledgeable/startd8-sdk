@@ -242,9 +242,14 @@ class TestSkeletonGeneration:
     def test_render_failure_skipped_gracefully(self):
         """If render_file raises, that file is skipped and others proceed."""
         gen = MicroPrimeCodeGenerator()
-        # Manifest with two files: one valid, one will cause a render failure
+        # Manifest with two files: one valid, one will cause a render failure.
+        # Give both a fillable element so the RUN-007 empty-spec gate does not
+        # suppress them — this test exercises the render-failure path, not the
+        # empty-fillable-spec path.
         file_spec_good = MagicMock()
+        file_spec_good.elements = [{"kind": "function", "name": "good_fn"}]
         file_spec_bad = MagicMock()
+        file_spec_bad.elements = [{"kind": "function", "name": "bad_fn"}]
 
         manifest = MagicMock()
         manifest.file_specs = {

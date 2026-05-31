@@ -785,6 +785,40 @@ def _validate_non_python_file(
     suffix = abs_path.suffix.lower()
     name = abs_path.name.lower()
 
+    # RUN-007 FR-5/FR-6: empty stem-named type artifact detector (Fix 2 / C-1).
+    # The run-007 stubs (`export class value-model {}`) are syntactically valid
+    # and carry ZERO stub markers, so the ordinary stub channel leaves the
+    # disk-quality score ~0.94 and the postmortem never sees them. On match we
+    # force the FAIL verdict by setting ast_valid=False / contract_compliance=0.0
+    # — compute_disk_quality_score short-circuits to 0.0 only on ast_valid=False.
+    # The shared predicate already excludes barrels (`export *`), function
+    # modules, and name-mismatches; here we add the `.d.ts` ambient-declaration
+    # exemption (Path("foo.d.ts").suffix == ".ts", so it would otherwise route
+    # through the same path) and scope the check to source-code languages.
+    _SOURCE_CODE_SUFFIXES = {
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".java", ".cs",
+    }
+    if suffix in _SOURCE_CODE_SUFFIXES and not name.endswith(".d.ts"):
+        try:
+            from startd8.element_fillability import is_empty_stem_type_artifact
+
+            if is_empty_stem_type_artifact(str(abs_path), content):
+                result.ast_valid = False
+                result.contract_compliance = 0.0
+                result.error = f"empty_stem_stub: {abs_path.name}"
+                result.semantic_issues.append({
+                    "category": "empty_stem_stub",
+                    "severity": "error",
+                    "message": (
+                        "empty stem-named type with no members — "
+                        "unfilled run-007 stub shape"
+                    ),
+                    "file": str(abs_path.name),
+                })
+                return result
+        except ImportError:
+            pass
+
     # Filename-based dispatch (before extension-based)
     if name == "go.mod":
         result = _validate_go_mod(content, result)

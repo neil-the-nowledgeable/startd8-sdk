@@ -3974,6 +3974,16 @@ class PrimeContractorWorkflow:
                     "stubs, and contract compliance."
                 )
 
+        # RUN-007 FR-4: thread the remaining dollar budget to micro-prime so it
+        # can refuse empty-spec targets before dispatching a costly escalation
+        # (the budget is owned here, not at the micro-prime escalation site —
+        # Step-0 OQ-3). None = no ceiling.
+        _max_cost = getattr(self, "_max_cost_usd", None)
+        if _max_cost is not None:
+            gen_context["_cost_budget_remaining_usd"] = max(
+                0.0, _max_cost - self.total_cost_usd,
+            )
+
         return gen_context
 
     def _apply_language_profile_to_engine(self) -> None:
@@ -4908,6 +4918,11 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
+        # RUN-007 FR-4: remember the dollar ceiling so _build_generation_context
+        # can pass the remaining budget into micro-prime, which refuses (rather
+        # than dispatches a costly escalation for) empty-spec targets when spent.
+        self._max_cost_usd = max_cost_usd
+
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
 
