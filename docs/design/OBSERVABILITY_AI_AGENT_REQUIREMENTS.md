@@ -1,7 +1,7 @@
 # AI Agent Observability — Requirements (Taxonomy Category 5)
 
 **Date:** 2026-05-31
-**Status:** Draft v0.1 — surfacing existing telemetry as formal requirements
+**Status:** Draft v0.2 — post-planning self-reflective update (requirements only; no code this pass)
 **Lineage:** Instantiates **Category 5 — AI Agent Observability** of
 `OBSERVABILITY_ARTIFACT_TAXONOMY_REQUIREMENTS.md` (the "reserved — signals emitted, no generator"
 row). Evidence base: a read-only telemetry inventory of `src/startd8/` (costs/, session_tracking,
@@ -11,7 +11,37 @@ context usage, latency, truncation, tool use, agent/pipeline traces, output qual
 
 ---
 
-## 0. Motivation
+## 0. Planning Insights (self-reflective update, v0.1 → v0.2)
+
+> A planning pass traced the actual emission call-chains and read the `_OTEL_DESCRIPTORS` manifest
+> machinery. Headline: **most of the hard infrastructure already exists** — the descriptor manifest
+> is the missing-link that closes both this doc's "descriptor→artifact loop" *and* the taxonomy's
+> "declare, don't guess" producer gap, for the SDK's own metrics. Two v0.1 findings were
+> over-stated and are corrected below.
+
+| v0.1 assumption | Planning discovery | Impact |
+|-----------------|--------------------|--------|
+| AAO-D1: cost is **double-counted** under two names | The two families are **disjoint paths with distinct semantics**: `startd8.cost.*` = global/automatic (CostTracker, fires on the standard `generate()` path); `startd8_cost_total` = **per-session** (explicit `record_request` API). They do **not** both fire in standard usage — double-counting is only a *latent* risk if a user calls both APIs for one call | **REQ-AAO-002 reframed**: clarify+document the distinct semantics and guard against double-invocation — **not** "prohibit duplicate emission" (a misdiagnosis) |
+| AAO-D6: descriptor→artifact loop is unbuilt | `_OTEL_DESCRIPTORS` declared in all modules; `generate_manifest()` collects + serializes them. Missing only: (a) `category`/`orientation` fields on the descriptor schema, (b) the wire from manifest → onboarding-metadata `manifest_declared` | **REQ-AAO-008 reframed** ~70% done: *add 2 schema fields + wire the last mile*, not greenfield (M, not L) |
+| REQ-AAO-001 = build a catalog | Descriptors already are a catalog (name/type/unit/labels); they just lack category/orientation + the undocumented signals | 001 narrows to *add the missing fields/signals* |
+| REQ-AAO-009 = new outcome signal | session_tracking already tracks `successful/failed_requests` + a `status` label; the truncation **event** exists but isn't a metric label | 009 narrows to *add `truncated`/retry labels* (S) |
+| Naming split might be intentional | Accidental divergence: session_tracking **hand-codes** underscore names; costs/ uses dotted (correct OTel); no export config maps them | **REQ-AAO-003 resolved**: standardize to **dotted** (OTel-native; Prometheus export underscores) — a consolidation task, not just docs |
+| (not in v0.1) | The descriptor manifest can carry category/orientation, making the **SDK its own declare-don't-guess producer** for category-4/5 metrics | **New value/flexibility insight** (§3.4): dissolves the taxonomy's REQ-OAT-025 upstream-exporter dependency *for the SDK's own metrics*; flagged for taxonomy reconciliation |
+| (not in v0.1) | No validation that **declared** descriptors match **emitted** metrics — the manifest can silently lie | **NEW REQ-AAO-012**: descriptor↔emission parity (a test), so the source of truth can't drift |
+
+**Resolved open questions:**
+- **OQ-1 → distinct semantics, documented.** Not derivation; the two cost families are global vs
+  per-session views (REQ-AAO-002).
+- **OQ-3 → accidental.** Standardize to dotted OTel names (REQ-AAO-003).
+- **OQ-2 → keep eval in category 5**, as a reserved/phased sub-area (REQ-AAO-010).
+
+*The essential complexity is: descriptors that carry (category, orientation) → one manifest → fed to
+generation. The accidental complexity (dual cost APIs, hand-coded underscore names, a dead Prometheus
+fallback, declared/emitted drift) is catalogued in Appendix C and should be removed opportunistically.*
+
+---
+
+## 0.1 Motivation
 
 The SDK already emits a substantial body of AI-agent telemetry — but it accreted as **internal
 developer instrumentation**, never formalized as a requirement and (cost aside) never surfaced in a
@@ -114,15 +144,24 @@ kind, unit, labels, semantics, emission site, and `(category=ai_agent_observabil
 in a single source of truth (the `_OTEL_DESCRIPTORS` manifest, §3.4). Undocumented-but-emitted
 signals (§1.2/1.3) MUST be added.
 
-**REQ-AAO-002 (reconcile duplication, AAO-D1).** The two cost/token families MUST be reconciled to a
-single authoritative source. Either (a) session_tracking consumes/derives from the cost metrics, or
-(b) the two are explicitly given distinct semantics (e.g. cost-metrics = global counters;
-session-metrics = per-session) and that relationship is documented. Duplicate emission of the same
-fact under two names without a stated relationship is prohibited.
+**REQ-AAO-002 (clarify the two cost/token families — corrected).** Planning showed these are **not**
+redundant duplicates but **disjoint paths with distinct semantics**: `startd8.cost.*` is the
+**global/automatic** cost (emitted by `CostTracker.record_cost()` on the standard `generate()`
+path); `startd8_cost_total`/`startd8_tokens_total` are **per-session** (emitted by the explicit
+`SessionTracker.record_request()` API). The requirement is therefore to **document the distinct
+semantics** (global vs per-session, which to use when) and to **guard against double-invocation** —
+a caller feeding the same call's cost to *both* APIs double-counts. This is a documentation +
+guard-rail requirement, **not** a deduplication of redundant emission (the v0.1 "double-counting"
+framing was a misdiagnosis — the families serve different questions).
 
-**REQ-AAO-003 (naming, AAO-D2).** Choose one canonical naming form and document the dotted↔underscore
-mapping (OTel metric names are dotted; Prometheus export underscores them — the mapping MUST be
-deterministic and recorded, not divergent hand-naming).
+**REQ-AAO-003 (naming — resolved to standardize on dotted).** Planning confirmed the split is
+**accidental**: `session_tracking.py` hand-codes underscore names (`startd8_cost_total`) while
+`costs/` uses correct dotted OTel names (`startd8.cost.total`), with no export config mapping them.
+The metric names MUST be standardized to **dotted OTel-native** form; the Prometheus exporter
+performs the dots→underscores transformation deterministically (so `startd8.cost.total` is exported
+as `startd8_cost_total`). This is a consolidation (rename the hand-coded names + tests), not merely
+documentation. **Compatibility:** because the Prometheus export of the new dotted names reproduces
+the existing underscore names, downstream Prometheus/Grafana consumers are unaffected.
 
 ### 3.2 Orientation classification (feeds the taxonomy)
 
@@ -151,17 +190,31 @@ link.
 
 ### 3.4 Close the descriptor→artifact loop
 
-**REQ-AAO-008 (manifest is source of truth, AAO-D6).** `_OTEL_DESCRIPTORS` / `generate_manifest()`
-MUST be the authoritative input that populates `manifest_declared` in onboarding metadata (carrying
-each signal's category + orientation per REQ-AAO-001/004), so the observability artifact generator
-(taxonomy REQ-OAT-040) produces category-5 artifacts from declared facts, not heuristics. This
-closes the loop: **SDK declares its telemetry → manifest → metadata → generated agent observability.**
+**REQ-AAO-008 (close the descriptor→artifact loop — ~70% built).** Planning found the loop's
+infrastructure already exists: every module declares `_OTEL_DESCRIPTORS`, and `generate_manifest()`
+collects + serializes them. Only the **last mile** is missing, so this requirement is *wiring*, not
+greenfield:
+1. add `category` + `orientation` to the descriptor schema (REQ-AAO-004 — a small schema change);
+2. wire `generate_manifest()` output to populate `manifest_declared` in onboarding metadata.
+
+This closes the loop: **SDK declares its telemetry → manifest → metadata → generated agent
+observability** — so the artifact generator (taxonomy REQ-OAT-040) produces category-5 artifacts
+from **declared facts**, not heuristics.
+
+> **Cross-doc convergence (value/flexibility insight).** Because the SDK's own descriptors carry
+> category+orientation, **the SDK is its own "declare, don't guess" producer** for its category-4/5
+> metrics — it does **not** need the cap-dev-pipe onboarding-exporter change the taxonomy worried
+> about (REQ-OAT-024/025) *for these SDK-emitted metrics*. The exporter dependency remains only for
+> non-SDK / service-level metrics. This is flagged for reconciliation into the taxonomy doc once its
+> CRP settles (not edited here to avoid the active review).
 
 ### 3.5 Fill the signal gaps (where instrumentation is missing)
 
-**REQ-AAO-009 (outcome signal, AAO-D4).** Each agent call MUST carry a first-class outcome
-(`success | truncated | retried | error`) as a metric label and span attribute, so success/error/retry
-rates are queryable without reconstructing them from `failed_requests` deltas.
+**REQ-AAO-009 (outcome signal — ~70% done, narrowed).** session_tracking already tracks
+`successful_requests`/`failed_requests` and emits a `status` label on `startd8_requests_total`; the
+truncation **event** exists but is not a label. The remaining work is small: add `truncated` and
+`retried` to the outcome label vocabulary (the event/data already exist) so success/error/truncated/
+retry rates are queryable directly, without reconstructing them from `failed_requests` deltas.
 
 **REQ-AAO-010 (eval hook, AAO-D4).** There MUST be a path to attach an eval/quality score to an agent
 call (span attribute + optional metric), so output quality is observable, not just throughput. (May
@@ -169,6 +222,16 @@ be reserved/phased.)
 
 **REQ-AAO-011 (tool use, AAO-D5).** Agentic tool calls SHOULD be instrumented — count, success/failure,
 latency per tool — so tool-augmented workflows are observable. (May be reserved/phased.)
+
+### 3.6 Keep the source of truth honest
+
+**REQ-AAO-012 (descriptor↔emission parity — new, from planning).** Because the descriptor manifest
+becomes the authoritative source feeding artifact generation (REQ-AAO-008), the **declared**
+descriptors MUST match the **emitted** metrics/spans. There MUST be a test asserting parity — every
+`_OTEL_DESCRIPTORS` entry corresponds to an actual `meter.create_*`/span emission and vice-versa — so
+the manifest cannot silently drift (declared-but-not-emitted, or emitted-but-not-declared). Planning
+found no such validation today; without it, a generator driven by the manifest would produce
+dashboards/alerts for metrics that don't exist (or miss ones that do).
 
 ---
 
@@ -216,7 +279,31 @@ category-5 artifacts (human/system/bridge) · `REQ-AAO-008` descriptor→artifac
 
 ---
 
-*Draft v0.1 — surfaces existing AI-agent telemetry (4 cost metrics surfaced; 7 session metrics +
-agent/pipeline spans emitted-but-undocumented) as Category-5 requirements; names 6 findings
-(duplication, naming, surfacing, weak quality, no tool-use, unclosed descriptor loop) and 11
-requirements. Candidate for a reflective-requirements + CRP pass like the taxonomy doc.*
+*(v0.1 footer superseded by the v0.2 summary below.)*
+
+## Appendix C — pre-existing accidental complexity to eliminate (opportunistic)
+
+Catalogued by the planning pass; the code-alignment follow-up SHOULD remove these. Effort S/M/L.
+
+| # | Smell | Location | Why accidental | Distillation | Effort |
+|---|-------|----------|----------------|--------------|--------|
+| C-1 | **Dual cost APIs, latent double-count** | `costs/tracker.py:266` (`record_cost`) + `session_tracking.py:807` (`record_request`) | two user-facing APIs can both record one call's cost under two names | document distinct semantics + a guard that warns on double-invocation (REQ-AAO-002) | S |
+| C-2 | **Duplicated label-building** | base agent + `session_tracking.py` rebuild `{agent_name, model, project_id}` independently | copy-paste; can drift | one shared label helper | S |
+| C-3 | **Dead Prometheus fallback** | `session_tracking.py:438–503` | full legacy Prometheus path kept though OTel is the chosen export | remove (or gate behind an explicit opt-in) once OTel-only confirmed | M |
+| C-4 | **Hand-coded underscore metric names** | `session_tracking.py` (`startd8_*`) | diverges from the dotted OTel convention used in `costs/` | rename to dotted; Prom export underscores (REQ-AAO-003) | M |
+| C-5 | **No descriptor↔emission validation** | `observability/manifest.py` `_OTEL_DESCRIPTORS` vs `meter.create_*` | the manifest can declare metrics that aren't emitted (or miss emitted ones) | add a parity test (REQ-AAO-012) | M |
+| C-6 | **Descriptor schema lacks category/orientation** | `observability/manifest.py` MetricDescriptor/SpanDescriptor | the routing fields the taxonomy needs aren't in the schema | add two fields (REQ-AAO-004) — also unblocks REQ-AAO-008 | S |
+
+**Net:** C-1/C-2/C-6 are S quick wins; C-5 (parity test) is a high-value robustness win that makes
+the descriptor manifest trustworthy as the generation source of truth; C-3 (dead Prometheus path) is
+a standalone deletion; C-4 rides on REQ-AAO-003. Most are *removals*, consistent with the taxonomy's
+distillation-first principle.
+
+---
+
+*v0.2 — Post-planning self-reflective update. Corrected 2 over-stated findings (cost double-count is
+latent not actual; descriptor loop ~70% built), narrowed 2 requirements (001, 009), resolved the
+naming split to "standardize on dotted" (003), added 1 requirement (012 descriptor↔emission parity),
+surfaced the cross-doc convergence (the SDK is its own declare-don't-guess producer), and catalogued
+6 accidental-complexity items (Appendix C). Net finding: the infrastructure largely exists — this is
+mostly wiring + cleanup, not new machinery.*
