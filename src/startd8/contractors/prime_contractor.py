@@ -584,6 +584,15 @@ class PrimeContractorWorkflow:
         self._forward_manifest = None
         # FR-MPA-007: Skeleton sources — populated in load_seed_context()
         self._skeleton_sources: dict[str, str] = {}
+        # Seed-loaded context fields — default to None here so _build_generation_context()
+        # (and other consumers) are safe in standalone runs that never call
+        # load_seed_context(), which overrides these when a seed is present.
+        self._security_contract: dict[str, Any] | None = None          # REQ-ICD-106
+        self._instrumentation_contract: dict[str, Any] | None = None
+        self._guidance_context: dict[str, Any] | None = None
+        self._expected_output_contracts: dict[str, Any] | None = None
+        self._design_calibration_hints: dict[str, Any] | None = None
+        self._resolved_artifact_params: dict[str, Any] | None = None
         # Complexity routing (REQ-MP-807) — off by default, enabled via enable_complexity_routing()
         self._complexity_routing_enabled = False
         self._complexity_config: Optional[Any] = None
