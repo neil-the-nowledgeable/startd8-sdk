@@ -1177,27 +1177,49 @@ class TestUnimplementedArtifactTypeReporting:
         ]
         assert _declared_artifact_types({}) == []
 
-    def test_unimplemented_types_recorded_as_skipped(self, tmp_path):
+    def test_all_eight_declared_types_now_generated(self, tmp_path):
+        """Closure 3B: with all 8 standard types declared, all are produced."""
         meta_path = tmp_path / "m.json"
         meta_path.write_text(json.dumps(_meta_with_declared_types(DECLARED_8)))
+        out = tmp_path / "obs"
+
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path, output_dir=out
+        )
+
+        summary = yaml.safe_load((out / "observability-manifest.yaml").read_text())["summary"]
+        assert summary["artifact_type_coverage"] == 1.0
+        assert summary["unimplemented_artifact_types"] == []
+        produced = {a.artifact_type for a in report.artifacts if a.status == "generated"}
+        for expected in (
+            "service_monitor",
+            "notification_policy",
+            "loki_rule",
+            "runbook",
+            "capability_index",
+        ):
+            assert expected in produced
+
+    def test_truly_unimplemented_type_recorded_as_skipped(self, tmp_path):
+        """A declared type with no native generator is still an honest skip (Gap 2)."""
+        meta_path = tmp_path / "m.json"
+        meta_path.write_text(
+            json.dumps(
+                _meta_with_declared_types(
+                    {"dashboard": {}, "prometheus_rule": {}, "trace_pipeline": {}}
+                )
+            )
+        )
         out = tmp_path / "obs"
 
         generate_observability_artifacts(onboarding_metadata_path=meta_path, output_dir=out)
 
         idx = yaml.safe_load((out / "observability-manifest.yaml").read_text())
         summary = idx["summary"]
-        # 5 declared types are not produced by the triplet generator.
-        assert summary["artifacts_skipped"] == 5
-        assert summary["artifact_type_coverage"] == round(3 / 8, 4)
-        assert summary["unimplemented_artifact_types"] == [
-            "capability_index",
-            "loki_rule",
-            "notification_policy",
-            "runbook",
-            "service_monitor",
-        ]
+        assert summary["unimplemented_artifact_types"] == ["trace_pipeline"]
+        assert summary["artifact_type_coverage"] == round(2 / 3, 4)
         skipped_types = {a["type"] for a in idx["artifacts"] if a["status"] == "skipped"}
-        assert skipped_types == set(summary["unimplemented_artifact_types"])
+        assert "trace_pipeline" in skipped_types
 
     def test_no_declared_types_no_coverage_fields(self, tmp_path):
         # Metadata without artifact_types → no coverage section, no synthetic skips.
@@ -1296,3 +1318,67 @@ class TestCliCoverageGate:
             min_metric_coverage=0.9, min_artifact_type_coverage=None, dry_run=True
         )
         assert mod._apply_coverage_gate(args, tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
+# Closure 3B: native extended artifact generators
+# ---------------------------------------------------------------------------
+
+
+class TestExtendedGenerators:
+    def test_service_monitor_is_valid_crd(self, grpc_service, business):
+        from startd8.observability.artifact_generator import generate_service_monitor
+
+        result = generate_service_monitor(grpc_service, business)
+        assert result.artifact_type == "service_monitor"
+        assert result.status == "generated"
+        doc = yaml.safe_load(result.content)
+        assert doc["apiVersion"] == "monitoring.coreos.com/v1"
+        assert doc["kind"] == "ServiceMonitor"
+        assert doc["spec"]["selector"]["matchLabels"]["app"] == "checkout-api"
+
+    def test_notification_policy_routes_by_service(self, grpc_service, business):
+        from startd8.observability.artifact_generator import generate_notification_policy
+
+        result = generate_notification_policy(grpc_service, business)
+        doc = yaml.safe_load(result.content)
+        route = doc["route"]["routes"][0]
+        assert "service = checkout-api" in route["matchers"]
+        # high criticality → critical severity → receiver name
+        assert route["receiver"] == "checkout-api-critical"
+
+    def test_loki_rule_uses_logql_error_filter(self, grpc_service, business):
+        from startd8.observability.artifact_generator import generate_loki_rule
+
+        result = generate_loki_rule(grpc_service, business)
+        doc = yaml.safe_load(result.content)
+        rule = doc["groups"][0]["rules"][0]
+        assert 'service="checkout-api"' in rule["expr"]
+        assert '|= "error"' in rule["expr"]
+        assert rule["labels"]["severity"] == "critical"
+
+    def test_runbook_is_markdown_with_service_context(self, grpc_service, business):
+        from startd8.observability.artifact_generator import generate_runbook
+
+        result = generate_runbook(grpc_service, business)
+        assert result.output_path.endswith(".md")
+        assert "# Runbook: checkout-api" in result.content
+        assert "/d/obs-checkout-api" in result.content
+        assert "postgresql" in result.content  # detected_databases surfaced
+
+    def test_capability_index_inventories_artifacts(self, grpc_service, business):
+        from startd8.observability.artifact_generator import (
+            generate_capability_index,
+            GenerationReport,
+            ArtifactResult,
+        )
+
+        report = GenerationReport(project_id="proj", generated_at="t")
+        report.artifacts.append(
+            ArtifactResult("alert_rule", "checkout-api", "x", "generated")
+        )
+        result = generate_capability_index([grpc_service], business, report)
+        assert result.artifact_type == "capability_index"
+        doc = yaml.safe_load(result.content)
+        assert doc["services"] == ["checkout-api"]
+        assert "alert_rule" in doc["observability_capabilities"]["artifact_types_generated"]
