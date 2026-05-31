@@ -579,6 +579,12 @@ def generate_alert_rules(
                 }
             )
 
+    # REQ-OAG-205: runbook_url annotation on every active alert (placeholder URL).
+    for rule in rules:
+        rule.setdefault("annotations", {})["runbook_url"] = (
+            f"https://runbooks.example.com/{service.service_id}/{rule['alert']}"
+        )
+
     # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
     # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
     todo_block = _domain_alert_todo_block(service)
@@ -724,6 +730,9 @@ def generate_dashboard_spec(
     # additive — the convention-based RED panels above remain the baseline.
     _add_domain_panels(panels, service, derivations)
 
+    # REQ-OAG-107: DB latency panels when databases were detected.
+    _add_database_panels(panels, service, derivations)
+
     if not panels:
         return ArtifactResult(
             artifact_type="dashboard_spec",
@@ -733,6 +742,9 @@ def generate_dashboard_spec(
             derivations=derivations,
             error_message="No convention metrics to build panels from",
         )
+
+    # REQ-OAG-105 / Gap 5: stamp gridPos on every panel at generation time.
+    _assign_gridpos(panels)
 
     # Build tags
     tags = ["generated", "observability", service.transport]
@@ -967,6 +979,59 @@ def _add_domain_panels(
                 transformation=f"{added} declared metrics → panels",
                 tier="manifest",
             )
+        )
+
+
+def _add_database_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Add a DB latency panel per detected database (REQ-OAG-107).
+
+    Only fires when the service has ``detected_databases``. Uses the OTel
+    ``db.client.operation.duration`` histogram scoped by ``db_system``.
+    """
+    if not service.detected_databases:
+        return
+    for db in service.detected_databases:
+        expr = (
+            "histogram_quantile(0.99, "
+            f'rate(db_client_operation_duration_bucket{{service="{service.service_id}",'
+            f'db_system="{db}"}}[$__rate_interval]))'
+        )
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": f"{db.title()} Operation Latency (p99)",
+                "expr": expr,
+                "unit": "s",
+                "group": "Database",
+            }
+        )
+    derivations.append(
+        DerivationTrace(
+            field="database_panels",
+            source=f"instrumentation_hints.{service.service_id}.detected_databases",
+            transformation=f"{len(service.detected_databases)} databases → latency panels",
+            tier="manifest",
+        )
+    )
+
+
+def _assign_gridpos(panels: List[Dict[str, Any]]) -> None:
+    """Assign a 2-column grid layout to every panel (REQ-OAG-105).
+
+    Positions are stamped at generation time so each panel ships deployable,
+    which also makes the downstream ``repair_gridpos`` autofix a no-op — closing
+    Gap 5 at the source rather than relying on a repair that did not fire.
+    Mirrors the repair schema (half-width 12, height 8) for layout consistency.
+    Panels that already carry a ``gridPos`` are left untouched.
+    """
+    w, h = 12, 8
+    for i, panel in enumerate(panels):
+        panel.setdefault(
+            "gridPos", {"h": h, "w": w, "x": (i % 2) * 12, "y": (i // 2) * h}
         )
 
 

@@ -844,3 +844,69 @@ class TestMetricCoverageInQualityReport:
         # Increment 1 adds domain panels, so most declared metrics are now covered.
         assert svc["metric_coverage"]["score"] > 0.5
         assert "avg_metric_coverage_score" in quality["aggregate"]
+
+
+# ---------------------------------------------------------------------------
+# Increment 3: RED completeness (gridPos, runbook_url, DB latency)
+# ---------------------------------------------------------------------------
+
+
+class TestGridPos:
+    """REQ-OAG-105 / Gap 5: panels ship with gridPos at generation time."""
+
+    def test_every_panel_has_gridpos(self, grpc_service, business):
+        spec = yaml.safe_load(generate_dashboard_spec(grpc_service, business).content)
+        assert spec["panels"]
+        for p in spec["panels"]:
+            assert "gridPos" in p
+            assert set(p["gridPos"]) == {"h", "w", "x", "y"}
+
+    def test_two_column_layout(self, grpc_service, business):
+        spec = yaml.safe_load(generate_dashboard_spec(grpc_service, business).content)
+        xs = {p["gridPos"]["x"] for p in spec["panels"]}
+        assert xs <= {0, 12}  # half-width 2-column grid
+
+    def test_obs_100h_not_dinged_and_repair_is_noop(self, grpc_service, business):
+        from startd8.validators.observability_artifact_checks import (
+            validate_dashboard, repair_gridpos,
+        )
+        result = generate_dashboard_spec(grpc_service, business)
+        vr = validate_dashboard(
+            result.content, result.output_path, autofix=True,
+            service_id=grpc_service.service_id, transport="grpc",
+        )
+        assert not any(i.check == "OBS-100h" for i in vr.issues)
+        # repair_gridpos finds nothing to fix on a freshly generated dashboard.
+        _, repairs = repair_gridpos(yaml.safe_load(result.content))
+        assert repairs == []
+
+
+class TestRunbookUrl:
+    """REQ-OAG-205: every active alert carries a runbook_url annotation."""
+
+    def test_all_alerts_have_runbook_url(self, grpc_service, business):
+        result = generate_alert_rules(grpc_service, business)
+        parsed = yaml.safe_load(result.content)
+        rules = [r for g in parsed["groups"] for r in g["rules"]]
+        assert rules
+        for r in rules:
+            url = r["annotations"]["runbook_url"]
+            assert url.startswith("https://runbooks.example.com/checkout-api/")
+            assert r["alert"] in url
+
+
+class TestDatabasePanels:
+    """REQ-OAG-107: DB latency panels appear only when databases are detected."""
+
+    def test_db_panel_present_when_database_detected(self, grpc_service, business):
+        # grpc_service fixture has detected_databases=["postgresql"]
+        spec = yaml.safe_load(generate_dashboard_spec(grpc_service, business).content)
+        db_panels = [p for p in spec["panels"] if p.get("group") == "Database"]
+        assert len(db_panels) == 1
+        assert "db_client_operation_duration_bucket" in db_panels[0]["expr"]
+        assert 'db_system="postgresql"' in db_panels[0]["expr"]
+
+    def test_no_db_panel_without_databases(self, http_service, business):
+        # http_service fixture has no detected_databases
+        spec = yaml.safe_load(generate_dashboard_spec(http_service, business).content)
+        assert not any(p.get("group") == "Database" for p in spec["panels"])
