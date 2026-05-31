@@ -287,8 +287,38 @@ def _check_package_filepath_alignment(
     )]
 
 
-# Known valid Go version range — update when new Go releases ship.
-_GO_VERSION_RANGE = (1, 18, 1, 24)  # min_major.min_minor .. max_major.max_minor
+# Go version sanity bounds. There is deliberately NO hard upper bound: a go.mod
+# targeting a release NEWER than this validator must never be flagged as an
+# error, or every freshly-generated module false-fails as new Go ships (audit
+# F4 — the old fixed range (1,18,1,24) hard-errored on the released go 1.25).
+# We only *warn* on implausible versions (predating modules, or absurdly high —
+# a likely LLM hallucination like `go 1.99` / `go 2.5`).
+_GO_VERSION_MIN_MINOR = 11        # `go` directive + modules since Go 1.11
+_GO_VERSION_SANITY_MAX_MINOR = 60  # generous soft ceiling to catch hallucinations
+
+
+def _go_version_issue(
+    major: int, minor: int, line: int, *, what: str,
+) -> "Optional[SemanticIssue]":
+    """Return a *warning* SemanticIssue for an implausible Go version, else None.
+
+    Never returns an ``error`` — a version merely newer than this validator is
+    valid. Go is currently major 1 (Go 2 is unreleased); we accept any
+    ``1.x`` with ``x >= _GO_VERSION_MIN_MINOR`` up to a generous soft ceiling.
+    """
+    if major == 1 and _GO_VERSION_MIN_MINOR <= minor <= _GO_VERSION_SANITY_MAX_MINOR:
+        return None
+    if major < 1 or (major == 1 and minor < _GO_VERSION_MIN_MINOR):
+        reason = "predates Go modules (1.11)"
+    else:
+        reason = "is implausibly high — verify it is a released Go version"
+    return SemanticIssue(
+        check="invalid_go_version",
+        severity="warning",
+        message=f"{what} `{major}.{minor}` {reason}",
+        line=line,
+    )
+
 
 _GO_DIRECTIVE_RE = re.compile(r'^\s*go\s+(\d+)\.(\d+)')
 _TOOLCHAIN_RE = re.compile(r'^\s*toolchain\s+go(\d+)\.(\d+)')
@@ -322,33 +352,16 @@ def _check_go_mod_validity(source: str) -> List[SemanticIssue]:
         if go_m:
             has_go_directive = True
             major, minor = int(go_m.group(1)), int(go_m.group(2))
-            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
-            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
-                issues.append(SemanticIssue(
-                    check="invalid_go_version",
-                    severity="error",
-                    message=(
-                        f"Go version `{major}.{minor}` is outside known valid "
-                        f"range ({min_maj}.{min_min}–{max_maj}.{max_min}) — "
-                        f"verify this is a released Go version"
-                    ),
-                    line=i,
-                ))
+            ver_issue = _go_version_issue(major, minor, i, what="Go version")
+            if ver_issue is not None:
+                issues.append(ver_issue)
 
         tc_m = _TOOLCHAIN_RE.match(stripped)
         if tc_m:
             major, minor = int(tc_m.group(1)), int(tc_m.group(2))
-            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
-            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
-                issues.append(SemanticIssue(
-                    check="invalid_go_version",
-                    severity="error",
-                    message=(
-                        f"Toolchain version `go{major}.{minor}` is outside known valid "
-                        f"range ({min_maj}.{min_min}–{max_maj}.{max_min})"
-                    ),
-                    line=i,
-                ))
+            ver_issue = _go_version_issue(major, minor, i, what="Toolchain version go")
+            if ver_issue is not None:
+                issues.append(ver_issue)
 
     if not has_module:
         issues.append(SemanticIssue(
@@ -394,17 +407,11 @@ def _check_dockerfile_go_version(source: str) -> List[SemanticIssue]:
         m = docker_go_re.search(stripped)
         if m:
             major, minor = int(m.group(1)), int(m.group(2))
-            min_maj, min_min, max_maj, max_min = _GO_VERSION_RANGE
-            if not (min_maj <= major <= max_maj and min_min <= minor <= max_min):
-                issues.append(SemanticIssue(
-                    check="invalid_go_version",
-                    severity="error",
-                    message=(
-                        f"Dockerfile Go image version `{major}.{minor}` is outside "
-                        f"known valid range ({min_maj}.{min_min}–{max_maj}.{max_min})"
-                    ),
-                    line=i,
-                ))
+            ver_issue = _go_version_issue(
+                major, minor, i, what="Dockerfile Go image version",
+            )
+            if ver_issue is not None:
+                issues.append(ver_issue)
     return issues
 
 

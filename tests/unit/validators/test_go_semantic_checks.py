@@ -377,22 +377,36 @@ class TestGoModValidation:
         issues = _check_go_mod_validity(source)
         assert len(issues) == 0
 
-    def test_future_go_version_flagged(self):
-        source = "module github.com/user/repo\n\ngo 1.25\n"
-        issues = _check_go_mod_validity(source)
-        error_issues = [i for i in issues if i.check == "invalid_go_version"]
-        assert len(error_issues) == 1
-        assert "1.25" in error_issues[0].message
+    def test_newer_go_version_not_flagged(self):
+        # A version newer than this validator must NOT be flagged — Go ships new
+        # minors regularly (audit F4: the old fixed range hard-errored on the
+        # released go 1.25, a guaranteed worsening false positive).
+        for ver in ("1.25", "1.30", "1.45"):
+            source = f"module github.com/user/repo\n\ngo {ver}\n"
+            issues = [i for i in _check_go_mod_validity(source)
+                      if i.check == "invalid_go_version"]
+            assert issues == [], f"go {ver} should be accepted as a future release"
 
-    def test_future_toolchain_flagged(self):
+    def test_implausible_go_version_warns(self):
+        # Hallucinated versions (Go 2 is unreleased; absurd minors) WARN, never error.
+        for ver in ("2.0", "1.99"):
+            source = f"module github.com/user/repo\n\ngo {ver}\n"
+            issues = [i for i in _check_go_mod_validity(source)
+                      if i.check == "invalid_go_version"]
+            assert len(issues) == 1
+            assert issues[0].severity == "warning"
+            assert ver in issues[0].message
+
+    def test_implausible_toolchain_warns(self):
         source = (
             "module github.com/user/repo\n\n"
-            "go 1.25\n"
-            "toolchain go1.25.6\n"
+            "go 2.0\n"
+            "toolchain go2.0.1\n"
         )
-        issues = _check_go_mod_validity(source)
-        version_issues = [i for i in issues if i.check == "invalid_go_version"]
-        assert len(version_issues) == 2  # go directive + toolchain
+        issues = [i for i in _check_go_mod_validity(source)
+                  if i.check == "invalid_go_version"]
+        assert len(issues) == 2  # go directive + toolchain
+        assert all(i.severity == "warning" for i in issues)
 
     def test_missing_module_directive(self):
         source = "go 1.23\n\nrequire (\n\tgithub.com/foo/bar v1.0.0\n)\n"
@@ -414,9 +428,9 @@ class TestGoModValidation:
         contam = [i for i in issues if i.check == "python_contamination"]
         assert len(contam) == 1
 
-    def test_valid_range_boundary(self):
-        """Go 1.18 and 1.24 are both within range."""
-        for ver in ("1.18", "1.24"):
+    def test_plausible_versions_accepted(self):
+        """The module floor (1.11) through current and near-future minors are valid."""
+        for ver in ("1.11", "1.18", "1.24", "1.25", "1.30"):
             source = f"module foo\n\ngo {ver}\n"
             issues = _check_go_mod_validity(source)
             version_issues = [i for i in issues if i.check == "invalid_go_version"]
@@ -433,11 +447,17 @@ class TestDockerfileGoVersion:
         issues = _check_dockerfile_go_version(source)
         assert len(issues) == 0
 
-    def test_future_version_flagged(self):
+    def test_newer_version_not_flagged(self):
+        # golang:1.25 is a real, released base image — must not be flagged (F4).
         source = "FROM --platform=$BUILDPLATFORM golang:1.25.6-alpine AS builder\n"
         issues = _check_dockerfile_go_version(source)
+        assert issues == []
+
+    def test_implausible_version_warns(self):
+        source = "FROM golang:2.0-alpine AS builder\n"
+        issues = _check_dockerfile_go_version(source)
         assert len(issues) == 1
-        assert "1.25" in issues[0].message
+        assert issues[0].severity == "warning"
 
     def test_non_go_from_ignored(self):
         source = "FROM gcr.io/distroless/static\n"
@@ -460,7 +480,9 @@ class TestDockerfileGoVersion:
 
 class TestFileTypeDispatch:
     def test_go_mod_dispatches_to_mod_validator(self):
-        source = "module foo\n\ngo 1.25\n"
+        # Use an implausible version (2.0) so the version check still fires,
+        # proving dispatch — a real future version like 1.25 is now valid.
+        source = "module foo\n\ngo 2.0\n"
         issues = run_go_semantic_checks(source, file_path="go.mod")
         checks = {i.check for i in issues}
         assert "invalid_go_version" in checks
@@ -468,7 +490,7 @@ class TestFileTypeDispatch:
         assert "unchecked_error" not in checks
 
     def test_dockerfile_dispatches_to_docker_validator(self):
-        source = "FROM golang:1.25-alpine AS builder\nRUN go build\n"
+        source = "FROM golang:2.0-alpine AS builder\nRUN go build\n"
         issues = run_go_semantic_checks(source, file_path="Dockerfile")
         checks = {i.check for i in issues}
         assert "invalid_go_version" in checks

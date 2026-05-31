@@ -1,10 +1,10 @@
 # Multi-Language Template Matching & Non-Python File Validation
 
-**Date:** 2026-03-17
-**Status:** Draft
+**Date:** 2026-03-17 (Layers 1–4) · **Updated:** 2026-05-31 (Layer 5)
+**Status:** Draft — Layers 1–4 implemented; Layer 5 false-positive hardening REQ-MLT-501/502/503/504 ✅ DONE, REQ-MLT-505 backlog open
 **Author:** Human + Agent collaboration
-**Derived From:** Run-066 (first Go Prime Contractor run) — 15/38 generated files contained Python stubs (`from __future__ import annotations`) instead of Go/HTML/go.mod content. Postmortem scored 0.96 (false positive — non-Python files defaulted to 1.0).
-**Priority:** P0 (template path), P1 (validation)
+**Derived From:** Run-066 (first Go Prime Contractor run) — 15/38 generated files contained Python stubs (`from __future__ import annotations`) instead of Go/HTML/go.mod content. Postmortem scored 0.96 (false **negative** — non-Python files defaulted to 1.0). **Layer 5** addresses the inverse (false **positives** on valid TS/TSX/JSONC/Go) found in run-005 and run-007.
+**Priority:** P0 (template path), P1 (validation), P1 (Layer 5 false-positive hardening)
 
 ---
 
@@ -227,6 +227,87 @@ When `_evaluate_disk_quality()` encounters 2+ files with `language_mismatch` err
 
 ---
 
+### Layer 5: Multi-Language False-Positive Hardening (run-005 / run-007)
+
+> **Goal:** stop the *inverse* of the run-066 failure. Run-066 was a false **negative**
+> (invalid non-Python files scored 1.0). Layers 5 addresses false **positives** —
+> *valid* multi-language output wrongly failed — found in two later runs:
+>   - **run-005:** valid `app/layout.tsx` failed the INTEGRATE checkpoint and valid TS/TSX
+>     elements escalated, because `node --check` can't parse `.tsx` (Node ≥ 23) and `npx tsc`
+>     install-noise was misread as a compile error. Fixed via REQ-NODE-MP-303/304/305
+>     (`prime-contractor-node/NODEJS_MICROPRIME_REQUIREMENTS.md`).
+>   - **run-007:** a flawless `tsconfig.json` (requirement_score 1.0) scored `FAIL:disk_quality`
+>     because it was parsed as strict JSON, not JSONC.
+>
+> **Governing principle (REQ-MLT-500).** A validator MUST distinguish **"my tool/dialect/
+> heuristic cannot handle this"** from **"the artifact is invalid."** The former degrades to a
+> best-effort pass (or an advisory `warning`); only the latter sets `ast_valid=False` /
+> `contract_compliance=0.0`. Every false positive below is an instance of conflating the two.
+> This is the disk/syntax-validation analogue of the parser-confidence severity calibration in
+> `MULTILANG_MANIFEST_VALIDATION_REQUIREMENTS.md` FR-5 ("never trade Python's
+> false-negative-free enforcement for false positives elsewhere").
+
+#### REQ-MLT-501: JSONC config files are not strict JSON — ✅ DONE (run-007)
+
+`tsconfig.json`, `jsconfig.json`, `*.jsonc`, the `tsconfig.*.json` / `jsconfig.*.json` variant
+families (`tsconfig.build.json`, `tsconfig.app.json`, `tsconfig.base.json`), VS Code configs
+(`settings.json`, `launch.json`, `tasks.json`, `extensions.json`), and `.babelrc` / `.eslintrc.json`
+are **JSONC** — `//` and `/* */` comments and trailing commas are legal. `_validate_json_file`
+MUST retry these tolerantly (string-aware comment/trailing-comma strip) before failing. Plain
+data `.json` stays strict; genuine errors in JSONC still fail.
+*Impl:* `forward_manifest_validator.py::_strip_jsonc` + `_is_jsonc_filename`.
+
+#### REQ-MLT-502: Contamination fingerprints MUST be statement-anchored, not substring — ✅ DONE
+
+REQ-MLT-400 already specified anchored detection ("as first code line / first code construct"),
+but the per-language file validators (`_validate_csharp_file`/`_validate_java_file`/`_validate_go_file`)
+shipped a naive `if fp in content` substring scan. `self.` matches `window.self` / `obj.self` /
+an identifier named `self`; `def ` matches text in strings/comments — all valid non-Python code,
+zeroed to `ast_valid=False`. The fingerprint check MUST be line-anchored and comment-aware.
+*Impl:* `languages/_validation_utils.py::detect_python_contamination` (shared, mirrors the correct
+`nodejs_semantic_checks` logic), wired into all three file validators.
+
+#### REQ-MLT-503: Version checks MUST never hard-error on a newer-than-baked-in version — ✅ DONE
+
+A baked-in version *range* is a time-bomb: `_GO_VERSION_RANGE=(1,18,1,24)` hard-errored
+(severity `error`) on the released `go 1.25` and on valid older `go 1.17`. Version validators
+MUST accept any plausible current/future release (floor only, e.g. Go modules ≥ 1.11) and at most
+**warn** (never error) on implausible values (Go 2 unreleased; absurd minors — likely
+hallucinations). Applies to the `go`/`toolchain` directives and `golang:X.Y` Docker base images.
+*Impl:* `validators/go_semantic_checks.py::_go_version_issue`.
+
+#### REQ-MLT-504: TS/TSX syntax uses `tsc`, not `node --check`; tool-absence ≠ invalidity — ✅ DONE
+
+`syntax_check_command` (the static `node --check {file}` template) MUST be `None` for Node so all
+syntax checking flows through the extension-aware `validate_syntax`, which routes `.ts`/`.tsx` to
+`tsc` (with a `.tsx` temp + `--jsx` for JSX) and treats a non-zero `tsc` exit as a failure only
+when it carries a real `error TS\d+` diagnostic. Full spec: REQ-NODE-MP-303/304/305.
+
+#### REQ-MLT-505: Calibration backlog (open — from the run-007 validation-code audit)
+
+The audit that produced REQ-MLT-501/502/503 also catalogued lower-priority false-positive sources.
+These remain **open**; each is an instance of REQ-MLT-500 (validator-incapacity treated as
+invalidity) and most are amplified by the `ast_valid=False → 0.0` collapse (see the kaizen-scoring
+note KZ-FP-1):
+
+| ID | Location | Valid input wrongly failed | Sev | Fix direction |
+|----|----------|----------------------------|-----|---------------|
+| F2 | `_validate_yaml_file` | multi-doc (`---`) / custom-tag YAML (`!Ref`, `!vault`) raises `YAMLError` → score 0.0 | MED | `safe_load_all`; treat unknown-tag `ConstructorError` as well-formed |
+| F6 | `_validate_html_file` | `{{ }}` balance check fires on Vue/Angular/Jinja/GHA `${{ }}` in plain HTML | MED | only run Go-template balance for `.gohtml`/`.tmpl` or `{{define}}` files |
+| F7 | `_validate_requirements_file` | camelCase PyPI packages (`wxPython`, `PyMySQL`) flagged "not a package" | MED | advisory-only; resolve against known-package heuristic |
+| F8 | `_validate_dockerfile` | builder-stage with no `CMD`/`ENTRYPOINT` deducted | MED | exempt builder stages / multi-`FROM` |
+| F9 | `_digest_looks_fabricated` | real SHA256 digests probabilistically flagged "fabricated" (error) | LOW | require both signals or downgrade to warning |
+| F10 | `nodejs._looks_like_typescript` | plain JS with `Array<T>` in a JSDoc/string routed to `tsc` | MED | only treat as TS on `.ts`/`.tsx` hint; heuristic as tiebreaker |
+| F11 | `_count_stubs_text` | `// TODO:` comments in complete code counted as unimplemented stubs | LOW | separate "TODO comment" from "stub body" |
+| F12 | `go._check_unchecked_errors` | `x, err := f(); return x, err` (most common Go idiom) flagged | MED | accept `return … err`, `errors.Is/As`, `require.NoError`, `_ = err` |
+| F13 | `go._check_package_filepath_alignment` | pkg name ≠ dir name (valid, convention only) flagged | MED | advisory-only / case-variant only |
+| F14 | `java._check_missing_access_modifiers` | interface methods (implicitly public) / package-private flagged | MED | skip interface/annotation scope; package-private = info |
+| F16 | `csharp._check_missing_async_await` | `async Task` returning a Task without `await` flagged | MED | info, recognize `return Task`/`ValueTask` |
+| F17 | `csharp._check_console_writeline` | `Console.WriteLine` in `Program.cs`/`Main` flagged (no entry-point exemption) | LOW | exempt `Program.cs`/`Main`/top-level statements (mirror Node/Java) |
+| F18 | `observability_artifact_checks` | real Grafana JSON (`targets[].expr`, `fieldConfig…unit`) fails the flat-`panels[]` schema check | MED | detect native Grafana schema locations |
+
+---
+
 ## 4. Implementation Scope
 
 ### Phase 1 (P0 — Unblocks Go runs)
@@ -300,6 +381,12 @@ When `_evaluate_disk_quality()` encounters 2+ files with `language_mismatch` err
 | MLT-200–201 | Run-066 go.mod Python stubs | 4 go.mod files scored 1.0 with Python content |
 | MLT-300–301 | Run-066 HTML Python stubs | 11 HTML templates scored 1.0 with Python content |
 | MLT-400–401 | Postmortem false-positive rate | 15/38 files scored 1.0 incorrectly |
+| MLT-500 | run-005/007 false positives | Governing principle: validator-incapacity ≠ artifact-invalidity |
+| MLT-501 | run-007 tsconfig FAIL:disk_quality | JSONC ≠ strict JSON |
+| MLT-502 | run-007 audit (F1) | Anchored, not substring, contamination fingerprints |
+| MLT-503 | run-007 audit (F4) | No hard-error on newer-than-baked-in versions |
+| MLT-504 | run-005 layout.tsx | TS/TSX via tsc; tool-absence ≠ invalidity (REQ-NODE-MP-303/304/305) |
+| MLT-505 | run-007 validation-code audit | Calibration backlog (F2/F6–F18) |
 
 ---
 

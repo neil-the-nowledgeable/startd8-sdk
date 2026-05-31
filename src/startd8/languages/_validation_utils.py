@@ -72,6 +72,57 @@ def get_contamination_fingerprints(language_id: str) -> tuple[str, ...]:
     return CONTAMINATION_FINGERPRINTS.get(language_id, PYTHON_FINGERPRINTS)
 
 
+import re as _re
+
+# Line-anchored matchers for the ambiguous fingerprints. A bare ``"self." in
+# content`` substring scan false-flags valid non-Python code — ``window.self``
+# / ``self.postMessage`` in JS, ``obj.self`` field access, an identifier named
+# ``self``/``def``, or the literal text inside a string/comment. Anchoring to
+# statement start eliminates those false positives (mirrors the precise logic in
+# ``nodejs_semantic_checks._check_python_contamination``).
+_SELF_DOT_RE = _re.compile(r"^\s*self\.\w")
+_PY_DEF_RE = _re.compile(r"^\s*def\s+\w+\s*\(")
+_PY_SHEBANGS = ("#!/usr/bin/env python", "#!/usr/bin/python")
+# Comment/blank prefixes for the brace-delimited target languages (Go/Java/C#).
+# ``#`` is included so C# preprocessor directives (``#region``/``#nullable``)
+# and Python comments are skipped — skipping only risks a false *negative*.
+_COMMENT_PREFIXES = ("//", "/*", "*", "#")
+
+
+def detect_python_contamination(
+    content: str, language_id: str,
+) -> Optional[str]:
+    """Return the offending Python fingerprint if *content* (a file in
+    *language_id*, a NON-Python brace language) contains a strong, statement-
+    anchored Python signal; else ``None``.
+
+    Line-anchored and comment-aware — the correct replacement for the naive
+    ``if fp in content`` substring scan that produced false positives on valid
+    Go/Java/C#/Node code (audit finding F1).
+    """
+    fingerprints = get_contamination_fingerprints(language_id)
+    for line in content.splitlines():
+        stripped = line.strip()
+        # Shebang check precedes the comment skip (a Python shebang starts ``#``).
+        for sb in _PY_SHEBANGS:
+            if stripped.startswith(sb):
+                return sb
+        if not stripped or stripped.startswith(_COMMENT_PREFIXES):
+            continue
+        if "self." in fingerprints and _SELF_DOT_RE.match(line):
+            return "self."
+        if "def " in fingerprints and _PY_DEF_RE.match(line):
+            return "def "
+        for fp in fingerprints:
+            # ``self.``/``def `` handled above with anchored matchers; the rest
+            # are matched at statement start (not anywhere in the line).
+            if fp in ("self.", "def ") or fp in _PY_SHEBANGS:
+                continue
+            if stripped.startswith(fp):
+                return fp
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Skeleton configuration (language-neutral DFA support)
 # ---------------------------------------------------------------------------

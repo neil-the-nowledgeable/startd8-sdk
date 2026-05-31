@@ -49,6 +49,28 @@ class TestValidateGoFile:
         assert result.contract_compliance == 0.0
         assert "package" in (result.error or "").lower()
 
+    def test_self_substring_not_contamination(self):
+        # Audit F1: `self` as a Go struct-field access (`x.self`) or in a
+        # comment is NOT Python contamination — the old `"self." in content`
+        # substring scan false-failed valid Go.
+        source = (
+            "package main\n\n"
+            "type T struct{ self *T }\n\n"
+            "func (x *T) f() *T {\n"
+            "    // reset self.state\n"
+            "    return x.self\n"
+            "}\n"
+        )
+        result = _validate_go_file(source, self._make_result())
+        assert result.ast_valid is not False
+        assert "fingerprint" not in (result.error or "").lower()
+
+    def test_real_python_contamination_still_caught(self):
+        source = "package main\n\ndef handler(req):\n    return req\n"
+        result = _validate_go_file(source, self._make_result())
+        assert result.ast_valid is False
+        assert "fingerprint" in (result.error or "").lower()
+
     def test_unbalanced_braces(self):
         result = _validate_go_file(UNBALANCED_GO, self._make_result())
         assert result.ast_valid is False
