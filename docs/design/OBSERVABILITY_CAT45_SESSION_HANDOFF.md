@@ -25,9 +25,12 @@ nothing yet* (the generator wiring is the next big piece).
   10 spans, regenerated; hand-authored SLO/alert templates preserved.
 - **Completeness gate:** `GRANDFATHERED_SOURCES` is **empty** — every collector-
   instrumented module declares its axes (0 violations on a real check, not masking).
-- **Parity bootstrap:** **22 emitters still tolerated** in `parity.EMITTER_EXCLUSIONS`
-  (`micro_prime.*`, `mottainai.*`, `security_prime.*`, `pipeline.artifact_inventory.*`).
-  These are the honest IOUs — surfaced, not hidden.
+- **Parity bootstrap:** ~~22 emitters tolerated~~ → **B COMPLETE.** `parity.EMITTER_EXCLUSIONS`
+  is now **empty**; `run_parity()` is a clean bijection (`ok=True`, `bootstrap_undeclared=[]`,
+  no hard violations). 23 emitters declared (the 22 prefix-cluster ones + `complexity.tier_distribution`,
+  whose declaration `e48e8f71` claimed but the stash incident dropped — never recovered until now).
+  Manifest YAML regenerated 17→40 metrics (additive; SLO/alert preserved). **Resume point is now
+  Signal 4 step 2 (C — generator `route_state` consumption).**
 
 ---
 
@@ -81,13 +84,10 @@ New modules: `observability/taxonomy_enums.py`, `manifest_validation.py`, `parit
 
 **In dependency order. Task IDs reference the session's TodoWrite list (#10–12).**
 
-1. **Finish B — declare the 22 emitters (#10).** For each prefix cluster, find the
-   `meter.create_*` site, add an `_OTEL_DESCRIPTORS` block to its module with
-   `category=pipeline_innate, orientation=system`, register the module in
-   `collector._INSTRUMENTED_MODULES`, and remove the matching entry from
-   `parity.EMITTER_EXCLUSIONS`. Verify `run_parity().bootstrap_undeclared` shrinks to `[]`.
-   Source files per prefix are listed in this session's notes (grep
-   `'"micro_prime.'` etc.).
+1. **~~Finish B — declare the 22 emitters (#10)~~ ✅ DONE.** All 23 emitters declared
+   (`pipeline_innate/system`; `complexity.tier_distribution` was the dropped 23rd), 7 carrier
+   modules registered in `collector._INSTRUMENTED_MODULES`, `parity.EMITTER_EXCLUSIONS` emptied.
+   `run_parity().bootstrap_undeclared == []`, obs+manifest suites green (230). YAML regenerated.
 2. **Then C — generator route_state consumption (#11).** Teach
    `observability/artifact_generator.py` (which ALREADY generates 8 artifact types) to:
    (a) read `route_state` from `manifest_declared` (via `onboarding_bridge`) — route

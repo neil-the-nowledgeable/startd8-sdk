@@ -75,6 +75,48 @@ except Exception:
     _mp_repair_attempts = _mp_repair_recovered = _mp_repair_step_applied = _mp_repair_wall_clock = None
     _HAS_OTEL = False
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. Module-level taxonomy defaults (REQ-OBS-SHARED-001): Micro Prime repair
+# metrics are innate codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "micro_prime.repair.attempts_total",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Total micro-prime repair pipeline runs",
+            "meter": "startd8.micro_prime.repair",
+            "labels": ["pipeline_mode", "language_id"],
+        },
+        {
+            "name": "micro_prime.repair.recovered_total",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Repairs that recovered invalid code to valid AST",
+            "meter": "startd8.micro_prime.repair",
+            "labels": ["pipeline_mode", "language_id"],
+        },
+        {
+            "name": "micro_prime.repair.step_applied",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Per-step application count",
+            "meter": "startd8.micro_prime.repair",
+            "labels": ["step", "pipeline_mode", "language_id"],
+        },
+        {
+            "name": "micro_prime.repair.wall_clock_ms",
+            "instrument": "histogram",
+            "unit": "ms",
+            "description": "Wall-clock time per repair pipeline run",
+            "meter": "startd8.micro_prime.repair",
+            "labels": ["pipeline_mode", "language_id"],
+        },
+    ],
+}
+
 # Shared step instances
 _shared_fence_strip = FenceStripStep()
 _shared_future_import_reorder = FutureImportReorderStep()

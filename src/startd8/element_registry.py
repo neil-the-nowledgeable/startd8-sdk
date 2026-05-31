@@ -57,6 +57,52 @@ except ImportError:
     _OTEL_AVAILABLE = False
 
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. Module-level taxonomy defaults (REQ-OBS-SHARED-001): element-registry cache
+# metrics are innate codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "micro_prime.element_registry.hits",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Registry lookups that returned a cached entry",
+            "meter": "startd8.element_registry",
+        },
+        {
+            "name": "micro_prime.element_registry.misses",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Registry lookups that returned None",
+            "meter": "startd8.element_registry",
+        },
+        {
+            "name": "micro_prime.element_registry.puts",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "New entries written to registry",
+            "meter": "startd8.element_registry",
+        },
+        {
+            "name": "micro_prime.element_registry.invalidations",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Entries invalidated due to staleness",
+            "meter": "startd8.element_registry",
+        },
+        {
+            "name": "micro_prime.element_registry.size",
+            "instrument": "observable_gauge",
+            "unit": "1",
+            "description": "Total entries in registry",
+            "meter": "startd8.element_registry",
+        },
+    ],
+}
+
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------

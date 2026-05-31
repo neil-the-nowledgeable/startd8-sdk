@@ -17,6 +17,34 @@ _meter: Optional[Any] = None
 _score_histogram: Optional[Any] = None
 _verdict_counter: Optional[Any] = None
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. The instruments are lazily created inside record_gate_result(); this static
+# declaration mirrors them for the descriptor↔emission parity test. Module-level
+# taxonomy defaults (REQ-OBS-SHARED-001): security-gate metrics are innate
+# codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "security_prime.score",
+            "instrument": "histogram",
+            "unit": "1",
+            "description": "Security score per file",
+            "meter": "security_prime",
+            "labels": ["database", "language"],
+        },
+        {
+            "name": "security_prime.gate_verdicts",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Gate verdict counts",
+            "meter": "security_prime",
+            "labels": ["verdict", "database"],
+        },
+    ],
+}
+
 
 def _get_tracer() -> Any:
     """Get or create the security_prime tracer."""

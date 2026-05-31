@@ -49,13 +49,12 @@ class EmitterExclusion:
 
 # The shrinking known-gap registry. Each entry is owned and slated for declaration in
 # a follow-up pass; removing it requires adding the descriptor in the same change.
-EMITTER_EXCLUSIONS: List[EmitterExclusion] = [
-    EmitterExclusion("complexity.tier_distribution", "complexity", "declared by cat-4 Phase 0.2 (CAT45 §A-1)"),
-    EmitterExclusion("micro_prime.", "micro_prime", "element/repair metrics not yet cataloged", prefix=True),
-    EmitterExclusion("mottainai.", "plan_ingestion", "Mottainai pipeline metrics not yet cataloged", prefix=True),
-    EmitterExclusion("security_prime.", "security_prime", "gate/score metrics not yet cataloged", prefix=True),
-    EmitterExclusion("pipeline.artifact_inventory.", "utils", "inventory metric not yet cataloged", prefix=True),
-]
+#
+# EMPTY (B complete): all previously-tolerated emitters
+# (complexity.tier_distribution, micro_prime.*, mottainai.*, security_prime.*,
+# pipeline.artifact_inventory.*) now declare `_OTEL_DESCRIPTORS` and are registered
+# in collector._INSTRUMENTED_MODULES. The bijection holds with no bootstrap tolerance.
+EMITTER_EXCLUSIONS: List[EmitterExclusion] = []
 
 # Exported names where a collision is known and resolved by a later pass. (Empty:
 # the startd8.cost.total / startd8_cost_total clash was resolved in Phase 2 by

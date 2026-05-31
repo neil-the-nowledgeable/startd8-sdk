@@ -203,6 +203,237 @@ metrics:
   source_file: src/startd8/repair/orchestrator.py
   category: pipeline_innate
   orientation: system
+- name: complexity.tier_distribution
+  instrument: histogram
+  unit: '1'
+  description: Distribution of complexity tier classifications
+  meter: startd8.complexity
+  source_file: src/startd8/complexity/classifier.py
+  labels:
+  - tier
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.element_registry.hits
+  instrument: counter
+  unit: '1'
+  description: Registry lookups that returned a cached entry
+  meter: startd8.element_registry
+  source_file: src/startd8/element_registry.py
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.element_registry.misses
+  instrument: counter
+  unit: '1'
+  description: Registry lookups that returned None
+  meter: startd8.element_registry
+  source_file: src/startd8/element_registry.py
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.element_registry.puts
+  instrument: counter
+  unit: '1'
+  description: New entries written to registry
+  meter: startd8.element_registry
+  source_file: src/startd8/element_registry.py
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.element_registry.invalidations
+  instrument: counter
+  unit: '1'
+  description: Entries invalidated due to staleness
+  meter: startd8.element_registry
+  source_file: src/startd8/element_registry.py
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.element_registry.size
+  instrument: observable_gauge
+  unit: '1'
+  description: Total entries in registry
+  meter: startd8.element_registry
+  source_file: src/startd8/element_registry.py
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.elements_local
+  instrument: counter
+  unit: '1'
+  description: Elements processed locally by Micro Prime
+  meter: startd8.micro_prime
+  source_file: src/startd8/micro_prime/prime_adapter.py
+  labels:
+  - tier
+  - file_path
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.elements_escalated
+  instrument: counter
+  unit: '1'
+  description: Elements escalated to fallback generator
+  meter: startd8.micro_prime
+  source_file: src/startd8/micro_prime/prime_adapter.py
+  labels:
+  - reason
+  - file_path
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.template_hits
+  instrument: counter
+  unit: '1'
+  description: Elements resolved by template registry
+  meter: startd8.micro_prime
+  source_file: src/startd8/micro_prime/prime_adapter.py
+  labels:
+  - file_path
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.repair.attempts_total
+  instrument: counter
+  unit: '1'
+  description: Total micro-prime repair pipeline runs
+  meter: startd8.micro_prime.repair
+  source_file: src/startd8/micro_prime/repair.py
+  labels:
+  - pipeline_mode
+  - language_id
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.repair.recovered_total
+  instrument: counter
+  unit: '1'
+  description: Repairs that recovered invalid code to valid AST
+  meter: startd8.micro_prime.repair
+  source_file: src/startd8/micro_prime/repair.py
+  labels:
+  - pipeline_mode
+  - language_id
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.repair.step_applied
+  instrument: counter
+  unit: '1'
+  description: Per-step application count
+  meter: startd8.micro_prime.repair
+  source_file: src/startd8/micro_prime/repair.py
+  labels:
+  - step
+  - pipeline_mode
+  - language_id
+  category: pipeline_innate
+  orientation: system
+- name: micro_prime.repair.wall_clock_ms
+  instrument: histogram
+  unit: ms
+  description: Wall-clock time per repair pipeline run
+  meter: startd8.micro_prime.repair
+  source_file: src/startd8/micro_prime/repair.py
+  labels:
+  - pipeline_mode
+  - language_id
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.elements_classified
+  instrument: counter
+  unit: '1'
+  description: Elements classified at ingestion time
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - tier
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.elements_pre_filled
+  instrument: counter
+  unit: '1'
+  description: Elements filled without LLM (template or registry)
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.registry_hits
+  instrument: counter
+  unit: '1'
+  description: Cross-run element reuse hits at ingestion
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.registry_misses
+  instrument: counter
+  unit: '1'
+  description: Cross-run element reuse misses at ingestion
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.skeleton_sources_forwarded
+  instrument: counter
+  unit: '1'
+  description: Skeletons consumed from seed (vs. recomputed)
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.implement_prompt_narrowed
+  instrument: counter
+  unit: '1'
+  description: Tasks receiving edit-mode prompts from pre-assembly
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: mottainai.tokens_avoided_estimate
+  instrument: counter
+  unit: tokens
+  description: Estimated input+output tokens saved by pre-assembly
+  meter: startd8.mottainai
+  source_file: src/startd8/workflows/builtin/plan_ingestion_mottainai.py
+  labels:
+  - phase
+  category: pipeline_innate
+  orientation: system
+- name: security_prime.score
+  instrument: histogram
+  unit: '1'
+  description: Security score per file
+  meter: security_prime
+  source_file: src/startd8/security_prime/otel.py
+  labels:
+  - database
+  - language
+  category: pipeline_innate
+  orientation: system
+- name: security_prime.gate_verdicts
+  instrument: counter
+  unit: '1'
+  description: Gate verdict counts
+  meter: security_prime
+  source_file: src/startd8/security_prime/otel.py
+  labels:
+  - verdict
+  - database
+  category: pipeline_innate
+  orientation: system
+- name: pipeline.artifact_inventory.lookup
+  instrument: counter
+  unit: '1'
+  description: Artifact inventory lookup outcomes
+  meter: startd8.pipeline
+  source_file: src/startd8/utils/artifact_inventory.py
+  labels:
+  - role
+  - outcome
+  category: pipeline_innate
+  orientation: system
 spans:
 - name_pattern: agent.generate:{agent_name}
   kind: CLIENT

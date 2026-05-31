@@ -31,6 +31,14 @@ _INSTRUMENTED_MODULES = [
     ("startd8.contractors.artisan_contractor", "src/startd8/contractors/artisan_contractor.py"),
     ("startd8.contractors.artisan_phases.runner", "src/startd8/contractors/artisan_phases/runner.py"),
     ("startd8.repair.orchestrator", "src/startd8/repair/orchestrator.py"),
+    # cat-4 / B: previously-undeclared live emitters, now cataloged (CAT45 §A-1, §D).
+    ("startd8.complexity.classifier", "src/startd8/complexity/classifier.py"),
+    ("startd8.element_registry", "src/startd8/element_registry.py"),
+    ("startd8.micro_prime.prime_adapter", "src/startd8/micro_prime/prime_adapter.py"),
+    ("startd8.micro_prime.repair", "src/startd8/micro_prime/repair.py"),
+    ("startd8.workflows.builtin.plan_ingestion_mottainai", "src/startd8/workflows/builtin/plan_ingestion_mottainai.py"),
+    ("startd8.security_prime.otel", "src/startd8/security_prime/otel.py"),
+    ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
 ]
 
 # Event type → instrument-group mapping (derived from EventType enum grouping).

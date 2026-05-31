@@ -30,6 +30,27 @@ logger = logging.getLogger(__name__)
 LookupOutcome = Literal["hit", "miss", "stale"]
 
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime
+# cost. The instrument is lazily created inside _emit_lookup_metric(); this static
+# declaration mirrors it for the descriptor↔emission parity test. Module-level
+# taxonomy defaults (REQ-OBS-SHARED-001): artifact-inventory reuse metrics are innate
+# codegen-pipeline mechanics, system-oriented.
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {
+            "name": "pipeline.artifact_inventory.lookup",
+            "instrument": "counter",
+            "unit": "1",
+            "description": "Artifact inventory lookup outcomes",
+            "meter": "startd8.pipeline",
+            "labels": ["role", "outcome"],
+        },
+    ],
+}
+
+
 # ---------------------------------------------------------------------------
 # OTel metric helper (guarded)
 # ---------------------------------------------------------------------------

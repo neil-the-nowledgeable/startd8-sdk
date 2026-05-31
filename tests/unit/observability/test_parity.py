@@ -52,12 +52,20 @@ class TestMetricBijection:
         assert r.emitted_not_declared == ["some.random.metric"]
         assert not r.ok
 
-    def test_excluded_emitter_is_tolerated(self):
-        # micro_prime.* is in the owned exclusion registry → bootstrap, not hard.
+    def test_excluded_emitter_is_tolerated(self, monkeypatch):
+        # The live EMITTER_EXCLUSIONS registry is now EMPTY (B complete — every
+        # emitter is declared). This test exercises the bootstrap MECHANISM with a
+        # synthetic owned exclusion, so it stays valid regardless of registry
+        # contents: an excluded emitter is reported as bootstrap, not hard-failed.
+        from startd8.observability import parity as _parity
+
+        synthetic = _parity.EmitterExclusion("synthetic.", "test", "mechanism check", prefix=True)
+        monkeypatch.setattr(_parity, "EMITTER_EXCLUSIONS", [synthetic])
+
         man = ObservabilityManifest(metrics=[])
-        r = check_metric_bijection(man, emitted={"micro_prime.template_hits": ["f.py"]})
+        r = check_metric_bijection(man, emitted={"synthetic.template_hits": ["f.py"]})
         assert r.emitted_not_declared == []
-        assert r.bootstrap_undeclared == ["micro_prime.template_hits"]
+        assert r.bootstrap_undeclared == ["synthetic.template_hits"]
         assert r.ok
 
     def test_declared_and_emitted_matches(self):
@@ -94,11 +102,16 @@ class TestExportNamePreservation:
 
 
 class TestRealManifestParity:
-    def test_real_manifest_passes_in_bootstrap_mode(self):
-        # No declared-not-emitted, no un-owned emitted-not-declared, the known
-        # startd8_cost_total collision is tolerated until Phase 2.
+    def test_real_manifest_full_parity(self):
+        # B complete: every live emitter is declared and registered, so the
+        # bijection holds with ZERO bootstrap tolerance. EMITTER_EXCLUSIONS is
+        # empty and this asserts the post-B end-state invariant (not bootstrap mode).
         r = run_parity()
         assert r.ok
         assert r.declared_not_emitted == []
-        # The known gaps are surfaced (not silently green).
-        assert r.bootstrap_undeclared, "expected the known undeclared emitters to be reported"
+        assert r.emitted_not_declared == []
+        assert r.bootstrap_undeclared == [], (
+            "EMITTER_EXCLUSIONS should be empty now that B is complete; "
+            f"unexpected bootstrap gaps: {r.bootstrap_undeclared}"
+        )
+        assert r.exported_name_collisions == []
