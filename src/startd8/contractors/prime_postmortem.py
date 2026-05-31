@@ -1742,6 +1742,18 @@ class PrimePostMortemEvaluator:
                     ):
                         fpm.verdict = "FAIL:disk_quality"
                         fpm.success = False
+                        # Surface the disk-validation diagnostic. This flip can
+                        # downgrade a feature the generator reported as success,
+                        # so root_cause/stage were never classified — leaving a
+                        # blind "unknown/unknown/none" in the report. Derive them
+                        # from the disk_compliance result instead.
+                        _disk_err = getattr(compliance, "error", "") or ""
+                        if fpm.root_cause == RootCause.UNKNOWN:
+                            fpm.root_cause = RootCause.AST_FAILURE
+                        if fpm.pipeline_stage == PipelineStage.UNKNOWN:
+                            fpm.pipeline_stage = PipelineStage.INTEGRATION
+                        if not fpm.error_message and _disk_err:
+                            fpm.error_message = _disk_err
 
                     # Semantic repair dual scoring (DC-3, REQ-SR)
                     pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})

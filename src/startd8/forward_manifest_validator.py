@@ -805,7 +805,7 @@ def _validate_non_python_file(
     elif suffix == ".go":
         result = _validate_go_file(content, result, file_path=str(abs_path))
     elif suffix == ".json":
-        result = _validate_json_file(content, result)
+        result = _validate_json_file(content, result, filename=abs_path.name)
     elif suffix == ".java":
         result = _validate_java_file(content, result)
     elif name in ("build.gradle", "build.gradle.kts"):
@@ -1419,15 +1419,79 @@ def _validate_package_json(
     return result
 
 
+# Files that are JSON-with-Comments (JSONC) by convention. ``//`` and
+# ``/* */`` comments and trailing commas are VALID in these files (TypeScript's
+# tsconfig.json, VS Code configs, etc.) and must not be flagged as JSON errors.
+_JSONC_FILENAMES = frozenset({
+    "tsconfig.json", "jsconfig.json", "devcontainer.json",
+})
+
+
+def _strip_jsonc(text: str) -> str:
+    """Strip ``//`` / ``/* */`` comments and trailing commas from JSONC text.
+
+    String-aware: comment markers and commas inside string literals are left
+    untouched so URLs (``https://``) and the like don't corrupt the output.
+    """
+    out: List[str] = []
+    i, n = 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:        # escape — copy next char verbatim
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":   # line comment
+            j = text.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":   # block comment
+            j = text.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    # Drop trailing commas before a closing } or ] (legal in JSONC, not JSON).
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
 def _validate_json_file(
     content: str,
     result: DiskComplianceResult,
+    *,
+    filename: str = "",
 ) -> DiskComplianceResult:
-    """Validate JSON syntax."""
+    """Validate JSON syntax.
+
+    JSONC config files (tsconfig.json, jsconfig.json, *.jsonc, …) legally allow
+    comments and trailing commas; strict ``json.loads`` would false-fail valid
+    output. For those filenames we retry tolerantly after stripping JSONC
+    constructs. Plain data ``.json`` files stay strict.
+    """
     import json as _json
+    name = filename.lower()
+    is_jsonc = name in _JSONC_FILENAMES or name.endswith(".jsonc")
     try:
         _json.loads(content)
     except _json.JSONDecodeError as exc:
+        if is_jsonc:
+            try:
+                _json.loads(_strip_jsonc(content))
+                return result  # valid once JSONC comments/commas are removed
+            except (_json.JSONDecodeError, ValueError) as exc2:
+                exc = exc2
         result.ast_valid = False
         result.error = f"json_error: {exc}"
         result.contract_compliance = 0.0
