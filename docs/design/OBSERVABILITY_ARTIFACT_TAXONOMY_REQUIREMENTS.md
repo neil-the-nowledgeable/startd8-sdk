@@ -1,7 +1,8 @@
 # Observability Artifact Taxonomy — Requirements
 
 **Date:** 2026-05-31
-**Status:** Draft v0.1 — requirements only (no code changes in this pass)
+**Status:** Draft v0.2 — requirements only (no code changes in this pass). Two-axis model:
+artifact = (category = *what is observed*, orientation = *who consumes / acts on it*).
 **Lineage:** Consolidates and re-frames `OBSERVABILITY_GENERATION_GAP_ANALYSIS.md`,
 `OBSERVABILITY_GENERATION_FOLLOWUP_RUN007.md`, `UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md`,
 and the pipeline-innate concerns in `cap-dev-pipe/design/pipeline-requirements.md` (REQ-CDP-*).
@@ -20,12 +21,15 @@ the root of a recurring class of "looks-like-success" failures (run-003 Gaps 1�
 Findings 1–3): artifacts of fundamentally different *kinds* are produced, scored, and
 reported as if they were the same thing.
 
-Conceptually, generation produces **five categories** of artifact, distinguished by **what
-is being observed** (or, for the pipeline category, what is being *recorded*). Two are
-implemented today, one is implemented-but-mislabeled, and two are emergent (their signals
-are already emitted but have no home). This document defines the taxonomy, fixes the
-`capability_index` naming collision, specifies a category-nested metadata structure, and
-defines the pipeline-innate artifact-reuse contract that serial / project-update runs need.
+Conceptually, every artifact is classified on **two independent axes**:
+**category** (§1.1 — *what is observed*: service / business / pipeline-innate / project / agent)
+and **orientation** (§1.2 — *who consumes & acts on it*: human, e.g. a dashboard; system, e.g.
+a metric / SLI / SLO; or bridge, e.g. an alert or notification policy — system-evaluated,
+human-actioned). The flat list collapses both axes, which is why artifacts of fundamentally
+different kinds get produced, scored, and reported as if the same. This document defines the
+two-axis taxonomy, fixes the `capability_index` naming collision, specifies a category-nested
+metadata structure, and defines the pipeline-innate artifact-reuse contract that serial /
+project-update runs need.
 
 This is a **requirements** document. Code alignment is a separate, follow-up pass.
 
@@ -80,6 +84,38 @@ signals already exist (REQ-OAT-041).
 the work: cost, token burn, active sessions, context-usage, truncations, agent traces, tool
 use, eval/quality. **Reserved**: no generator yet; the SDK already emits these metrics
 (`costs/`, session tracking) (REQ-OAT-041).
+
+### 1.2 Second axis — artifact orientation (consumer)
+
+Category (§1.1) answers *"what is observed."* It does **not** capture *"who consumes the
+artifact and who acts on it,"* which is an independent property. A service dashboard and a
+service SLO are both category-1, but a human reads the dashboard while a machine evaluates the
+SLO — they need different generation inputs, different validation, and different coverage
+accounting. **Orientation** is therefore a second, orthogonal axis. Every artifact is
+classified on **both** axes: `(category, orientation)`.
+
+| Orientation | Primary consumer | Artifact types | Validated for |
+|-------------|------------------|----------------|---------------|
+| **Human-oriented** | a **person** reads / interprets it | `dashboard`, `onboarding_portal`, `role_dashboard`, `runbook` | clarity, completeness, layout, audience-fit, navigability |
+| **System-oriented** | a **machine** consumes it | `slo_definition` (SLI + SLO), `service_monitor` (metric collection), recording rules, `provenance`, `generation_report`, `observability_inventory` | schema correctness, parseability, threshold / indicator validity |
+| **Bridge (both)** | system-**evaluated**, human-**actioned** | `prometheus_rule` / `alert_rule` (alerting), `loki_rule` (alerting), `notification_policy` | **both** sides: rule validity (system) **and** actionability — severity, annotations, runbook/dashboard links, routing target (human) |
+
+**Why orientation is its own axis (granularity & tracking):**
+
+- **Bridge artifacts are where the system→human handoff happens.** An alert that is
+  syntactically valid (system ✓) but has no actionable annotation, no runbook/dashboard link,
+  or no notification route (human ✗) is *half-broken* in a way neither a pure-system nor a
+  pure-human check would catch. Classifying alerts and notification policies as **bridge** lets
+  validation assert **both** halves, and lets reporting track the handoff explicitly.
+- **It generalizes the run-007 coverage split.** "dashboarded vs alerted" was an early,
+  ad-hoc instance of this axis: *dashboarded* = on a **human** surface; *alerted* = on a
+  **bridge** surface. Orientation makes this a principled, complete dimension — a metric's
+  coverage is tracked across **human / system / bridge** surfaces (REQ-OAT-061), so a metric
+  that is visualized but neither defined as an SLI nor alerted is visibly only 1/3 covered.
+- **Mixed-orientation files are explicit.** A `prometheus_rule` / `loki_rule` file may contain
+  *recording* rules (system) and *alerting* rules (bridge). The artifact's orientation is
+  **bridge-primary**; its recording-rule subset is scored on the system dimension
+  (REQ-OAT-062). This is recorded, not hand-waved.
 
 ---
 
@@ -148,8 +184,9 @@ during migration. Producers SHOULD emit both during the transition; the nested f
 authoritative.
 
 **REQ-OAT-023.** Every emitted artifact record (`ArtifactResult`, and entries in the
-generation manifest / `generation_report`) MUST carry an explicit `category` field drawn from
-the five-category enum.
+generation manifest / `generation_report`) MUST carry an explicit `category` field (five-category
+enum) **and** an `orientation` field (`human` | `system` | `bridge`). The two are independent;
+both are required.
 
 ---
 
@@ -181,23 +218,54 @@ home, and (b) future generators slot in without re-litigating the taxonomy.
 (service / business / pipeline-innate), not run all types in one undifferentiated loop, so each
 category can have its own preconditions, deploy path, and validators.
 
-### 4.2 Category-aware quality validation
+### 4.2 Category- and orientation-aware quality validation
 
-**REQ-OAT-050.** Quality validation MUST be category-aware. Every generated artifact MUST be
-scored (closing run-007 Finding 1: `artifacts_scored == artifacts_generated`), using validators
-appropriate to its category — service-observability validators check live alerting / RED
-coverage; pipeline-innate validators check inventory/report completeness; etc.
+**REQ-OAT-050.** Quality validation MUST be both **category-aware and orientation-aware**. Every
+generated artifact MUST be scored (closing run-007 Finding 1: `artifacts_scored ==
+artifacts_generated`), using validators appropriate to its `(category, orientation)`:
+- **human-oriented** → clarity / completeness / layout / audience-fit (e.g. dashboard has the
+  expected panels & navigation; runbook has all required sections);
+- **system-oriented** → schema correctness / parseability / definition validity (e.g. SLO has a
+  valid SLI + target; service_monitor has selector/endpoints);
+- **bridge** → **both** halves: the rule is valid (system) **and** actionable (human) — severity
+  set, summary/annotations present, runbook/dashboard links resolvable, a notification route
+  exists. A bridge artifact that passes only one half MUST score as partial, not complete.
 
-**REQ-OAT-051.** Metric coverage MUST distinguish *dashboarded* from *alerted* per run-007
-Finding 3 (`metric_coverage_dashboarded`, `metric_coverage_alerted`), and these are
-**service-observability** dimensions — they MUST NOT be applied to pipeline-innate artifacts.
+**REQ-OAT-051 (orientation-based metric coverage).** Per-metric coverage MUST be tracked across
+the orientation axis, generalizing the run-007 dashboarded/alerted split:
+- `metric_coverage_human` — referenced by a live human surface (dashboard panel);
+- `metric_coverage_system` — defined as a system artifact (SLI / recording rule);
+- `metric_coverage_bridge` — referenced by an active (non-commented) alert / notification path.
+
+`metric_coverage_human` ≡ the prior `metric_coverage_dashboarded`; `metric_coverage_bridge` ≡
+the prior `metric_coverage_alerted` (names retained as aliases for continuity). All three fold
+into the composite so a metric that is *visualized but neither SLI'd nor alerted* reads as
+partially covered, not 1.0. These are **service / project / agent** observability dimensions and
+MUST NOT be applied to pipeline-innate artifacts.
 
 **REQ-OAT-052 (category-aware honest skip).** Coverage reporting MUST be reported per category.
 A declared-but-unproduced type MUST be reported as a skip **with its category and owner** (e.g.
 `capability_index — owned by onboarding, not produced by observability`), not as a generic
 unimplemented type.
 
-### 4.3 Pipeline-innate: generation index, reuse, and serial runs
+### 4.3 Orientation axis
+
+**REQ-OAT-060.** Every artifact type MUST declare an `orientation` (`human` | `system` |
+`bridge`) per the §1.2 table. Orientation is independent of category; generation, validation,
+and reporting MUST treat the two axes separately.
+
+**REQ-OAT-061.** Bridge artifacts (`prometheus_rule`/`alert_rule` alerting, `loki_rule`
+alerting, `notification_policy`) MUST be validated and reported on **both** the system and human
+sub-dimensions (REQ-OAT-050), so the system→human handoff (a valid alert that is nonetheless
+unactionable, or a route with no target) is independently visible.
+
+**REQ-OAT-062 (mixed-orientation files).** When a single artifact file contains rules of
+differing orientation (e.g. a `prometheus_rule` with both recording and alerting rules), the
+artifact's declared orientation is its primary one (bridge), and validation MUST additionally
+score the off-orientation subset (recording rules on the system dimension). The breakdown MUST
+be recorded, not collapsed.
+
+### 4.4 Pipeline-innate: generation index, reuse, and serial runs
 
 **REQ-OAT-030 (`generation_report`).** The pipeline MUST emit a `generation_report` (category 3)
 that indexes *what was generated this run*, grouped by category, with per-artifact
@@ -250,23 +318,43 @@ produced** (retrospective). Coverage = needed vs produced. These MUST NOT be con
 
 ---
 
-## Appendix A — current artifact type → category map
+## Appendix A — current artifact type → (category, orientation) map
 
-| Current type (code) | Category | Notes |
-|---------------------|----------|-------|
-| `alert_rule` / `prometheus_rule` | 1 service | |
-| `dashboard` (Grafana JSON), `dashboard_spec` (YAML intermediate) | 1 service | spec is an intermediate, not a declared type |
-| `slo_definition` | 1 service | |
-| `service_monitor`, `loki_rule`, `notification_policy` | 1 service | technical infra |
-| `runbook` | 1 service (incident response) | borderline; stays with service for now |
-| `portal` (today) | 2 business | → split into `onboarding_portal` + `role_dashboard` |
-| `capability_index` (today, obs generator) | 3 pipeline-innate | → **rename** to `observability_inventory` |
-| `provenance` (`run-provenance.json`) | 3 pipeline-innate | |
-| (new) `generation_report` | 3 pipeline-innate | what-was-generated index |
-| `capability_index` (onboarding, software features) | n/a observability | owned by onboarding/ContextCore; ceded |
+| Current type (code) | Category | Orientation | Notes |
+|---------------------|----------|-------------|-------|
+| `alert_rule` / `prometheus_rule` | 1 service | **bridge** | alerting = bridge; recording-rule subset scored on system (REQ-OAT-062) |
+| `dashboard` (Grafana JSON), `dashboard_spec` (YAML intermediate) | 1 service | **human** | spec is an intermediate, not a declared type |
+| `slo_definition` | 1 service | **system** | SLI + SLO target = machine-consumed |
+| `service_monitor` | 1 service | **system** | metric-collection (scrape) config |
+| `loki_rule` | 1 service | **bridge** | alerting = bridge; recording subset = system |
+| `notification_policy` | 1 service | **bridge** | system routing → human delivery |
+| `runbook` | 1 service (incident response) | **human** | borderline category; stays with service for now |
+| `portal` (today) | 2 business | **human** | → split into `onboarding_portal` + `role_dashboard` |
+| `capability_index` (today, obs generator) | 3 pipeline-innate | **system** | → **rename** to `observability_inventory` |
+| `provenance` (`run-provenance.json`) | 3 pipeline-innate | **system** | |
+| (new) `generation_report` | 3 pipeline-innate | **system** | what-was-generated index |
+| `capability_index` (onboarding, software features) | n/a observability | — | owned by onboarding/ContextCore; ceded |
 
 ## Appendix B — requirement ID index
 
-`REQ-OAT-010..013` naming/disambiguation · `REQ-OAT-020..023` metadata structure ·
-`REQ-OAT-030..032` pipeline-innate / reuse · `REQ-OAT-040..042` category-aware generation ·
-`REQ-OAT-050..052` category-aware validation.
+`REQ-OAT-010..013` naming/disambiguation · `REQ-OAT-020..023` metadata structure (category +
+orientation fields) · `REQ-OAT-030..032` pipeline-innate / reuse · `REQ-OAT-040..042`
+category-aware generation · `REQ-OAT-050..052` category- & orientation-aware validation ·
+`REQ-OAT-060..062` orientation axis.
+
+## Appendix C — the two axes at a glance
+
+```
+                      ORIENTATION  (who consumes / acts)
+                  human            system           bridge
+              ┌───────────────┬───────────────┬───────────────────┐
+   1 service  │ dashboard     │ slo, svc_mon  │ alert, notif_policy│
+   2 business │ portal, role  │ —             │ —                  │
+C  3 pipeline │ —             │ provenance,   │ —                  │
+A             │               │ gen_report,   │                   │
+T             │               │ obs_inventory │                   │
+E  4 project  │ (reserved)    │ (reserved)    │ (reserved)        │
+G  5 agent    │ (reserved)    │ (reserved)    │ (reserved)        │
+              └───────────────┴───────────────┴───────────────────┘
+   (runbook = service × human; recording-rule subset of alert/loki = service × system)
+```
