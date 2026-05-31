@@ -174,11 +174,11 @@ two-axis taxonomy so it routes correctly: the raw metrics/SLI definitions are **
 agent dashboards are **human**-oriented; agent alerts & budget/notification policies are **bridge**.
 This is the data that satisfies the taxonomy's REQ-OAT-024 (declare, don't guess) for agent metrics.
 
-> **Schema contract owned by `REQ-OBS-SHARED-001`** (R1-F1/F7). The exact `category`/`orientation`
-> field names, enum domains (`orientation` ∈ {`system`,`human`,`bridge`}; `category` ∈ the 5-value
-> taxonomy incl. `ai_agent_observability`), and `""` defaults are defined **once** in
-> `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md` and referenced here by ID — not restated — so the
-> cat-4 and cat-5 implementations cannot diverge on spelling or default.
+> **Schema contract owned by `REQ-OBS-SHARED-001`** (R1-F1/F7; R2-F8). The `category`/`orientation`
+> field names, enum domains, and defaults are defined **once** in
+> `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md` and referenced here **by ID only — not restated**
+> (the no-restatement rule is itself REQ-OBS-SHARED-001), so the cat-4 and cat-5 implementations cannot
+> diverge on spelling or default.
 
 ### 3.3 Category-5 artifacts to generate
 
