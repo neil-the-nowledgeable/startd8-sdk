@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.0.0"
+version: "1.2.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -461,20 +461,168 @@ capabilities:
         description: "SkillAgent for Claude Skills via MCP"
     confidence: 0.85
 
+  - capability_id: startd8.project.capdevpipe_install
+    category: integration
+    maturity: stable
+    summary: "Embed & configure the cap-dev-pipe capability pipeline into a project — TUI-guided or headless, symlink/copy, dry-run preview, subprocess verify, idempotent re-run modes"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        CapDevPipeInstaller (TUI-agnostic, get_logger-instrumented) drives a single planned
+        action list: curated 17-entry embed set (golden-fixture-tested), pipeline.env (detect
+        env→ConfigManager→walk-up, block-on-empty, 0600), wrapper, language profiles
+        (relative symlinks / Windows copy-fallback), .gitignore, subprocess `run.sh --list-langs`
+        verify (single-source assertion), and an install manifest as the repair oracle.
+        Re-run modes: reconfigure / upgrade(+prune) / repair / replace-pipeline.env / doctor
+        (source-relocation). Hardening: TOCTOU parent-dir confinement, copy source-trust,
+        pending/complete crash marker, manifest schema versioning. The TUI handler
+        (install_capdevpipe_flow) is a thin caller; also callable headlessly from a config dict.
+      agent: |
+        from startd8.capdevpipe_installer import CapDevPipeInstaller, InstallConfig, InstallMethod
+        CapDevPipeInstaller().execute(InstallConfig(source_path=..., target_root=..., method=InstallMethod.SYMLINK, pipeline_env={...})).
+        Or via the TUI: ImprovedTUI.install_capdevpipe_flow(config_dict) (headless).
+    triggers: ["install cap-dev-pipe", "capdevpipe", "embed pipeline", "project setup", "cap-dev-pipe installer"]
+    evidence:
+      - type: code
+        ref: src/startd8/capdevpipe_installer.py
+        description: "CapDevPipeInstaller: embed/execute/verify/apply_mode + manifest + hardening"
+      - type: code
+        ref: src/startd8/tui_improved.py
+        description: "install_capdevpipe_flow handler + PROJECT SETUP menu (thin caller, standalone)"
+      - type: test
+        ref: tests/unit/capdevpipe/
+        description: "104 tests: golden-fixture embed set, symlink/copy end-to-end, re-run modes, Windows fallback, headless handler, P2 hardening"
+    confidence: 0.9
+
+  # ============================================================================
+  # INTEGRATION LAYER — Manifest validation & observability artifact generation
+  # ============================================================================
+
+  - capability_id: startd8.integration.multilang_manifest_validation
+    category: validate
+    maturity: stable
+    summary: "Multi-language forward-manifest validation across 6 languages with per-parse confidence tiers and severity calibration"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        build_multilang_file_manifest(rel_path, source) dispatches by extension to per-language
+        adapters and returns a FileManifest stamped with parser_tier. Python/C#/Java parse on an
+        authoritative AST tier (violations → error); Go/Node/Vue parse on an advisory regex tier
+        (violations → warning). map_parser_kind() maps native element kinds to the shared
+        ElementKind taxonomy. Never raises: a parser that throws on a supported language degrades
+        to an empty parser_tier=None manifest rather than failing the run. The manifest feeds
+        ForwardManifest.validate_implementation() for cross-language element/import enforcement.
+      agent: |
+        from startd8.languages.manifest_adapter import build_multilang_file_manifest
+        manifest = build_multilang_file_manifest(rel_path, source)  # carries .parser_tier
+        # tiers: authoritative (py/cs/java → error) | advisory (go/node/vue → warning) | None
+    triggers: ["manifest validation", "multilang manifest", "forward manifest", "parser tier", "element validation", "import validation"]
+    evidence:
+      - type: code
+        ref: src/startd8/languages/manifest_adapter.py
+        description: "build_multilang_file_manifest dispatcher + per-language adapters + map_parser_kind"
+      - type: code
+        ref: src/startd8/forward_manifest_validator.py
+        description: "Multi-language element/import violation reporting with severity calibration"
+      - type: test
+        ref: tests/unit/languages/test_multilang_manifest_builder.py
+        description: "Per-language builder + tier-stamping coverage"
+      - type: docs
+        ref: docs/design/MULTILANG_MANIFEST_VALIDATION_REQUIREMENTS.md
+        description: "Requirements v0.3 — FR-1..FR-8, P1-P5 complete (commit 940167a9)"
+    confidence: 0.95
+
+  - capability_id: startd8.integration.forward_manifest_draft_time_injection
+    category: generate
+    maturity: stable
+    summary: "Inject the forward manifest as a P0 spec-prompt section at draft time, with a framework-conventions registry and review-time validation"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        At draft time, spec_builder.py constructs a forward-manifest section (target file_specs:
+        expected elements, imports, interface contracts) and appends it to the prioritized prompt
+        as a P0 section so drafters see the contract before generating. forward_manifest_extractor
+        seeds default specs from a framework-conventions registry for common config files
+        (next.config, tsconfig.json, prisma/schema.prisma, vite/jest/tailwind configs). At review
+        time ForwardManifest.validate_implementation() checks the produced code against the
+        contract and reports violations back into the lead/primary review loop.
+      agent: |
+        # Draft-time: forward-manifest P0 section auto-injected by implementation_engine/spec_builder.py
+        from startd8.forward_manifest import ForwardManifest
+        result = manifest.validate_implementation(target_files)  # review-time contract check
+    triggers: ["forward manifest", "draft time injection", "spec prompt", "framework conventions", "contract validation", "interface contract"]
+    evidence:
+      - type: code
+        ref: src/startd8/forward_manifest.py
+        description: "ForwardManifest schema + validate_implementation() (line 518)"
+      - type: code
+        ref: src/startd8/forward_manifest_extractor.py
+        description: "extract_forward_manifest() + framework-conventions registry for config files"
+      - type: code
+        ref: src/startd8/implementation_engine/spec_builder.py
+        description: "P0 forward-manifest section construction (~line 1113)"
+      - type: docs
+        ref: docs/design/FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS.md
+        description: "Requirements v0.6 — FR-1..FR-9 applied"
+    confidence: 0.9
+
+  - capability_id: startd8.integration.observability_artifact_generation
+    category: generate
+    maturity: beta
+    summary: "Generate Prometheus alerts, Grafana dashboard specs, and SLO definitions from manifest metadata, with derivation traceability and drift --check"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        From onboarding/manifest metadata, generate_observability_artifacts() emits Prometheus
+        alert rules (generate_alert_rules), Grafana dashboard specs (generate_dashboard_spec), and
+        SLO definitions (generate_slo_definitions), each carrying a DerivationTrace, plus an index.
+        check_drift() supports a --check mode against existing artifacts. validators/
+        observability_artifact_checks.py applies structural quality checks (OBS-100..710).
+        KNOWN LIMITATIONS (beta): the generator currently reads only convention_based metrics and
+        ignores manifest_declared domain metrics (artifact_generator.py:255), so semantic relevance
+        is low while structural-only scoring stays high; the declared 8-type artifact contract is
+        not reconciled with the 3 generated types. Gap closure tracked as R1-F1 (manifest_declared
+        consumption), R1-F2 (semantic coverage scoring), R1-F3 (honest-skip reporting), R1-F4
+        (Grafana JSON path), R1-S5 (gridPos autofix).
+      agent: |
+        from startd8.observability.artifact_generator import generate_observability_artifacts, check_drift
+        report = generate_observability_artifacts(metadata, output_dir)  # alerts + dashboards + SLOs + index
+        # CLI: scripts/generate_observability_artifacts.py [--check]
+        # beta: convention-only metrics; manifest_declared domain metrics not yet consumed
+    triggers: ["observability artifacts", "alert rules", "dashboard spec", "slo definition", "drift detection", "onboarding artifacts", "manifest declared metrics"]
+    evidence:
+      - type: code
+        ref: src/startd8/observability/artifact_generator.py
+        description: "generate_observability_artifacts, generate_alert_rules/dashboard_spec/slo_definitions, check_drift"
+      - type: code
+        ref: src/startd8/validators/observability_artifact_checks.py
+        description: "Structural quality checks OBS-100..710"
+      - type: code
+        ref: scripts/generate_observability_artifacts.py
+        description: "CLI entry point with --check drift mode"
+      - type: docs
+        ref: docs/design/UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md
+        description: "Requirements REQ-UOM-001..072 + UNIFIED_OBSERVABILITY_MANIFEST_PLAN.md"
+      - type: docs
+        ref: docs/design/OBSERVABILITY_GENERATION_GAP_ANALYSIS.md
+        description: "Open gaps R1-F1..F4/R1-S5; iteration plan + pipeline fix list track closure"
+    confidence: 0.7
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_capabilities: 15
+  total_capabilities: 20
   by_maturity:
-    stable: 11
+    stable: 16
     beta: 4
   by_category:
     action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
     observe: 3     # session_tracking, cost_tracking, otel_logging
-    validate: 3    # truncation_detection, diagnostics, mock_provider
-    integration: 3 # provider_registry, contextcore, mcp
+    validate: 4    # truncation_detection, diagnostics, mock_provider, multilang_manifest_validation
+    generate: 2    # forward_manifest_draft_time_injection, observability_artifact_generation
+    integration: 4 # provider_registry, contextcore, mcp, capdevpipe_install
     query: 1       # model_catalog
     transform: 1   # code_extraction
 
@@ -483,6 +631,18 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.2.0"
+    date: "2026-05-30"
+    changes:
+      - "Added startd8.integration.multilang_manifest_validation (validate, stable, confidence 0.95) — 6-language forward-manifest validation with authoritative/advisory parser tiers (MULTILANG_MANIFEST_VALIDATION_REQUIREMENTS v0.3, FR-1..FR-8, commit 940167a9)"
+      - "Added startd8.integration.forward_manifest_draft_time_injection (generate, stable, confidence 0.9) — P0 spec-prompt injection + framework-conventions registry + review-time validate_implementation (FORWARD_MANIFEST_DRAFT_TIME_REQUIREMENTS v0.6, FR-1..FR-9)"
+      - "Added startd8.integration.observability_artifact_generation (generate, beta, confidence 0.7) — alert rules / dashboard specs / SLO definitions from manifest metadata + drift --check; known gaps R1-F1..F4/R1-S5 (UNIFIED_OBSERVABILITY_MANIFEST + GAP_ANALYSIS)"
+      - "20 capabilities: 16 stable, 4 beta; new category generate (2); validate 3→4"
+  - version: "1.1.0"
+    date: "2026-05-30"
+    changes:
+      - "Added startd8.project.capdevpipe_install (integration, stable, confidence 0.9) — TUI-guided + headless cap-dev-pipe installer (104 tests, P1+P2 shipped to main)"
+      - "16 capabilities: 12 stable, 4 beta; integration 3→4"
   - version: "1.0.0"
     date: "2026-02-12"
     changes:
