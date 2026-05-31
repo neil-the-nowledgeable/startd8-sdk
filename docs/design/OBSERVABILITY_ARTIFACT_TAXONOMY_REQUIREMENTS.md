@@ -1,8 +1,9 @@
 # Observability Artifact Taxonomy — Requirements
 
 **Date:** 2026-05-31
-**Status:** Draft v0.2 — requirements only (no code changes in this pass). Two-axis model:
-artifact = (category = *what is observed*, orientation = *who consumes / acts on it*).
+**Status:** Draft v0.3 — post-planning self-reflective update (requirements only; no code this
+pass). Two-axis model: artifact = (category = *what is observed*, orientation = *who consumes /
+acts on it*).
 **Lineage:** Consolidates and re-frames `OBSERVABILITY_GENERATION_GAP_ANALYSIS.md`,
 `OBSERVABILITY_GENERATION_FOLLOWUP_RUN007.md`, `UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md`,
 and the pipeline-innate concerns in `cap-dev-pipe/design/pipeline-requirements.md` (REQ-CDP-*).
@@ -11,7 +12,39 @@ and the pipeline-innate concerns in `cap-dev-pipe/design/pipeline-requirements.m
 
 ---
 
-## 0. Motivation
+## 0. Planning Insights (self-reflective update, v0.2 → v0.3)
+
+> A planning pass read the three target modules (`artifact_generator.py` ~2400 lines,
+> `observability_artifact_checks.py` ~1460 lines, the CLI) to map each requirement to code and
+> to surface pre-existing accidental complexity. The headline finding: **this taxonomy is a net
+> simplification.** Both axes (category, orientation), once carried as first-class fields, *dissolve*
+> five separate accidental-complexity smells. The implementation removes more code-paths than it
+> adds. Key corrections below; the opportunistic cleanups are catalogued in Appendix D.
+
+| v0.2 assumption | Planning discovery | Impact on requirements |
+|-----------------|--------------------|------------------------|
+| REQ-OAT-023 (add category+orientation) is a heavy "L" touching ~40 call sites | Nearly all `ArtifactResult`s flow through `_generate_one` + ~5 helpers; with two lookup tables (`_ARTIFACT_TYPE_TO_CATEGORY` already exists; add `…_ORIENTATION`) assignment is centralized, not 40 hand-edits | 023 reframed as the **keystone** (M, not L); it *unblocks* 020/040/042/051/052 and dissolves the role-bucketing + pseudo-service smells |
+| REQ-OAT-040 metric routing is a generation concern | As written it forces brittle name-pattern heuristics (`if "startd8_" in name`) — **new** accidental complexity | **NEW REQ-OAT-024 + revised 040: declare, don't guess** — metadata carries each metric's category/orientation; heuristics are fallback only |
+| `_is_non_service_entry` (7 heuristics) is just existing cruft | Same "guessing what metadata should declare" anti-pattern as 040 | Folded into REQ-OAT-024 (structural classification in metadata collapses 7 heuristics → 1 check) |
+| REQ-OAT-031 (auto-satisfy) is one requirement for this module | The generator's only job is to **emit** `generation_report` + checksums; the **reuse/auto-satisfy** logic lives in plan-ingestion (cap-dev-pipe), out of this module | 031 **split**: producer (emit, in scope) vs consumer (auto-satisfy, cross-referenced, out of scope) |
+| REQ-OAT-013 "migrate the Finding-2 conformant output" | The run-007 Finding-2 fix made `capability_index` *masquerade* as the software-feature schema — the **wrong** direction; it must be reverted, not migrated | 013 reframed as **revert-the-masquerade** → inventory schema |
+| REQ-OAT-050 (orientation-aware validation) is "L" | The structural validators are ~90% boilerplate and already near-ready (alerts already check service-label/summary); adding an `orientation` param + a bridge-actionability check is small **once** the 3 validators share a check-runner | 050 is **S–M**; gated on an enabling refactor (unify the 3 boilerplate validators) that itself removes complexity |
+| Extensibility was implicit | Five parallel dispatch mechanisms + two parallel scoring paths mean "add an artifact type" currently means "add control flow" | **NEW REQ-OAT-070 invariant**: adding a type MUST be declarative table entries (type→category/orientation/generator/validator), never new dispatch/validation branches |
+
+**Resolved questions:**
+- **Per-service vs per-project dispatch (was ambiguous).** Category 1 is per-service; categories 2
+  & 3 are per-project (single call, may read all services). Categories 4 & 5 reserved. This is
+  now stated in REQ-OAT-042.
+- **Where does validator work live?** REQ-OAT-050/061/062 are `observability_artifact_checks.py`
+  changes; REQ-OAT-023/040/042/051 are `artifact_generator.py`; auto-satisfy consumer is
+  plan-ingestion. Scope boundaries are now explicit per requirement.
+
+*The essential complexity is two declarative axes + two lookup tables + one dispatch table + one
+validation runner. Everything else is accidental and collapses (Appendix D).*
+
+---
+
+## 0.1 Motivation
 
 ContextCore generation today treats every produced artifact as one **flat list**:
 `onboarding-metadata.json.artifact_types` is a flat enumeration, the generator runs all
@@ -147,9 +180,13 @@ produced MUST be named `observability_inventory` and emitted to
 inventory (services, artifact counts/paths by category), explicitly **not** the
 `capability_index` schema. (This reverses run-007 Finding 2 Option A.)
 
-**REQ-OAT-013.** The Finding-2 conformant-`capability_index` output added on
-`feat/observability-followup-run007` MUST be migrated to `observability_inventory` per
-REQ-OAT-012 in the code-alignment pass.
+**REQ-OAT-013 (revert the masquerade).** The run-007 Finding-2 change made the obs generator's
+`capability_index` *conform to the software-feature schema* (`manifest_id`/`version`/`capabilities[]`)
+— i.e. it made an observability inventory **masquerade** as a capability manifest. Planning
+confirmed this was the wrong direction. The code-alignment pass MUST **revert the masquerade**:
+reshape the output to a category-3 **inventory** schema (services + per-category artifact
+list/counts/paths) and rename to `observability_inventory` (REQ-OAT-012). It is not a migration
+of a correct artifact; it is the removal of a wrong one.
 
 ---
 
@@ -183,10 +220,31 @@ from `artifact_categories` (union of all categories' types) so existing readers 
 during migration. Producers SHOULD emit both during the transition; the nested form is
 authoritative.
 
-**REQ-OAT-023.** Every emitted artifact record (`ArtifactResult`, and entries in the
+**REQ-OAT-023 (keystone).** Every emitted artifact record (`ArtifactResult`, and entries in the
 generation manifest / `generation_report`) MUST carry an explicit `category` field (five-category
 enum) **and** an `orientation` field (`human` | `system` | `bridge`). The two are independent;
-both are required.
+both are required. These fields MUST be assigned from two declarative lookup tables
+(`_ARTIFACT_TYPE_TO_CATEGORY` — already exists; `_ARTIFACT_TYPE_TO_ORIENTATION` — new), populated
+centrally (in `_generate_one` and the handful of non-`_generate_one` construction sites), **not**
+hand-set at each call site. This requirement is the **keystone**: it unblocks REQ-OAT-020, 040,
+042, 051, 052, and is the prerequisite that lets the accidental-complexity cleanups in Appendix D
+(D-2 pseudo-service, D-4 role-bucketing) collapse declaratively.
+
+**REQ-OAT-024 (declare, don't guess — structural classification in metadata).** The onboarding
+metadata MUST carry the structural facts the generator currently reverse-engineers via heuristics,
+so the generator reads them instead of guessing:
+- **Entry kind.** Each `instrumentation_hints` entry MUST declare whether it is a real service
+  (e.g. `kind: service`). This collapses the seven-heuristic `_is_non_service_entry` filter
+  (Appendix D-7) into a single check.
+- **Metric category & orientation.** Each declared metric (`manifest_declared[]`, and ideally
+  `convention_based[]`) MUST carry its `category` (service / project / agent) and MAY carry
+  `orientation`, so metric routing (REQ-OAT-040) is a lookup, not a name-pattern heuristic.
+
+Name-pattern heuristics MAY remain only as a **fallback** when the metadata omits the
+classification, and when used MUST be recorded in the generation report as an *inferred* (not
+declared) classification, so the gap is visible. This requirement exists because planning showed
+REQ-OAT-040, implemented naively, would *add* accidental complexity (brittle metric-name lists);
+declaring the facts upstream removes it.
 
 ---
 
@@ -204,10 +262,12 @@ domain metrics MUST route as:
 | `contextcore_task_progress`, `contextcore_task_status`, `contextcore_install_completeness_percent` | 4 — Project Observability |
 | `http.server.*` / convention RED metrics | 1 — Service Observability |
 
-Until categories 4 & 5 have generators (reserved), these metrics MAY remain on a clearly-labeled
-"domain metrics" surface, but the generation report MUST record that they are category-4/5
-signals awaiting a category-4/5 home (REQ-OAT-041), so the gap is visible rather than silently
-mixed into service observability.
+The routing key MUST come from the metric's **declared** category (REQ-OAT-024), not a hardcoded
+metric-name list; a name-pattern heuristic is a recorded fallback only. Until categories 4 & 5
+have generators (reserved), these metrics MAY remain on a clearly-labeled "domain metrics"
+surface, but the generation report MUST record that they are category-4/5 signals awaiting a
+category-4/5 home (REQ-OAT-041), so the gap is visible rather than silently mixed into service
+observability.
 
 **REQ-OAT-041 (reserved categories).** Categories 4 and 5 MUST be defined and namespaced now,
 with no generator required. The taxonomy and metadata MUST accept `project_observability` and
@@ -230,6 +290,14 @@ artifacts_generated`), using validators appropriate to its `(category, orientati
 - **bridge** → **both** halves: the rule is valid (system) **and** actionable (human) — severity
   set, summary/annotations present, runbook/dashboard links resolvable, a notification route
   exists. A bridge artifact that passes only one half MUST score as partial, not complete.
+
+> **Feasibility (planning insight).** This is **S–M**, not L: the structural validators
+> (`validate_dashboard/alerts/slo`) already perform most system checks and some human checks
+> (alerts already verify the `service` label and `summary` annotation). The new work is an
+> `orientation` parameter + a small bridge **actionability** check (runbook/dashboard link, a
+> non-null notification receiver). It SHOULD be preceded by the enabling refactor in Appendix D-9
+> (extract a shared check-runner from the three ~90%-boilerplate structural validators), which
+> *removes* complexity and makes the orientation branch trivial.
 
 **REQ-OAT-051 (orientation-based metric coverage).** Per-metric coverage MUST be tracked across
 the orientation axis, generalizing the run-007 dashboarded/alerted split:
@@ -265,7 +333,19 @@ artifact's declared orientation is its primary one (bridge), and validation MUST
 score the off-orientation subset (recording rules on the system dimension). The breakdown MUST
 be recorded, not collapsed.
 
-### 4.4 Pipeline-innate: generation index, reuse, and serial runs
+### 4.4 Extensibility invariant (anti-accidental-complexity)
+
+**REQ-OAT-070 (extension by table, not by control flow).** Adding a new artifact type MUST be
+expressible as **declarative table entries** — `type → category`, `type → orientation`,
+`type → generator`, `type → validator/contract`, `type → output_path` — and MUST NOT require new
+branches in the orchestrator's dispatch or the validator's scoring. This invariant is the
+permanent guard against the accidental complexity Appendix D removes (five dispatch mechanisms,
+two scoring paths): once dispatch and validation are table-driven, the cost of a new type is one
+row, and the taxonomy cannot silently re-accrete special-case control flow. Any change that would
+add a per-type `if/elif` branch to orchestration or scoring is a violation of this requirement and
+MUST instead extend the relevant table.
+
+### 4.5 Pipeline-innate: generation index, reuse, and serial runs
 
 **REQ-OAT-030 (`generation_report`).** The pipeline MUST emit a `generation_report` (category 3)
 that indexes *what was generated this run*, grouped by category, with per-artifact
@@ -273,7 +353,19 @@ that indexes *what was generated this run*, grouped by category, with per-artifa
 This is the artifact the user described as "a capability index that indexes what has been
 generated."
 
-**REQ-OAT-031 (project-update / serial-run reuse — auto-satisfy).** When a pipeline run targets
+> **Scope split (planning insight).** REQ-OAT-031 has a **producer** half and a **consumer** half.
+> The producer half — emit `generation_report` with per-artifact source checksums — lives in this
+> SDK module (`generate_observability_artifacts` + `_write_index`) and is **in scope** for the
+> code-alignment pass. The consumer half — the auto-satisfy reuse logic below — lives in
+> **plan-ingestion (cap-dev-pipe)** and is **out of scope** for this SDK module; it is specified
+> here as a cross-referenced contract the producer must satisfy. The checksums exist solely for
+> the consumer; this module has no use for them itself.
+
+**REQ-OAT-031a (producer — in scope).** `generation_report` MUST record, per artifact, a
+`source_checksum` derived from the inputs that determined it (onboarding metadata + manifest),
+so a later run can detect staleness without re-deriving the artifact.
+
+**REQ-OAT-031b (consumer — plan-ingestion, cross-referenced).** When a pipeline run targets
 a project that was previously generated, plan-ingestion MUST load the prior
 `generation_report` / `run-provenance.json` artifact inventory and, before requesting
 generation:
@@ -358,3 +450,37 @@ G  5 agent    │ (reserved)    │ (reserved)    │ (reserved)        │
               └───────────────┴───────────────┴───────────────────┘
    (runbook = service × human; recording-rule subset of alert/loki = service × system)
 ```
+
+## Appendix D — pre-existing accidental complexity to eliminate (opportunistic)
+
+The planning pass catalogued accidental complexity that has accrued across the Gap 1–5 / Closure
+3B / run-007 work. The taxonomy code-alignment pass SHOULD remove these opportunistically — most
+*collapse for free* once the two axes (REQ-OAT-023) are first-class. "Adds/removes" is relative
+to the codebase, not the requirements. Effort S/M/L.
+
+| # | Smell | Location (artifact_generator.py unless noted) | Why accidental | Distillation | Effort |
+|---|-------|-----------------------------------------------|----------------|--------------|--------|
+| D-1 | **Five parallel dispatch mechanisms** (triplet loop, extended dict loop, dashboard-JSON convert, portal, capability_index) all produce `ArtifactResult` yet each has bespoke control flow | orchestrator `generate_observability_artifacts` | uniform problem, five shapes; adding a type means picking a mechanism | one **category-aware dispatch table** (REQ-OAT-042/070) | M |
+| D-2 | **capability_index as project pseudo-service** — emitted with `service_id=project_id`, so the quality report's `services` dict gets a fake "service" with a spurious composite | `generate_capability_index`; `_write_quality_report` | shortcut to reuse the per-service loop; semantic lie | bucket category-3 artifacts in a separate `pipeline`/`project` report section (REQ-OAT-052); collapses once `category` exists | S |
+| D-3 | **`dashboard_spec` vestigial intermediate** — the YAML spec is persisted *and scored* as an end artifact though it only feeds the Grafana-JSON conversion | `generate_dashboard_spec`, `_convert_dashboards_to_grafana_json`, `_CAPABILITY_INDEX_EXCLUDE` | the JSON was added later (Gap 4); the spec was never demoted | mark `status="intermediate"` (skip write/scoring) or inline it; declare only `dashboard` (JSON) | M |
+| D-4 | **Role-bucketing by artifact-type name** (`if type in ("dashboard_spec","dashboard")` → dashboarded; `=="alert_rule"` → alerted) | `_write_quality_report` | conflates *type* with *orientation*; breaks when types multiply | declarative `group_by(orientation)` once `orientation` exists (REQ-OAT-051) | S |
+| D-5 | **Two parallel scoring paths** — `_repair_and_validate` (triplet, rich validators, if/elif) vs `_score_extended_artifacts` (generic substring, separate pass) | both functions | triplet existed first; extended bolted on for run-007 Finding 1 | one `(category,orientation)`-aware scoring dispatcher (REQ-OAT-050) | M |
+| D-6 | **Dead/inert code**: `compute_service_composite` exported in `__all__` but never called; `repair_gridpos` call is a no-op since gridPos is stamped at generation; dangling `compute_service_composite` comment | `observability_artifact_checks.py:645,36`; `artifact_generator.py` gridpos path | superseded by later fixes, never removed | delete | S |
+| D-7 | **`_is_non_service_entry` seven heuristics** (req-id, run-id, project-name, dir-names, suffixes, multi-word…) | `_is_non_service_entry` | metadata doesn't declare entry kind, so the code guesses | one check on declared `kind` (REQ-OAT-024) | S |
+| D-8 | **Duplicated magic weights** `_STRUCTURAL_WEIGHT/_COVERAGE_WEIGHT` in the validator **and** `_COMPOSITE_*_WEIGHT` in the generator; hardcoded default thresholds | `observability_artifact_checks.py:641`, `artifact_generator.py:~149,~2146` | copy-paste; can drift | one shared constants block | S |
+| D-9 | **Three structural validators are ~90% boilerplate** (same parse / count / issues / repair pattern) across `validate_dashboard/alerts/slo`; 5 near-identical result dataclasses | `observability_artifact_checks.py` | grew one-at-a-time | extract a shared **check-runner** + base result; *enables* REQ-OAT-050 cheaply | M |
+| D-10 | **CLI `--portal-persona=all` special branch** bifurcates the CLI and re-loads metadata (`load_onboarding_metadata`/`extract_service_hints`/`load_business_context` a second time) | `scripts/generate_observability_artifacts.py` | special case leaked into the CLI | move the persona fan-out inside the generator; CLI stays flat | S |
+| D-11 | **`TODO-when-absent` domain-alert stub machinery** (`_domain_alert_todo_block`) becomes obsolete once domain metrics route to categories 4/5 (REQ-OAT-040) | `_domain_alert_todo_block`, alert assembly | workaround for "no home for domain metrics" | remove when metric routing lands | M |
+
+**Net:** D-2/D-4/D-7 collapse *for free* with the REQ-OAT-023 keystone + REQ-OAT-024 metadata.
+D-6/D-8/D-10 are standalone quick wins (do anytime). D-9 is an enabling refactor that *lowers* the
+cost of REQ-OAT-050. D-1/D-5 are the two structural unifications that REQ-OAT-042/050/070 mandate.
+The code-alignment pass should net **remove** lines, not add them.
+
+---
+
+*v0.3 — Post-planning self-reflective update. Reframed 1 keystone (023), added 2 requirements
+(024 declare-don't-guess, 070 extension-by-table), split 1 (031 → producer/consumer), corrected 2
+(013 revert-not-migrate, 050 effort S–M), resolved 2 questions, and catalogued 11 pre-existing
+accidental-complexity items (Appendix D) the implementation should remove. Net finding: the
+taxonomy is a simplification — implementation removes more complexity than it adds.*
