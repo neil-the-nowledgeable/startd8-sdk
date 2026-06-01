@@ -125,6 +125,38 @@ class ContractViolationDiagnostic(Diagnostic):
         self.category = "contract_violation"
 
 
+@dataclass
+class MisnamedFieldDiagnostic(Diagnostic):
+    """An invented Prisma field name flagged by ``scan_prisma_usage`` (FR-4).
+
+    Category ``content_contract``. Carries the invented ``field`` plus the
+    structured ``model`` it was used on (sourced from the additive
+    ``PrismaUsageViolation.model`` field) so the rename step can resolve the
+    invented name against that model's real field set.
+    """
+
+    field: str = ""
+    model: str = ""
+    call_site_hint: str = ""
+
+    def __post_init__(self) -> None:
+        self.category = "content_contract"
+
+
+@dataclass
+class WrongImportPathDiagnostic(Diagnostic):
+    """An invented/unresolvable module-import specifier (FR-4).
+
+    Category ``content_contract``. Carries the invented ``specifier`` so the
+    rename step can map it to its canonical on-disk path.
+    """
+
+    specifier: str = ""
+
+    def __post_init__(self) -> None:
+        self.category = "content_contract"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step & pipeline results
 # ═══════════════════════════════════════════════════════════════════════════

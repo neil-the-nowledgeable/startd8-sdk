@@ -64,7 +64,7 @@ class RepairConfig:
     """
 
     repair_enabled: bool = True
-    repairable_categories: frozenset[str] = frozenset({"syntax", "import", "lint", "semantic", "security", "convention"})
+    repairable_categories: frozenset[str] = frozenset({"syntax", "import", "lint", "semantic", "security", "convention", "content_contract"})
     pre_checkpoint_repair: bool = False
     staging_root: Optional[Path] = None
     circuit_breaker_threshold: int = 3
