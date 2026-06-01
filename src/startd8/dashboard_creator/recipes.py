@@ -120,6 +120,39 @@ _SEED: List[PanelRecipe] = [
         summary="Full-width markdown banner/header.",
         options={"mode": "markdown"},
     ),
+    # Phase 5 panel-type recipes ------------------------------------------
+    PanelRecipe(
+        id="canvas.display", applies_to=[PanelType.CANVAS],
+        summary="Read-only display canvas (kiosk): no inline editing, no advanced types.",
+        options={"inlineEditing": False, "showAdvancedTypes": False, "panZoom": False},
+    ),
+    PanelRecipe(
+        id="canvas.editable", applies_to=[PanelType.CANVAS],
+        summary="Authoring canvas: inline editing, advanced element types, pan/zoom.",
+        options={"inlineEditing": True, "showAdvancedTypes": True, "panZoom": True},
+    ),
+    PanelRecipe(
+        id="canvas.metric_card", applies_to=[PanelType.CANVAS],
+        summary="Starter scaffold: a centered metric-value card — set the element's "
+                "config.text.field to your metric.",
+        options={"root": {
+            "type": "frame",
+            "placement": {"top": 0, "left": 0, "width": 100, "height": 100},
+            "elements": [{
+                "type": "metric-value",
+                "name": "value",
+                "placement": {"top": 20, "left": 10, "width": 80, "height": 50},
+                "constraint": {"horizontal": "left", "vertical": "top"},
+                "config": {
+                    "align": "center", "valign": "middle", "size": 36,
+                    "text": {"mode": "field", "field": ""},
+                    "color": {"fixed": "#73BF69"},
+                },
+                "background": {"color": {"fixed": "transparent"}},
+                "border": {"color": {"fixed": "dark-green"}, "width": 1},
+            }],
+        }},
+    ),
 ]
 
 # RCP-004: refuse to register a recipe for a panel type with no constructor.

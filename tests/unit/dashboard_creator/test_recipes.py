@@ -37,6 +37,7 @@ class TestRegistry:
             "bargauge.basic", "piechart.composition", "timeseries.observability",
             "timeseries.stacked", "table.aggregation", "table.ranking",
             "barchart.ranking", "text.banner",
+            "canvas.display", "canvas.editable", "canvas.metric_card",
         }
         assert set(RECIPE_REGISTRY) == expected
 
