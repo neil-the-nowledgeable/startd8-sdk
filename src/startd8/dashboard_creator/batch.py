@@ -31,6 +31,7 @@ class DashboardReport:
     error: Optional[str] = None
     json_path: Optional[str] = None
     duration_ms: int = 0
+    lint_warnings: List[str] = field(default_factory=list)  # AES-061: surfaced per dashboard
 
 
 @dataclass
@@ -155,6 +156,7 @@ def run_batch(
                     success=True,
                     json_path=result.output.get("json_path"),
                     duration_ms=duration_ms,
+                    lint_warnings=result.output.get("lint_warnings", []),
                 ))
                 report.succeeded += 1
             else:
@@ -193,6 +195,8 @@ def _persist_report(report: BatchReport, report_dir: Optional[Path]) -> Optional
             "total": report.total,
             "succeeded": report.succeeded,
             "failed": report.failed,
+            # AES-061: batch-level rollup of lint warnings across all dashboards.
+            "lint_warning_count": sum(len(d.lint_warnings) for d in report.dashboards),
             "dashboards": [
                 {
                     "uid": d.uid,
@@ -202,6 +206,7 @@ def _persist_report(report: BatchReport, report_dir: Optional[Path]) -> Optional
                     "duration_ms": d.duration_ms,
                     **({"output_path": d.json_path} if d.json_path else {}),
                     **({"error": d.error} if d.error else {}),
+                    **({"lint_warnings": d.lint_warnings} if d.lint_warnings else {}),
                 }
                 for d in report.dashboards
             ],

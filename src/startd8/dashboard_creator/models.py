@@ -247,3 +247,16 @@ class DashboardSpec(BaseModel):
     time_from: Optional[str] = None  # Hydrated from config (DC-005)
     time_to: Optional[str] = None  # Hydrated from config (DC-005)
     config_overrides: Dict[str, Any] = Field(default_factory=dict)
+    # Phase 3 layout/intent (AES-050/051)
+    density: str = "operational"  # "operational" (dense) | "executive" (larger, more whitespace)
+    objective: Optional[str] = None  # One-line dashboard objective; renders a banner header
+    banner: bool = False  # Force a banner header even without an objective
+
+    @field_validator("density")
+    @classmethod
+    def validate_density(cls, v: str) -> str:
+        if v not in {"operational", "executive"}:
+            raise ValueError(
+                f"density must be 'operational' or 'executive', got '{v}'"
+            )
+        return v

@@ -75,7 +75,7 @@ def auto_group_rows(panels: List[PanelSpec]) -> List[PanelSpec]:
     return result
 
 
-def auto_layout(panels: List[PanelSpec]) -> List[PanelSpec]:
+def auto_layout(panels: List[PanelSpec], density: str = "operational") -> List[PanelSpec]:
     """DC-109: Calculate ``gridPos`` for panels without explicit positioning.
 
     Layout rules:
@@ -114,6 +114,9 @@ def auto_layout(panels: List[PanelSpec]) -> List[PanelSpec]:
             continue
 
         w, h = _PANEL_SIZE.get(panel.type, (_DEFAULT_W, _DEFAULT_H))
+        if density == "executive":  # AES-050: larger panels, fewer per row, more whitespace
+            w = min(_GRID_COLS, round(w * 1.5))
+            h = round(h * 1.3)
 
         # Wrap to next row if the panel doesn't fit, advancing by the row's height
         if cursor_x + w > _GRID_COLS:
@@ -138,12 +141,22 @@ def auto_layout(panels: List[PanelSpec]) -> List[PanelSpec]:
 
 
 def apply_layout(spec: DashboardSpec) -> DashboardSpec:
-    """Convenience: apply row grouping then auto-layout to a spec.
+    """Convenience: prepend an optional banner header, group rows, then auto-layout.
 
     Returns a new ``DashboardSpec`` with updated panels.
     """
-    panels = auto_group_rows(spec.panels)
-    panels = auto_layout(panels)
+    panels = list(spec.panels)
+    # AES-051: a full-width text banner header carrying the objective/title.
+    if spec.objective or spec.banner:
+        banner = PanelSpec(
+            type=PanelType.TEXT,
+            title=spec.title,
+            recipe="text.banner",
+            options={"content": spec.objective or f"# {spec.title}", "mode": "markdown"},
+        )
+        panels = [banner] + panels
+    panels = auto_group_rows(panels)
+    panels = auto_layout(panels, density=spec.density)
     return spec.model_copy(update={"panels": panels})
 
 
