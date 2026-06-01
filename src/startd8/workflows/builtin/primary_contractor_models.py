@@ -16,7 +16,6 @@ from startd8.model_catalog import Models
 
 
 __all__ = [
-    "DrafterChoice",
     "WorkflowPhase",
     "PrimaryContractorConfig",
     "LeadContractorConfig",  # Backward-compat alias
@@ -33,21 +32,11 @@ __all__ = [
 ]
 
 
-class DrafterChoice(str, Enum):
-    """Available drafter models (cheaper options for drafting work)."""
-    # OpenAI GPT-4.1 family (1M context, April 2025)
-    GPT_4_1_MINI = "openai:gpt-4.1-mini"       # $0.40/$1.60 per 1M tokens - fast, cost-efficient
-    GPT_4_1_NANO = "openai:gpt-4.1-nano"       # $0.10/$0.40 per 1M tokens - ultra-fast, lowest cost
-    # OpenAI GPT-4o family (legacy but still good)
-    GPT_4O_MINI = "openai:gpt-4o-mini"         # $0.15/$0.60 per 1M tokens
-    # Google Gemini 2.5 family (recommended)
-    GEMINI_2_5_FLASH = "gemini:gemini-2.5-flash"         # $0.15/$0.60 per 1M tokens
-    GEMINI_2_5_FLASH_LITE = "gemini:gemini-2.5-flash-lite"  # $0.075/$0.30 per 1M tokens
-    # Google Gemini 3.x family (latest)
-    GEMINI_3_FLASH_PREVIEW = "gemini:gemini-3-flash-preview"  # $0.10/$0.40 per 1M tokens
-    # Google Gemini 2.0 family (retiring March 2026)
-    GEMINI_2_0_FLASH = "gemini:gemini-2.0-flash"          # $0.10/$0.40 per 1M tokens
-    GEMINI_2_0_FLASH_LITE = "gemini:gemini-2.0-flash-lite"  # $0.075/$0.30 per 1M tokens
+# NOTE (REQ-PCMR-110): the former ``DrafterChoice`` enum was a parallel,
+# hand-maintained model list that duplicated (and drifted from) the central
+# ``model_catalog``. It had no consumers and was removed. Choose a drafter via
+# ``Models.PRIMARY_CONTRACTOR_DRAFTER`` or ``get_latest_model(provider, "mini")``;
+# enumerate cheap options with ``list_models_by_tier("mini")`` / ``("fast")``.
 
 
 class WorkflowPhase(str, Enum):
@@ -84,7 +73,7 @@ class PrimaryContractorConfig:
     """
     task_description: str
     context: Optional[Dict[str, Any]] = None
-    lead_agent: str = Models.PRIMARY_CONTRACTOR_LEAD  # Claude Sonnet (latest)
+    lead_agent: str = Models.PRIMARY_CONTRACTOR_LEAD  # Claude Opus 4.8 (flagship)
     drafter_agent: str = Models.PRIMARY_CONTRACTOR_DRAFTER  # Gemini Flash Lite (cheapest)
     max_iterations: int = 3
     pass_threshold: int = 80

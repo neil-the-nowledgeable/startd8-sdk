@@ -128,8 +128,13 @@ class Models:
     # Recommended Defaults by Use Case
     # ==========================================================================
 
-    # Primary Contractor pattern: balanced lead + cheap drafter
-    PRIMARY_CONTRACTOR_LEAD = CLAUDE_SONNET_LATEST
+    # Primary Contractor pattern: flagship lead/reviewer + cheap drafter.
+    # REQ-PCMR-100: lead/reviewer run on the Anthropic flagship (Opus 4.8) for
+    # max spec/review/integration quality; the reviewer role defaults to the
+    # lead (prime_contractor.py), so it inherits this with no separate edit.
+    # REQ-PCMR-101: drafter stays the cheapest stable tier (Gemini Flash Lite).
+    # To opt down to the balanced lead, set lead_agent=Models.CLAUDE_SONNET_LATEST.
+    PRIMARY_CONTRACTOR_LEAD = CLAUDE_OPUS_LATEST
     PRIMARY_CONTRACTOR_DRAFTER = GEMINI_FLASH_LITE
 
     # Code review: needs good reasoning

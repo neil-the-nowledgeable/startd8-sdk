@@ -387,7 +387,8 @@ class ContextCoreWorkflowAdapter:
             task_title="Implement rate limiter",
             workflow_config={
                 "task_description": "Implement rate limiter using token bucket",
-                "drafter_agent": "openai:gpt-4o-mini",
+                # Optional — omit to use Models.PRIMARY_CONTRACTOR_DRAFTER (catalog default).
+                "drafter_agent": "gemini:gemini-2.5-flash-lite",
             },
         )
     """
