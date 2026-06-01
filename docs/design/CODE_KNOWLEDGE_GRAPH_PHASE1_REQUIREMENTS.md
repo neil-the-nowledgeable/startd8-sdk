@@ -268,10 +268,15 @@ emits `skipped_not_materialized` (explicit unverified record) — **never silent
 
 - **Node tools (subprocess):** `@sourcegraph/scip-typescript` (verified v0.4.0). Documented as a
   prerequisite for the SCIP-backed checks, not a Python import.
-- **Python:** `protobuf` is **already present** in the env; **vendor a pinned `scip_pb2.py`**
-  (record the source proto version) so there is **no protoc/grpcio-tools runtime dependency** and
-  **no new pip extra is required** for Phase 1. The only new prerequisite is the Node
-  `scip-typescript` tool (subprocess). Core suite must run with the Node tool absent (REQ-CKG-230).
+- **Python:** **vendor a pinned `scip_pb2.py`** (generated from `scip.proto`; no protoc/grpcio-tools
+  at *runtime* — grpcio-tools is dev-time-only for regeneration). The reader parses it via
+  **`protobuf`**, which is **NOT a declared startd8 dependency** — correction found during Inc-0: v2.2
+  wrongly assumed it was present (it was only pulled in transitively by grpcio-tools). Phase 1 therefore
+  adds **one optional extra**: `[code-observability] = ["protobuf>=4.21.0"]`. The SCIP **reader**
+  requires that extra; the package stays **import-safe without it** (guarded import — `parse_symbol`
+  and `scip_runner` work; the reader raises a clear "install the extra" error only when used). The Node
+  `scip-typescript` tool is a separate (non-pip) prerequisite. Core suite + the 5 toolchain-free
+  signatures run with both the extra and the Node tool absent (REQ-CKG-230/710).
 
 ## 7. Verification strategy
 

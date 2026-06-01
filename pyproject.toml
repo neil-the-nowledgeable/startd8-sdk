@@ -48,6 +48,10 @@ all = [
 java = ["javalang>=0.13.0"]
 csharp = ["tree-sitter>=0.24.0", "tree-sitter-c-sharp>=0.23.0"]
 validation = ["jsonschema>=4.0.0"]
+# CKG Phase 1 (REQ-CKG-710): the SCIP reader parses the vendored scip_pb2 via protobuf.
+# Optional — core + the toolchain-free cross-file signatures run without it; the Node
+# `scip-typescript` tool is a separate (non-pip) prerequisite, see docs.
+code-observability = ["protobuf>=4.21.0"]
 otel = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
