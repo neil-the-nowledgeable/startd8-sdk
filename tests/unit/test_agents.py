@@ -7,6 +7,7 @@ import asyncio
 from pathlib import Path
 import tempfile
 from unittest.mock import Mock, MagicMock, patch
+from types import SimpleNamespace
 
 from startd8.agents import MockAgent, BaseAgent
 from startd8.models import TokenUsage, GenerateResult
@@ -1147,4 +1148,107 @@ class TestSystemPromptSupport:
         result = agent.generate("Hello")
         assert isinstance(result, GenerateResult)
         assert isinstance(result.text, str)
+
+
+class TestOpenAINextGenParams:
+    """gpt-5 family / o-series require max_completion_tokens and default temperature."""
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gpt-5.5", True),
+            ("gpt-5.4-mini", True),
+            ("gpt-5.4-nano", True),
+            ("gpt-5", True),
+            ("o1", True),
+            ("o3-mini", True),
+            ("o4-mini", True),
+            ("gpt-4o", False),
+            ("gpt-4o-mini", False),
+            ("gpt-4.1", False),
+            ("gpt-4-turbo", False),
+            ("gpt-3.5-turbo", False),
+        ],
+    )
+    def test_requires_max_completion_tokens(self, model, expected):
+        from startd8.agents.base import requires_max_completion_tokens
+        assert requires_max_completion_tokens(model) is expected
+
+    async def _capture_kwargs(self, model):
+        """Build an OpenAIAgent with a mocked client and return the create() kwargs."""
+        from startd8.agents.openai import GPT4Agent, _OPENAI_AVAILABLE
+        if not _OPENAI_AVAILABLE:
+            pytest.skip("openai package not installed")
+
+        with patch('startd8.agents.openai.OpenAI'), \
+             patch('startd8.agents.openai.AsyncOpenAI'):
+            agent = GPT4Agent(model=model, api_key="test-key")
+
+        captured = {}
+
+        async def fake_create(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="ok"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2, total_tokens=7),
+            )
+
+        agent.async_client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create))
+        )
+        await agent.agenerate("hello", temperature=0.7)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_gpt5_uses_max_completion_tokens_and_drops_temperature(self):
+        captured = await self._capture_kwargs("gpt-5.5")
+        assert "max_completion_tokens" in captured
+        assert "max_tokens" not in captured
+        # gpt-5 only supports the default temperature, so an override must be dropped.
+        assert "temperature" not in captured
+
+    @pytest.mark.asyncio
+    async def test_gpt4o_uses_max_tokens_and_keeps_temperature(self):
+        captured = await self._capture_kwargs("gpt-4o")
+        assert "max_tokens" in captured
+        assert "max_completion_tokens" not in captured
+        assert captured.get("temperature") == 0.7
+
+    def test_requires_max_completion_tokens_handles_none(self):
+        from startd8.agents.base import requires_max_completion_tokens
+        assert requires_max_completion_tokens("") is False
+        assert requires_max_completion_tokens(None) is False  # type: ignore[arg-type]
+
+    def test_build_chat_kwargs_enforce_off_keeps_max_tokens(self):
+        """M3: a compatible endpoint must NOT get next-gen params even for a gpt-5 name."""
+        from startd8.agents.openai import _build_chat_kwargs
+        kw = _build_chat_kwargs("gpt-5.5", [{"role": "user", "content": "hi"}],
+                                token_limit=100, temperature=0.7, stop=None, enforce_next_gen=False)
+        assert kw["max_tokens"] == 100
+        assert "max_completion_tokens" not in kw
+        assert kw["temperature"] == 0.7
+
+    def test_build_chat_kwargs_enforce_on_switches(self):
+        from startd8.agents.openai import _build_chat_kwargs
+        kw = _build_chat_kwargs("gpt-5.5", [{"role": "user", "content": "hi"}],
+                                token_limit=100, temperature=0.7, stop=["X"], enforce_next_gen=True)
+        assert kw["max_completion_tokens"] == 100
+        assert "max_tokens" not in kw and "temperature" not in kw
+        assert kw["stop"] == ["X"]
+
+    def test_compatible_agent_non_openai_endpoint_not_enforced(self):
+        """OpenAICompatibleAgent pointed at a local server keeps max_tokens (M3)."""
+        from startd8.agents.openai import OpenAICompatibleAgent, _OPENAI_AVAILABLE
+        if not _OPENAI_AVAILABLE:
+            pytest.skip("openai package not installed")
+        with patch('startd8.agents.openai.OpenAI'), patch('startd8.agents.openai.AsyncOpenAI'):
+            local = OpenAICompatibleAgent(model="gpt-5.5", api_key="x",
+                                          base_url="http://localhost:11434/v1")
+            openai_ep = OpenAICompatibleAgent(model="gpt-5.5", api_key="x",
+                                              base_url="https://api.openai.com/v1")
+        assert local._is_openai_endpoint() is False
+        assert openai_ep._is_openai_endpoint() is True
 

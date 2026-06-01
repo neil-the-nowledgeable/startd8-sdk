@@ -14,10 +14,43 @@ from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
-from .base import BaseAgent, is_completion_model
+from .base import BaseAgent, is_completion_model, requires_max_completion_tokens
 from .pool import TimeoutConfig, get_client_pool
 
 logger = logging.getLogger(__name__)
+
+
+def _build_chat_kwargs(
+    model: str,
+    messages: list,
+    token_limit: int,
+    temperature: Optional[float],
+    stop: Optional[list],
+    *,
+    enforce_next_gen: bool,
+) -> dict:
+    """Build chat-completions kwargs, adapting token/temperature params per model family.
+
+    The gpt-5 family and o-series reject ``max_tokens`` (require ``max_completion_tokens``)
+    and only accept the default temperature. ``enforce_next_gen`` gates that behavior so it
+    is applied only against the real OpenAI endpoint — an OpenAI-*compatible* server may use a
+    model name in those families while still expecting the classic ``max_tokens`` dialect.
+    """
+    kwargs: dict[str, Any] = {"model": model, "messages": messages}
+    if enforce_next_gen and requires_max_completion_tokens(model):
+        kwargs["max_completion_tokens"] = token_limit
+        if temperature is not None:
+            logger.debug(
+                "Dropping temperature override for %s (only the default temperature is supported)",
+                model,
+            )
+    else:
+        kwargs["max_tokens"] = token_limit
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+    if stop is not None:
+        kwargs["stop"] = stop
+    return kwargs
 
 # Optional OpenAI import
 try:
@@ -157,16 +190,11 @@ class GPT4Agent(BaseAgent):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-            "messages": messages,
-        }
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if stop is not None:
-            kwargs["stop"] = stop
-
+        token_limit = max_tokens if max_tokens is not None else self.max_tokens
+        # GPT4Agent always targets the real OpenAI endpoint → enforce next-gen params.
+        kwargs = _build_chat_kwargs(
+            self.model, messages, token_limit, temperature, stop, enforce_next_gen=True
+        )
         return await self.async_client.chat.completions.create(**kwargs)
 
     async def agenerate(
@@ -510,6 +538,15 @@ class OpenAICompatibleAgent(BaseAgent):
                     retryable_exceptions=self.retry_config.retryable_exceptions + (OpenAIAPIConnectionError,),
                 )
 
+    def _is_openai_endpoint(self) -> bool:
+        """True when this compatible agent points at the real OpenAI API.
+
+        Next-gen param enforcement (max_completion_tokens / fixed temperature) is an OpenAI-API
+        fact, so it must NOT be applied to third-party OpenAI-compatible servers (vLLM, Ollama,
+        NIM) even if their model names happen to start with gpt-5/o-series prefixes.
+        """
+        return not self.base_url or "api.openai.com" in self.base_url
+
     def _register_cleanup(self):
         """Register cleanup handler to run on exit"""
         if not self._cleanup_registered:
@@ -624,16 +661,12 @@ class OpenAICompatibleAgent(BaseAgent):
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-            "messages": messages,
-        }
-        if temperature is not None:
-            kwargs["temperature"] = temperature
-        if stop is not None:
-            kwargs["stop"] = stop
-
+        token_limit = max_tokens if max_tokens is not None else self.max_tokens
+        # Only enforce next-gen params against the real OpenAI endpoint (M3).
+        kwargs = _build_chat_kwargs(
+            self.model, messages, token_limit, temperature, stop,
+            enforce_next_gen=self._is_openai_endpoint(),
+        )
         return await self.async_client.chat.completions.create(**kwargs)
 
     async def agenerate(
