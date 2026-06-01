@@ -26,12 +26,8 @@ from typing import Dict, Set, Tuple
 
 import pytest
 
-from startd8.validators.cross_file_imports import (
-    scan_missing_dependencies,
-    scan_unresolvable_imports,
-)
-from startd8.validators.prisma_usage import scan_prisma_usage
-from startd8.validators.prisma_zod_symmetry import evaluate_cross_file_integrity
+from startd8.validators.cross_file_verifier import run_checks
+from startd8.validators.prisma_zod_symmetry import evaluate_cross_file_integrity  # Zod audit
 
 # --- Faithful run-009 schema (real strtd8 field shapes: the #12/#13 drift sources) ---
 PRISMA = """\
@@ -58,23 +54,15 @@ Finding = Tuple[str, str, str, str]
 
 
 def _run_cross_file_checks(sources: Dict[str, str], project_root: str) -> Set[Finding]:
-    """Mirror of `_evaluate_cross_file_integrity`'s check composition (error-only).
+    """Error findings as (check_id, kind, locus, source_file).
 
-    SINGLE SEAM: Inc-4 repoints this to `cross_file_verifier.run(...)` and the locked
-    sets below must not change.
+    Inc-4: now DELEGATES to the extracted `cross_file_verifier.run_checks`. The locked
+    sets below are unchanged — proving the extraction preserved the 5 shipped signatures'
+    findings (byte-equivalence; only the cosmetic check_id label replaced the old function
+    name). `scip=None` here so the SCIP-backed external check is skipped (advisory).
     """
-    out: Set[Finding] = set()
-    for f in evaluate_cross_file_integrity(sources):
-        if f.severity == "error":
-            out.add(("zod_symmetry", f.kind, f.field or "", f.source_file or ""))
-    for scan in (scan_unresolvable_imports, scan_missing_dependencies):
-        for f in scan(sources, project_root):
-            if f.severity == "error":
-                out.add((scan.__name__, f.kind, f.specifier or "", f.source_file or ""))
-    for f in scan_prisma_usage(sources, project_root):
-        if f.severity == "error":
-            out.add(("prisma_usage", f.kind, f.field or "", f.source_file or ""))
-    return out
+    result = run_checks(sources, project_root, scip=None)
+    return {(f.check_id, f.kind, f.locus, f.source_file) for f in result.errors}
 
 
 @pytest.fixture()
@@ -109,8 +97,8 @@ DIRTY_SOURCES: Dict[str, str] = {
 # FROZEN current behaviour — captured 2026-06-01 against the shipped 5 signatures.
 # Any change here means the verifier surface changed; Inc-4 must reproduce this exactly.
 EXPECTED_DIRTY: Set[Finding] = {
-    ("scan_unresolvable_imports", "unresolvable_import", "@/lib/prisma", "app/api/profile/route.ts"),
-    ("scan_missing_dependencies", "missing_dependency", "pino", "app/api/profile/route.ts"),
+    ("unresolvable_import", "unresolvable_import", "@/lib/prisma", "app/api/profile/route.ts"),
+    ("missing_dependency", "missing_dependency", "pino", "app/api/profile/route.ts"),
     ("prisma_usage", "prisma_unknown_field", "inputTokens", "lib/ai/service.ts"),
     ("prisma_usage", "prisma_unknown_field", "outputTokens", "lib/ai/service.ts"),
     ("prisma_usage", "prisma_invalid_compound_key", "id_ownerId", "app/api/pp/route.ts"),
@@ -143,7 +131,7 @@ class TestRun009RegressionLock:
         "category, predicate",
         [
             ("#1 module-path (unresolvable @/ import)",
-             lambda fs: ("scan_unresolvable_imports", "unresolvable_import", "@/lib/prisma", "app/api/profile/route.ts") in fs),
+             lambda fs: ("unresolvable_import", "unresolvable_import", "@/lib/prisma", "app/api/profile/route.ts") in fs),
             ("#3 dependency-availability (undeclared pino)",
              lambda fs: any(k == "missing_dependency" and loc == "pino" for _, k, loc, _ in fs)),
             ("#7 type-class mismatch (yearsExp)",
