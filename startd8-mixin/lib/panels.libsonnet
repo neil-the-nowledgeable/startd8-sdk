@@ -457,4 +457,134 @@ local config = (import '../config.libsonnet')._config;
       content: content,
     },
   },
+
+  // --- Phase 5: new panel types ------------------------------------------
+
+  // Geomap (markers layer; size/color by field)
+  geomap(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit=''):: {
+    title: title,
+    type: 'geomap',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: {
+      defaults: {
+        [if unit != '' then 'unit']: unit,
+        color: { mode: 'continuous-BlYlRd' },
+      },
+      overrides: [],
+    },
+    options: {
+      view: { id: 'zero', lat: 0, lon: 0, zoom: 1, allLayers: true, shared: false },
+      basemap: { type: 'default', name: 'Layer 0' },
+      controls: { mouseWheelZoom: true, showZoom: true, showAttribution: true, showScale: false },
+      tooltip: { mode: 'details' },
+      layers: [{
+        type: 'markers',
+        name: 'Markers',
+        tooltip: true,
+        location: { mode: 'auto' },
+        config: {
+          showLegend: true,
+          style: {
+            symbol: { mode: 'fixed', fixed: 'img/icons/marker/circle.svg' },
+            color: { fixed: 'dark-green' },
+            size: { fixed: 5, min: 2, max: 15 },
+            opacity: 0.4,
+          },
+        },
+      }],
+    },
+  },
+
+  // Canvas (empty frame; elements added via spec options)
+  canvas(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }):: {
+    title: title,
+    type: 'canvas',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: { defaults: {}, overrides: [] },
+    options: {
+      inlineEditing: false,
+      showAdvancedTypes: true,
+      panZoom: false,
+      root: { type: 'frame', elements: [], placement: { top: 0, left: 0, width: 100, height: 100 } },
+    },
+  },
+
+  // Heatmap
+  heatmap(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit=''):: {
+    title: title,
+    type: 'heatmap',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: {
+      defaults: { custom: { hideFrom: { legend: false, tooltip: false, viz: false } } },
+      overrides: [],
+    },
+    options: {
+      calculate: false,
+      color: { scheme: 'Oranges', mode: 'scheme', steps: 64, reverse: false },
+      yAxis: { [if unit != '' then 'unit']: unit, axisPlacement: 'left' },
+      cellGap: 1,
+      legend: { show: true },
+      tooltip: { show: true, yHistogram: false },
+    },
+  },
+
+  // State timeline (discrete state over time)
+  stateTimeline(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit=''):: {
+    title: title,
+    type: 'state-timeline',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: {
+      defaults: {
+        [if unit != '' then 'unit']: unit,
+        custom: { lineWidth: 0, fillOpacity: 70 },
+        color: { mode: 'continuous-GrYlRd' },
+      },
+      overrides: [],
+    },
+    options: {
+      mergeValues: true,
+      showValue: 'auto',
+      alignValue: 'left',
+      rowHeight: 0.9,
+      legend: { displayMode: 'list', placement: 'bottom', showLegend: true },
+      tooltip: { mode: 'single', sort: 'none' },
+    },
+  },
+
+  // XY chart (scatter / bubble)
+  xychart(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }):: {
+    title: title,
+    type: 'xychart',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: {
+      defaults: {
+        custom: { show: 'points', pointSize: { fixed: 5 }, axisPlacement: 'auto' },
+      },
+      overrides: [],
+    },
+    options: { mapping: 'auto', series: [] },
+  },
+
+  // Candlestick (OHLC + volume)
+  candlestick(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }):: {
+    title: title,
+    type: 'candlestick',
+    datasource: datasource,
+    targets: targets,
+    fieldConfig: { defaults: { custom: {} }, overrides: [] },
+    options: {
+      mode: 'candles+volume',
+      candleStyle: 'candles',
+      colorStrategy: 'open-close',
+      colors: { up: 'green', down: 'red' },
+      includeAllFields: false,
+      legend: { displayMode: 'list', placement: 'bottom', showLegend: true },
+      tooltip: { mode: 'multi', sort: 'none' },
+    },
+  },
 }

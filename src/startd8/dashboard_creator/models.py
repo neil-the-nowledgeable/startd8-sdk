@@ -30,6 +30,13 @@ class PanelType(str, Enum):
     TRACEQL_GAUGE = "traceqlGauge"
     TRACES = "traces"
     TEXT = "text"
+    # Phase 5 — new panel types (gap analysis backlog)
+    GEOMAP = "geomap"
+    CANVAS = "canvas"
+    HEATMAP = "heatmap"
+    STATE_TIMELINE = "state-timeline"
+    XYCHART = "xychart"
+    CANDLESTICK = "candlestick"
 
 
 class VariableType(str, Enum):
