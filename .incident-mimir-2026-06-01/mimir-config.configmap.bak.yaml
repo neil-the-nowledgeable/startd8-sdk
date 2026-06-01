@@ -1,0 +1,66 @@
+apiVersion: v1
+data:
+  mimir.yaml: |-
+    multitenancy_enabled: false
+
+    server:
+      http_listen_port: 9009
+      grpc_listen_port: 9095
+
+    distributor:
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore:
+          store: inmemory
+
+    ingester:
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore:
+          store: inmemory
+        replication_factor: 1
+
+    blocks_storage:
+      backend: filesystem
+      bucket_store:
+        sync_dir: /data/tsdb-sync
+      filesystem:
+        dir: /data/blocks
+      tsdb:
+        dir: /data/tsdb
+
+    compactor:
+      data_dir: /data/compactor
+      sharding_ring:
+        kvstore:
+          store: inmemory
+
+    store_gateway:
+      sharding_ring:
+        replication_factor: 1
+
+    limits:
+      max_global_series_per_user: 0       # 0 = no limit (Mimir convention for this field)
+      ingestion_rate: 100000              # samples/sec (0 means BLOCKED, not unlimited)
+      ingestion_burst_size: 1000000       # burst capacity (0 means BLOCKED, not unlimited)
+    ruler:
+      rule_path: /data/data-ruler/
+      evaluation_interval: 30s
+
+    ruler_storage:
+      backend: local
+      local:
+        directory: /etc/mimir/rules
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"mimir.yaml":"multitenancy_enabled: false\n\nserver:\n  http_listen_port: 9009\n  grpc_listen_port: 9095\n\ndistributor:\n  ring:\n    instance_addr: 127.0.0.1\n    kvstore:\n      store: inmemory\n\ningester:\n  ring:\n    instance_addr: 127.0.0.1\n    kvstore:\n      store: inmemory\n    replication_factor: 1\n\nblocks_storage:\n  backend: filesystem\n  bucket_store:\n    sync_dir: /data/tsdb-sync\n  filesystem:\n    dir: /data/blocks\n  tsdb:\n    dir: /data/tsdb\n\ncompactor:\n  data_dir: /data/compactor\n  sharding_ring:\n    kvstore:\n      store: inmemory\n\nstore_gateway:\n  sharding_ring:\n    replication_factor: 1\n\nlimits:\n  max_global_series_per_user: 0       # 0 = no limit (Mimir convention for this field)\n  ingestion_rate: 100000              # samples/sec (0 means BLOCKED, not unlimited)\n  ingestion_burst_size: 1000000       # burst capacity (0 means BLOCKED, not unlimited)\n"},"kind":"ConfigMap","metadata":{"annotations":{},"labels":{"app.kubernetes.io/managed-by":"kustomize","app.kubernetes.io/part-of":"o11y-dev"},"name":"mimir-config","namespace":"observability"}}
+  creationTimestamp: "2026-01-23T02:55:51Z"
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: o11y-dev
+  name: mimir-config
+  namespace: observability
+  resourceVersion: "11234597"
+  uid: 719972f7-f75b-4288-930e-7cc2ff20b682

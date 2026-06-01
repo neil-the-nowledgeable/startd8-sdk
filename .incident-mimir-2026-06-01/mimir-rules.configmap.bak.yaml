@@ -1,0 +1,359 @@
+apiVersion: v1
+data:
+  alerts.yaml: |
+    groups:
+      - name: contextcore_mimir_alerts
+        rules:
+          - alert: ContextCoreInsightLatencyHigh
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(contextcore_insight_query_duration_milliseconds_bucket[5m])) by (le)
+              ) > 500
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Insight query latency > 500ms P99"
+              runbook_url: "docs/OPERATIONAL_RUNBOOK.md#insight-latency"
+
+          - alert: ContextCoreTaskStalled
+            expr: |
+              max_over_time(project_task:contextcore_task_progress:rate1h[24h]) == 0
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: "Task stalled > 24h"
+              runbook_url: "docs/OPERATIONAL_RUNBOOK.md#task-stalled"
+  peas-rules.yaml: |
+    # PEAS Mimir recording rules — derives peas:* series from the raw gauges
+    # published by scripts/observability/live_metrics_exporter.py. Lights up the
+    # panels in outputs/dashboards/json/peas-{command,region-co}.json that query
+    # recording-rule names.
+    #
+    # Deployment: this file is concatenated into the `mimir-rules` ConfigMap in
+    # the kind-o11y-dev cluster's `observability` namespace, under the key
+    # `peas-rules.yaml`. Re-deploy with:
+    #
+    #     scripts/observability/deploy_mimir_rules.sh
+    #
+    # Rule semantics are derived directly from docs/science/fire-weather-alert-
+    # rule-v1.md §1 (the 3-signal rule). Thresholds:
+    #
+    #   CRITICAL   RH < 20% AND gust > 35 mph AND active Red Flag Warning (rule-v1)
+    #   WARNING    RH < 25% AND gust > 25 mph AND active Red Flag Warning  (looser)
+    #   VIS-FIRE   visibility < 1600 m AND active RFW (winter+fire compound;
+    #              currently only Open-Meteo at 3 anchors produces visibility, so
+    #              sparse — populates when more sensors are wired)
+
+    groups:
+      - name: peas_station_health
+        interval: 30s
+        rules:
+          # Station healthy = comms operational AND last update within 2h.
+          # 1 = healthy, 0 = unhealthy. Dashboard ratios use sum/count.
+          - record: peas:station_healthy
+            expr: |
+              (peas_station_comm_operational == bool 1)
+              *
+              ((time() - peas_station_last_updated_s) < bool 7200)
+
+      - name: peas_fireweather
+        interval: 30s
+        rules:
+          # CRITICAL tier — rule-v1 threshold, the canonical fire-weather alert
+          - record: peas:fireweather_critical
+            expr: |
+              label_replace(
+                (
+                  (peas_relative_humidity < bool 20)
+                  *
+                  (peas_gust_mph > bool 35)
+                )
+                * on(region) group_left()
+                (max by(region) (peas_red_flag_warning_active)),
+                "tier", "critical", "", ""
+              )
+
+          # WARNING tier — looser thresholds for elevated-risk surfacing
+          - record: peas:fireweather_warning
+            expr: |
+              label_replace(
+                (
+                  (peas_relative_humidity < bool 25)
+                  *
+                  (peas_gust_mph > bool 25)
+                )
+                * on(region) group_left()
+                (max by(region) (peas_red_flag_warning_active)),
+                "tier", "warning", "", ""
+              )
+
+          # Visibility-fire compound — winter low-vis during active RFW.
+          # Today only the 3 Open-Meteo anchors carry visibility, so this is
+          # mostly zero outside those station IDs. Populates fully once CDOT
+          # visibility sensors are exposed in the exporter.
+          - record: peas:visibility_alert_fire
+            expr: |
+              label_replace(
+                (peas_visibility_m < bool 1600)
+                * on(region) group_left()
+                (max by(region) (peas_red_flag_warning_active)),
+                "tier", "visibility-fire", "", ""
+              )
+
+          # Per-station compound tier value: 2 = CRITICAL, 1 = WARNING, no series
+          # = below WARNING. The dashboard's `* on(station) group_right` pattern
+          # joins this against peas_station_metadata to render geomap tables.
+          - record: peas:fireweather_compound_tier
+            expr: |
+              max by(region, corridor, station) (
+                (peas:fireweather_critical * 2)
+                or
+                peas:fireweather_warning
+              )
+
+          # Per-station alert flag (0/1) preserving tier label. Used for topk
+          # tables that need station-level granularity with tier filtering.
+          - record: peas:fireweather_a_count
+            expr: |
+              peas:fireweather_critical or peas:fireweather_warning
+
+      - name: peas_governance
+        interval: 30s
+        rules:
+          # Per-alert operator-decision state, derived from the ops server's
+          # peas_brief_approval_state gauge (0=pending, 1=approved, 2=denied).
+          # Dashboard panels join this against peas_alert_metadata via
+          # `on(alert_id) group_left(...)` to render the alert roster + history.
+          - record: peas:governance_approval_state
+            expr: |
+              max by(region, corridor, alert_id) (peas_brief_approval_state)
+
+      - name: peas_severewx
+        interval: 30s
+        rules:
+          # Severe-thunderstorm rule v1 — per docs/science/severe-thunderstorm-alert-rule-v1.md §3.
+          # Compound of NWS Severe Thunderstorm Warning polygon authority + ASOS observations.
+
+          # Observable signals (gust > 40 mph; vis < 3 km in warm air; heavy precip
+          # categorical). All collapsed to {region, corridor, station} so the
+          # compound a_count addition has matching label sets.
+          - record: peas:severewx_strong_gust
+            expr: |
+              max by(region, corridor, station) (
+                (peas_gust_mph > bool 40)
+              )
+
+          - record: peas:severewx_low_vis_convective
+            expr: |
+              max by(region, corridor, station) (
+                (peas_visibility_m < bool 3000) * (peas_temperature_f > bool 32)
+              )
+
+          - record: peas:severewx_heavy_precip
+            expr: |
+              max by(region, corridor, station) (peas_heavy_precip_active)
+
+          # A-count = number of observable signals firing at a station (0..3)
+          - record: peas:severewx_a_count
+            expr: |
+              clamp_max(
+                peas:severewx_strong_gust
+                +
+                peas:severewx_low_vis_convective
+                +
+                peas:severewx_heavy_precip,
+                3
+              )
+
+          # CRITICAL: inside STW polygon AND ≥ 2 observable signals
+          - record: peas:severewx_critical
+            expr: |
+              label_replace(
+                (peas_nws_stw_active == bool 1)
+                *
+                (peas:severewx_a_count >= bool 2),
+                "tier", "critical", "", ""
+              )
+
+          # WARNING: inside STW polygon AND exactly 1 observable signal
+          - record: peas:severewx_warning
+            expr: |
+              label_replace(
+                (peas_nws_stw_active == bool 1)
+                *
+                (peas:severewx_a_count == bool 1),
+                "tier", "warning", "", ""
+              )
+
+          # WATCH: inside Watch polygon (no STW) OR inside STW with 0 signals
+          - record: peas:severewx_watch
+            expr: |
+              label_replace(
+                clamp_max(
+                  ((peas_nws_stw_active == bool 1) * (peas:severewx_a_count == bool 0))
+                  +
+                  ((peas_nws_stw_watch_active == bool 1)
+                   * (peas_nws_stw_active == bool 0)),
+                  1
+                ),
+                "tier", "watch", "", ""
+              )
+
+          # Per-station compound tier value (for table joins / geomap):
+          # 2 = CRITICAL, 1 = WARNING, no series = silent (or watch only)
+          - record: peas:severewx_compound_tier
+            expr: |
+              max by(region, corridor, station) (
+                (peas:severewx_critical * 2)
+                or
+                peas:severewx_warning
+              )
+  rules.yaml: |
+    groups:
+      - name: contextcore_mimir_precompute
+        interval: 1m
+        rules:
+          - record: "project_sprint:contextcore_sprint_planned_points:last"
+            expr: max by (project_id, sprint_id) (contextcore_sprint_planned_points)
+  startd8-alerts.yaml: |
+    groups:
+      - name: startd8_slo_alerts
+        rules:
+          - alert: StartD8AgentRuntimeAvailabilityLow
+            expr: |
+              service:startd8_availability:rate5m < 0.999
+            for: 5m
+            labels:
+              severity: P2
+              service: startd8-agent-runtime
+              namespace: agents
+            annotations:
+              summary: "StartD8 agent runtime availability below 99.9% SLO"
+              description: >
+                Success rate is {{ $value | humanizePercentage }} over the last 5 minutes,
+                below the 99.9% availability target.
+              runbook_url: "runbooks/startd8-agent-runtime-runbook.md#availabilitylow-alert"
+          - alert: StartD8AgentRuntimeLatencyHigh
+            expr: |
+              service:startd8_latency_p99:rate5m > 500
+            for: 5m
+            labels:
+              severity: P2
+              service: startd8-agent-runtime
+              namespace: agents
+            annotations:
+              summary: "StartD8 agent runtime P99 latency exceeds 500ms SLO"
+              description: >
+                P99 response time is {{ $value | humanizeDuration }}ms over the last 5 minutes,
+                exceeding the 500ms latency target.
+              runbook_url: "runbooks/startd8-agent-runtime-runbook.md#latencyhigh-alert"
+      - name: startd8_operational_alerts
+        rules:
+          - alert: StartD8TruncationHigh
+            expr: |
+              service:startd8_truncations:rate5m > 0.05
+            for: 10m
+            labels:
+              severity: P3
+              service: startd8-agent-runtime
+              namespace: agents
+            annotations:
+              summary: "StartD8 context truncation rate exceeds 5%"
+              description: >
+                {{ $value | humanizePercentage }} of requests are experiencing context
+                truncation. This may cause degraded agent output quality.
+              runbook_url: "runbooks/startd8-agent-runtime-runbook.md#truncation-response"
+          - alert: StartD8CostBudgetBurn
+            expr: |
+              service:startd8_cost:rate1h > 10
+            for: 15m
+            labels:
+              severity: P3
+              service: startd8-agent-runtime
+              namespace: agents
+            annotations:
+              summary: "StartD8 cost burn rate exceeds $10/hour"
+              description: >
+                Current cost burn rate is ${{ $value | printf "%.2f" }}/hour, sustained
+                for 15 minutes. Review model usage patterns and consider provider fallback.
+              runbook_url: "runbooks/startd8-agent-runtime-runbook.md#cost-anomaly-response"
+  startd8-rules.yaml: |
+    groups:
+      - name: startd8_availability
+        interval: 1m
+        rules:
+          - record: "service:startd8_availability:rate5m"
+            expr: |
+              sum(rate(startd8_requests_total{status="success"}[5m]))
+              /
+              sum(rate(startd8_requests_total[5m]))
+          - record: "model:startd8_availability:rate5m"
+            expr: |
+              sum by (model) (rate(startd8_requests_total{status="success"}[5m]))
+              /
+              sum by (model) (rate(startd8_requests_total[5m]))
+      - name: startd8_latency
+        interval: 1m
+        rules:
+          - record: "service:startd8_latency_p99:rate5m"
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(startd8_response_time_ms_bucket[5m])) by (le)
+              )
+          - record: "service:startd8_latency_p50:rate5m"
+            expr: |
+              histogram_quantile(0.50,
+                sum(rate(startd8_response_time_ms_bucket[5m])) by (le)
+              )
+          - record: "model:startd8_latency_p99:rate5m"
+            expr: |
+              histogram_quantile(0.99,
+                sum by (le, model) (rate(startd8_response_time_ms_bucket[5m]))
+              )
+      - name: startd8_throughput
+        interval: 1m
+        rules:
+          - record: "service:startd8_requests:rate5m"
+            expr: |
+              sum(rate(startd8_requests_total[5m]))
+          - record: "model:startd8_requests:rate5m"
+            expr: |
+              sum by (model) (rate(startd8_requests_total[5m]))
+      - name: startd8_cost
+        interval: 1m
+        rules:
+          - record: "model:startd8_cost:rate1h"
+            expr: |
+              sum by (model) (rate(startd8_cost_total[1h])) * 3600
+          - record: "service:startd8_cost:rate1h"
+            expr: |
+              sum(rate(startd8_cost_total[1h])) * 3600
+      - name: startd8_tokens
+        interval: 1m
+        rules:
+          - record: "direction:startd8_tokens:rate5m"
+            expr: |
+              sum by (direction) (rate(startd8_tokens_total[5m]))
+          - record: "model:startd8_tokens:rate5m"
+            expr: |
+              sum by (model, direction) (rate(startd8_tokens_total[5m]))
+      - name: startd8_truncation
+        interval: 1m
+        rules:
+          - record: "service:startd8_truncations:rate5m"
+            expr: |
+              sum(rate(startd8_truncations_total[5m]))
+              /
+              sum(rate(startd8_requests_total[5m]))
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"alerts.yaml":"groups:\n  - name: contextcore_mimir_alerts\n    rules:\n      - alert: ContextCoreInsightLatencyHigh\n        expr: |\n          histogram_quantile(0.99,\n            sum(rate(contextcore_insight_query_duration_milliseconds_bucket[5m])) by (le)\n          ) \u003e 500\n        for: 10m\n        labels:\n          severity: warning\n        annotations:\n          summary: \"Insight query latency \u003e 500ms P99\"\n          runbook_url: \"docs/OPERATIONAL_RUNBOOK.md#insight-latency\"\n\n      - alert: ContextCoreTaskStalled\n        expr: |\n          max_over_time(project_task:contextcore_task_progress:rate1h[24h]) == 0\n        for: 1h\n        labels:\n          severity: warning\n        annotations:\n          summary: \"Task stalled \u003e 24h\"\n          runbook_url: \"docs/OPERATIONAL_RUNBOOK.md#task-stalled\"\n","rules.yaml":"groups:\n  - name: contextcore_mimir_precompute\n    interval: 1m\n    rules:\n      - record: \"project_sprint:contextcore_sprint_planned_points:last\"\n        expr: max by (project_id, sprint_id) (contextcore_sprint_planned_points)\n","startd8-alerts.yaml":"groups:\n  - name: startd8_slo_alerts\n    rules:\n      - alert: StartD8AgentRuntimeAvailabilityLow\n        expr: |\n          service:startd8_availability:rate5m \u003c 0.999\n        for: 5m\n        labels:\n          severity: P2\n          service: startd8-agent-runtime\n          namespace: agents\n        annotations:\n          summary: \"StartD8 agent runtime availability below 99.9% SLO\"\n          description: \u003e\n            Success rate is {{ $value | humanizePercentage }} over the last 5 minutes,\n            below the 99.9% availability target.\n          runbook_url: \"runbooks/startd8-agent-runtime-runbook.md#availabilitylow-alert\"\n      - alert: StartD8AgentRuntimeLatencyHigh\n        expr: |\n          service:startd8_latency_p99:rate5m \u003e 500\n        for: 5m\n        labels:\n          severity: P2\n          service: startd8-agent-runtime\n          namespace: agents\n        annotations:\n          summary: \"StartD8 agent runtime P99 latency exceeds 500ms SLO\"\n          description: \u003e\n            P99 response time is {{ $value | humanizeDuration }}ms over the last 5 minutes,\n            exceeding the 500ms latency target.\n          runbook_url: \"runbooks/startd8-agent-runtime-runbook.md#latencyhigh-alert\"\n  - name: startd8_operational_alerts\n    rules:\n      - alert: StartD8TruncationHigh\n        expr: |\n          service:startd8_truncations:rate5m \u003e 0.05\n        for: 10m\n        labels:\n          severity: P3\n          service: startd8-agent-runtime\n          namespace: agents\n        annotations:\n          summary: \"StartD8 context truncation rate exceeds 5%\"\n          description: \u003e\n            {{ $value | humanizePercentage }} of requests are experiencing context\n            truncation. This may cause degraded agent output quality.\n          runbook_url: \"runbooks/startd8-agent-runtime-runbook.md#truncation-response\"\n      - alert: StartD8CostBudgetBurn\n        expr: |\n          service:startd8_cost:rate1h \u003e 10\n        for: 15m\n        labels:\n          severity: P3\n          service: startd8-agent-runtime\n          namespace: agents\n        annotations:\n          summary: \"StartD8 cost burn rate exceeds $10/hour\"\n          description: \u003e\n            Current cost burn rate is ${{ $value | printf \"%.2f\" }}/hour, sustained\n            for 15 minutes. Review model usage patterns and consider provider fallback.\n          runbook_url: \"runbooks/startd8-agent-runtime-runbook.md#cost-anomaly-response\"\n","startd8-rules.yaml":"groups:\n  - name: startd8_availability\n    interval: 1m\n    rules:\n      - record: \"service:startd8_availability:rate5m\"\n        expr: |\n          sum(rate(startd8_requests_total{status=\"success\"}[5m]))\n          /\n          sum(rate(startd8_requests_total[5m]))\n      - record: \"model:startd8_availability:rate5m\"\n        expr: |\n          sum by (model) (rate(startd8_requests_total{status=\"success\"}[5m]))\n          /\n          sum by (model) (rate(startd8_requests_total[5m]))\n  - name: startd8_latency\n    interval: 1m\n    rules:\n      - record: \"service:startd8_latency_p99:rate5m\"\n        expr: |\n          histogram_quantile(0.99,\n            sum(rate(startd8_response_time_ms_bucket[5m])) by (le)\n          )\n      - record: \"service:startd8_latency_p50:rate5m\"\n        expr: |\n          histogram_quantile(0.50,\n            sum(rate(startd8_response_time_ms_bucket[5m])) by (le)\n          )\n      - record: \"model:startd8_latency_p99:rate5m\"\n        expr: |\n          histogram_quantile(0.99,\n            sum by (le, model) (rate(startd8_response_time_ms_bucket[5m]))\n          )\n  - name: startd8_throughput\n    interval: 1m\n    rules:\n      - record: \"service:startd8_requests:rate5m\"\n        expr: |\n          sum(rate(startd8_requests_total[5m]))\n      - record: \"model:startd8_requests:rate5m\"\n        expr: |\n          sum by (model) (rate(startd8_requests_total[5m]))\n  - name: startd8_cost\n    interval: 1m\n    rules:\n      - record: \"model:startd8_cost:rate1h\"\n        expr: |\n          sum by (model) (rate(startd8_cost_total[1h])) * 3600\n      - record: \"service:startd8_cost:rate1h\"\n        expr: |\n          sum(rate(startd8_cost_total[1h])) * 3600\n  - name: startd8_tokens\n    interval: 1m\n    rules:\n      - record: \"direction:startd8_tokens:rate5m\"\n        expr: |\n          sum by (direction) (rate(startd8_tokens_total[5m]))\n      - record: \"model:startd8_tokens:rate5m\"\n        expr: |\n          sum by (model, direction) (rate(startd8_tokens_total[5m]))\n  - name: startd8_truncation\n    interval: 1m\n    rules:\n      - record: \"service:startd8_truncations:rate5m\"\n        expr: |\n          sum(rate(startd8_truncations_total[5m]))\n          /\n          sum(rate(startd8_requests_total[5m]))\n"},"kind":"ConfigMap","metadata":{"annotations":{},"name":"mimir-rules","namespace":"observability"}}
+  creationTimestamp: "2026-02-09T15:17:56Z"
+  name: mimir-rules
+  namespace: observability
+  resourceVersion: "11974984"
+  uid: a038e106-6a26-4830-8e8e-5ba8ae839c82

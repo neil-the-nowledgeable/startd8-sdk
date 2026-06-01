@@ -37,6 +37,52 @@ from ..repair.orchestrator import reset_circuit_breaker
 
 logger = get_logger(__name__)
 
+# REQ-CME: emit startd8.cost.* metrics from the construction path. The contractor
+# tracks cost into the postmortem JSON via token_usage_cost() but never drove the
+# OTel cost emitter, so cost/usage never reached Mimir (see
+# docs/design/OBSERVABILITY_COST_METRIC_EMISSION_GAP.md). We emit at the per-feature
+# cost-accumulation chokepoint using the existing store-free CostMetrics emitter,
+# passing the already-computed result.cost_usd (FR-8: no re-pricing drift).
+try:  # pragma: no cover - import guard
+    from ..costs.otel_metrics import CostMetrics as _CostMetrics
+except Exception:  # pragma: no cover
+    _CostMetrics = None  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class _FeatureCostRecord:
+    """Minimal duck-typed record consumed by ``CostMetrics.record`` (REQ-CME)."""
+
+    model: str
+    provider: str
+    project: str
+    total_cost: float
+    input_tokens: int
+    output_tokens: int
+
+
+_PROVIDER_PREFIXES = (
+    ("claude", "anthropic"), ("gpt", "openai"), ("o1", "openai"), ("o3", "openai"),
+    ("gemini", "google"), ("mistral", "mistral"), ("mixtral", "mistral"),
+    ("llama", "ollama"), ("mock", "mock"),
+)
+
+
+def _provider_from_model(model: Optional[str]) -> str:
+    """Best-effort provider label from a model/agent spec (REQ-CME FR-4).
+
+    ``anthropic:claude-...`` -> ``anthropic``; bare model names map by prefix.
+    """
+    if not model:
+        return "unknown"
+    if ":" in model:
+        return model.split(":", 1)[0]
+    lowered = model.lower()
+    for prefix, provider in _PROVIDER_PREFIXES:
+        if lowered.startswith(prefix):
+            return provider
+    return "unknown"
+
 # AC-R7: Generator-native OTel observability for prime contractor
 try:
     from opentelemetry import trace as _trace
@@ -539,6 +585,9 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        # REQ-CME: store-free OTel cost emitter (no CostStore/SQLite). Instruments
+        # init lazily on first record; a no-op when OTel metrics are unconfigured.
+        self._cost_metrics = _CostMetrics() if _CostMetrics is not None else None
         # Repair pipeline config (REQ-RPL-200)
         self._repair_config = repair_config
         # IntegrationEngine — delegates snapshot/merge/checkpoint/rollback
@@ -3310,9 +3359,7 @@ class PrimeContractorWorkflow:
             # Phase 4: Content-addressable cache lookup (AC-R3)
             cache_hit = self._try_generation_cache(feature, gen_context)
             if cache_hit is not None:
-                self.total_cost_usd += cache_hit.cost_usd
-                self.total_input_tokens += cache_hit.input_tokens
-                self.total_output_tokens += cache_hit.output_tokens
+                self._accumulate_cost(cache_hit)
                 self._accept_generation_result(feature, cache_hit)
                 return True
 
@@ -3323,9 +3370,7 @@ class PrimeContractorWorkflow:
             cache_result = self._try_element_cache_assembly(feature)
             if cache_result is not None:
                 result = cache_result
-                self.total_cost_usd += result.cost_usd
-                self.total_input_tokens += result.input_tokens
-                self.total_output_tokens += result.output_tokens
+                self._accumulate_cost(result)
                 self._persist_kaizen_prompts(feature, gen_context, result=result)
                 self._accept_generation_result(feature, result)
                 return True
@@ -3356,10 +3401,9 @@ class PrimeContractorWorkflow:
             # Accumulate tokens/cost regardless of success so postmortem
             # cost reporting is accurate.  _accept_generation_result still
             # runs on success (sets feature status, etc.), but tokens must
-            # be counted even for failed generations.
-            self.total_cost_usd += result.cost_usd
-            self.total_input_tokens += result.input_tokens
-            self.total_output_tokens += result.output_tokens
+            # be counted even for failed generations.  REQ-CME: this also emits
+            # the startd8.cost.* metric, in lockstep with the postmortem totals.
+            self._accumulate_cost(result)
 
             # Phase 8: Quality gate
             if not self._check_quality_gate(feature, result):
@@ -4585,6 +4629,40 @@ class PrimeContractorWorkflow:
             "cost_usd": result.cost_usd,
             "iterations": result.iterations,
         })
+
+    def _accumulate_cost(self, result: GenerationResult) -> None:
+        """Accumulate per-feature cost/tokens AND emit the OTel cost metric (REQ-CME).
+
+        Single chokepoint so the emitted ``startd8.cost.*`` series stay in lockstep
+        with the postmortem ``total_cost_usd`` accounting by construction. Covers
+        success and failure (the LLM-generation site calls this regardless of
+        ``result.success``), matching the postmortem's cost coverage.
+        """
+        self.total_cost_usd += result.cost_usd
+        self.total_input_tokens += result.input_tokens
+        self.total_output_tokens += result.output_tokens
+        self._emit_cost_metric(result)
+
+    def _emit_cost_metric(self, result: GenerationResult) -> None:
+        """Emit one ``startd8.cost.*`` record via the store-free CostMetrics emitter.
+
+        Uses the already-computed ``result.cost_usd`` as the recorded cost (FR-8 —
+        no re-pricing, so metric and postmortem agree). Non-fatal: a telemetry
+        failure must never break a build.
+        """
+        if self._cost_metrics is None:
+            return
+        try:
+            self._cost_metrics.record(_FeatureCostRecord(
+                model=result.model or "unknown",
+                provider=_provider_from_model(result.model),
+                project=self.project_root.name,
+                total_cost=result.cost_usd,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            ))
+        except Exception:  # pragma: no cover - telemetry must not break builds
+            logger.debug("REQ-CME cost metric emit failed", exc_info=True)
 
     def _accept_generation_result(
         self, feature: FeatureSpec, result: GenerationResult,
