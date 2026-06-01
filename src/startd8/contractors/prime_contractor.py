@@ -4218,24 +4218,74 @@ class PrimeContractorWorkflow:
             if ap.is_file():
                 producer_files.append(anchor)
 
-        if not producer_files:
-            return ""
-
-        missing = [
-            p for p in producer_files
-            if not (Path(p) if Path(p).is_absolute() else Path(self.project_root) / p).is_file()
+        # FR-4: declared anchors absent on disk would otherwise be silently
+        # invented — surface them (wiped/not-yet-restored). Mode-A producers
+        # not yet generated are warned separately below.
+        absent_anchors = [
+            a for a in self.seed_upstream_anchors
+            if not (Path(a) if Path(a).is_absolute() else Path(self.project_root) / a).is_file()
         ]
-        if missing:
+        if absent_anchors:
             logger.warning(
-                "FR-2: upstream producer output(s) not yet on disk for '%s': %s",
-                feature.name, ", ".join(missing),
+                "Gap-B FR-4: declared upstream anchor(s) absent on disk for '%s' "
+                "(inventory incomplete): %s", feature.name, ", ".join(absent_anchors),
             )
-        ifaces = build_upstream_interfaces(
-            producer_files=producer_files,
-            project_root=str(self.project_root),
-            require_present=False,
-        )
-        return render_upstream_interfaces(ifaces)
+
+        parts: List[str] = []
+
+        # Mode A + Mode B: TS/JS module-interface inheritance.
+        if producer_files:
+            missing = [
+                p for p in producer_files
+                if not (Path(p) if Path(p).is_absolute() else Path(self.project_root) / p).is_file()
+            ]
+            if missing:
+                logger.warning(
+                    "FR-2: upstream producer output(s) not yet on disk for '%s': %s",
+                    feature.name, ", ".join(missing),
+                )
+            ifaces = build_upstream_interfaces(
+                producer_files=producer_files,
+                project_root=str(self.project_root),
+                require_present=False,
+            )
+            ts_render = render_upstream_interfaces(ifaces)
+            if ts_render:
+                parts.append(ts_render)
+
+        # FR-3: Prisma field-set inheritance for data-model-mirroring features.
+        if self._feature_mirrors_data_model(feature):
+            for anchor in self.seed_upstream_anchors:
+                if not str(anchor).endswith(".prisma"):
+                    continue
+                ap = Path(anchor) if Path(anchor).is_absolute() else Path(self.project_root) / anchor
+                if not ap.is_file():
+                    continue
+                try:
+                    from .upstream_interface import render_prisma_field_sets
+                    prisma_render = render_prisma_field_sets(ap.read_text(encoding="utf-8"))
+                except OSError:
+                    prisma_render = ""
+                if prisma_render:
+                    parts.append(prisma_render)
+                break
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _feature_mirrors_data_model(feature: FeatureSpec) -> bool:
+        """FR-2/FR-3 targeting: does this feature generate a Zod/type mirror of Prisma?
+
+        Heuristic on target-file names + description keywords — bounds the Prisma
+        field-set injection to features that actually mirror the data model.
+        """
+        _MIRROR_NAMES = ("value-model", "schema", "schemas", "model", "models", "types", "dto", "zod")
+        for tf in (getattr(feature, "target_files", None) or []):
+            stem = Path(str(tf)).stem.lower()
+            if str(tf).endswith((".ts", ".tsx")) and any(k in stem for k in _MIRROR_NAMES):
+                return True
+        desc = (getattr(feature, "description", "") or "").lower()
+        return any(k in desc for k in ("zod", "z.object", "prisma model", "value model", "schema mirror"))
 
     def _collect_dependency_imports(
         self, feature: FeatureSpec,
