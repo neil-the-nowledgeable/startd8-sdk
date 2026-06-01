@@ -2237,6 +2237,10 @@ def generate_observability_artifacts(
     # declared contracts so every generated artifact is scored, not just the triplet.
     _score_extended_artifacts(report, metadata.get("expected_output_contracts", {}))
 
+    # REQ-OAT-050/061/062: orientation-aware annotation + bridge two-half breakdown.
+    # After scoring (quality exists) and stamping (axes exist), before the report write.
+    _apply_orientation_scoring(report)
+
     if not dry_run:
         # Gap 3 / Closure 2: expected metric set per service (declared + convention)
         # drives the semantic metric-coverage score in the quality report.
@@ -2332,6 +2336,144 @@ def _score_extended_artifacts(
         if not contract:
             continue
         a.quality = validate_extended_artifact(a.content, contract).to_quality()
+
+
+# ---------------------------------------------------------------------------
+# Orientation-aware scoring (REQ-OAT-050 / 061 / 062)
+# ---------------------------------------------------------------------------
+
+
+def _iter_rule_dicts(content: str) -> List[Dict[str, Any]]:
+    """Yield rule dicts from alert/recording YAML (``groups[].rules[]`` —
+    PrometheusRule CRD or flat — tolerating malformed content)."""
+    try:
+        data = yaml.safe_load(content)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    groups = data.get("spec", {}).get("groups", []) or data.get("groups", [])
+    rules: List[Dict[str, Any]] = []
+    if groups:
+        for g in groups:
+            rules.extend(r for r in (g.get("rules", []) or []) if isinstance(r, dict))
+    else:
+        rules = [r for r in (data.get("rules", []) or []) if isinstance(r, dict)]
+    return rules
+
+
+def _produced_service_targets(report: GenerationReport) -> Tuple[Set[str], Set[str]]:
+    """Service IDs that got a produced dashboard / runbook this run — the
+    resolvable handoff targets for bridge actionability (REQ-OAT-061). Resolved
+    at service granularity (not exact UID), so the obs-/cc-obs- UID skew between
+    an alert's dashboard_url and the rendered dashboard does not false-flag."""
+    dash: Set[str] = set()
+    run: Set[str] = set()
+    for a in report.artifacts:
+        if a.status != "generated":
+            continue
+        if a.artifact_type in ("dashboard_spec", "dashboard"):
+            dash.add(a.service_id)
+        elif a.artifact_type == "runbook":
+            run.add(a.service_id)
+    return dash, run
+
+
+def _bridge_human_actionable(
+    result: ArtifactResult, dash_services: Set[str], run_services: Set[str],
+) -> bool:
+    """REQ-OAT-061 human (actionability) half of a bridge artifact.
+
+    notification_policy → a route + receiver exists. alert/loki rules → every
+    active rule has a severity + summary AND a context link (runbook_url/
+    dashboard_url) that resolves to an artifact actually produced for the service
+    this run (a non-produced handoff target = broken handoff → human half fails).
+    """
+    if result.artifact_type == "notification_policy":
+        try:
+            data = yaml.safe_load(result.content) or {}
+        except Exception:
+            return False
+        return bool(data.get("route") and data.get("receivers"))
+
+    rules = [r for r in _iter_rule_dicts(result.content) if "alert" in r]
+    if not rules:
+        return False
+    handoff_exists = result.service_id in dash_services or result.service_id in run_services
+    for r in rules:
+        labels = r.get("labels", {}) or {}
+        ann = r.get("annotations", {}) or {}
+        if not labels.get("severity") or not ann.get("summary"):
+            return False
+        has_link = bool(ann.get("runbook_url") or ann.get("dashboard_url"))
+        if not (has_link and handoff_exists):
+            return False
+    return True
+
+
+def _recording_subscore(content: str) -> Optional[Dict[str, Any]]:
+    """REQ-OAT-062: when a bridge file mixes alerting + recording rules, score the
+    off-orientation (recording = system) subset as a recorded sub-score. Returns
+    None when the file is not mixed (so it stays a single-orientation artifact)."""
+    rules = _iter_rule_dicts(content)
+    recording = [r for r in rules if "record" in r]
+    alerting = [r for r in rules if "alert" in r]
+    if not (recording and alerting):
+        return None
+    valid = sum(1 for r in recording if r.get("expr"))
+    return {
+        "orientation": Orientation.SYSTEM.value,
+        "rules": len(recording),
+        "valid": valid,
+        "score": round(valid / len(recording), 4) if recording else 0.0,
+    }
+
+
+def _apply_orientation_scoring(report: GenerationReport) -> None:
+    """Annotate each scored artifact with its taxonomy axes and, for bridge
+    artifacts, a two-half (system/human) breakdown that is *partial* when only one
+    half passes (REQ-OAT-050/061), plus a recorded recording-rule sub-score for
+    mixed files (REQ-OAT-062). Runs after stamping + scoring, before the report
+    is written. Honest skips (status != generated) are untouched."""
+    # REQ-OAT-050 (artifacts_scored == artifacts_generated): the rendered Grafana
+    # JSON (runtime "dashboard") is the compiled form of a "dashboard_spec" and has
+    # no validator of its own — inherit the spec's already-validated quality so the
+    # derived artifact is scored, not silently dropped from the scored denominator.
+    spec_quality = {
+        a.service_id: a.quality
+        for a in report.artifacts
+        if a.artifact_type == "dashboard_spec" and a.quality is not None
+    }
+    for a in report.artifacts:
+        if (
+            a.artifact_type == "dashboard"
+            and a.status == "generated"
+            and a.quality is None
+            and a.service_id in spec_quality
+        ):
+            a.quality = dict(spec_quality[a.service_id])
+            a.quality["inherited_from"] = "dashboard_spec"
+
+    dash_services, run_services = _produced_service_targets(report)
+    for a in report.artifacts:
+        if a.status != "generated" or a.quality is None:
+            continue
+        if a.category:
+            a.quality["category"] = a.category
+        if a.orientation:
+            a.quality["orientation"] = a.orientation
+        if a.orientation != Orientation.BRIDGE.value:
+            continue
+        # system half = structurally valid (all structural checks pass).
+        total = a.quality.get("checks_total", 0)
+        passed = a.quality.get("checks_passed", 0)
+        system_ok = total > 0 and passed == total
+        human_ok = _bridge_human_actionable(a, dash_services, run_services)
+        a.quality["orientation_breakdown"] = {"system": system_ok, "human": human_ok}
+        a.quality["orientation_partial"] = system_ok != human_ok
+        sub = _recording_subscore(a.content)
+        if sub is not None:
+            a.quality["offorientation_subscore"] = sub
 
 
 def _record_unimplemented_artifact_types(
@@ -2679,8 +2821,13 @@ def _write_quality_report(
     # alerted (Run-007 Finding 3), and all per-service scores so the composite
     # reflects every artifact, not just the triplet (Run-007 Finding 1).
     services: Dict[str, Dict[str, Any]] = {}
-    svc_dashboard_contents: Dict[str, List[str]] = {}
-    svc_alert_contents: Dict[str, List[str]] = {}
+    # REQ-OAT-051: track per-ORIENTATION contents so coverage folds across
+    # human (dashboards) / system (SLO SLIs, recording rules) / bridge (active
+    # alerts, notifications). The prior dashboarded/alerted split is retained as
+    # aliases (human≡dashboarded, bridge≡alerted) for continuity.
+    svc_human_contents: Dict[str, List[str]] = {}
+    svc_system_contents: Dict[str, List[str]] = {}
+    svc_bridge_contents: Dict[str, List[str]] = {}
     svc_all_scores: Dict[str, List[float]] = {}
     for a in scored:
         svc = services.setdefault(a.service_id, {})
@@ -2694,40 +2841,53 @@ def _write_quality_report(
         svc_all_scores.setdefault(a.service_id, []).append(a.quality["score"])
         if a.content:
             if a.artifact_type in ("dashboard_spec", "dashboard"):
-                svc_dashboard_contents.setdefault(a.service_id, []).append(a.content)
-            elif a.artifact_type == "alert_rule":
-                svc_alert_contents.setdefault(a.service_id, []).append(a.content)
+                svc_human_contents.setdefault(a.service_id, []).append(a.content)
+            elif a.artifact_type in ("alert_rule", "loki_rule", "notification_policy"):
+                svc_bridge_contents.setdefault(a.service_id, []).append(a.content)
+            elif a.artifact_type == "slo_definition":
+                svc_system_contents.setdefault(a.service_id, []).append(a.content)
 
     # compute per-service composite over ALL scored artifacts, blended with the
-    # split metric coverage (dashboarded + alerted).
+    # orientation-split metric coverage (human + system + bridge, equal thirds).
     for svc_id, svc_data in services.items():
-        cov_dash: Optional[float] = None
-        cov_alert: Optional[float] = None
+        cov_human: Optional[float] = None
+        cov_system: Optional[float] = None
+        cov_bridge: Optional[float] = None
         if (
             service_metrics
             and compute_metric_coverage is not None
             and svc_id in service_metrics
         ):
             expected = service_metrics[svc_id]
-            # Dashboarded: referenced by a live dashboard panel.
-            cov_dash = compute_metric_coverage(
-                expected, svc_dashboard_contents.get(svc_id, [])
+            # human: referenced by a live dashboard panel.
+            cov_human = compute_metric_coverage(
+                expected, svc_human_contents.get(svc_id, [])
             ).score
-            # Alerted: referenced by an active (non-commented) alert rule.
+            # system: defined as a system artifact (SLO SLI / recording rule).
+            cov_system = compute_metric_coverage(
+                expected, svc_system_contents.get(svc_id, [])
+            ).score
+            # bridge: referenced by an active (non-commented) alert / notification.
             # extract_referenced_metrics strips comment lines, so the domain-alert
             # TODO stubs do NOT count here — only metrics with a live alert do.
-            cov_alert = compute_metric_coverage(
-                expected, svc_alert_contents.get(svc_id, [])
+            cov_bridge = compute_metric_coverage(
+                expected, svc_bridge_contents.get(svc_id, [])
             ).score
-            svc_data["metric_coverage_dashboarded"] = cov_dash
-            svc_data["metric_coverage_alerted"] = cov_alert
+            svc_data["metric_coverage_human"] = cov_human
+            svc_data["metric_coverage_system"] = cov_system
+            svc_data["metric_coverage_bridge"] = cov_bridge
+            # Continuity aliases (REQ-OAT-051): names retained for downstream readers.
+            svc_data["metric_coverage_dashboarded"] = cov_human
+            svc_data["metric_coverage_alerted"] = cov_bridge
 
         all_scores = svc_all_scores.get(svc_id, [])
         structural = sum(all_scores) / len(all_scores) if all_scores else 0.0
 
-        coverage_for_blend: Optional[float] = None
-        if cov_dash is not None and cov_alert is not None:
-            coverage_for_blend = (cov_dash + cov_alert) / 2.0
+        # Fold the available orientation coverages at equal weights (REQ-OAT-051).
+        _covs = [c for c in (cov_human, cov_system, cov_bridge) if c is not None]
+        coverage_for_blend: Optional[float] = (
+            sum(_covs) / len(_covs) if _covs else None
+        )
 
         if coverage_for_blend is None:
             composite = structural
@@ -2756,30 +2916,28 @@ def _write_quality_report(
         round(sum(composites) / len(composites), 4) if composites else 0.0
     )
 
-    # Finding 3: split coverage averages (dashboarded vs alerted). Keep a combined
-    # avg_metric_coverage_score (mean of the two) so the CLI coverage gate keeps
-    # working and reflects both visualization and alerting.
-    dash_covs = [
-        s["metric_coverage_dashboarded"]
-        for s in services.values()
-        if "metric_coverage_dashboarded" in s
-    ]
-    alert_covs = [
-        s["metric_coverage_alerted"]
-        for s in services.values()
-        if "metric_coverage_alerted" in s
-    ]
-    if dash_covs:
-        aggregate["avg_metric_coverage_dashboarded"] = round(
-            sum(dash_covs) / len(dash_covs), 4
-        )
-    if alert_covs:
-        aggregate["avg_metric_coverage_alerted"] = round(
-            sum(alert_covs) / len(alert_covs), 4
-        )
-    if dash_covs and alert_covs:
-        combined = (sum(dash_covs) + sum(alert_covs)) / (len(dash_covs) + len(alert_covs))
-        aggregate["avg_metric_coverage_score"] = round(combined, 4)
+    # REQ-OAT-051: orientation coverage averages (human / system / bridge), with a
+    # combined avg_metric_coverage_score (equal-weight mean across the orientations
+    # present) so the CLI coverage gate keeps working. dashboarded/alerted retained
+    # as aliases for human/bridge.
+    def _avg(key: str) -> Optional[float]:
+        vals = [s[key] for s in services.values() if key in s]
+        return round(sum(vals) / len(vals), 4) if vals else None
+
+    avg_human = _avg("metric_coverage_human")
+    avg_system = _avg("metric_coverage_system")
+    avg_bridge = _avg("metric_coverage_bridge")
+    if avg_human is not None:
+        aggregate["avg_metric_coverage_human"] = avg_human
+        aggregate["avg_metric_coverage_dashboarded"] = avg_human  # alias
+    if avg_system is not None:
+        aggregate["avg_metric_coverage_system"] = avg_system
+    if avg_bridge is not None:
+        aggregate["avg_metric_coverage_bridge"] = avg_bridge
+        aggregate["avg_metric_coverage_alerted"] = avg_bridge  # alias
+    _present = [v for v in (avg_human, avg_system, avg_bridge) if v is not None]
+    if _present:
+        aggregate["avg_metric_coverage_score"] = round(sum(_present) / len(_present), 4)
 
     # Finding 1: make scored-vs-generated explicit so the gap is visible.
     aggregate["artifacts_scored"] = len(scored)
