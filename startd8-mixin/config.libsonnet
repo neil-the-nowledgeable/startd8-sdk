@@ -9,9 +9,13 @@
 
     // Dashboard defaults
     dashboardTags: ['startd8', 'sdk'],
-    dashboardRefresh: '30s',
+    dashboardRefresh: '',  // AES-040: auto-refresh off by default (corpus: ~90% unset)
     dashboardTimeFrom: 'now-6h',
     dashboardTimeTo: 'now',
+
+    // AES-020 escape hatch: set true to restore the legacy gauge/barGauge default
+    // threshold ramps (gauge 80/100, barGauge 60/80) for consumers that relied on them.
+    legacyThresholds: false,
 
     // Service name default
     serviceName: 'startd8-sdk',

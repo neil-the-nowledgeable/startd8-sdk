@@ -112,10 +112,20 @@ def generate_dashboard_jsonnet(
     lines.append(f"  '{spec.uid}',{desc_arg}")
     lines.append(f"  tags=[{tags_str}],")
 
-    # Merge block fields (templating, links)
-    has_merge = bool(spec.variables) or bool(spec.links)
+    # AES-041: shared crosshair (graphTooltip: 1) when the dashboard has >= 2
+    # timeseries panels; otherwise leave the mixin default (0).
+    n_timeseries = sum(
+        1 for p in spec.panels
+        if p.type in (PanelType.TIMESERIES, PanelType.TRACEQL_TIMESERIES)
+    )
+    shared_crosshair = n_timeseries >= 2
+
+    # Merge block fields (templating, links, graphTooltip)
+    has_merge = bool(spec.variables) or bool(spec.links) or shared_crosshair
     if has_merge:
         lines.append(") {")
+        if shared_crosshair:
+            lines.append("  graphTooltip: 1,")
         if spec.variables:
             lines.append("  templating: {")
             lines.append("    list: [")
