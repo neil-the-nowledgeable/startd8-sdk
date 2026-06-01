@@ -10,6 +10,33 @@ the manifest is taxonomy follow-up (REQ-OAT-041), cross-referenced here, not bui
 
 ---
 
+## Implementation status — RECONCILED 2026-05-31 (Phases 0–3 SHIPPED on `main`)
+
+> Phases 0–3 are **implemented and merged to `main`** via `feat/obs-cat5-impl`
+> (merge `5babc995`). The two code-verification "stale claims" this plan absorbed
+> (`OBSERVABILITY_CAT45_CODE_VERIFICATION.md` §A-1/§A-2) are now both *corrected and
+> implemented*: the live tier histogram is declared (cat-4), and the deprecated
+> opt-in Prometheus path is retired. Phase→commit map:
+
+| Phase | Status | Commit |
+|-------|--------|--------|
+| 0.1 cost double-record guard | ✅ done | `bdfad35f` |
+| 0.3 retire deprecated opt-in Prometheus path (§A-2) | ✅ done | `bdfad35f` |
+| 0.4 `category`/`orientation` on Metric/Span + collector pass-through (R3-F1) | ✅ done | `da3a1105` |
+| 0.5 `EventTypeDescriptor.category` → `event_group` (§C polysemy) | ✅ done | `da3a1105` |
+| 1.1 populate axes + completeness gate (`GRANDFATHERED_SOURCES` empty) | ✅ done | `a7497351` |
+| 1.2 kind-aware descriptor↔emission parity test | ✅ done | `18fbbd9d` |
+| 2.1 dotted metric rename (+ exported-name collision fix) | ✅ done | `46eced3b` |
+| 3.1 descriptor→`manifest_declared` bridge (`sdk_emitted` route) | ✅ done | `cbe9cca6` |
+| B (follow-on): declare ALL 23 live emitters — parity bijection, exclusions empty | ✅ done | `7b78b89c` |
+| Phase 4 (signal gaps), Phase 5 (cat-5 artifact definitions) | ⏳ reserved | — |
+
+The category-5 *generator* consumption (`route_state` etc.) shipped as the taxonomy
+keystone (step C, `45f0194e`) — see `OBSERVABILITY_ARTIFACT_TAXONOMY_*`. Remaining:
+REQ-AAO-050/051 orientation-aware quality scoring (C2) and the `task.*` disambiguation.
+
+---
+
 ## Guiding principle
 
 Planning showed the hard infrastructure (per-module `_OTEL_DESCRIPTORS` + `generate_manifest()`)
@@ -170,15 +197,16 @@ These amend the phases above; applied from CRP R1 (see Appendix A). The shared s
   + `_prom_*` attrs. Gate removal on a behavioral check that an OTLP capture still carries the
   `startd8_*` session metrics after removal — a grep alone can miss late-bound usage.
 
-## Before-code checklist
+## Before-code checklist — SATISFIED (Phases 0–3 shipped, see status block above)
 
-- [ ] Every v0.2 requirement maps to a phase; every step traces to a requirement / Appendix-C item.
-- [ ] Phase 0 net-removes lines (Prometheus opt-in path, deduped labels).
-- [ ] Parity test (1.2) is kind-aware and fails on a deliberately mis-declared metric (bijection) and a
-  non-subset span attr before it's trusted (3.1).
-- [ ] Phase 2 rename verified byte-for-byte against a captured golden baseline (R1-S4).
-- [ ] Phase 1 keystone (schema + parity) lands once; cat-4 plan depends on it, doesn't re-add (R1-S1).
-- [ ] Cross-doc: the Phase-3 loop's effect on taxonomy REQ-OAT-024/025 is reconciled (`REQ-OBS-SHARED-004`).
+- [x] Every v0.2 requirement maps to a phase; every step traces to a requirement / Appendix-C item.
+- [x] Phase 0 net-removes lines (Prometheus opt-in path, deduped labels).
+- [x] Parity test (1.2) is kind-aware and fails on a deliberately mis-declared metric (bijection) and a
+  non-subset span attr before it's trusted (3.1). *(See `tests/unit/observability/test_parity.py`.)*
+- [x] Phase 2 rename verified byte-for-byte against a captured golden baseline (R1-S4).
+- [x] Phase 1 keystone (schema + parity) lands once; cat-4 plan depends on it, doesn't re-add (R1-S1).
+- [x] Cross-doc: the Phase-3 loop's effect on taxonomy REQ-OAT-024/025 is reconciled (`REQ-OBS-SHARED-004`)
+  — step C consumes `route_state` declared-first with `inferred` fallback recorded.
 
 ---
 

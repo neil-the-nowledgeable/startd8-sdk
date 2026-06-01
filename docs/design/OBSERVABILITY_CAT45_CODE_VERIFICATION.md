@@ -9,6 +9,12 @@ and eventual implementation rest on accurate facts. Read-only; no doc/code edits
 > Feeds the post-CRP cross-doc reconciliation. Two plan claims are **stale**, four are **confirmed**,
 > and one **new collision** (not in any doc) was found. The new collision is the highest-value catch.
 
+> **RECONCILED 2026-05-31** (merge `5babc995` on `main`). All findings folded into the plan docs and
+> implemented: the §A stale claims are now *corrected and shipped* (A-1 tier histogram declared in
+> commit `7b78b89c`; A-2 Prometheus path retired in `bdfad35f`), §B confirmed claims addressed
+> (B-3 `task.*` collision → **deferred** disambiguation follow-up; B-4 phase-span naming → still open),
+> and the §C `category` polysemy is **resolved** (see §C resolution note below).
+
 ---
 
 ## A. Stale plan claims — must revise
@@ -106,6 +112,19 @@ own capability_index-style naming-collision theme).
 
 → Recommend Option 1 or 2 over 3; raise as a cross-doc reconciliation item so AAO-004, PRO-005, and
 taxonomy REQ-OAT-070a all settle on ONE answer rather than three docs each adding `category`.
+
+**RESOLUTION (shipped 2026-05-31).** A blend of Options 1 + 2, settling on ONE answer per axis:
+- **Option 2 applied to `EventTypeDescriptor`:** its `category` (the 8-value instrument grouping) was
+  **renamed to `event_group`** (commit `da3a1105`, AAO Phase 0.5), freeing `category` to mean the
+  5-cat taxonomy uniformly on Metric/Span descriptors (`taxonomy_enums.Category`).
+- **Option 1 applied to the legacy capability axis:** `_ARTIFACT_TYPE_TO_CATEGORY`
+  (4-value `observe/integration/action/reference`) is **kept distinct** — it feeds the capability-index
+  schema only, and the step-C taxonomy registry uses a separately-named `taxonomy_category`
+  (`_ARTIFACT_TYPE_REGISTRY`, REQ-OAT-070a, commit `45f0194e`), so no taxonomy strings leak into the
+  capability schema (CRP R2-F1). A test asserts the two axes stay value-disjoint.
+
+Net: `category` now means the 5-cat taxonomy everywhere it appears as a taxonomy field; the two
+other "category-ish" axes carry distinct names (`event_group`, legacy capability axis). Polysemy closed.
 
 ---
 

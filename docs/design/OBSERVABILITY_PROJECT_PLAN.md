@@ -11,6 +11,22 @@ The **category-4 artifact generator** and the **burndown/velocity dashboards** a
 
 ---
 
+## Implementation status — RECONCILED 2026-05-31 (declarations SHIPPED; one rename DEFERRED)
+
+> Merged to `main` via `feat/obs-cat5-impl` (merge `5babc995`). The code-verification
+> §A-1 correction (tier histogram is LIVE, declare-don't-delete) is now *implemented*.
+
+| Phase | Status | Commit / note |
+|-------|--------|---------------|
+| 0.2 **declare** live `complexity.tier_distribution` histogram (§A-1) | ✅ done | `7b78b89c` (B) — `pipeline_innate`/`system` |
+| 2.x declare the project spans (`project_observability`/`system` axes) | ✅ done | `e48e8f71` + `b294d046` |
+| 3.x document the ownership boundary (SDK emits, ContextCore owns gauges) | ✅ done | `b294d046` (`contextcore_owned` route consumed in step C, `45f0194e`) |
+| 1.x depend on the cat-5 keystone (schema + parity, land once) | ✅ done | shared keystone landed in AAO `da3a1105`/`18fbbd9d` |
+| 0.1 / C-1 `codegen.task.*` rename (PRO-008 / §B-3) | ⛔ **DEFERRED** | 39 attrs / 98 occ / 9 files mixing codegen-chunk + work-item; per-site only — see `OBSERVABILITY_CODEGEN_TASK_DISAMBIGUATION_FOLLOWUP.md` |
+| C-4 phase-span naming inconsistency (§B-4) | ⏳ open | not addressed in B/C; small follow-up |
+
+---
+
 ## Guiding principle
 
 Planning showed category-4 is mostly **documentation + declaring existing spans** in the *one shared*
@@ -152,13 +168,15 @@ These amend the phases above; applied from CRP R1 (see Appendix A). The shared s
 
 ## Before-code checklist
 
-- [ ] Every v0.2 requirement maps to a phase; every step traces to a requirement / Appendix-C item.
-- [ ] Phase-1 schema change is a **dependency** on the cat-5 keystone, not a duplicate add (R1-S1).
-- [ ] Parity test (2.3) is the kind-aware shared helper (spans ⊆ emitted) (R1-S2).
-- [ ] `task_tracking_emitter` stays OUT of the OTel collector (it's a state-file channel).
-- [ ] No progress-delta emitter is built (REQ-PRO-004 ownership).
+- [x] Every v0.2 requirement maps to a phase; every step traces to a requirement / Appendix-C item.
+- [x] Phase-1 schema change is a **dependency** on the cat-5 keystone, not a duplicate add (R1-S1).
+- [x] Parity test (2.3) is the kind-aware shared helper (spans ⊆ emitted) (R1-S2).
+- [x] `task_tracking_emitter` stays OUT of the OTel collector (it's a state-file channel).
+- [x] No progress-delta emitter is built (REQ-PRO-004 ownership).
 - [ ] Phase 0.1 lands the `codegen.task.*` rename before Phase 2.1 declares descriptors.
-- [ ] Phase 0.2 **declares** the live `complexity.tier_distribution` histogram (does NOT delete it).
+  **DEFERRED** — Phase 2 declarations shipped *without* the rename (the rename is the separate
+  `task.*` disambiguation follow-up); revisit ordering when that lands.
+- [x] Phase 0.2 **declares** the live `complexity.tier_distribution` histogram (does NOT delete it).
 
 ---
 
