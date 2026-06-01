@@ -156,6 +156,11 @@ def generate_dashboard_jsonnet(
 
 def _render_panel(panel: PanelSpec) -> str:
     """DC-101: Render a PanelSpec as a panels.*() constructor call."""
+    # REQ-DCR-RCP-020: apply the named recipe (corpus-mode finish) under the panel's
+    # explicit values before rendering. No-op when panel.recipe is unset/unknown.
+    from startd8.dashboard_creator.recipes import hydrate_panel
+
+    panel, _ = hydrate_panel(panel)
     ptype = panel.type
 
     if ptype == PanelType.ROW:
@@ -445,6 +450,13 @@ def _render_merge_block(panel: PanelSpec) -> str:
 
     if fc_fields:
         fields.append("fieldConfig+: { " + ", ".join(fc_fields) + " }")
+
+    # options+: deep-merge the panel's options (recipe finish + spec) onto the
+    # constructor's options (REQ-DCR-RCP-020). ROW/TEXT consume options specially
+    # (collapsed / content) and are excluded.
+    if panel.type not in (PanelType.ROW, PanelType.TEXT) and panel.options:
+        opt_fields = [f"{k}: {_to_jsonnet(v)}" for k, v in panel.options.items()]
+        fields.append("options+: { " + ", ".join(opt_fields) + " }")
 
     # Single-target panels: emit instant/format via targets array in merge block
     if panel.type in _SINGLE_TARGET_TYPES and panel.targets and len(panel.targets) == 1:
