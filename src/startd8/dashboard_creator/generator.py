@@ -10,6 +10,7 @@ Generated Jsonnet follows the overview.libsonnet composition pattern:
   5. Call dashboards.withPanels(baseDashboard, [...])
 """
 
+import json
 import re
 from typing import Any, List, Optional
 
@@ -28,6 +29,34 @@ from startd8.dashboard_creator.models import (
 _METRIC_REF = re.compile(r"\$\{metrics\.(\w+)\}")
 _SELECTOR_REF = re.compile(r"\$\{selectors\.(\w+)\}")
 _COMBINED_REF = re.compile(r"\$\{(metrics|selectors)\.(\w+)\}")
+# Config refs require the Jsonnet (not JSON) path — they resolve to m.X / sel.Y.
+_CONFIG_REF = re.compile(r"\$\{(?:metrics|selectors)\.\w+\}")
+
+
+def _to_jsonnet(obj: Any) -> str:
+    """Serialize an inert data value to Jsonnet (REQ-DCR-RCP-024), fencing config-refs
+    at every leaf (REQ-DCR-RCP-025).
+
+    JSON ⊆ Jsonnet, so ``json.dumps`` is valid for any config-ref-free value. A leaf
+    string containing ``${metrics.*}`` / ``${selectors.*}`` is instead routed through
+    ``_render_expression`` so it resolves to ``m.X`` / ``sel.Y`` rather than being
+    emitted as an inert literal. Deterministic: dict keys are sorted (REQ-DCR-RCP-024
+    / R1-S10). Raises on unserializable types instead of the old silent ``repr()``.
+    """
+    if isinstance(obj, dict):
+        body = ", ".join(
+            f"{json.dumps(str(k))}: {_to_jsonnet(obj[k])}" for k in sorted(obj)
+        )
+        return "{" + body + "}"
+    if isinstance(obj, list):
+        return "[" + ", ".join(_to_jsonnet(v) for v in obj) + "]"
+    if isinstance(obj, str) and _CONFIG_REF.search(obj):
+        return _render_expression(obj)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return json.dumps(obj)
+    raise TypeError(
+        f"Cannot serialize {type(obj).__name__} to Jsonnet: {obj!r}"
+    )
 
 
 def generate_dashboard_jsonnet(
@@ -83,10 +112,20 @@ def generate_dashboard_jsonnet(
     lines.append(f"  '{spec.uid}',{desc_arg}")
     lines.append(f"  tags=[{tags_str}],")
 
-    # Merge block fields (templating, links)
-    has_merge = bool(spec.variables) or bool(spec.links)
+    # AES-041: shared crosshair (graphTooltip: 1) when the dashboard has >= 2
+    # timeseries panels; otherwise leave the mixin default (0).
+    n_timeseries = sum(
+        1 for p in spec.panels
+        if p.type in (PanelType.TIMESERIES, PanelType.TRACEQL_TIMESERIES)
+    )
+    shared_crosshair = n_timeseries >= 2
+
+    # Merge block fields (templating, links, graphTooltip)
+    has_merge = bool(spec.variables) or bool(spec.links) or shared_crosshair
     if has_merge:
         lines.append(") {")
+        if shared_crosshair:
+            lines.append("  graphTooltip: 1,")
         if spec.variables:
             lines.append("  templating: {")
             lines.append("    list: [")
@@ -180,7 +219,7 @@ def _render_panel(panel: PanelSpec) -> str:
 
     # Overrides
     if panel.overrides:
-        args.append(f"overrides={_render_jsonnet_value(panel.overrides)}")
+        args.append(f"overrides={_to_jsonnet(panel.overrides)}")
 
     sep = ",\n    "
     call = f"panels.{constructor}(\n    {sep.join(args)},\n  )"
@@ -314,7 +353,7 @@ def _render_targets(targets: List[TargetSpec]) -> str:
         ref_id = target.refId or (chr(65 + i) if i < 26 else f"REF_{i}")
         fields.append(f"refId: '{ref_id}'")
         if target.datasource:
-            fields.append(f"datasource: {_render_jsonnet_value(target.datasource)}")
+            fields.append(f"datasource: {_to_jsonnet(target.datasource)}")
         if target.queryType:
             fields.append(f"queryType: '{target.queryType}'")
         if target.instant:
@@ -367,10 +406,10 @@ def _render_merge_block(panel: PanelSpec) -> str:
                     if k == "links" and panel.dataLinks:
                         continue  # dataLinks takes precedence
                     defaults_inner.append(
-                        f"{k}: {_render_jsonnet_value(v)}"
+                        f"{k}: {_to_jsonnet(v)}"
                     )
             else:
-                fc_fields.append(f"{key}: {_render_jsonnet_value(value)}")
+                fc_fields.append(f"{key}: {_to_jsonnet(value)}")
 
     if defaults_inner:
         fc_fields.insert(0, "defaults+: { " + ", ".join(defaults_inner) + " }")
@@ -417,7 +456,7 @@ def _render_transformations(transforms: List[TransformSpec]) -> str:
     for t in transforms:
         parts = [f"id: '{_escape_jsonnet_string(t.id)}'"]
         if t.options:
-            parts.append(f"options: {_render_jsonnet_value(t.options)}")
+            parts.append(f"options: {_to_jsonnet(t.options)}")
         items.append("{ " + ", ".join(parts) + " }")
     return "[\n      " + ",\n      ".join(items) + ",\n    ]"
 
@@ -449,32 +488,19 @@ def _render_dashboard_link(link: DashboardLink) -> str:
     return "{ " + ", ".join(fields) + " }"
 
 
-def _render_jsonnet_value(obj: Any) -> str:
-    """Convert a Python value to a Jsonnet literal."""
-    if isinstance(obj, dict):
-        if not obj:
-            return "{}"
-        fields = [f"{k}: {_render_jsonnet_value(v)}" for k, v in obj.items()]
-        return "{ " + ", ".join(fields) + " }"
-    elif isinstance(obj, list):
-        if not obj:
-            return "[]"
-        items = [_render_jsonnet_value(item) for item in obj]
-        return "[" + ", ".join(items) + "]"
-    elif isinstance(obj, str):
-        return f"'{_escape_jsonnet_string(obj)}'"
-    elif isinstance(obj, bool):
-        return "true" if obj else "false"
-    elif isinstance(obj, (int, float)):
-        return str(obj)
-    elif obj is None:
-        return "null"
-    return repr(obj)
-
-
 def _escape_jsonnet_string(s: str) -> str:
-    """Escape a string for Jsonnet single-quoted string literal."""
-    return s.replace("\\", "\\\\").replace("'", "\\'")
+    """Escape a string for a Jsonnet single-quoted string literal (REQ-DCR-RCP-026).
+
+    Delegates the escaping to ``json.dumps`` (which correctly handles newlines, tabs,
+    control characters, backslashes, and unicode) so a multi-line text-panel content or
+    a title containing ``\\n`` no longer produces invalid Jsonnet, and crafted strings
+    can't break out of the literal. Output stays in the single-quoted style used
+    throughout the generator: take the json.dumps body (already fully escaped) and
+    escape ``'`` for the single-quote context. The legacy implementation escaped only
+    ``\\`` and ``'`` and silently emitted raw control characters.
+    """
+    inner = json.dumps(s)[1:-1]  # strip the surrounding double quotes; everything else escaped
+    return inner.replace("'", "\\'")
 
 
 def _panel_constructor_name(ptype: PanelType) -> str:

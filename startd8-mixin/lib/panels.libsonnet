@@ -1,4 +1,5 @@
 // Panel construction helpers for StartD8 dashboards.
+local config = (import '../config.libsonnet')._config;
 {
   // Stat panel (single value)
   stat(title, expr, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', thresholds=[], decimals=null, instant=false, legendFormat=''):: {
@@ -54,11 +55,17 @@
         color: { mode: 'thresholds' },
         thresholds: {
           mode: 'absolute',
-          steps: if std.length(thresholds) > 0 then thresholds else [
-            { color: 'red', value: null },
-            { color: 'yellow', value: 80 },
-            { color: 'green', value: 100 },
-          ],
+          // AES-020: no arbitrary magic-number default ramp — a base step only,
+          // unless the spec supplies thresholds (recipes set the actionable range).
+          // config.legacyThresholds restores the old 80/100 ramp for consumers that relied on it.
+          steps: if std.length(thresholds) > 0 then thresholds
+                 else if config.legacyThresholds then [
+                   { color: 'red', value: null },
+                   { color: 'yellow', value: 80 },
+                   { color: 'green', value: 100 },
+                 ] else [
+                   { color: 'green', value: null },
+                 ],
         },
         mappings: [],
       },
@@ -161,11 +168,15 @@
         color: { mode: 'thresholds' },
         thresholds: {
           mode: 'absolute',
-          steps: if std.length(thresholds) > 0 then thresholds else [
-            { color: 'red', value: null },
-            { color: 'yellow', value: 60 },
-            { color: 'green', value: 80 },
-          ],
+          // AES-020: base step only by default; config.legacyThresholds restores the old 60/80 ramp.
+          steps: if std.length(thresholds) > 0 then thresholds
+                 else if config.legacyThresholds then [
+                   { color: 'red', value: null },
+                   { color: 'yellow', value: 60 },
+                   { color: 'green', value: 80 },
+                 ] else [
+                   { color: 'green', value: null },
+                 ],
         },
       },
       overrides: [],
@@ -180,7 +191,8 @@
   },
 
   // Pie chart panel
-  piechart(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', pieType='pie', legendMode='list', legendPlacement='right', overrides=[]):: {
+  // AES-014: corpus-mode defaults — donut, legend at bottom, percent labels.
+  piechart(title, targets, datasource={ type: 'prometheus', uid: '${datasource}' }, unit='', pieType='donut', legendMode='list', legendPlacement='bottom', overrides=[]):: {
     title: title,
     type: 'piechart',
     datasource: datasource,
@@ -199,6 +211,7 @@
     options: {
       legend: { displayMode: legendMode, placement: legendPlacement, showLegend: true },
       pieType: pieType,
+      displayLabels: ['percent'],
       reduceOptions: { calcs: ['lastNotNull'], fields: '', values: false },
       tooltip: { mode: 'single', sort: 'none' },
     },

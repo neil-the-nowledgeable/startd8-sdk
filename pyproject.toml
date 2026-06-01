@@ -75,6 +75,11 @@ dev = [
     "cryptography>=42.0.0",
     "jsonschema>=4.0.0",
     "respx>=0.21.0",
+    # NFR-AES-5: Jsonnet toolchain for the dashboard_creator compile-based golden tests.
+    # Provides the `_gojsonnet` backend compiler.py already supports, so compiled-JSON
+    # goldens run without a separately-installed `jsonnet` binary. Tests that compile
+    # skip-with-reason when the toolchain is absent (see tests/.../test_cosmetic_defaults.py).
+    "gojsonnet>=0.20.0",
 ]
 
 [project.scripts]
