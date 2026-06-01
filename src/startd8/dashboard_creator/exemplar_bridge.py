@@ -172,3 +172,50 @@ def find_dashboard_exemplar(
 def suggest_recipes(dashboard: Dict[str, Any]) -> List[str]:
     """REQ-PEP-342: the deterministic recipe hint for a dashboard's archetype."""
     return list(ARCHETYPE_RECIPES.get(classify_archetype(dashboard), []))
+
+
+def apply_recipe_hint(spec, registry: Optional[ExemplarRegistry] = None):
+    """REQ-PEP-341: deterministically apply the exemplar recipe hint to a DashboardSpec.
+
+    The hint maps **by panel type**, applies **only to panels the spec left
+    un-recipe'd**, is a **no-op for types the exemplar archetype doesn't cover**, and
+    leaves explicit spec recipes untouched (R2-S6/S7 — it selects a recipe id, not a
+    new precedence layer). If a ``registry`` is given, the hint is gated on a matching
+    reference exemplar actually existing (grounding the suggestion in a proven dashboard);
+    without one it falls back to the archetype's curated recipes. Returns the same spec
+    object unchanged when nothing applies.
+    """
+    from startd8.dashboard_creator.recipes import RECIPE_REGISTRY
+
+    # Classify from a synthetic dashboard (panel types + title/tags) — same as a compiled one.
+    dash = {
+        "title": spec.title,
+        "tags": list(spec.tags),
+        "panels": [{"type": p.type.value} for p in spec.panels],
+    }
+    if registry is not None and find_dashboard_exemplar(dash, registry) is None:
+        return spec
+
+    recipe_ids = suggest_recipes(dash)
+    if not recipe_ids:
+        return spec
+
+    # First matching recipe per panel type (deterministic — recipe_ids order is fixed).
+    type_to_recipe: Dict[Any, str] = {}
+    for rid in recipe_ids:
+        recipe = RECIPE_REGISTRY.get(rid)
+        if recipe is None:
+            continue
+        for pt in recipe.applies_to:
+            type_to_recipe.setdefault(pt, rid)
+
+    new_panels = []
+    changed = False
+    for panel in spec.panels:
+        if panel.recipe is None and panel.type in type_to_recipe:
+            new_panels.append(panel.model_copy(update={"recipe": type_to_recipe[panel.type]}))
+            changed = True
+        else:
+            new_panels.append(panel)
+
+    return spec.model_copy(update={"panels": new_panels}) if changed else spec

@@ -310,6 +310,19 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     f"Config overrides will not take effect.",
                 )
 
+        # 4.9 Recipe hint (REQ-PEP-341, opt-in) — deterministically apply the archetype's
+        # recipes to un-recipe'd panels before validation/generation.
+        if config.get("recipe_hint"):
+            from startd8.dashboard_creator.exemplar_bridge import apply_recipe_hint
+
+            hinted = apply_recipe_hint(spec)
+            if hinted is not spec:
+                n = sum(1 for p in hinted.panels if p.recipe) - sum(
+                    1 for p in spec.panels if p.recipe
+                )
+                logger.info("Recipe hint applied recipes to %d panel(s)", n)
+                spec = hinted
+
         # 5. Validate spec
         self._emit_progress(on_progress, 4, 10, "Validating spec")
         validation_errors = validate_spec(spec, merged_config)
