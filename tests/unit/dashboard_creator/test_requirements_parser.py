@@ -529,7 +529,9 @@ class TestOverviewParsing:
         assert len(parsed.variables) == 5  # datasource + fiscal_year + budget_status + department + fund_source
 
     def test_link_count(self, parsed):
-        assert len(parsed.links) == 4
+        # overview-requirements.md defines 5 dashboard links (was 4; a 5th — the
+        # Justice Pipeline cross-link — was added to the source doc).
+        assert len(parsed.links) == 5
 
     def test_multi_target_panel(self, parsed):
         """Panel 12 (Fund Source Breakdown) should have 6 targets."""
