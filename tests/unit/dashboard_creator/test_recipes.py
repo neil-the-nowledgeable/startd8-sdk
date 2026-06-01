@@ -38,6 +38,8 @@ class TestRegistry:
             "timeseries.stacked", "table.aggregation", "table.ranking",
             "barchart.ranking", "text.banner",
             "canvas.display", "canvas.editable", "canvas.metric_card",
+            "geomap.heatmap", "heatmap.timeseries", "state_timeline.compact",
+            "xychart.connected", "candlestick.ohlc", "candlestick.price",
         }
         assert set(RECIPE_REGISTRY) == expected
 

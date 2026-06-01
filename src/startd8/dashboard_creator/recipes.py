@@ -153,6 +153,40 @@ _SEED: List[PanelRecipe] = [
             }],
         }},
     ),
+    PanelRecipe(
+        id="geomap.heatmap", applies_to=[PanelType.GEOMAP],
+        summary="Density heatmap layer instead of point markers.",
+        options={"layers": [{
+            "type": "heatmap", "name": "Heatmap", "location": {"mode": "auto"},
+            "config": {"radius": 25, "blur": 27, "weight": {"fixed": 1, "min": 0, "max": 1}},
+        }]},
+    ),
+    PanelRecipe(
+        id="heatmap.timeseries", applies_to=[PanelType.HEATMAP],
+        summary="Bucket a time series into a heatmap (calculate from data).",
+        options={"calculate": True,
+                 "calculation": {"xBuckets": {"mode": "size"}, "yBuckets": {"mode": "count"}}},
+    ),
+    PanelRecipe(
+        id="state_timeline.compact", applies_to=[PanelType.STATE_TIMELINE],
+        summary="Dense status timeline: no inline values, thinner rows.",
+        options={"showValue": "never", "rowHeight": 0.7},
+    ),
+    PanelRecipe(
+        id="xychart.connected", applies_to=[PanelType.XYCHART],
+        summary="Scatter with connecting lines.",
+        field_config={"defaults": {"custom": {"show": "points+lines"}}},
+    ),
+    PanelRecipe(
+        id="candlestick.ohlc", applies_to=[PanelType.CANDLESTICK],
+        summary="OHLC bars instead of filled candles.",
+        options={"candleStyle": "ohlcbars", "colorStrategy": "open-close"},
+    ),
+    PanelRecipe(
+        id="candlestick.price", applies_to=[PanelType.CANDLESTICK],
+        summary="Price-only candles (no volume pane).",
+        options={"mode": "candles", "includeAllFields": False},
+    ),
 ]
 
 # RCP-004: refuse to register a recipe for a panel type with no constructor.
