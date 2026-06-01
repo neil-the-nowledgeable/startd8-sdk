@@ -238,19 +238,41 @@ class TestRenderVariable:
         assert "'ver'" in result
         assert "'1.0'" in result
 
-    def test_all_9_variable_types_renderable(self):
+    def test_all_11_variable_types_renderable(self):
         """Every VariableType value produces output without error."""
         for vt in VariableType:
             kwargs = {"type": vt, "name": "test", "label": "Test"}
             if vt in {VariableType.MODEL, VariableType.AGENT, VariableType.PROJECT}:
                 kwargs["metric"] = "up"
-            if vt == VariableType.CUSTOM:
+            if vt in {VariableType.CUSTOM, VariableType.QUERY, VariableType.INTERVAL}:
                 kwargs["query"] = "a,b"
             if vt == VariableType.CONSTANT:
                 kwargs["value"] = "x"
             var = VariableSpec(**kwargs)
             result = _render_variable(var)
             assert f"variables.{vt.value}(" in result
+
+    def test_query_variable_emits_label_values_and_options(self):
+        var = VariableSpec(type=VariableType.QUERY, name="instance", label="Instance",
+                           query="label_values(up, instance)", multi=True,
+                           includeAll=True, regex="/.*prod/")
+        result = _render_variable(var)
+        assert "variables.queryVariable(" in result
+        assert "label_values(up, instance)" in result
+        assert "multi=true" in result and "includeAll=true" in result
+        assert "regex='/.*prod/'" in result
+        # includeAll handled by the builder, not duplicated in a merge block
+        assert "includeAll: true" not in result
+
+    def test_interval_variable_renders(self):
+        var = VariableSpec(type=VariableType.INTERVAL, name="interval", query="1m,10m,1h")
+        result = _render_variable(var)
+        assert "variables.intervalVariable('1m,10m,1h'" in result
+
+    def test_datasource_variable_regex(self):
+        var = VariableSpec(type=VariableType.PROMETHEUS_DATASOURCE, name="ds", regex="/.*prom$/")
+        result = _render_variable(var)
+        assert "regex='/.*prom$/'" in result
 
 
 # ---------------------------------------------------------------------------

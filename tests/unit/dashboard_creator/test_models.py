@@ -45,14 +45,15 @@ class TestPanelType:
 
 
 class TestVariableType:
-    def test_all_9_values_accepted(self):
+    def test_all_11_values_accepted(self):
         expected = {
             "prometheusDatasource", "tempoDatasource", "lokiDatasource",
             "serviceNameVariable", "modelVariable", "agentVariable",
-            "projectVariable", "customVariable", "constantVariable",
+            "projectVariable", "queryVariable", "intervalVariable",
+            "customVariable", "constantVariable",
         }
         assert {vt.value for vt in VariableType} == expected
-        assert len(VariableType) == 9
+        assert len(VariableType) == 11
 
 
 # ---------------------------------------------------------------------------
