@@ -117,6 +117,30 @@ class TestRootCauseClassifier:
         assert cause == expected_cause
         assert stage == expected_stage
 
+    @pytest.mark.parametrize(
+        "error_msg, should_match",
+        [
+            # RUN-011 Gap C: TS231x/232x/234x are real type-class errors → attribute.
+            ("synthesize-value-props.ts:273:55 error TS2345: Argument of type "
+             "'Set<unknown>' is not assignable to parameter of type 'Set<string>'.", True),
+            ("x.ts(1,1): error TS2322: Type 'string' is not assignable to type 'number'.", True),
+            ("x.ts(1,1): error TS2314: Generic type requires type arguments.", True),
+            # Must NOT match: module-resolution (230x) + target/lib (280x) are
+            # handled/stripped elsewhere, not type-class mismatches.
+            ("error TS2307: Cannot find module 'zod'", False),
+            ("error TS2802: Set can only be iterated with --downlevelIteration", False),
+        ],
+    )
+    def test_classify_type_class_mismatch(self, classifier, error_msg, should_match):
+        cause, stage = classifier.classify_feature(
+            {"error_message": error_msg, "status": "failed"}
+        )
+        if should_match:
+            assert cause == RootCause.TYPE_CLASS_MISMATCH
+            assert stage == PipelineStage.TYPECHECK
+        else:
+            assert cause != RootCause.TYPE_CLASS_MISMATCH
+
     def test_classify_feature_blocked_status(self, classifier):
         feature_dict = {"status": "blocked", "error_message": ""}
         cause, stage = classifier.classify_feature(feature_dict)
