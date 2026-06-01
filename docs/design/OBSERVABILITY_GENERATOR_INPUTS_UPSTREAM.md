@@ -1,8 +1,14 @@
 # Bringing observability-generator placeholders forward as cap-dev-pipe inputs
 
 **Date:** 2026-05-31
-**Status:** Design note (requirements-adjacent) — extends REQ-OAT-024/025; consumed-side is the SDK,
-producer-side is cap-dev-pipe (out of this module's immediate scope).
+**Status:** ⚠️ **SUPERSEDED — consolidated into
+`OBSERVABILITY_INPUT_PROVISIONING_REQUIREMENTS.md`** (the canonical requirements doc). This note's
+unique insights (the operational-placeholder inventory, the `obs-`/`cc-obs-` dashboard-UID skew, and
+the REQ-OAT-061 consumer-side connection) now live there as **FR-A2 / FR-B6**. Kept for provenance;
+do not extend — add to the canonical doc instead. *(The earlier "tracked in cap-dev-pipe" claim in §7
+was aspirational; the producer work is now tracked as FR-B6/FR-E in the canonical doc.)*
+**Original framing:** Design note (requirements-adjacent) — extends REQ-OAT-024/025; consumed-side is
+the SDK, producer-side is cap-dev-pipe.
 **Related code:** `src/startd8/observability/artifact_generator.py`; the REQ-OAT-061 actionability
 check (`_bridge_human_actionable`, step C2) that surfaces these gaps today.
 
