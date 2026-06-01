@@ -78,6 +78,7 @@ class RootCause(str, Enum):
     DEPENDENCY_BLOCKED = "dependency_blocked"
     REPAIR_LANGUAGE_MISMATCH = "repair_language_mismatch"
     CROSS_FILE_CONTRACT = "cross_file_contract"  # RUN-008 FR-10: Prisma↔Zod / import seam divergence
+    TYPE_CLASS_MISMATCH = "type_class_mismatch"  # RUN-011 Gap C: TS231x/232x/234x assignment/overload/binding errors
     UNKNOWN = "unknown"
 
 
@@ -93,6 +94,7 @@ class PipelineStage(str, Enum):
     FALLBACK = "fallback"
     INTEGRATION = "integration"
     CROSS_FEATURE_CONTRACT = "cross_feature_contract"  # RUN-008 FR-10: divergence between sibling features
+    TYPECHECK = "typecheck"  # RUN-011 Gap C: surfaced by tsc --noEmit, survives per-file isolation
     UNKNOWN = "unknown"
 
 
@@ -126,6 +128,14 @@ _ERROR_PATTERNS: List[Tuple[re.Pattern, RootCause, PipelineStage]] = [
      RootCause.SIZE_REGRESSION, PipelineStage.INTEGRATION),
     (re.compile(r"ast.*fail|syntax error|invalid syntax", re.IGNORECASE),
      RootCause.AST_FAILURE, PipelineStage.REPAIR),
+    # RUN-011 Gap C — TypeScript type-class errors (assignment/binding/operator):
+    # TS231x (operator overload), TS232x (binding/assignment), TS234x (argument
+    # assignment, e.g. TS2345 Set<unknown> not assignable to Set<string>). These
+    # are REAL type errors that survive per-file isolation (not the module-resolution
+    # / target-lib false positives nodejs.py strips) — attribute them, don't leave
+    # them as unknown/unknown. Case-sensitive on the TS code to avoid stray matches.
+    (re.compile(r"error TS23[124]\d\b"),
+     RootCause.TYPE_CLASS_MISMATCH, PipelineStage.TYPECHECK),
     (re.compile(r"blocked by.*dependency|dependency.*failed", re.IGNORECASE),
      RootCause.DEPENDENCY_BLOCKED, PipelineStage.INTEGRATION),
     (re.compile(r"generation.*error|generation.*fail", re.IGNORECASE),
@@ -405,6 +415,16 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         "hint": (
             "Source cross-file contracts (imported module names, field/type/FK "
             "shape) from the producing feature's actual output — do not invent them."
+        ),
+    },
+    "type_class_mismatch": {
+        "phase": "draft",
+        "hint": (
+            "Type the generated values to match their consumers — a TS2345/2322/231x "
+            "error means an assignment/argument/operator type is incompatible "
+            "(e.g. iterating an `unknown`-typed tool-use response into a `Set<string>`). "
+            "Annotate the collection (`new Set<string>()`) or narrow/cast the value at "
+            "the boundary; do not leave LLM tool-use outputs as `unknown`."
         ),
     },
     "unresolvable_import": {

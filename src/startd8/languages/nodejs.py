@@ -701,11 +701,22 @@ def _is_real_tsc_diagnostic(output: str) -> bool:
 # Module-resolution diagnostics that are FALSE POSITIVES in single-file isolation:
 # a per-file/per-element syntax check copies the file to a temp dir with no
 # node_modules and no tsconfig `paths`, so real package imports (`zod`, `next`,
-# `@prisma/client`) and `@/`-aliased imports cannot resolve (TS2307), and any
-# symbols/members they would export read as missing (TS2305/TS2306/TS2614/TS2724).
+# `@prisma/client`) and `@/`-aliased imports cannot resolve (TS2307 / TS2792 —
+# the latter is the newer variant that includes the "Did you mean to set
+# 'moduleResolution' to 'nodenext'..." suggestion), and any symbols/members
+# they would export read as missing (TS2305/TS2306/TS2614/TS2724).
 # Cross-module resolution is the PROJECT-level gate's job (RUN-008 FR-4), not the
 # per-file syntax check — so these codes must not fail validate_syntax.
-_MODULE_RESOLUTION_CODES: tuple[str, ...] = ("TS2307", "TS2305", "TS2306", "TS2614", "TS2724")
+# RUN-010 evidence: TS2792 fired on a generated `import { z } from "zod"` and
+# halted the batch at PI-001; was not in the drop list.
+_MODULE_RESOLUTION_CODES: tuple[str, ...] = (
+    "TS2307",  # Cannot find module 'X'
+    "TS2792",  # Cannot find module 'X'. Did you mean to set... (RUN-010)
+    "TS2305",  # Module has no exported member 'X'
+    "TS2306",  # File is not a module
+    "TS2614",  # Module has no default export
+    "TS2724",  # Module has no exported member 'X' (case-sensitivity hint)
+)
 
 # Target/lib-config diagnostics that are FALSE POSITIVES in single-file isolation:
 # they depend on the project's `target`/`lib`/`downlevelIteration`, which the

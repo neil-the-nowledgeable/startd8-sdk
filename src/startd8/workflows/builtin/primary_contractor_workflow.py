@@ -6,23 +6,16 @@ while cheaper models handle the actual drafting work.
 
 Pattern:
 1. Claude creates detailed implementation spec
-2. Drafter (Gemini Flash, GPT-4.1-nano, etc.) implements from spec
+2. Drafter (cheap model, e.g. Gemini Flash Lite) implements from spec
 3. Claude reviews implementation
 4. If not approved, loop back to step 2 (max 3 iterations)
 5. Claude integrates/finalizes
 
-Cost Structure (January 2026):
-Primary Contractors (Claude 4.5 family - recommended):
-- Claude Sonnet 4.5: $3.00/$15.00 per 1M tokens (default, best for coding/agents)
-- Claude Opus 4.5: $5.00/$25.00 per 1M tokens (most intelligent)
-- Claude Haiku 4.5: $1.00/$5.00 per 1M tokens (fastest)
-
-Drafters (cost-efficient options):
-- Gemini 2.5 Flash Lite: $0.075/$0.30 per 1M tokens (default - best value)
-- GPT-4.1-nano: $0.10/$0.40 per 1M tokens (ultra-fast)
-- Gemini 3 Flash Preview: $0.10/$0.40 per 1M tokens (latest)
-- GPT-4o-mini: $0.15/$0.60 per 1M tokens (legacy but reliable)
-- Gemini 2.5 Flash: $0.15/$0.60 per 1M tokens (balanced)
+Model defaults are centralized in ``startd8.model_catalog`` — edit there, not here:
+- Lead/reviewer: ``Models.PRIMARY_CONTRACTOR_LEAD`` (Opus 4.8 flagship; REQ-PCMR-100).
+  Opt down to the balanced lead with ``lead_agent=Models.CLAUDE_SONNET_LATEST``.
+- Drafter: ``Models.PRIMARY_CONTRACTOR_DRAFTER`` (Gemini 2.5 Flash Lite — cheapest
+  stable; REQ-PCMR-101). Enumerate cheap options via ``list_models_by_tier("mini")``.
 """
 
 from datetime import datetime, timezone
@@ -190,23 +183,18 @@ class PrimaryContractorWorkflow(WorkflowBase):
         - Config/data generation: fail_on_api_truncation=True, fail_on_heuristic_truncation=False
         - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
-    Recommended Lead Agents:
-        - anthropic:claude-sonnet-4-6 (default - best for coding/agents)
-        - anthropic:claude-opus-4-6 (most intelligent)
-        - anthropic:claude-haiku-4-5-20251001 (fastest, near-frontier)
-
-    Recommended Drafter Agents:
-        - anthropic:claude-haiku-4-5-20251001 (default - fast, low-cost)
-        - openai:gpt-4.1-nano ($0.10/$0.40 - ultra-fast)
-        - gemini:gemini-3-flash-preview ($0.10/$0.40 - latest)
-        - openai:gpt-4o-mini ($0.15/$0.60 - reliable)
+    Model selection is centralized in ``startd8.model_catalog`` (edit there):
+        - Lead/reviewer default: ``Models.PRIMARY_CONTRACTOR_LEAD`` (Opus 4.8 flagship).
+          Opt down with ``lead_agent=Models.CLAUDE_SONNET_LATEST`` for lower cost.
+        - Drafter default: ``Models.PRIMARY_CONTRACTOR_DRAFTER`` (Gemini 2.5 Flash Lite).
+          List cheap alternatives with ``list_models_by_tier("mini")`` / ``("fast")``.
 
     Example:
         result = workflow.run(
             config={
                 "task_description": "Implement a rate limiter using token bucket algorithm",
                 "context": {"language": "Python", "framework": "FastAPI"},
-                "drafter_agent": "openai:gpt-4.1-nano",
+                # drafter_agent omitted -> Models.PRIMARY_CONTRACTOR_DRAFTER (catalog default)
                 "max_iterations": 3
             }
         )

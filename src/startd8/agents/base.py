@@ -78,6 +78,28 @@ def is_completion_model(model: str) -> bool:
     return False
 
 
+def requires_max_completion_tokens(model: str) -> bool:
+    """
+    Check whether an OpenAI model rejects ``max_tokens`` and requires
+    ``max_completion_tokens`` instead.
+
+    The gpt-5 family and the o-series reasoning models (o1/o3/o4) only accept
+    ``max_completion_tokens`` on the chat-completions endpoint, and only support
+    the default ``temperature`` (1). Older families (gpt-4o, gpt-4.1, gpt-4-turbo,
+    gpt-3.5) continue to use ``max_tokens`` and arbitrary temperatures.
+
+    Args:
+        model: Model identifier
+
+    Returns:
+        True if the model needs ``max_completion_tokens`` and a default temperature.
+    """
+    if not model:
+        return False
+    m = model.lower()
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 # Import cost tracking (optional dependency within the same package)
 try:
     from ..costs import CostTracker, BudgetManager, get_cost_context
