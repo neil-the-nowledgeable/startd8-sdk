@@ -189,6 +189,14 @@ class TestDensityAndBanner:
         assert first.recipe == "text.banner"
         assert first.options["content"] == "# Goal"
         assert first.gridPos.w == 24 and first.gridPos.y == 0
+        assert first.gridPos.h == 3  # banner is short; content text panels default to h=8
+
+    def test_content_text_panel_is_tall(self):
+        # AES-030: content text panels default to a content-friendly height (24x8),
+        # distinct from the short banner.
+        result = apply_layout(DashboardSpec(title="T", panels=[
+            PanelSpec(type=PanelType.TEXT, title="Notes", options={"content": "x"})]))
+        assert (result.panels[0].gridPos.w, result.panels[0].gridPos.h) == (24, 8)
 
     def test_no_banner_by_default(self):
         result = apply_layout(DashboardSpec(title="T",

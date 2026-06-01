@@ -27,7 +27,7 @@ _PANEL_SIZE = {
     PanelType.PIECHART: (6, 8),
     PanelType.HISTOGRAM: (12, 8),
     PanelType.LOGS: (24, 10),
-    PanelType.TEXT: (24, 4),
+    PanelType.TEXT: (24, 8),  # content-friendly (markdown tables/lists); banners size shorter via explicit gridPos
     PanelType.TRACEQL_STAT: (4, 4),
     PanelType.TRACEQL_GAUGE: (6, 8),
     PanelType.TRACEQL_TABLE: (12, 8),
@@ -160,6 +160,9 @@ def apply_layout(spec: DashboardSpec) -> DashboardSpec:
             title=spec.title,
             recipe="text.banner",
             options={"content": spec.objective or f"# {spec.title}", "mode": "markdown"},
+            # A banner is short by intent — pin an explicit height so it isn't sized
+            # like a content text panel (24x8). Auto-layout preserves explicit gridPos.
+            gridPos=GridPos(h=3, w=_ROW_W, x=0, y=0),
         )
         panels = [banner] + panels
     panels = auto_group_rows(panels)
