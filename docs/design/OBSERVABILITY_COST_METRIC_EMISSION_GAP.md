@@ -123,13 +123,15 @@ The Prime Contractor calls `agent.agenerate(prompt)` directly and prices results
 *explicit* requirement (none exists) — so it's not a defect-against-spec; it's an implementation choice
 that invalidated the requirements' unstated coverage assumption.
 
-### What the fix therefore requires (both layers)
-- **Requirements:** add an owned coverage requirement (best home: REQ-PC observability, cross-linked
-  from REQ-AAO) — "construction-path generations MUST emit cost/session OTel metrics" — and upgrade
-  REQ-AAO-012 (or add REQ-AAO-013) to a **runtime coverage** assertion, not just static emitter parity.
-- **Implementation:** inject a `CostTracker` into the contractor's agents + route through
-  `generate_and_track()` (§5 option 1), or call `record_cost()` from the contractor's existing
-  per-generation accounting (§5 option 2).
+### What the fix therefore requires (both layers) — DONE 2026-06-01
+- **Requirements:** ✅ added **REQ-PC-018** (Cost/Usage Metric Emission — the owned coverage mandate,
+  cross-linked from REQ-AAO) + a REQ-PC-013 scope note; ✅ added **REQ-AAO-013** (runtime emission
+  coverage), distinct from the static parity test (REQ-AAO-012). Specified in
+  `COST_METRIC_EMISSION_COVERAGE_REQUIREMENTS.md` (REQ-CME, reflective loop).
+- **Implementation:** ✅ emit at the per-feature chokepoint via the store-free `CostMetrics` emitter
+  (chosen over the more invasive `CostTracker`/`generate_and_track` option after planning). Commit
+  `7351613a`; **verified live** on run-012 (`startd8_cost_USD_total = $0.2382`,
+  `model=anthropic:claude-sonnet-4-6 provider=anthropic project=strtd8`).
 
 **One-line classification:** *Combo — a requirements **coverage** gap (no doc owns "the construction
 path must emit cost metrics"; three tracks each assumed the standard path) that an implementation

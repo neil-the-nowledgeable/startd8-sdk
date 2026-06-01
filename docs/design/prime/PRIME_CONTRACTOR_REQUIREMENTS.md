@@ -1,7 +1,8 @@
 # Prime Contractor Workflow — Functional Requirements
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Created:** 2026-02-20
+**Updated:** 2026-06-01 — added REQ-PC-018 (cost/usage metric emission) + REQ-PC-013 scope note
 **Source:** Run 2 post-mortem, Mottainai fix plan (Gaps 9–14), pipeline requirements audit
 
 ---
@@ -237,7 +238,7 @@ A `--force-regenerate` flag MUST bypass the cache and regenerate all files.
 
 ---
 
-## Layer 5: Observability (REQ-PC-013–014)
+## Layer 5: Observability (REQ-PC-013–014, REQ-PC-018)
 
 ### REQ-PC-013: Cost Reporting
 
@@ -250,6 +251,12 @@ Per-feature generation cost MUST be tracked and reported.
 - Each feature's generation cost (USD) MUST be recorded in the execution report
 - Total cost across all features MUST be summarized
 - Cost MUST include both generation and validation passes
+
+> **Scope note (2026-06-01):** REQ-PC-013 covers cost in the **postmortem JSON report** only.
+> Emitting cost as **OTel metrics** (`startd8.cost.*` → Mimir) is a *separate* obligation — see
+> **REQ-PC-018**. Treating "cost tracking" as report-only is exactly what let the construction path
+> spend money with zero `startd8.cost.*` series reaching Mimir
+> (see `docs/design/OBSERVABILITY_COST_METRIC_EMISSION_GAP.md`).
 
 ---
 
@@ -264,6 +271,31 @@ The prime contractor MUST log which onboarding fields were injected and which we
 - At generation start, log: "Injected X/Y context fields: [list of present fields]"
 - For each missing field, log: "Missing context field: {field_name} — using default"
 - Log format MUST be consistent with artisan's `DESIGN: forwarded X/6 onboarding inventory fields into context`
+
+---
+
+### REQ-PC-018: Cost/Usage Metric Emission (the owned coverage requirement)
+
+**Status:** implemented (2026-06-01)
+**Source files:** `src/startd8/contractors/prime_contractor.py`, `src/startd8/costs/otel_metrics.py`
+**Cross-refs:** `COST_METRIC_EMISSION_COVERAGE_REQUIREMENTS.md` (REQ-CME), `OBSERVABILITY_AI_AGENT_REQUIREMENTS.md` (REQ-AAO-013)
+
+Every cost-incurring generation in the construction path MUST emit the `startd8.cost.*` OTel metric
+family (cost + input/output tokens + per-request histogram), in addition to the REQ-PC-013 postmortem
+report. This closes the coverage gap where neither REQ-AAO (observation-only), REQ-CT (assumed the
+`agents/base.py` tracked path was universal), nor REQ-PC-013 (report-only) owned construction-path
+metric emission.
+
+**Acceptance criteria:**
+- Emission happens at the per-feature cost-accumulation chokepoint, reusing the existing store-free
+  `CostMetrics` emitter (no `CostStore`/SQLite; no agent-injection refactor).
+- The recorded cost MUST be the already-computed `result.cost_usd` (no re-pricing → metric and
+  postmortem agree); token counters use `result.input_tokens`/`output_tokens`.
+- Coverage MUST include success **and** failure (failed features still incur cost).
+- Metrics MUST carry `model`, `provider`, `project` attribution labels.
+- A runtime-coverage test MUST assert a generation actually drives the emitter (see REQ-AAO-013).
+- The session/usage family (`SessionTracker`) and per-role (lead/drafter) attribution are **deferred**
+  enrichments, not part of this requirement.
 
 ---
 

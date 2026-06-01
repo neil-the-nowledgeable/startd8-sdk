@@ -1,7 +1,7 @@
 # AI Agent Observability — Requirements (Taxonomy Category 5)
 
 **Date:** 2026-05-31
-**Status:** Draft v0.3 — combined cat-4/5 CRP R1 triaged (8 F-suggestions applied; shared spine extracted to `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md`)
+**Status:** Draft v0.4 — combined cat-4/5 CRP R1 triaged (8 F-suggestions applied; shared spine extracted to `OBSERVABILITY_DESCRIPTOR_SPINE_REQUIREMENTS.md`); v0.4 (2026-06-01) adds REQ-AAO-013 (runtime emission coverage) closing the parity-vs-runtime blind spot
 **Lineage:** Instantiates **Category 5 — AI Agent Observability** of
 `OBSERVABILITY_ARTIFACT_TAXONOMY_REQUIREMENTS.md` (the "reserved — signals emitted, no generator"
 row). Evidence base: a read-only telemetry inventory of `src/startd8/` (costs/, session_tracking,
@@ -253,6 +253,17 @@ manifest cannot silently drift. **The relation is kind-aware and owned by `REQ-O
 "subset" — the shared requirement reconciles this to one kind-aware relation referenced by both
 plans. Planning found no such validation today; the first thing it catches is the live-but-undeclared
 `complexity.tier_distribution` histogram (see `OBSERVABILITY_CAT45_CODE_VERIFICATION.md` §A-1).
+
+**REQ-AAO-013 (runtime emission coverage — new, 2026-06-01).** Descriptor↔emission parity (REQ-AAO-012)
+proves the emitter modules *can* emit; it does **not** prove the **dominant workload drives them at
+runtime**. That blind spot is exactly how the Prime Contractor (the active construction path) spent
+real money while emitting **zero** `startd8.cost.*` series to Mimir (see
+`OBSERVABILITY_COST_METRIC_EMISSION_GAP.md`). Therefore: for each cost-incurring generation path, a
+**runtime-coverage** test MUST assert that a representative run actually produces the expected
+`startd8.cost.*` series — not merely that the descriptor is declared/created. Construction-path
+emission itself is owned by **REQ-PC-018** (and specified in `COST_METRIC_EMISSION_COVERAGE_REQUIREMENTS.md`,
+REQ-CME); this requirement adds the *validation* obligation. The session/usage family and per-role
+attribution remain deferred enrichments (REQ-PC-018).
 
 ---
 
