@@ -41,6 +41,26 @@ class TestStripModuleResolution:
         out = "f.ts(1,1): error TS2305: Module '\"x\"' has no exported member 'Y'."
         assert _is_real_tsc_diagnostic(_strip_module_resolution_errors(out)) is False
 
+    def test_strips_target_lib_config_codes(self):
+        # RUN-009: per-file isolation lacks the project tsconfig, so target/lib
+        # constructs (Set iteration) false-fail. The strip backstop drops them.
+        out = (
+            "route.ts(3,18): error TS2802: Type 'Set<unknown>' can only be iterated "
+            "through when using the '--downlevelIteration' flag or with a '--target' "
+            "of 'es2015' or higher."
+        )
+        assert _is_real_tsc_diagnostic(_strip_module_resolution_errors(out)) is False
+
+    def test_target_lib_strip_keeps_real_error(self):
+        out = (
+            "route.ts(3,18): error TS2802: Set iteration needs es2015+.\n"
+            "route.ts(7,2): error TS2345: Argument of type 'number' not assignable."
+        )
+        filtered = _strip_module_resolution_errors(out)
+        assert "TS2802" not in filtered
+        assert "TS2345" in filtered
+        assert _is_real_tsc_diagnostic(filtered) is True
+
 
 @pytest.mark.skipif(not TSC_AVAILABLE, reason="tsc not on PATH")
 class TestEndToEndWithTsc:
