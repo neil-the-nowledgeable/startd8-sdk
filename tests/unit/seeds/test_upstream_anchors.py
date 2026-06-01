@@ -50,3 +50,16 @@ class TestSeedSerialization:
     def test_omitted_when_none(self):
         seed = ContextSeed()
         assert "upstream_anchors" not in seed.to_dict()  # _OPTIONAL_FIELDS: None → omitted
+
+
+def test_nextjs_dynamic_and_group_segments():
+    """Next.js [id]/[...slug]/(group) path segments must parse (regression)."""
+    txt = ("<!-- cap-dev-pipe: upstream-anchors -->\n"
+           "- app/api/proof-points/[id]/route.ts\n"
+           "- app/[...slug]/page.tsx\n"
+           "- app/(marketing)/page.tsx\n"
+           "<!-- /cap-dev-pipe -->\n")
+    a = parse_upstream_anchors(txt)
+    assert "app/api/proof-points/[id]/route.ts" in a
+    assert "app/[...slug]/page.tsx" in a
+    assert "app/(marketing)/page.tsx" in a
