@@ -99,6 +99,8 @@ class PanelSpec(BaseModel):
     # Layout
     gridPos: Optional[GridPos] = None
     group: Optional[str] = None  # Row grouping (DC-108)
+    # Named recipe (REQ-DCR-RCP-010) — corpus-mode finish merged under explicit values
+    recipe: Optional[str] = None
     # Common options
     unit: str = ""
     thresholds: List[ThresholdStep] = Field(default_factory=list)

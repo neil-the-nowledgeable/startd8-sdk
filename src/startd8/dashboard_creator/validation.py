@@ -95,6 +95,21 @@ def validate_spec(
             errors.append(
                 f"Panel '{panel.title}': unknown type '{panel.type.value}'"
             )
+        # Recipe validation (REQ-DCR-RCP-030/031)
+        if getattr(panel, "recipe", None):
+            from startd8.dashboard_creator.recipes import RECIPE_REGISTRY
+
+            recipe = RECIPE_REGISTRY.get(panel.recipe)
+            if recipe is None:
+                errors.append(
+                    f"Panel '{panel.title}': unknown recipe '{panel.recipe}'"
+                )
+            elif panel.type not in recipe.applies_to:
+                allowed = ", ".join(t.value for t in recipe.applies_to)
+                errors.append(
+                    f"Panel '{panel.title}': recipe '{panel.recipe}' applies to "
+                    f"[{allowed}], not '{panel.type.value}'"
+                )
 
     # Check variable builders
     for var in spec.variables:
