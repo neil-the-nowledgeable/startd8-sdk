@@ -960,6 +960,15 @@ class PhaseEmitter:
         doc_path = self._doc_path
         route_label = route.value
 
+        # RUN-009 Gap A (FR-1/FR-2b): parse plan-declared upstream anchors from
+        # the plan's `<!-- cap-dev-pipe: upstream-anchors -->` marker → top-level
+        # `upstream_anchors` (clean-prior-run.sh do-not-wipe + Mode-B inheritance).
+        from ...seeds.upstream_anchors import parse_upstream_anchors
+        _upstream_anchors = (
+            parse_upstream_anchors(getattr(parsed_plan, "raw_text", "") or "")
+            if parsed_plan is not None else []
+        )
+
         # REQ-SIG-200: extract graph for top-level seed field
         _scg = (
             artifacts.get("service_communication_graph")
@@ -986,6 +995,7 @@ class PhaseEmitter:
             forward_manifest=forward_manifest_dict,
             security_contract=security_contract,
             authoring_mode="pipeline",  # REQ-SU-300: pipeline-derived seed
+            upstream_anchors=_upstream_anchors or None,  # RUN-009 Gap A
         )
 
         # OI-005: Build capability coverage map (requirement_id → task_ids)

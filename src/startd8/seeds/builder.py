@@ -87,6 +87,7 @@ class SeedBuilder:
         self._authoring_mode: Optional[str] = None  # REQ-SU-300
         self._plan_risk_register: Optional[list] = None  # REQ-SU-500
         self._plan_verification_criteria: Optional[list] = None  # REQ-SU-500
+        self._upstream_anchors: Optional[List[str]] = None  # RUN-009 Gap A
         self._refine_suggestions: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
@@ -367,6 +368,17 @@ class SeedBuilder:
         self._project_metadata = metadata
         return self
 
+    def set_upstream_anchors(
+        self, anchors: Optional[List[str]]
+    ) -> "SeedBuilder":
+        """Set plan-declared do-not-wipe / upstream-inheritance anchors (RUN-009 Gap A).
+
+        Emitted top-level as ``upstream_anchors`` so ``clean-prior-run.sh`` skips
+        them on ``--fresh`` (FR-3) and Mode-B inheritance (Gap B) reads them.
+        """
+        self._upstream_anchors = list(anchors) if anchors else None
+        return self
+
     def set_ingestion_metrics(
         self, step_costs: Optional[Dict[str, float]] = None
     ) -> "SeedBuilder":
@@ -548,5 +560,6 @@ class SeedBuilder:
             authoring_mode=self._authoring_mode,
             plan_risk_register=self._plan_risk_register,
             plan_verification_criteria=self._plan_verification_criteria,
+            upstream_anchors=self._upstream_anchors,
         )
         return seed.to_dict()

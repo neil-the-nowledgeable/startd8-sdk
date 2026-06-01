@@ -62,6 +62,7 @@ class ContextSeed:
     plan_risk_register: Optional[List[Dict[str, Any]]] = None  # REQ-SU-500
     plan_verification_criteria: Optional[List[str]] = None  # REQ-SU-500
     authoring_mode: Optional[str] = None  # REQ-SU-300: "pipeline", "designed", or "hybrid"
+    upstream_anchors: Optional[List[str]] = None  # RUN-009 Gap A: do-not-wipe / Mode-B inheritance anchors
 
     # Optional fields serialized only when non-None (used by to_dict loop).
     _OPTIONAL_FIELDS = (
@@ -71,7 +72,7 @@ class ContextSeed:
         "project_metadata", "forward_manifest", "route",
         "generation_profile", "security_contract",
         "capability_coverage_map", "plan_risk_register",
-        "plan_verification_criteria", "authoring_mode",
+        "plan_verification_criteria", "authoring_mode", "upstream_anchors",
     )
 
     def to_dict(self) -> Dict[str, Any]:
