@@ -48,6 +48,9 @@ from .tui.mixin_iterative_workflow import IterativeWorkflowMixin
 from .tui.mixin_enhancement_chain import EnhancementChainMixin
 from .tui.mixin_readiness_review import ReadinessReviewMixin
 from .tui.mixin_diagnostics import DiagnosticsMixin
+from .tui.mixin_job_workflow_runners import JobWorkflowRunnersMixin
+from .tui.mixin_agent_selection import AgentSelectionMixin
+from .tui.mixin_model_management import ModelManagementMixin
 from .paths import default_config_dir, default_data_dir
 from .models import (
     DocumentEnhancementConfig,
@@ -79,11 +82,14 @@ from .tui import (
 class ImprovedTUI(
     SettingsFoldersMixin,
     AgentManagementMixin,
+    ModelManagementMixin,
     ApiKeyMixin,
     PromptWorkflowMixin,
+    AgentSelectionMixin,
     DocumentUpdaterMixin,
     PromptBuilderMixin,
     JobQueueMixin,
+    JobWorkflowRunnersMixin,
     ExternalToolsMixin,
     CapDevPipeMixin,
     PromptsStatsMixin,
