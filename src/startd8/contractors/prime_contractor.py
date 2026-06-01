@@ -564,6 +564,7 @@ class PrimeContractorWorkflow:
         self._seed_context: Optional[SeedContext] = None
         self.seed_service_metadata: Dict[str, Any] = {}
         self.seed_forward_manifest: Optional[Dict[str, Any]] = None  # REQ-PC-FM-002
+        self.seed_upstream_anchors: List[str] = []  # RUN-009 Gap B: pre-existing upstream anchors
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
         self.walkthrough: bool = walkthrough
@@ -1533,6 +1534,9 @@ class PrimeContractorWorkflow:
 
         self.seed_service_metadata = service_metadata
         self.seed_forward_manifest = forward_manifest if isinstance(forward_manifest, dict) else None
+        # RUN-009 Gap B: pre-existing upstream anchors (Gap A's signal) — Mode-B inheritance reads these.
+        _anchors = seed_data.get("upstream_anchors") or []
+        self.seed_upstream_anchors = [str(a) for a in _anchors if isinstance(a, str)]
 
         # Deserialize raw dict to ForwardManifest once at load time (REQ-MP-701).
         # Stored separately from seed_forward_manifest (raw dict kept for
@@ -4173,30 +4177,47 @@ class PrimeContractorWorkflow:
             gen_context["upstream_interfaces"] = upstream_section
 
     def _collect_upstream_interfaces(self, feature: FeatureSpec) -> str:
-        """RUN-008 FR-1/2/3 — render upstream producers' real emitted interface.
+        """Render upstream producers' real emitted interface (Mode A + Mode B).
 
-        Selects producer files from the feature's declared dependencies (FR-3
-        explicit edges), reads their on-disk output, and renders the real export
-        names so the drafter imports EXACTLY what was generated (FR-1). Missing
-        declared producers are logged (FR-2 surfaced) but do not abort the live
-        path; strict ``MissingUpstreamArtifact`` blocking is available to callers
-        of ``build_upstream_interfaces(require_present=True)``. Returns "" when
-        the feature has no JS/TS dependencies (no effect on other languages).
+        **Mode A** (RUN-008 FR-1): in-batch sibling producers via ``depends_on`` —
+        reads their on-disk output so the drafter imports EXACTLY what was
+        generated (closed RUN-008 Gap A). **Mode B** (RUN-009 Gap B): pre-existing
+        upstream anchors (Gap A's ``upstream_anchors`` signal) on disk — so the
+        drafter inherits the project's real module inventory (e.g. ``@/lib/db``)
+        instead of inventing a path (``@/lib/prisma``). Missing declared producers
+        are logged (FR-2 surfaced) without aborting; strict ``MissingUpstreamArtifact``
+        blocking is available to callers of ``build_upstream_interfaces(require_present=True)``.
+        Returns "" when there are no JS/TS upstreams (no effect on other languages).
         """
-        deps = getattr(feature, "dependencies", None)
-        if not deps or self.queue is None:
-            return ""
         from .upstream_interface import build_upstream_interfaces, render_upstream_interfaces
 
+        _TSJS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
         producer_files: List[str] = []
-        for dep_id in deps:
-            dep = self.queue.get_feature(dep_id)
-            if dep is None:
+
+        # Mode A (RUN-008 FR-1): in-batch sibling producers via depends_on.
+        deps = getattr(feature, "dependencies", None) or []
+        if deps and self.queue is not None:
+            for dep_id in deps:
+                dep = self.queue.get_feature(dep_id)
+                if dep is None:
+                    continue
+                for tf in (dep.target_files or []):
+                    if str(tf).endswith(_TSJS) and tf not in producer_files:
+                        producer_files.append(tf)
+
+        # Mode B (RUN-009 Gap B): pre-existing upstream anchors on disk (Gap A's
+        # `upstream_anchors` signal). Feeds the consumer the REAL exports of the
+        # project's existing modules (e.g. `lib/db.ts`) so it imports `@/lib/db`
+        # instead of inventing `@/lib/prisma`. Selection (FR-2 MVP): all on-disk
+        # TS/JS anchors (the canonical set is small); import-relevance narrowing
+        # is a refinement. Only include anchors actually present on disk.
+        for anchor in self.seed_upstream_anchors:
+            if not str(anchor).endswith(_TSJS) or anchor in producer_files:
                 continue
-            for tf in (dep.target_files or []):
-                if str(tf).endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")) \
-                        and tf not in producer_files:
-                    producer_files.append(tf)
+            ap = Path(anchor) if Path(anchor).is_absolute() else Path(self.project_root) / anchor
+            if ap.is_file():
+                producer_files.append(anchor)
+
         if not producer_files:
             return ""
 

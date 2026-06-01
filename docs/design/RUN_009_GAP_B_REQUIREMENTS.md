@@ -1,8 +1,10 @@
 # RUN-009 Gap B — Mode-B Inheritance (Pre-Existing Upstream Files) — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Core implemented)
 **Date:** 2026-06-01
-**Status:** Draft (ready for convergent review)
+**Status:** FR-1 (Mode-B propagation) + FR-6 (consume `upstream_anchors`) SHIPPED; FR-2 selection-refinement / FR-3 Prisma field-set inheritance / FR-4 absent-anchor warning = follow-ons
+
+> **Implementation status (2026-06-01).** **Core shipped:** `_collect_upstream_interfaces` now feeds **pre-existing on-disk anchors** (from the seed's `upstream_anchors`, loaded via `load_seed_context`) into `build_upstream_interfaces` alongside in-batch producers — so a consumer inherits the project's real module (`@/lib/db`) instead of inventing `@/lib/prisma` (FR-1 + FR-6). Reuses the RUN-008 extractor/renderer (the "mostly reuse" insight held). Selection (FR-2) is the MVP "all on-disk TS/JS anchors"; **remaining:** FR-2 import-relevance narrowing, FR-3 Prisma field-set inheritance (reuse `prisma_parser`), FR-4 absent-anchor warning. **End-to-end validation in strtd8 is blocked until the wiped M1 anchors are restored** (Gap A protects them going forward; they must be regenerated/committed first).
 **Source incident:** `docs/design/RUN_009_POSTMORTEM.md` Gap B — Fix 1 (RUN-008) cross-feature inheritance covers **Mode A** (intra-batch sibling output — confirmed working: 4 producer/consumer chains inherited correctly) but **not Mode B** (pre-existing upstream files). 5 features independently invented `@/lib/prisma` instead of the project's real `@/lib/db`; the Zod schema invented `bio` instead of the Prisma field set.
 **Depends on:** `RUN_009_GAP_A_REQUIREMENTS.md` (the `upstream_anchors` signal — the pre-existing files Mode B reads from are exactly the files Gap A protects from `--fresh`; FR-6 there ↔ FR-6 here). **Gap A must land first** so the anchors survive on disk for Mode B to read.
 **Scope:** generation-side propagation of pre-existing on-disk upstream files into a feature's design context. Out of scope: Gap A's seed/cleanup (consumed, not built); inter-batch inheritance (`PLAN_BATCH_ORCHESTRATION` FR-10).
