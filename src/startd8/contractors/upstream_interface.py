@@ -168,6 +168,45 @@ def build_upstream_interfaces(
     return interfaces
 
 
+def render_prisma_field_sets(prisma_text: str, entities: Optional[List[str]] = None) -> str:
+    """Render a Prisma schema's entity field sets for generation-time inheritance.
+
+    RUN-009 Gap B FR-3: a feature generating a Zod schema / TS type that mirrors
+    the Prisma model must use the **real** Prisma field names/types, not invent
+    them (run-009's `bio` vs the real `summary`). Reuses ``prisma_parser`` and
+    injects the scalar field set so the drafter mirrors it exactly. This is the
+    generation-time complement to the FR-7 Prisma↔Zod symmetry check (which only
+    flags the divergence post-hoc).
+    """
+    from ..languages.prisma_parser import parse_prisma_schema
+
+    schema = parse_prisma_schema(prisma_text or "")
+    if not schema.models:
+        return ""
+    names = entities or sorted(schema.models)
+    rows: List[str] = []
+    for ename in names:
+        model = schema.model(ename)
+        if model is None:
+            continue
+        scalars = schema.scalar_fields(ename)
+        if not scalars:
+            continue
+        fields = ", ".join(
+            f"{f.name}: {f.type}{'?' if f.is_optional else ''}" for f in scalars
+        )
+        rows.append(f"- `{ename}`: {fields}")
+    if not rows:
+        return ""
+    return "\n".join([
+        "## Prisma data model — mirror these field names/types EXACTLY",
+        "Zod/TypeScript schemas MUST use these exact field names and compatible "
+        "types. Do NOT invent fields (no `bio` when Prisma declares `summary`) or "
+        "foreign keys the model does not declare.",
+        *rows,
+    ])
+
+
 def render_upstream_interfaces(interfaces: List[UpstreamInterface]) -> str:
     """Render interfaces as a prompt section grounding the consumer in real exports."""
     if not interfaces:
