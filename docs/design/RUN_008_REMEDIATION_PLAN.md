@@ -18,7 +18,12 @@ This plan implements the v0.2 requirements. Every FR maps to a step; every step 
 - **Track A — generation propagation (FR-1/2/3):** `contractors/upstream_interface.py` — real export extraction, `@/`-alias/relative import resolution, `MissingUpstreamArtifact` (FR-2). Wired into `_build_generation_context` (`upstream_interfaces` key, selected from `depends_on` edges — FR-3) and rendered in the drafter P1 prompt (FR-1). Live path logs missing upstreams (FR-2 surfaced); strict raise available via `require_present=True`.
 - **Prior:** FR-6 (`.prisma` first-class), FR-7 (Prisma↔Zod symmetry, wired/auto-FAIL), FR-10 (cross-file integrity in postmortem) — all done.
 
-**Remaining:** OQ-3 host decision (where the pipeline provisions `npm install`/`prisma generate` to flip `STARTD8_TS_TYPECHECK` on); FR-8 `.d.ts` interface emit (optional refinement); FR-11 broader end-to-end regression fixtures.
+**OQ-3 RESOLVED (2026-06-01):** verification = pipeline-owned `tsc --noEmit` gate after **every** batch (incl. terminal), consolidated with Essential ④; provisioning = `npm ci` cached + `prisma generate`; SDK in-process check is the opt-in same-run mirror. See requirements §4 OQ-3.
+
+**Remaining work (cross-repo):**
+- **cap-dev-pipe — ✅ DONE (2026-06-01).** Post-run verification gate wired into `run-prime-contractor.sh`: after every batch it runs `ts-verify-gate.py` → `npm ci`/`npm install` (lockfile-aware: install when none exists yet) + `prisma generate` + project-level `tsc --noEmit` via `run_project_typecheck`. Skips non-TS projects (`package.json` guard). Informational by default; `STARTD8_TS_GATE_STRICT=1` fails the pipeline on a bad verdict, `TS_VERIFY_GATE=0` disables. **Proven on the spike: verdict FAIL, 5 diagnostics.** This is the OQ-3 authoritative gate; the SDK in-process `STARTD8_TS_TYPECHECK` mirror remains an optional same-run signal.
+- **Essential ④ (other session):** the gate above currently runs per prime-contractor invocation; the inter-batch transition gate should call the same `ts-verify-gate.py` / `run_project_typecheck` so there is one implementation, and must fire after the terminal batch too.
+- **SDK (optional):** FR-8 `.d.ts` interface emit (refinement; regex extractor covers FR-1 today); FR-11 full-batch e2e regression fixture.
 
 ## Steps
 
