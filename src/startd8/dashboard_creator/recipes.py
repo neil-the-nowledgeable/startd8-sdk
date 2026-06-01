@@ -120,6 +120,73 @@ _SEED: List[PanelRecipe] = [
         summary="Full-width markdown banner/header.",
         options={"mode": "markdown"},
     ),
+    # Phase 5 panel-type recipes ------------------------------------------
+    PanelRecipe(
+        id="canvas.display", applies_to=[PanelType.CANVAS],
+        summary="Read-only display canvas (kiosk): no inline editing, no advanced types.",
+        options={"inlineEditing": False, "showAdvancedTypes": False, "panZoom": False},
+    ),
+    PanelRecipe(
+        id="canvas.editable", applies_to=[PanelType.CANVAS],
+        summary="Authoring canvas: inline editing, advanced element types, pan/zoom.",
+        options={"inlineEditing": True, "showAdvancedTypes": True, "panZoom": True},
+    ),
+    PanelRecipe(
+        id="canvas.metric_card", applies_to=[PanelType.CANVAS],
+        summary="Starter scaffold: a centered metric-value card — set the element's "
+                "config.text.field to your metric.",
+        options={"root": {
+            "type": "frame",
+            "placement": {"top": 0, "left": 0, "width": 100, "height": 100},
+            "elements": [{
+                "type": "metric-value",
+                "name": "value",
+                "placement": {"top": 20, "left": 10, "width": 80, "height": 50},
+                "constraint": {"horizontal": "left", "vertical": "top"},
+                "config": {
+                    "align": "center", "valign": "middle", "size": 36,
+                    "text": {"mode": "field", "field": ""},
+                    "color": {"fixed": "#73BF69"},
+                },
+                "background": {"color": {"fixed": "transparent"}},
+                "border": {"color": {"fixed": "dark-green"}, "width": 1},
+            }],
+        }},
+    ),
+    PanelRecipe(
+        id="geomap.heatmap", applies_to=[PanelType.GEOMAP],
+        summary="Density heatmap layer instead of point markers.",
+        options={"layers": [{
+            "type": "heatmap", "name": "Heatmap", "location": {"mode": "auto"},
+            "config": {"radius": 25, "blur": 27, "weight": {"fixed": 1, "min": 0, "max": 1}},
+        }]},
+    ),
+    PanelRecipe(
+        id="heatmap.timeseries", applies_to=[PanelType.HEATMAP],
+        summary="Bucket a time series into a heatmap (calculate from data).",
+        options={"calculate": True,
+                 "calculation": {"xBuckets": {"mode": "size"}, "yBuckets": {"mode": "count"}}},
+    ),
+    PanelRecipe(
+        id="state_timeline.compact", applies_to=[PanelType.STATE_TIMELINE],
+        summary="Dense status timeline: no inline values, thinner rows.",
+        options={"showValue": "never", "rowHeight": 0.7},
+    ),
+    PanelRecipe(
+        id="xychart.connected", applies_to=[PanelType.XYCHART],
+        summary="Scatter with connecting lines.",
+        field_config={"defaults": {"custom": {"show": "points+lines"}}},
+    ),
+    PanelRecipe(
+        id="candlestick.ohlc", applies_to=[PanelType.CANDLESTICK],
+        summary="OHLC bars instead of filled candles.",
+        options={"candleStyle": "ohlcbars", "colorStrategy": "open-close"},
+    ),
+    PanelRecipe(
+        id="candlestick.price", applies_to=[PanelType.CANDLESTICK],
+        summary="Price-only candles (no volume pane).",
+        options={"mode": "candles", "includeAllFields": False},
+    ),
 ]
 
 # RCP-004: refuse to register a recipe for a panel type with no constructor.
