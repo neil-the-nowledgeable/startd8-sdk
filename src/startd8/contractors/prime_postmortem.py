@@ -416,6 +416,38 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "(`@/lib/db`); inherit the real path from the project's module inventory."
         ),
     },
+    "missing_dependency": {
+        "phase": "draft",
+        "hint": (
+            "Import only packages declared in package.json. Do not import a package "
+            "(e.g. `pino`) the project does not depend on; use an existing dependency "
+            "or the project's established logging/util module."
+        ),
+    },
+    "prisma_unknown_field": {
+        "phase": "draft",
+        "hint": (
+            "Use only field names that exist on the Prisma model. Do not invent or "
+            "rename columns (`promptTokens`/`responseTokens`, not `inputTokens`/"
+            "`outputTokens`); consult the prisma/schema.prisma model definition."
+        ),
+    },
+    "prisma_where_not_unique": {
+        "phase": "draft",
+        "hint": (
+            "`findUnique`/`upsert`/`update`/`delete` `where` must select by an "
+            "`@unique`/`@id` column. Use `findFirst` to filter by a non-unique field, "
+            "or add `@unique` to the column in the schema."
+        ),
+    },
+    "prisma_invalid_compound_key": {
+        "phase": "draft",
+        "hint": (
+            "A compound `where` key (e.g. `id_ownerId`) requires a matching "
+            "`@@unique([...])`/`@@id([...])` on the Prisma model. Declare the compound "
+            "constraint or select by an existing unique key."
+        ),
+    },
     "field_missing_in_prisma": {
         "phase": "draft",
         "hint": (
@@ -1671,11 +1703,16 @@ class PrimePostMortemEvaluator:
         # run and 7 unresolvable imports earned a PASS. This pure-Python check
         # fires regardless of provisioning (even with no .prisma/node_modules).
         try:
-            from startd8.validators.cross_file_imports import scan_unresolvable_imports
-            findings += [
-                f for f in scan_unresolvable_imports(sources, project_root)
-                if f.severity == "error"
-            ]
+            from startd8.validators.cross_file_imports import (
+                scan_missing_dependencies,
+                scan_unresolvable_imports,
+            )
+            from startd8.validators.prisma_usage import scan_prisma_usage
+            # RUN-009 Approach-B classifier signatures (all toolchain-free, fire even
+            # on an unprovisioned/wiped run): unresolvable @/ import, missing
+            # package.json dependency, and Prisma call-site field / unique-where misuse.
+            for _scan in (scan_unresolvable_imports, scan_missing_dependencies, scan_prisma_usage):
+                findings += [f for f in _scan(sources, project_root) if f.severity == "error"]
         except ImportError:
             pass
         if not findings:

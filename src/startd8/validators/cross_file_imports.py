@@ -114,3 +114,70 @@ def scan_unresolvable_imports(
                         f"generated batch nor an on-disk project file"),
             ))
     return out
+
+
+# Node.js built-in modules (importing these needs no package.json entry).
+_NODE_BUILTINS = frozenset({
+    "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
+    "constants", "crypto", "dgram", "dns", "domain", "events", "fs", "http",
+    "http2", "https", "inspector", "module", "net", "os", "path", "perf_hooks",
+    "process", "punycode", "querystring", "readline", "repl", "stream",
+    "string_decoder", "timers", "tls", "trace_events", "tty", "url", "util",
+    "v8", "vm", "worker_threads", "zlib",
+})
+
+
+def _package_name(specifier: str) -> str:
+    """Bare specifier → npm package name (`next/server`→`next`, `@a/b/c`→`@a/b`)."""
+    if specifier.startswith("@"):
+        return "/".join(specifier.split("/")[:2])
+    return specifier.split("/")[0]
+
+
+def scan_missing_dependencies(sources: Dict[str, str], project_root: str) -> List[ImportViolation]:
+    """RUN-009 Approach-B signature: a bare import not declared in package.json.
+
+    Run-009 imported `pino` with no `package.json` entry. Flags every external
+    (non-relative, non-`@/`) import whose package is absent from the project's
+    declared deps (and isn't a Node built-in). Conservative: if there is no
+    `package.json`, returns [] (cannot verify — that absent-prerequisite case is
+    a separate signal), so no false positives.
+    """
+    import json
+
+    from ..contractors.upstream_interface import extract_import_specifiers
+
+    pkg = Path(project_root) / "package.json"
+    if not pkg.is_file():
+        return []
+    try:
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    declared: set[str] = set()
+    for key in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        declared.update((data.get(key) or {}).keys())
+
+    out: List[ImportViolation] = []
+    for path, content in sources.items():
+        if not path.endswith(_TS_EXTS):
+            continue
+        seen: set[str] = set()
+        for spec in extract_import_specifiers(content):
+            if spec in seen or spec.startswith((".", "@/")):
+                continue
+            seen.add(spec)
+            if spec.startswith("node:"):
+                continue
+            pkgname = _package_name(spec)
+            if pkgname.split("/")[0] in _NODE_BUILTINS:
+                continue
+            if pkgname not in declared:
+                out.append(ImportViolation(
+                    kind="missing_dependency",
+                    source_file=path,
+                    specifier=spec,
+                    detail=(f"`{path}` imports `{spec}` but `{pkgname}` is not declared "
+                            f"in package.json dependencies"),
+                ))
+    return out
