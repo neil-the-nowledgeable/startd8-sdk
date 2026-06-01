@@ -42,6 +42,8 @@ class VariableType(str, Enum):
     MODEL = "modelVariable"
     AGENT = "agentVariable"
     PROJECT = "projectVariable"
+    QUERY = "queryVariable"  # GAP-VAR-01: generic label_values(...) query variable
+    INTERVAL = "intervalVariable"  # GAP-VAR-03
     CUSTOM = "customVariable"
     CONSTANT = "constantVariable"
 
@@ -136,7 +138,8 @@ class VariableSpec(BaseModel):
     label: str = ""
     # For metric-based variables (model, agent, project)
     metric: Optional[str] = None
-    # For custom variables
+    # For custom/query/interval variables — the options list or the query definition
+    # (e.g. "label_values(up, instance)" for a query var, "1m,10m,1h" for interval).
     query: Optional[str] = None
     multi: bool = False
     # For constant variables
@@ -147,6 +150,9 @@ class VariableSpec(BaseModel):
     default: Optional[str] = None  # Default selected value
     hide: int = 0  # 0=visible, 1=label-only, 2=hidden
     skipUrlSync: bool = False  # Exclude from URL state
+    # For query / datasource variables (GAP-VAR-01/02)
+    regex: Optional[str] = None  # Regex filter applied to the variable's values
+    datasource_var: Optional[str] = None  # Datasource-UID binding, e.g. "${ds}"
 
     @field_validator("hide")
     @classmethod
@@ -168,9 +174,14 @@ class VariableSpec(BaseModel):
             raise ValueError(
                 f"Variable '{self.name}' ({self.type.value}) requires 'metric'"
             )
-        if self.type == VariableType.CUSTOM and not self.query:
+        query_types = {
+            VariableType.CUSTOM,
+            VariableType.QUERY,
+            VariableType.INTERVAL,
+        }
+        if self.type in query_types and not self.query:
             raise ValueError(
-                f"Variable '{self.name}' (customVariable) requires 'query'"
+                f"Variable '{self.name}' ({self.type.value}) requires 'query'"
             )
         if self.type == VariableType.CONSTANT and not self.value:
             raise ValueError(

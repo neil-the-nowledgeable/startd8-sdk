@@ -261,13 +261,42 @@ def _render_variable(variable: VariableSpec) -> str:
         if variable.multi:
             args.append("multi=true")
 
+    # Query variable (GAP-VAR-01): query/definition is the first positional arg;
+    # multi/includeAll/regex/datasource are constructor args the builder consumes.
+    if vtype == VariableType.QUERY:
+        args.insert(0, _render_expression(variable.query or ""))
+        if variable.datasource_var:
+            args.append(
+                f"datasource={{ type: 'prometheus', uid: '{variable.datasource_var}' }}"
+            )
+        if variable.multi:
+            args.append("multi=true")
+        if variable.includeAll:
+            args.append("includeAll=true")
+        if variable.regex:
+            args.append(f"regex='{_escape_jsonnet_string(variable.regex)}'")
+
+    # Interval variable (GAP-VAR-03): options list is the first positional arg.
+    if vtype == VariableType.INTERVAL:
+        args.insert(0, f"'{_escape_jsonnet_string(variable.query or '')}'")
+
+    # Datasource variable regex filter (GAP-VAR-02).
+    if vtype in {
+        VariableType.PROMETHEUS_DATASOURCE,
+        VariableType.TEMPO_DATASOURCE,
+        VariableType.LOKI_DATASOURCE,
+    } and variable.regex:
+        args.append(f"regex='{_escape_jsonnet_string(variable.regex)}'")
+
     call = f"variables.{builder}({', '.join(args)})"
 
-    # Extended options + default go in a merge block (not constructor args)
+    # Extended options + default go in a merge block (not constructor args).
+    # For QUERY the builder already emits includeAll/allValue/current, so skip them
+    # here to avoid duplicate Jsonnet keys.
     merge_fields: List[str] = []
-    if variable.includeAll:
+    if variable.includeAll and vtype != VariableType.QUERY:
         merge_fields.append("includeAll: true")
-    if variable.allValue is not None:
+    if variable.allValue is not None and vtype != VariableType.QUERY:
         merge_fields.append(f"allValue: '{_escape_jsonnet_string(variable.allValue)}'")
     if variable.hide != 0:
         merge_fields.append(f"hide: {variable.hide}")
