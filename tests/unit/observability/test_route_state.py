@@ -253,6 +253,25 @@ class TestCoverageDenominatorExclusion:
         counted = declared - {a.artifact_type for a in ceded}
         assert "capability_index" not in counted
 
+    def test_ceding_a_triplet_type_is_ignored(self, tmp_path):
+        # Contradiction guard: the triplet is produced unconditionally, so a cede of
+        # "dashboard" must NOT create an owned_elsewhere skip nor drop it from coverage.
+        meta = self._meta({
+            "dashboard": {"owner": "contextcore"},  # nonsensical cede of a triplet type
+            "prometheus_rule": {}, "slo_definition": {},
+        })
+        meta_path = tmp_path / "onboarding-metadata.json"
+        meta_path.write_text(json.dumps(meta))
+        report = generate_observability_artifacts(
+            onboarding_metadata_path=meta_path, output_dir=tmp_path / "out",
+        )
+        assert not any(
+            a.skip_reason == "owned_elsewhere" and a.artifact_type == "dashboard"
+            for a in report.artifacts
+        )
+        assert any(a.artifact_type == "dashboard_spec" and a.status == "generated"
+                   for a in report.artifacts)
+
     def test_unimplemented_type_is_declared_unimplemented(self, tmp_path):
         meta = self._meta({"dashboard": {}, "trace_config": {}})  # trace_config has no generator
         meta_path = tmp_path / "onboarding-metadata.json"

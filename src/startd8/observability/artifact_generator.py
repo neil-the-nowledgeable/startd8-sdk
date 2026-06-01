@@ -220,6 +220,11 @@ _RUNTIME_TO_DECLARED: Dict[str, str] = {
     "dashboard": "dashboard",  # rendered Grafana JSON shares the dashboard contract
 }
 
+# The triplet is produced UNCONDITIONALLY (no declaration / cede gate). Marking one
+# of these owned_elsewhere is contradictory — production wins (see
+# _record_unimplemented_artifact_types), so coverage never excludes a produced type.
+_ALWAYS_PRODUCED_DECLARED_TYPES = frozenset({"prometheus_rule", "dashboard", "slo_definition"})
+
 
 def resolve_artifact_spec(label: str) -> Optional[ArtifactTypeSpec]:
     """Resolve a declared OR runtime artifact label to its registry row (REQ-OAT-070a)."""
@@ -2348,7 +2353,17 @@ def _record_unimplemented_artifact_types(
     owned_elsewhere = owned_elsewhere or {}
     project_id = report.project_id or "project"
     for atype in report.declared_artifact_types:
-        if atype in owned_elsewhere:
+        ceded = atype in owned_elsewhere
+        if ceded and atype in _ALWAYS_PRODUCED_DECLARED_TYPES:
+            # The triplet is produced unconditionally; honoring a cede here would
+            # record a skip for a type that IS produced and wrongly drop it from the
+            # coverage denominator (which derives `owned` from these skip records).
+            logger.warning(
+                "artifact_type %r marked owned_elsewhere but is always produced by the "
+                "triplet generator; ignoring the cede (counted as produced)", atype,
+            )
+            ceded = False
+        if ceded:
             owner = owned_elsewhere[atype]
             report.artifacts.append(_stamp_taxonomy(ArtifactResult(
                 artifact_type=atype,
