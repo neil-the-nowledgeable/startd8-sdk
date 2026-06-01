@@ -26,8 +26,9 @@ import re
 from typing import List
 
 _OPEN_RE = re.compile(r"<!--\s*cap-dev-pipe:\s*upstream-anchors\s*-->", re.IGNORECASE)
-# A token is path-like if it has a directory separator or a trailing .ext
-_PATH_RE = re.compile(r"^[\w./@-]+(?:/[\w./@-]+)*$")
+# A token is path-like if it has a directory separator or a trailing .ext.
+# Allow Next.js dynamic/group segments: [id], [...slug], (group).
+_PATH_RE = re.compile(r"^[\w.\[\]()@+-]+(?:/[\w.\[\]()@+-]+)*$")
 _EXT_RE = re.compile(r"\.[A-Za-z0-9]+$")
 
 
