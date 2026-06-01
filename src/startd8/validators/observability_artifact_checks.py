@@ -64,8 +64,52 @@ class ObservabilityIssue:
     message: str
 
 
+class _ChecklistResult:
+    """Shared check-tallying base for the structural validators (D-9).
+
+    The three result types were ~90% identical: a running ``checks_passed`` /
+    ``checks_total`` tally, an ``issues`` list, and a ``score``. This base
+    centralizes that machinery so each validator just *declares its checks* via
+    ``check()`` instead of repeating the ``total += 1 / passed += 1 /
+    issues.append(...)`` triplet. Subclasses (below) add only their type-specific
+    fields. (Plain class, not a dataclass — its annotations are NOT promoted to
+    fields of the dataclass subclasses, so field order is unchanged.)
+    """
+
+    checks_passed: int
+    checks_total: int
+    issues: List["ObservabilityIssue"]
+
+    @property
+    def score(self) -> float:
+        return self.checks_passed / self.checks_total if self.checks_total else 0.0
+
+    def check(self, check_id: str, severity: str, ok: bool, message: str = "") -> bool:
+        """Record one check. Always bumps ``checks_total``; bumps ``checks_passed``
+        when ``ok``; otherwise records an issue **only if a message is given**.
+        An empty message yields a counted-but-unflagged check — preserving the
+        dashboard validator's ``elif panels:`` third state (a check that counts
+        against the total but neither passes nor raises an issue)."""
+        self.checks_total += 1
+        if ok:
+            self.checks_passed += 1
+        elif message:
+            self.issues.append(ObservabilityIssue(check_id, severity, message))
+        return ok
+
+    def record_metric_checks(self, metric_issues: List["ObservabilityIssue"]) -> None:
+        """OBS-203 aggregate: each found metric-name issue is a failed check; if
+        none were found, a single passing check (preserves the prior tally)."""
+        if metric_issues:
+            self.checks_total += len(metric_issues)
+            self.issues.extend(metric_issues)
+        else:
+            self.checks_total += 1
+            self.checks_passed += 1
+
+
 @dataclass
-class DashboardValidationResult:
+class DashboardValidationResult(_ChecklistResult):
     file_path: str
     yaml_valid: bool = False
     panel_count: int = 0
@@ -75,13 +119,9 @@ class DashboardValidationResult:
     issues: List[ObservabilityIssue] = field(default_factory=list)
     repairs_applied: List[str] = field(default_factory=list)
 
-    @property
-    def score(self) -> float:
-        return self.checks_passed / self.checks_total if self.checks_total else 0.0
-
 
 @dataclass
-class AlertValidationResult:
+class AlertValidationResult(_ChecklistResult):
     file_path: str
     yaml_valid: bool = False
     rule_count: int = 0
@@ -91,13 +131,9 @@ class AlertValidationResult:
     issues: List[ObservabilityIssue] = field(default_factory=list)
     repairs_applied: List[str] = field(default_factory=list)
 
-    @property
-    def score(self) -> float:
-        return self.checks_passed / self.checks_total if self.checks_total else 0.0
-
 
 @dataclass
-class SloValidationResult:
+class SloValidationResult(_ChecklistResult):
     file_path: str
     yaml_valid: bool = False
     target_value: Optional[float] = None
@@ -106,10 +142,6 @@ class SloValidationResult:
     checks_total: int = 0
     issues: List[ObservabilityIssue] = field(default_factory=list)
     repairs_applied: List[str] = field(default_factory=list)
-
-    @property
-    def score(self) -> float:
-        return self.checks_passed / self.checks_total if self.checks_total else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -190,24 +222,19 @@ def validate_dashboard(
 ) -> DashboardValidationResult:
     """Validate a dashboard spec YAML against the OBS-100 + OBS-200 checklists."""
     result = DashboardValidationResult(file_path=file_path)
-    issues = result.issues
-    passed = 0
-    total = 0
 
-    # OBS-100a: YAML parseable
-    total += 1
+    # OBS-100a: YAML parseable (fatal — early return on failure)
+    result.checks_total += 1
     try:
         data = yaml.safe_load(content)
-        if not isinstance(data, dict):
-            issues.append(ObservabilityIssue("OBS-100a", "error", "YAML content is not a mapping"))
-            result.checks_total = total
-            return result
-        result.yaml_valid = True
-        passed += 1
     except yaml.YAMLError as exc:
-        issues.append(ObservabilityIssue("OBS-100a", "error", f"YAML parse error: {exc}"))
-        result.checks_total = total
+        result.issues.append(ObservabilityIssue("OBS-100a", "error", f"YAML parse error: {exc}"))
         return result
+    if not isinstance(data, dict):
+        result.issues.append(ObservabilityIssue("OBS-100a", "error", "YAML content is not a mapping"))
+        return result
+    result.yaml_valid = True
+    result.checks_passed += 1
 
     # Autofix: gridPos
     if autofix:
@@ -216,116 +243,64 @@ def validate_dashboard(
 
     panels = data.get("panels", [])
     result.panel_count = len(panels)
+    n = len(panels)
 
-    # OBS-100b: title present
-    total += 1
-    if data.get("title"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-100b", "error", "Dashboard missing 'title'"))
+    result.check("OBS-100b", "error", bool(data.get("title")), "Dashboard missing 'title'")
 
-    # OBS-100c: uid matches obs-{service}
-    total += 1
     uid = data.get("uid", "")
-    if uid and uid.startswith("obs-"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-100c", "error", f"uid '{uid}' doesn't match obs-{{service}} pattern"))
+    result.check(
+        "OBS-100c", "error", bool(uid) and uid.startswith("obs-"),
+        f"uid '{uid}' doesn't match obs-{{service}} pattern",
+    )
 
-    # OBS-100d: panels non-empty
-    total += 1
-    if panels:
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-100d", "error", "Dashboard has no panels"))
+    result.check("OBS-100d", "error", bool(panels), "Dashboard has no panels")
 
-    # OBS-100e: each panel has expr
-    total += 1
+    # OBS-100e–h: per-panel completeness. With NO panels these count toward the
+    # total but raise no issue (empty message = the prior `elif panels:` state).
     panels_with_expr = sum(1 for p in panels if _panel_has_expr(p))
-    if panels and panels_with_expr == len(panels):
-        passed += 1
-    elif panels:
-        issues.append(ObservabilityIssue(
-            "OBS-100e", "error",
-            f"{len(panels) - panels_with_expr}/{len(panels)} panels missing PromQL expr",
-        ))
-
-    # OBS-100f: panel has type
-    total += 1
+    result.check(
+        "OBS-100e", "error", bool(panels) and panels_with_expr == n,
+        f"{n - panels_with_expr}/{n} panels missing PromQL expr" if panels else "",
+    )
     panels_with_type = sum(1 for p in panels if p.get("type"))
-    if panels and panels_with_type == len(panels):
-        passed += 1
-    elif panels:
-        issues.append(ObservabilityIssue(
-            "OBS-100f", "warning",
-            f"{len(panels) - panels_with_type}/{len(panels)} panels missing visualization type",
-        ))
-
-    # OBS-100g: panel has unit
-    total += 1
+    result.check(
+        "OBS-100f", "warning", bool(panels) and panels_with_type == n,
+        f"{n - panels_with_type}/{n} panels missing visualization type" if panels else "",
+    )
     panels_with_unit = sum(1 for p in panels if p.get("unit"))
-    if panels and panels_with_unit == len(panels):
-        passed += 1
-    elif panels:
-        issues.append(ObservabilityIssue(
-            "OBS-100g", "warning",
-            f"{len(panels) - panels_with_unit}/{len(panels)} panels missing unit",
-        ))
-
-    # OBS-100h: gridPos present (after autofix)
-    total += 1
+    result.check(
+        "OBS-100g", "warning", bool(panels) and panels_with_unit == n,
+        f"{n - panels_with_unit}/{n} panels missing unit" if panels else "",
+    )
     panels_with_grid = sum(1 for p in panels if p.get("gridPos"))
-    if panels and panels_with_grid == len(panels):
-        passed += 1
-    elif panels:
-        issues.append(ObservabilityIssue("OBS-100h", "warning", "Panels missing gridPos"))
+    result.check(
+        "OBS-100h", "warning", bool(panels) and panels_with_grid == n,
+        "Panels missing gridPos" if panels else "",
+    )
 
-    # OBS-100i: datasources
-    total += 1
-    if data.get("datasources"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-100i", "warning", "No datasources declared"))
-
-    # OBS-100j: variables
-    total += 1
-    if data.get("variables"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-100j", "info", "No variables declared"))
+    result.check("OBS-100i", "warning", bool(data.get("datasources")), "No datasources declared")
+    result.check("OBS-100j", "info", bool(data.get("variables")), "No variables declared")
 
     # OBS-200a (OBS-710c): RED coverage
-    total += 1
     red = _compute_red_coverage(panels)
     result.red_coverage = red
-    if red >= 2.0 / 3.0:
-        passed += 1
-    else:
-        missing = []
-        if not has_rate_panel(panels):
-            missing.append("Rate")
-        if not has_error_panel(panels):
-            missing.append("Errors")
-        if not has_duration_panel(panels):
-            missing.append("Duration")
-        issues.append(ObservabilityIssue(
-            "OBS-200a", "warning",
-            f"RED coverage {red:.0%} — missing: {', '.join(missing)}",
-        ))
+    missing = []
+    if not has_rate_panel(panels):
+        missing.append("Rate")
+    if not has_error_panel(panels):
+        missing.append("Errors")
+    if not has_duration_panel(panels):
+        missing.append("Duration")
+    result.check(
+        "OBS-200a", "warning", red >= 2.0 / 3.0,
+        f"RED coverage {red:.0%} — missing: {', '.join(missing)}",
+    )
 
-    # OBS-203: Metric name validity
+    # OBS-203: Metric name validity (aggregate)
     all_exprs = get_all_panel_exprs(panels)
-    metric_issues = validate_metric_names(all_exprs, service_id=service_id, transport=transport)
-    for mi in metric_issues:
-        total += 1
-        issues.append(mi)
-    if not metric_issues:
-        # All metric checks passed — count as 1 aggregate check
-        total += 1
-        passed += 1
-
-    result.checks_passed = passed
-    result.checks_total = total
+    result.record_metric_checks(
+        validate_metric_names(all_exprs, service_id=service_id, transport=transport)
+    )
     return result
 
 
@@ -344,24 +319,19 @@ def validate_alerts(
 ) -> AlertValidationResult:
     """Validate Prometheus alert rule YAML against OBS-101 + OBS-201 checklists."""
     result = AlertValidationResult(file_path=file_path)
-    issues = result.issues
-    passed = 0
-    total = 0
 
-    # OBS-101a: YAML parseable
-    total += 1
+    # OBS-101a: YAML parseable (fatal — early return on failure)
+    result.checks_total += 1
     try:
         data = yaml.safe_load(content)
-        if not isinstance(data, dict):
-            issues.append(ObservabilityIssue("OBS-101a", "error", "YAML content is not a mapping"))
-            result.checks_total = total
-            return result
-        result.yaml_valid = True
-        passed += 1
     except yaml.YAMLError as exc:
-        issues.append(ObservabilityIssue("OBS-101a", "error", f"YAML parse error: {exc}"))
-        result.checks_total = total
+        result.issues.append(ObservabilityIssue("OBS-101a", "error", f"YAML parse error: {exc}"))
         return result
+    if not isinstance(data, dict):
+        result.issues.append(ObservabilityIssue("OBS-101a", "error", "YAML content is not a mapping"))
+        return result
+    result.yaml_valid = True
+    result.checks_passed += 1
 
     # Extract rules
     groups = data.get("groups", [])
@@ -370,86 +340,44 @@ def validate_alerts(
         rules.extend(g.get("rules", []) if isinstance(g, dict) else [])
     result.rule_count = len(rules)
 
-    # OBS-101b: groups with rules
-    total += 1
-    if rules:
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-101b", "error", "No alert rules found"))
+    result.check("OBS-101b", "error", bool(rules), "No alert rules found")
 
     for rule in rules:
-        # OBS-101c: alert name
-        total += 1
         name = rule.get("alert", "")
-        if name and name[0].isupper():
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101c", "error", f"Rule missing or invalid alert name: '{name}'"))
+        result.check(
+            "OBS-101c", "error", bool(name) and name[0].isupper(),
+            f"Rule missing or invalid alert name: '{name}'",
+        )
+        result.check("OBS-101d", "error", bool(rule.get("expr")), f"Rule '{name}' missing expr")
+        result.check("OBS-101e", "warning", bool(rule.get("for")), f"Rule '{name}' missing 'for' duration")
 
-        # OBS-101d: expr
-        total += 1
-        if rule.get("expr"):
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101d", "error", f"Rule '{name}' missing expr"))
-
-        # OBS-101e: for duration
-        total += 1
-        if rule.get("for"):
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101e", "warning", f"Rule '{name}' missing 'for' duration"))
-
-        # OBS-101f: severity label
-        total += 1
         labels = rule.get("labels", {})
         severity = labels.get("severity", "")
-        if severity in ("critical", "warning", "info"):
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101f", "error", f"Rule '{name}' missing/invalid severity label: '{severity}'"))
+        result.check(
+            "OBS-101f", "error", severity in ("critical", "warning", "info"),
+            f"Rule '{name}' missing/invalid severity label: '{severity}'",
+        )
+        result.check("OBS-101g", "warning", bool(labels.get("service")), f"Rule '{name}' missing service label")
 
-        # OBS-101g: service label
-        total += 1
-        if labels.get("service"):
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101g", "warning", f"Rule '{name}' missing service label"))
-
-        # OBS-101h: summary annotation
-        total += 1
         annotations = rule.get("annotations", {})
-        if annotations.get("summary"):
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue("OBS-101h", "warning", f"Rule '{name}' missing summary annotation"))
+        result.check(
+            "OBS-101h", "warning", bool(annotations.get("summary")),
+            f"Rule '{name}' missing summary annotation",
+        )
 
     # OBS-710d: Alert coverage (latency + error_rate + availability)
-    total += 1
-    expected = 1
-    if manifest_availability is not None:
-        expected = 3  # latency + error_rate + availability
+    expected = 3 if manifest_availability is not None else 1
     result.rule_coverage = min(len(rules), expected) / expected if expected else 1.0
-    if result.rule_coverage >= 1.0:
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue(
-            "OBS-710d", "warning",
-            f"Alert coverage: {len(rules)}/{expected} expected rules (rule_coverage={result.rule_coverage:.2f})",
-        ))
+    result.check(
+        "OBS-710d", "warning", result.rule_coverage >= 1.0,
+        f"Alert coverage: {len(rules)}/{expected} expected rules (rule_coverage={result.rule_coverage:.2f})",
+    )
 
-    # OBS-203: Metric name validity
+    # OBS-203: Metric name validity (aggregate)
     alert_exprs = [str(r.get("expr", "")) for r in rules if r.get("expr")]
-    metric_issues = validate_metric_names(alert_exprs, service_id=service_id, transport=transport)
-    for mi in metric_issues:
-        total += 1
-        issues.append(mi)
-    if not metric_issues:
-        total += 1
-        passed += 1
-
-    result.checks_passed = passed
-    result.checks_total = total
+    result.record_metric_checks(
+        validate_metric_names(alert_exprs, service_id=service_id, transport=transport)
+    )
     return result
 
 
@@ -504,24 +432,19 @@ def validate_slo(
         return merged
 
     result = SloValidationResult(file_path=file_path)
-    issues = result.issues
-    passed = 0
-    total = 0
 
-    # OBS-102a: YAML parseable
-    total += 1
+    # OBS-102a: YAML parseable (fatal — early return on failure)
+    result.checks_total += 1
     try:
         data = yaml.safe_load(content)
-        if not isinstance(data, dict):
-            issues.append(ObservabilityIssue("OBS-102a", "error", "YAML content is not a mapping"))
-            result.checks_total = total
-            return result
-        result.yaml_valid = True
-        passed += 1
     except yaml.YAMLError as exc:
-        issues.append(ObservabilityIssue("OBS-102a", "error", f"YAML parse error: {exc}"))
-        result.checks_total = total
+        result.issues.append(ObservabilityIssue("OBS-102a", "error", f"YAML parse error: {exc}"))
         return result
+    if not isinstance(data, dict):
+        result.issues.append(ObservabilityIssue("OBS-102a", "error", "YAML content is not a mapping"))
+        return result
+    result.yaml_valid = True
+    result.checks_passed += 1
 
     # Autofix: SLO target from manifest
     if autofix and manifest_availability is not None:
@@ -531,84 +454,51 @@ def validate_slo(
     spec = data.get("spec", {})
     metadata = data.get("metadata", {})
 
-    # OBS-102b: apiVersion openslo/v1
-    total += 1
-    if data.get("apiVersion") == "openslo/v1":
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102b", "error", f"apiVersion: '{data.get('apiVersion')}' (expected 'openslo/v1')"))
+    result.check(
+        "OBS-102b", "error", data.get("apiVersion") == "openslo/v1",
+        f"apiVersion: '{data.get('apiVersion')}' (expected 'openslo/v1')",
+    )
+    result.check(
+        "OBS-102c", "error", data.get("kind") == "SLO",
+        f"kind: '{data.get('kind')}' (expected 'SLO')",
+    )
 
-    # OBS-102c: kind SLO
-    total += 1
-    if data.get("kind") == "SLO":
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102c", "error", f"kind: '{data.get('kind')}' (expected 'SLO')"))
-
-    # OBS-102d: spec.target
-    total += 1
+    # OBS-102d: spec.target (records target_value when present)
     target = spec.get("target")
     if target is not None:
         result.target_value = float(target)
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102d", "error", "Missing spec.target"))
+    result.check("OBS-102d", "error", target is not None, "Missing spec.target")
 
-    # OBS-102e: spec.timeWindow
-    total += 1
-    if spec.get("timeWindow"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102e", "error", "Missing spec.timeWindow"))
+    result.check("OBS-102e", "error", bool(spec.get("timeWindow")), "Missing spec.timeWindow")
 
-    # OBS-102f: spec.indicator
-    total += 1
     indicator = spec.get("indicator", {})
     ind_spec = indicator.get("spec", {}) if isinstance(indicator, dict) else {}
-    if ind_spec.get("thresholdMetric") or ind_spec.get("ratioMetric"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102f", "error", "Missing spec.indicator with threshold/ratio metric"))
+    result.check(
+        "OBS-102f", "error",
+        bool(ind_spec.get("thresholdMetric") or ind_spec.get("ratioMetric")),
+        "Missing spec.indicator with threshold/ratio metric",
+    )
 
-    # OBS-102g: metadata.name
-    total += 1
-    if metadata.get("name"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102g", "warning", "Missing metadata.name"))
-
-    # OBS-102h: metadata.labels.service
-    total += 1
+    result.check("OBS-102g", "warning", bool(metadata.get("name")), "Missing metadata.name")
     labels = metadata.get("labels", {})
-    if labels.get("service"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102h", "warning", "Missing metadata.labels.service"))
+    result.check("OBS-102h", "warning", bool(labels.get("service")), "Missing metadata.labels.service")
+    result.check("OBS-102i", "info", bool(spec.get("alerting")), "Missing spec.alerting section")
 
-    # OBS-102i: spec.alerting
-    total += 1
-    if spec.get("alerting"):
-        passed += 1
-    else:
-        issues.append(ObservabilityIssue("OBS-102i", "info", "Missing spec.alerting section"))
-
-    # OBS-202a (OBS-710a): target matches manifest
-    total += 1
+    # OBS-202a (OBS-710a): target matches manifest — three-way (match / no-manifest / no-target)
     if manifest_availability is not None and result.target_value is not None:
-        if abs(result.target_value - manifest_availability) < 0.01:
+        matches = abs(result.target_value - manifest_availability) < 0.01
+        if matches:
             result.target_matches_manifest = True
-            passed += 1
-        else:
-            issues.append(ObservabilityIssue(
-                "OBS-202a", "error",
-                f"SLO target {result.target_value} doesn't match manifest availability {manifest_availability}",
-            ))
+        result.check(
+            "OBS-202a", "error", matches,
+            f"SLO target {result.target_value} doesn't match manifest availability {manifest_availability}",
+        )
     elif manifest_availability is None:
-        passed += 1  # can't check — pass by default
+        result.check("OBS-202a", "error", True)  # can't check — pass by default
     else:
-        issues.append(ObservabilityIssue("OBS-202a", "error", "No target to check against manifest"))
+        result.check("OBS-202a", "error", False, "No target to check against manifest")
 
-    # OBS-203: Metric name validity (check SLO indicator query)
+    # OBS-203: Metric name validity (check SLO indicator query) — aggregate
     slo_exprs: List[str] = []
     tm = ind_spec.get("thresholdMetric", {})
     if isinstance(tm, dict):
@@ -617,16 +507,9 @@ def validate_slo(
             q = ms.get("spec", {}).get("query", "")
             if q:
                 slo_exprs.append(str(q))
-    metric_issues = validate_metric_names(slo_exprs, service_id=service_id, transport=transport)
-    for mi in metric_issues:
-        total += 1
-        issues.append(mi)
-    if not metric_issues:
-        total += 1
-        passed += 1
-
-    result.checks_passed = passed
-    result.checks_total = total
+    result.record_metric_checks(
+        validate_metric_names(slo_exprs, service_id=service_id, transport=transport)
+    )
     return result
 
 
