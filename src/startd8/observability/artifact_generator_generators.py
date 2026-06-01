@@ -1,0 +1,1310 @@
+# Copyright 2026 StartD8 Contributors
+# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+
+"""Per-artifact generators (alerts, dashboards, SLOs, monitors, runbooks, capability index).
+
+Extracted verbatim from ``artifact_generator.py`` (Tier-2 refactor, step 2).
+"""
+
+import json  # noqa: F401
+import logging
+import re  # noqa: F401
+from datetime import datetime, timezone  # noqa: F401
+from pathlib import Path  # noqa: F401
+from typing import Any, Dict, List, Optional, Set, Tuple  # noqa: F401
+
+import yaml  # noqa: F401
+
+from .taxonomy_enums import Category, Orientation, RouteState  # noqa: F401
+from .artifact_generator_models import *  # noqa: F401,F403
+
+try:
+    from startd8.logging_config import get_logger
+
+    logger = get_logger(__name__)
+except ImportError:  # pragma: no cover
+    logger = logging.getLogger(__name__)
+
+
+_CRITICALITY_TO_SEVERITY: Dict[str, str] = {
+    "critical": "critical",
+    "high": "critical",
+    "medium": "warning",
+    "low": "info",
+}
+
+
+_DEFAULT_THRESHOLDS = {
+    "availability": "99",
+    "latency_p99": "500ms",
+    "throughput": "100rps",
+}
+
+
+_INSTRUMENT_TO_PANEL: Dict[str, str] = {
+    "histogram": "histogram",
+    "counter": "timeseries",
+    "gauge": "gauge",
+    "up_down_counter": "timeseries",
+    "observable_gauge": "gauge",
+}
+
+
+_INSTRUMENT_TO_QUERY: Dict[str, str] = {
+    "histogram": (
+        "histogram_quantile(0.99, "
+        'rate({metric}_bucket{{service="{service}"}}[$__rate_interval]))'
+    ),
+    "counter": 'rate({metric}_total{{service="{service}"}}[$__rate_interval])',
+    "gauge": '{metric}{{service="{service}"}}',
+    "up_down_counter": '{metric}{{service="{service}"}}',
+    "observable_gauge": '{metric}{{service="{service}"}}',
+}
+
+
+_METRIC_UNITS: Dict[str, str] = {
+    "duration": "s",
+    "size": "bytes",
+    "request": "reqps",
+    "response": "bytes",
+}
+
+
+def _parse_duration_to_seconds(value: str) -> float:
+    """Parse '500ms' → 0.5, '2s' → 2.0, '200' → 0.2 (assume ms if bare number)."""
+    value = value.strip().lower()
+    if value.endswith("ms"):
+        return float(value[:-2]) / 1000.0
+    if value.endswith("s"):
+        return float(value[:-1])
+    # Bare number: assume milliseconds
+    return float(value) / 1000.0
+
+
+def _parse_availability_to_fraction(value: str) -> float:
+    """Parse '99.9' → 0.999, '99.95' → 0.9995.
+
+    Rounds to 6 decimal places to avoid IEEE 754 artifacts like
+    0.9990000000000001 in generated YAML/PromQL.
+    """
+    return round(float(value.strip()) / 100.0, 6)
+
+
+def _prom_name(otel_name: str) -> str:
+    """Convert OTel dot-separated name to Prometheus underscore format."""
+    return otel_name.replace(".", "_")
+
+
+def _resolve_threshold(
+    field_name: str,
+    business: BusinessContext,
+    derivations: List[DerivationTrace],
+) -> Tuple[Optional[str], str]:
+    """Resolve a threshold value with three-tier fallback.
+
+    Returns (value, tier) where tier is 'manifest' or 'default'.
+    """
+    biz_value = getattr(business, field_name, None)
+    if biz_value is not None:
+        derivations.append(
+            DerivationTrace(
+                field=field_name,
+                source=f"manifest.spec.requirements.{field_name}",
+                transformation=f"{biz_value}",
+                tier="manifest",
+            )
+        )
+        return biz_value, "manifest"
+
+    default = _DEFAULT_THRESHOLDS.get(field_name)
+    if default is not None:
+        derivations.append(
+            DerivationTrace(
+                field=field_name,
+                source=f"_DEFAULT_THRESHOLDS.{field_name}",
+                transformation=f"{default} (default)",
+                tier="default",
+            )
+        )
+        return default, "default"
+
+    return None, "none"
+
+
+def _severity_for(business: BusinessContext, derivations: List[DerivationTrace]) -> str:
+    """Derive alert severity from criticality."""
+    severity = _CRITICALITY_TO_SEVERITY.get(business.criticality, "warning")
+    derivations.append(
+        DerivationTrace(
+            field="alert_severity",
+            source="manifest.spec.business.criticality",
+            transformation=f"{business.criticality} → {severity}",
+            tier="manifest",
+        )
+    )
+    return severity
+
+
+def _metric_unit(metric_name: str) -> str:
+    """Infer unit from metric name patterns."""
+    for pattern, unit in _METRIC_UNITS.items():
+        if pattern in metric_name:
+            return unit
+    return ""
+
+
+def _derivation_comment(derivations: List[DerivationTrace]) -> str:
+    """Build a YAML comment block documenting derivation traces."""
+    lines = ["# Derivation:"]
+    for d in derivations:
+        lines.append(f"#   {d.field}: {d.source} ({d.transformation}) [{d.tier}]")
+    return "\n".join(lines)
+
+
+def generate_alert_rules(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate Prometheus alert rules for a single service.
+
+    Creates alerts for duration metrics (latency) and request count metrics
+    (availability) using convention-based metrics from service hints.
+    """
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    rules: List[Dict[str, Any]] = []
+
+    # Resolve thresholds
+    latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
+    avail_raw, _ = _resolve_threshold("availability", business, derivations)
+
+    for metric in service.convention_metrics:
+        prom = _prom_name(metric.name)
+
+        # Duration/histogram metrics → latency alert
+        if metric.type == "histogram" and "duration" in metric.name and latency_raw:
+            threshold_sec = _parse_duration_to_seconds(latency_raw)
+            rules.append(
+                {
+                    "alert": _alert_name(service.service_id, "LatencyP99High"),
+                    "expr": (
+                        f"histogram_quantile(0.99,\n"
+                        f'  rate({prom}_bucket{{service="{service.service_id}"}}[5m])\n'
+                        f") > {threshold_sec}"
+                    ),
+                    "for": "5m",
+                    "labels": {
+                        "severity": severity,
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                    },
+                    "annotations": {
+                        "summary": (
+                            f"{service.service_id} p99 latency exceeds {latency_raw}"
+                        ),
+                        "source": "Derived from manifest.spec.requirements.latencyP99",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
+                    },
+                }
+            )
+
+        # Histogram duration metric → error rate alert (derived from _count)
+        # The histogram's _count tracks total requests; with a status filter
+        # we can derive error rate even without a dedicated counter metric.
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and avail_raw
+            and not any(r.get("alert", "").endswith("ErrorRateHigh") for r in rules)
+        ):
+            error_filter = _error_filter_for_protocol(service.transport)
+            avail_frac = _parse_availability_to_fraction(avail_raw)
+            error_threshold = round(1.0 - avail_frac, 4)
+            rules.append(
+                {
+                    "alert": _alert_name(service.service_id, "ErrorRateHigh"),
+                    "expr": (
+                        f"(\n"
+                        f'  rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
+                        f'  / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f") > {error_threshold}"
+                    ),
+                    "for": "5m",
+                    "labels": {
+                        "severity": severity,
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                    },
+                    "annotations": {
+                        "summary": (
+                            f"{service.service_id} error rate exceeds "
+                            f"{error_threshold * 100:.1f}%"
+                        ),
+                        "source": "Derived from manifest.spec.requirements.availability",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
+                    },
+                }
+            )
+
+        # Histogram duration metric → availability alert (derived from _count)
+        # Success ratio = 1 - (error_count / total_count); alert when below target.
+        if (
+            metric.type == "histogram"
+            and "duration" in metric.name
+            and avail_raw
+            and not any(r.get("alert", "").endswith("AvailabilityLow") for r in rules)
+        ):
+            error_filter = _error_filter_for_protocol(service.transport)
+            avail_frac = _parse_availability_to_fraction(avail_raw)
+            rules.append(
+                {
+                    "alert": _alert_name(service.service_id, "AvailabilityLow"),
+                    "expr": (
+                        f"(\n"
+                        f'  1 - rate({prom}_count{{service="{service.service_id}",{error_filter}}}[5m])\n'
+                        f'    / rate({prom}_count{{service="{service.service_id}"}}[5m])\n'
+                        f") < {avail_frac}"
+                    ),
+                    "for": "5m",
+                    "labels": {
+                        "severity": severity,
+                        "service": service.service_id,
+                        "protocol": service.transport,
+                    },
+                    "annotations": {
+                        "summary": (
+                            f"{service.service_id} availability below {avail_raw}%"
+                        ),
+                        "source": "Derived from manifest.spec.requirements.availability",
+                        "dashboard_url": f"/d/obs-{service.service_id}",
+                    },
+                }
+            )
+
+    # REQ-OAG-205: runbook_url annotation on every active alert (placeholder URL).
+    for rule in rules:
+        rule.setdefault("annotations", {})["runbook_url"] = (
+            f"https://runbooks.example.com/{service.service_id}/{rule['alert']}"
+        )
+
+    # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
+    # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
+    todo_block = _domain_alert_todo_block(service)
+    if todo_block:
+        derivations.append(
+            DerivationTrace(
+                field="domain_alert_todos",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{len(service.declared_metrics)} declared metrics → TODO alert stubs",
+                tier="manifest",
+            )
+        )
+
+    if not rules and not todo_block:
+        return ArtifactResult(
+            artifact_type="alert_rule",
+            service_id=service.service_id,
+            output_path=f"alerts/{service.service_id}-alerts.yaml",
+            status="skipped",
+            derivations=derivations,
+            error_message="No alertable metrics found",
+        )
+
+    content_dict = {
+        "groups": [
+            {
+                "name": f"{service.service_id}.slo",
+                "rules": rules,
+            }
+        ]
+    }
+
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} (transport: {service.transport})\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    body = yaml.dump(content_dict, default_flow_style=False, sort_keys=False)
+
+    return ArtifactResult(
+        artifact_type="alert_rule",
+        service_id=service.service_id,
+        output_path=f"alerts/{service.service_id}-alerts.yaml",
+        status="generated",
+        content=header + body + todo_block,
+        derivations=derivations,
+    )
+
+
+def _alert_name(service_id: str, suffix: str) -> str:
+    """Build PascalCase alert name from service id + suffix."""
+    parts = service_id.replace("-", " ").replace("_", " ").title().replace(" ", "")
+    return f"{parts}{suffix}"
+
+
+def _error_filter_for_protocol(transport: str) -> str:
+    """Return the PromQL label filter for error responses by protocol.
+
+    gRPC codes per OTel semantic conventions (server-side failures only):
+    - Unavailable (14): service not reachable
+    - Internal (13): unhandled server error
+    - Unimplemented (12): method not supported
+    - DataLoss (15): unrecoverable data loss
+    Unknown (2) is excluded — it is ambiguous and often client-side.
+    """
+    if transport == "grpc":
+        return 'grpc_code=~"Unavailable|Internal|Unimplemented|DataLoss"'
+    # HTTP
+    return 'status=~"5.."'
+
+
+def generate_dashboard_spec(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate a DashboardSpec YAML for a single service.
+
+    Produces one panel per convention metric with panel type derived from
+    instrument type. Output is compatible with DashboardCreatorWorkflow.
+    """
+    derivations: List[DerivationTrace] = []
+    panels: List[Dict[str, Any]] = []
+
+    for metric in service.convention_metrics:
+        prom = _prom_name(metric.name)
+        panel_type = _INSTRUMENT_TO_PANEL.get(metric.type, "timeseries")
+        query_tpl = _INSTRUMENT_TO_QUERY.get(metric.type)
+        if not query_tpl:
+            continue
+
+        query = query_tpl.format(metric=prom, service=service.service_id)
+        unit = _metric_unit(metric.name)
+
+        # Infer group from metric name
+        group = _panel_group(metric.name)
+
+        panel: Dict[str, Any] = {
+            "type": panel_type,
+            "title": _panel_title(metric.name),
+            "expr": query,
+            "unit": unit,
+            "group": group,
+        }
+
+        # Add latency threshold line if applicable
+        if "duration" in metric.name and metric.type == "histogram":
+            latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
+            if latency_raw:
+                threshold_sec = _parse_duration_to_seconds(latency_raw)
+                panel["thresholds"] = [
+                    {"value": None, "color": "green"},
+                    {"value": threshold_sec, "color": "red"},
+                ]
+
+        panels.append(panel)
+
+        # Add p50 and p95 quantile panels for duration histograms
+        # (p99 is the primary panel above; p50/p95 support incident response)
+        if "duration" in metric.name and metric.type == "histogram":
+            for quantile, label in [(0.50, "p50"), (0.95, "p95")]:
+                q_query = (
+                    f"histogram_quantile({quantile}, "
+                    f'rate({prom}_bucket{{service="{service.service_id}"}}[$__rate_interval]))'
+                )
+                panels.append({
+                    "type": "timeseries",
+                    "title": f"{_panel_title(metric.name)} ({label})",
+                    "expr": q_query,
+                    "unit": unit,
+                    "group": group,
+                })
+
+    # Synthesize RED-completing panels if missing (REQ-KZ-OBS-200a)
+    _ensure_red_coverage(panels, service, business, derivations)
+
+    # Closure 1 / Gap 1: add domain panels for manifest_declared metrics,
+    # grouped by intent (Cost & Tokens, Sessions, Health, Progress). These are
+    # additive — the convention-based RED panels above remain the baseline.
+    _add_domain_panels(panels, service, derivations)
+
+    # REQ-OAG-107: DB latency panels when databases were detected.
+    _add_database_panels(panels, service, derivations)
+
+    if not panels:
+        return ArtifactResult(
+            artifact_type="dashboard_spec",
+            service_id=service.service_id,
+            output_path=f"dashboards/{service.service_id}-dashboard-spec.yaml",
+            status="skipped",
+            derivations=derivations,
+            error_message="No convention metrics to build panels from",
+        )
+
+    # REQ-OAG-105 / Gap 5: stamp gridPos on every panel at generation time.
+    _assign_gridpos(panels)
+
+    # Build tags
+    tags = ["generated", "observability", service.transport]
+    if business.criticality in ("critical", "high"):
+        if business.dashboard_placement == "overview":
+            tags.append("overview")
+
+    derivations.append(
+        DerivationTrace(
+            field="dashboard_placement",
+            source="manifest.spec.observability.dashboardPlacement",
+            transformation=f"{business.dashboard_placement}",
+            tier="manifest",
+        )
+    )
+
+    spec_dict: Dict[str, Any] = {
+        "title": f"{service.service_id} Observability",
+        "uid": f"obs-{service.service_id}",
+        "description": (
+            f"Auto-derived observability dashboard for "
+            f"{service.service_id} ({service.transport})"
+        ),
+        "tags": tags,
+        "datasources": {"prometheus": "prometheus"},
+        "panels": panels,
+        "variables": [
+            {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}
+        ],
+    }
+
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} "
+        f"(transport: {service.transport}"
+        f"{', language: ' + service.language if service.language else ''})\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    body = yaml.dump(spec_dict, default_flow_style=False, sort_keys=False)
+
+    return ArtifactResult(
+        artifact_type="dashboard_spec",
+        service_id=service.service_id,
+        output_path=f"dashboards/{service.service_id}-dashboard-spec.yaml",
+        status="generated",
+        content=header + body,
+        derivations=derivations,
+    )
+
+
+def _panel_title(metric_name: str) -> str:
+    """Build human-readable panel title from OTel metric name."""
+    # "rpc.server.duration" → "RPC Server Duration"
+    return metric_name.replace(".", " ").replace("_", " ").title()
+
+
+def _panel_group(metric_name: str) -> str:
+    """Infer dashboard row group from metric name."""
+    name_lower = metric_name.lower()
+    if "duration" in name_lower:
+        return "Latency"
+    if "request" in name_lower and "size" in name_lower:
+        return "Size"
+    if "response" in name_lower and "size" in name_lower:
+        return "Size"
+    if "request" in name_lower:
+        return "Throughput"
+    return "General"
+
+
+def _domain_metric_type(metric: ConventionMetric) -> str:
+    """Resolve the instrument type of a declared metric.
+
+    Prefers the explicit ``type`` field; falls back to inferring from the
+    Prometheus-style name suffix when type is absent.
+    """
+    if metric.type:
+        return metric.type
+    name = metric.name.lower()
+    if name.endswith("_total"):
+        return "counter"
+    if name.endswith(("_ratio", "_percent", "_status", "_count")):
+        return "gauge"
+    return "gauge"
+
+
+def _domain_panel_group(metric_name: str) -> str:
+    """Group a declared metric into an intent-based dashboard row.
+
+    Domain metrics describe product behaviour, so they are grouped by what the
+    operator cares about (cost, sessions, health, progress) rather than by RED.
+    """
+    name = metric_name.lower()
+    if "cost" in name or "token" in name:
+        return "Cost & Tokens"
+    if "session" in name:
+        return "Sessions"
+    if "truncation" in name or "context_usage" in name or "context_ratio" in name:
+        return "Health"
+    if "task" in name or "progress" in name or "status" in name or "completeness" in name:
+        return "Progress"
+    return "Domain Metrics"
+
+
+def _domain_unit(metric_name: str) -> str:
+    """Infer a Grafana unit for a declared metric from its name."""
+    name = metric_name.lower()
+    if "ratio" in name or "percent" in name:
+        return "percentunit"
+    if name.endswith("_ms") or "_time_ms" in name:
+        return "ms"
+    if "cost" in name:
+        return "none"
+    return "short"
+
+
+def _domain_query(metric: ConventionMetric, service_id: str) -> str:
+    """Build a PromQL query for a declared metric.
+
+    Counters become rate panels; gauges/ratios are read directly. Declared
+    metric names are already Prometheus-style, so (unlike convention metrics)
+    no ``_total`` suffix is appended to names that already carry it.
+    """
+    name = metric.name
+    mtype = _domain_metric_type(metric)
+    label = f'{{service="{service_id}"}}'
+    if mtype == "counter":
+        target = name if name.endswith("_total") else f"{name}_total"
+        return f"rate({target}{label}[$__rate_interval])"
+    return f"{name}{label}"
+
+
+def _pascal(text: str) -> str:
+    """Convert a snake/dot/dash name to PascalCase (startd8_cost_total → Startd8CostTotal)."""
+    cleaned = text.replace(".", " ").replace("_", " ").replace("-", " ")
+    return "".join(w.title() for w in cleaned.split())
+
+
+def _domain_alert_todo_block(service: ServiceHints) -> str:
+    """Build a commented-out alert stub block for declared metrics.
+
+    Policy (TODO-when-absent): the manifest carries no thresholds for domain
+    metrics, so rather than silently omitting them, each declared metric is
+    emitted as a commented-out alert stub with a ``<THRESHOLD>`` placeholder.
+    The active rules in the file stay valid Prometheus YAML; the stubs make the
+    missing domain alerts visible to the operator. Returns "" when there are no
+    declared metrics.
+    """
+    if not service.declared_metrics:
+        return ""
+
+    lines = [
+        "",
+        "# " + "-" * 73,
+        "# TODO: domain-metric alerts (Closure 1 / Gap 1)",
+        "# The manifest_declared metrics below have no threshold in the manifest, so",
+        "# no active alert is emitted (policy: TODO-when-absent). Set a threshold and",
+        "# uncomment to activate.",
+        "# " + "-" * 73,
+    ]
+    for metric in service.declared_metrics:
+        expr = _domain_query(metric, service.service_id)
+        alert_name = _alert_name(service.service_id, _pascal(metric.name) + "High")
+        lines.extend(
+            [
+                f"#  - alert: {alert_name}",
+                f"#    expr: {expr} > <THRESHOLD>",
+                "#    for: 5m",
+                "#    labels:",
+                "#      severity: warning",
+                f"#      service: {service.service_id}",
+                "#    annotations:",
+                f'#      summary: "{service.service_id} {metric.name} above threshold"',
+                '#      todo: "Set <THRESHOLD>; no manifest value available"',
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _add_domain_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Append a panel per manifest_declared metric (Closure 1 / Gap 1).
+
+    Mutates ``panels`` in place. Skips declared metrics whose query already
+    appears among existing panels (dedup against convention panels), so a
+    metric is never visualised twice.
+    """
+    if not service.declared_metrics:
+        return
+
+    existing_exprs = {str(p.get("expr", "")) for p in panels}
+    added = 0
+    for metric in service.declared_metrics:
+        query = _domain_query(metric, service.service_id)
+        if query in existing_exprs:
+            continue
+        mtype = _domain_metric_type(metric)
+        unit = _domain_unit(metric.name)
+        # Ratios/percents read best on a gauge; counters (rate) and other
+        # gauges read best as a timeseries.
+        if unit == "percentunit":
+            panel_type = "gauge"
+        elif mtype == "counter":
+            panel_type = "timeseries"
+        else:
+            panel_type = "timeseries"
+        panels.append(
+            {
+                "type": panel_type,
+                "title": _panel_title(metric.name),
+                "expr": query,
+                "unit": unit,
+                "group": _domain_panel_group(metric.name),
+            }
+        )
+        existing_exprs.add(query)
+        added += 1
+
+    if added:
+        derivations.append(
+            DerivationTrace(
+                field="domain_panels",
+                source=f"instrumentation_hints.{service.service_id}.metrics.manifest_declared",
+                transformation=f"{added} declared metrics → panels",
+                tier="manifest",
+            )
+        )
+
+
+def _add_database_panels(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Add a DB latency panel per detected database (REQ-OAG-107).
+
+    Only fires when the service has ``detected_databases``. Uses the OTel
+    ``db.client.operation.duration`` histogram scoped by ``db_system``.
+    """
+    if not service.detected_databases:
+        return
+    for db in service.detected_databases:
+        expr = (
+            "histogram_quantile(0.99, "
+            f'rate(db_client_operation_duration_bucket{{service="{service.service_id}",'
+            f'db_system="{db}"}}[$__rate_interval]))'
+        )
+        panels.append(
+            {
+                "type": "timeseries",
+                "title": f"{db.title()} Operation Latency (p99)",
+                "expr": expr,
+                "unit": "s",
+                "group": "Database",
+            }
+        )
+    derivations.append(
+        DerivationTrace(
+            field="database_panels",
+            source=f"instrumentation_hints.{service.service_id}.detected_databases",
+            transformation=f"{len(service.detected_databases)} databases → latency panels",
+            tier="manifest",
+        )
+    )
+
+
+def _assign_gridpos(panels: List[Dict[str, Any]]) -> None:
+    """Assign a 2-column grid layout to every panel (REQ-OAG-105).
+
+    Positions are stamped at generation time so each panel ships deployable,
+    which also makes the downstream ``repair_gridpos`` autofix a no-op — closing
+    Gap 5 at the source rather than relying on a repair that did not fire.
+    Mirrors the repair schema (half-width 12, height 8) for layout consistency.
+    Panels that already carry a ``gridPos`` are left untouched.
+    """
+    w, h = 12, 8
+    for i, panel in enumerate(panels):
+        panel.setdefault(
+            "gridPos", {"h": h, "w": w, "x": (i % 2) * 12, "y": (i // 2) * h}
+        )
+
+
+def _ensure_red_coverage(
+    panels: List[Dict[str, Any]],
+    service: ServiceHints,
+    business: BusinessContext,
+    derivations: List[DerivationTrace],
+) -> None:
+    """Synthesize missing Rate and Error panels for RED coverage (REQ-KZ-OBS-200a).
+
+    Inspects existing panels to determine which RED signals are present,
+    then adds synthetic panels for any that are missing. Panels are derived
+    from the service's transport type (gRPC vs HTTP).
+    """
+    # Shared RED detection — single source of truth with the validator
+    try:
+        from startd8.validators.observability_artifact_checks import (
+            has_rate_panel, has_error_panel,
+        )
+        has_rate = has_rate_panel(panels)
+        has_error = has_error_panel(panels)
+    except ImportError:
+        # Fallback inline detection if validator not available
+        exprs = [str(p.get("expr", "")).lower() for p in panels]
+        has_rate = any("rate(" in e and "_count" in e and "status" not in e for e in exprs)
+        has_error = any("error" in e or "status_code" in e for e in exprs)
+
+    if has_rate and has_error:
+        return  # Already have full RED coverage
+
+    # Determine metric prefix from transport
+    error_filter = _error_filter_for_protocol(service.transport)
+    if service.transport == "grpc":
+        duration_metric = "rpc_server_duration"
+    else:
+        duration_metric = "http_server_duration"
+
+    rate_expr = (
+        f'sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+    )
+    error_expr = (
+        f'sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}",'
+        f'{error_filter}}}[$__rate_interval]))\n'
+        f'/ sum(rate({duration_metric}_count'
+        f'{{service="{service.service_id}"}}[$__rate_interval]))'
+    )
+
+    if not has_rate:
+        panels.append({
+            "type": "timeseries",
+            "title": "Request Rate",
+            "expr": rate_expr,
+            "unit": "reqps",
+            "group": "Throughput",
+        })
+
+    if not has_error:
+        error_panel: Dict[str, Any] = {
+            "type": "timeseries",
+            "title": "Error Rate",
+            "expr": error_expr,
+            "unit": "percentunit",
+            "group": "Errors",
+        }
+        # Add error budget threshold from availability requirement
+        if business.availability:
+            try:
+                avail = float(business.availability)
+                error_budget = round(1.0 - round(avail / 100.0, 6), 6)
+                error_panel["thresholds"] = [
+                    {"value": None, "color": "green"},
+                    {"value": error_budget, "color": "red"},
+                ]
+            except (ValueError, TypeError):
+                pass
+        panels.append(error_panel)
+
+    # Availability gauge — shows current availability vs SLO target
+    if business.availability:
+        try:
+            avail_target = round(float(business.availability) / 100.0, 6)
+            avail_gauge_expr = (
+                f"(\n"
+                f"  sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}"}}[1h]))\n'
+                f"  - sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}",'
+                f'{_error_filter_for_protocol(service.transport)}}}[1h]))\n'
+                f")\n"
+                f"/ sum(rate({duration_metric}_count"
+                f'{{service="{service.service_id}"}}[1h]))\n'
+                f"or vector(1)"
+            )
+            panels.append({
+                "type": "gauge",
+                "title": "Availability (1h)",
+                "expr": avail_gauge_expr,
+                "unit": "percentunit",
+                "group": "Availability",
+                "thresholds": [
+                    {"value": None, "color": "red"},
+                    {"value": avail_target, "color": "green"},
+                ],
+            })
+        except (ValueError, TypeError):
+            pass
+
+
+def generate_slo_definitions(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate OpenSLO-format SLO definitions for a single service.
+
+    Produces one SLO per applicable business requirement:
+    - availability → ratio-based SLO (good/total requests)
+    - latency_p99 → threshold-based SLO (P99 under threshold)
+    """
+    derivations: List[DerivationTrace] = []
+    documents: List[str] = []
+
+    # Find the right metrics for each SLO type
+    histogram_metric = None
+    counter_metric = None
+    for m in service.convention_metrics:
+        if m.type == "histogram" and "duration" in m.name and not histogram_metric:
+            histogram_metric = m
+        if m.type == "counter" and not counter_metric:
+            counter_metric = m
+
+    # Fallback: derive counter from histogram duration metric's _count suffix.
+    # OTel histograms always have a _count companion that tracks total
+    # requests — the alert generator already uses this (e.g.
+    # rpc_server_duration_count).  When onboarding metadata only reports
+    # histogram types (common for gRPC/HTTP convention metrics), synthesize
+    # a counter reference so the availability SLO can be generated.
+    if counter_metric is None and histogram_metric is not None:
+        counter_metric = ConventionMetric(
+            name=histogram_metric.name,
+            type="counter",
+            source=histogram_metric.source,
+        )
+        logger.info(
+            "Derived counter metric from histogram %s for %s availability SLO",
+            histogram_metric.name, service.service_id,
+        )
+
+    avail_raw, _ = _resolve_threshold("availability", business, derivations)
+    latency_raw, _ = _resolve_threshold("latency_p99", business, derivations)
+    severity = _severity_for(business, derivations)
+
+    window = business.slo_window
+    derivations.append(
+        DerivationTrace(
+            field="slo_window",
+            source="manifest.strategy.objectives[].keyResults[].window",
+            transformation=window,
+            tier="manifest" if window != "30d" else "default",
+        )
+    )
+
+    # Availability SLO
+    if counter_metric and avail_raw:
+        prom = _prom_name(counter_metric.name)
+        # When the counter was derived from a histogram, the Prometheus name
+        # needs a _count suffix (e.g. rpc_server_duration_count) — same
+        # pattern the alert generator uses for error rate and availability.
+        if "duration" in counter_metric.name and not prom.endswith("_count"):
+            prom = f"{prom}_count"
+        error_filter = _error_filter_for_protocol(service.transport)
+        avail_target = float(avail_raw)
+
+        slo = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service.service_id}-availability",
+                "labels": {
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                    "generated_by": "startd8",
+                },
+            },
+            "spec": {
+                "description": f"Availability SLO for {service.service_id}",
+                "target": avail_target,
+                "timeWindow": {"duration": window, "isRolling": True},
+                "budgetPolicy": "occurrences",
+                "indicator": {
+                    "metadata": {
+                        "name": f"{service.service_id}-availability-sli",
+                    },
+                    "spec": {
+                        "ratioMetric": {
+                            "counter": {
+                                "metricSource": {
+                                    "type": "prometheus",
+                                    "spec": {
+                                        "query": (
+                                            f'rate({prom}'
+                                            f'{{service="{service.service_id}"}}[5m])'
+                                        ),
+                                    },
+                                },
+                            },
+                            "good": {
+                                "metricSource": {
+                                    "type": "prometheus",
+                                    "spec": {
+                                        "query": (
+                                            f'rate({prom}'
+                                            f'{{service="{service.service_id}",'
+                                            f"{error_filter}"
+                                            f"}}[5m])"
+                                        ),
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                "alerting": {
+                    "name": f"{service.service_id}-availability-alert",
+                    "labels": {"severity": severity},
+                },
+            },
+        }
+        documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+    elif avail_raw and not counter_metric:
+        logger.warning(
+            "Skipping availability SLO for %s: no counter metric available "
+            "(no explicit counter AND no histogram to derive from)",
+            service.service_id,
+        )
+
+    # Latency SLO
+    if histogram_metric and latency_raw:
+        prom = _prom_name(histogram_metric.name)
+        threshold_sec = _parse_duration_to_seconds(latency_raw)
+
+        slo = {
+            "apiVersion": "openslo/v1",
+            "kind": "SLO",
+            "metadata": {
+                "name": f"{service.service_id}-latency-p99",
+                "labels": {
+                    "service": service.service_id,
+                    "protocol": service.transport,
+                    "generated_by": "startd8",
+                },
+            },
+            "spec": {
+                "description": f"P99 latency SLO for {service.service_id}",
+                "target": round(float(avail_raw), 2) if avail_raw else 99.0,
+                "timeWindow": {"duration": window, "isRolling": True},
+                "budgetPolicy": "occurrences",
+                "indicator": {
+                    "metadata": {
+                        "name": f"{service.service_id}-latency-sli",
+                    },
+                    "spec": {
+                        "thresholdMetric": {
+                            "metricSource": {
+                                "type": "prometheus",
+                                "spec": {
+                                    "query": (
+                                        f"histogram_quantile(0.99, "
+                                        f"rate({prom}_bucket"
+                                        f'{{service="{service.service_id}"}}[5m]))'
+                                    ),
+                                },
+                            },
+                            "threshold": threshold_sec,
+                            "operator": "lte",
+                        },
+                    },
+                },
+                "alerting": {
+                    "name": f"{service.service_id}-latency-alert",
+                    "labels": {"severity": severity},
+                },
+            },
+        }
+        documents.append(yaml.dump(slo, default_flow_style=False, sort_keys=False))
+
+    if not documents:
+        return ArtifactResult(
+            artifact_type="slo_definition",
+            service_id=service.service_id,
+            output_path=f"slos/{service.service_id}-slo.yaml",
+            status="skipped",
+            derivations=derivations,
+            error_message="No SLO-eligible metrics or thresholds",
+        )
+
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id}\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    content = header + "---\n".join(documents)
+
+    return ArtifactResult(
+        artifact_type="slo_definition",
+        service_id=service.service_id,
+        output_path=f"slos/{service.service_id}-slo.yaml",
+        status="generated",
+        content=content,
+        derivations=derivations,
+    )
+
+
+def generate_service_monitor(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate a Prometheus-Operator ServiceMonitor CRD for a service."""
+    derivations: List[DerivationTrace] = []
+    scrape_interval = "30s"
+    doc: Dict[str, Any] = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "ServiceMonitor",
+        "metadata": {
+            "name": service.service_id,
+            "labels": {
+                "app": service.service_id,
+                "managed-by": "startd8-observability",
+            },
+        },
+        "spec": {
+            "selector": {"matchLabels": {"app": service.service_id}},
+            "endpoints": [
+                {"port": "metrics", "path": "/metrics", "interval": scrape_interval}
+            ],
+        },
+    }
+    derivations.append(
+        DerivationTrace(
+            field="service_monitor.selector",
+            source="service_id",
+            transformation=f"app={service.service_id}",
+            tier="default",
+        )
+    )
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} (transport: {service.transport})\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="service_monitor",
+        service_id=service.service_id,
+        output_path=f"service-monitors/{service.service_id}-servicemonitor.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_notification_policy(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate an Alertmanager routing policy scoped to a service."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    receiver = f"{service.service_id}-{severity}"
+    doc: Dict[str, Any] = {
+        "route": {
+            "routes": [
+                {
+                    "matchers": [f"service = {service.service_id}"],
+                    "receiver": receiver,
+                    "group_by": ["alertname", "service"],
+                    "group_wait": "30s",
+                    "repeat_interval": "4h",
+                }
+            ]
+        },
+        "receivers": [
+            {
+                "name": receiver,
+                # Configure a real integration (webhook/email/slack) on deploy.
+                "webhook_configs": [{"url": "REPLACE_WITH_WEBHOOK_URL"}],
+            }
+        ],
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} — notification routing by severity\n"
+        f"# TODO: replace REPLACE_WITH_WEBHOOK_URL with a real receiver target\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="notification_policy",
+        service_id=service.service_id,
+        output_path=f"notifications/{service.service_id}-notification-policy.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_loki_rule(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate a Loki ruler alerting rule for a service's error logs."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    expr = (
+        f'sum(rate({{service="{service.service_id}"}} |= "error" [5m])) > 0'
+    )
+    doc: Dict[str, Any] = {
+        "groups": [
+            {
+                "name": f"{service.service_id}.logs",
+                "rules": [
+                    {
+                        "alert": _alert_name(service.service_id, "HighErrorLogRate"),
+                        "expr": expr,
+                        "for": "5m",
+                        "labels": {"severity": severity, "service": service.service_id},
+                        "annotations": {
+                            "summary": (
+                                f"{service.service_id} is emitting error-level logs"
+                            ),
+                            "dashboard_url": f"/d/obs-{service.service_id}",
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Service: {service.service_id} — Loki log-based alerting\n"
+        f"{_derivation_comment(derivations)}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="loki_rule",
+        service_id=service.service_id,
+        output_path=f"loki-rules/{service.service_id}-loki-rules.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+        derivations=derivations,
+    )
+
+
+def generate_runbook(
+    service: ServiceHints,
+    business: BusinessContext,
+) -> ArtifactResult:
+    """Generate an incident runbook (markdown) for a service."""
+    derivations: List[DerivationTrace] = []
+    severity = _severity_for(business, derivations)
+    avail = business.availability or "—"
+    latency = business.latency_p99 or "—"
+    lines = [
+        f"# Runbook: {service.service_id}",
+        "",
+        f"> Generated by startd8 observability artifact generator.",
+        "",
+        "## Service summary",
+        "",
+        f"- **Transport:** {service.transport}",
+        f"- **Language:** {service.language or 'unknown'}",
+        f"- **Criticality:** {business.criticality} (alert severity: {severity})",
+        f"- **Availability target:** {avail}",
+        f"- **Latency p99 target:** {latency}",
+    ]
+    if service.detected_databases:
+        lines.append(f"- **Databases:** {', '.join(service.detected_databases)}")
+    lines += [
+        "",
+        "## Dashboards",
+        "",
+        f"- Grafana: `/d/obs-{service.service_id}`",
+        "",
+        "## Alerts",
+        "",
+        f"- Latency / error-rate / availability alerts fire at severity "
+        f"**{severity}** (see `alerts/{service.service_id}-alerts.yaml`).",
+        "",
+        "## First response",
+        "",
+        "1. Open the dashboard above; check the RED panels (rate, errors, duration).",
+        "2. Correlate with recent deploys and the error-rate panel.",
+        "3. Check logs for error spikes "
+        f"(`{{service=\"{service.service_id}\"}} |= \"error\"`).",
+        "",
+        "## Escalation",
+        "",
+        f"- {'Page on-call immediately.' if severity == 'critical' else 'Notify the owning team.'}",
+        f"- Owner: {business.owner or 'TODO: set manifest.spec.business.owner'}",
+        "",
+    ]
+    return ArtifactResult(
+        artifact_type="runbook",
+        service_id=service.service_id,
+        output_path=f"runbooks/{service.service_id}-runbook.md",
+        status="generated",
+        content="\n".join(lines),
+        derivations=derivations,
+    )
+
+
+_ARTIFACT_TYPE_TO_CATEGORY = {
+    "dashboard": "observe",
+    "dashboard_spec": "observe",
+    "alert_rule": "observe",
+    "prometheus_rule": "observe",
+    "slo_definition": "observe",
+    "loki_rule": "observe",
+    "service_monitor": "integration",
+    "notification_policy": "action",
+    "runbook": "reference",
+}
+
+
+_CAPABILITY_INDEX_EXCLUDE = frozenset({"capability_index", "dashboard_spec"})
+
+
+def generate_capability_index(
+    services: List[ServiceHints],
+    business: BusinessContext,
+    report: GenerationReport,
+) -> ArtifactResult:
+    """Generate a conformant capability-index manifest for the provisioned
+    observability (Run-007 Finding 2).
+
+    Emits the schema the contract declares — ``manifest_id``, ``version``, and a
+    ``capabilities[]`` list (each entry carries ``capability_id``, ``category``,
+    ``maturity``, ``summary``, ``evidence``) — describing what observability was
+    provisioned, rather than the previous ad-hoc inventory which did not match
+    the ``[capabilities, version, manifest_id]`` contract and would not parse as
+    a capability index.
+    """
+    project_id = business.project_id or report.project_id or "project"
+    # Single-token slug for capability ids (strip run-id / path noise).
+    slug = re.split(r"[/\\]", str(project_id))[0] or "project"
+
+    capabilities: List[Dict[str, Any]] = []
+    seen: set = set()
+    for a in report.artifacts:
+        if a.status != "generated" or a.artifact_type in _CAPABILITY_INDEX_EXCLUDE:
+            continue
+        cap_id = f"{slug}.observability.{a.service_id}.{a.artifact_type}"
+        if cap_id in seen:
+            continue
+        seen.add(cap_id)
+        capabilities.append(
+            {
+                "capability_id": cap_id,
+                "category": _ARTIFACT_TYPE_TO_CATEGORY.get(a.artifact_type, "observe"),
+                "maturity": "beta",
+                "summary": (
+                    f"{a.artifact_type.replace('_', ' ')} provisioned for "
+                    f"{a.service_id}"
+                ),
+                "evidence": [a.output_path],
+            }
+        )
+
+    doc: Dict[str, Any] = {
+        "manifest_id": f"{slug}.observability.agent",
+        "name": f"{business.project_name or slug} Observability Capabilities",
+        "version": "1.0.0",
+        "capabilities": capabilities,
+    }
+    header = (
+        f"# Generated by startd8 observability artifact generator\n"
+        f"# Capability index for observability provisioned on {project_id}\n\n"
+    )
+    return ArtifactResult(
+        artifact_type="capability_index",
+        service_id=project_id,
+        output_path="capability-index.yaml",
+        status="generated",
+        content=header + yaml.dump(doc, default_flow_style=False, sort_keys=False),
+    )
