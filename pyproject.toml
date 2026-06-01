@@ -126,6 +126,7 @@ nodejs = "startd8.languages.nodejs:NodeLanguageProfile"
 java = "startd8.languages.java:JavaLanguageProfile"
 csharp = "startd8.languages.csharp:CSharpLanguageProfile"
 vue = "startd8.languages.vue:VueLanguageProfile"
+prisma = "startd8.languages.prisma:PrismaLanguageProfile"
 
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"

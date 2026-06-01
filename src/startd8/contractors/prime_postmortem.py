@@ -77,6 +77,7 @@ class RootCause(str, Enum):
     GENERATION_ERROR = "generation_error"
     DEPENDENCY_BLOCKED = "dependency_blocked"
     REPAIR_LANGUAGE_MISMATCH = "repair_language_mismatch"
+    CROSS_FILE_CONTRACT = "cross_file_contract"  # RUN-008 FR-10: Prisma↔Zod / import seam divergence
     UNKNOWN = "unknown"
 
 
@@ -91,6 +92,7 @@ class PipelineStage(str, Enum):
     SPLICER = "splicer"
     FALLBACK = "fallback"
     INTEGRATION = "integration"
+    CROSS_FEATURE_CONTRACT = "cross_feature_contract"  # RUN-008 FR-10: divergence between sibling features
     UNKNOWN = "unknown"
 
 
@@ -395,6 +397,46 @@ from startd8.forward_manifest_validator import compute_disk_quality_score  # noq
 
 # All 16 RootCause values mapped to prompt hints.
 CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
+    # RUN-008 FR-10 — cross-feature contract divergence (Prisma↔Zod). The
+    # categories below match SymmetryViolation.kind so the Kaizen loop maps
+    # them directly.
+    "cross_file_contract": {
+        "phase": "spec",
+        "hint": (
+            "Source cross-file contracts (imported module names, field/type/FK "
+            "shape) from the producing feature's actual output — do not invent them."
+        ),
+    },
+    "field_missing_in_prisma": {
+        "phase": "draft",
+        "hint": (
+            "Every Zod field must exist on the corresponding Prisma model with the "
+            "SAME name — no synonyms (use `summary` not `bio`, `yearsExp` not "
+            "`yearsOfExperience`). Reconcile against the generated schema."
+        ),
+    },
+    "fk_invented": {
+        "phase": "draft",
+        "hint": (
+            "Do not invent a foreign key the Prisma relation graph does not declare. "
+            "If a child links to a parent, the Prisma model must define the FK column "
+            "and relation; otherwise omit it from the Zod schema."
+        ),
+    },
+    "field_type_mismatch": {
+        "phase": "draft",
+        "hint": (
+            "Zod field types must match the Prisma column type-class (Prisma String "
+            "→ z.string(), Int/Float → z.number(), DateTime → z.string().datetime())."
+        ),
+    },
+    "field_missing_in_zod": {
+        "phase": "draft",
+        "hint": (
+            "A required, non-defaulted Prisma column is absent from the Zod schema; "
+            "add it or confirm the input legitimately omits it."
+        ),
+    },
     "duplicate_import": {
         "phase": "draft",
         "hint": "Check for existing imports before adding new ones. Deduplicate at file top.",
@@ -1329,6 +1371,16 @@ class PrimePostMortemEvaluator:
                 semantic_repair_data=aggregated_repair if aggregated_repair else None,
                 history_by_id=history_by_id,
             )
+            # RUN-008 FR-10: cross-file integrity (Prisma↔Zod symmetry) over the
+            # whole generated set. The per-file disk pass above cannot see this —
+            # tsc can't either (excess-property checks suppressed on spreads), so
+            # this is the only surface that catches the run-008 failure class.
+            self._evaluate_cross_file_integrity(report.features, project_root)
+            # RUN-008 FR-4/5/9: project-level tsc --noEmit + prisma generate catches
+            # the compile-class (unresolvable imports, invalid Prisma where-usage).
+            # Env-gated (STARTD8_TS_TYPECHECK) — only runs where the host provisions
+            # the Node toolchain (OQ-3). Toolchain-absent is surfaced, never a silent PASS.
+            self._evaluate_ts_toolchain(report.features, project_root)
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
                 f.assembly_delta for f in report.features
@@ -1563,6 +1615,180 @@ class PrimePostMortemEvaluator:
 
         matched = sum(1 for kw in keywords if kw in combined)
         return matched / len(keywords) if keywords else 0.0
+
+    def _evaluate_cross_file_integrity(
+        self,
+        features: List[FeaturePostMortem],
+        project_root: str,
+    ) -> None:
+        """RUN-008 FR-10 — Prisma↔Zod symmetry across the generated batch.
+
+        Runs once over the whole file set, attributes each error to the feature
+        that produced the offending Zod file, and forces that feature to FAIL
+        (``disk_quality_score=0``, ``success=False``) with a
+        ``cross_file_contract`` root cause and ``cross_feature_contract`` stage,
+        plus error-severity semantic issues the Kaizen loop turns into
+        suggestions. No-op when the batch has no ``.prisma`` + Zod pair, so
+        non-TS/Prisma runs are unaffected (no false positives).
+        """
+        try:
+            from startd8.validators.prisma_zod_symmetry import evaluate_cross_file_integrity
+            from startd8.forward_manifest_validator import DiskComplianceResult
+        except ImportError:
+            logger.debug("Cross-file integrity check unavailable — skipping")
+            return
+
+        # Map each generated file path → owning feature, and read its content.
+        path_to_feature: Dict[str, FeaturePostMortem] = {}
+        sources: Dict[str, str] = {}
+        for fpm in features:
+            for fp in (fpm.generated_files or fpm.target_files):
+                if not str(fp).endswith((".prisma", ".ts", ".tsx")):
+                    continue
+                candidate = Path(fp) if Path(fp).is_absolute() else Path(project_root) / fp
+                try:
+                    if candidate.is_file():
+                        sources[fp] = candidate.read_text(encoding="utf-8", errors="replace")
+                        path_to_feature[fp] = fpm
+                except OSError:
+                    continue
+
+        findings = [
+            f for f in evaluate_cross_file_integrity(sources) if f.severity == "error"
+        ]
+        if not findings:
+            return
+
+        # Attribute findings to the feature that produced the Zod file; if the
+        # source file can't be mapped, fall back to the feature owning the
+        # Prisma schema (the producer side of the seam).
+        prisma_feature = next(
+            (fpm for fpm in features
+             if any(str(f).endswith(".prisma") for f in (fpm.generated_files or fpm.target_files))),
+            None,
+        )
+        by_feature: Dict[int, List[Any]] = {}
+        for f in findings:
+            owner = path_to_feature.get(f.source_file) if f.source_file else None
+            owner = owner or prisma_feature
+            if owner is None:
+                continue
+            by_feature.setdefault(id(owner), []).append(f)
+
+        for fpm in features:
+            fs = by_feature.get(id(fpm))
+            if not fs:
+                continue
+            if fpm.disk_compliance is None:
+                fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+            for f in fs:
+                fpm.disk_compliance.semantic_issues.append({
+                    "category": f.kind,
+                    "severity": "error",
+                    "message": f.detail,
+                })
+            # Hard FAIL: cross-file incoherence is not a successful generation
+            # regardless of per-file syntax or requirement score.
+            fpm.disk_quality_score = 0.0
+            fpm.success = False
+            if fpm.verdict not in ("FAIL", "FAIL:semantic", "FAIL:disk_quality"):
+                fpm.verdict = "FAIL:cross_file"
+            if fpm.root_cause == RootCause.UNKNOWN:
+                fpm.root_cause = RootCause.CROSS_FILE_CONTRACT
+            if fpm.pipeline_stage == PipelineStage.UNKNOWN:
+                fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
+            fpm.semantic_error_count += len(fs)
+            if not fpm.error_message:
+                shown = "; ".join(f"{f.kind}:{f.field}" for f in fs[:4])
+                more = "" if len(fs) <= 4 else f" (+{len(fs) - 4} more)"
+                fpm.error_message = f"cross-file contract violations: {shown}{more}"
+
+    def _evaluate_ts_toolchain(
+        self,
+        features: List[FeaturePostMortem],
+        project_root: str,
+    ) -> None:
+        """RUN-008 FR-4/5/9 — project-level ``tsc --noEmit`` + ``prisma generate``.
+
+        Env-gated via ``STARTD8_TS_TYPECHECK`` (off by default) so existing runs
+        and CI without a Node toolchain are unaffected. When enabled and the
+        batch has TS files:
+        - real diagnostics → the owning feature(s) FAIL (`cross_file_contract`);
+        - toolchain unavailable → a warning is recorded on TS features (FR-9:
+          surfaced, never a silent PASS) without flipping success (absence of a
+          provisioned toolchain is an operator/infra condition, not a code fault).
+        """
+        try:
+            from startd8.validators.ts_toolchain import (
+                diagnostics_by_file,
+                run_project_typecheck,
+                typecheck_enabled,
+            )
+            from startd8.forward_manifest_validator import DiskComplianceResult
+        except ImportError:
+            return
+        if not typecheck_enabled():
+            return
+
+        ts_exts = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+        path_to_feature: Dict[str, FeaturePostMortem] = {}
+        for fpm in features:
+            for fp in (fpm.generated_files or fpm.target_files):
+                if str(fp).endswith(ts_exts):
+                    path_to_feature[Path(fp).name] = fpm
+        if not path_to_feature:
+            return  # no TS in this batch — nothing to typecheck
+
+        result = run_project_typecheck(project_root)
+
+        if result.verdict == "unavailable":
+            # FR-9: do not silently pass an unverifiable TS project — annotate.
+            for fpm in {id(f): f for f in path_to_feature.values()}.values():
+                if fpm.disk_compliance is None:
+                    fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+                fpm.disk_compliance.semantic_issues.append({
+                    "category": "ts_verification_unavailable",
+                    "severity": "warning",
+                    "message": f"TypeScript typecheck unavailable: {result.message}",
+                })
+            logger.warning(
+                "FR-9: TS typecheck enabled but toolchain unavailable (%s) — "
+                "TS features unverified, not silently passed.", result.message,
+            )
+            return
+
+        if result.verdict == "pass":
+            return
+
+        # verdict == "fail": attribute each diagnostic to the owning feature.
+        by_file = diagnostics_by_file(result.diagnostics)
+        affected: Dict[int, FeaturePostMortem] = {}
+        for file_key, diags in by_file.items():
+            base = Path(file_key).name
+            fpm = path_to_feature.get(base)
+            if fpm is None:
+                continue
+            affected[id(fpm)] = fpm
+            if fpm.disk_compliance is None:
+                fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+            for d in diags:
+                fpm.disk_compliance.semantic_issues.append({
+                    "category": f"tsc_{d.code}",
+                    "severity": "error",
+                    "message": f"{d.code} {Path(d.file).name}:{d.line} {d.message}",
+                })
+            fpm.semantic_error_count += len(diags)
+        for fpm in affected.values():
+            fpm.disk_quality_score = 0.0
+            fpm.success = False
+            if fpm.verdict not in ("FAIL", "FAIL:semantic", "FAIL:disk_quality", "FAIL:cross_file"):
+                fpm.verdict = "FAIL:typecheck"
+            if fpm.root_cause == RootCause.UNKNOWN:
+                fpm.root_cause = RootCause.CROSS_FILE_CONTRACT
+            if fpm.pipeline_stage == PipelineStage.UNKNOWN:
+                fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
+            if not fpm.error_message:
+                fpm.error_message = "tsc --noEmit reported errors (see semantic_issues)"
 
     def _evaluate_disk_quality(
         self,

@@ -951,6 +951,12 @@ def build_supplementary_sections(
     if fc:
         p1_sections.append(f"## Interface Contract Bindings\n{fc}")
 
+    # P1: Upstream module interfaces (RUN-008 FR-1) — real export names from the
+    # already-generated producer files, so the drafter imports exactly those.
+    ui = context.get("upstream_interfaces")
+    if ui:
+        p1_sections.append(ui if isinstance(ui, str) else str(ui))
+
     # P1: Upstream API contracts (Layer 3: within-run manifest accumulation)
     upstream = context.get("upstream_contracts")
     if upstream and isinstance(upstream, list):

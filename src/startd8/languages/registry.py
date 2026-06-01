@@ -188,6 +188,14 @@ class LanguageRegistry:
             except ImportError:
                 logger.debug("VueLanguageProfile not available")
 
+        # Prisma schema (RUN-008 FR-6) — also loadable via entry point
+        if "prisma" not in already:
+            try:
+                from .prisma import PrismaLanguageProfile
+                cls.register(PrismaLanguageProfile())
+            except ImportError:
+                logger.debug("PrismaLanguageProfile not available")
+
     @classmethod
     def get(cls, language_id: str) -> Optional[LanguageProfile]:
         """Get language profile by ID (case-insensitive)."""

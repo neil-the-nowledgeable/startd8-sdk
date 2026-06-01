@@ -4165,6 +4165,57 @@ class PrimeContractorWorkflow:
         if dep_imports:
             gen_context["dependency_imports"] = dep_imports
 
+        # RUN-008 FR-1/3: ground the consumer in upstream producers' REAL emitted
+        # interface (export names read from their on-disk output), replacing the
+        # name-inference guess that produced run-008's invented imports.
+        upstream_section = self._collect_upstream_interfaces(feature)
+        if upstream_section:
+            gen_context["upstream_interfaces"] = upstream_section
+
+    def _collect_upstream_interfaces(self, feature: FeatureSpec) -> str:
+        """RUN-008 FR-1/2/3 — render upstream producers' real emitted interface.
+
+        Selects producer files from the feature's declared dependencies (FR-3
+        explicit edges), reads their on-disk output, and renders the real export
+        names so the drafter imports EXACTLY what was generated (FR-1). Missing
+        declared producers are logged (FR-2 surfaced) but do not abort the live
+        path; strict ``MissingUpstreamArtifact`` blocking is available to callers
+        of ``build_upstream_interfaces(require_present=True)``. Returns "" when
+        the feature has no JS/TS dependencies (no effect on other languages).
+        """
+        deps = getattr(feature, "dependencies", None)
+        if not deps or self.queue is None:
+            return ""
+        from .upstream_interface import build_upstream_interfaces, render_upstream_interfaces
+
+        producer_files: List[str] = []
+        for dep_id in deps:
+            dep = self.queue.get_feature(dep_id)
+            if dep is None:
+                continue
+            for tf in (dep.target_files or []):
+                if str(tf).endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")) \
+                        and tf not in producer_files:
+                    producer_files.append(tf)
+        if not producer_files:
+            return ""
+
+        missing = [
+            p for p in producer_files
+            if not (Path(p) if Path(p).is_absolute() else Path(self.project_root) / p).is_file()
+        ]
+        if missing:
+            logger.warning(
+                "FR-2: upstream producer output(s) not yet on disk for '%s': %s",
+                feature.name, ", ".join(missing),
+            )
+        ifaces = build_upstream_interfaces(
+            producer_files=producer_files,
+            project_root=str(self.project_root),
+            require_present=False,
+        )
+        return render_upstream_interfaces(ifaces)
+
     def _collect_dependency_imports(
         self, feature: FeatureSpec,
     ) -> Dict[str, Dict[str, Any]]:
