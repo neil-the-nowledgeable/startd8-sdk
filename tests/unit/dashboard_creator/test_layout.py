@@ -170,6 +170,38 @@ class TestApplyLayout:
         assert result.title == spec.title
 
 
+class TestDensityAndBanner:
+    def test_executive_density_scales_panels(self):
+        # AES-050: executive scales stat 4x4 -> 6x5, timeseries 12x8 -> 18x10.
+        op = apply_layout(DashboardSpec(title="T", density="operational",
+            panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")]))
+        ex = apply_layout(DashboardSpec(title="T", density="executive",
+            panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")]))
+        assert (op.panels[0].gridPos.w, op.panels[0].gridPos.h) == (4, 4)
+        assert (ex.panels[0].gridPos.w, ex.panels[0].gridPos.h) == (6, 5)
+
+    def test_objective_prepends_banner(self):
+        # AES-051: an objective renders a full-width text banner at the top.
+        result = apply_layout(DashboardSpec(title="T", objective="# Goal",
+            panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")]))
+        first = result.panels[0]
+        assert first.type == PanelType.TEXT
+        assert first.recipe == "text.banner"
+        assert first.options["content"] == "# Goal"
+        assert first.gridPos.w == 24 and first.gridPos.y == 0
+
+    def test_no_banner_by_default(self):
+        result = apply_layout(DashboardSpec(title="T",
+            panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")]))
+        assert result.panels[0].type == PanelType.STAT  # no banner prepended
+
+    def test_invalid_density_rejected(self):
+        import pytest
+        with pytest.raises(Exception):
+            DashboardSpec(title="T", density="huge",
+                          panels=[PanelSpec(type=PanelType.STAT, title="A", expr="up")])
+
+
 # ---------------------------------------------------------------------------
 # nest_collapsed_rows (DC-110 / REQ-DCR-AES-033)
 # ---------------------------------------------------------------------------

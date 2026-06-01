@@ -32,15 +32,18 @@ local config = (import '../config.libsonnet')._config;
     [if description != '' then 'description']: description,
   },
 
-  // Add panels to dashboard with auto-positioned gridPos
+  // Attach panels + assign ids. AES-030b: the Python layout pass (apply_layout) is the
+  // single source of layout truth and always fills gridPos before compile; withPanels
+  // trusts incoming gridPos and fails loud rather than silently synthesizing an
+  // overlapping {x:0,y:0} — protecting direct mixin consumers that bypass apply_layout.
   withPanels(dashboard, panels)::
     dashboard {
       panels: std.mapWithIndex(
         function(i, p)
-          p + (
-            if std.objectHas(p, 'gridPos') then {}
-            else { gridPos: { h: 8, w: 12, x: (i % 2) * 12, y: std.floor(i / 2) * 8 } }
-          ) + { id: i + 1 },
+          (if std.objectHas(p, 'gridPos') then {}
+           else error 'withPanels: panel %d (%s) has no gridPos — run apply_layout first'
+                      % [i, if std.objectHas(p, 'title') then p.title else '?'])
+          + p + { id: i + 1 },
         panels
       ),
     },
