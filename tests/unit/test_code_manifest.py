@@ -999,17 +999,35 @@ class TestSelfReferential:
         assert m.errors == []
         assert m.digest.startswith("sha256:")
 
-        # Check key elements exist
+        # Check key elements still defined in code_manifest.py exist. The data
+        # models (FileManifest/Element/SCHEMA_VERSION) were extracted to
+        # code_manifest_models.py — they are verified there below.
         element_names = {e.name for e in m.elements}
-        assert "FileManifest" in element_names
         assert "generate_file_manifest" in element_names
-        assert "Element" in element_names
-        assert "SCHEMA_VERSION" in element_names
+        assert "lookup_element" in element_names
+        assert "_ManifestVisitor" in element_names
 
         # Phase 3: verify symbol_info is populated for scope-creating elements
         gen_func = next(e for e in m.elements if e.name == "generate_file_manifest")
         assert gen_func.symbol_info is not None
         assert isinstance(gen_func.symbol_info, SymbolInfo)
+
+    def test_manifest_of_models_source(self):
+        """Generate a manifest for the extracted code_manifest_models.py."""
+        project_root = Path(__file__).resolve().parent.parent.parent
+        file_path = project_root / "src" / "startd8" / "utils" / "code_manifest_models.py"
+        if not file_path.exists():
+            pytest.skip("Source file not found — running outside repo")
+
+        m = generate_file_manifest(file_path, project_root)
+        assert m.module == "startd8.utils.code_manifest_models"
+        assert m.errors == []
+
+        # The extracted data models live here now.
+        element_names = {e.name for e in m.elements}
+        assert "FileManifest" in element_names
+        assert "Element" in element_names
+        assert "SCHEMA_VERSION" in element_names
 
 
 # ═══════════════════════════════════════════════════════════════════════════
