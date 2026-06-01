@@ -27,7 +27,8 @@ Usage:
             "task_id": "P1-RATELIMIT",
             "project_id": "contextcore",
             "parent_id": "PHASE-1",  # Optional parent task/story
-            "drafter_agent": "openai:gpt-4o-mini",
+            # Optional — omit to use Models.PRIMARY_CONTRACTOR_DRAFTER (catalog default).
+            "drafter_agent": "gemini:gemini-2.5-flash-lite",
         }
     )
 """
@@ -256,7 +257,8 @@ class PrimaryContractorContextCoreWorkflow(PrimaryContractorWorkflow):
                 "task_id": "P1-RATELIMIT",
                 "project_id": "my-project",
                 "parent_id": "PHASE-1",
-                "drafter_agent": "openai:gpt-4o-mini",
+                # Optional — omit to use Models.PRIMARY_CONTRACTOR_DRAFTER (catalog default).
+            "drafter_agent": "gemini:gemini-2.5-flash-lite",
             }
         )
     """

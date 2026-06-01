@@ -10,6 +10,19 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import stat
 
+from .model_catalog import get_latest_model
+
+
+def _bare_model_id(agent_spec: Optional[str], fallback: str) -> str:
+    """Strip the ``provider:`` prefix from a catalog spec for config storage.
+
+    Config stores bare model ids (e.g. ``"claude-sonnet-4-6"``), while the
+    catalog returns ``provider:model`` specs. Falls back to *fallback* if the
+    catalog lookup returns nothing (REQ-PCMR-112).
+    """
+    spec = agent_spec or fallback
+    return spec.split(":", 1)[1] if ":" in spec else spec
+
 
 class ConfigManager:
     """Manage startd8 configuration"""
@@ -69,12 +82,18 @@ class ConfigManager:
                 "openai": None
             },
             "models": {
+                # REQ-PCMR-112: derive TUI agent defaults from model_catalog so a
+                # catalog bump (e.g. CLAUDE_SONNET_LATEST) updates these with no edit here.
                 "claude": {
-                    "default": "claude-sonnet-4-6",
+                    "default": _bare_model_id(
+                        get_latest_model("anthropic", "balanced"), "claude-sonnet-4-6"
+                    ),
                     "max_tokens": 32768
                 },
                 "gpt4": {
-                    "default": "gpt-4o",
+                    "default": _bare_model_id(
+                        get_latest_model("openai", "balanced"), "gpt-4o"
+                    ),
                     "max_tokens": 16384
                 }
             },
