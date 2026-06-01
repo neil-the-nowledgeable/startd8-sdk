@@ -39,13 +39,22 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 @dataclass(frozen=True)
 class PrismaUsageViolation:
-    """Shape-compatible with the postmortem's cross-file attribution loop."""
+    """Shape-compatible with the postmortem's cross-file attribution loop.
+
+    ``model`` is an additive field (default ``""``) carrying the structured
+    model name the invented field was used on, so the name-repair pipeline can
+    resolve the field against that model's real set without re-parsing the
+    ``detail`` prose (name-repair R1-S3). Additive-only: the postmortem
+    attribution loop reads ``kind``/``source_file``/``field``/``detail`` exactly
+    as before and ignores ``model``.
+    """
 
     kind: str          # prisma_unknown_field | prisma_where_not_unique | prisma_invalid_compound_key
     source_file: str
     field: str
     detail: str
     severity: str = "error"
+    model: str = ""
 
 
 def _match_brace(text: str, open_idx: int) -> int:
@@ -170,6 +179,7 @@ def scan_prisma_usage(sources: Dict[str, str], project_root: str) -> List[Prisma
                                 kind="prisma_where_not_unique", source_file=path, field=key,
                                 detail=(f"`{path}`: `{model_name}.{method}` selects by `{key}`, "
                                         f"which is not @unique/@id (unique-where required)"),
+                                model=model_name,
                             ))
                         continue
                     # not a field, operator, or valid compound
@@ -178,11 +188,13 @@ def scan_prisma_usage(sources: Dict[str, str], project_root: str) -> List[Prisma
                             kind="prisma_invalid_compound_key", source_file=path, field=key,
                             detail=(f"`{path}`: `{model_name}.{method}` uses compound key `{key}` "
                                     f"but the model declares no matching @@unique/@@id"),
+                            model=model_name,
                         ))
                     else:
                         out.append(PrismaUsageViolation(
                             kind="prisma_unknown_field", source_file=path, field=key,
                             detail=f"`{path}`: `{key}` is not a field of Prisma model `{model_name}`",
+                            model=model_name,
                         ))
 
             # data / create / update payloads
@@ -196,6 +208,7 @@ def scan_prisma_usage(sources: Dict[str, str], project_root: str) -> List[Prisma
                             kind="prisma_unknown_field", source_file=path, field=key,
                             detail=(f"`{path}`: `{key}` (in `{payload_key}`) is not a field of "
                                     f"Prisma model `{model_name}`"),
+                            model=model_name,
                         ))
     # de-dup identical (path, kind, field)
     seen = set()

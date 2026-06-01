@@ -36,6 +36,7 @@ from .steps import (
     GoPythonContaminationStripStep,
     GoSyntaxValidateStep,
     GoUncheckedErrorFixStep,
+    ImportPathRenameStep,
     IndentNormalizeStep,
     JavaImportSortStep,
     JavaSqlParameterizeStep,
@@ -44,6 +45,7 @@ from .steps import (
     JavaRawTypeFixStep,
     JavaSyntaxValidateStep,
     JsSyntaxValidateStep,
+    PrismaFieldRenameStep,
     SemanticDiscardedReturnFixStep,
     SemanticDuplicateMainFixStep,
     SemanticImportFixStep,
@@ -106,6 +108,9 @@ _CANONICAL_ORDER = [
     "eslint_autofix",
     "var_to_const",
     "dedup_require",
+    # Content-contract name repair (name-repair Inc 4) — before the JS syntax gate
+    "prisma_field_rename",
+    "import_path_rename",
     "js_syntax_validate",
 ]
 
@@ -163,6 +168,11 @@ _ROUTING_TABLE: list[tuple[str, str, list[str], str, Optional[str]]] = [
     ("semantic", "var_usage", ["eslint_autofix", "js_syntax_validate"], "MEDIUM", "nodejs"),
     ("semantic", "duplicate_require", ["eslint_autofix", "js_syntax_validate"], "MEDIUM", "nodejs"),
     ("semantic", "python_contamination", ["contamination_strip_js", "js_syntax_validate"], "HIGH", "nodejs"),
+    # Content-contract name repair (name-repair Inc 4, FR-4). Both rows fire
+    # whenever the category is present; each step no-ops if its diagnostic
+    # subtype is absent, so a field-only feature harmlessly runs both.
+    ("content_contract", "prisma_unknown_field", ["prisma_field_rename", "import_path_rename", "js_syntax_validate"], "HIGH", "nodejs"),
+    ("content_contract", "unresolvable_import", ["prisma_field_rename", "import_path_rename", "js_syntax_validate"], "HIGH", "nodejs"),
 ]
 
 # Step name → step class constructor
@@ -211,6 +221,9 @@ _STEP_FACTORIES: dict[str, type] = {
     "eslint_autofix": EslintAutoFixStep,
     "var_to_const": VarToConstStep,
     "dedup_require": DedupRequireStep,
+    # Content-contract name repair (name-repair Inc 4)
+    "prisma_field_rename": PrismaFieldRenameStep,
+    "import_path_rename": ImportPathRenameStep,
 }
 
 # Map file extension → language_id for auto-detection

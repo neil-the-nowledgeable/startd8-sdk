@@ -37,7 +37,9 @@ from .extended_lint_fix import ExtendedLintFixStep
 from .fence_strip import FenceStripStep
 from .future_import_reorder import FutureImportReorderStep
 from .import_completion import ErrorDrivenImportCompletion, ManifestImportCompletion
+from .import_path_rename import ImportPathRenameStep
 from .indent_normalize import IndentNormalizeStep
+from .prisma_field_rename import PrismaFieldRenameStep
 from .semantic_discarded_return_fix import SemanticDiscardedReturnFixStep
 from .semantic_duplicate_main_fix import SemanticDuplicateMainFixStep
 from .semantic_import_fix import SemanticImportFixStep
@@ -75,8 +77,10 @@ __all__ = [
     "FenceStripStep",
     "FutureImportReorderStep",
     "ErrorDrivenImportCompletion",
+    "ImportPathRenameStep",
     "IndentNormalizeStep",
     "ManifestImportCompletion",
+    "PrismaFieldRenameStep",
     "SemanticDiscardedReturnFixStep",
     "SemanticDuplicateMainFixStep",
     "SemanticImportFixStep",

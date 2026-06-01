@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from ..logging_config import get_logger
 from ..security import sanitize_path
-from .checkpoint import CheckpointStatus, IntegrationCheckpoint
+from .checkpoint import CheckpointResult, CheckpointStatus, IntegrationCheckpoint
 from .gate_contracts import GateEmitter
 from .protocols import (
     IntegrationListener,
@@ -908,6 +908,162 @@ class IntegrationEngine:
             )
 
         return None
+
+    def _rel_to_root(self, p: Path) -> str:
+        """Project-relative POSIX path the content scanners expect as a source key."""
+        try:
+            return p.relative_to(self.project_root).as_posix()
+        except ValueError:
+            return p.name
+
+    def _new_content_violations(self, rel: str, text: str) -> set:
+        """Set of (kind, token) content-contract violations in a single source.
+
+        Used for strict-subset re-validation (name-repair R4-S2): a file is rolled
+        back only when a *new* violation appears, not when a previously-abstained
+        one merely remains.
+        """
+        from ..validators.cross_file_imports import scan_unresolvable_imports
+        from ..validators.prisma_usage import scan_prisma_usage
+
+        sources = {rel: text}
+        out: set = set()
+        for v in scan_prisma_usage(sources, str(self.project_root)):
+            if v.kind == "prisma_unknown_field":
+                out.add(("field", v.field, v.model))
+        for iv in scan_unresolvable_imports(sources, str(self.project_root)):
+            if iv.kind == "unresolvable_import":
+                out.add(("import", iv.specifier))
+        return out
+
+    def _attempt_content_name_repair(
+        self,
+        gen_paths: List[Path],
+        unit: IntegrationUnit,
+    ) -> Optional[Any]:
+        """Content-contract name repair in the pre-merge path (name-repair Inc 5).
+
+        Runs **unconditionally** from the call site — invented-but-valid Prisma
+        fields / import paths produce no syntax/lint diagnostic, so this cannot
+        piggyback on the syntax/lint-failure path (R3-S1). Detects invented
+        field/import names, rewrites the typo-class to their on-disk counterpart,
+        and leaves the synonym/structural class abstained.
+
+        Returns a replacement ``CheckpointResult``:
+
+        * **FAILED** (carrying the residual violations) whenever any content
+          violation remains un-repaired — so an abstain routes the feature to the
+          LLM-retry loop instead of silently merging (R4-S1);
+        * a fresh ``pre_validate`` result when repairs landed and the re-scan is
+          clean; or
+        * ``None`` when there was nothing to do (gate closed / no TS+Prisma /
+          no violations detected).
+
+        Gated by ``RepairConfig.pre_checkpoint_repair`` as the staged-rollout
+        master enable (R3-S3).
+        """
+        if not (
+            _HAS_REPAIR
+            and self._repair_config is not None
+            and getattr(self._repair_config, "repair_enabled", False)
+            and getattr(self._repair_config, "pre_checkpoint_repair", False)
+        ):
+            return None
+        if not (self.project_root / "prisma" / "schema.prisma").is_file():
+            return None
+        ts_paths = [p for p in gen_paths if p.suffix in (".ts", ".tsx") and p.exists()]
+        if not ts_paths:
+            return None
+
+        try:
+            from ..repair.content_bridge import scan_results_to_diagnostics
+            from ..repair.orchestrator import run_file_repair
+            from ..validators.cross_file_imports import scan_unresolvable_imports
+            from ..validators.prisma_usage import scan_prisma_usage
+
+            # Read current (post syntax/lint repair) disk content (R2-S2).
+            preimages: Dict[Path, str] = {p: p.read_text(encoding="utf-8") for p in ts_paths}
+            sources = {self._rel_to_root(p): preimages[p] for p in ts_paths}
+
+            diagnostics = scan_results_to_diagnostics(
+                scan_prisma_usage(sources, str(self.project_root)),
+                scan_unresolvable_imports(sources, str(self.project_root)),
+            )
+            if not diagnostics:
+                return None
+
+            outcome = run_file_repair(
+                dict(preimages), diagnostics, self._repair_config, self.project_root,
+            )
+
+            kept: List[Path] = []
+            if outcome.any_modified:
+                for fpath, content in outcome.repaired_files.items():
+                    fpath.write_text(content, encoding="utf-8")
+                    rel = self._rel_to_root(fpath)
+                    # Strict-subset re-validation (R4-S2): roll back only on a NEW
+                    # content violation introduced by the rewrite.
+                    pre = self._new_content_violations(rel, preimages[fpath])
+                    post = self._new_content_violations(rel, content)
+                    if post - pre:
+                        fpath.write_text(preimages[fpath], encoding="utf-8")
+                    else:
+                        kept.append(fpath)
+
+                # Registry update AFTER rollback, only for kept files (R2-S3).
+                if self._element_registry is not None:
+                    for fpath in kept:
+                        rel = (
+                            str(fpath.relative_to(self.project_root))
+                            if fpath.is_absolute() else str(fpath)
+                        )
+                        for entry in self._element_registry.elements_for_file(rel):
+                            self._element_registry.set_phase_status(
+                                entry.element_id, "integrate", "repaired",
+                                metadata={"repair_stage": "pre_merge_content"},
+                            )
+
+            # Residual content scan over the current on-disk tree.
+            residual_sources = {
+                self._rel_to_root(p): p.read_text(encoding="utf-8") for p in ts_paths
+            }
+            residual: List[str] = []
+            for v in scan_prisma_usage(residual_sources, str(self.project_root)):
+                if v.kind == "prisma_unknown_field":
+                    residual.append(v.detail)
+            for iv in scan_unresolvable_imports(residual_sources, str(self.project_root)):
+                if iv.kind == "unresolvable_import":
+                    residual.append(iv.detail)
+
+            if residual:
+                # R4-S1: an abstain/residual must FAIL the checkpoint so the
+                # feature routes to LLM-retry rather than merging the invention.
+                logger.info(
+                    "Content name repair left %d residual violation(s) for %s — FAILED",
+                    len(residual), unit.name, extra={"unit_id": unit.id},
+                )
+                return CheckpointResult(
+                    status=CheckpointStatus.FAILED,
+                    name="pre_merge_content_contract",
+                    message=f"{len(residual)} unrepaired content-contract violation(s)",
+                    errors=residual[:10],
+                )
+
+            if outcome.any_modified and kept:
+                logger.info(
+                    "Content name repair cleaned %d file(s) for %s",
+                    len(kept), unit.name, extra={"unit_id": unit.id},
+                )
+                return self.checkpoint.pre_validate(gen_paths)
+            return None
+
+        except Exception as exc:
+            logger.warning(
+                "Content name repair failed for %s: %s",
+                unit.name, exc,
+                extra={"unit_id": unit.id},
+            )
+            return None
 
     def _attempt_repair(
         self,
@@ -2327,6 +2483,19 @@ class IntegrationEngine:
                                 pre_result.status != CheckpointStatus.FAILED
                             ),
                         })
+
+                # Content-contract name repair (name-repair R3-S1) runs on PASS
+                # or FAIL: invented-but-valid names produce no syntax/lint failure,
+                # so this must NOT be gated on pre_result == FAILED. It may flip a
+                # PASSED result to FAILED when an invention is detected but not
+                # repaired (abstain), routing the feature to retry (R4-S1).
+                content_result = self._attempt_content_name_repair(gen_paths, unit)
+                if content_result is not None:
+                    pre_result = content_result
+                    result_obj_metadata.setdefault("repair_summaries", []).append({
+                        "phase": "pre_merge_content",
+                        "status": pre_result.status.value,
+                    })
 
                 if pre_result.status == CheckpointStatus.FAILED:
                     error_msg = pre_result.message
