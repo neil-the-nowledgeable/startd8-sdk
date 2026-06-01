@@ -181,3 +181,78 @@ def _collect_expressions(spec: DashboardSpec) -> List[str]:
         if var.query:
             exprs.append(var.query)
     return exprs
+
+
+# ---------------------------------------------------------------------------
+# Structural lint (REQ-DCR-AES-060/061/062, AES-031, RCP-032) — non-blocking
+# ---------------------------------------------------------------------------
+
+_SIGNAL_TYPES = {
+    PanelType.STAT, PanelType.GAUGE, PanelType.BAR_GAUGE,
+    PanelType.TRACEQL_STAT, PanelType.TRACEQL_GAUGE,
+}
+_UNIT_TYPES = {
+    PanelType.STAT, PanelType.GAUGE, PanelType.BAR_GAUGE,
+    PanelType.TIMESERIES, PanelType.BARCHART, PanelType.HISTOGRAM,
+}
+
+
+def _fixed_colors(panel) -> set:
+    """Distinct fixedColor values from a (hydrated) panel's fieldConfig + overrides.
+    Palette-classic / threshold-mode panels carry no fixed color (AES-060e)."""
+    colors = set()
+    defaults = (panel.fieldConfig or {}).get("defaults", {})
+    color = defaults.get("color", {})
+    if isinstance(color, dict) and color.get("fixedColor"):
+        colors.add(color["fixedColor"])
+    for ov in panel.overrides or []:
+        for prop in ov.get("properties", []) if isinstance(ov, dict) else []:
+            val = prop.get("value")
+            if isinstance(val, dict) and val.get("fixedColor"):
+                colors.add(val["fixedColor"])
+    return colors
+
+
+def lint_spec(spec: DashboardSpec) -> List[str]:
+    """Non-blocking structural lint. Returns advisory warnings (never raises, never
+    blocks generation). The workflow logs these via ``get_logger`` and surfaces them
+    in ``result["lint_warnings"]`` (REQ-DCR-AES-061 — validate returns, workflow logs).
+    """
+    from startd8.dashboard_creator.recipes import hydrate_panel
+
+    warnings: List[str] = []
+    content = [p for p in spec.panels if p.type != PanelType.ROW]
+
+    # AES-031: suggest a signal row (no auto-reorder) when the top panel isn't a KPI tile.
+    if content and content[0].type not in _SIGNAL_TYPES:
+        warnings.append(
+            "No signal-row panel at the top — consider a stat/gauge KPI row (BLUF)."
+        )
+
+    all_colors: set = set()
+    for panel in content:
+        effective, shadow = hydrate_panel(panel)
+        warnings.extend(shadow)  # RCP-032 recipe shadow warnings
+
+        if panel.type != PanelType.TEXT and not panel.title:
+            warnings.append(f"Panel of type '{panel.type.value}' has no title.")
+
+        if panel.type in _UNIT_TYPES and not effective.unit:
+            warnings.append(f"Panel '{panel.title}' has no unit.")
+
+        if panel.type == PanelType.TIMESERIES and panel.targets:
+            if any(not t.legendFormat for t in panel.targets):
+                warnings.append(
+                    f"Timeseries '{panel.title}' has a target without legendFormat "
+                    f"(raw metric name in legend)."
+                )
+
+        all_colors |= _fixed_colors(effective)
+
+    if len(all_colors) > 6:
+        warnings.append(
+            f"Dashboard uses {len(all_colors)} distinct fixed colors (>6) — "
+            f"the 'Rainbow' anti-pattern; establish a palette."
+        )
+
+    return warnings

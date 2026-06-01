@@ -15,6 +15,26 @@ _DEFAULT_W = 12
 _ROW_H = 1
 _ROW_W = 24
 
+# AES-030: per-panel-type default (w, h) seeded from corpus medians. Panels without
+# an explicit gridPos are sized by type instead of the uniform 12x8.
+_PANEL_SIZE = {
+    PanelType.STAT: (4, 4),
+    PanelType.GAUGE: (6, 8),
+    PanelType.BAR_GAUGE: (8, 8),
+    PanelType.TIMESERIES: (12, 8),
+    PanelType.TABLE: (12, 8),
+    PanelType.BARCHART: (12, 8),
+    PanelType.PIECHART: (6, 8),
+    PanelType.HISTOGRAM: (12, 8),
+    PanelType.LOGS: (24, 10),
+    PanelType.TEXT: (24, 4),
+    PanelType.TRACEQL_STAT: (4, 4),
+    PanelType.TRACEQL_GAUGE: (6, 8),
+    PanelType.TRACEQL_TABLE: (12, 8),
+    PanelType.TRACEQL_TIMESERIES: (12, 8),
+    PanelType.TRACES: (24, 10),
+}
+
 
 def auto_group_rows(panels: List[PanelSpec]) -> List[PanelSpec]:
     """DC-108: Insert row panels to group panels by their ``group`` field.
@@ -59,27 +79,30 @@ def auto_layout(panels: List[PanelSpec]) -> List[PanelSpec]:
     """DC-109: Calculate ``gridPos`` for panels without explicit positioning.
 
     Layout rules:
-    - 24-column grid with default panel size ``h=8, w=12`` (two per row).
+    - 24-column grid; panels without explicit gridPos are sized by type
+      (``_PANEL_SIZE``, AES-030), packed left-to-right.
+    - When a wrap row contains panels of differing heights, the Y cursor advances
+      by the tallest panel in that row so nothing overlaps (AES-032).
     - Row panels span full width (``w=24, h=1``) and reset the Y cursor.
-    - Panels with an explicit ``gridPos`` are placed at their specified
-      position; auto-layout fills around them.
+    - Panels with an explicit ``gridPos`` are placed as-is; auto-layout fills around them.
     """
     result: List[PanelSpec] = []
     cursor_x = 0
     cursor_y = 0
+    row_h = 0  # tallest auto-placed panel in the current wrap row
 
     for panel in panels:
         if panel.type == PanelType.ROW:
             # Rows always start on a new line and span full width
             if cursor_x > 0:
-                cursor_y += _DEFAULT_H
-                cursor_x = 0
+                cursor_y += row_h
             updated = panel.model_copy(
                 update={"gridPos": GridPos(h=_ROW_H, w=_ROW_W, x=0, y=cursor_y)},
             )
             result.append(updated)
             cursor_y += _ROW_H
             cursor_x = 0
+            row_h = 0
             continue
 
         if panel.gridPos is not None:
@@ -90,24 +113,26 @@ def auto_layout(panels: List[PanelSpec]) -> List[PanelSpec]:
                 cursor_y = panel_bottom
             continue
 
-        w = _DEFAULT_W
-        h = _DEFAULT_H
+        w, h = _PANEL_SIZE.get(panel.type, (_DEFAULT_W, _DEFAULT_H))
 
-        # Wrap to next row if panel doesn't fit
+        # Wrap to next row if the panel doesn't fit, advancing by the row's height
         if cursor_x + w > _GRID_COLS:
-            cursor_y += h
+            cursor_y += row_h
             cursor_x = 0
+            row_h = 0
 
         updated = panel.model_copy(
             update={"gridPos": GridPos(h=h, w=w, x=cursor_x, y=cursor_y)},
         )
         result.append(updated)
         cursor_x += w
+        row_h = max(row_h, h)
 
-        # If we've filled the row, advance
+        # If we've filled the row, advance by its height
         if cursor_x >= _GRID_COLS:
-            cursor_y += h
+            cursor_y += row_h
             cursor_x = 0
+            row_h = 0
 
     return result
 

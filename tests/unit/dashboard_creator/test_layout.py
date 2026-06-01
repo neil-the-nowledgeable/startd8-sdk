@@ -78,24 +78,33 @@ class TestAutoGroupRows:
 
 class TestAutoLayout:
     def test_two_panels_side_by_side(self):
+        # AES-030: stat panels are 4x4 (corpus median), not 12x8.
         panels = [
             PanelSpec(type=PanelType.STAT, title="A", expr="up"),
             PanelSpec(type=PanelType.STAT, title="B", expr="up"),
         ]
         result = auto_layout(panels)
-        assert result[0].gridPos == GridPos(h=8, w=12, x=0, y=0)
-        assert result[1].gridPos == GridPos(h=8, w=12, x=12, y=0)
+        assert result[0].gridPos == GridPos(h=4, w=4, x=0, y=0)
+        assert result[1].gridPos == GridPos(h=4, w=4, x=4, y=0)
 
-    def test_three_panels_wrap_to_next_row(self):
+    def test_panels_wrap_to_next_row(self):
+        # 6 stats (4w each) fill the 24-col row; the 7th wraps to the next row.
+        panels = [PanelSpec(type=PanelType.STAT, title=str(i), expr="up") for i in range(7)]
+        result = auto_layout(panels)
+        assert result[0].gridPos == GridPos(h=4, w=4, x=0, y=0)
+        assert result[5].gridPos == GridPos(h=4, w=4, x=20, y=0)
+        assert result[6].gridPos == GridPos(h=4, w=4, x=0, y=4)
+
+    def test_mixed_heights_no_overlap(self):
+        # AES-032: stat(h=4) + timeseries(h=8) share a row; the wrap clears the tallest.
         panels = [
-            PanelSpec(type=PanelType.STAT, title="A", expr="up"),
-            PanelSpec(type=PanelType.STAT, title="B", expr="up"),
-            PanelSpec(type=PanelType.STAT, title="C", expr="up"),
+            PanelSpec(type=PanelType.STAT, title="A", expr="up"),         # 4x4
+            PanelSpec(type=PanelType.TIMESERIES, title="B", expr="up"),   # 12x8
+            PanelSpec(type=PanelType.TIMESERIES, title="C", expr="up"),   # 12x8 -> wraps
         ]
         result = auto_layout(panels)
-        assert result[0].gridPos == GridPos(h=8, w=12, x=0, y=0)
-        assert result[1].gridPos == GridPos(h=8, w=12, x=12, y=0)
-        assert result[2].gridPos == GridPos(h=8, w=12, x=0, y=8)
+        assert result[0].gridPos.y == 0 and result[1].gridPos.y == 0
+        assert result[2].gridPos.y == 8  # cleared the row's max height (8), no overlap
 
     def test_row_panel_spans_full_width(self):
         panels = [
@@ -111,10 +120,10 @@ class TestAutoLayout:
             PanelSpec(type=PanelType.STAT, title="B", expr="up"),
         ]
         result = auto_layout(panels)
-        # A at y=0, row at y=8 (after A fills half-row, cursor wraps), B at y=9
+        # A (stat, h=4) at y=0; row clears the partial row -> y=4; B after row (h=1) -> y=5
         assert result[0].gridPos.y == 0
-        assert result[1].gridPos.y == 8  # Row after partial row
-        assert result[2].gridPos.y == 9  # After row (h=1)
+        assert result[1].gridPos.y == 4  # Row after partial row of height 4
+        assert result[2].gridPos.y == 5  # After row (h=1)
 
     def test_explicit_gridpos_preserved(self):
         explicit = GridPos(h=4, w=6, x=3, y=10)

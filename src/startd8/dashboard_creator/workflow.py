@@ -26,7 +26,7 @@ from startd8.dashboard_creator.manifest_sync import sync_manifest
 from startd8.dashboard_creator.mixin_update import derive_mixin_entry, update_mixin_imports
 from startd8.dashboard_creator.models import DashboardSpec, PanelType
 from startd8.dashboard_creator.output import persist_dashboard
-from startd8.dashboard_creator.validation import enforce_uid, validate_spec
+from startd8.dashboard_creator.validation import enforce_uid, lint_spec, validate_spec
 from startd8.exceptions import ConfigurationError, ValidationError
 from startd8.logging_config import get_logger
 from startd8.workflows.base import WorkflowBase
@@ -324,6 +324,13 @@ class DashboardCreatorWorkflow(WorkflowBase):
             output="Spec validation passed",
         ))
 
+        # 5.2 Structural lint (REQ-DCR-AES-060/061) — non-blocking advisory warnings.
+        # validate_spec owns hard errors; lint_spec owns soft warnings; the workflow
+        # logs them via get_logger and surfaces them in the result.
+        lint_warnings = lint_spec(spec)
+        for warning in lint_warnings:
+            logger.warning("Lint: %s", warning)
+
         # 5.5 Apply layout (DC-108, DC-109) — group rows + auto-position
         has_groups = any(p.group is not None for p in spec.panels)
         has_missing_gridpos = any(
@@ -544,6 +551,7 @@ class DashboardCreatorWorkflow(WorkflowBase):
                 "jsonnet_source": jsonnet_source,
                 "dashboard_url": dashboard_url,
                 "panel_count": panel_count,
+                "lint_warnings": lint_warnings,
             },
             steps=step_results,
             metrics=WorkflowMetrics(
