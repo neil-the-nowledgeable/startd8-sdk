@@ -391,7 +391,15 @@ class NodeLanguageProfile:
             tmp.flush()
             tmp.close()
 
-            base = ["--noEmit", "--isolatedModules", "--skipLibCheck"]
+            # RUN-009: a per-file check has no project tsconfig, so tsc defaults
+            # to target ES3 — which false-fails legal constructs the real project
+            # supports (e.g. Set/Map iteration → TS2802 "needs --downlevelIteration
+            # or --target es2015+"). Pin a modern target/lib so config-dependent
+            # syntax validates under realistic settings (project targets are >=ES2017).
+            base = [
+                "--noEmit", "--isolatedModules", "--skipLibCheck",
+                "--target", "ES2022", "--lib", "ES2022,DOM,DOM.Iterable",
+            ]
             if is_jsx:
                 base += ["--jsx", "preserve"]
 
@@ -699,12 +707,27 @@ def _is_real_tsc_diagnostic(output: str) -> bool:
 # per-file syntax check — so these codes must not fail validate_syntax.
 _MODULE_RESOLUTION_CODES: tuple[str, ...] = ("TS2307", "TS2305", "TS2306", "TS2614", "TS2724")
 
+# Target/lib-config diagnostics that are FALSE POSITIVES in single-file isolation:
+# they depend on the project's `target`/`lib`/`downlevelIteration`, which the
+# per-file check can't see. We pin a modern --target/--lib above, but keep these
+# as a backstop for environments where lib resolution falls back (e.g. an `npx`
+# shim without bundled lib files). TS2802: Set/Map iteration; TS2585: generics as
+# values; TS2569: spread of iterables; TS1378: top-level await; TS2705: async/Promise.
+_TARGET_LIB_CODES: tuple[str, ...] = ("TS2802", "TS2585", "TS2569", "TS1378", "TS2705")
+
+# Diagnostics dropped from the per-file syntax check — both families are
+# project-config concerns, not single-file syntax errors (RUN-008 + RUN-009).
+_PER_FILE_FALSE_POSITIVE_CODES: tuple[str, ...] = _MODULE_RESOLUTION_CODES + _TARGET_LIB_CODES
+
 
 def _strip_module_resolution_errors(output: str) -> str:
-    """Drop module-resolution diagnostics (see :data:`_MODULE_RESOLUTION_CODES`)."""
+    """Drop per-file-isolation false positives (module-resolution + target/lib config).
+
+    See :data:`_MODULE_RESOLUTION_CODES` and :data:`_TARGET_LIB_CODES`.
+    """
     kept = [
         line for line in output.splitlines()
-        if not any(f"error {code}:" in line for code in _MODULE_RESOLUTION_CODES)
+        if not any(f"error {code}:" in line for code in _PER_FILE_FALSE_POSITIVE_CODES)
     ]
     return "\n".join(kept)
 
