@@ -15,42 +15,36 @@ NFR-2: this is invoked once per **batch** (at the postmortem hook), not per feat
 
 from __future__ import annotations
 
-import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 
 from startd8.logging_config import get_logger
+from startd8.utils.jsonc import loads_jsonc
 
 logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT_S = 300
 _TOOL = "scip-typescript"
 
-# Conservative JSONC cleanup: strip /* */ and // comments + trailing commas.
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-_LINE_COMMENT = re.compile(r"(?m)//[^\n]*")
-_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
+def _config_parses(path: Path) -> bool:
+    """True if the JSON/JSONC config parses (or is absent). False only on corruption.
 
-def _config_parses(path: Path, *, jsonc: bool) -> bool:
-    """True if the JSON/JSONC config parses (or is absent). False only on corruption."""
+    JSONC-tolerant (comments + trailing commas) so a valid tsconfig — which contains
+    ``/*`` inside path globs and may carry comments — is never mis-judged as corrupt.
+    """
     if not path.is_file():
         return True
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return True  # unreadable is not "corrupt content"; let the tool decide
-    if jsonc:
-        text = _BLOCK_COMMENT.sub("", text)
-        text = _LINE_COMMENT.sub("", text)
-        text = _TRAILING_COMMA.sub(r"\1", text)
     try:
-        json.loads(text)
+        loads_jsonc(text)
         return True
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:  # json.JSONDecodeError is a ValueError
         return False
 
 
@@ -91,10 +85,10 @@ def run_index(
             logger.warning("scip: project_root %s escapes workspace %s — refusing", root, ws)
             return None
 
-    if not _config_parses(root / "package.json", jsonc=False):
+    if not _config_parses(root / "package.json"):
         logger.warning("scip: package.json in %s is not parseable — degrading to advisory", root)
         return None
-    if not _config_parses(root / "tsconfig.json", jsonc=True):
+    if not _config_parses(root / "tsconfig.json"):
         logger.warning("scip: tsconfig.json in %s is not parseable — degrading to advisory", root)
         return None
 
