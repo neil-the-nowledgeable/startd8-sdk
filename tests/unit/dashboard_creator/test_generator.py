@@ -4,9 +4,11 @@ import pytest
 
 from startd8.dashboard_creator.generator import (
     generate_dashboard_jsonnet,
+    _escape_jsonnet_string,
     _render_expression,
     _render_panel,
     _render_variable,
+    _to_jsonnet,
 )
 from startd8.dashboard_creator.models import (
     DashboardLink,
@@ -612,4 +614,58 @@ class TestRenderPanelExtensions:
         assert "links:" in result
         assert "title: 'Drill'" in result
         assert "decimals: 0" in result
-        assert "'currencyUSD'" in result
+        # fieldConfig data leaves: merge-block key stays unquoted, value is JSON (RCP-024).
+        assert 'unit: "currencyUSD"' in result
+
+
+# ---------------------------------------------------------------------------
+# Serializer hardening — Phase 0a (REQ-DCR-RCP-024/025/026)
+# ---------------------------------------------------------------------------
+
+
+class TestSerializerHardening:
+    def test_escape_string_is_newline_safe(self):
+        # RCP-026: the proven bug — a raw newline in a single-quoted Jsonnet literal
+        # is a syntax error. The escaper must emit an escaped \n, no raw newline.
+        out = _escape_jsonnet_string("line1\nline2\twith\ttabs")
+        assert "\n" not in out and "\t" not in out
+        assert "\\n" in out
+
+    def test_text_panel_multiline_content_no_raw_newline(self):
+        panel = PanelSpec(type=PanelType.TEXT, title="Notes",
+                          options={"content": "para1\n\npara2"})
+        result = _render_panel(panel)
+        # the rendered constructor call must contain no raw newline inside the string arg
+        assert "panels.text(" in result
+        assert "para1\\n\\npara2" in result
+
+    def test_escape_string_blocks_injection(self):
+        # A crafted title cannot break out of the literal: the quote is escaped.
+        out = _escape_jsonnet_string("x'+std.extVar('y')+'")
+        assert "\\'" in out  # the single quotes are escaped
+
+    def test_to_jsonnet_inert_data_is_json(self):
+        # RCP-024: inert leaves serialize as JSON (double-quoted keys/values), sorted.
+        assert _to_jsonnet({"b": 2, "a": "x"}) == '{"a": "x", "b": 2}'
+        assert _to_jsonnet([{"k": True}, None]) == '[{"k": true}, null]'
+
+    def test_to_jsonnet_config_ref_fence_in_overrides(self):
+        # RCP-025: a ${metrics.*} leaf anywhere (incl. inside overrides) resolves to m.X,
+        # never an inert literal — the R2-F1 hole.
+        out = _to_jsonnet([{"properties": [{"id": "unit", "value": "${metrics.fooBar}"}]}])
+        assert "m.fooBar" in out
+        assert "${metrics.fooBar}" not in out
+
+    def test_overrides_render_fences_config_ref(self):
+        panel = PanelSpec(
+            type=PanelType.TIMESERIES, title="X", targets=[TargetSpec(expr="up")],
+            overrides=[{"properties": [{"id": "unit", "value": "${metrics.fooBar}"}]}],
+        )
+        result = _render_panel(panel)
+        assert "m.fooBar" in result
+        assert "${metrics.fooBar}" not in result
+
+    def test_to_jsonnet_raises_on_unserializable(self):
+        # No silent repr() fallback (the old bug).
+        with pytest.raises(TypeError):
+            _to_jsonnet(("a", "b"))
