@@ -176,8 +176,9 @@ class TestRenderPanel:
         result = _render_panel(panel)
         assert "m.activeSessions" in result
 
-    def test_all_16_panel_types_renderable(self):
+    def test_all_22_panel_types_renderable(self):
         """Every PanelType value produces output without error."""
+        from startd8.dashboard_creator.generator import _panel_constructor_name
         for pt in PanelType:
             if pt == PanelType.ROW:
                 panel = PanelSpec(type=pt, title="Row")
@@ -187,6 +188,8 @@ class TestRenderPanel:
                 PanelType.TIMESERIES, PanelType.TABLE, PanelType.BARCHART,
                 PanelType.PIECHART, PanelType.HISTOGRAM,
                 PanelType.TRACEQL_TABLE, PanelType.TRACEQL_TIMESERIES,
+                PanelType.GEOMAP, PanelType.CANVAS, PanelType.HEATMAP,
+                PanelType.STATE_TIMELINE, PanelType.XYCHART, PanelType.CANDLESTICK,
             }:
                 panel = PanelSpec(type=pt, title=f"T-{pt.value}", targets=[TargetSpec(expr="up")])
             elif pt in {
@@ -196,7 +199,9 @@ class TestRenderPanel:
             else:
                 panel = PanelSpec(type=pt, title=f"T-{pt.value}", expr="up")
             result = _render_panel(panel)
-            assert f"panels.{pt.value}(" in result, f"Panel type {pt.value} not rendered"
+            # state-timeline maps to the 'stateTimeline' constructor (hyphen not a valid id)
+            assert f"panels.{_panel_constructor_name(pt)}(" in result, \
+                f"Panel type {pt.value} not rendered"
 
 
 # ---------------------------------------------------------------------------

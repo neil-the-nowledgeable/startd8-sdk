@@ -544,9 +544,15 @@ def _escape_jsonnet_string(s: str) -> str:
     return inner.replace("'", "\\'")
 
 
+# Panel types whose Jsonnet value is not a valid identifier need an explicit name.
+_CONSTRUCTOR_NAMES = {
+    PanelType.STATE_TIMELINE: "stateTimeline",  # 'state-timeline' has a hyphen
+}
+
+
 def _panel_constructor_name(ptype: PanelType) -> str:
     """Map PanelType to panels.libsonnet constructor name."""
-    return ptype.value
+    return _CONSTRUCTOR_NAMES.get(ptype, ptype.value)
 
 
 def _variable_builder_name(vtype: VariableType) -> str:
@@ -589,4 +595,11 @@ _MULTI_TARGET_TYPES = {
     PanelType.HISTOGRAM,
     PanelType.TRACEQL_TABLE,
     PanelType.TRACEQL_TIMESERIES,
+    # Phase 5 — new data-bound panels
+    PanelType.GEOMAP,
+    PanelType.CANVAS,
+    PanelType.HEATMAP,
+    PanelType.STATE_TIMELINE,
+    PanelType.XYCHART,
+    PanelType.CANDLESTICK,
 }

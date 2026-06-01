@@ -33,6 +33,13 @@ _PANEL_SIZE = {
     PanelType.TRACEQL_TABLE: (12, 8),
     PanelType.TRACEQL_TIMESERIES: (12, 8),
     PanelType.TRACES: (24, 10),
+    # Phase 5 — new panel types (corpus medians)
+    PanelType.GEOMAP: (12, 12),
+    PanelType.CANVAS: (16, 8),
+    PanelType.HEATMAP: (12, 8),
+    PanelType.STATE_TIMELINE: (24, 6),
+    PanelType.XYCHART: (12, 8),
+    PanelType.CANDLESTICK: (12, 8),
 }
 
 
