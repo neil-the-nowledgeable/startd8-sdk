@@ -16,17 +16,15 @@
 
 ---
 
-## 2. Immediate next step — the validation rerun (in flight)
+## 2. Validation rerun — DONE (bjpurue64, 2026-06-01)
 
-A `--fresh` prime-contractor rerun against the restored strtd8 foundation is the end-to-end proof of the whole remediation. It should demonstrate:
+The `--fresh` rerun against the restored strtd8 foundation proved the remediation:
 
-1. **Gap A:** the 9 M1 anchors (`package.json`, `prisma/schema.prisma`, `lib/db.ts`, …) are **NOT wiped** by `--fresh` (config-floor + the FR-5 "tracked" durability now holds).
-2. **Gap B:** consumers inherit the real `@/lib/db` (not invented `@/lib/prisma`); the Zod schema mirrors the Prisma field set (`summary`/`yearsExp`, no invented `bio`).
-3. **Gap C:** if anything still slips, the postmortem **FAILs honestly** with attributed `unresolvable_import` / `prisma_zod_symmetry` findings — not a false 1.00 PASS.
+1. **Gap A held:** "Honoring 9 upstream anchor(s) — NOT wiped." The M1 anchors survived `--fresh`.
+2. **Gap C held:** **honest verdict PARTIAL / 0.78** (4 succeeded, 1 failed) — no false 1.00 PASS.
+3. **Lone failure was a tooling false-positive, now fixed:** `TS2802` (Set/Map iteration "needs es2015+") from the per-file tsc check, which had no project tsconfig and defaulted to ES3. The project targets ES2017, so the file was valid. **Fixed** by pinning `--target ES2022 --lib …` in the per-file check (+ a strip backstop for the target/lib family). An equivalent rerun is effectively **5/5 buildable**.
 
-**Note (seed signal):** the existing run-009 seed predates the seed-emission fix, so its `upstream_anchors` is injected for this rerun to activate Gap-B Mode-B inheritance. For *future* runs, add the marker block to the plan and re-run plan-ingestion (see §3.2).
-
-**After it finishes, check:** the postmortem verdict + `pipeline_attribution` (should be populated, not `unknown`); whether the M1 anchors survived; `npm run build` / the post-run `tsc` gate verdict; and whether Gap-B made the imports/fields coherent.
+> **Working-tree caveat (learned the hard way):** because this rerun ran on the *old 9-anchor seed* (M1 only), `--fresh` wiped the **M2/M3 working-tree files** even though they were committed — recoverable via `git checkout HEAD -- app lib`, but disruptive. **Before any future `--fresh` M-batch**, ensure the plan slice carries the `upstream-anchors` marker (or the `.cap-dev-pipe/upstream-anchors.txt` floor covers M1–M3) so the prior milestones aren't clobbered. The 24-anchor config + M4 marker now cover this going forward.
 
 ---
 
@@ -34,15 +32,15 @@ A `--fresh` prime-contractor rerun against the restored strtd8 foundation is the
 
 That analysis is the load-bearing reframe and **supersedes the narrow "just add Mode B" framing**: the run-009 build-fix pass surfaced **~16 cross-file failures across 7 contract categories**, and **Mode A/B inheritance addresses only one** (module-path). Gaps A/B (shipped) are necessary but cover ~1.5 of 7 categories. The other categories — canonical-schema (field/type/constraint), external-library-API (SDK hallucination), dependency-availability (`pino`), api-request/response-shape, project-config (tsconfig/next.config), type-signature — are **content-level** disagreements that *more inheritance scope cannot fix*. The root is **per-file probabilistic generation (locality)**, not absent inheritance.
 
-**Shipped-signature inventory (Approach B — the "verify-after-generate" classifier, the chronic 4-postmortem deferral):** of the 6 signatures that doc enumerates, **2 are shipped** — unresolvable-import (`cross_file_imports.py`) + Zod↔Prisma symmetry (`prisma_zod_symmetry.py`). **4 remain:** missing-dependency (vs `package.json`), Prisma-field-at-call-site (`db.model.create/update/where` fields vs the schema), compound-key validity (`findUnique`/`where` only `@unique`/`@id`), SDK-type-presence (e.g. `Anthropic.ContentBlockParam` vs the installed `.d.ts`).
+**Shipped-signature inventory (Approach B — the "verify-after-generate" classifier, the chronic 4-postmortem deferral): now COMPLETE.** Of the 6 signatures: **5 ship as in-process postmortem checks** — unresolvable-import + missing-dependency (`cross_file_imports.py`), Zod↔Prisma symmetry (`prisma_zod_symmetry.py`), Prisma-field-at-call-site + compound-key validity (`prisma_usage.py`). The 6th — SDK-type-presence (e.g. `Anthropic.ContentBlockParam` vs the installed `.d.ts`) — is **dispositioned to the post-run `tsc` gate** (reading `.d.ts` in-process pairs with Approach A; the provisioned compiler already covers it). All wired into `prime_postmortem.py` with `CAUSE_TO_SUGGESTION` Kaizen mappings → honest FAIL, no false PASS.
 
 ## 4. Remaining work (priority order — revised per the reframe)
 
-1. **Complete Approach B — the remaining 4 classifier signatures** *(highest leverage; Tier 1).* This is the chronic deferral and the precondition for measuring everything else (the score-vs-reality inversion). Cheapest path: they extend what's already built — `cross_file_imports.py` (add missing-dependency vs `package.json`) and `prisma_zod_symmetry.py`/`prisma_parser.py` (add call-site field + compound-key checks); SDK-type-presence needs `.d.ts` reading (pairs with Approach A). Each → honest FAIL + Kaizen, no false PASS.
-2. **Approach A — pre-flight project-knowledge artifact** *(Tier 2).* Generalizes Gap A/B into one deterministic project-state read (file→exports table, `package.json`, `tsconfig`, Prisma model summary, installed-dep `.d.ts` surface) injected as a P0 spec section. Closes dependency-availability + project-config + external-API at the source. My Gap-B FR-3 Prisma field-set injection is the first slice of this.
+1. **~~Complete Approach B — the remaining 4 classifier signatures~~ DONE (2026-06-01).** All 5 in-process signatures ship (`cross_file_imports.py` + `prisma_usage.py` + `prisma_zod_symmetry.py`); SDK-type-presence is covered by the `tsc` gate. The score-vs-reality inversion is closed (rerun verified, §2). **Approach A and Approach D below are now the highest-leverage remaining levers.**
+2. **Approach A — pre-flight project-knowledge artifact** *(Tier 2; now highest-leverage).* Generalizes Gap A/B into one deterministic project-state read (file→exports table, `package.json`, `tsconfig`, Prisma model summary, installed-dep `.d.ts` surface) injected as a P0 spec section. Closes dependency-availability + project-config + external-API at the source. My Gap-B FR-3 Prisma field-set injection is the first slice of this. **Build this as the Mieruka `CodeGraph` slice — NOT a bespoke scanner** — so code-gen coherence and code-observability share one resolver (two-tier: tree-sitter for partial/non-building code, SCIP for buildable). See `CROSS_FILE_CONTRACT_RESOLUTION.md` §11. Decide before implementing.
 3. **Approach D — single-pass batch synthesis** *(Tier 3, untried, high-leverage for small batches).* Generate the whole ≤~15-file batch in one prompt so the LLM literally sees the files it references — addresses *all* categories at once by construction. run-009's 13-file batch is squarely in range. Cheapest to prototype (workflow-level, not primitive-level).
-4. **Plan-marker adoption** *(proper Gap-A FR-1 path).* Add `<!-- cap-dev-pipe: upstream-anchors -->` to `typescript-plan.md` so ingestion emits `upstream_anchors` (vs the hand-maintained `.cap-dev-pipe/upstream-anchors.txt`).
-5. **Direct strtd8 delivery fix / the in-flight rerun** — the rerun validates Gaps A/B/C live and will empirically show which of the 7 categories remain → the data that prioritizes signature #1.
+4. **~~Plan-marker adoption~~ DONE (2026-06-01).** The M4 plan slice (`typescript-plan-m4.md`) carries the `<!-- cap-dev-pipe: upstream-anchors -->` marker; the parser was also fixed to accept Next.js dynamic/group route segments (`[id]`/`[...slug]`/`(group)`). Add the marker to M5/M6 plan slices as they're written.
+5. **~~Direct strtd8 delivery / the rerun~~ DONE (§2).** The rerun confirmed Gaps A/B/C live. Empirical residual = the content-level categories Approach A/D target (above). strtd8's own next step is M4 — see `strtd8/docs/V1_COMPLETION_PLAN.md`.
 6. **Generalized compile-gate (Go/Java/C#)** — `COMPILE_GATE_*` v0.3 ready when a compiled-language batch is on the roadmap. (A provisioned `tsc`/`prisma` gate would itself cover several Approach-B categories for TS — but is toolchain-dependent; the in-process signatures fire even unprovisioned.)
 
 ---
