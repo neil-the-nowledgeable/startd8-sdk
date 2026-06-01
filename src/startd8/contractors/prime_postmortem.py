@@ -1475,6 +1475,14 @@ class PrimePostMortemEvaluator:
             else:
                 report.aggregate_verdict = "FAIL"
 
+            # REQ-CKG-245 (aggregate any-error rule): a cross-file contract error is
+            # build-breaking, so it caps the batch verdict at FAIL regardless of the mean
+            # disk score — which otherwise dilutes a single failing feature away (one zeroed
+            # feature in ~13 still averages ≈0.92 ≥ PASS threshold, reproducing the inversion).
+            report.aggregate_verdict = self._cap_verdict_on_cross_file_errors(
+                report.features, report.aggregate_verdict
+            )
+
         # Extract lessons
         report.lessons = self._extract_lessons(report)
 
@@ -1673,15 +1681,18 @@ class PrimePostMortemEvaluator:
         non-TS/Prisma runs are unaffected (no false positives).
         """
         try:
-            from startd8.validators.prisma_zod_symmetry import evaluate_cross_file_integrity
+            from startd8.validators.cross_file_verifier import run_checks
             from startd8.forward_manifest_validator import DiskComplianceResult
         except ImportError:
             logger.debug("Cross-file integrity check unavailable — skipping")
             return
 
         # Map each generated file path → owning feature, and read its content.
+        # REQ-CKG-236: a declared-but-unmaterialized file is recorded as unverified,
+        # never silently dropped (a missing flush must not look like a clean batch).
         path_to_feature: Dict[str, FeaturePostMortem] = {}
         sources: Dict[str, str] = {}
+        not_materialized: List[str] = []
         for fpm in features:
             for fp in (fpm.generated_files or fpm.target_files):
                 if not str(fp).endswith((".prisma", ".ts", ".tsx")):
@@ -1691,30 +1702,36 @@ class PrimePostMortemEvaluator:
                     if candidate.is_file():
                         sources[fp] = candidate.read_text(encoding="utf-8", errors="replace")
                         path_to_feature[fp] = fpm
+                    else:
+                        not_materialized.append(str(fp))
                 except OSError:
-                    continue
-
-        findings = [
-            f for f in evaluate_cross_file_integrity(sources) if f.severity == "error"
-        ]
-        # RUN-009 Fix 3: toolchain-free unresolvable-import signature. The tsc gate
-        # (ts_toolchain, FR-4) catches these only when the Node toolchain is
-        # provisioned; run-009 wiped its own foundation, so that gate could not
-        # run and 7 unresolvable imports earned a PASS. This pure-Python check
-        # fires regardless of provisioning (even with no .prisma/node_modules).
-        try:
-            from startd8.validators.cross_file_imports import (
-                scan_missing_dependencies,
-                scan_unresolvable_imports,
+                    not_materialized.append(str(fp))
+        if not_materialized:
+            logger.warning(
+                "cross-file: %d generated file(s) not materialized on disk — unverified "
+                "(skipped_not_materialized): %s",
+                len(not_materialized), not_materialized[:5],
             )
-            from startd8.validators.prisma_usage import scan_prisma_usage
-            # RUN-009 Approach-B classifier signatures (all toolchain-free, fire even
-            # on an unprovisioned/wiped run): unresolvable @/ import, missing
-            # package.json dependency, and Prisma call-site field / unique-where misuse.
-            for _scan in (scan_unresolvable_imports, scan_missing_dependencies, scan_prisma_usage):
-                findings += [f for f in _scan(sources, project_root) if f.severity == "error"]
-        except ImportError:
-            pass
+
+        # Inc-4: delegate to the unified verifier (REQ-CKG-600) — the 5 shipped signatures
+        # (Zod↔Prisma symmetry, unresolvable @/ import, missing dependency, Prisma call-site
+        # misuse) + tsconfig path-alias existence + the SCIP-backed external-type check.
+        # REQ-CKG-690a proves this is behaviour-preserving for the 5 signatures. The SCIP
+        # index is env-gated (STARTD8_CKG_SCIP) so existing runs/CI without a Node toolchain
+        # are unaffected; absent -> the external check is skipped_unavailable (advisory,
+        # never a silent PASS — REQ-CKG-230).
+        scip = None
+        import os
+        if os.environ.get("STARTD8_CKG_SCIP"):
+            try:
+                from startd8.code_observability import run_index
+                from startd8.code_observability.scip_reader import ScipReader
+                _idx = run_index(project_root)
+                scip = ScipReader.from_path(_idx) if _idx else None
+            except Exception:
+                logger.warning("cross-file: SCIP index unavailable — external check advisory", exc_info=True)
+
+        findings = run_checks(sources, project_root, scip=scip).errors
         if not findings:
             return
 
@@ -1744,7 +1761,7 @@ class PrimePostMortemEvaluator:
                 fpm.disk_compliance.semantic_issues.append({
                     "category": f.kind,
                     "severity": "error",
-                    "message": f.detail,
+                    "message": f.message,
                 })
             # Hard FAIL: cross-file incoherence is not a successful generation
             # regardless of per-file syntax or requirement score.
@@ -1759,11 +1776,23 @@ class PrimePostMortemEvaluator:
             fpm.semantic_error_count += len(fs)
             if not fpm.error_message:
                 shown = "; ".join(
-                    f"{f.kind}:{getattr(f, 'field', None) or getattr(f, 'specifier', '')}"
+                    f"{f.kind}:{f.locus}"
                     for f in fs[:4]
                 )
                 more = "" if len(fs) <= 4 else f" (+{len(fs) - 4} more)"
                 fpm.error_message = f"cross-file contract violations: {shown}{more}"
+
+    @staticmethod
+    def _cap_verdict_on_cross_file_errors(features: List[Any], verdict: str) -> str:
+        """REQ-CKG-245: any error-severity cross-file finding caps the batch verdict at FAIL.
+
+        Independent of the mean disk score, which dilutes a single build-breaking failure
+        away (one zeroed feature in ~13 averages ≈0.92 ≥ the PASS threshold). A feature that
+        `_evaluate_cross_file_integrity` flipped to ``FAIL:cross_file`` forces the run to FAIL.
+        """
+        if any(getattr(f, "verdict", "") == "FAIL:cross_file" for f in features):
+            return "FAIL"
+        return verdict
 
     def _evaluate_ts_toolchain(
         self,
