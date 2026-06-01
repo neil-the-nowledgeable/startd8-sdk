@@ -197,6 +197,32 @@ class MissingTemplateError(Startd8Error):
         return " | ".join(parts)
 
 
+class MissingUpstreamArtifact(Startd8Error):
+    """A feature's declared upstream producer output is absent — RUN-008 FR-2.
+
+    Raised when feature F2 depends on F1 (or imports from a path F1 produces)
+    but F1's generated artifact is not on disk at F2's design time. F2 MUST halt
+    loudly rather than fall back to summaries or invent the cross-file contract
+    (the run-008 failure mode). Carries attribution so the post-mortem is not
+    blind to the blocked dependency.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        missing_path: str = None,
+        feature_id: str = None,
+        root_cause: str = "cross_file_contract",
+        pipeline_stage: str = "cross_feature_contract",
+    ):
+        super().__init__(message)
+        self.missing_path = missing_path
+        self.feature_id = feature_id
+        self.root_cause = root_cause
+        self.pipeline_stage = pipeline_stage
+
+
 class TruncationWarning(UserWarning):
     """
     Warning issued when a response appears to be truncated.

@@ -1,0 +1,269 @@
+// prisma/schema.prisma
+// Feature F-001: Prisma base schema — datasource + generator only.
+// Domain models (Profile, ProofPoint, Capability, etc.) are added in F-002.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------------
+model Profile {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Required
+  name String
+
+  // Optional descriptive fields
+  title       String?
+  company     String?
+  industry    String?
+  summary     String?
+  linkedinUrl String?
+  email       String?
+  phone       String?
+  location    String?
+  yearsExp    Int?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// ProofPoint
+// ---------------------------------------------------------------------------
+model ProofPoint {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Content fields (all optional beyond id/meta)
+  title       String?
+  description String?
+  context     String?
+  result      String?
+  impact      String?
+  timeframe   String?
+  role        String?
+  notes       String?
+
+  // Relations (join tables)
+  capabilities ProofPointCapability[]
+  outcomes     ProofPointOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Capability
+// ---------------------------------------------------------------------------
+model Capability {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  proficiency String?
+  notes       String?
+
+  // Relations
+  proofPoints  ProofPointCapability[]
+  outcomes     CapabilityOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Outcome
+// ---------------------------------------------------------------------------
+model Outcome {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  metric      String?
+  timeframe   String?
+  notes       String?
+
+  // Relations
+  proofPoints  ProofPointOutcome[]
+  capabilities CapabilityOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Metric
+// ---------------------------------------------------------------------------
+model Metric {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  value       String?
+  unit        String?
+  direction   String?
+  timeframe   String?
+  description String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// Differentiator
+// ---------------------------------------------------------------------------
+model Differentiator {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  evidence    String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// ValueProp
+// ---------------------------------------------------------------------------
+model ValueProp {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  headline    String?
+  subheadline String?
+  body        String?
+  audience    String?
+  format      String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// Artifact
+// ---------------------------------------------------------------------------
+model Artifact {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind        String?
+  title       String?
+  url         String?
+  description String?
+  mimeType    String?
+  sizeBytes   Int?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// AiCall
+// ---------------------------------------------------------------------------
+model AiCall {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  model          String?
+  promptTokens   Int?
+  responseTokens Int?
+  costUsd        Float?
+  purpose        String?
+  requestBody    String?
+  responseBody   String?
+  durationMs     Int?
+  error          String?
+}
+
+// ---------------------------------------------------------------------------
+// Join table: ProofPoint ↔ Capability
+// ---------------------------------------------------------------------------
+model ProofPointCapability {
+  id           String   @id @default(cuid())
+  ownerId      String   @default("local")
+  source       String   @default("user")
+  confirmed    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  proofPointId String
+  capabilityId String
+
+  proofPoint   ProofPoint  @relation(fields: [proofPointId], references: [id], onDelete: Cascade)
+  capability   Capability  @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+
+  @@unique([proofPointId, capabilityId])
+}
+
+// ---------------------------------------------------------------------------
+// Join table: ProofPoint ↔ Outcome
+// ---------------------------------------------------------------------------
+model ProofPointOutcome {
+  id           String   @id @default(cuid())
+  ownerId      String   @default("local")
+  source       String   @default("user")
+  confirmed    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  proofPointId String
+  outcomeId    String
+
+  proofPoint   ProofPoint @relation(fields: [proofPointId], references: [id], onDelete: Cascade)
+  outcome      Outcome    @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@unique([proofPointId, outcomeId])
+}
+
+// ---------------------------------------------------------------------------
+// Join table: Capability ↔ Outcome
+// ---------------------------------------------------------------------------
+model CapabilityOutcome {
+  id           String   @id @default(cuid())
+  ownerId      String   @default("local")
+  source       String   @default("user")
+  confirmed    Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  capabilityId String
+  outcomeId    String
+
+  capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  outcome      Outcome    @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@unique([capabilityId, outcomeId])
+}
