@@ -417,7 +417,13 @@ class NodeLanguageProfile:
                 # Toolchain noise (tsc/typescript not installed), not a syntax
                 # error — degrade gracefully so callers don't mis-escalate.
                 return True, ""
-            return False, output
+            # RUN-008: drop module-resolution false positives — a single file
+            # checked in isolation cannot resolve package/`@/` imports. That is
+            # the project-level gate's job (FR-4), not this per-file syntax check.
+            filtered = _strip_module_resolution_errors(output)
+            if not _is_real_tsc_diagnostic(filtered):
+                return True, ""
+            return False, filtered
         except FileNotFoundError:
             return True, ""  # tsc not installed — best-effort
         except subprocess.TimeoutExpired:
@@ -682,6 +688,25 @@ _TSC_DIAGNOSTIC = re.compile(r"error TS\d+", re.IGNORECASE)
 def _is_real_tsc_diagnostic(output: str) -> bool:
     """True if *output* contains a genuine TypeScript compiler diagnostic."""
     return bool(_TSC_DIAGNOSTIC.search(output))
+
+
+# Module-resolution diagnostics that are FALSE POSITIVES in single-file isolation:
+# a per-file/per-element syntax check copies the file to a temp dir with no
+# node_modules and no tsconfig `paths`, so real package imports (`zod`, `next`,
+# `@prisma/client`) and `@/`-aliased imports cannot resolve (TS2307), and any
+# symbols/members they would export read as missing (TS2305/TS2306/TS2614/TS2724).
+# Cross-module resolution is the PROJECT-level gate's job (RUN-008 FR-4), not the
+# per-file syntax check — so these codes must not fail validate_syntax.
+_MODULE_RESOLUTION_CODES: tuple[str, ...] = ("TS2307", "TS2305", "TS2306", "TS2614", "TS2724")
+
+
+def _strip_module_resolution_errors(output: str) -> str:
+    """Drop module-resolution diagnostics (see :data:`_MODULE_RESOLUTION_CODES`)."""
+    kept = [
+        line for line in output.splitlines()
+        if not any(f"error {code}:" in line for code in _MODULE_RESOLUTION_CODES)
+    ]
+    return "\n".join(kept)
 
 
 # JSX detection: a tag-open immediately followed by an identifier/fragment, or a
