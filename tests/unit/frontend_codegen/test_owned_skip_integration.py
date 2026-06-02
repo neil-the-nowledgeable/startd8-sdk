@@ -1,7 +1,8 @@
 """Inc 8b — integration test for the prime-contractor owned-file skip hook.
 
 Exercises ``PrimeContractorWorkflow._try_deterministic_file_shortcut`` directly via a stub
-``self`` (the same seam pattern the module-level ``_read_prisma_anchor`` was written for).
+``self``. The core now consults the language-agnostic ``DeterministicFileProvider`` registry;
+this test registers the Prisma→Zod provider explicitly (the entry point activates on install).
 Verifies: an owned in-sync file is skipped ($0.00 GENERATED); stale/tampered/non-owned/
 absent targets fall through to the LLM; and build files keep their prior behavior.
 """
@@ -15,12 +16,24 @@ import pytest
 # Importable now that the protobuf-runtime mismatch is fixed; skip if a leaner env can't.
 prime = pytest.importorskip("startd8.contractors.prime_contractor")
 
+from startd8.contractors import deterministic_providers  # noqa: E402
 from startd8.frontend_codegen import render_zod_schema  # noqa: E402
+from startd8.frontend_codegen.provider import PrismaZodFileProvider  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
 PCW = prime.PrimeContractorWorkflow
 FeatureStatus = prime.FeatureStatus
+
+
+@pytest.fixture(autouse=True)
+def _register_provider():
+    """Register the Prisma→Zod provider (entry-point discovery needs an install)."""
+    deterministic_providers.clear_providers()
+    deterministic_providers.register_provider(PrismaZodFileProvider())
+    deterministic_providers._DISCOVERED = True  # skip entry-point discovery in-test
+    yield
+    deterministic_providers.clear_providers()
 
 SCHEMA = "model M {\n  id String @id\n  name String\n}\n"
 SCHEMA_V2 = "model M {\n  id String @id\n  name String\n  extra String?\n}\n"

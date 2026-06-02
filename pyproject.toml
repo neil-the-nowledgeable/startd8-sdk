@@ -143,6 +143,11 @@ heuristic = "startd8.contractors.adapters.standalone:HeuristicSizeEstimator"
 [project.entry-points."startd8.contractors.merge_strategies"]
 simple = "startd8.contractors.adapters.standalone:SimpleMergeStrategy"
 
+# Deterministic-file providers — the prime-contractor skip-hook consults these to decide a
+# target file is deterministically provided + in-sync (no stack coupling in the core).
+[project.entry-points."startd8.contractors.deterministic_providers"]
+prisma-zod = "startd8.frontend_codegen.provider:PrismaZodFileProvider"
+
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
 Repository = "https://github.com/startdate/startd8"
