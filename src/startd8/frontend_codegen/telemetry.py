@@ -23,6 +23,30 @@ except ImportError:  # pragma: no cover - exercised only when OTel isn't install
 
 _METER_NAME = "startd8.frontend_codegen"
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+# Frontend/backend code-generation telemetry is pipeline-innate (REQ-OBS-SHARED-001);
+# declaring it keeps the descriptor↔emission parity bijection closed (parity.py).
+_OTEL_DESCRIPTORS = {
+    "category": "pipeline_innate",
+    "orientation": "system",
+    "metrics": [
+        {"name": "startd8.frontend_codegen.models_rendered", "instrument": "counter",
+         "unit": "models", "description": "Prisma models rendered to Zod schemas",
+         "meter": _METER_NAME},
+        {"name": "startd8.frontend_codegen.fields_rendered", "instrument": "counter",
+         "unit": "fields", "description": "Scalar fields rendered", "meter": _METER_NAME},
+        {"name": "startd8.frontend_codegen.format_hints_applied", "instrument": "counter",
+         "unit": "hints", "description": "Convention format hints (.email/.url) applied",
+         "meter": _METER_NAME},
+        {"name": "startd8.frontend_codegen.unrenderable_fields", "instrument": "counter",
+         "unit": "fields", "description": "Fields with no deterministic Zod mapping",
+         "meter": _METER_NAME},
+        {"name": "startd8.frontend_codegen.drift_check", "instrument": "counter",
+         "unit": "checks", "description": "Drift checks, labelled by status",
+         "meter": _METER_NAME, "labels": ["status"]},
+    ],
+}
+
 _instruments: Dict[str, Any] = {}
 _initialized = False
 

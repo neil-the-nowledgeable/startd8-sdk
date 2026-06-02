@@ -55,6 +55,26 @@ class BusinessContext:
     project_id: Optional[str] = None
     project_name: Optional[str] = None
     slo_window: str = "30d"
+    # Delivery fields consumed from the ContextCore-authored manifest (FR-CONS-1).
+    # Replace hardcoded placeholders in notification_policy / service_monitor /
+    # loki_rule / runbook. Shapes verified against real .contextcore.yaml (plan Phase 0).
+    alert_channels: List[str] = field(default_factory=list)  # spec.observability.alertChannels
+    owners: List[Dict[str, Any]] = field(default_factory=list)  # metadata.owners: [{team,slack?,email?}]
+    metrics_interval: Optional[str] = None  # spec.observability.metricsInterval, e.g. "30s"
+    targets: List[Dict[str, Any]] = field(default_factory=list)  # spec.targets: [{kind,name,namespace}]
+    # OQ-8 resolved (pipeline-requirements R2-F1/F2): optional manifest fields, env-overridable.
+    # Precedence env > manifest > default/omit; the env tier is read at the call sites.
+    prometheus_datasource: Optional[str] = None  # spec.observability.prometheusDatasource
+    runbook_base: Optional[str] = None  # spec.observability.runbookBase (HTTPS prefix)
+
+    def routing_channels(self) -> List[str]:
+        """Channel identifiers for alert routing, with the Phase-0 fallback chain:
+        spec.observability.alertChannels → metadata.owners[].slack → []
+        (empty → the consumer treats notification routing as required-unresolved,
+        never fabricating a webhook URL)."""
+        if self.alert_channels:
+            return [str(c) for c in self.alert_channels]
+        return [str(o["slack"]) for o in self.owners if isinstance(o, dict) and o.get("slack")]
 
 
 @dataclass

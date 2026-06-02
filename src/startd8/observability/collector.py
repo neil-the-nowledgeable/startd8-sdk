@@ -39,6 +39,7 @@ _INSTRUMENTED_MODULES = [
     ("startd8.workflows.builtin.plan_ingestion_mottainai", "src/startd8/workflows/builtin/plan_ingestion_mottainai.py"),
     ("startd8.security_prime.otel", "src/startd8/security_prime/otel.py"),
     ("startd8.utils.artifact_inventory", "src/startd8/utils/artifact_inventory.py"),
+    ("startd8.frontend_codegen.telemetry", "src/startd8/frontend_codegen/telemetry.py"),
 ]
 
 # Event type → instrument-group mapping (derived from EventType enum grouping).

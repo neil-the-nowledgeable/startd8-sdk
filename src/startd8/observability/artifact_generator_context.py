@@ -344,6 +344,7 @@ def load_business_context(
         logger.info("Loaded business context from manifest: %s", manifest_path)
 
     spec = manifest.get("spec", {})
+    meta = manifest.get("metadata", {})
     business = spec.get("business", {})
     requirements = spec.get("requirements", {})
     observability = spec.get("observability", {})
@@ -354,6 +355,15 @@ def load_business_context(
     ctx.criticality = business.get("criticality", "medium")
     ctx.owner = business.get("owner")
     ctx.dashboard_placement = observability.get("dashboardPlacement", "standard")
+
+    # Delivery fields (FR-CONS-1) consumed by notification_policy / service_monitor /
+    # loki_rule / runbook in place of hardcoded placeholders.
+    ctx.alert_channels = list(observability.get("alertChannels") or [])
+    ctx.owners = list(meta.get("owners") or [])
+    ctx.metrics_interval = observability.get("metricsInterval")
+    ctx.targets = list(spec.get("targets") or [])
+    ctx.prometheus_datasource = observability.get("prometheusDatasource")
+    ctx.runbook_base = observability.get("runbookBase")
 
     # SLO thresholds from requirements
     ctx.availability = requirements.get("availability")
