@@ -2711,8 +2711,107 @@ class PrimePostMortemEvaluator:
 
 
 # ---------------------------------------------------------------------------
-# Async launcher
+# Post-mortem launchers (sync gate + async back-compat)
 # ---------------------------------------------------------------------------
+
+
+def _prepare_postmortem_inputs(
+    result_dict: Dict[str, Any],
+    queue: Any,  # FeatureQueue — Any to avoid circular import
+    seed_path: Optional[str] = None,
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[List[Dict]]]:
+    """Snapshot the inputs the evaluator needs, decoupled from live state.
+
+    Deep-copies ``result_dict`` and serializes queue state so the evaluation is
+    insulated from concurrent mutation (the async path) and produces a
+    deterministic snapshot (the sync gate, REQ-CKG-240 NFR-5).
+    """
+    result_copy = copy.deepcopy(result_dict)
+
+    queue_state: Dict[str, Any] = {}
+    if hasattr(queue, "features"):
+        queue_state = {
+            fid: f.to_dict() if hasattr(f, "to_dict") else {}
+            for fid, f in queue.features.items()
+        }
+
+    seed_tasks = None
+    if seed_path:
+        try:
+            seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
+            seed_tasks = seed_data.get("tasks", [])
+        except Exception:
+            logger.warning("Failed to load seed for postmortem: %s", seed_path)
+
+    return result_copy, queue_state, seed_tasks
+
+
+def evaluate_prime_postmortem_sync(
+    result_dict: Dict[str, Any],
+    queue: Any,  # FeatureQueue — Any to avoid circular import
+    seed_path: Optional[str] = None,
+    output_dir: str = ".",
+    project_root: Optional[str] = None,
+) -> PrimePostMortemReport:
+    """Run the post-mortem evaluation synchronously and return the report.
+
+    REQ-CKG-240: the cross-file verifier verdict must gate the run, so the
+    evaluation runs inline (no detached thread) before ``PrimeContractor.run()``
+    returns. The caller folds the verdict into ``result_dict`` via
+    :func:`apply_cross_file_gate`. Running inline also removes the race the
+    detached ``daemon=False`` thread introduced, satisfying NFR-5 determinism.
+    """
+    result_copy, queue_state, seed_tasks = _prepare_postmortem_inputs(
+        result_dict, queue, seed_path
+    )
+    evaluator = PrimePostMortemEvaluator()
+    report = evaluator.evaluate(
+        result_dict=result_copy,
+        queue_state=queue_state,
+        seed_tasks=seed_tasks,
+        output_dir=output_dir,
+        project_root=project_root,
+    )
+    logger.info(
+        "Prime postmortem complete (sync): score=%.2f verdict=%s",
+        report.aggregate_score,
+        report.aggregate_verdict,
+    )
+    return report
+
+
+def apply_cross_file_gate(
+    result_dict: Dict[str, Any],
+    report: PrimePostMortemReport,
+) -> Dict[str, Any]:
+    """Fold the post-mortem verdict into ``result_dict`` so it gates the run.
+
+    REQ-CKG-240/245: an error-severity cross-file finding flips its owning
+    feature to ``FAIL:cross_file`` and caps the batch verdict at FAIL. This
+    surfaces that as a consumable gate on ``result_dict`` (and, downstream, the
+    CLI exit code) instead of a log line in a thread nobody joins.
+
+    Returns the gate dict (also stored at ``result_dict["cross_file_gate"]``).
+    """
+    cross_file_failures = [
+        {
+            "feature_id": getattr(f, "feature_id", "?"),
+            "name": getattr(f, "name", ""),
+            "error_message": getattr(f, "error_message", "") or "",
+        }
+        for f in report.features
+        if getattr(f, "verdict", "") == "FAIL:cross_file"
+    ]
+    gate = {
+        "passed": not cross_file_failures,
+        "verdict": report.aggregate_verdict,
+        "score": report.aggregate_score,
+        "cross_file_failures": cross_file_failures,
+    }
+    result_dict["cross_file_gate"] = gate
+    result_dict["postmortem_verdict"] = report.aggregate_verdict
+    result_dict["postmortem_score"] = report.aggregate_score
+    return gate
 
 
 def launch_prime_postmortem_async(
@@ -2724,37 +2823,20 @@ def launch_prime_postmortem_async(
 ) -> threading.Thread:
     """Launch post-mortem evaluation in a background thread.
 
+    Retained for backward compatibility (external callers / existing tests).
+    The active gating path in ``PrimeContractor.run()`` uses
+    :func:`evaluate_prime_postmortem_sync` instead, so the verdict can gate the
+    run (REQ-CKG-240). This launcher does **not** gate — its verdict is logged.
+
     Thread-safe: deep-copies result_dict and snapshots queue state before
     spawning the thread so the caller can continue without contention.
-
-    Args:
-        result_dict: Result from PrimeContractor.run().
-        queue: FeatureQueue instance.
-        seed_path: Optional path to seed file for requirement matching.
-        output_dir: Directory for report output files.
 
     Returns:
         The started Thread object.
     """
-    # Deep-copy for thread safety
-    result_copy = copy.deepcopy(result_dict)
-
-    # Snapshot queue state
-    queue_state = {}
-    if hasattr(queue, "features"):
-        queue_state = {
-            fid: f.to_dict() if hasattr(f, "to_dict") else {}
-            for fid, f in queue.features.items()
-        }
-
-    # Load seed tasks if path provided
-    seed_tasks = None
-    if seed_path:
-        try:
-            seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-            seed_tasks = seed_data.get("tasks", [])
-        except Exception:
-            logger.warning("Failed to load seed for postmortem: %s", seed_path)
+    result_copy, queue_state, seed_tasks = _prepare_postmortem_inputs(
+        result_dict, queue, seed_path
+    )
 
     def _run() -> None:
         try:
