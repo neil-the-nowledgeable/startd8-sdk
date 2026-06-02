@@ -936,6 +936,35 @@ class IntegrationEngine:
                 out.add(("import", iv.specifier))
         return out
 
+    def _warn_external_dependencies(self, gen_paths: List[Path]) -> List[str]:
+        """Advisory: flag bare imports of packages absent from ``package.json``.
+
+        Surfaces the RUN-014/015/016 *invented external dependency* class (``ai``, ``swr``,
+        ``pino``, ...) **during** integration instead of only in the postmortem. Advisory by
+        design (the chosen wiring): logs warnings and returns them for the result metadata,
+        and **never blocks** -- a missing dependency is not name-repairable (it routes to
+        regen/install, not a rewrite). Reuses ``scan_missing_dependencies`` (it already reads
+        ``package.json`` and skips node builtins / ``node:`` specifiers); a project without a
+        ``package.json`` yields no findings (cannot verify -- no false positives).
+        """
+        ts_paths = [p for p in gen_paths if p.suffix in (".ts", ".tsx") and p.exists()]
+        if not ts_paths:
+            return []
+        try:
+            from ..validators.cross_file_imports import scan_missing_dependencies
+
+            sources = {self._rel_to_root(p): p.read_text(encoding="utf-8") for p in ts_paths}
+            violations = scan_missing_dependencies(sources, str(self.project_root))
+        except Exception as exc:  # advisory -- never break integration
+            logger.debug("missing-dependency advisory scan failed: %s", exc)
+            return []
+        out: List[str] = []
+        for v in violations:
+            msg = f"{v.source_file}: {v.detail}"
+            logger.warning("Missing dependency (advisory): %s", msg)
+            out.append(msg)
+        return out
+
     def _attempt_content_name_repair(
         self,
         gen_paths: List[Path],
@@ -2441,6 +2470,19 @@ class IntegrationEngine:
                         ])
                 except Exception as exc:
                     logger.warning("Post-gen cleanup failed: %s", exc)
+
+        # 2.6. Advisory: surface invented external dependencies (RUN-014/015/016) during the
+        # run, not just in the postmortem. Never blocks integration.
+        if not self.dry_run:
+            _dep_paths = [
+                (p if p.is_absolute() else p.resolve())
+                for p in (Path(f) for f in unit.generated_files)
+            ]
+            for w in self._warn_external_dependencies(_dep_paths):
+                warnings.append(w)
+                result_obj_metadata.setdefault(
+                    "missing_dependency_warnings", []
+                ).append(w[:200])
 
         # 3. Pre-validate generated source files
         if not self.dry_run and self.checkpoint is not None:
