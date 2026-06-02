@@ -101,10 +101,14 @@ detail, create+edit form, delete — **plus inline validation** (validate-on-blu
 field-level error partials, partial swaps). Field→input widget mapping derived from the model
 (enum→select, date→date input, bool→checkbox, relation→picker stub, str→input/textarea). Owned.
 
-**FR-5 — Python project build gate.** New `python_toolchain.py` mirroring `ts_toolchain`, **reusing
-the `ToolchainResult` dataclass + verdict logic**: run `python -m compileall` → `mypy` → `pytest`
-over the generated project. **Loud-degrade when a tool is absent — never a silent pass.** Expose a
-`python_typecheck_enabled()` flag mirroring the TS gate's toggle.
+**FR-5 — Python project build gate. Shipped (Step 3).** `validators/python_toolchain.py` mirrors
+`ts_toolchain`'s **verdict contract** (`checked`/`unavailable`/`timeout`/`error` →
+`pass`|`fail`|`unavailable`) with a **native `PyToolchainResult`** — *not* a literal reuse of
+`ToolchainResult`, which is TS-coupled (`prisma_generated`, `TscDiagnostic`). *(Corrected from v0.2
+§0, which assumed dataclass reuse; the real reuse is the contract + loud-degrade rule.)* Stages:
+`compileall` (the **always-available syntax floor**) → `mypy` → `pytest`; absent/disabled stages are
+**recorded in `stages_skipped`** (loud, never a silent pass). `python_typecheck_enabled()` toggles
+on `STARTD8_PY_TYPECHECK`, mirroring the TS gate.
 
 **FR-6 — Completeness emitter.** Generate a **pure** function from an explicitly declared signal set
 → score + priority-ordered nudges (realizes the app's FR-9). Owned, no LLM. *(Signal declaration →

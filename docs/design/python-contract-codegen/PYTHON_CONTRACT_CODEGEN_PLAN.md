@@ -49,9 +49,10 @@ resolved (single table class + the FR-1 Pydantic schemas as the API/AI edge). Dr
 on a `# startd8-artifact:` header tag so one provider verifies both `models.py` and `tables.py`.
 *Depended on: Step 1.*
 
-**Step 3 — Python build gate (FR-5).** `validators/python_toolchain.run_project_typecheck_py`
-reusing `ToolchainResult`: `compileall` → `mypy` → `pytest`; `status="unavailable"` ⇒ non-pass
-(loud-degrade). `python_typecheck_enabled()` toggle. *Depends on: nothing; parallelizable with 1–2.*
+**Step 3 — Python build gate (FR-5). ✅ SHIPPED.** `validators/python_toolchain.run_project_check`:
+`compileall` (always-available floor) → `mypy` → `pytest`, native `PyToolchainResult` mirroring the
+ts_toolchain verdict contract; absent/disabled stages recorded in `stages_skipped` (loud-degrade).
+`python_typecheck_enabled()` toggles on `STARTD8_PY_TYPECHECK`. *Was parallelizable with 1–2.*
 
 **Step 4 — FastAPI CRUD + canonical layout (FR-3, FR-11).** `crud_generator` emits list/detail/
 create/update/delete handlers (validate Pydantic → SQLModel op → response), canonical imports only.
