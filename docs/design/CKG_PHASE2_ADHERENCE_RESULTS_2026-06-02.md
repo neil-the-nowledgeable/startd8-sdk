@@ -166,5 +166,24 @@ weak cases showed Gap A *already perfect* (cases too easy / scorer blind to prop
 N=10 on **strengthened** cases shows the real 0.05→1.00. The result is only trustworthy because both the
 *scorer* (structural) and the *cases* (force `db.<model>`, synonym-described) were hardened.
 
-**Remaining:** cross-tier confirmation with strengthened cases (pro/flash — expected higher baseline, same
-direction); and the **end-to-end OQ-5** test for full pipeline fidelity (Verifier + build + repair).
+### 7.1 Cross-tier confirmation (strengthened cases, structural, N=10)
+
+| Tier | Gap A (fields) base → inj | Gap B (paths) base → inj |
+|---|---|---|
+| `claude-haiku-4-5` | 0.05 → **1.00** | 0.40 → **1.00** |
+| `gemini-2.5-flash` | 0.10 → **1.00** | 0.55 → **1.00** |
+| `gemini-2.5-pro`   | 0.30 → **0.95** | 0.60 → **1.00** |
+
+**Both halves validated across all three tiers.** Baselines rise slightly with model strength (Gap A
+0.05→0.10→0.30; Gap B 0.40→0.55→0.60) — so **the lift is largest on the cheapest model** (Haiku Gap-A +0.95
+vs pro +0.65), which is precisely the "richer specs → cheaper models" cost-efficiency claim, measured.
+
+**Honest residuals (kept, not smoothed over):**
+- **Injection is necessary and *nearly* sufficient, not a hard guarantee** — pro injected Gap A = 0.95 (one
+  PI-001 miss in 10). D1's residual is small but nonzero even with the truth in-prompt.
+- **Gap B leans on one case** — PI-007 (`@/lib/ai/client`) barely reproduces (10/10 baseline on both gemini
+  tiers); PI-002 (`@/lib/prisma`) is the real Gap-B driver. The Gap-B signal is solid but narrower than the
+  two-case count implies.
+
+**Remaining:** the **end-to-end OQ-5** test for full pipeline fidelity (Verifier + build + repair active,
+real `PrimeContractorWorkflow`), and broader case coverage for Gap B (more module-path families).
