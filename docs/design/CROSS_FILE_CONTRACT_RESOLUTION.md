@@ -399,11 +399,36 @@ RUN-012 PI-008 (WizardShell): $0.3247, 2.2× the average — Opus-tier signature
 
 RUN-011 showed score-vs-reality inversion: high-verdict features were structurally undeliverable (Gap C from RUN_011 postmortem). The Fix 2 TS2345 type_class_mismatch signature shipped mid-RUN-011 authoring.
 
-RUN-012 verdict score is 0.67 — accurately reflecting 10/15 delivered. The 5 failed features were correctly attributed to `cross_feature_contract / cross_file_contract`. **Score-vs-reality is recoupled** — first run in this sequence where the headline metric is a reliable signal.
+RUN-012 verdict score is 0.67 — accurately reflecting 10/15 delivered. The 5 failed features were correctly attributed to `cross_feature_contract / cross_file_contract`. **Score-vs-reality is recoupled** — first run in this sequence where the headline metric is a reliable signal at the *cross-file* boundary.
 
 This validates the Approach B direction (§5.B + §6) at the per-signature level: each load-bearing signature that ships **converts a previously-invisible failure mode into an attributed-and-scored one**. It does NOT prevent the failure (RUN-012 still produced 5 failures); but it makes the failures legible to the verdict layer.
 
 **The composition principle holds (per §6):** Approach A reduces the rate of invention; Approach B makes any invention that slips through legible. Neither alone is sufficient; the combination is what makes the pipeline trustworthy.
+
+### 12.4a CORRECTION (2026-06-02) — recoupling is partial; intra-file type errors still bypass the verdict
+
+Added after the M6 direct-fix pass (commit `bc147aa` on the strtd8 repo). RUN-013's verdict reported 3 PASS + 2 FAIL with score 0.60, and §12.4 (above) cited this as evidence of recoupling. **The 3 PASS verdicts were wrong** — `npx tsc --noEmit` against the assembled project showed PI-001 had 8 type errors (invented `text`/`impact`/`label` fields plus a `name: string` vs `string | null` mismatch on Capability), PI-002 referenced ~12 fields that exist in neither Prisma nor PI-001's own type defs, and PI-003 had locally erased all types to `Record<string, unknown>` to bypass type-checking. **All five M6 features were broken; the verdict layer caught 2 of the 5.** Full reconciled verdict table in [RUN_013_M6_SUBNAMESPACE_INVENTION_POSTMORTEM.md §6.1](./RUN_013_M6_SUBNAMESPACE_INVENTION_POSTMORTEM.md).
+
+The pattern the verdict layer reliably catches:
+- **Cross-file contract violations** (file A references file B's symbol/path; file B doesn't provide it). Caught by `unresolvable_import` and `cross_feature_contract` signatures.
+- **Single-file syntactic / per-file isolated typecheck failures** (file does not compile in isolation). Caught by per-file `tsc --noEmit` in the classifier's typecheck stage.
+
+The pattern the verdict layer **does NOT catch**:
+- **Intra-file type mismatches against project-wide truth** — e.g., a file's declared `ProofPointData` type asserts a `text` field, the file's own Prisma select claims `text: true`, and tsc in isolation may or may not catch this depending on whether the Prisma client surface is available to the per-file typecheck. RUN-013 evidence suggests it does not always catch it.
+- **Cross-file semantic mismatches between feature outputs** — e.g., file A declares `Type X` with one shape, file B in the same batch declares `Type X` with a DIFFERENT shape, and neither imports the other's version. Each compiles in isolation; neither is wrong from its own perspective; the assembled project has two definitions for what should be one type. RUN-013 PI-001 vs PI-002 demonstrates this exact pattern: corpus.ts's `ProofPointData` and markdown.ts's expected `ProofPointData` field set are entirely disjoint.
+- **Type erasure as a typecheck escape valve** — when a file declares its types as `Record<string, unknown>` or `any`, tsc emits zero errors regardless of whether the runtime shape will work. The classifier sees clean output and marks PASS.
+
+**Score-vs-reality recoupling is real for the failure modes Fix 2 catches, but it is not complete.** The "complete recoupling" claim from §12.4 should be read as "recoupling at the cross-file contract layer," not "recoupling across the entire pipeline."
+
+### 12.4b NEW Fix — project-wide typecheck post-merge (Fix 10 on the SDK roadmap)
+
+The simplest signature that closes the gap §12.4a describes: **after each feature's outputs are merged to the project tree, run `npx tsc --noEmit` against the project root.** Treat the resulting errors as additional attributable failures even if the per-feature gate passed. Attribution is straightforward — the file paths in tsc's error messages map to the features that wrote them.
+
+For RUN-013 specifically, Fix 10 would have changed the verdict from `3 PASS / 2 FAIL` to `0 PASS / 5 FAIL` — accurate. Cost is one shell invocation per feature merge (`npx tsc --noEmit`, ~5-15 seconds on a project of strtd8's size).
+
+This is **mechanically cheap to ship** and would re-couple score with reality at the intra-file layer to match what §12.4 claimed at the cross-file layer. Recommended priority: ship Fix 10 alongside the three signature additions §12.5 already enumerates (`unresolvable_css_module`, `barrel_import_to_non_existent_index`, `top_level_types_dir_invented`). Combined, these four fixes would have attributed every one of RUN-013's failures correctly.
+
+**The §6 composition principle (Approach A + Approach B) needs an addendum**: Approach B is not one signature — it's a *signature family*, and the family is incomplete until project-wide typecheck is in it. Per-file signatures (TS2345, cross-file imports) catch failures at file boundaries; project-wide typecheck catches failures at the *assembly* boundary. Both are necessary.
 
 ### 12.5 Updated priority for the SDK fix roadmap
 
