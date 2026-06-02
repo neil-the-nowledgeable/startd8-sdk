@@ -10,37 +10,38 @@
 
 From **one `.prisma` contract**, `startd8 generate backend` deterministically assembles the entire
 all-Python app spine — Pydantic models, SQLModel tables, FastAPI CRUD, server-rendered HTMX UI
-(inline validation), JSON/Markdown export, AI tool-schemas, completeness. **11 owned artifact
-kinds**, all `$0.00`-skip-recognized by the `pydantic-sqlmodel` provider, all build-gateable.
+(inline validation), JSON/Markdown export, AI tool-schemas, completeness, `requirements.txt`. **12
+owned artifact kinds**, all `$0.00`-skip-recognized by the `pydantic-sqlmodel` provider, all
+build-gateable.
 
 - **Merged to `main`** (merge `900c9e8e`); package `src/startd8/backend_codegen/`.
 - **OQ-5 wired** (`4d894bc5`): skip-hook via entry point + the build gate in
   `prime_postmortem._evaluate_python_toolchain` (env `STARTD8_PY_TYPECHECK`).
-- **Pilot passed** (ProofPoint+Metric): 18 files, gate pass, `--check` all in_sync.
-- **Verified on the real strtd8 15-model contract**: 57 files, byte-identical idempotent,
-  `--check` in_sync.
-- Static validation only so far: `compile()` for `.py`, Jinja-parse for templates. **Nothing has
-  imported fastapi/sqlmodel/jinja2 or served a request yet.**
+- **Pilot passed** (ProofPoint+Metric): 19 files, gate pass, `--check` all in_sync.
+- **Verified on the real strtd8 15-model contract**: byte-identical idempotent, `--check` in_sync.
+- **Runtime-verified** (#1 below): the generated app actually serves — full JSON CRUD + HTMX UI
+  via `TestClient` against real fastapi/sqlmodel/jinja2.
 
 ---
 
 ## Next steps (prioritized)
 
-### 1. Real-runtime smoke test of a generated app  ·  *highest value — do first*
-This is the one remaining unknown that static checks can't cover, and it **doubles as the app's
-M0→M2 Profile pilot slice** (`$0`-LLM `generate backend`, not a pipeline run).
+### 1. Real-runtime smoke test of a generated app  ·  ✅ DONE
+Generated the ProofPoint+Metric app into a throwaway venv with real
+fastapi/sqlmodel/jinja2/python-multipart and drove the full cycle via FastAPI's `TestClient` —
+**13/13 pass**: JSON CRUD with the DTOs, JSON-list-column round-trip (`tags`), enum coercion,
+partial `XUpdate` PATCH, and the whole HTMX UI (list/form/validate/delete). Encoded as
+`tests/unit/backend_codegen/test_runtime_smoke.py` (skips when app deps absent; runs in
+CI-with-deps).
 
-**Do:** `generate backend` → fresh venv → `pip install fastapi sqlmodel jinja2 uvicorn` →
-`uvicorn app.main:app`.
-**Acceptance:**
-- `GET /ui/<entity>` renders the list; `GET /ui/<entity>/new` renders the form.
-- `POST` the form persists a row to SQLite (`init_db` ran on startup).
-- `POST /ui/<entity>/validate` returns the inline field-error partial.
-- delete swaps the row out (`hx-swap=outerHTML`); detail/edit round-trip.
-
-**Why:** converts "generates correct-looking code" → "generates a running app"; will surface any
-runtime import mismatch, Jinja context-key, or SQLModel coercion edge (esp. `tags` list ↔ JSON
-column, enum coercion, optional/`metricId`). Capture findings back into the generators.
+**Three real defects the runtime test caught (all fixed):**
+- **`TemplateResponse` signature** — old `(name, context)` form crashes on modern Starlette
+  (treats the context dict as the template name). Now `(request, name, context)`.
+- **`web_router` never mounted** — `main.py` only included the JSON routers; the HTMX UI was
+  generated but unreachable. Now `app.include_router(web_router)`.
+- **`python-multipart` is a required runtime dep** (form parsing) and the SDK emitted no dependency
+  manifest. Added a generated **`requirements.txt`** (fastapi/sqlmodel/jinja2/python-multipart/
+  uvicorn) — a 12th owned artifact kind.
 
 ### 2. Tag + clear the retired TS `app/` in strtd8  ·  *prerequisite, cheap*
 The strtd8 app tree is still Next.js. Tag it (`retired-ts-prototype`) and clear it so the Python

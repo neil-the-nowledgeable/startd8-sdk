@@ -147,6 +147,31 @@ def render_completeness(
     return header + "\n\n" + body
 
 
+# The generated app's runtime dependencies (this stack is fixed; not schema-derived). Verified by
+# the runtime smoke test — python-multipart is required for the HTMX form routes' request.form().
+_RUNTIME_REQUIREMENTS: List[str] = [
+    "fastapi",
+    "sqlmodel",
+    "jinja2",
+    "python-multipart",  # form parsing for the HTMX routes (request.form())
+    "uvicorn[standard]",  # ASGI server
+]
+
+
+def render_requirements(
+    schema_text: str, source_file: str = "prisma/schema.prisma"
+) -> str:
+    """Render ``requirements.txt`` — the generated app's pinned-by-stack runtime deps.
+
+    A ``#``-comment GENERATED header (pip ignores comment lines) keeps it owned/drift-tracked like
+    the rest of the spine, even though the dep set is fixed rather than schema-derived.
+    """
+    sha = schema_sha256(schema_text)
+    header = _header(source_file, sha, "python-requirements")
+    body = "\n".join(_RUNTIME_REQUIREMENTS)
+    return header + "\n\n" + body + "\n"
+
+
 def render_derived(
     schema_text: str, source_file: str = "prisma/schema.prisma"
 ) -> Tuple[Tuple[str, str], ...]:
@@ -163,4 +188,5 @@ DERIVED_LAYOUT: Dict[str, str] = {
     "python-export": "app/export.py",
     "python-ai-schemas": "app/ai_schemas.py",
     "python-completeness": "app/completeness.py",
+    "python-requirements": "requirements.txt",
 }

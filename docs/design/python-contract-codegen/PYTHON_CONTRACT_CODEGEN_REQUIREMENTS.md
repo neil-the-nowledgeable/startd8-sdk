@@ -152,7 +152,8 @@ invented path. *(A bespoke layout constant proved simpler than the planned `skel
 reuse, which is TS/barrel-oriented — corrected from v0.2.)*
 
 **FR-12 — Pilot. PASSED (Step 8).** `startd8 generate backend` on the **ProofPoint + Metric**
-`.prisma` writes 18 files (10 `.py` + 8 templates), `--gate` reports **build gate: pass**, and
+`.prisma` writes 19 files (10 `.py` + 8 templates + `requirements.txt`), `--gate` reports **build
+gate: pass**, and
 `--check` reports **all 18 artifacts in_sync** — i.e. the skip-hook would mark a regen `$0.00`. The
 v1 acceptance milestone, proven end-to-end via the real CLI.
 

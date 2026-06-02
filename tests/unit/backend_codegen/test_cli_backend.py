@@ -56,6 +56,7 @@ EXPECTED_FILES = [
     "app/templates/proofpoint/list.html",
     "app/templates/proofpoint/form.html",
     "app/templates/metric/detail.html",
+    "requirements.txt",
 ]
 
 

@@ -60,6 +60,12 @@ def test_web_py_routes_compile_and_cover_crud_and_validation():
     assert "from .db import get_session" in web
     assert "from .tables import Metric, ProofPoint" in web
     assert 'Jinja2Templates(directory=str(Path(__file__).parent / "templates"))' in web
+    # modern Starlette signature: request FIRST (runtime-test fix; old (name, ctx) form crashed)
+    assert (
+        'templates.TemplateResponse(\n        request, "proofpoint/list.html", {"items": items}'
+        in web
+    )
+    assert '"request":' not in web  # request must NOT be passed inside the context dict
     # CRUD + inline-validation routes for an entity with a PK
     for route in (
         '@web_router.get("/ui/proofpoint"',

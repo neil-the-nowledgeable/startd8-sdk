@@ -91,6 +91,23 @@ def test_all_derived_artifacts_in_sync_and_tagged():
         assert embedded_artifact_kind(content).startswith("python-")
 
 
+def test_requirements_manifest():
+    from startd8.backend_codegen import render_requirements
+
+    req = render_requirements(SCHEMA)
+    assert req.startswith("# GENERATED from")  # pip ignores # comment lines
+    for dep in (
+        "fastapi",
+        "sqlmodel",
+        "jinja2",
+        "python-multipart",
+        "uvicorn[standard]",
+    ):
+        assert dep in req
+    assert owned_file_in_sync(SCHEMA, req) is True
+    assert embedded_artifact_kind(req) == "python-requirements"
+
+
 def test_derived_tamper_detected():
     export = render_export(SCHEMA)
     assert (

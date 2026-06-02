@@ -80,7 +80,7 @@ structured-output contract). Three new schema-derived artifact kinds (`python-ex
 (in `assembler.py`) aggregates every artifact; the command writes the `app/` package, `--check`
 drift-checks all owned artifacts, `--gate` runs the Python build gate. *Depended on: Steps 1–6.*
 
-**Step 8 — Pilot: ProofPoint + Metric end-to-end (FR-12). ✅ PASSED.** Real CLI run writes 18 files;
+**Step 8 — Pilot: ProofPoint + Metric end-to-end (FR-12). ✅ PASSED.** Real CLI run writes 19 files;
 `--gate` → build gate pass; `--check` → all 18 in_sync ($0.00 regen). Covered by
 `test_cli_backend.py::test_pilot_regen_is_zero_cost_and_gate_green`. **Acceptance milestone met.**
 *Depended on: Steps 1–7.*

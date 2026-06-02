@@ -403,6 +403,9 @@ def test_db_and_main_spine():
     assert "app = FastAPI(title=" in main
     assert "from .routers import all_routers" in main
     assert "app.include_router(_router)" in main
+    # the HTMX UI must be mounted too (runtime-test fix — web_router was unmounted)
+    assert "from .web import web_router" in main
+    assert "app.include_router(web_router)" in main
     compile(main, "<main>", "exec")
 
 

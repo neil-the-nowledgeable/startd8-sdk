@@ -21,6 +21,7 @@ from .derived import (
     render_completeness,
     render_derived,
     render_export,
+    render_requirements,
 )
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
 from .htmx_generator import render_ui, render_web
@@ -44,6 +45,7 @@ __all__ = [
     "render_ai_schemas",
     "render_completeness",
     "render_derived",
+    "render_requirements",
     "render_backend",
     "CANONICAL_LAYOUT",
     "check_drift",

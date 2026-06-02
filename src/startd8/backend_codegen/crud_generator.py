@@ -37,6 +37,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "python-export": "app/export.py",
     "python-ai-schemas": "app/ai_schemas.py",
     "python-completeness": "app/completeness.py",
+    "python-requirements": "requirements.txt",
 }
 
 
@@ -186,7 +187,7 @@ def render_db(schema_text: str, source_file: str = "prisma/schema.prisma") -> st
 
 
 def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
-    """Render ``app/main.py`` — the FastAPI app, init_db on startup, all routers included."""
+    """Render ``app/main.py`` — the FastAPI app, init_db on startup, JSON + HTML routers mounted."""
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, "fastapi-main")
     body = (
@@ -194,7 +195,8 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "from contextlib import asynccontextmanager\n\n"
         "from fastapi import FastAPI\n\n"
         "from .db import init_db\n"
-        "from .routers import all_routers\n\n\n"
+        "from .routers import all_routers\n"
+        "from .web import web_router\n\n\n"
         "@asynccontextmanager\n"
         "async def lifespan(app: FastAPI):\n"
         "    init_db()\n"
@@ -202,6 +204,7 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         'app = FastAPI(title="StartDate", lifespan=lifespan)\n\n'
         "for _router in all_routers:\n"
         "    app.include_router(_router)\n"
+        "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n"
     )
     return header + "\n\n" + body
 

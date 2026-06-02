@@ -16,7 +16,7 @@ from .crud_generator import (
     render_main,
     render_routers,
 )
-from .derived import render_derived
+from .derived import render_derived, render_requirements
 from .htmx_generator import render_ui
 from .pydantic_renderer import render_pydantic_models
 from .sqlmodel_renderer import render_sqlmodel_tables
@@ -48,4 +48,5 @@ def render_backend(
     out.extend(
         render_derived(schema_text, source_file)
     )  # export / ai_schemas / completeness
+    out.append(("requirements.txt", render_requirements(schema_text, source_file)))
     return tuple(out)
