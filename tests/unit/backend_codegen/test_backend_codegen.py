@@ -264,15 +264,16 @@ def test_sqlmodel_render_tables_enums_pk_and_json():
         "    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))"
         in text
     )
-    # optional column; FK constraint from @relation; relation object excluded (no Relationship() yet)
+    # optional column; FK constraint from @relation; relation object -> Relationship() (one-way:
+    # Metric has no back-reference to ProofPoint in this schema)
     assert "    context: Optional[str] = None" in text
     assert (
         '    metricId: Optional[str] = Field(default=None, foreign_key="metric.id")'
         in text
     )
-    assert "    metric:" not in text
+    assert '    metric: Optional["Metric"] = Relationship()' in text
     # synthesized imports
-    assert "from sqlmodel import Field, SQLModel" in text
+    assert "from sqlmodel import Field, Relationship, SQLModel" in text
     assert "from sqlalchemy import JSON, Column" in text
     assert "from enum import Enum" in text
 
@@ -332,6 +333,82 @@ def test_sqlmodel_foreign_keys():
         "  a A @relation(fields: [aId], references: [id])\n}\n"
     )
     assert 'aId: str = Field(foreign_key="a.id")' in render_sqlmodel_tables(req).text
+
+
+def test_sqlmodel_relationships_bidirectional():
+    """@relation pairs -> Relationship(back_populates=...) on both sides; compound @@id join model."""
+    schema = (
+        "model Metric { id String @id\n  proofPoints ProofPoint[] }\n"
+        "model ProofPoint {\n  id String @id\n  metricId String?\n"
+        "  metric Metric? @relation(fields: [metricId], references: [id])\n"
+        "  caps ProofPointCapability[]\n}\n"
+        "model Capability { id String @id\n  links ProofPointCapability[] }\n"
+        "model ProofPointCapability {\n  proofPointId String\n  capabilityId String\n"
+        "  proofPoint ProofPoint @relation(fields: [proofPointId], references: [id])\n"
+        "  capability Capability @relation(fields: [capabilityId], references: [id])\n"
+        "  @@id([proofPointId, capabilityId])\n}\n"
+    )
+    text = render_sqlmodel_tables(schema).text
+    assert "from sqlmodel import Field, Relationship, SQLModel" in text
+    # bidirectional 1:N pairing
+    assert (
+        '    metric: Optional["Metric"] = Relationship(back_populates="proofPoints")'
+        in text
+    )
+    assert (
+        '    proofPoints: list["ProofPoint"] = Relationship(back_populates="metric")'
+        in text
+    )
+    # through the join model (M2M via explicit link)
+    assert '    proofPoint: "ProofPoint" = Relationship(back_populates="caps")' in text
+    assert (
+        '    caps: list["ProofPointCapability"] = Relationship(back_populates="proofPoint")'
+        in text
+    )
+    # compound @@id -> both columns are primary keys (so SQLAlchemy can map the join table)
+    assert (
+        'proofPointId: str = Field(primary_key=True, foreign_key="proofpoint.id")'
+        in text
+    )
+    assert (
+        'capabilityId: str = Field(primary_key=True, foreign_key="capability.id")'
+        in text
+    )
+
+
+def test_sqlmodel_default_translation():
+    """Prisma @default / @updatedAt -> SQLModel Field defaults (+ generator helpers)."""
+    schema = (
+        "model Profile {\n"
+        "  id String @id @default(cuid())\n"
+        '  ownerId String @default("local")\n'
+        "  confirmed Boolean @default(true)\n"
+        "  createdAt DateTime @default(now())\n"
+        "  updatedAt DateTime @updatedAt\n"
+        "  name String\n}\n"
+    )
+    text = render_sqlmodel_tables(schema).text
+    assert "import uuid" in text and "from datetime import datetime, timezone" in text
+    assert "def _gen_id() -> str:" in text and "def _utcnow() -> datetime:" in text
+    assert "    id: str = Field(primary_key=True, default_factory=_gen_id)" in text
+    assert '    ownerId: str = Field(default="local")' in text
+    assert "    confirmed: bool = Field(default=True)" in text
+    assert "    createdAt: datetime = Field(default_factory=_utcnow)" in text
+    assert (
+        "    updatedAt: datetime = Field(default_factory=_utcnow, "
+        'sa_column_kwargs={"onupdate": _utcnow})' in text
+    )
+    # defaulted fields are server-set -> excluded from the Create DTO
+    create = text.split("class ProfileCreate")[1].split("class ProfileRead")[0]
+    assert "name: str" in create
+    for f in ("id:", "ownerId:", "confirmed:", "createdAt:", "updatedAt:"):
+        assert f not in create
+
+
+def test_sqlmodel_reserved_name_fails_loud():
+    """A reserved SQLAlchemy attribute name in the contract raises, never emits crash-code."""
+    with pytest.raises(ValueError, match="reserved attribute name"):
+        render_sqlmodel_tables("model T { id String @id\n  metadata String? }")
 
 
 # --------------------------------------------------------------------------- #

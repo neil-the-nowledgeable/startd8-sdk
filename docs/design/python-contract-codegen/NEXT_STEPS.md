@@ -55,18 +55,22 @@ unchanged table class; routers use them (`item: XCreate` → `-> XRead`; `data: 
 test (#1) may still reveal which `@default`/server-set fields a real schema needs hidden — confirm
 then.
 
-### 4. FK constraints  ·  ✅ DONE (Relationship() still open)
-`@relation(fields:…, references:…)` → `Field(foreign_key="table.col")` on the FK scalar column;
-runtime-verified (constraint declared on the SQLAlchemy table; `create_all` dependency-orders the
-tables; a referencing insert round-trips). **Still open:** `Relationship()` ORM-navigation
-attributes (`proofpoint.metric`) — they need cross-model `back_populates` pairing (and `@relation`-
-name disambiguation for multi-relation / M2M models), a larger and riskier pass than the column
-constraint, so it's intentionally separated.
+### 4. FK constraints + `Relationship()` + `@default` translation + reserved-name guard  ·  ✅ DONE
+All runtime-verified **on the real 15-model schema** (`configure_mappers` + `create_all` + a real
+CREATE + bidirectional navigation):
+- **FK constraints** — `@relation` → `Field(foreign_key="table.col")`.
+- **`Relationship()`** — cross-model `back_populates` pairing (relation-name disambiguation;
+  self-ref + implicit-M2M flagged & skipped); compound `@@id` PKs for join models.
+- **`@default`/`@updatedAt` translation** (fixed the write-path blocker the team's smoke test found):
+  `cuid`/`uuid`→`default_factory`, `now()`/`@updatedAt`→utcnow factory+`onupdate`, literals→`default=`.
+- **Reserved attr names** (`metadata`/`registry`) fail loud instead of emitting import-crashing code.
 
 ### 5. Lower priority
 - **Completeness domain-manifest (OQ-4)** — replace the v1 presence rule with the real thresholds
   (Profile present, ≥3 confirmed ProofPoints, ≥1 Outcome/Metric/Differentiator) via a declared
-  signal manifest.
+  signal manifest. *(The team's FR-6 note — "AI must never write `Metric.value`" — also lands here:
+  it's a domain rule the generic renderer can't infer, needs an app-authored narrower draft schema
+  or this manifest.)*
 
 ### Skip for now
 Polyglot / `ProtoStubProvider` (no demand) and a Pydantic-native contract format — the

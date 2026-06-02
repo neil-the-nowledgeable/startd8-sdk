@@ -11,13 +11,15 @@ gets typed DTOs generated *alongside* it — ``<Name>Create`` (editable surface,
 server-set fields), ``<Name>Read`` (full view), ``<Name>Update`` (every non-PK field optional, for
 partial PATCH). The table class stays unchanged, so the fidelity gate is unaffected.
 
-Scope: primary keys (``@id`` → ``Field(primary_key=True)``), scalar columns, enum classes
-(``str, Enum``), list scalars as JSON columns, the Create/Read/Update DTOs, and **foreign-key
-constraints** (``@relation(fields:…, references:…)`` → ``Field(foreign_key="table.col")``;
-runtime-verified: the constraint is declared on the SQLAlchemy table and ``create_all`` dependency-
-orders the tables). **Deferred:** ``Relationship()`` ORM-navigation attributes — they need
-cross-model relation-pairing for correct ``back_populates`` (and ``@relation``-name disambiguation
-for multi-relation models), a larger pass than the column constraint.
+Scope (all runtime-verified against the real 15-model schema): primary keys — field ``@id`` and
+compound ``@@id([...])`` (join models); scalar columns; enum classes (``str, Enum``); list scalars
+as JSON columns; the Create/Read/Update DTOs; **FK constraints** (``@relation`` →
+``Field(foreign_key="table.col")``); **``Relationship()`` ORM-navigation** with cross-model
+``back_populates`` pairing (relation-name disambiguation; self-ref + implicit-M2M are flagged and
+skipped); and **Prisma ``@default`` / ``@updatedAt`` translation** (``cuid``/``uuid`` →
+``default_factory``, ``now()``/``@updatedAt`` → utcnow factory + ``onupdate``, literals →
+``default=``). Reserved SQLAlchemy attribute names (``metadata``/``registry``) fail loud rather than
+emit import-crashing code.
 """
 
 from __future__ import annotations
@@ -36,6 +38,75 @@ from .pydantic_renderer import _PY_SCALAR
 
 _REL_FIELDS_RE = re.compile(r"fields:\s*\[([^\]]*)\]")
 _REL_REFS_RE = re.compile(r"references:\s*\[([^\]]*)\]")
+_BLOCK_ID_RE = re.compile(r"@@id\(\s*\[([^\]]*)\]")
+
+
+def _compound_pk_cols(schema: PrismaSchema, model_name: str) -> Set[str]:
+    """Column names of a model's compound primary key (``@@id([a, b])``), or an empty set.
+
+    Needed for join models (M2M) whose key is block-level, not a field ``@id`` — without these the
+    table has no primary key and SQLAlchemy cannot map it.
+    """
+    model = schema.model(model_name)
+    if model is None:
+        return set()
+    for a in model.block_attributes:
+        m = _BLOCK_ID_RE.search(a)
+        if m:
+            return {x.strip() for x in m.group(1).split(",") if x.strip()}
+    return set()
+
+
+_DEFAULT_RE = re.compile(r"@default\((.*)\)")
+# Attribute names SQLAlchemy's Declarative API reserves on a mapped class.
+_RESERVED_ATTRS = frozenset({"metadata", "registry"})
+
+
+def _default_field_arg(field: PrismaField, needs: Set[str]) -> str:
+    """Translate a Prisma ``@default(...)`` / ``@updatedAt`` into a SQLModel ``Field(...)`` arg.
+
+    Returns the kwarg string (e.g. ``default_factory=_gen_id``, ``default="local"``) or ``""`` when
+    there is no translatable default. ``cuid()``/``uuid()`` → a uuid-hex generator; ``now()`` /
+    ``@updatedAt`` → a tz-aware utcnow factory (``@updatedAt`` also adds SQL ``onupdate``);
+    ``autoincrement()`` is left to SQLAlchemy.
+    """
+    if any(a == "@updatedAt" for a in field.attributes):
+        needs.add("utcnow")
+        return 'default_factory=_utcnow, sa_column_kwargs={"onupdate": _utcnow}'
+    attr = next((a for a in field.attributes if a.startswith("@default(")), "")
+    if not attr:
+        return ""
+    m = _DEFAULT_RE.search(attr)
+    if not m:
+        return ""
+    val = m.group(1).strip()
+    if val in ("cuid()", "uuid()"):
+        needs.add("genid")
+        return "default_factory=_gen_id"
+    if val == "now()":
+        needs.add("utcnow")
+        return "default_factory=_utcnow"
+    if val == "autoincrement()":
+        return ""  # integer PK auto-increments
+    if val.startswith('"') and val.endswith('"'):
+        return f"default={val}"  # quoted string literal
+    if val in ("true", "false"):
+        return f"default={'True' if val == 'true' else 'False'}"
+    if re.fullmatch(r"-?\d+(\.\d+)?", val):
+        return f"default={val}"  # numeric literal
+    return f'default="{val}"'  # bareword (enum member / token) → string default
+
+
+def _reserved_name_violations(
+    schema: PrismaSchema, model_names: List[str]
+) -> List[str]:
+    """``Model.field`` for any scalar field whose name is a reserved SQLAlchemy attribute."""
+    out: List[str] = []
+    for name in model_names:
+        for f in schema.scalar_fields(name):
+            if f.name in _RESERVED_ATTRS:
+                out.append(f"{name}.{f.name}")
+    return out
 
 
 def _fk_map(schema: PrismaSchema, model_name: str) -> Dict[str, str]:
@@ -66,6 +137,88 @@ def _fk_map(schema: PrismaSchema, model_name: str) -> Dict[str, str]:
         for fk, ref in zip(fk_fields, ref_cols):
             out[fk] = f"{target_table}.{ref}"
     return out
+
+
+_REL_NAME_RE = re.compile(r'@relation\(\s*(?:name:\s*)?"([^"]+)"')
+
+
+def _relation_attr(field: PrismaField) -> str:
+    return next((a for a in field.attributes if a.startswith("@relation(")), "")
+
+
+def _relation_name(field: PrismaField) -> str:
+    m = _REL_NAME_RE.search(_relation_attr(field))
+    return m.group(1) if m else ""
+
+
+def _owns_fk(field: PrismaField) -> bool:
+    """True if this relation field owns the FK (its ``@relation`` carries ``fields: [...]``)."""
+    return "fields:" in _relation_attr(field)
+
+
+def _partner_field(schema: PrismaSchema, owner_model: str, field: PrismaField) -> str:
+    """The matching relation field name on the target model, or "" if not uniquely pairable.
+
+    Pairs by Prisma relation name when present (disambiguates multiple relations between the same
+    two models); otherwise pairs only when exactly one candidate exists. A self-referential same
+    field is excluded.
+    """
+    target = schema.model(field.type)
+    if target is None:
+        return ""
+    rel_name = _relation_name(field)
+    cands = [
+        p
+        for p in target.fields
+        if p.type == owner_model
+        and not (field.type == owner_model and p.name == field.name)
+    ]
+    if rel_name:
+        named = [p for p in cands if _relation_name(p) == rel_name]
+        return named[0].name if len(named) == 1 else ""
+    return cands[0].name if len(cands) == 1 else ""
+
+
+def _relationship_lines(
+    schema: PrismaSchema, composites: frozenset, model_name: str, needs: Set[str]
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """SQLModel ``Relationship()`` lines for a model's object-relation fields (with back_populates).
+
+    Returns (lines, skipped) where skipped is ``(field, reason)`` for relations we deliberately do
+    not emit (self-referential — needs ``remote_side``; implicit many-to-many — needs a link model).
+    """
+    model = schema.model(model_name)
+    lines: List[str] = []
+    skipped: List[Tuple[str, str]] = []
+    if model is None:
+        return lines, skipped
+    for f in model.fields:
+        if f.type not in schema.models or f.type in composites:
+            continue  # scalar/enum column, not an object relation
+        if f.type == model_name:
+            skipped.append((f.name, "self-referential relation (needs remote_side)"))
+            continue
+        partner = _partner_field(schema, model_name, f)
+        if f.is_list and partner:
+            pf = next(
+                (p for p in schema.model(f.type).fields if p.name == partner), None
+            )
+            if pf is not None and pf.is_list and not _owns_fk(f) and not _owns_fk(pf):
+                skipped.append((f.name, "implicit many-to-many (needs link model)"))
+                continue
+        needs.add("Relationship")
+        # Quoted forward refs (this file has no `from __future__ import annotations`): SQLModel
+        # resolves these eagerly via the class registry.
+        if f.is_list:
+            ann = f'list["{f.type}"]'
+        elif f.is_optional:
+            needs.add("Optional")
+            ann = f'Optional["{f.type}"]'
+        else:
+            ann = f'"{f.type}"'
+        bp = f'back_populates="{partner}"' if partner else ""
+        lines.append(f"    {f.name}: {ann} = Relationship({bp})")
+    return lines, skipped
 
 
 @dataclass(frozen=True)
@@ -103,10 +256,12 @@ def _render_table_field(
     needs: Set[str],
     enums_used: Set[str],
     fk: str = "",
+    is_pk: bool = False,
 ) -> Tuple[str, bool]:
     """Render one ``    <name>: <ann>[ = ...]`` line. Returns (line, was_unrenderable).
 
-    ``fk`` (``"table.col"``) adds a ``foreign_key=`` constraint to the scalar column.
+    ``fk`` (``"table.col"``) adds a ``foreign_key=`` constraint; ``is_pk`` marks the column a
+    primary key (covers both field ``@id`` and compound ``@@id`` members).
     """
     base = _base_type(field, schema, needs, enums_used)
     unrenderable = base == "Any" and field.type not in ("Json",)
@@ -119,15 +274,23 @@ def _render_table_field(
             unrenderable,
         )
 
-    # Compose Field(...) args from primary-key + foreign-key constraints (order: default, pk, fk).
+    # Compose Field(...) args from primary-key + foreign-key + a translated Prisma @default.
+    default_arg = _default_field_arg(field, needs)
     args: List[str] = []
-    if field.is_id:
+    if is_pk:
         args.append("primary_key=True")
     if fk:
         args.append(f'foreign_key="{fk}"')
+    if default_arg:
+        args.append(default_arg)
 
     if field.is_optional:
         needs.add("Optional")
+        if default_arg:  # the @default provides the default; don't add `default=None`
+            return (
+                f"    {field.name}: Optional[{base}] = Field({', '.join(args)})",
+                unrenderable,
+            )
         if args:
             return (
                 f"    {field.name}: Optional[{base}] = Field(default=None, {', '.join(args)})",
@@ -190,12 +353,22 @@ def _dto_block(
 
 
 def _import_block(needs: Set[str]) -> str:
-    """Synthesize the import block: __future__ / stdlib (datetime, decimal, enum, typing) /
-    third-party (sqlalchemy, sqlmodel)."""
-    groups: List[List[str]] = [["from __future__ import annotations"]]
+    """Synthesize the import block: stdlib (datetime, decimal, enum, typing) / third-party
+    (sqlalchemy, sqlmodel).
+
+    Note: this file deliberately does **not** use ``from __future__ import annotations`` — SQLModel
+    resolves ``Relationship()`` target types eagerly, and deferred (string) annotations make
+    SQLAlchemy treat ``list[X]`` as a literal class name. Relationship targets are quoted forward
+    refs (``Optional["Metric"]``); scalar annotations resolve at definition time (enum classes are
+    emitted above the tables, ``Optional``/``Decimal``/``datetime`` are imported)."""
+    groups: List[List[str]] = []
 
     stdlib: List[str] = []
-    if "datetime" in needs:
+    if "genid" in needs:
+        stdlib.append("import uuid")
+    if "utcnow" in needs:
+        stdlib.append("from datetime import datetime, timezone")
+    elif "datetime" in needs:
         stdlib.append("from datetime import datetime")
     if "Decimal" in needs:
         stdlib.append("from decimal import Decimal")
@@ -210,7 +383,12 @@ def _import_block(needs: Set[str]) -> str:
     third: List[str] = []
     if "sqlalchemy" in needs:
         third.append("from sqlalchemy import JSON, Column")
-    third.append("from sqlmodel import Field, SQLModel")
+    sm = (
+        ["Field", "Relationship", "SQLModel"]
+        if "Relationship" in needs
+        else ["Field", "SQLModel"]
+    )
+    third.append("from sqlmodel import " + ", ".join(sm))
     groups.append(third)
 
     return "\n\n".join("\n".join(g) for g in groups)
@@ -254,15 +432,28 @@ def render_sqlmodel_tables(
     blocks: List[str] = []
     model_names = [n for n in schema.models if n not in composites]
 
+    # Fail loud, never emit import-crashing code: SQLAlchemy reserves a few attribute names.
+    violations = _reserved_name_violations(schema, model_names)
+    if violations:
+        raise ValueError(
+            "SQLModel reserved attribute name(s) in the contract — rename the field in the "
+            f".prisma schema: {', '.join(violations)}. Reserved by SQLAlchemy's Declarative API: "
+            f"{', '.join(sorted(_RESERVED_ATTRS))}."
+        )
+
     for name in model_names:
         scalars = schema.scalar_fields(name)
         fkmap = _fk_map(schema, name)
+        pk_cols = _compound_pk_cols(schema, name)
         lines = [f"class {name}(SQLModel, table=True):"]
-        if not scalars:
-            lines.append("    pass")
         for f in scalars:
             line, bad = _render_table_field(
-                f, schema, needs, enums_used, fk=fkmap.get(f.name, "")
+                f,
+                schema,
+                needs,
+                enums_used,
+                fk=fkmap.get(f.name, ""),
+                is_pk=f.is_id or f.name in pk_cols,
             )
             lines.append(line)
             if bad:
@@ -274,6 +465,16 @@ def render_sqlmodel_tables(
                         reason="no SQLModel column mapping for Prisma type",
                     )
                 )
+        rel_lines, rel_skipped = _relationship_lines(schema, composites, name, needs)
+        lines.extend(rel_lines)
+        for fld, reason in rel_skipped:
+            flagged.append(
+                UnrenderableField(
+                    entity=name, field=fld, prisma_type="relation", reason=reason
+                )
+            )
+        if not scalars and not rel_lines:
+            lines.append("    pass")
         blocks.append("\n".join(lines))
 
         # API DTOs (OQ-3): Create hides server-set (@default) fields; Read is the full view;
@@ -308,13 +509,24 @@ def render_sqlmodel_tables(
 
     header = _HEADER_TEMPLATE.format(source_file=source_file, sha=sha)
     imports = _import_block(needs)
-    body_blocks = enum_blocks + blocks
-    body = "\n\n\n".join(body_blocks)
 
+    # Default-factory helpers (emitted only when a translated @default needs them).
+    helpers: List[str] = []
+    if "genid" in needs:
+        helpers.append("def _gen_id() -> str:\n    return uuid.uuid4().hex")
+    if "utcnow" in needs:
+        helpers.append(
+            "def _utcnow() -> datetime:\n    return datetime.now(timezone.utc)"
+        )
+
+    body_blocks = enum_blocks + blocks
+    # tail sections (imports / helpers / classes) are separated by two blank lines (PEP 8).
+    tail = [imports]
+    if helpers:
+        tail.append("\n\n\n".join(helpers))
     if body_blocks:
-        text = header + "\n\n" + imports + "\n\n\n" + body + "\n"
-    else:
-        text = header + "\n\n" + imports + "\n"
+        tail.append("\n\n\n".join(body_blocks))
+    text = header + "\n\n" + "\n\n\n".join(tail) + "\n"
 
     fields_rendered = sum(len(schema.scalar_fields(n)) for n in model_names)
     return SQLModelRenderResult(

@@ -89,10 +89,13 @@ skip-hook `$0.00 GENERATED`, never hand-edited).
 classes (per the locked ORM decision). The "one definition = contract + table" property is realized
 at the **`.prisma` level** (single source); the SQLModel tables (persistence) and the FR-1 Pydantic
 schemas (API/validation/AI) are co-generated projections. Enums emit as `str, Enum` classes; list
-scalars as JSON columns; `@id` → `Field(primary_key=True)`; **FK constraints** from `@relation`
-(`Field(foreign_key="table.col")`, runtime-verified — constraint declared on the SQLAlchemy table +
-`create_all` dependency-ordering). **Shipped (Step 2 + FK).** *(`Relationship()` ORM-navigation
-deferred — needs cross-model `back_populates` pairing.)*
+scalars as JSON columns; field `@id` **and compound `@@id`** → primary keys; **FK constraints**
+(`@relation` → `Field(foreign_key=…)`); **`Relationship()` ORM-navigation** with cross-model
+`back_populates` pairing (self-ref + implicit-M2M flagged/skipped); and **`@default`/`@updatedAt`
+translation** (`cuid`/`uuid`→`default_factory`, `now()`/`@updatedAt`→utcnow+`onupdate`,
+literals→`default=`). Reserved attr names (`metadata`/`registry`) fail loud. **Shipped — all
+runtime-verified on the real 15-model schema** (`configure_mappers` + `create_all` + a real CREATE
+with defaults filled + bidirectional navigation). **Deferred:** nothing major.
 
 **FR-3 — FastAPI CRUD generator. Shipped (Step 4).** `crud_generator.py` emits the owned spine —
 `app/routers.py` (one `APIRouter` per entity: list / detail / create / update / delete, validate via

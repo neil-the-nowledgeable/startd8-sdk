@@ -42,6 +42,8 @@ def _extract_rendered_fields(text: str, class_re: re.Pattern) -> dict:
             continue
         if line.strip() == "pass":
             continue
+        if "Relationship(" in line:
+            continue  # SQLModel ORM-navigation field, not a schema column
         fm = _FIELD_RE.match(line)
         if fm:
             out[current].append((fm.group(1), fm.group(2)))

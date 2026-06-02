@@ -141,7 +141,13 @@ def backend(
         console.print(f"[red]error:[/red] cannot read schema {schema}: {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
-    artifacts = render_backend(schema_text, source_label)
+    try:
+        artifacts = render_backend(schema_text, source_label)
+    except (
+        ValueError
+    ) as exc:  # e.g. a reserved attribute name in the contract — fail loud
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
 
     if check:
         drifted = 0
