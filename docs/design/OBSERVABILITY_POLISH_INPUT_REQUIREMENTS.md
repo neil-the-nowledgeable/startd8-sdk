@@ -154,15 +154,16 @@ today except the placeholders are no longer fabricated.
 
 ## 4. Open Questions
 
-OQ-1..5 resolved in §0 (v0.2 planning); OQ-6/7 resolved in §0.2 (cross-repo grounding). OQ-8 **opened**:
+OQ-1..5 resolved in §0 (v0.2 planning); OQ-6/7 resolved in §0.2 (cross-repo grounding). OQ-8 **RESOLVED**:
 
-- **OQ-8 (OPENED — pending ContextCore triage; interim decision made).** Manifest home for **runbook
-  URL base** and **datasource name**. Raised to ContextCore/cap-dev-pipe as
-  `pipeline-requirements.md` Appendix C **Review Round R2 (R2-F1 runbookBase, R2-F2 datasource)** —
-  field-vs-config decision. **Interim (unblocks implementation):** treat both as env/config defaults
-  (`OBS_RUNBOOK_BASE`; `OBS_PROM_DATASOURCE` default `"prometheus"`); when unset, the generator
-  **omits** the runbook annotation rather than emitting `runbooks.example.com`. If ContextCore adds
-  fields, FR-CONS-2/3 read them first. Phases 1–4 + 6 are **unblocked**; Phase 5 uses the interim.
+- **OQ-8 (RESOLVED — ContextCore/cap-dev-pipe triaged R2-F1/F2 accepted, 2026-06-02).** Decision:
+  **hybrid manifest field + env override**, precedence **env > manifest > default/omit** — NOT
+  field-only or env-only. New optional manifest fields `spec.observability.runbookBase` and
+  `spec.observability.prometheusDatasource`; env `OBS_RUNBOOK_BASE` / `OBS_PROM_DATASOURCE` bind at
+  generation. Codified in REQ-CDP-OBS-002/003/004/007 + INT-007 + traceability. **FR-CONS-2/3 updated
+  + implemented:** datasource resolves `OBS_PROM_DATASOURCE → spec.observability.prometheusDatasource →
+  "prometheus"`; runbook base resolves `OBS_RUNBOOK_BASE → spec.observability.runbookBase → omit`
+  (no `runbooks.example.com`). All phases done.
 
 **Phase 0 (confirm field shapes) — DONE:** verified against real `.contextcore.yaml` (see plan §Phase 0).
 Key finding: channel source is `spec.observability.alertChannels` (`list[str]`) with fallback to

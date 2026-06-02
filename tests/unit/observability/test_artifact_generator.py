@@ -1628,3 +1628,54 @@ class TestLoadDeliveryFields:
         ctx = load_business_context(p, {})
         assert ctx.alert_channels == []
         assert ctx.routing_channels() == ["#fallback"]
+
+
+class TestOQ8Precedence:
+    """OQ-8 resolved (R2-F1/F2): env > manifest field > default/omit for the runbook
+    base and the Prometheus datasource."""
+
+    # --- runbook base ---
+    def test_runbook_base_from_manifest_when_no_env(self, grpc_service, business, monkeypatch):
+        monkeypatch.delenv("OBS_RUNBOOK_BASE", raising=False)
+        business.runbook_base = "https://rb.manifest.io"
+        rules = [r for g in yaml.safe_load(generate_alert_rules(grpc_service, business).content)["groups"]
+                 for r in g["rules"]]
+        assert all(r["annotations"]["runbook_url"].startswith("https://rb.manifest.io/checkout-api/")
+                   for r in rules)
+
+    def test_runbook_base_env_wins_over_manifest(self, grpc_service, business, monkeypatch):
+        monkeypatch.setenv("OBS_RUNBOOK_BASE", "https://rb.env.io")
+        business.runbook_base = "https://rb.manifest.io"
+        rules = [r for g in yaml.safe_load(generate_alert_rules(grpc_service, business).content)["groups"]
+                 for r in g["rules"]]
+        assert all(r["annotations"]["runbook_url"].startswith("https://rb.env.io/") for r in rules)
+
+    # --- datasource ---
+    def test_datasource_from_manifest_when_no_env(self, grpc_service, monkeypatch):
+        monkeypatch.delenv("OBS_PROM_DATASOURCE", raising=False)
+        biz = BusinessContext(prometheus_datasource="mimir-manifest")
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_dashboard_spec(grpc_service, biz).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        assert doc["datasources"]["prometheus"] == "mimir-manifest"
+
+    def test_datasource_env_wins_over_manifest(self, grpc_service, monkeypatch):
+        monkeypatch.setenv("OBS_PROM_DATASOURCE", "mimir-env")
+        biz = BusinessContext(prometheus_datasource="mimir-manifest")
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_dashboard_spec(grpc_service, biz).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        assert doc["datasources"]["prometheus"] == "mimir-env"
+
+    def test_load_reads_oq8_fields(self, tmp_path):
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text(
+            "spec:\n  observability:\n"
+            "    prometheusDatasource: mimir-prod\n"
+            "    runbookBase: https://rb.acme.io\n"
+        )
+        ctx = load_business_context(p, {})
+        assert ctx.prometheus_datasource == "mimir-prod"
+        assert ctx.runbook_base == "https://rb.acme.io"

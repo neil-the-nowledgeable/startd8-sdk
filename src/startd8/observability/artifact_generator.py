@@ -84,6 +84,10 @@ class BusinessContext:
     owners: List[Dict[str, Any]] = field(default_factory=list)  # metadata.owners: [{team,slack?,email?}]
     metrics_interval: Optional[str] = None  # spec.observability.metricsInterval, e.g. "30s"
     targets: List[Dict[str, Any]] = field(default_factory=list)  # spec.targets: [{kind,name,namespace}]
+    # OQ-8 resolved (pipeline-requirements R2-F1/F2): optional manifest fields, env-overridable.
+    # Precedence is env > manifest > default/omit; the env tier is read at the call sites.
+    prometheus_datasource: Optional[str] = None  # spec.observability.prometheusDatasource
+    runbook_base: Optional[str] = None  # spec.observability.runbookBase (HTTPS prefix)
 
     def routing_channels(self) -> List[str]:
         """Channel identifiers for alert routing, with the Phase-0 fallback chain:
@@ -584,6 +588,8 @@ def load_business_context(
     ctx.owners = list(meta.get("owners") or [])
     ctx.metrics_interval = observability.get("metricsInterval")
     ctx.targets = list(spec.get("targets") or [])
+    ctx.prometheus_datasource = observability.get("prometheusDatasource")
+    ctx.runbook_base = observability.get("runbookBase")
 
     ctx.project_id = project.get("id") or metadata.get("project_id")
     ctx.project_name = project.get("name")
@@ -839,10 +845,12 @@ def generate_alert_rules(
                 }
             )
 
-    # REQ-OAG-205: runbook_url annotation. Base is environment config (OQ-8 interim,
-    # FR-CONS-2): use OBS_RUNBOOK_BASE if set; otherwise OMIT the annotation rather than
-    # emit the dead `runbooks.example.com` placeholder.
-    runbook_base = os.environ.get("OBS_RUNBOOK_BASE", "").rstrip("/")
+    # REQ-OAG-205 / REQ-CDP-OBS-003 / FR-CONS-2: runbook_url base resolves env >
+    # manifest > omit (OQ-8 resolved, pipeline-requirements R2-F1). Never emit the dead
+    # `runbooks.example.com` placeholder.
+    runbook_base = (
+        os.environ.get("OBS_RUNBOOK_BASE") or business.runbook_base or ""
+    ).rstrip("/")
     if runbook_base:
         for rule in rules:
             rule.setdefault("annotations", {})["runbook_url"] = (
@@ -1033,10 +1041,16 @@ def generate_dashboard_spec(
             f"{service.service_id} ({service.transport})"
         ),
         "tags": tags,
-        # Datasource name is environment config (OQ-8 interim, FR-CONS-3): default
-        # "prometheus"; override via OBS_PROM_DATASOURCE when the target Grafana names
-        # its datasource differently.
-        "datasources": {"prometheus": os.environ.get("OBS_PROM_DATASOURCE", "prometheus")},
+        # Datasource name resolves env > manifest > default (OQ-8 resolved, REQ-CDP-OBS-002
+        # / R2-F2 / FR-CONS-3): OBS_PROM_DATASOURCE → spec.observability.prometheusDatasource
+        # → "prometheus".
+        "datasources": {
+            "prometheus": (
+                os.environ.get("OBS_PROM_DATASOURCE")
+                or business.prometheus_datasource
+                or "prometheus"
+            )
+        },
         "panels": panels,
         "variables": [
             {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}

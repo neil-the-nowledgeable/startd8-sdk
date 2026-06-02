@@ -101,19 +101,17 @@ a fabricated contact).
 
 ---
 
-## Phase 5 — runbook base + datasource (FR-CONS-2/3) — gated on OQ-8
+## Phase 5 — runbook base + datasource (FR-CONS-2/3) ✅ DONE (OQ-8 resolved)
+
+**OQ-8 resolved** (cap-dev-pipe R2-F1/F2 accepted): **hybrid, precedence env > manifest > default/omit.**
 
 | Step | Change | Files |
 |------|--------|-------|
-| 5.1 | Runbook URL base: read `spec.observability.runbookBase` **if ContextCore adds it** (OQ-8), else env `OBS_RUNBOOK_BASE`, else **omit** the `runbook_url` annotation rather than emit `runbooks.example.com` | artifact_generator.py:820 |
-| 5.2 | Datasource name: env/config default (`OBS_PROM_DATASOURCE`, default `"prometheus"`) instead of the literal | artifact_generator.py:1007 |
+| 5.1 | Runbook URL base: `OBS_RUNBOOK_BASE` (env) → `business.runbook_base` (`spec.observability.runbookBase`) → **omit** the `runbook_url` annotation (no `runbooks.example.com`) | artifact_generator.py (alert annotation) |
+| 5.2 | Datasource: `OBS_PROM_DATASOURCE` (env) → `business.prometheus_datasource` (`spec.observability.prometheusDatasource`) → `"prometheus"` | artifact_generator.py (dashboard datasources) |
 
-**Decision gate:** resolve **OQ-8** (does ContextCore add `runbookBase`/`datasource` fields, or are
-they env/config?) before coding 5.1/5.2. Recommendation: env/config now; propose ContextCore fields
-only if they become per-project intent.
-
-**Validation:** with no base configured, no dead `runbooks.example.com` URL appears; datasource
-override flows into dashboard targets.
+Both manifest fields read in `load_business_context`. **Validation:** TestOQ8Precedence (env-wins,
+manifest-when-no-env, omit/default-when-neither) + TestLoadDeliveryFields read-path — all green.
 
 ---
 
