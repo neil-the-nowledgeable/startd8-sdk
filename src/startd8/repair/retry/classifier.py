@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from .models import RetryViolation
 from .search import TargetExistenceSearch, resolve_relative_target
@@ -79,15 +79,17 @@ def classify(
     ):
         return ClassifyResult(RetryClass.SCAFFOLDABLE_BARREL, target=directory)
 
-    # 3. Rewritable — the intended module exists at exactly one location (FR-4/R1-F4).
-    locations: List[Path] = search.locations_for(spec, importer_rel)
-    if len(locations) == 1:
-        return ClassifyResult(RetryClass.REWRITABLE_PATH, target=locations[0])
-    if len(locations) >= 2:
+    # 3. Rewritable — the intended module resolves at exactly one location, via
+    #    the shared predicate (collapse for sub-namespace invention, else
+    #    token-match). >1 ⇒ ambiguous → needs-regen (R1-F4). (FR-4)
+    resolved = search.resolve_target(spec, importer_rel)
+    if resolved.target is not None:
+        return ClassifyResult(RetryClass.REWRITABLE_PATH, target=resolved.target)
+    if resolved.strategy == "ambiguous":
         return ClassifyResult(
             RetryClass.NEEDS_REGEN,
             reason="ambiguous_target",
-            candidates=tuple(locations),
+            candidates=resolved.candidates,
         )
 
     # 4. No target anywhere.

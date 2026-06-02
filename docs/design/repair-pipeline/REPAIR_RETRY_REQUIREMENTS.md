@@ -156,6 +156,14 @@ therefore requires, as named work (not a tweak):
    `(importer_path, bad_specifier)`, resolve the intended module via the FR-3 predicate, then emit
    a **canonical form that passes the blind resolver** (R3-F2) at **import sites only** (R4-F3) —
    not a `best_match` against the lib-only specifier set.
+3. **Sub-namespace collapse** (validated against RUN-013 PI-004): when an importer invents an
+   *interior* path segment (`@/lib/export/renderers/markdown` where `@/lib/export/markdown`
+   exists), drop one interior segment at a time and take the unique collapsed form that resolves
+   on disk. This is the **opposite token shape** from the RUN-012 relocation (there the *real*
+   path has the extra segment), so the resolver tries **collapse first, then token-match**.
+   *Validated end-to-end:* the implemented `repair/retry` loads the real run-013 report and
+   rewrites both invented `renderers` imports deterministically (the postmortem's Tier-1
+   direct-fix), with PI-005's TS2322 type error correctly out of scope (0 `unresolvable_import`).
 
 **Abstain on ambiguity (R1-F4).** Broadening the surface materially raises false-rewrite risk:
 if the intended module name resolves at **≥2** locations, `import_path_rename` MUST **abstain**

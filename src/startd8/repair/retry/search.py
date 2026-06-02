@@ -19,8 +19,9 @@ rewriter's resolvability (R3-F3).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import List, Optional, Protocol, Tuple, runtime_checkable
 
 _MODULE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 _INDEX_STEMS = (
@@ -60,6 +61,20 @@ def resolve_relative_target(
     return (importer_dir / specifier).resolve(strict=False)
 
 
+@dataclass(frozen=True)
+class ResolveResult:
+    """Outcome of resolving a violation's intended module to an on-disk file.
+
+    ``strategy`` records *how* it resolved (for reporting/debugging) and is the
+    single predicate shared by the classifier (rewritable vs ambiguous) and the
+    rewriter (which target to point at) — R3-F3.
+    """
+
+    target: Optional[Path] = None
+    strategy: str = ""  # "collapse" | "token_match" | "ambiguous" | ""
+    candidates: Tuple[Path, ...] = field(default_factory=tuple)
+
+
 @runtime_checkable
 class TargetExistenceSearch(Protocol):
     """The authoritative 'does the intended module exist, and where' predicate."""
@@ -67,6 +82,14 @@ class TargetExistenceSearch(Protocol):
     @property
     def generated_root(self) -> Path:
         """The run's ``generated/`` surface root (for locating scaffold targets)."""
+        ...
+
+    def resolve_target(self, specifier: str, importer_rel: str) -> "ResolveResult":
+        """Resolve the intended module: sub-namespace collapse, then token-match."""
+        ...
+
+    def module_resolves(self, specifier: str, importer_rel: str) -> bool:
+        """True if *specifier* resolves to a real module file on disk (blind)."""
         ...
 
     def locations_for(self, specifier: str, importer_rel: str) -> List[Path]:
@@ -128,6 +151,86 @@ class DiskTargetSearch:
         return self._module_cache
 
     # ── protocol ────────────────────────────────────────────────────────────
+
+    def resolve_target(self, specifier: str, importer_rel: str) -> ResolveResult:
+        """Resolve the intended module via collapse-first, then token-match.
+
+        * **collapse** (RUN-013 sub-namespace invention): drop one *interior*
+          segment at a time and keep the unique candidate that resolves on disk
+          (``@/lib/export/renderers/markdown`` → ``@/lib/export/markdown``).
+        * **token-match** (RUN-012 relocation): the one on-disk module whose path
+          segments contain all of the specifier's tokens.
+        """
+        collapsed = self._collapse_resolve(specifier, importer_rel)
+        if collapsed:
+            if len(collapsed) == 1:
+                return ResolveResult(collapsed[0], "collapse")
+            return ResolveResult(None, "ambiguous", tuple(collapsed))
+        locs = self.locations_for(specifier, importer_rel)
+        if len(locs) == 1:
+            return ResolveResult(locs[0], "token_match")
+        if len(locs) >= 2:
+            return ResolveResult(None, "ambiguous", tuple(locs))
+        return ResolveResult(None, "")
+
+    def module_resolves(self, specifier: str, importer_rel: str) -> bool:
+        return self._module_at(specifier, importer_rel) is not None
+
+    def _module_at(self, specifier: str, importer_rel: str) -> Optional[Path]:
+        """The real module file *specifier* resolves to on disk, or None.
+
+        ``@/`` is resolved blind (root + ``src/``, ignoring ``tsconfig``) to match
+        the project's own ``_resolves_on_disk`` convention (R3-F2).
+        """
+        bases: List[Path] = []
+        if specifier.startswith("."):
+            importer_dir = (self._generated_root / importer_rel).parent
+            bases.append(importer_dir / specifier)
+        elif specifier.startswith("@/"):
+            rest = specifier[2:]
+            for root in self._roots:
+                bases.append(root / rest)
+                bases.append(root / "src" / rest)
+        else:
+            return None
+        for base in bases:
+            stem = base.resolve(strict=False)
+            for ext in _MODULE_EXTS:
+                cand = Path(str(stem) + ext)
+                if cand.is_file():
+                    return cand
+            for stub in _INDEX_STEMS:
+                cand = stem / stub
+                if cand.is_file():
+                    return cand
+        return None
+
+    def _collapse_resolve(self, specifier: str, importer_rel: str) -> List[Path]:
+        """Targets reachable by dropping a single interior segment of *specifier*.
+
+        Only ``@/``/relative specifiers with ≥1 interior segment beyond the
+        filename are eligible. Returns the de-duplicated set of on-disk modules
+        the collapsed forms resolve to (empty if none; >1 ⇒ ambiguous upstream).
+        """
+        if not (specifier.startswith("@/") or specifier.startswith(".")):
+            return []
+        prefix, sep, rest = (
+            ("@/", "@/", specifier[2:])
+            if specifier.startswith("@/")
+            else ("", "", specifier)
+        )
+        segs = rest.split("/")
+        # interior = everything except the trailing filename segment; keep relative
+        # leading dots intact (they aren't droppable path segments).
+        droppable = [i for i, s in enumerate(segs[:-1]) if s not in ("", ".", "..")]
+        seen: dict = {}
+        for i in droppable:
+            collapsed_rest = "/".join(segs[:i] + segs[i + 1 :])
+            collapsed_spec = (sep + collapsed_rest) if sep else collapsed_rest
+            hit = self._module_at(collapsed_spec, importer_rel)
+            if hit is not None:
+                seen[hit] = collapsed_spec
+        return list(seen.keys())
 
     def locations_for(self, specifier: str, importer_rel: str) -> List[Path]:
         tokens = [t.lower() for t in specifier_tokens(specifier)]
