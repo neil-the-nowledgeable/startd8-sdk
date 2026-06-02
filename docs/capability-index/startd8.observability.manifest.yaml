@@ -434,6 +434,48 @@ metrics:
   - outcome
   category: pipeline_innate
   orientation: system
+- name: startd8.frontend_codegen.models_rendered
+  instrument: counter
+  unit: models
+  description: Prisma models rendered to Zod schemas
+  meter: startd8.frontend_codegen
+  source_file: src/startd8/frontend_codegen/telemetry.py
+  category: pipeline_innate
+  orientation: system
+- name: startd8.frontend_codegen.fields_rendered
+  instrument: counter
+  unit: fields
+  description: Scalar fields rendered
+  meter: startd8.frontend_codegen
+  source_file: src/startd8/frontend_codegen/telemetry.py
+  category: pipeline_innate
+  orientation: system
+- name: startd8.frontend_codegen.format_hints_applied
+  instrument: counter
+  unit: hints
+  description: Convention format hints (.email/.url) applied
+  meter: startd8.frontend_codegen
+  source_file: src/startd8/frontend_codegen/telemetry.py
+  category: pipeline_innate
+  orientation: system
+- name: startd8.frontend_codegen.unrenderable_fields
+  instrument: counter
+  unit: fields
+  description: Fields with no deterministic Zod mapping
+  meter: startd8.frontend_codegen
+  source_file: src/startd8/frontend_codegen/telemetry.py
+  category: pipeline_innate
+  orientation: system
+- name: startd8.frontend_codegen.drift_check
+  instrument: counter
+  unit: checks
+  description: Drift checks, labelled by status
+  meter: startd8.frontend_codegen
+  source_file: src/startd8/frontend_codegen/telemetry.py
+  labels:
+  - status
+  category: pipeline_innate
+  orientation: system
 spans:
 - name_pattern: agent.generate:{agent_name}
   kind: CLIENT
