@@ -1,0 +1,370 @@
+// prisma/schema.prisma
+// Feature F-001: Prisma base schema — datasource + generator only.
+// Domain models (Profile, ProofPoint, Capability, etc.) are added in F-002.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------------
+model Profile {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Required
+  name String
+
+  // Optional descriptive fields
+  title       String?
+  company     String?
+  industry    String?
+  summary     String?
+  linkedinUrl String?
+  email       String?
+  phone       String?
+  location    String?
+  yearsExp    Int?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// ProofPoint
+// ---------------------------------------------------------------------------
+model ProofPoint {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Content fields (all optional beyond id/meta)
+  title       String?
+  description String?
+  context     String?
+  result      String?
+  impact      String?
+  timeframe   String?
+  role        String?
+  notes       String?
+
+  // Relations (join tables)
+  capabilities ProofPointCapability[]
+  outcomes     ProofPointOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Capability
+// ---------------------------------------------------------------------------
+model Capability {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  proficiency String?
+  notes       String?
+
+  // Relations
+  proofPoints ProofPointCapability[]
+  outcomes    CapabilityOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Outcome
+// ---------------------------------------------------------------------------
+model Outcome {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  metric      String?
+  timeframe   String?
+  notes       String?
+
+  // Relations
+  proofPoints  ProofPointOutcome[]
+  capabilities CapabilityOutcome[]
+}
+
+// ---------------------------------------------------------------------------
+// Metric
+// ---------------------------------------------------------------------------
+model Metric {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  value       String?
+  unit        String?
+  direction   String?
+  timeframe   String?
+  description String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// Differentiator
+// ---------------------------------------------------------------------------
+model Differentiator {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name        String?
+  category    String?
+  description String?
+  evidence    String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// ValueProp
+// ---------------------------------------------------------------------------
+model ValueProp {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  headline    String?
+  subheadline String?
+  body        String?
+  audience    String?
+  format      String?
+  notes       String?
+}
+
+// ---------------------------------------------------------------------------
+// Artifact
+// ---------------------------------------------------------------------------
+model Artifact {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind        String?
+  title       String?
+  url         String?
+  description String?
+  mimeType    String?
+  sizeBytes   Int?
+  notes       String?
+  dataJson    String? // JSON-stringified structured data per docs/PLAN.md §2 (SQLite has no native JSON; rendered to MD on display)
+}
+
+// ---------------------------------------------------------------------------
+// AiCall
+// ---------------------------------------------------------------------------
+model AiCall {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  model          String?
+  promptTokens   Int?
+  responseTokens Int?
+  costUsd        Float?
+  purpose        String?
+  requestBody    String?
+  responseBody   String?
+  durationMs     Int?
+  error          String?
+}
+
+// ---------------------------------------------------------------------------
+// Join table: ProofPoint ↔ Capability
+// ---------------------------------------------------------------------------
+model ProofPointCapability {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proofPointId String
+  capabilityId String
+
+  proofPoint ProofPoint @relation(fields: [proofPointId], references: [id], onDelete: Cascade)
+  capability Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+
+  @@unique([proofPointId, capabilityId])
+}
+
+// ---------------------------------------------------------------------------
+// Join table: ProofPoint ↔ Outcome
+// ---------------------------------------------------------------------------
+model ProofPointOutcome {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  proofPointId String
+  outcomeId    String
+
+  proofPoint ProofPoint @relation(fields: [proofPointId], references: [id], onDelete: Cascade)
+  outcome    Outcome    @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@unique([proofPointId, outcomeId])
+}
+
+// ---------------------------------------------------------------------------
+// Join table: Capability ↔ Outcome
+// ---------------------------------------------------------------------------
+model CapabilityOutcome {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  capabilityId String
+  outcomeId    String
+
+  capability Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  outcome    Outcome    @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@unique([capabilityId, outcomeId])
+}
+model JobDescription {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Required: the raw content the user provided
+  rawText String
+
+  // Optional metadata
+  url      String?
+  title    String?
+  company  String?
+  location String?
+  summary  String?
+
+  // AI-extracted fields (FR-20 acceptance). Each is multi-line text; the UI
+  // splits on newline for list rendering.
+  beforeScenarios      String?
+  requiredCapabilities String?
+  targetOutcomes       String?
+  keywords             String?
+
+  notes String?
+
+  // Relations (no FK on the polymorphic match table; cascade on direct
+  // child models)
+  tailoredAssets TailoredAsset[]
+}
+
+// ---------------------------------------------------------------------------
+// TailoredMatch (FR-21)
+// ---------------------------------------------------------------------------
+// Polymorphic link between a JobDescription and any candidate-side Value
+// Model entity (Capability / Outcome / ProofPoint / Differentiator /
+// ValueProp). A run of the tailor-match AI pass populates these; the user
+// curates which to keep.
+//
+// subjectType is one of: "capability" | "outcome" | "proof-point" |
+//                        "differentiator" | "value-prop"
+// subjectId references the row id of the candidate entity of that type.
+// matchScore is 0-100 (Int) — the AI's estimate of relevance.
+
+model TailoredMatch {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobDescriptionId String
+  subjectType      String
+  subjectId        String
+  matchScore       Int     @default(0)
+  rationale        String?
+  notes            String?
+
+  @@unique([jobDescriptionId, subjectType, subjectId])
+  @@index([jobDescriptionId])
+}
+
+// ---------------------------------------------------------------------------
+// TailoredAsset (FR-22 + FR-23)
+// ---------------------------------------------------------------------------
+// A piece of tailored content (resume bullets, cover letter, LinkedIn blurb,
+// outreach email) generated for a specific JobDescription. variant + tone
+// support FR-23 "Variants & tone control" — multiple variants per (jd, kind)
+// combination.
+//
+// kind is one of: "resume_bullets" | "cover_letter" | "linkedin_blurb" |
+//                 "outreach_email"
+// variant is free-form (e.g., "concise" | "expansive" | "narrative").
+// tone is free-form (e.g., "formal" | "casual" | "consultative").
+// body is the rendered Markdown / plain text content.
+// metadata is JSON-stringified extra context (e.g., the source ProofPoint ids
+//   the asset draws from) — opaque to the schema layer.
+
+model TailoredAsset {
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
+  source    String   @default("user")
+  confirmed Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobDescriptionId String
+  kind             String
+  variant          String?
+  tone             String?
+  title            String?
+  body             String
+  metadata         String?
+
+  jobDescription JobDescription @relation(fields: [jobDescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([jobDescriptionId, kind])
+}

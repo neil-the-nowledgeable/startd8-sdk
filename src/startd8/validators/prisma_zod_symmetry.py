@@ -247,12 +247,26 @@ def default_entity_name(zod_schema_name: str) -> str:
     return zod_schema_name
 
 
-def _prisma_type_compatible(prisma_type: str, zod_class: str, schema: PrismaSchema) -> bool:
-    """True if a Prisma scalar type is compatible with a Zod field's type-class."""
+def _prisma_type_compatible(
+    prisma_type: str,
+    zod_class: str,
+    schema: PrismaSchema,
+    *,
+    decimal_accepts_string: bool = False,
+) -> bool:
+    """True if a Prisma scalar type is compatible with a Zod field's type-class.
+
+    ``decimal_accepts_string`` (opt-in) also accepts ``z.string()`` for a ``Decimal``
+    column — the money-safe choice the deterministic frontend generator makes (FR-2/R2-S1).
+    Default ``False`` preserves the original strict behavior for existing consumers
+    (postmortem / cross-file verifier), which treat a Decimal→string render as a mismatch.
+    """
     if zod_class == "unknown":
         return True  # z.unknown()/z.any() is permissive — never flag
     if prisma_type in schema.enums:
         return zod_class in ("enum", "string", "literal")
+    if prisma_type == "Decimal" and decimal_accepts_string and zod_class == "string":
+        return True
     acceptable = _PRISMA_TO_ZOD.get(prisma_type)
     if acceptable is None:
         return True  # unknown Prisma type (composite/relation) — don't flag
@@ -266,6 +280,7 @@ def check_prisma_zod_symmetry(
     zod_schemas: Dict[str, ZodObjectSchema],
     *,
     entity_map: Optional[Dict[str, str]] = None,
+    decimal_accepts_string: bool = False,
 ) -> List[SymmetryViolation]:
     """Compare each Zod schema against its Prisma model; return divergences.
 
@@ -299,7 +314,12 @@ def check_prisma_zod_symmetry(
                 continue
             if zf.name in prisma_scalar:
                 pf = prisma_scalar[zf.name]
-                if not _prisma_type_compatible(pf.type, zf.type_class, prisma_schema):
+                if not _prisma_type_compatible(
+                    pf.type,
+                    zf.type_class,
+                    prisma_schema,
+                    decimal_accepts_string=decimal_accepts_string,
+                ):
                     violations.append(SymmetryViolation(
                         entity=entity, zod_schema=zod_name, kind="field_type_mismatch",
                         field=zf.name,

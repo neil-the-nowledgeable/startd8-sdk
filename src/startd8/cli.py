@@ -32,6 +32,7 @@ from .cli_workflow import workflow_app
 from .cli_manifest import manifest_app
 from .cli_dashboard import dashboard_app
 from .cli_element_registry import element_registry_app
+from .cli_generate import generate_app
 
 
 app = typer.Typer(
@@ -758,6 +759,12 @@ app.add_typer(workflow_app, name="workflow")
 # Manifest commands
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(manifest_app, name="manifest")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Deterministic frontend code generation (no LLM)
+# ──────────────────────────────────────────────────────────────────────────
+app.add_typer(generate_app, name="generate")
 
 
 # =============================================================================
