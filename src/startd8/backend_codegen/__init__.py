@@ -15,6 +15,12 @@ from .crud_generator import (
     render_routers,
     render_spine,
 )
+from .derived import (
+    render_ai_schemas,
+    render_completeness,
+    render_derived,
+    render_export,
+)
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
 from .htmx_generator import render_ui, render_web
 from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
@@ -33,6 +39,10 @@ __all__ = [
     "render_spine",
     "render_web",
     "render_ui",
+    "render_export",
+    "render_ai_schemas",
+    "render_completeness",
+    "render_derived",
     "CANONICAL_LAYOUT",
     "check_drift",
     "owned_file_in_sync",

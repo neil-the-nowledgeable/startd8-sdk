@@ -117,16 +117,20 @@ machinery. Owned; `$0.00`-skippable.
 **recorded in `stages_skipped`** (loud, never a silent pass). `python_typecheck_enabled()` toggles
 on `STARTD8_PY_TYPECHECK`, mirroring the TS gate.
 
-**FR-6 — Completeness emitter.** Generate a **pure** function from an explicitly declared signal set
-→ score + priority-ordered nudges (realizes the app's FR-9). Owned, no LLM. *(Signal declaration →
-OQ-4.)*
+**FR-6 — Completeness emitter. Shipped (Step 6).** `derived.render_completeness` → `app/completeness.py`:
+a pure `compute_completeness(present)` → score + priority-ordered nudges. *(OQ-4 resolved: a
+schema-derived **presence** rule in v1 — each entity with ≥1 row contributes; nudge per absent
+entity. Domain-weighted thresholds, e.g. ≥3 ProofPoints, are a declared-manifest refinement,
+deferred.)* Owned, no LLM.
 
-**FR-7 — Export emitter.** Generate structured-data → **JSON** (pure) + **Markdown** (from a
-declared layout) with round-trip fidelity. Owned.
+**FR-7 — Export emitter. Shipped (Step 6).** `derived.render_export` → `app/export.py`: `to_json`
+(lossless, sorted) + `to_markdown` (deterministic layout — section per entity in schema order, field
+lines in order). JSON is the round-trip format. Owned.
 
-**FR-8 — AI tool/IO schema emission.** Project the **same `.prisma` contract** into the
-structured-output schemas the AI passes import (their I/O contract), reusing the FR-1 projection
-(Pydantic target). Schemas owned/deterministic; pass *logic* stays LLM.
+**FR-8 — AI tool/IO schema emission. Shipped (Step 6).** `derived.render_ai_schemas` →
+`app/ai_schemas.py`: re-projects the FR-1 Pydantic models as the AI passes' structured-output
+contract — `AI_SCHEMAS` (entity → model class) + `json_schema(entity)`. Owned/deterministic; pass
+*logic* stays LLM.
 
 **FR-9 — Owned-file discipline.** (a) **Drift** — the two-stage *logic* (stale-hash + re-render
 byte-compare) carries over, but is **mirrored, not reused**: a `.py` file carries a `#` GENERATED
@@ -187,8 +191,9 @@ OQ-5.)*
   canonical persisted contract; the FR-1 pure-Pydantic schemas serve the API/AI edge. The
   `Base`/`Create`/`Read` DTO hierarchy is **deferred** until the CRUD edge (Step 4) must hide
   server-set fields like `id`.
-- **OQ-4 — Completeness signal declaration.** Contract field annotations vs a separate manifest?
-  (Couples to OQ-1.)
+- **OQ-4 → resolved (Step 6).** Not derivable from the schema (the `.prisma` doesn't encode "≥3
+  ProofPoints"). v1 ships a schema-derived **presence** rule; domain-weighted thresholds are a
+  declared-manifest refinement, deferred.
 - **OQ-5 — Prime-contractor integration hook** *(narrowed)*. Beyond the standalone CLI, wire the
   Python gate into `integration_engine` post-generation (matching the TS tsc gate placement)?
 - **OQ-7 — Contract source-of-truth** *(new, load-bearing)*. Keep `.prisma` as the neutral IDL

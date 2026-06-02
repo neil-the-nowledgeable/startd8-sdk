@@ -34,6 +34,9 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "fastapi-db": "app/db.py",
     "fastapi-main": "app/main.py",
     "fastapi-web": "app/web.py",
+    "python-export": "app/export.py",
+    "python-ai-schemas": "app/ai_schemas.py",
+    "python-completeness": "app/completeness.py",
 }
 
 

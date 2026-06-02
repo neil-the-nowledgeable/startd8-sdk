@@ -68,9 +68,12 @@ dispatch, so the one provider $0.00-recognizes them too. *Depended on: Steps 1�
 `{# #}` comment so the existing drift path recognizes them (entity-aware dispatch added). Six new
 artifact kinds (`fastapi-web`, `htmx-base/-field-error/-list/-detail/-form`). *Depended on: Step 4.*
 
-**Step 6 — Pure emitters + AI schemas (FR-6, FR-7, FR-8).** `completeness` (declared signal set →
-score+nudges), `export` (JSON pure + MD from declared layout), and AI tool/IO schema projection
-(reuse Step-1 renderer). Resolve OQ-4 (signal declaration). *Depends on: Step 1 (renderer) + 2.*
+**Step 6 — Pure emitters + AI schemas (FR-6, FR-7, FR-8). ✅ SHIPPED.** `derived.py`:
+`render_completeness` (presence rule → score+nudges; OQ-4 resolved), `render_export` (JSON lossless
++ MD deterministic layout), `render_ai_schemas` (re-projects the Step-1 Pydantic models as the AI
+structured-output contract). Three new schema-derived artifact kinds (`python-export`/
+`-ai-schemas`/`-completeness`); export+completeness are pure stdlib (tests *execute* them).
+*Depended on: Step 1 (renderer) + 2.*
 
 **Step 7 — CLI (FR-13).** Add `startd8 generate backend --schema --out --check --strict` to
 `cli_generate.py`. *Depends on: Steps 1–6 (something to invoke).*

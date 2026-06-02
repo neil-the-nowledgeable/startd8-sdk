@@ -39,6 +39,7 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     what disambiguate them. ``entity`` is ``None`` for app-wide artifacts.
     """
     from .crud_generator import render_db, render_main, render_routers
+    from .derived import render_ai_schemas, render_completeness, render_export
     from .htmx_generator import (
         render_base_template,
         render_detail_template,
@@ -66,6 +67,9 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
         "htmx-list": lambda s, sf, e: render_list_template(s, sf, e),
         "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e),
         "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
+        "python-export": lambda s, sf, e: render_export(s, sf),
+        "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
+        "python-completeness": lambda s, sf, e: render_completeness(s, sf),
     }
 
 
