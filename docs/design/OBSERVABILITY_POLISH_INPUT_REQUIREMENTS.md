@@ -1,10 +1,13 @@
 # Polish-Stage Observability Input Collection — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Second reflective pass — cross-repo grounding)
 **Date:** 2026-06-02
 **Status:** Draft
-**Source:** Formalizes `OBSERVABILITY_POLISH_STAGE_INPUT_CATALOG.md` (the 148-input discovery sweep)
-into a buildable spec. Planning pass examined `artifact_generator.py`'s actual input-read sites.
+**Source:** Formalizes `OBSERVABILITY_POLISH_STAGE_INPUT_CATALOG.md` (the 148-input discovery sweep).
+v0.2 planned against `artifact_generator.py`; v0.3 grounds against the cap-dev-pipe + ContextCore
+contracts (`cap-dev-pipe/design/pipeline-requirements.md`, `POLISH_INPUT_GATHERING_BACKGROUND.md`),
+which **reshaped ownership** and narrowed startd8's scope to a single change.
+**Paired plan:** `OBSERVABILITY_POLISH_INPUT_PLAN.md`.
 
 ---
 
@@ -38,6 +41,34 @@ into a buildable spec. Planning pass examined `artifact_generator.py`'s actual i
   goals this pass; defer operational tuning (query window, weights, scrape interval) and the
   SDK-self-template reconciliation to follow-ups.
 
+### 0.2 Second reflective pass (v0.2 → v0.3): cross-repo grounding
+
+> v0.2 planned startd8 in isolation and proposed a new `spec.delivery` block. Grounding against the
+> cap-dev-pipe + ContextCore contracts **invalidated that** and revealed a three-repo ownership split.
+
+| v0.2 Assumption | Cross-repo Discovery | Impact |
+|-----------------|----------------------|--------|
+| startd8 adds a `spec.delivery` block for webhook/runbook/datasource | The manifest **schema is ContextCore-owned** and **already models the inputs**: `spec.observability.alertChannels` (REQ-CDP-OBS-005, naming-validated), `metadata.owners`, `spec.targets[]`, `spec.observability.metricsInterval/logLevel/dashboardPlacement`, `spec.requirements.*`, `spec.business.criticality`, `spec.risks[]` | **RETRACT `spec.delivery`.** Adding fields from startd8/cap-dev-pipe = a second source of truth for a schema we don't own. Any *new* field is a ContextCore ask |
+| Polish writes/augments the manifest `spec` | **POLISH (Stage 1) runs BEFORE `init-from-plan` (Stage 2)** — at polish time **no manifest exists**. The spec is derived later from the plan | The "collect at polish" flow is **gather-at-polish → apply-at-init**, owned by **cap-dev-pipe**; there's already a Stage 2.5 RESOLVE-QUESTIONS surface (`question-answers.yaml` / `manifest fix --interactive`) to reuse, gated by REQ-CDP-INT-010 |
+| The unread fields just need a generator wire-up + a new schema | **Verified:** `artifact_generator.py` reads `spec.observability.dashboardPlacement` + `spec.requirements` + `spec.business.criticality` only — it does **NOT** read `alertChannels`, `metadata.owners`, `spec.targets[]`, or `metricsInterval`, and emits placeholders for them | startd8's gap is **narrow and real**: consume the **existing** ContextCore manifest fields instead of placeholders/hardcoded values. No new schema |
+| Validation (ranges, naming, consistency) is part of this spec | cap-dev-pipe **already requires** it: semantic plausibility of owners/channels (REQ-CDP-INT-002), channel naming conventions (REQ-CDP-OBS-005), availability ≥95% bound (their CRP R1-F1), required/optional parameter classification (REQ-CDP-INT-007) | **RE-HOME validation** to cap-dev-pipe/ContextCore; startd8 trusts validated manifest values |
+
+**Resolved (this pass):**
+- **OQ-6 → resolved.** `alertChannels` are channel *identifiers* (naming-validated), not webhook URL
+  transport. Per-project input = the channel(s) (`spec.observability.alertChannels`, exists); the
+  webhook/contact-point *endpoint* is environment config (like `GRAFANA_API_TOKEN`), not per-project.
+  So the generator routes by `alertChannels`; no severity→URL map is authored per project.
+- **OQ-7 → resolved.** cap-dev-pipe DOES emit `.contextcore.yaml` `spec:` — at **Stage 2**, authored
+  by ContextCore, **after** polish. Gather-at-polish/apply-at-init; reuse Stage 2.5 plumbing; do not
+  hand-edit the manifest.
+
+**New (this pass):**
+- **OQ-8 (ContextCore).** Is there a manifest home for the **runbook URL base** and the **datasource
+  name**? The innate OBS reqs model `alertChannels`/`owners`/`targets`/`metricsInterval` but **not** a
+  runbook base or datasource. Either ContextCore adds fields (e.g. `spec.observability.runbookBase`,
+  `…datasource`) or startd8 treats them as environment/config defaults. **Decision needed before
+  implementation** (drives FR-CONS-2/3).
+
 ---
 
 ## 1. Problem Statement
@@ -62,78 +93,80 @@ artifacts are correct on first emit.
 
 ## 2. Requirements
 
-**FR-1 (single source of intent — surface already exists).** Operator-intent inputs MUST be collected
-into the per-project manifest `spec`, which the generator **already reads** (`spec.business`,
-`spec.requirements`, `spec.observability`, `spec.project`, `strategy`). This requirement is therefore
-satisfied for goals **today**; the only addition is a new **`spec.delivery`** block for the unread
-delivery fields (FR-2/3/4). No operator-facing input may remain a code constant or a generated
-placeholder.
+The v0.2 collection/schema requirements were re-homed (see §0.2). What remains for **startd8** is one
+focused change: **consume the manifest delivery fields ContextCore already populates, instead of
+emitting placeholders.** The gather flow, schema, and validation are delegated (§2.2).
 
-**FR-2 (alert delivery — webhook).** The alert webhook target(s) MUST be a collected input, routable
-by severity (e.g. critical→page, warning→Slack), threaded into the generated `notification_policy`.
-The `REPLACE_WITH_WEBHOOK_URL` placeholder MUST NOT appear in a generated artifact when an input is
-provided.
+### 2.1 startd8 consumption requirements (the actual work)
 
-**FR-3 (runbook + contact).** The runbook URL base and on-call owner/contact MUST be collected inputs,
-replacing the `runbooks.example.com` placeholder in alert annotations + runbooks.
+**FR-CONS-1 (consume existing delivery fields).** `artifact_generator.py` MUST read these
+already-populated, ContextCore-owned manifest fields and thread them into the named artifacts,
+replacing today's placeholders/hardcoded values:
+- `spec.observability.alertChannels` → `notification_policy` routing (REQ-CDP-OBS-005) — replaces
+  `REPLACE_WITH_WEBHOOK_URL` (:1671); route by channel identifier, severity-mapped via the existing
+  `_CRITICALITY_TO_SEVERITY`.
+- `metadata.owners` → `notification_policy` owner + `runbook` escalation contacts (REQ-CDP-OBS-005/007)
+  — replaces the missing/`TODO` owner.
+- `spec.targets[]` (`.name`, `.namespace`) → `service_monitor` selector/namespace + `loki_rule`
+  selector + dashboard target (REQ-CDP-OBS-004/006) — replaces the `app={service_id}` / fixed-namespace
+  assumptions.
+- `spec.observability.metricsInterval` → `service_monitor` scrape interval (REQ-CDP-OBS-004) — replaces
+  hardcoded `"30s"` (:1606).
 
-**FR-4 (datasource).** The Prometheus datasource name MUST be a collected input (default `"prometheus"`).
+**FR-CONS-2 (runbook base).** The runbook URL base MUST stop being the `runbooks.example.com`
+placeholder (:820). Source per OQ-8: read a manifest field if ContextCore adds one, else a
+config/env default (`OBS_RUNBOOK_BASE`), else omit the annotation rather than emit a dead domain.
 
-**FR-5 (SLO goals, collected once — into the existing `spec.requirements`).** Uptime/availability,
-latency objective, and (per-project) cost budget MUST be collected into `spec.requirements`
-(`availability`, `latencyP99`, `throughput`, `errorBudget`) — the fields the generator already
-consumes. Error-budget already derives from availability (`1 − target`, artifact_generator.py:1337);
-collection MUST NOT re-author it. The startd8-self `$50/$100` template split is a **separate**
-SDK-self-monitoring fix (see §0 / OQ-1), not part of per-project collection.
+**FR-CONS-3 (datasource).** The Prometheus datasource name (:1007) MUST be configurable (env/config
+default `"prometheus"`), per OQ-8; not a hardcoded literal.
 
-**FR-6 (alert thresholds + timing).** Truncation-rate, context-saturation, budget, and latency alert
-thresholds + their `for_duration` MUST be collectable inputs (defaulting to today's template values).
+**FR-CONS-4 (backward-compatible, parameter-classification-aware).** With a field absent, the generator
+MUST fall back to today's default and MUST NOT emit a dead placeholder for a *required* delivery
+parameter — instead honor REQ-CDP-INT-007: a missing **required** parameter (e.g. `alertChannels` for
+`notification_policy`) is surfaced as unresolved (Gate-1 visible), a missing **optional** one defaults
+silently. No manifest field becomes mandatory to run; absent-everything output stays byte-identical to
+today except the placeholders are no longer fabricated.
 
-**FR-7 (operational tuning — scoped).** Query rate window (`[5m]`), scrape interval (`30s`), and
-quality weights (0.7/0.3) MAY be exposed as advanced inputs; default to current constants. (Lower
-priority — see OQ-2.)
+### 2.2 Delegated — NOT startd8 (cross-references)
 
-**FR-8 (collection mechanism).** Inputs MUST be collectable at the EARLIEST polish stage via a single
-mechanism (prompt and/or `polish-inputs.yaml`) and persisted into the manifest before generation runs.
-(See OQ-3.)
-
-**FR-9 (backward-compatible defaults).** Every input MUST default to today's value; with no inputs
-provided, generation MUST produce byte-identical artifacts to today (except the placeholders, which
-remain placeholders only when truly unset). No input is mandatory to run.
-
-**FR-10 (validation at collection).** Collected inputs MUST be validated at collection time: ranges
-(0–1 fractions, positive durations/budgets), URL/webhook format, and **goal consistency** (budget
-alert ≥ SLO budget; error-budget = 1 − availability).
+- **Polish-stage input gathering** (show helpful inputs, collect, apply) → **cap-dev-pipe**:
+  gather-at-polish → apply-at-`init-from-plan`, reusing Stage 2.5 RESOLVE-QUESTIONS /
+  `question-answers.yaml` / `manifest fix --interactive`, gated by REQ-CDP-INT-010. See
+  `POLISH_INPUT_GATHERING_BACKGROUND.md` §5.
+- **Manifest schema (any new field)** → **ContextCore** (`manifest init-from-plan`). Includes the OQ-8
+  decision on `runbookBase`/`datasource` fields.
+- **Input validation** (ranges, channel naming, owner semantic plausibility, availability bounds) →
+  **cap-dev-pipe/ContextCore**: REQ-CDP-INT-002, REQ-CDP-OBS-005, REQ-CDP-INT-007. startd8 trusts
+  validated manifest values.
+- **startd8-self `$50/$100` reconciliation** → a separate one-line fix to the committed self-manifest
+  (`startd8.observability.manifest.yaml`), tracked independently.
 
 ## 3. Non-Requirements / out of scope
 
-- NOT building a new generator or changing artifact output *formats* (only their input values).
-- NOT exposing Tier-5 internal knobs with no operator meaning (panel grid geometry, manifest IDs,
-  jsonnet timeout, capability maturity literal).
-- NOT a Grafana-credentials manager (the API token stays an env var, `GRAFANA_API_TOKEN`).
-- NOT changing the `route_state`/taxonomy generator work (that's the separate cat-4/5 Task C).
+- NOT adding a `spec.delivery` block or any manifest field (schema is ContextCore's — §2.2).
+- NOT building an input-collection/prompt surface (cap-dev-pipe's, and it already exists — §2.2).
+- NOT validating input plausibility (cap-dev-pipe/ContextCore's, per REQ-CDP-INT-002 — §2.2).
+- NOT changing artifact output *formats*, only the *values* threaded in.
+- NOT a Grafana-credentials manager (API token stays env `GRAFANA_API_TOKEN`).
+- NOT the `route_state`/taxonomy generator work (separate cat-4/5 Task C).
+- NOT the operational tuning knobs (query window, for-durations, quality weights) — SDK-internal,
+  deferred.
 
 ## 4. Open Questions
 
-**All v0.1 open questions resolved by the planning pass — see §0 Planning Insights.**
-- OQ-1 → keep per-project (`spec.requirements`) and SDK-self (`$50/$100` templates) cost goals
-  **separate**; reconcile the self-templates as a follow-up.
-- OQ-2 → **narrow** to the 3 unread delivery fields + document the already-read goals.
-- OQ-3 → collect into the manifest `spec` (existing read surface); polish writer is thin.
-- OQ-4 → `spec.delivery = { webhook, runbook_base, datasource }`, read at :1671/:820/:1007.
-- OQ-5 → yes, the generator reads the per-project manifest `spec` today.
+OQ-1..5 resolved in §0 (v0.2 planning); OQ-6/7 resolved in §0.2 (cross-repo grounding). One live:
 
-**New (post-planning):**
-- **OQ-6.** Webhook shape: a severity→URL map (`{critical, warning}`) vs a single URL + Alertmanager
-  routing? (Planning leans severity-map, mirroring `_CRITICALITY_TO_SEVERITY`.)
-- **OQ-7.** Does cap-dev-pipe already emit a per-project manifest with a `spec` block at an earlier
-  stage that the polish writer should augment, or does polish create it? (Determines writer vs
-  augmenter.)
+- **OQ-8 (live — needs a decision before implementation).** Manifest home for **runbook URL base** and
+  **datasource name**: does ContextCore add `spec.observability.runbookBase` / `…datasource`, or does
+  startd8 treat them as env/config defaults? Drives FR-CONS-2/3. (Recommendation: env/config defaults
+  now; propose ContextCore fields if they become per-project intent.)
 
 ---
 
-*v0.2 — Post-planning self-reflective update. The generator already reads the manifest `spec`, so
-FR-1 is largely satisfied and scope narrows to a `spec.delivery` block (3 unread fields) + documenting
-the existing `spec.requirements` goals; the $50/$100 split was reframed as a separate SDK-self fix.
-5 OQs resolved, 2 added. Ready for an implementation plan (the unread-fields wiring is small) or an
-optional CRP pass.*
+*v0.3 — Second reflective pass (cross-repo grounding). Retracted the `spec.delivery` block and the
+collection/validation FRs after grounding against cap-dev-pipe + ContextCore: the manifest schema is
+ContextCore-owned and already models the inputs; the gather flow is cap-dev-pipe's (already specced);
+polish runs before the manifest exists. startd8's scope collapsed to **FR-CONS-1..4 — consume the
+existing manifest delivery fields (`alertChannels`/`owners`/`targets`/`metricsInterval`) instead of
+emitting placeholders.** 8 OQs resolved, 1 live (OQ-8, runbook-base/datasource home). Paired plan:
+`OBSERVABILITY_POLISH_INPUT_PLAN.md`.*
