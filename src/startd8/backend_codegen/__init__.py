@@ -9,16 +9,20 @@ projection of it.
 from __future__ import annotations
 
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
-from .gates import verify_pydantic_fidelity
+from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
+from .sqlmodel_renderer import SQLModelRenderResult, render_sqlmodel_tables
 
 __all__ = [
     "render_pydantic_models",
     "PydanticRenderResult",
+    "render_sqlmodel_tables",
+    "SQLModelRenderResult",
     "check_drift",
     "owned_file_in_sync",
     "is_owned_generated_file",
     "PydanticSQLModelProvider",
     "verify_pydantic_fidelity",
+    "verify_sqlmodel_fidelity",
 ]

@@ -15,19 +15,28 @@ from typing import List, Tuple
 from ..languages.prisma_parser import parse_prisma_schema
 from .pydantic_renderer import composite_type_names
 
-_CLASS_RE = re.compile(r"^class (\w+)Schema\(BaseModel\):$")
+_PYDANTIC_CLASS_RE = re.compile(r"^class (\w+)Schema\(BaseModel\):$")
+_SQLMODEL_CLASS_RE = re.compile(r"^class (\w+)\(SQLModel, table=True\):$")
 _FIELD_RE = re.compile(r"^    (\w+): (.+)$")
 
 
-def _extract_rendered_fields(text: str) -> dict:
-    """Map ``<EntityName> -> [(field_name, annotation), ...]`` from the rendered models file."""
+def _extract_rendered_fields(text: str, class_re: re.Pattern) -> dict:
+    """Map ``<EntityName> -> [(field_name, annotation), ...]`` from a rendered models file.
+
+    *class_re* selects which class headers count as entities (Pydantic ``XSchema(BaseModel)`` or
+    SQLModel ``X(SQLModel, table=True)``); any other ``class`` line (e.g. an ``Enum``) ends the
+    current entity body so its members aren't miscounted as fields.
+    """
     out: dict = {}
     current = None
     for line in (text or "").splitlines():
-        cm = _CLASS_RE.match(line)
+        cm = class_re.match(line)
         if cm:
             current = cm.group(1)
             out[current] = []
+            continue
+        if line.startswith("class "):
+            current = None  # a non-entity class (e.g. an Enum) — leave the body
             continue
         if current is None:
             continue
@@ -48,9 +57,33 @@ def verify_pydantic_fidelity(schema_text: str, rendered_text: str) -> Tuple[str,
     Prisma field renders ``Optional[...] = None``; each list field renders ``list[...]``. Returns
     a tuple of issues (empty = faithful).
     """
+    return _verify(
+        schema_text, rendered_text, _PYDANTIC_CLASS_RE, expect_default_none=True
+    )
+
+
+def verify_sqlmodel_fidelity(schema_text: str, rendered_text: str) -> Tuple[str, ...]:
+    """Check the rendered SQLModel-tables file reflects the schema's scalar projection.
+
+    Same field set/order/list checks as the Pydantic gate; optionality is checked by ``Optional[``
+    presence only (an ``@id`` optional renders ``= Field(default=None, ...)`` rather than ``= None``,
+    so the ``= None`` default is *not* required here).
+    """
+    return _verify(
+        schema_text, rendered_text, _SQLMODEL_CLASS_RE, expect_default_none=False
+    )
+
+
+def _verify(
+    schema_text: str,
+    rendered_text: str,
+    class_re: re.Pattern,
+    *,
+    expect_default_none: bool,
+) -> Tuple[str, ...]:
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
-    rendered = _extract_rendered_fields(rendered_text)
+    rendered = _extract_rendered_fields(rendered_text, class_re)
     issues: List[str] = []
 
     for name in schema.models:
@@ -71,12 +104,16 @@ def verify_pydantic_fidelity(schema_text: str, rendered_text: str) -> Tuple[str,
         ann_by_name = {g[0]: g[1] for g in got}
         for f in expected:
             ann = ann_by_name[f.name]
-            if f.is_optional and ("Optional[" not in ann or "= None" not in ann):
+            if f.is_optional and "Optional[" not in ann:
                 issues.append(
                     f"{name}.{f.name}: optional in schema but rendered '{ann}' "
-                    f"(expected Optional[...] = None)"
+                    f"(expected Optional[...])"
                 )
-            if not f.is_optional and "= None" in ann:
+            if f.is_optional and expect_default_none and "= None" not in ann:
+                issues.append(
+                    f"{name}.{f.name}: optional in schema but rendered without a default ('{ann}')"
+                )
+            if not f.is_optional and expect_default_none and "= None" in ann:
                 issues.append(
                     f"{name}.{f.name}: required in schema but rendered with a default ('{ann}')"
                 )

@@ -87,9 +87,10 @@ skip-hook `$0.00 GENERATED`, never hand-edited).
 
 **FR-2 — SQLModel table emission.** The same `.prisma` contract co-projects to **SQLModel** table
 classes (per the locked ORM decision). The "one definition = contract + table" property is realized
-at the **`.prisma` level** (single source); SQLModel and the API-facing Pydantic schema are
-co-generated projections. Server-set / read-only field distinctions are emitted deterministically.
-*(One-class-vs-DTO split → OQ-3.)*
+at the **`.prisma` level** (single source); the SQLModel tables (persistence) and the FR-1 Pydantic
+schemas (API/validation/AI) are co-generated projections. Enums emit as `str, Enum` classes; list
+scalars as JSON columns; `@id` → `Field(primary_key=True)`. **Shipped (Step 2).** *(FK constraints
++ `Relationship()` deferred — FK scalars render as plain columns for v1.)*
 
 **FR-3 — FastAPI CRUD generator.** Per entity, emit owned route handlers for list / detail /
 create / update / delete: validate Pydantic → SQLModel op → response. Canonical imports only (the
@@ -169,8 +170,10 @@ OQ-5.)*
 - **OQ-2 — Templating engine.** Pure string templates (the proven `value-model.ts` pattern) vs a
   structured/AST emitter — and how each stays convention-true to FastAPI app structure + Jinja/HTMX
   idioms.
-- **OQ-3 — SQLModel single-class vs separate DTO.** One SQLModel class as both API contract + table,
-  or a separate read/write Pydantic DTO at the API edge? (Affects FR-2/FR-3 projection.)
+- **OQ-3 → resolved (Step 2).** One `class X(SQLModel, table=True)` per entity = the table + the
+  canonical persisted contract; the FR-1 pure-Pydantic schemas serve the API/AI edge. The
+  `Base`/`Create`/`Read` DTO hierarchy is **deferred** until the CRUD edge (Step 4) must hide
+  server-set fields like `id`.
 - **OQ-4 — Completeness signal declaration.** Contract field annotations vs a separate manifest?
   (Couples to OQ-1.)
 - **OQ-5 — Prime-contractor integration hook** *(narrowed)*. Beyond the standalone CLI, wire the

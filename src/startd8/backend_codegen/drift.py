@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Dict, Optional
 
 from ..frontend_codegen.schema_renderer import schema_sha256
-from .pydantic_renderer import render_pydantic_models
 
 IN_SYNC = 0
 DRIFT = 1
@@ -25,7 +24,31 @@ ERROR = 2
 
 _HEADER_SHA_RE = re.compile(r"#\s*schema-sha256:\s*([0-9a-f]{64})")
 _HEADER_SRC_RE = re.compile(r"#\s*GENERATED from\s+(\S+)")
+_HEADER_KIND_RE = re.compile(r"#\s*startd8-artifact:\s*(\S+)")
 _GENERATED_MARKER = "# GENERATED from"
+
+
+def _renderers() -> Dict[str, Callable[[str, str], str]]:
+    """Map artifact-kind → a ``(schema_text, source_file) -> text`` renderer.
+
+    Imported lazily so this module has no load-order dependency on the renderers. Each backend
+    artifact tags its header with ``# startd8-artifact: <kind>`` so a single provider/drift path
+    re-renders it with the *right* renderer (a Pydantic-models file and a SQLModel-tables file both
+    carry the GENERATED marker, so the kind tag is what disambiguates them).
+    """
+    from .pydantic_renderer import render_pydantic_models
+    from .sqlmodel_renderer import render_sqlmodel_tables
+
+    return {
+        "pydantic-models": lambda s, sf: render_pydantic_models(s, source_file=sf).text,
+        "sqlmodel-tables": lambda s, sf: render_sqlmodel_tables(s, source_file=sf).text,
+    }
+
+
+def embedded_artifact_kind(ondisk_text: str) -> Optional[str]:
+    """The ``startd8-artifact`` kind recorded in a generated file's header, or ``None``."""
+    m = _HEADER_KIND_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
 
 
 @dataclass(frozen=True)
@@ -107,7 +130,15 @@ def check_drift(
             f"— regenerate",
         )
 
-    rendered = render_pydantic_models(schema_text, source_file=source_file).text
+    kind = embedded_artifact_kind(ondisk_text)
+    renderer = _renderers().get(kind or "")
+    if renderer is None:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            f"unknown or missing startd8-artifact kind ({kind!r}) — cannot verify",
+        )
+    rendered = renderer(schema_text, source_file)
     if rendered != ondisk_text:
         return DriftResult(
             "tampered",

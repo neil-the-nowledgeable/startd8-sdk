@@ -42,9 +42,12 @@
 - **Proves:** the smallest vertical — a generated Pydantic models file recognized by the skip-hook
   as `$0.00 GENERATED`, drift-checked, fidelity-gated. *Depends on: nothing new.*
 
-**Step 2 — SQLModel co-projection (FR-2).** Extend the renderer to emit SQLModel table classes from
-the same `.prisma` AST. Resolve OQ-3 here (single class vs API DTO) against the pilot entities.
-*Depends on: Step 1.*
+**Step 2 — SQLModel co-projection (FR-2). ✅ SHIPPED.** `sqlmodel_renderer.py` emits
+`class X(SQLModel, table=True)` from the same `.prisma` AST: `@id`→primary key, enums→`str, Enum`
+classes, list scalars→JSON columns, FK scalars→plain columns (FK constraints deferred). OQ-3
+resolved (single table class + the FR-1 Pydantic schemas as the API/AI edge). Drift now dispatches
+on a `# startd8-artifact:` header tag so one provider verifies both `models.py` and `tables.py`.
+*Depended on: Step 1.*
 
 **Step 3 — Python build gate (FR-5).** `validators/python_toolchain.run_project_typecheck_py`
 reusing `ToolchainResult`: `compileall` → `mypy` → `pytest`; `status="unavailable"` ⇒ non-pass

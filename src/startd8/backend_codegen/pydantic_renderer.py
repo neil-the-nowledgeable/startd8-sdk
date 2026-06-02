@@ -172,6 +172,7 @@ def _import_block(needs: Set[str]) -> str:
 _HEADER_TEMPLATE = (
     "# GENERATED from {source_file} — do not edit by hand; "
     "regenerate via `startd8 generate backend`.\n"
+    "# startd8-artifact: pydantic-models\n"
     "# Source of truth: the Prisma schema.\n"
     "# schema-sha256: {sha}"
 )

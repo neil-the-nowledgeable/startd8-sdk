@@ -17,7 +17,9 @@ from startd8.backend_codegen import (
     PydanticSQLModelProvider,
     owned_file_in_sync,
     render_pydantic_models,
+    render_sqlmodel_tables,
     verify_pydantic_fidelity,
+    verify_sqlmodel_fidelity,
 )
 from startd8.backend_codegen.drift import check_drift
 from startd8.contractors import deterministic_providers as dp
@@ -233,3 +235,87 @@ def test_fidelity_flags_lost_optionality():
     broken = gen.replace("    context: Optional[str] = None", "    context: str")
     issues = verify_pydantic_fidelity(PILOT_SCHEMA, broken)
     assert any("context" in i for i in issues)
+
+
+# --------------------------------------------------------------------------- #
+# SQLModel renderer (Step 2 / FR-2)
+# --------------------------------------------------------------------------- #
+
+
+def test_sqlmodel_render_tables_enums_pk_and_json():
+    res = render_sqlmodel_tables(PILOT_SCHEMA)
+    text = res.text
+    assert res.unrenderable == ()
+    assert res.models_rendered == 2 and res.enums_rendered == 1
+    # table classes + primary key
+    assert "class ProofPoint(SQLModel, table=True):" in text
+    assert "    id: str = Field(primary_key=True)" in text
+    # enum -> str, Enum class (referenced, not Literal)
+    assert "class Confidence(str, Enum):" in text
+    assert '    draft = "draft"' in text
+    assert "    confidence: Confidence" in text
+    # list scalar -> JSON column
+    assert (
+        "    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))"
+        in text
+    )
+    # optional + relation exclusion
+    assert "    context: Optional[str] = None" in text
+    assert "    metricId: Optional[str] = None" in text
+    assert "metric:" not in text
+    # synthesized imports
+    assert "from sqlmodel import Field, SQLModel" in text
+    assert "from sqlalchemy import JSON, Column" in text
+    assert "from enum import Enum" in text
+
+
+def test_sqlmodel_render_is_valid_python_and_stable():
+    out = render_sqlmodel_tables(PILOT_SCHEMA).text
+    compile(out, "<tables>", "exec")
+    assert render_sqlmodel_tables(PILOT_SCHEMA).text == out
+
+
+def test_sqlmodel_fidelity_clean_and_flags():
+    gen = render_sqlmodel_tables(PILOT_SCHEMA).text
+    assert verify_sqlmodel_fidelity(PILOT_SCHEMA, gen) == ()
+    # enum members must not be miscounted as table fields
+    broken = gen.replace("    value: float\n", "")
+    assert any(
+        "Metric" in i and "mismatch" in i
+        for i in verify_sqlmodel_fidelity(PILOT_SCHEMA, broken)
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Multi-artifact drift dispatch (the kind-tag disambiguation)
+# --------------------------------------------------------------------------- #
+
+
+def test_both_artifacts_in_sync_and_not_confused():
+    models = render_pydantic_models(PILOT_SCHEMA).text
+    tables = render_sqlmodel_tables(PILOT_SCHEMA).text
+    # each is in-sync when checked against the schema (drift dispatches on the artifact-kind tag)
+    assert owned_file_in_sync(PILOT_SCHEMA, models) is True
+    assert owned_file_in_sync(PILOT_SCHEMA, tables) is True
+    # and they are genuinely different artifacts
+    assert models != tables
+    assert "SQLModel, table=True" in tables and "SQLModel" not in models
+
+
+def test_sqlmodel_drift_detects_tamper():
+    tables = render_sqlmodel_tables(PILOT_SCHEMA).text
+    tampered = tables.replace("    unit: str", "    unit: int", 1)
+    assert owned_file_in_sync(PILOT_SCHEMA, tampered) is False
+
+
+def test_sqlmodel_file_provided_via_registry(tmp_path):
+    _write_schema(tmp_path)
+    dp.register_provider(PydanticSQLModelProvider())
+    tables = render_sqlmodel_tables(
+        PILOT_SCHEMA, source_file="prisma/schema.prisma"
+    ).text
+    out = tmp_path / "app" / "tables.py"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(tables, encoding="utf-8")
+    # same provider recognizes the SQLModel artifact too (kind-dispatched) -> $0.00 skip
+    assert is_deterministically_provided(out, tables, _ctx(tmp_path)) is True
