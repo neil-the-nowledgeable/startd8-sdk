@@ -5375,7 +5375,17 @@ class PrimeContractorWorkflow:
             )
             apply_cross_file_gate(result_dict, _pm_report)
         except Exception:
+            # Degrade loudly, never silent-PASS (CKG discipline): if the gate
+            # can't be evaluated, record an explicit unavailable state so the
+            # consumer/exit code sees a skipped gate rather than an absent key
+            # that defaults to "passed".
             logger.warning("Prime postmortem (sync gate) failed", exc_info=True)
+            result_dict["cross_file_gate"] = {
+                "passed": True,
+                "available": False,
+                "reason": "postmortem evaluation failed (gate not computed)",
+                "cross_file_failures": [],
+            }
 
         return result_dict
 

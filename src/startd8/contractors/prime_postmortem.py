@@ -2804,6 +2804,7 @@ def apply_cross_file_gate(
     ]
     gate = {
         "passed": not cross_file_failures,
+        "available": True,
         "verdict": report.aggregate_verdict,
         "score": report.aggregate_score,
         "cross_file_failures": cross_file_failures,

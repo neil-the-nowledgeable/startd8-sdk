@@ -77,6 +77,7 @@ class TestApplyCrossFileGate:
         gate = apply_cross_file_gate(result_dict, _report(feats, "PASS", 1.0))
 
         assert gate["passed"] is True
+        assert gate["available"] is True  # explicit availability (vs a skipped gate)
         assert gate["cross_file_failures"] == []
         assert result_dict["cross_file_gate"]["passed"] is True
         assert result_dict["postmortem_verdict"] == "PASS"

@@ -59,7 +59,7 @@ def _startd8_backend(agent_spec: str):
     """Real generation backend (run-later boundary). Requires an API key + budget."""
     try:
         from startd8.providers import ProviderRegistry
-        from startd8.agents import resolve_agent_spec
+        from startd8.utils.agent_resolution import resolve_agent_spec
     except Exception as exc:  # pragma: no cover - import guard
         raise SystemExit(f"startd8 backend unavailable: {exc}")
 
