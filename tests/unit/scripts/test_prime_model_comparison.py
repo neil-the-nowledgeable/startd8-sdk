@@ -233,6 +233,21 @@ def test_materialize_copy_excludes_nested_batch(harness, tmp_path):
     assert not (workdir / "out").exists()  # nested batch output not copied in
 
 
+def test_materialize_copy_excludes_stale_run_state(harness, tmp_path):
+    """A fresh sandbox must NOT inherit .prime_contractor_state.json / .startd8 (would skip work)."""
+    source = tmp_path / "proj"
+    (source / "src").mkdir(parents=True)
+    (source / "src" / "a.py").write_text("x = 1\n")
+    (source / ".prime_contractor_state.json").write_text('{"done": true}')
+    (source / ".startd8").mkdir()
+    (source / ".startd8" / "state.json").write_text("{}")
+    workdir = tmp_path / "batch" / "mock-a" / "workdir"
+    harness.materialize_sandbox(source, workdir, "copy", batch_root=tmp_path / "batch")
+    assert (workdir / "src" / "a.py").is_file()
+    assert not (workdir / ".prime_contractor_state.json").exists()
+    assert not (workdir / ".startd8").exists()
+
+
 # --------------------------------------------------------------------------- M1: timeout
 
 def test_run_command_timeout_marks_failed(harness, tmp_path):

@@ -213,6 +213,38 @@ def run_benchmark(
     ))
 
 
+@app.command("compare-models")
+def compare_models(
+    seed: Path = typer.Option(..., "--seed", help="Shared prime-context-seed.json (same for all models)"),
+    models: List[str] = typer.Option(
+        ..., "--model", "-m",
+        help="Model spec provider:model (repeatable, >=2 required). "
+             "Example: -m gemini:gemini-2.5-pro -m openai:gpt-5.5",
+    ),
+    source_root: Path = typer.Option(Path("."), "--source-root", help="Target project root to copy per model"),
+    batch_root: Optional[Path] = typer.Option(None, "--batch-root", help="Output root for the batch"),
+    cost_budget: Optional[float] = typer.Option(None, "--cost-budget", help="Per-run cost budget (USD)"),
+    per_run_timeout: Optional[float] = typer.Option(
+        None, "--per-run-timeout", help="Max seconds per model run (timeout marks it failed, batch continues)"),
+    isolation: str = typer.Option("copy", "--isolation", help="copy (incl. dirty files) or worktree (git HEAD only)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print plan; do not copy or execute"),
+):
+    """Run the same seed through PrimeContractor across 2+ models in isolated sandboxes, then rank."""
+    from .model_comparison import validate_inputs, run_comparison
+
+    deduped = list(dict.fromkeys(models))
+    br = batch_root.resolve() if batch_root else None
+    err = validate_inputs(deduped, seed.resolve(), source_root.resolve(), br, dry_run)
+    if err:
+        console.print(f"❌ {err}", style="red")
+        raise typer.Exit(2)
+    run_comparison(
+        seed=seed.resolve(), source_root=source_root.resolve(), models=deduped, batch_root=br,
+        cost_budget=cost_budget, per_run_timeout=per_run_timeout, isolation=isolation,
+        dry_run=dry_run, log=print,
+    )
+
+
 @app.command()
 def compare(
     prompt_id: str = typer.Argument(..., help="Prompt ID to compare responses for"),
