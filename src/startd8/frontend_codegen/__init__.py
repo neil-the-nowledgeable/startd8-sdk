@@ -17,8 +17,16 @@ from .conventions import (
     ProjectConventions,
     detect_project_conventions,
 )
-from .drift import DriftResult, check_drift, embedded_schema_sha
+from .drift import (
+    DriftResult,
+    check_drift,
+    embedded_schema_sha,
+    embedded_source_file,
+    is_owned_generated_file,
+    owned_file_in_sync,
+)
 from .gates import assert_symmetric, verify_render_fidelity
+from .telemetry import record_drift_check, record_render
 from .skeleton import (
     SkeletonArtifact,
     SkeletonPlan,
@@ -55,8 +63,13 @@ __all__ = [
     "composite_type_names",
     "detect_project_conventions",
     "embedded_schema_sha",
+    "embedded_source_file",
     "field_completeness_issues",
+    "is_owned_generated_file",
+    "owned_file_in_sync",
     "plan_frontend_skeleton",
+    "record_drift_check",
+    "record_render",
     "render_barrel",
     "render_css_module_stub",
     "model_field_sets",

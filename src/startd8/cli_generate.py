@@ -15,6 +15,7 @@ from rich.console import Console
 
 from .frontend_codegen import check_drift, plan_frontend_skeleton, render_zod_schema
 from .frontend_codegen.drift import ERROR as _EXIT_ERROR
+from .frontend_codegen.telemetry import record_drift_check, record_render
 
 console = Console()
 
@@ -67,11 +68,13 @@ def frontend(
             console.print(f"[red]error:[/red] cannot read {out}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
         result = check_drift(schema_text, ondisk, source_file=source_label)
+        record_drift_check(result.status)
         color = "green" if result.status == "in_sync" else "yellow"
         console.print(f"[{color}]{result.status}[/{color}]: {result.detail}")
         raise typer.Exit(result.exit_code)
 
     rendered = render_zod_schema(schema_text, source_file=source_label)
+    record_render(rendered)
     if rendered.unrenderable:
         console.print(
             f"[yellow]{len(rendered.unrenderable)} unrenderable field(s):[/yellow]"

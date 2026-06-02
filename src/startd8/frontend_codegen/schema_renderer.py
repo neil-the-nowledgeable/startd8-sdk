@@ -217,11 +217,18 @@ _HEADER_TEMPLATE = (
 
 @dataclass(frozen=True)
 class RenderResult:
-    """The rendered Zod-schema file plus its provenance and any flagged fields."""
+    """The rendered Zod-schema file plus its provenance, flagged fields, and stats.
+
+    The integer stats are deterministic counts (for telemetry, NFR-6); they do not affect
+    the rendered ``text`` and carry no side effects.
+    """
 
     text: str
     schema_sha256: str
     unrenderable: Tuple[UnrenderableField, ...]
+    models_rendered: int = 0
+    fields_rendered: int = 0
+    format_hints_applied: int = 0
 
 
 def schema_sha256(schema_text: str) -> str:
@@ -332,7 +339,16 @@ def render_zod_schema(
         )
 
     text = "\n\n".join(sections) + "\n"
-    return RenderResult(text=text, schema_sha256=sha, unrenderable=tuple(flagged))
+    fields_rendered = sum(len(schema.scalar_fields(n)) for n in model_names)
+    format_hints_applied = text.count(".email(") + text.count(".url(")
+    return RenderResult(
+        text=text,
+        schema_sha256=sha,
+        unrenderable=tuple(flagged),
+        models_rendered=len(model_names),
+        fields_rendered=fields_rendered,
+        format_hints_applied=format_hints_applied,
+    )
 
 
 def field_completeness_issues(schema_text: str) -> Tuple[str, ...]:

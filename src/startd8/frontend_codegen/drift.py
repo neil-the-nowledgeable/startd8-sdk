@@ -25,6 +25,8 @@ DRIFT = 1
 ERROR = 2
 
 _HEADER_SHA_RE = re.compile(r"//\s*schema-sha256:\s*([0-9a-f]{64})")
+_HEADER_SRC_RE = re.compile(r"//\s*GENERATED from\s+(\S+)")
+_GENERATED_MARKER = "// GENERATED from"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,39 @@ def embedded_schema_sha(ondisk_text: str) -> Optional[str]:
     """The ``schema-sha256`` recorded in a generated file's header, or ``None``."""
     m = _HEADER_SHA_RE.search(ondisk_text or "")
     return m.group(1) if m else None
+
+
+def embedded_source_file(ondisk_text: str) -> Optional[str]:
+    """The ``GENERATED from <source_file>`` label recorded in a generated header, or ``None``."""
+    m = _HEADER_SRC_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def is_owned_generated_file(ondisk_text: str) -> bool:
+    """True if *ondisk_text* is a file this generator produced (carries the GENERATED header).
+
+    Necessary but **not** sufficient to skip in the pipeline — a stale/hand-edited file also
+    carries the header. Pair with :func:`owned_file_in_sync` before treating it as provided.
+    """
+    text = ondisk_text or ""
+    return _GENERATED_MARKER in text and embedded_schema_sha(text) is not None
+
+
+def owned_file_in_sync(schema_text: str, ondisk_text: str) -> bool:
+    """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
+
+    The C2-safe predicate for the pipeline skip-hook: header presence alone is rejected; the
+    file must re-render byte-identically from the current schema. The embedded source-label
+    is recovered from the header so the re-render's header line matches (avoiding a false
+    "tampered"). Any doubt → ``False`` (the caller falls through to the LLM — a safe failure).
+    """
+    if not is_owned_generated_file(ondisk_text):
+        return False
+    source_file = embedded_source_file(ondisk_text) or "prisma/schema.prisma"
+    return (
+        check_drift(schema_text, ondisk_text, source_file=source_file).status
+        == "in_sync"
+    )
 
 
 def check_drift(
