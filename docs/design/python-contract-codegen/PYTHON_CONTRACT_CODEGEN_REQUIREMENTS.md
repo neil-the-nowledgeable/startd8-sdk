@@ -151,14 +151,16 @@ X`, `from .routers import all_routers`) resolve by construction; the FR-5 build 
 invented path. *(A bespoke layout constant proved simpler than the planned `skeleton._canonical_dirs`
 reuse, which is TS/barrel-oriented — corrected from v0.2.)*
 
-**FR-12 — Pilot.** Drive **ProofPoint + Metric** end-to-end: `.prisma` contract → generated Pydantic
-+ SQLModel + FastAPI CRUD + HTMX form/list (with inline validation) → `$0.00` skip on regen →
-Python build gate green. The v1 acceptance milestone.
+**FR-12 — Pilot. PASSED (Step 8).** `startd8 generate backend` on the **ProofPoint + Metric**
+`.prisma` writes 18 files (10 `.py` + 8 templates), `--gate` reports **build gate: pass**, and
+`--check` reports **all 18 artifacts in_sync** — i.e. the skip-hook would mark a regen `$0.00`. The
+v1 acceptance milestone, proven end-to-end via the real CLI.
 
-**FR-13 — CLI surface.** Add `startd8 generate backend` as one `@generate_app.command` in
-`cli_generate.py` (zero changes to `cli.py`), supporting `--schema`/`--out`/`--check`/`--strict`
-like the `frontend` command. Prime-contractor integration is a follow-on. *(Integration hook →
-OQ-5.)*
+**FR-13 — CLI surface. Shipped (Step 7).** `startd8 generate backend` — one `@generate_app.command`
+in `cli_generate.py` (zero changes to `cli.py`): `--schema`/`--out`/`--check`/`--gate`/
+`--source-label`. Writes the whole `app/` package (via `render_backend`); `--check` drift-checks
+every owned artifact (exit 1 on drift); `--gate` runs the Python build gate. Prime-contractor
+`integration_engine` wiring is the remaining follow-on (OQ-5).
 
 ---
 

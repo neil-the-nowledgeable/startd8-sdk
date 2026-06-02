@@ -75,13 +75,15 @@ structured-output contract). Three new schema-derived artifact kinds (`python-ex
 `-ai-schemas`/`-completeness`); export+completeness are pure stdlib (tests *execute* them).
 *Depended on: Step 1 (renderer) + 2.*
 
-**Step 7 — CLI (FR-13).** Add `startd8 generate backend --schema --out --check --strict` to
-`cli_generate.py`. *Depends on: Steps 1–6 (something to invoke).*
+**Step 7 — CLI (FR-13). ✅ SHIPPED.** `startd8 generate backend --schema --out --check --gate
+--source-label` in `cli_generate.py` (one command, zero changes to `cli.py`). `render_backend`
+(in `assembler.py`) aggregates every artifact; the command writes the `app/` package, `--check`
+drift-checks all owned artifacts, `--gate` runs the Python build gate. *Depended on: Steps 1–6.*
 
-**Step 8 — Pilot: ProofPoint + Metric end-to-end (FR-12).** Author the `.prisma` for the pilot
-context → run `generate backend` → assert: Pydantic + SQLModel + CRUD + HTMX form/list generated;
-re-run reports `$0.00 GENERATED`; Python build gate green. **Acceptance milestone.**
-*Depends on: Steps 1–7.*
+**Step 8 — Pilot: ProofPoint + Metric end-to-end (FR-12). ✅ PASSED.** Real CLI run writes 18 files;
+`--gate` → build gate pass; `--check` → all 18 in_sync ($0.00 regen). Covered by
+`test_cli_backend.py::test_pilot_regen_is_zero_cost_and_gate_green`. **Acceptance milestone met.**
+*Depended on: Steps 1–7.*
 
 ---
 

@@ -15,6 +15,7 @@ from .crud_generator import (
     render_routers,
     render_spine,
 )
+from .assembler import render_backend
 from .derived import (
     render_ai_schemas,
     render_completeness,
@@ -43,6 +44,7 @@ __all__ = [
     "render_ai_schemas",
     "render_completeness",
     "render_derived",
+    "render_backend",
     "CANONICAL_LAYOUT",
     "check_drift",
     "owned_file_in_sync",

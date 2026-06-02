@@ -103,3 +103,92 @@ def frontend(
         )
         for note in plan.notes:
             console.print(f"  [dim]note:[/dim] {note}")
+
+
+@generate_app.command("backend")
+def backend(
+    schema: Path = typer.Option(..., "--schema", help="Path to prisma/schema.prisma."),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root to write the app/ package into."
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Drift-check the on-disk artifacts; write nothing. Exit 0=in-sync, 1=drift.",
+    ),
+    gate: bool = typer.Option(
+        False,
+        "--gate",
+        help="After writing, run the Python build gate (compileall) over the project.",
+    ),
+    source_label: str = typer.Option(
+        "prisma/schema.prisma",
+        "--source-label",
+        help="Schema path written into the GENERATED headers (must match across runs).",
+    ),
+) -> None:
+    """Render the full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived).
+
+    Deterministic, no LLM. Every artifact is owned/$0.00-skippable; an empty ``app/__init__.py``
+    package marker is written but not drift-tracked.
+    """
+    from .backend_codegen import check_drift as _backend_drift
+    from .backend_codegen import is_owned_generated_file, render_backend
+
+    try:
+        schema_text = schema.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read schema {schema}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    artifacts = render_backend(schema_text, source_label)
+
+    if check:
+        drifted = 0
+        for rel, content in artifacts:
+            if not is_owned_generated_file(content):
+                continue  # the empty package marker — nothing to verify
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            result = _backend_drift(schema_text, ondisk, source_file=source_label)
+            if result.status != "in_sync":
+                drifted += 1
+                console.print(
+                    f"[yellow]{result.status}[/yellow]: {rel} — {result.detail}"
+                )
+        if drifted:
+            console.print(f"[yellow]{drifted} artifact(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(
+            f"[green]in_sync[/green]: all {len(artifacts)} artifact(s) match the schema"
+        )
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} file(s) under {out}/app")
+
+    if gate:
+        from .validators.python_toolchain import run_project_check
+
+        result = run_project_check(str(out), run_mypy=False, run_pytest=False)
+        color = "green" if result.is_pass else "red"
+        console.print(
+            f"[{color}]build gate: {result.verdict}[/{color}] "
+            f"(ran {', '.join(result.stages_run) or 'nothing'}; "
+            f"skipped {', '.join(result.stages_skipped) or 'nothing'})"
+        )
+        for d in result.diagnostics:
+            console.print(
+                f"  [red]{d.stage}[/red] {d.file}:{d.line} {d.code}: {d.message}"
+            )
+        if not result.is_pass:
+            raise typer.Exit(_EXIT_ERROR)
