@@ -10,6 +10,7 @@ See docs/design/UNIFIED_OBSERVABILITY_MANIFEST_REQUIREMENTS.md for design.
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -76,6 +77,22 @@ class BusinessContext:
     project_id: Optional[str] = None
     project_name: Optional[str] = None
     slo_window: str = "30d"
+    # Delivery fields consumed from the ContextCore-authored manifest (FR-CONS-1).
+    # These replace hardcoded placeholders in notification_policy / service_monitor /
+    # loki_rule / runbook. Shapes verified against real .contextcore.yaml (plan Phase 0).
+    alert_channels: List[str] = field(default_factory=list)  # spec.observability.alertChannels
+    owners: List[Dict[str, Any]] = field(default_factory=list)  # metadata.owners: [{team,slack?,email?}]
+    metrics_interval: Optional[str] = None  # spec.observability.metricsInterval, e.g. "30s"
+    targets: List[Dict[str, Any]] = field(default_factory=list)  # spec.targets: [{kind,name,namespace}]
+
+    def routing_channels(self) -> List[str]:
+        """Channel identifiers for alert routing, with the Phase-0 fallback chain:
+        spec.observability.alertChannels → metadata.owners[].slack → []
+        (empty → the consumer treats notification routing as required-unresolved,
+        never fabricating a webhook URL)."""
+        if self.alert_channels:
+            return [str(c) for c in self.alert_channels]
+        return [str(o["slack"]) for o in self.owners if isinstance(o, dict) and o.get("slack")]
 
 
 @dataclass
@@ -555,10 +572,18 @@ def load_business_context(
         logger.info("Loaded business context from manifest: %s", manifest_path)
 
     spec = manifest.get("spec", {})
+    meta = manifest.get("metadata", {})
     business = spec.get("business", {})
     requirements = spec.get("requirements", {})
     observability = spec.get("observability", {})
     project = spec.get("project", {})
+
+    # Delivery fields (FR-CONS-1) — consumed by notification_policy / service_monitor /
+    # loki_rule / runbook in place of hardcoded placeholders.
+    ctx.alert_channels = list(observability.get("alertChannels") or [])
+    ctx.owners = list(meta.get("owners") or [])
+    ctx.metrics_interval = observability.get("metricsInterval")
+    ctx.targets = list(spec.get("targets") or [])
 
     ctx.project_id = project.get("id") or metadata.get("project_id")
     ctx.project_name = project.get("name")
@@ -814,11 +839,15 @@ def generate_alert_rules(
                 }
             )
 
-    # REQ-OAG-205: runbook_url annotation on every active alert (placeholder URL).
-    for rule in rules:
-        rule.setdefault("annotations", {})["runbook_url"] = (
-            f"https://runbooks.example.com/{service.service_id}/{rule['alert']}"
-        )
+    # REQ-OAG-205: runbook_url annotation. Base is environment config (OQ-8 interim,
+    # FR-CONS-2): use OBS_RUNBOOK_BASE if set; otherwise OMIT the annotation rather than
+    # emit the dead `runbooks.example.com` placeholder.
+    runbook_base = os.environ.get("OBS_RUNBOOK_BASE", "").rstrip("/")
+    if runbook_base:
+        for rule in rules:
+            rule.setdefault("annotations", {})["runbook_url"] = (
+                f"{runbook_base}/{service.service_id}/{rule['alert']}"
+            )
 
     # Closure 1 / Gap 1: commented-out alert stubs for declared domain metrics
     # (TODO-when-absent — no manifest threshold, so not emitted as active rules).
@@ -1004,7 +1033,10 @@ def generate_dashboard_spec(
             f"{service.service_id} ({service.transport})"
         ),
         "tags": tags,
-        "datasources": {"prometheus": "prometheus"},
+        # Datasource name is environment config (OQ-8 interim, FR-CONS-3): default
+        # "prometheus"; override via OBS_PROM_DATASOURCE when the target Grafana names
+        # its datasource differently.
+        "datasources": {"prometheus": os.environ.get("OBS_PROM_DATASOURCE", "prometheus")},
         "panels": panels,
         "variables": [
             {"type": "prometheusDatasource", "name": "datasource", "label": "Datasource"}
@@ -1597,23 +1629,42 @@ def generate_slo_definitions(
 # ---------------------------------------------------------------------------
 
 
+def _target_for(service_id: str, targets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The `spec.targets[]` entry for a service: name match, else the sole target, else None."""
+    for t in targets:
+        if isinstance(t, dict) and str(t.get("name", "")) == service_id:
+            return t
+    return targets[0] if len(targets) == 1 and isinstance(targets[0], dict) else None
+
+
 def generate_service_monitor(
     service: ServiceHints,
     business: BusinessContext,
 ) -> ArtifactResult:
-    """Generate a Prometheus-Operator ServiceMonitor CRD for a service."""
+    """Generate a Prometheus-Operator ServiceMonitor CRD for a service.
+
+    Scrape interval from `spec.observability.metricsInterval` and namespace from the
+    matching `spec.targets[]` entry (FR-CONS-1), falling back to today's defaults.
+    """
     derivations: List[DerivationTrace] = []
-    scrape_interval = "30s"
+    scrape_interval = business.metrics_interval or "30s"
+    target = _target_for(service.service_id, business.targets)
+    namespace = str(target["namespace"]) if target and target.get("namespace") else None
+
+    metadata: Dict[str, Any] = {
+        "name": service.service_id,
+        "labels": {
+            "app": service.service_id,
+            "managed-by": "startd8-observability",
+        },
+    }
+    if namespace:
+        metadata["namespace"] = namespace
+
     doc: Dict[str, Any] = {
         "apiVersion": "monitoring.coreos.com/v1",
         "kind": "ServiceMonitor",
-        "metadata": {
-            "name": service.service_id,
-            "labels": {
-                "app": service.service_id,
-                "managed-by": "startd8-observability",
-            },
-        },
+        "metadata": metadata,
         "spec": {
             "selector": {"matchLabels": {"app": service.service_id}},
             "endpoints": [
@@ -1629,6 +1680,17 @@ def generate_service_monitor(
             tier="default",
         )
     )
+    derivations.append(DerivationTrace(
+        field="scrape_interval",
+        source="manifest.spec.observability.metricsInterval" if business.metrics_interval else "default",
+        transformation=f"interval={scrape_interval}",
+        tier="manifest" if business.metrics_interval else "default",
+    ))
+    if namespace:
+        derivations.append(DerivationTrace(
+            field="namespace", source="manifest.spec.targets[].namespace",
+            transformation=f"namespace={namespace}", tier="manifest",
+        ))
     header = (
         f"# Generated by startd8 observability artifact generator\n"
         f"# Service: {service.service_id} (transport: {service.transport})\n"
@@ -1648,10 +1710,45 @@ def generate_notification_policy(
     service: ServiceHints,
     business: BusinessContext,
 ) -> ArtifactResult:
-    """Generate an Alertmanager routing policy scoped to a service."""
+    """Generate an Alertmanager routing policy scoped to a service.
+
+    Routes to the manifest's `spec.observability.alertChannels` (FR-CONS-1), falling
+    back to `metadata.owners[].slack` (Phase-0 fallback chain). Owner emails become
+    `email_configs` contacts. The channel is the per-project input; the Slack webhook
+    *transport* is an environment secret (OQ-6), referenced as `${SLACK_API_URL}` —
+    NOT a fabricated `REPLACE_WITH_WEBHOOK_URL`. With no channels resolvable, the
+    receiver carries no transport and `alertChannels` is recorded as an unresolved
+    REQUIRED parameter (REQ-CDP-INT-007) for the downstream Gate-1 check.
+    """
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
     receiver = f"{service.service_id}-{severity}"
+
+    channels = business.routing_channels()
+    owner_emails = [
+        str(o["email"]) for o in business.owners
+        if isinstance(o, dict) and o.get("email")
+    ]
+
+    receiver_doc: Dict[str, Any] = {"name": receiver}
+    if channels:
+        # Channel identifiers from the manifest; transport (api_url) is a deploy-time
+        # secret, referenced not fabricated.
+        receiver_doc["slack_configs"] = [
+            {"channel": ch, "api_url": "${SLACK_API_URL}", "send_resolved": True}
+            for ch in channels
+        ]
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="manifest.spec.observability.alertChannels",
+            transformation=f"route → {channels}", tier="manifest",
+        ))
+    if owner_emails:
+        receiver_doc["email_configs"] = [{"to": e} for e in owner_emails]
+        derivations.append(DerivationTrace(
+            field="owner_contacts", source="manifest.metadata.owners[].email",
+            transformation=f"email → {owner_emails}", tier="manifest",
+        ))
+
     doc: Dict[str, Any] = {
         "route": {
             "routes": [
@@ -1664,20 +1761,31 @@ def generate_notification_policy(
                 }
             ]
         },
-        "receivers": [
-            {
-                "name": receiver,
-                # Configure a real integration (webhook/email/slack) on deploy.
-                "webhook_configs": [{"url": "REPLACE_WITH_WEBHOOK_URL"}],
-            }
-        ],
+        "receivers": [receiver_doc],
     }
-    header = (
-        f"# Generated by startd8 observability artifact generator\n"
-        f"# Service: {service.service_id} — notification routing by severity\n"
-        f"# TODO: replace REPLACE_WITH_WEBHOOK_URL with a real receiver target\n"
-        f"{_derivation_comment(derivations)}\n\n"
-    )
+
+    header_lines = [
+        "# Generated by startd8 observability artifact generator",
+        f"# Service: {service.service_id} — notification routing by severity",
+    ]
+    if channels:
+        header_lines.append(
+            "# Channels from manifest; set the SLACK_API_URL secret at deploy time "
+            "(the webhook transport is environment config, not a per-project input)."
+        )
+    else:
+        header_lines.append(
+            "# UNRESOLVED REQUIRED PARAM: no alertChannels (or owners[].slack) in the "
+            "manifest — receiver has no transport. Populate spec.observability.alertChannels "
+            "upstream (REQ-CDP-OBS-005). No webhook URL was fabricated."
+        )
+        derivations.append(DerivationTrace(
+            field="alert_channels", source="manifest.spec.observability.alertChannels",
+            transformation="unresolved_required (REQ-CDP-INT-007) — no transport emitted",
+            tier="default",
+        ))
+    header = "\n".join(header_lines) + f"\n{_derivation_comment(derivations)}\n\n"
+
     return ArtifactResult(
         artifact_type="notification_policy",
         service_id=service.service_id,
@@ -1692,11 +1800,22 @@ def generate_loki_rule(
     service: ServiceHints,
     business: BusinessContext,
 ) -> ArtifactResult:
-    """Generate a Loki ruler alerting rule for a service's error logs."""
+    """Generate a Loki ruler alerting rule for a service's error logs.
+
+    Log selector derived from `spec.targets[].name` (FR-CONS-1, REQ-CDP-OBS-006),
+    falling back to the service_id.
+    """
     derivations: List[DerivationTrace] = []
     severity = _severity_for(business, derivations)
+    target = _target_for(service.service_id, business.targets)
+    selector_name = str(target["name"]) if target and target.get("name") else service.service_id
+    if target and target.get("name"):
+        derivations.append(DerivationTrace(
+            field="loki.selector", source="manifest.spec.targets[].name",
+            transformation=f'service="{selector_name}"', tier="manifest",
+        ))
     expr = (
-        f'sum(rate({{service="{service.service_id}"}} |= "error" [5m])) > 0'
+        f'sum(rate({{service="{selector_name}"}} |= "error" [5m])) > 0'
     )
     doc: Dict[str, Any] = {
         "groups": [
@@ -1746,7 +1865,7 @@ def generate_runbook(
     lines = [
         f"# Runbook: {service.service_id}",
         "",
-        f"> Generated by startd8 observability artifact generator.",
+        "> Generated by startd8 observability artifact generator.",
         "",
         "## Service summary",
         "",
@@ -1779,9 +1898,31 @@ def generate_runbook(
         "## Escalation",
         "",
         f"- {'Page on-call immediately.' if severity == 'critical' else 'Notify the owning team.'}",
-        f"- Owner: {business.owner or 'TODO: set manifest.spec.business.owner'}",
-        "",
     ]
+    # Escalation contacts from metadata.owners (FR-CONS-1), else spec.business.owner.
+    owner_lines: List[str] = []
+    for o in business.owners:
+        if not isinstance(o, dict):
+            continue
+        parts = []
+        if o.get("team"):
+            parts.append(f"team **{o['team']}**")
+        if o.get("email"):
+            parts.append(str(o["email"]))
+        if o.get("slack"):
+            parts.append(str(o["slack"]))
+        if parts:
+            owner_lines.append("- Contact: " + " · ".join(parts))
+    if owner_lines:
+        derivations.append(DerivationTrace(
+            field="escalation.contacts", source="manifest.metadata.owners",
+            transformation=f"{len(owner_lines)} owner(s)", tier="manifest",
+        ))
+    elif business.owner:
+        owner_lines = [f"- Owner: {business.owner}"]
+    else:
+        owner_lines = ["- Owner: _not set — populate manifest.metadata.owners (REQ-CDP-OBS-007)_"]
+    lines += owner_lines + [""]
     return ArtifactResult(
         artifact_type="runbook",
         service_id=service.service_id,

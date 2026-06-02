@@ -24,7 +24,11 @@ from startd8.observability.artifact_generator import (
     extract_service_hints,
     generate_alert_rules,
     generate_dashboard_spec,
+    generate_loki_rule,
+    generate_notification_policy,
     generate_observability_artifacts,
+    generate_runbook,
+    generate_service_monitor,
     generate_slo_definitions,
     load_business_context,
     load_onboarding_metadata,
@@ -909,17 +913,27 @@ class TestGridPos:
 
 
 class TestRunbookUrl:
-    """REQ-OAG-205: every active alert carries a runbook_url annotation."""
+    """REQ-OAG-205 + FR-CONS-2: runbook_url uses the OBS_RUNBOOK_BASE env base; with
+    no base configured it is OMITTED (never the dead runbooks.example.com placeholder)."""
 
-    def test_all_alerts_have_runbook_url(self, grpc_service, business):
+    def test_runbook_url_uses_env_base_when_set(self, grpc_service, business, monkeypatch):
+        monkeypatch.setenv("OBS_RUNBOOK_BASE", "https://rb.acme.io/")
         result = generate_alert_rules(grpc_service, business)
-        parsed = yaml.safe_load(result.content)
-        rules = [r for g in parsed["groups"] for r in g["rules"]]
+        rules = [r for g in yaml.safe_load(result.content)["groups"] for r in g["rules"]]
         assert rules
         for r in rules:
             url = r["annotations"]["runbook_url"]
-            assert url.startswith("https://runbooks.example.com/checkout-api/")
+            assert url.startswith("https://rb.acme.io/checkout-api/")
             assert r["alert"] in url
+
+    def test_runbook_url_omitted_when_no_base(self, grpc_service, business, monkeypatch):
+        monkeypatch.delenv("OBS_RUNBOOK_BASE", raising=False)
+        result = generate_alert_rules(grpc_service, business)
+        rules = [r for g in yaml.safe_load(result.content)["groups"] for r in g["rules"]]
+        assert rules
+        for r in rules:
+            assert "runbook_url" not in r.get("annotations", {})
+        assert "runbooks.example.com" not in result.content
 
 
 class TestDatabasePanels:
@@ -1481,3 +1495,136 @@ class TestAllArtifactsScored:
         runbook = next(a for a in report.artifacts if a.artifact_type == "runbook")
         assert runbook.quality is not None  # now scored (was unscored pre-Finding-1)
         assert runbook.quality["score"] < 1.0  # missing Risks/Procedures sections
+
+
+# ---------------------------------------------------------------------------
+# FR-CONS-1..4: consume manifest delivery fields (polish-input)
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryFieldConsumption:
+    """The generator consumes alertChannels/owners/targets/metricsInterval from the
+    ContextCore manifest instead of emitting placeholders (FR-CONS-1)."""
+
+    def test_notification_routes_to_alert_channels_no_placeholder(self, grpc_service):
+        biz = BusinessContext(
+            alert_channels=["#alerts", "#oncall"],
+            owners=[{"team": "platform", "email": "ops@acme.io", "slack": "#ignored"}],
+        )
+        result = generate_notification_policy(grpc_service, biz)
+        assert "REPLACE_WITH_WEBHOOK_URL" not in result.content
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
+        )
+        recv = doc["receivers"][0]
+        chans = [c["channel"] for c in recv["slack_configs"]]
+        assert chans == ["#alerts", "#oncall"]            # alertChannels wins over owners[].slack
+        assert recv["email_configs"][0]["to"] == "ops@acme.io"
+
+    def test_notification_falls_back_to_owner_slack(self, grpc_service):
+        biz = BusinessContext(owners=[{"team": "platform", "slack": "#startd8-dev"}])
+        result = generate_notification_policy(grpc_service, biz)
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
+        )
+        chans = [c["channel"] for c in doc["receivers"][0]["slack_configs"]]
+        assert chans == ["#startd8-dev"]
+
+    def test_notification_unresolved_when_no_channels(self, grpc_service):
+        result = generate_notification_policy(grpc_service, BusinessContext())
+        assert "REPLACE_WITH_WEBHOOK_URL" not in result.content
+        assert "UNRESOLVED REQUIRED PARAM" in result.content
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
+        )
+        recv = doc["receivers"][0]
+        assert "slack_configs" not in recv and "webhook_configs" not in recv  # no fabrication
+
+    def test_service_monitor_uses_metrics_interval_and_namespace(self, grpc_service):
+        biz = BusinessContext(
+            metrics_interval="15s",
+            targets=[{"kind": "Deployment", "name": "checkout-api", "namespace": "shop"}],
+        )
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_service_monitor(grpc_service, biz).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        assert doc["spec"]["endpoints"][0]["interval"] == "15s"
+        assert doc["metadata"]["namespace"] == "shop"
+
+    def test_loki_selector_from_target_name(self, grpc_service):
+        biz = BusinessContext(targets=[{"name": "checkout-svc", "namespace": "shop"}])
+        content = generate_loki_rule(grpc_service, biz).content
+        assert 'service="checkout-svc"' in content
+
+    def test_runbook_escalation_from_owners(self, grpc_service):
+        biz = BusinessContext(owners=[{"team": "platform", "email": "ops@acme.io"}])
+        content = generate_runbook(grpc_service, biz).content
+        assert "team **platform**" in content and "ops@acme.io" in content
+
+    def test_dashboard_datasource_env_override(self, grpc_service, monkeypatch):
+        monkeypatch.setenv("OBS_PROM_DATASOURCE", "mimir-prod")
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_dashboard_spec(grpc_service, BusinessContext()).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        assert doc["datasources"]["prometheus"] == "mimir-prod"
+
+
+class TestDeliveryBackwardCompat:
+    """FR-CONS-4: absent fields → today's defaults, never a fabricated placeholder."""
+
+    def test_no_fields_no_placeholders(self, grpc_service, monkeypatch):
+        monkeypatch.delenv("OBS_RUNBOOK_BASE", raising=False)
+        biz = BusinessContext()
+        for gen in (generate_notification_policy, generate_service_monitor,
+                    generate_loki_rule, generate_runbook):
+            content = gen(grpc_service, biz).content
+            assert "REPLACE_WITH_WEBHOOK_URL" not in content
+            assert "runbooks.example.com" not in content
+
+    def test_service_monitor_defaults_when_absent(self, grpc_service):
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_service_monitor(grpc_service, BusinessContext()).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        assert doc["spec"]["endpoints"][0]["interval"] == "30s"   # default preserved
+        assert "namespace" not in doc["metadata"]                 # no target → no namespace
+
+
+class TestLoadDeliveryFields:
+    """load_business_context parses the delivery fields from a real manifest shape (Phase 1)."""
+
+    def test_reads_channels_owners_targets_interval(self, tmp_path):
+        import textwrap as _tw
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text(_tw.dedent("""\
+            metadata:
+              owners:
+                - team: platform
+                  slack: "#startd8-dev"
+                  email: ops@acme.io
+            spec:
+              targets:
+                - kind: Deployment
+                  name: checkout
+                  namespace: shop
+              observability:
+                metricsInterval: "15s"
+                alertChannels:
+                  - "#alerts"
+                  - "#oncall"
+        """))
+        ctx = load_business_context(p, {})
+        assert ctx.alert_channels == ["#alerts", "#oncall"]
+        assert ctx.metrics_interval == "15s"
+        assert ctx.targets[0]["namespace"] == "shop"
+        assert ctx.owners[0]["email"] == "ops@acme.io"
+        assert ctx.routing_channels() == ["#alerts", "#oncall"]
+
+    def test_routing_channels_falls_back_to_owner_slack(self, tmp_path):
+        p = tmp_path / ".contextcore.yaml"
+        p.write_text("metadata:\n  owners:\n    - team: t\n      slack: '#fallback'\n")
+        ctx = load_business_context(p, {})
+        assert ctx.alert_channels == []
+        assert ctx.routing_channels() == ["#fallback"]
