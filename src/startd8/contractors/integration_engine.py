@@ -31,7 +31,10 @@ from .protocols import (
 
 # Repair pipeline imports — optional, guarded (R2-S5)
 try:
-    from ..repair.diagnostics import classify_checkpoint_category, parse_checkpoint_diagnostics
+    from ..repair.diagnostics import (
+        classify_checkpoint_category,
+        parse_checkpoint_diagnostics,
+    )
     from ..repair.orchestrator import run_file_repair
     from ..repair.staging import create_staging
 
@@ -54,7 +57,8 @@ _PYTHON_FUTURE_IMPORT_RE = "from __future__ import"
 
 
 def _detect_python_stub_in_non_python(
-    content: str, target_path: str,
+    content: str,
+    target_path: str,
 ) -> Optional[str]:
     """Return an error string if *content* looks like a Python stub but
     *target_path* is a non-Python file.  Returns ``None`` when the file is
@@ -72,9 +76,7 @@ def _detect_python_stub_in_non_python(
         return None
 
     # Strip blank lines / whitespace for "only substantive lines" checks.
-    substantive = [
-        line for line in content.splitlines() if line.strip()
-    ]
+    substantive = [line for line in content.splitlines() if line.strip()]
 
     # Case 1: content is *only* ``from __future__ import annotations``
     if len(substantive) == 1 and substantive[0].strip().startswith(
@@ -87,13 +89,14 @@ def _detect_python_stub_in_non_python(
 
     # Case 2: __future__ import + raise NotImplementedError skeleton
     non_future = [
-        line for line in substantive
+        line
+        for line in substantive
         if not line.strip().startswith("from __future__ import")
     ]
-    if all(
-        line.strip() == "raise NotImplementedError"
-        for line in non_future
-    ) and len(non_future) >= 1:
+    if (
+        all(line.strip() == "raise NotImplementedError" for line in non_future)
+        and len(non_future) >= 1
+    ):
         return (
             "content is a Python skeleton stub "
             "(from __future__ import + raise NotImplementedError)"
@@ -101,6 +104,7 @@ def _detect_python_stub_in_non_python(
 
     # Case 3: generic — __future__ import present in a non-Python file
     from pathlib import PurePosixPath
+
     _ext = PurePosixPath(target_path).suffix
     _label = _ext.lstrip(".") if _ext else PurePosixPath(target_path).name
     return (
@@ -115,7 +119,9 @@ class NullListener:
     def on_integration_started(self, unit: IntegrationUnit) -> None:
         pass
 
-    def on_file_integrated(self, unit: IntegrationUnit, source: Path, target: Path) -> None:
+    def on_file_integrated(
+        self, unit: IntegrationUnit, source: Path, target: Path
+    ) -> None:
         pass
 
     def on_checkpoint_result(self, unit: IntegrationUnit, result: Any) -> None:
@@ -124,7 +130,9 @@ class NullListener:
     def on_integration_failed(self, unit: IntegrationUnit, error: str) -> None:
         pass
 
-    def on_integration_completed(self, unit: IntegrationUnit, files: List[Path]) -> None:
+    def on_integration_completed(
+        self, unit: IntegrationUnit, files: List[Path]
+    ) -> None:
         pass
 
 
@@ -186,9 +194,7 @@ class IntegrationEngine:
     # Phase 4: Manifest diff (IN-1 through IN-3)
     # ------------------------------------------------------------------
 
-    def _manifest_pre_merge_diff(
-        self, rel_path: str, staged_path: Path
-    ) -> None:
+    def _manifest_pre_merge_diff(self, rel_path: str, staged_path: Path) -> None:
         """Run manifest diff between existing and staged file (IN-1 through IN-3).
 
         Logs diff at INFO (IN-1). Emits WARNING on breaking changes (IN-2)
@@ -207,24 +213,30 @@ class IntegrationEngine:
         try:
             if self.manifest_registry.is_stale(rel_path):
                 logger.debug(
-                    "manifest.diff: skipping stale file %s", rel_path,
+                    "manifest.diff: skipping stale file %s",
+                    rel_path,
                 )
                 return
         except Exception as exc:
-            logger.debug("manifest.diff: staleness check failed for %s: %s", rel_path, exc)
+            logger.debug(
+                "manifest.diff: staleness check failed for %s: %s", rel_path, exc
+            )
 
         try:
             from startd8.utils.code_manifest import generate_file_manifest
+
             staged = generate_file_manifest(staged_path, self.project_root)
         except Exception as exc:
             logger.debug(
                 "manifest.diff: failed to parse staged file %s: %s",
-                rel_path, exc,
+                rel_path,
+                exc,
             )
             return
 
         try:
             from startd8.utils.manifest_registry import ManifestDiff
+
             diff = ManifestDiff.diff(existing, staged)
 
             logger.info(
@@ -264,11 +276,13 @@ class IntegrationEngine:
                     GateEmitter.emit(gate)
                 except Exception as exc:
                     logger.debug(
-                        "manifest.diff: GateEmitter failed: %s", exc,
+                        "manifest.diff: GateEmitter failed: %s",
+                        exc,
                     )
 
             # IN-3: Element retention check
             from startd8.utils.manifest_registry import _count_all_elements
+
             old_count = _count_all_elements(existing.elements)
             if old_count > 0:
                 new_count = old_count + diff.element_count_delta
@@ -278,7 +292,9 @@ class IntegrationEngine:
                         "manifest.diff: element regression in %s — "
                         "ratio %.2f < threshold %.2f "
                         "(note: file splits/refactors may produce per-file false positives)",
-                        rel_path, ratio, self.element_retention_threshold,
+                        rel_path,
+                        ratio,
+                        self.element_retention_threshold,
                     )
 
             # CG-IN-1: Escalate breaking changes based on caller count
@@ -289,7 +305,8 @@ class IntegrationEngine:
                         logger.error(
                             "manifest.diff: removed public element %s has %d callers — "
                             "downstream breakage likely",
-                            fqn, len(callers),
+                            fqn,
+                            len(callers),
                         )
                     else:
                         logger.info(
@@ -302,7 +319,10 @@ class IntegrationEngine:
                         logger.error(
                             "manifest.diff: changed signature of %s has %d callers — "
                             "downstream breakage likely (old=%s, new=%s)",
-                            fqn, len(callers), old_sig, new_sig,
+                            fqn,
+                            len(callers),
+                            old_sig,
+                            new_sig,
                         )
                     else:
                         logger.info(
@@ -314,12 +334,16 @@ class IntegrationEngine:
 
             # CG-IN-2: Call edge diff
             try:
-                removed_edges, added_edges = ManifestDiff.call_edge_diff(existing, staged)
+                removed_edges, added_edges = ManifestDiff.call_edge_diff(
+                    existing, staged
+                )
                 if removed_edges or added_edges:
                     logger.debug(
                         "manifest.diff: call edge changes in %s — "
                         "%d removed, %d added",
-                        rel_path, len(removed_edges), len(added_edges),
+                        rel_path,
+                        len(removed_edges),
+                        len(added_edges),
                     )
             except Exception as exc:
                 logger.debug("manifest.diff: CG-IN-2 edge diff failed: %s", exc)
@@ -338,7 +362,8 @@ class IntegrationEngine:
                         logger.info(
                             "manifest.diff: modified file %s has callers in %d files — "
                             "consider re-testing: %s",
-                            rel_path, len(affected_files),
+                            rel_path,
+                            len(affected_files),
                             ", ".join(sorted(affected_files)[:5]),
                         )
             except Exception as exc:
@@ -353,13 +378,18 @@ class IntegrationEngine:
                         logger.error(
                             "INTEGRATE IN-1: Resolved type change for %s: %r → %r "
                             "(%d callers — type change may break callers)",
-                            fqn, old_rs, new_rs, len(callers),
+                            fqn,
+                            old_rs,
+                            new_rs,
+                            len(callers),
                         )
                     else:
                         logger.warning(
                             "INTEGRATE IN-1: Resolved type change for %s: %r → %r "
                             "(no known callers)",
-                            fqn, old_rs, new_rs,
+                            fqn,
+                            old_rs,
+                            new_rs,
                         )
             except Exception as exc:
                 logger.debug("manifest.diff: IN-1 resolved type check failed: %s", exc)
@@ -388,7 +418,11 @@ class IntegrationEngine:
                         )
                         GateEmitter.emit(gate)
                     except Exception as exc:  # E2: GateEmitter is advisory, never block
-                        logger.debug("manifest.diff: IN-2 GateEmitter failed for %s: %s", fqn, exc)
+                        logger.debug(
+                            "manifest.diff: IN-2 GateEmitter failed for %s: %s",
+                            fqn,
+                            exc,
+                        )
             except Exception as exc:
                 logger.debug("manifest.diff: IN-2 MRO change check failed: %s", exc)
 
@@ -399,13 +433,15 @@ class IntegrationEngine:
                     if added_exports:
                         logger.info(
                             "INTEGRATE IN-3: New exports in __all__ for %s: %s",
-                            rel_path, added_exports,
+                            rel_path,
+                            added_exports,
                         )
                     if removed_exports:
                         logger.info(
                             "INTEGRATE IN-3: Removed exports from __all__ for %s: %s "
                             "(may break 'from %s import *' consumers)",
-                            rel_path, removed_exports,
+                            rel_path,
+                            removed_exports,
                             rel_path.replace("/", ".").removesuffix(".py"),
                         )
             except Exception as exc:
@@ -413,7 +449,9 @@ class IntegrationEngine:
 
         except Exception as exc:
             logger.debug(
-                "manifest.diff: diff failed for %s: %s", rel_path, exc,
+                "manifest.diff: diff failed for %s: %s",
+                rel_path,
+                exc,
             )
 
     def _manifest_post_merge_refresh(
@@ -473,7 +511,9 @@ class IntegrationEngine:
     # Path derivation (PCA-607)
     # ------------------------------------------------------------------
 
-    def _derive_target_from_source(self, source_path: Path, unit: IntegrationUnit) -> Path:
+    def _derive_target_from_source(
+        self, source_path: Path, unit: IntegrationUnit
+    ) -> Path:
         """Derive a project-relative target path from a staging source path.
 
         Strips known staging directory prefixes (e.g. ``.startd8/staging/``,
@@ -496,7 +536,9 @@ class IntegrationEngine:
                     logger.warning(
                         "sanitize_path rejected derived relative path '%s' "
                         "from %s: %s — falling back to filename",
-                        relative, source_path, exc,
+                        relative,
+                        source_path,
+                        exc,
                         extra={"unit_id": unit.id},
                     )
                     return self.project_root / source_path.name
@@ -510,7 +552,8 @@ class IntegrationEngine:
                     matched = sanitize_path(tf, base_dir=self.project_root)
                     logger.info(
                         "Derived target for %s from matching target_file entry: %s",
-                        source_path, matched,
+                        source_path,
+                        matched,
                         extra={"unit_id": unit.id},
                     )
                     return matched
@@ -618,9 +661,7 @@ class IntegrationEngine:
             return
 
         integrated_set = {str(f) for f in integrated_files}
-        skipped_set = {
-            entry.get("path", "") for entry in skipped_files
-        }
+        skipped_set = {entry.get("path", "") for entry in skipped_files}
 
         for tf in unit.target_files:
             try:
@@ -648,7 +689,8 @@ class IntegrationEngine:
                 except Exception as exc:
                     logger.debug(
                         "Element provenance recording failed for %s: %s",
-                        entry.element_id, exc,
+                        entry.element_id,
+                        exc,
                     )
 
     # ------------------------------------------------------------------
@@ -659,13 +701,17 @@ class IntegrationEngine:
         """Check if a specific file has uncommitted changes."""
         result_staged = subprocess.run(
             ["git", "diff", "--cached", "--name-only", str(path)],
-            capture_output=True, text=True,
-            cwd=self.project_root, timeout=300,
+            capture_output=True,
+            text=True,
+            cwd=self.project_root,
+            timeout=300,
         )
         result_unstaged = subprocess.run(
             ["git", "diff", "--name-only", str(path)],
-            capture_output=True, text=True,
-            cwd=self.project_root, timeout=300,
+            capture_output=True,
+            text=True,
+            cwd=self.project_root,
+            timeout=300,
         )
         return bool(result_staged.stdout.strip() or result_unstaged.stdout.strip())
 
@@ -701,11 +747,13 @@ class IntegrationEngine:
         # id and name are properties on the protocol, not context keys
         if not unit.generated_files:
             logger.warning(
-                "IntegrationUnit '%s' has no generated_files", unit.name,
+                "IntegrationUnit '%s' has no generated_files",
+                unit.name,
             )
         if not unit.target_files:
             logger.warning(
-                "IntegrationUnit '%s' has no target_files", unit.name,
+                "IntegrationUnit '%s' has no target_files",
+                unit.name,
             )
 
     # ------------------------------------------------------------------
@@ -835,28 +883,27 @@ class IntegrationEngine:
             # Run checks individually for proper diagnostic routing
             syntax_result = self.checkpoint.check_syntax(gen_paths)
             lint_result = self.checkpoint.check_lint(
-                gen_paths, ignore_codes=["F401"],
+                gen_paths,
+                ignore_codes=["F401"],
             )
 
             failed_results = [
-                r for r in (syntax_result, lint_result)
+                r
+                for r in (syntax_result, lint_result)
                 if r.status == CheckpointStatus.FAILED
             ]
             if not failed_results:
                 return None
 
-            categories = {
-                classify_checkpoint_category(r) for r in failed_results
-            }
-            repairable = categories & set(
-                self._repair_config.repairable_categories
-            )
+            categories = {classify_checkpoint_category(r) for r in failed_results}
+            repairable = categories & set(self._repair_config.repairable_categories)
             if not repairable:
                 return None
 
             logger.info(
                 "Pre-merge repair: attempting %s for %s",
-                sorted(repairable), unit.name,
+                sorted(repairable),
+                unit.name,
                 extra={"unit_id": unit.id},
             )
 
@@ -884,10 +931,16 @@ class IntegrationEngine:
                 # Gap-A: Update element registry for repaired files
                 if self._element_registry is not None:
                     for fpath in outcome.repaired_files:
-                        rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                        rel = (
+                            str(fpath.relative_to(self.project_root))
+                            if fpath.is_absolute()
+                            else str(fpath)
+                        )
                         for entry in self._element_registry.elements_for_file(rel):
                             self._element_registry.set_phase_status(
-                                entry.element_id, "integrate", "repaired",
+                                entry.element_id,
+                                "integrate",
+                                "repaired",
                                 metadata={"repair_stage": "pre_merge"},
                             )
 
@@ -895,7 +948,8 @@ class IntegrationEngine:
                 new_result = self.checkpoint.pre_validate(gen_paths)
                 logger.info(
                     "Pre-merge repair result for %s: %s",
-                    unit.name, new_result.status.value,
+                    unit.name,
+                    new_result.status.value,
                     extra={"unit_id": unit.id},
                 )
                 return new_result
@@ -903,7 +957,8 @@ class IntegrationEngine:
         except Exception as exc:
             logger.warning(
                 "Pre-merge repair failed for %s: %s",
-                unit.name, exc,
+                unit.name,
+                exc,
                 extra={"unit_id": unit.id},
             )
 
@@ -934,6 +989,37 @@ class IntegrationEngine:
         for iv in scan_unresolvable_imports(sources, str(self.project_root)):
             if iv.kind == "unresolvable_import":
                 out.add(("import", iv.specifier))
+        return out
+
+    def _warn_external_dependencies(self, gen_paths: List[Path]) -> List[str]:
+        """Advisory: flag bare imports of packages absent from ``package.json``.
+
+        Surfaces the RUN-014/015/016 *invented external dependency* class (``ai``, ``swr``,
+        ``pino``, …) **during** integration instead of only in the postmortem. Advisory by
+        design (the chosen wiring): it logs warnings and returns them for the result
+        metadata, and **never blocks** — a missing dependency is not name-repairable (it
+        routes to regen/install, not a rewrite). Reuses ``scan_missing_dependencies`` (it
+        already reads ``package.json`` and skips node builtins / ``node:`` specifiers); a
+        project without a ``package.json`` yields no findings (cannot verify).
+        """
+        ts_paths = [p for p in gen_paths if p.suffix in (".ts", ".tsx") and p.exists()]
+        if not ts_paths:
+            return []
+        try:
+            from ..validators.cross_file_imports import scan_missing_dependencies
+
+            sources = {
+                self._rel_to_root(p): p.read_text(encoding="utf-8") for p in ts_paths
+            }
+            violations = scan_missing_dependencies(sources, str(self.project_root))
+        except Exception as exc:  # advisory — never break integration
+            logger.debug("missing-dependency advisory scan failed: %s", exc)
+            return []
+        out: List[str] = []
+        for v in violations:
+            msg = f"{v.source_file}: {v.detail}"
+            logger.warning("Missing dependency (advisory): %s", msg)
+            out.append(msg)
         return out
 
     def _attempt_content_name_repair(
@@ -982,7 +1068,9 @@ class IntegrationEngine:
             from ..validators.prisma_usage import scan_prisma_usage
 
             # Read current (post syntax/lint repair) disk content (R2-S2).
-            preimages: Dict[Path, str] = {p: p.read_text(encoding="utf-8") for p in ts_paths}
+            preimages: Dict[Path, str] = {
+                p: p.read_text(encoding="utf-8") for p in ts_paths
+            }
             sources = {self._rel_to_root(p): preimages[p] for p in ts_paths}
 
             diagnostics = scan_results_to_diagnostics(
@@ -993,7 +1081,10 @@ class IntegrationEngine:
                 return None
 
             outcome = run_file_repair(
-                dict(preimages), diagnostics, self._repair_config, self.project_root,
+                dict(preimages),
+                diagnostics,
+                self._repair_config,
+                self.project_root,
             )
 
             kept: List[Path] = []
@@ -1015,11 +1106,14 @@ class IntegrationEngine:
                     for fpath in kept:
                         rel = (
                             str(fpath.relative_to(self.project_root))
-                            if fpath.is_absolute() else str(fpath)
+                            if fpath.is_absolute()
+                            else str(fpath)
                         )
                         for entry in self._element_registry.elements_for_file(rel):
                             self._element_registry.set_phase_status(
-                                entry.element_id, "integrate", "repaired",
+                                entry.element_id,
+                                "integrate",
+                                "repaired",
                                 metadata={"repair_stage": "pre_merge_content"},
                             )
 
@@ -1031,7 +1125,9 @@ class IntegrationEngine:
             for v in scan_prisma_usage(residual_sources, str(self.project_root)):
                 if v.kind == "prisma_unknown_field":
                     residual.append(v.detail)
-            for iv in scan_unresolvable_imports(residual_sources, str(self.project_root)):
+            for iv in scan_unresolvable_imports(
+                residual_sources, str(self.project_root)
+            ):
                 if iv.kind == "unresolvable_import":
                     residual.append(iv.detail)
 
@@ -1040,7 +1136,9 @@ class IntegrationEngine:
                 # feature routes to LLM-retry rather than merging the invention.
                 logger.info(
                     "Content name repair left %d residual violation(s) for %s — FAILED",
-                    len(residual), unit.name, extra={"unit_id": unit.id},
+                    len(residual),
+                    unit.name,
+                    extra={"unit_id": unit.id},
                 )
                 return CheckpointResult(
                     status=CheckpointStatus.FAILED,
@@ -1052,7 +1150,9 @@ class IntegrationEngine:
             if outcome.any_modified and kept:
                 logger.info(
                     "Content name repair cleaned %d file(s) for %s",
-                    len(kept), unit.name, extra={"unit_id": unit.id},
+                    len(kept),
+                    unit.name,
+                    extra={"unit_id": unit.id},
                 )
                 return self.checkpoint.pre_validate(gen_paths)
             return None
@@ -1060,7 +1160,8 @@ class IntegrationEngine:
         except Exception as exc:
             logger.warning(
                 "Content name repair failed for %s: %s",
-                unit.name, exc,
+                unit.name,
+                exc,
                 extra={"unit_id": unit.id},
             )
             return None
@@ -1107,16 +1208,9 @@ class IntegrationEngine:
             )
             return results, False
 
-        failed_checks = [
-            r for r in results
-            if r.status == CheckpointStatus.FAILED
-        ]
-        categories = {
-            classify_checkpoint_category(r) for r in failed_checks
-        }
-        repairable = categories & set(
-            self._repair_config.repairable_categories
-        )
+        failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
+        categories = {classify_checkpoint_category(r) for r in failed_checks}
+        repairable = categories & set(self._repair_config.repairable_categories)
 
         if not (repairable and failed_checks):
             return results, False
@@ -1126,7 +1220,10 @@ class IntegrationEngine:
             diagnostics = parse_checkpoint_diagnostics(failed_checks)
             files_to_repair: Dict[Path, str] = {}
             for ifile in integrated_files:
-                if ifile.suffix in (".py", ".java", ".go", ".cs", ".js") and ifile.exists():
+                if (
+                    ifile.suffix in (".py", ".java", ".go", ".cs", ".js")
+                    and ifile.exists()
+                ):
                     files_to_repair[ifile] = ifile.read_text(
                         encoding="utf-8",
                     )
@@ -1138,6 +1235,7 @@ class IntegrationEngine:
                     CONFIDENCE_TRUNCATION_BLOCKED,
                     detect_truncation,
                 )
+
                 for fpath in list(files_to_repair):
                     tr = detect_truncation(files_to_repair[fpath])
                     if tr.confidence >= CONFIDENCE_TRUNCATION_BLOCKED:
@@ -1169,10 +1267,9 @@ class IntegrationEngine:
                     if outcome.any_modified:
                         staged.write_repaired(outcome.repaired_files)
                         # R2-S2: Engine drives re-checkpoint
-                        recheckpoint_results = (
-                            self.checkpoint.run_all_checkpoints(
-                                staged.paths, unit.name,
-                            )
+                        recheckpoint_results = self.checkpoint.run_all_checkpoints(
+                            staged.paths,
+                            unit.name,
                         )
                         if self.checkpoint.summarize_results(
                             recheckpoint_results,
@@ -1185,39 +1282,52 @@ class IntegrationEngine:
                             # Gap-A: Update element registry for post-merge repaired files
                             if self._element_registry is not None:
                                 for fpath in outcome.repaired_files:
-                                    rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
-                                    for entry in self._element_registry.elements_for_file(rel):
+                                    rel = (
+                                        str(fpath.relative_to(self.project_root))
+                                        if fpath.is_absolute()
+                                        else str(fpath)
+                                    )
+                                    for (
+                                        entry
+                                    ) in self._element_registry.elements_for_file(rel):
                                         self._element_registry.set_phase_status(
-                                            entry.element_id, "integrate", "repaired",
+                                            entry.element_id,
+                                            "integrate",
+                                            "repaired",
                                             metadata={"repair_stage": "post_merge"},
                                         )
 
                 # R3-S2: Cost measurement
-                repair_duration_ms = (
-                    (time.monotonic() - repair_start) * 1000
+                repair_duration_ms = (time.monotonic() - repair_start) * 1000
+                result_obj_metadata.update(
+                    {
+                        "repair_attempted": True,
+                        "repair_success": repair_success,
+                        "repair_duration_ms": repair_duration_ms,
+                        "repair_steps": outcome.steps_applied,
+                        "repair_files_modified": [
+                            str(p) for p in outcome.repaired_files
+                        ],
+                    }
                 )
-                result_obj_metadata.update({
-                    "repair_attempted": True,
-                    "repair_success": repair_success,
-                    "repair_duration_ms": repair_duration_ms,
-                    "repair_steps": outcome.steps_applied,
-                    "repair_files_modified": [
-                        str(p) for p in outcome.repaired_files
-                    ],
-                })
                 # REQ-RFL-105: Condensed repair summary for review adapter
                 result_obj_metadata.setdefault(
-                    "repair_summaries", [],
-                ).append({
-                    "phase": "post_merge",
-                    "total_repairs": len(outcome.repaired_files) if outcome.repaired_files else 0,
-                    "steps_applied": list(outcome.steps_applied) if outcome.steps_applied else [],
-                    "any_modified": bool(outcome.any_modified),
-                })
+                    "repair_summaries",
+                    [],
+                ).append(
+                    {
+                        "phase": "post_merge",
+                        "total_repairs": (
+                            len(outcome.repaired_files) if outcome.repaired_files else 0
+                        ),
+                        "steps_applied": (
+                            list(outcome.steps_applied) if outcome.steps_applied else []
+                        ),
+                        "any_modified": bool(outcome.any_modified),
+                    }
+                )
                 if truncation_skipped:
-                    result_obj_metadata["truncation_skipped"] = (
-                        truncation_skipped
-                    )
+                    result_obj_metadata["truncation_skipped"] = truncation_skipped
 
                 # REQ-RPL-501: Cost avoidance tracking
                 if repair_success:
@@ -1226,16 +1336,19 @@ class IntegrationEngine:
                         "estimated_regen_cost_usd",
                         0.75,  # static estimate; midpoint of $0.50-$1.00 regen range
                     )
-                    result_obj_metadata[
-                        "repair_cost_avoided_usd"
-                    ] = estimated_regen_cost
+                    result_obj_metadata["repair_cost_avoided_usd"] = (
+                        estimated_regen_cost
+                    )
 
                     # REQ-RPL-401/501: OTel cost avoidance counter
                     try:
                         from ..repair import record_cost_avoided
+
                         record_cost_avoided(estimated_regen_cost)
                     except ImportError:
-                        logger.debug("repair.record_cost_avoided not available — skipping OTel cost counter")
+                        logger.debug(
+                            "repair.record_cost_avoided not available — skipping OTel cost counter"
+                        )
 
                     # REQ-RPL-303: Handoff attribution (P2)
                     result_obj_metadata["repairs"] = [
@@ -1250,11 +1363,8 @@ class IntegrationEngine:
                                 )
                                 if r.modified
                             ],
-                            "lines_modified": len(
-                                content.splitlines()
-                            ) - len(
-                                files_to_repair.get(fpath, "").splitlines()
-                            ),
+                            "lines_modified": len(content.splitlines())
+                            - len(files_to_repair.get(fpath, "").splitlines()),
                         }
                         for fpath, content in outcome.repaired_files.items()
                         for fr in outcome.file_results
@@ -1264,40 +1374,48 @@ class IntegrationEngine:
                 # R3-S5: EventBus emission
                 try:
                     from ..events import Event, EventBus, EventType
-                    EventBus.emit(Event(
-                        type=EventType.PIPELINE_STEP_COMPLETE,
-                        source="repair",
-                        data={
-                            "success": repair_success,
-                            "duration_ms": repair_duration_ms,
-                            "files_repaired": len(outcome.repaired_files),
-                            "steps": outcome.steps_applied,
-                        },
-                    ))
+
+                    EventBus.emit(
+                        Event(
+                            type=EventType.PIPELINE_STEP_COMPLETE,
+                            source="repair",
+                            data={
+                                "success": repair_success,
+                                "duration_ms": repair_duration_ms,
+                                "files_repaired": len(outcome.repaired_files),
+                                "steps": outcome.steps_applied,
+                            },
+                        )
+                    )
                 except (ImportError, AttributeError, TypeError) as ebus_exc:
                     logger.debug(
-                        "EventBus repair emission skipped: %s", ebus_exc,
+                        "EventBus repair emission skipped: %s",
+                        ebus_exc,
                     )
 
                 # REQ-RPL-501: Cost avoidance event emission
                 if repair_success:
                     try:
                         from ..events import Event, EventBus, EventType
-                        EventBus.emit(Event(
-                            type=EventType.PIPELINE_STEP_COMPLETE,
-                            source="repair.cost_avoided",
-                            data={
-                                "cost_avoided_usd": estimated_regen_cost,
-                                "feature_name": unit.name,
-                            },
-                        ))
+
+                        EventBus.emit(
+                            Event(
+                                type=EventType.PIPELINE_STEP_COMPLETE,
+                                source="repair.cost_avoided",
+                                data={
+                                    "cost_avoided_usd": estimated_regen_cost,
+                                    "feature_name": unit.name,
+                                },
+                            )
+                        )
                     except (ImportError, AttributeError, TypeError):
                         pass  # advisory
 
         except Exception as exc:
             # R2-S5 + R3-S7: Defensive guard
             logger.error(
-                "Repair pipeline failed: %s", exc,
+                "Repair pipeline failed: %s",
+                exc,
                 exc_info=True,
                 extra={"unit_id": unit.id},
             )
@@ -1308,6 +1426,7 @@ class IntegrationEngine:
             # R3-S6: Persist to TaskErrorStore
             try:
                 from ..storage.error_store import TaskErrorStore
+
                 TaskErrorStore(
                     project_root=self.project_root,
                 ).record_error(
@@ -1353,12 +1472,17 @@ class IntegrationEngine:
                 "Install startd8[security] to enable SQL injection, credential "
                 "leakage, and resource lifecycle checks.",
             )
-            result_metadata["anzen_gate"] = [{"status": "skipped", "reason": "query_prime not available"}]
+            result_metadata["anzen_gate"] = [
+                {"status": "skipped", "reason": "query_prime not available"}
+            ]
             # Write gate-skipped sentinel so consumers distinguish
             # "all clean" from "never ran" (REQ-KSP-499 gap analysis)
             try:
-                from startd8.security_prime.gate_metrics import write_gate_metrics_report
+                from startd8.security_prime.gate_metrics import (
+                    write_gate_metrics_report,
+                )
                 import datetime as _dt
+
                 skipped_report = {
                     "schema_version": "1.0.0",
                     "status": "skipped",
@@ -1383,6 +1507,7 @@ class IntegrationEngine:
         allowlist = []
         try:
             from startd8.security_prime.allowlist import load_allowlist, is_allowlisted
+
             project_root = str(self.project_root) if self.project_root else "."
             allowlist = load_allowlist(project_root)
         except ImportError:
@@ -1419,6 +1544,7 @@ class IntegrationEngine:
                     if db_str:
                         try:
                             from startd8.query_prime.models import DatabaseType as _DBT
+
                             db_type = _DBT(db_str)
                         except (ValueError, KeyError):
                             # Intentional: "unknown" is a valid str fallback;
@@ -1432,8 +1558,12 @@ class IntegrationEngine:
 
             # Resolve language from file extension
             _ext_to_lang = {
-                ".cs": "csharp", ".py": "python", ".go": "go",
-                ".java": "java", ".js": "nodejs", ".ts": "nodejs",
+                ".cs": "csharp",
+                ".py": "python",
+                ".go": "go",
+                ".java": "java",
+                ".js": "nodejs",
+                ".ts": "nodejs",
             }
             language = _ext_to_lang.get(fpath.suffix, "")
             if not language:
@@ -1442,7 +1572,10 @@ class IntegrationEngine:
 
             t0 = _time.monotonic()
             sv_result = verify_file(
-                source, str(fpath), db_type, language,
+                source,
+                str(fpath),
+                db_type,
+                language,
             )
             verify_time_ms = (_time.monotonic() - t0) * 1000.0
 
@@ -1453,7 +1586,8 @@ class IntegrationEngine:
                 logger.warning(
                     "Anzen verification slow: %s took %.0fms (injection=%.0f, "
                     "credential=%.0f, lifecycle=%.0f) — pattern module may need optimization",
-                    fpath.name, det_total,
+                    fpath.name,
+                    det_total,
                     step_timing.get("injection_ms", 0),
                     step_timing.get("credential_ms", 0),
                     step_timing.get("lifecycle_ms", 0),
@@ -1463,7 +1597,9 @@ class IntegrationEngine:
             for finding_item in sv_result.findings:
                 checks_that_ran.add(finding_item.check_type.value)
                 ct_val = finding_item.check_type.value
-                findings_by_check_type[ct_val] = findings_by_check_type.get(ct_val, 0) + 1
+                findings_by_check_type[ct_val] = (
+                    findings_by_check_type.get(ct_val, 0) + 1
+                )
 
             # Allowlist suppression: filter out operator-declared false positives
             was_allowlisted = False
@@ -1471,20 +1607,28 @@ class IntegrationEngine:
                 unsuppressed = []
                 for finding in sv_result.findings:
                     justification = is_allowlisted(
-                        str(fpath), finding.check_type.value, allowlist,
+                        str(fpath),
+                        finding.check_type.value,
+                        allowlist,
                     )
                     if justification:
                         logger.info(
                             "Anzen allowlist: suppressed %s in %s (%s)",
-                            finding.check_type.value, fpath.name, justification,
+                            finding.check_type.value,
+                            fpath.name,
+                            justification,
                         )
                         was_allowlisted = True
                         # Track allowlist hit for audit
                         for al_entry in allowlist:
-                            if (al_entry["check_id"] == finding.check_type.value
-                                    and _fnmatch.fnmatch(str(fpath), al_entry["file_pattern"])):
+                            if al_entry[
+                                "check_id"
+                            ] == finding.check_type.value and _fnmatch.fnmatch(
+                                str(fpath), al_entry["file_pattern"]
+                            ):
                                 allowlist_hit_tracker.setdefault(
-                                    al_entry["file_pattern"], [],
+                                    al_entry["file_pattern"],
+                                    [],
                                 ).append(str(fpath))
                                 break
                     else:
@@ -1492,7 +1636,11 @@ class IntegrationEngine:
                 # Recompute verdict with unsuppressed findings only
                 if len(unsuppressed) < len(sv_result.findings):
                     has_hard = any(
-                        f.check_type in (SecurityCheckType.INJECTION, SecurityCheckType.CREDENTIAL_LEAKAGE)
+                        f.check_type
+                        in (
+                            SecurityCheckType.INJECTION,
+                            SecurityCheckType.CREDENTIAL_LEAKAGE,
+                        )
                         and f.severity == "error"
                         for f in unsuppressed
                     )
@@ -1504,7 +1652,9 @@ class IntegrationEngine:
                         new_verdict = SecurityVerdict.PASS
                     # Replace result with filtered version
                     sv_result = _dc_replace(
-                        sv_result, findings=unsuppressed, verdict=new_verdict,
+                        sv_result,
+                        findings=unsuppressed,
+                        verdict=new_verdict,
                     )
 
             gate_results.append(sv_result)
@@ -1512,13 +1662,19 @@ class IntegrationEngine:
             # Compute per-file score
             try:
                 from startd8.security_prime.scorer import compute_security_score
+
                 score = compute_security_score(
                     sv_result.verdict.value,
-                    [f.severity for f in sv_result.findings] if sv_result.findings else None,
+                    (
+                        [f.severity for f in sv_result.findings]
+                        if sv_result.findings
+                        else None
+                    ),
                 )
             except ImportError:
                 score = {"pass": 1.0, "warn": 0.7, "fail": 0.0}.get(
-                    sv_result.verdict.value, 0.5,
+                    sv_result.verdict.value,
+                    0.5,
                 )
 
             # Build enriched entry for gate report
@@ -1529,37 +1685,48 @@ class IntegrationEngine:
                 _fct = f.check_type.value
                 finding_types[_fct] = finding_types.get(_fct, 0) + 1
                 finding_severities.append(f.severity)
-                structured_findings.append({
-                    "check_type": _fct,
-                    "severity": f.severity,
-                    "message": f.message,
-                    "line": f.line,
-                    "pattern_hash": getattr(f, "pattern_hash", ""),
-                })
+                structured_findings.append(
+                    {
+                        "check_type": _fct,
+                        "severity": f.severity,
+                        "message": f.message,
+                        "line": f.line,
+                        "pattern_hash": getattr(f, "pattern_hash", ""),
+                    }
+                )
 
             db_str = db_type.value if hasattr(db_type, "value") else str(db_type)
-            enriched_entries.append({
-                "file_path": str(fpath),
-                "verdict": sv_result.verdict.value,
-                "score": score,
-                "findings_count": len(sv_result.findings),
-                "finding_types": finding_types,
-                "finding_severities": finding_severities,
-                "findings": structured_findings,
-                "database": db_str,
-                "language": language,
-                "timing_ms": verify_time_ms,
-                "step_timing_ms": sv_result.verification_timing_ms or {},
-                "allowlisted": was_allowlisted,
-                "prompt_security_features": result_metadata.get("prompt_security_features"),
-            })
+            enriched_entries.append(
+                {
+                    "file_path": str(fpath),
+                    "verdict": sv_result.verdict.value,
+                    "score": score,
+                    "findings_count": len(sv_result.findings),
+                    "finding_types": finding_types,
+                    "finding_severities": finding_severities,
+                    "findings": structured_findings,
+                    "database": db_str,
+                    "language": language,
+                    "timing_ms": verify_time_ms,
+                    "step_timing_ms": sv_result.verification_timing_ms or {},
+                    "allowlisted": was_allowlisted,
+                    "prompt_security_features": result_metadata.get(
+                        "prompt_security_features"
+                    ),
+                }
+            )
 
             # OTel recording
             try:
                 from startd8.security_prime.otel import record_gate_result
+
                 record_gate_result(
-                    str(fpath), sv_result.verdict.value, score,
-                    db_str, language, len(sv_result.findings),
+                    str(fpath),
+                    sv_result.verdict.value,
+                    score,
+                    db_str,
+                    language,
+                    len(sv_result.findings),
                 )
             except ImportError:
                 pass
@@ -1568,7 +1735,11 @@ class IntegrationEngine:
                 logger.error(
                     "Anzen gate FAIL: %s — %s",
                     fpath.name,
-                    sv_result.findings[0].message if sv_result.findings else "security violation",
+                    (
+                        sv_result.findings[0].message
+                        if sv_result.findings
+                        else "security violation"
+                    ),
                     extra={"unit_id": unit.id},
                 )
             elif sv_result.verdict == SecurityVerdict.WARN:
@@ -1593,6 +1764,7 @@ class IntegrationEngine:
             # from the Kaizen feedback loop — see Issues #1-4 in security audit).
             try:
                 from startd8.forward_manifest_validator import validate_disk_compliance
+
                 for entry in enriched_entries:
                     if not entry.get("findings"):
                         continue
@@ -1635,8 +1807,7 @@ class IntegrationEngine:
                     for e in enriched_entries
                 )
                 violation_files = [
-                    e["file_path"] for e in enriched_entries
-                    if e["verdict"] == "fail"
+                    e["file_path"] for e in enriched_entries if e["verdict"] == "fail"
                 ]
                 output_dir = str(self.project_root) if self.project_root else "."
                 update_security_metrics(
@@ -1664,7 +1835,8 @@ class IntegrationEngine:
                 from startd8.security_prime.allowlist import build_allowlist_metrics
 
                 owasp_section = build_owasp_section(
-                    checks_that_ran, findings_by_check_type,
+                    checks_that_ran,
+                    findings_by_check_type,
                 )
                 score_dist = compute_score_distribution(
                     [e["score"] for e in enriched_entries],
@@ -1672,16 +1844,23 @@ class IntegrationEngine:
                 thresh_sens = compute_threshold_sensitivity(enriched_entries)
                 comp_contribs = compute_component_contributions(enriched_entries)
                 al_metrics = build_allowlist_metrics(
-                    allowlist, allowlist_hit_tracker,
+                    allowlist,
+                    allowlist_hit_tracker,
                 )
 
                 # Aggregate prompt security features for report
                 psf = result_metadata.get("prompt_security_features")
                 if psf:
-                    from startd8.security_prime.gate_metrics import compute_prompt_effectiveness
+                    from startd8.security_prime.gate_metrics import (
+                        compute_prompt_effectiveness,
+                    )
+
                     security_sensitive_count = sum(
-                        1 for e in enriched_entries
-                        if (e.get("prompt_security_features") or {}).get("security_sensitive")
+                        1
+                        for e in enriched_entries
+                        if (e.get("prompt_security_features") or {}).get(
+                            "security_sensitive"
+                        )
                     )
                     prompt_eff = compute_prompt_effectiveness(
                         enriched_entries,
@@ -1693,6 +1872,7 @@ class IntegrationEngine:
                     prompt_eff = None
 
                 import uuid as _uuid
+
                 run_id = result_metadata.get("run_id", str(_uuid.uuid4())[:8])
                 gate_report = build_gate_verdict_report(
                     enriched_entries,
@@ -1720,7 +1900,9 @@ class IntegrationEngine:
     # ------------------------------------------------------------------
 
     def finalize_anzen_metrics(
-        self, output_dir: str, run_id: str,
+        self,
+        output_dir: str,
+        run_id: str,
     ) -> Dict[str, Any]:
         """Aggregate accumulated Anzen gate entries and write final metrics.
 
@@ -1751,7 +1933,8 @@ class IntegrationEngine:
         for entry in entries:
             db = entry.get("database", "unknown")
             bucket = qp_by_db.setdefault(
-                db, {"count": 0, "mean_score": 0.0, "scores": []},
+                db,
+                {"count": 0, "mean_score": 0.0, "scores": []},
             )
             bucket["count"] += 1
             bucket["scores"].append(entry.get("score", 0.0))
@@ -1766,8 +1949,7 @@ class IntegrationEngine:
             e.get("finding_types", {}).get("injection", 0) for e in entries
         )
         credential_total = sum(
-            e.get("finding_types", {}).get("credential_leakage", 0)
-            for e in entries
+            e.get("finding_types", {}).get("credential_leakage", 0) for e in entries
         )
         lifecycle_total = sum(
             e.get("finding_types", {}).get("lifecycle", 0) for e in entries
@@ -1789,7 +1971,8 @@ class IntegrationEngine:
             "lifecycle_total": lifecycle_total,
             "parameterization_rate": (
                 round(max(0.0, 1.0 - injection_total / len(entries)), 4)
-                if entries else 0.0
+                if entries
+                else 0.0
             ),
             "false_positives_suppressed": 0,
             "by_database": qp_by_db,
@@ -1800,13 +1983,19 @@ class IntegrationEngine:
         logger.info(
             "Anzen gate finalized: %d files, %d injections, %d credentials, "
             "score=%.2f (%d databases)",
-            len(entries), injection_total, credential_total,
-            mean_score, len(qp_by_db),
+            len(entries),
+            injection_total,
+            credential_total,
+            mean_score,
+            len(qp_by_db),
         )
         return report
 
     def _write_query_security_files(
-        self, output_dir: str, run_id: str, report: Dict[str, Any],
+        self,
+        output_dir: str,
+        run_id: str,
+        report: Dict[str, Any],
     ) -> None:
         """Write query-security-metrics.json + update kaizen-metrics.json."""
         import datetime
@@ -1814,6 +2003,7 @@ class IntegrationEngine:
 
         try:
             from startd8.security_prime.kaizen import update_query_security_metrics
+
             update_query_security_metrics(output_dir, report)
         except (ImportError, OSError) as exc:
             logger.debug("Query security metrics update skipped: %s", exc)
@@ -1835,7 +2025,8 @@ class IntegrationEngine:
             logger.info("Wrote query-security-metrics.json to %s", qp_path)
         except OSError as exc:
             logger.debug(
-                "Advisory: query-security-metrics.json write failed: %s", exc,
+                "Advisory: query-security-metrics.json write failed: %s",
+                exc,
             )
 
     # ------------------------------------------------------------------
@@ -1881,12 +2072,14 @@ class IntegrationEngine:
                             extra={"unit_id": unit.id},
                         )
                     # REQ-RFL-100: Persist compliance data for files with issues
-                    if (not compliance.ast_valid
-                            or compliance.stubs_remaining > 0
-                            or compliance.duplicate_definitions > 0
-                            or compliance.import_completeness < 1.0
-                            or compliance.contract_compliance < 1.0
-                            or compliance.semantic_issues):
+                    if (
+                        not compliance.ast_valid
+                        or compliance.stubs_remaining > 0
+                        or compliance.duplicate_definitions > 0
+                        or compliance.import_completeness < 1.0
+                        or compliance.contract_compliance < 1.0
+                        or compliance.semantic_issues
+                    ):
                         try:
                             rel = str(fpath.relative_to(self.project_root))
                         except ValueError:
@@ -1898,22 +2091,27 @@ class IntegrationEngine:
                             "import_completeness": compliance.import_completeness,
                             "contract_compliance": compliance.contract_compliance,
                             "semantic_issues": [
-                                {"category": si.get("category", "unknown"),
-                                 "severity": si.get("severity", "warning"),
-                                 "message": str(si.get("message", ""))[:200]}
+                                {
+                                    "category": si.get("category", "unknown"),
+                                    "severity": si.get("severity", "warning"),
+                                    "message": str(si.get("message", ""))[:200],
+                                }
                                 for si in (compliance.semantic_issues or [])
                                 if isinstance(si, dict)
                             ],
                         }
                 except Exception as exc:
                     logger.debug(
-                        "Semantic check failed for %s: %s", fpath, exc,
+                        "Semantic check failed for %s: %s",
+                        fpath,
+                        exc,
                     )
             elif fpath.suffix in (".cs", ".csproj"):
                 try:
                     from startd8.validators.csharp_semantic_checks import (
                         run_csharp_semantic_checks,
                     )
+
                     source = fpath.read_text(encoding="utf-8")
                     issues = run_csharp_semantic_checks(source, file_path=str(fpath))
                     # Deduplicate: suppress sql_injection_risk findings for files
@@ -1943,10 +2141,12 @@ class IntegrationEngine:
                             "import_completeness": 1.0,
                             "contract_compliance": 1.0,
                             "semantic_issues": [
-                                {"category": si.check,
-                                 "severity": si.severity,
-                                 "message": str(si.message)[:200],
-                                 "line": getattr(si, "line", 0)}
+                                {
+                                    "category": si.check,
+                                    "severity": si.severity,
+                                    "message": str(si.message)[:200],
+                                    "line": getattr(si, "line", 0),
+                                }
                                 for si in issues
                             ],
                         }
@@ -1956,6 +2156,7 @@ class IntegrationEngine:
                             from startd8.languages.csharp_splicer import (
                                 check_using_coverage,
                             )
+
                             # Find the nearest .csproj for this .cs file
                             _csproj = None
                             for _p in fpath.parent.iterdir():
@@ -1969,7 +2170,8 @@ class IntegrationEngine:
                                         break
                             if _csproj is not None:
                                 _cov = check_using_coverage(
-                                    source, _csproj.read_text(encoding="utf-8"),
+                                    source,
+                                    _csproj.read_text(encoding="utf-8"),
                                 )
                                 for _ci in _cov:
                                     logger.warning(
@@ -1981,31 +2183,45 @@ class IntegrationEngine:
                             pass  # advisory — never block on using coverage
                 except Exception as exc:
                     logger.debug(
-                        "C# semantic check failed for %s: %s", fpath, exc,
+                        "C# semantic check failed for %s: %s",
+                        fpath,
+                        exc,
                     )
             elif fpath.suffix == ".java":
                 from startd8.validators.java_semantic_checks import (
                     run_java_semantic_checks,
                 )
+
                 self._collect_language_semantic_checks(
-                    fpath, unit, compliance_results,
-                    run_java_semantic_checks, "Java",
+                    fpath,
+                    unit,
+                    compliance_results,
+                    run_java_semantic_checks,
+                    "Java",
                 )
             elif fpath.suffix == ".go":
                 from startd8.validators.go_semantic_checks import (
                     run_go_semantic_checks,
                 )
+
                 self._collect_language_semantic_checks(
-                    fpath, unit, compliance_results,
-                    run_go_semantic_checks, "Go",
+                    fpath,
+                    unit,
+                    compliance_results,
+                    run_go_semantic_checks,
+                    "Go",
                 )
             elif fpath.suffix in (".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"):
                 from startd8.validators.nodejs_semantic_checks import (
                     run_nodejs_semantic_checks,
                 )
+
                 self._collect_language_semantic_checks(
-                    fpath, unit, compliance_results,
-                    run_nodejs_semantic_checks, "Node.js",
+                    fpath,
+                    unit,
+                    compliance_results,
+                    run_nodejs_semantic_checks,
+                    "Node.js",
                 )
 
         return compliance_results
@@ -2045,16 +2261,21 @@ class IntegrationEngine:
                     "import_completeness": 1.0,
                     "contract_compliance": 1.0,
                     "semantic_issues": [
-                        {"category": si.check, "severity": si.severity,
-                         "message": str(si.message)[:200],
-                         "line": getattr(si, "line", 0)}
+                        {
+                            "category": si.check,
+                            "severity": si.severity,
+                            "message": str(si.message)[:200],
+                            "line": getattr(si, "line", 0),
+                        }
                         for si in issues
                     ],
                 }
         except Exception as exc:
             logger.debug(
                 "%s semantic check failed for %s: %s",
-                language_label, fpath, exc,
+                language_label,
+                fpath,
+                exc,
             )
 
     def _attempt_semantic_repair(
@@ -2072,7 +2293,9 @@ class IntegrationEngine:
             Semantic repair result dict (for postmortem dual scoring), or None.
         """
         if self._repair_config is None or not getattr(
-            self._repair_config, "repair_enabled", False,
+            self._repair_config,
+            "repair_enabled",
+            False,
         ):
             return None
 
@@ -2083,20 +2306,27 @@ class IntegrationEngine:
         # which categories each language supports (e.g., Go: unchecked_error,
         # C#: sql_injection_risk).  Merge these into the config so the
         # orchestrator doesn't skip repair for languages with defaults.
-        existing_categories = getattr(repair_config, "semantic_repair_categories", frozenset()) or frozenset()
+        existing_categories = (
+            getattr(repair_config, "semantic_repair_categories", frozenset())
+            or frozenset()
+        )
         auto_categories = set(existing_categories)
         for f in integrated_files:
             ext = f.suffix.lower()
             try:
                 from startd8.languages.registry import LanguageRegistry
+
                 profile = LanguageRegistry.get_by_extension(ext)
                 if profile is not None:
-                    lang_defaults = repair_config.get_semantic_categories(profile.language_id)
+                    lang_defaults = repair_config.get_semantic_categories(
+                        profile.language_id
+                    )
                     auto_categories.update(lang_defaults)
             except (ImportError, AttributeError):
                 pass
         if auto_categories != existing_categories:
             from startd8.repair.config import RepairConfig
+
             repair_config = RepairConfig(
                 repair_enabled=repair_config.repair_enabled,
                 repairable_categories=repair_config.repairable_categories,
@@ -2117,7 +2347,9 @@ class IntegrationEngine:
 
         project_root = self.project_root or Path(".")
         result = run_semantic_repair(
-            integrated_files, repair_config, project_root,
+            integrated_files,
+            repair_config,
+            project_root,
         )
         if result.get("issues_repaired", 0) > 0:
             logger.info(
@@ -2165,7 +2397,11 @@ class IntegrationEngine:
                     continue
                 try:
                     fm = generate_file_manifest(fpath, self.project_root)
-                    rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                    rel = (
+                        str(fpath.relative_to(self.project_root))
+                        if fpath.is_absolute()
+                        else str(fpath)
+                    )
                     manifest_registry[rel] = fm
                 except Exception:
                     continue
@@ -2175,20 +2411,21 @@ class IntegrationEngine:
 
             # Validate against forward manifest
             violations = validate_forward_manifest(
-                self._forward_manifest, manifest_registry,
+                self._forward_manifest,
+                manifest_registry,
             )
 
             # Filter to ERROR severity only
             error_violations = [
-                v for v in violations
-                if getattr(v, "severity", "error") == "error"
+                v for v in violations if getattr(v, "severity", "error") == "error"
             ]
             if not error_violations:
                 return False
 
             logger.info(
                 "Found %d contract violation(s) for %s, attempting repair",
-                len(error_violations), unit.name,
+                len(error_violations),
+                unit.name,
                 extra={"unit_id": unit.id},
             )
 
@@ -2214,15 +2451,17 @@ class IntegrationEngine:
                     if len(parts) >= 3:
                         element_name = parts[-1]
 
-                diagnostics.append(ContractViolationDiagnostic(
-                    category="contract_violation",
-                    file=v.file_path if hasattr(v, "file_path") else "",
-                    message=f"{v.violation_type}: expected {v.expected}, got {v.actual}",
-                    violation_type=v.violation_type,
-                    expected=str(v.expected),
-                    actual=str(v.actual),
-                    element_name=element_name,
-                ))
+                diagnostics.append(
+                    ContractViolationDiagnostic(
+                        category="contract_violation",
+                        file=v.file_path if hasattr(v, "file_path") else "",
+                        message=f"{v.violation_type}: expected {v.expected}, got {v.actual}",
+                        violation_type=v.violation_type,
+                        expected=str(v.expected),
+                        actual=str(v.actual),
+                        element_name=element_name,
+                    )
+                )
 
             # Collect file contents for repair
             files_to_repair: dict = {}
@@ -2251,10 +2490,16 @@ class IntegrationEngine:
                 # Gap-C: Update element registry for contract-violation-repaired files
                 if self._element_registry is not None:
                     for fpath in outcome.repaired_files:
-                        rel = str(fpath.relative_to(self.project_root)) if fpath.is_absolute() else str(fpath)
+                        rel = (
+                            str(fpath.relative_to(self.project_root))
+                            if fpath.is_absolute()
+                            else str(fpath)
+                        )
                         for entry in self._element_registry.elements_for_file(rel):
                             self._element_registry.set_phase_status(
-                                entry.element_id, "integrate", "repaired",
+                                entry.element_id,
+                                "integrate",
+                                "repaired",
                                 metadata={"repair_stage": "contract_violation"},
                             )
 
@@ -2268,7 +2513,8 @@ class IntegrationEngine:
                     entry["repaired"] = True
                 logger.info(
                     "Contract violation repair applied to %d file(s) for %s",
-                    len(outcome.repaired_files), unit.name,
+                    len(outcome.repaired_files),
+                    unit.name,
                     extra={"unit_id": unit.id},
                 )
                 return True
@@ -2276,7 +2522,8 @@ class IntegrationEngine:
         except Exception as exc:
             logger.warning(
                 "Post-integrate contract validation failed for %s: %s",
-                unit.name, exc,
+                unit.name,
+                exc,
                 extra={"unit_id": unit.id},
             )
 
@@ -2334,21 +2581,27 @@ class IntegrationEngine:
         for file_path in files:
             subprocess.run(
                 ["git", "add", str(file_path)],
-                cwd=self.project_root, capture_output=True, timeout=300,
+                cwd=self.project_root,
+                capture_output=True,
+                timeout=300,
             )
         commit_msg = (
-            f"feat: Integrate {unit.name}\n\n"
-            "Integrated via IntegrationEngine"
+            f"feat: Integrate {unit.name}\n\n" "Integrated via IntegrationEngine"
         )
         result = subprocess.run(
             ["git", "commit", "-m", commit_msg],
-            cwd=self.project_root, capture_output=True, text=True, timeout=300,
+            cwd=self.project_root,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         if result.returncode == 0:
             logger.info("Committed: %s", unit.name)
         else:
             logger.warning(
-                "Commit failed for '%s': %s", unit.name, result.stderr.strip(),
+                "Commit failed for '%s': %s",
+                unit.name,
+                result.stderr.strip(),
             )
 
     # ------------------------------------------------------------------
@@ -2398,7 +2651,9 @@ class IntegrationEngine:
         # 1. Notify started
         listener.on_integration_started(unit)
         logger.info(
-            "INTEGRATING: %s (attempt %d)", unit.name, attempt,
+            "INTEGRATING: %s (attempt %d)",
+            unit.name,
+            attempt,
             extra={"unit_id": unit.id, "attempt": attempt},
         )
 
@@ -2409,7 +2664,8 @@ class IntegrationEngine:
                 if self._restore_target(tp):
                     logger.info(
                         "Retry %d: restored %s from snapshot",
-                        attempt, self._rel_display(tp),
+                        attempt,
+                        self._rel_display(tp),
                     )
 
         # 2.5. Post-generation cleanup (P2: goimports for Go, etc.)
@@ -2424,23 +2680,48 @@ class IntegrationEngine:
             if all_gen_paths:
                 try:
                     cleanup_warnings = self._language_profile.post_generation_cleanup(
-                        all_gen_paths, self.project_root,
+                        all_gen_paths,
+                        self.project_root,
                     )
                     for w in cleanup_warnings:
                         logger.warning("Post-gen cleanup: %s", w)
                         warnings.append(w)
                     # REQ-MSR-330: Persist language-specific warnings
                     if cleanup_warnings:
-                        _lang_id = getattr(self._language_profile, "language_id", "unknown")
+                        _lang_id = getattr(
+                            self._language_profile, "language_id", "unknown"
+                        )
                         result_obj_metadata.setdefault(
-                            "language_warnings", [],
-                        ).extend([
-                            {"language": _lang_id, "category": "post_gen_cleanup",
-                             "message": str(w)[:200]}
-                            for w in cleanup_warnings[:20]
-                        ])
+                            "language_warnings",
+                            [],
+                        ).extend(
+                            [
+                                {
+                                    "language": _lang_id,
+                                    "category": "post_gen_cleanup",
+                                    "message": str(w)[:200],
+                                }
+                                for w in cleanup_warnings[:20]
+                            ]
+                        )
                 except Exception as exc:
                     logger.warning("Post-gen cleanup failed: %s", exc)
+
+        # 2.6. Advisory: surface invented external dependencies (RUN-014/015/016) during the
+        # run, not just in the postmortem. Never blocks integration.
+        if not self.dry_run:
+            _dep_gen_paths = [
+                p
+                for p in (Path(f) for f in unit.generated_files)
+                if (p if p.is_absolute() else p.resolve()).exists()
+            ]
+            for w in self._warn_external_dependencies(
+                [p if p.is_absolute() else p.resolve() for p in _dep_gen_paths]
+            ):
+                warnings.append(w)
+                result_obj_metadata.setdefault(
+                    "missing_dependency_warnings", []
+                ).append(w[:200])
 
         # 3. Pre-validate generated source files
         if not self.dry_run and self.checkpoint is not None:
@@ -2459,30 +2740,37 @@ class IntegrationEngine:
                 # Emit GateResult
                 try:
                     gate = GateEmitter.from_checkpoint_result(
-                        pre_result, workflow_id=unit.id, trace_id=None,
+                        pre_result,
+                        workflow_id=unit.id,
+                        trace_id=None,
                     )
                     GateEmitter.emit(gate)
                 except Exception as gate_exc:
                     logger.warning(
-                        "Failed to emit pre-validate gate result: %s", gate_exc,
+                        "Failed to emit pre-validate gate result: %s",
+                        gate_exc,
                     )
                 if pre_result.status == CheckpointStatus.FAILED:
                     # Attempt pre-merge repair before giving up
                     repaired_result = self._attempt_pre_merge_repair(
-                        gen_paths, unit,
+                        gen_paths,
+                        unit,
                     )
                     if repaired_result is not None:
                         pre_result = repaired_result
                         # REQ-RFL-105: Record pre-merge repair in metadata
                         result_obj_metadata.setdefault(
-                            "repair_summaries", [],
-                        ).append({
-                            "phase": "pre_merge",
-                            "any_modified": True,
-                            "repair_succeeded": (
-                                pre_result.status != CheckpointStatus.FAILED
-                            ),
-                        })
+                            "repair_summaries",
+                            [],
+                        ).append(
+                            {
+                                "phase": "pre_merge",
+                                "any_modified": True,
+                                "repair_succeeded": (
+                                    pre_result.status != CheckpointStatus.FAILED
+                                ),
+                            }
+                        )
 
                 # Content-contract name repair (name-repair R3-S1) runs on PASS
                 # or FAIL: invented-but-valid names produce no syntax/lint failure,
@@ -2492,10 +2780,12 @@ class IntegrationEngine:
                 content_result = self._attempt_content_name_repair(gen_paths, unit)
                 if content_result is not None:
                     pre_result = content_result
-                    result_obj_metadata.setdefault("repair_summaries", []).append({
-                        "phase": "pre_merge_content",
-                        "status": pre_result.status.value,
-                    })
+                    result_obj_metadata.setdefault("repair_summaries", []).append(
+                        {
+                            "phase": "pre_merge_content",
+                            "status": pre_result.status.value,
+                        }
+                    )
 
                 if pre_result.status == CheckpointStatus.FAILED:
                     error_msg = pre_result.message
@@ -2503,7 +2793,8 @@ class IntegrationEngine:
                         error_msg += ": " + "; ".join(pre_result.errors[:5])
                     logger.error(
                         "Pre-merge validation failed for %s: %s",
-                        unit.name, error_msg,
+                        unit.name,
+                        error_msg,
                         extra={"unit_id": unit.id},
                     )
                     errors.append(error_msg)
@@ -2515,7 +2806,8 @@ class IntegrationEngine:
                         checkpoint_results=[pre_result],
                     )
                 logger.info(
-                    "Pre-merge validation passed for %s", unit.name,
+                    "Pre-merge validation passed for %s",
+                    unit.name,
                     extra={"unit_id": unit.id},
                 )
 
@@ -2530,12 +2822,14 @@ class IntegrationEngine:
             if i < len(unit.target_files):
                 try:
                     target_path = sanitize_path(
-                        unit.target_files[i], base_dir=self.project_root,
+                        unit.target_files[i],
+                        base_dir=self.project_root,
                     )
                 except Exception as e:
                     logger.error(
                         "Path validation failed for '%s': %s",
-                        unit.target_files[i], e,
+                        unit.target_files[i],
+                        e,
                         extra={"unit_id": unit.id},
                     )
                     continue
@@ -2544,7 +2838,8 @@ class IntegrationEngine:
                     target_path = self._derive_target_from_source(source_path, unit)
                 else:
                     logger.error(
-                        "Source file not found: %s", source_path,
+                        "Source file not found: %s",
+                        source_path,
                         extra={"unit_id": unit.id},
                     )
                     continue
@@ -2555,7 +2850,9 @@ class IntegrationEngine:
             if self.dry_run:
                 action = "update" if target_path.exists() else "create"
                 logger.info(
-                    "[DRY RUN] Would %s: %s", action, self._rel_display(target_path),
+                    "[DRY RUN] Would %s: %s",
+                    action,
+                    self._rel_display(target_path),
                     extra={"dry_run": True},
                 )
                 integrated_files.append(target_path)
@@ -2563,7 +2860,8 @@ class IntegrationEngine:
 
             if not source_path.exists():
                 logger.error(
-                    "Source file not found: %s", source_path,
+                    "Source file not found: %s",
+                    source_path,
                     extra={"unit_id": unit.id},
                 )
                 continue
@@ -2572,24 +2870,29 @@ class IntegrationEngine:
             try:
                 _source_text = source_path.read_text(encoding="utf-8")
                 _stub_error = _detect_python_stub_in_non_python(
-                    _source_text, str(target_path),
+                    _source_text,
+                    str(target_path),
                 )
                 if _stub_error is not None:
                     logger.warning(
                         "Python stub detected in non-Python target %s: %s",
-                        target_path, _stub_error,
+                        target_path,
+                        _stub_error,
                         extra={"unit_id": unit.id},
                     )
-                    skipped_files.append({
-                        "path": str(source_path),
-                        "reason": "python_stub_in_non_python",
-                        "detail": _stub_error,
-                    })
+                    skipped_files.append(
+                        {
+                            "path": str(source_path),
+                            "reason": "python_stub_in_non_python",
+                            "detail": _stub_error,
+                        }
+                    )
                     continue
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning(
                     "Cross-language guard read failed for %s: %s — proceeding",
-                    source_path.name, exc,
+                    source_path.name,
+                    exc,
                     extra={"unit_id": unit.id},
                 )
 
@@ -2607,7 +2910,9 @@ class IntegrationEngine:
                 source_content = source_path.read_text(encoding="utf-8")
                 expected = get_expected_sections_for_code(source_content)
                 trunc_result = detect_truncation(
-                    source_content, expected_sections=expected, strict_mode=False,
+                    source_content,
+                    expected_sections=expected,
+                    strict_mode=False,
                 )
                 if trunc_result.is_truncated:
                     log_truncation_result(
@@ -2623,7 +2928,9 @@ class IntegrationEngine:
                         reject_threshold = CONFIDENCE_IS_TRUNCATED  # 0.5
                     else:
                         reject_threshold = (
-                            CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
+                            CONFIDENCE_HIGH
+                            if code_mode_active
+                            else CONFIDENCE_HIGH_PROSE
                         )
                     if trunc_result.confidence >= reject_threshold:
                         logger.error(
@@ -2648,18 +2955,15 @@ class IntegrationEngine:
                             code_mode_active,
                             extra={"unit_id": unit.id},
                         )
-                        warnings.append(
-                            f"Possible truncation in {source_path.name}"
-                        )
+                        warnings.append(f"Possible truncation in {source_path.name}")
 
             # PCA-604: Path traversal protection — ensure target is within project root
             try:
                 canonical_target = target_path.resolve()
                 canonical_root = self.project_root.resolve()
-                if (
-                    canonical_target != canonical_root
-                    and not str(canonical_target).startswith(str(canonical_root) + os.sep)
-                ):
+                if canonical_target != canonical_root and not str(
+                    canonical_target
+                ).startswith(str(canonical_root) + os.sep):
                     msg = (
                         f"Path traversal blocked: {target_path} resolves to "
                         f"{canonical_target} outside project root {canonical_root}"
@@ -2679,14 +2983,18 @@ class IntegrationEngine:
                         continue
             except (OSError, ValueError) as exc:
                 logger.warning(
-                    "Path resolution failed for %s: %s", target_path, exc,
+                    "Path resolution failed for %s: %s",
+                    target_path,
+                    exc,
                     extra={"unit_id": unit.id},
                 )
 
             # AR-823: Import validation against module inventory
             _unit_ctx = unit.context if hasattr(unit, "context") else {}
             _module_inventory = (
-                _unit_ctx.get("module_inventory", []) if isinstance(_unit_ctx, dict) else []
+                _unit_ctx.get("module_inventory", [])
+                if isinstance(_unit_ctx, dict)
+                else []
             )
             if source_path.suffix == ".py" and _module_inventory:
                 unresolved = self._validate_imports(source_path, _module_inventory)
@@ -2697,11 +3005,13 @@ class IntegrationEngine:
                     )
                     logger.error(msg, extra={"unit_id": unit.id})
                     warnings.append(msg)
-                    skipped_files.append({
-                        "path": str(source_path),
-                        "reason": "unresolved_imports",
-                        "unresolved": unresolved,
-                    })
+                    skipped_files.append(
+                        {
+                            "path": str(source_path),
+                            "reason": "unresolved_imports",
+                            "unresolved": unresolved,
+                        }
+                    )
                     continue
 
             # PCA-604: Size regression guard — block overwrites that would lose significant code.
@@ -2718,7 +3028,11 @@ class IntegrationEngine:
                     _manifest_covers_target = _rel in _fm_specs
                 except (AttributeError, TypeError):
                     pass
-            if target_path.is_file() and source_path.exists() and not _manifest_covers_target:
+            if (
+                target_path.is_file()
+                and source_path.exists()
+                and not _manifest_covers_target
+            ):
                 try:
                     target_content = target_path.read_text(encoding="utf-8")
                     target_lines = len(target_content.splitlines())
@@ -2729,14 +3043,15 @@ class IntegrationEngine:
                     allow_override = ctx.get("allow_size_regression", False)
                     file_manifest = ctx.get("file_manifest", {})
                     file_override = file_manifest.get(
-                        str(source_path), {},
+                        str(source_path),
+                        {},
                     ).get("size_regression_override", False)
                     if not allow_override and file_override:
                         allow_override = True
                     override_source = (
-                        "cli_flag" if ctx.get("allow_size_regression")
-                        else "plan_annotation" if file_override
-                        else None
+                        "cli_flag"
+                        if ctx.get("allow_size_regression")
+                        else "plan_annotation" if file_override else None
                     )
 
                     # AR-818: Stricter threshold when truncation is also detected
@@ -2746,9 +3061,12 @@ class IntegrationEngine:
                         _task_trunc_conf = _tf.get("max_confidence", 0.0)
 
                     from ..truncation_detection import CONFIDENCE_IS_TRUNCATED as _CIT
+
                     effective_threshold = self._size_regression_threshold  # 0.60
                     if _task_trunc_conf >= _CIT:  # 0.5
-                        effective_threshold = 0.70  # AR-818: stricter when truncation detected
+                        effective_threshold = (
+                            0.70  # AR-818: stricter when truncation detected
+                        )
 
                     if (
                         target_lines > self._min_lines
@@ -2759,72 +3077,88 @@ class IntegrationEngine:
                             logger.warning(
                                 "Size regression override: %s (%d/%d lines, %.0f%% of original)"
                                 " — override source: %s",
-                                source_path.name, source_lines, target_lines,
-                                ratio * 100, override_source,
+                                source_path.name,
+                                source_lines,
+                                target_lines,
+                                ratio * 100,
+                                override_source,
                                 extra={"unit_id": unit.id},
                             )
                             result_obj_metadata.setdefault(
-                                "size_regression_overrides", [],
-                            ).append({
-                                "path": str(source_path),
-                                "source_lines": source_lines,
-                                "target_lines": target_lines,
-                                "ratio": ratio,
-                                "override_source": override_source,
-                            })
+                                "size_regression_overrides",
+                                [],
+                            ).append(
+                                {
+                                    "path": str(source_path),
+                                    "source_lines": source_lines,
+                                    "target_lines": target_lines,
+                                    "ratio": ratio,
+                                    "override_source": override_source,
+                                }
+                            )
                         else:
                             # REQ-RPL-301: Attempt merge-based repair for
                             # size regressions when repair is enabled.
                             _merge_repaired = False
-                            if (
-                                self._repair_config is not None
-                                and getattr(
-                                    self._repair_config,
-                                    "repair_enabled",
-                                    False,
-                                )
+                            if self._repair_config is not None and getattr(
+                                self._repair_config,
+                                "repair_enabled",
+                                False,
                             ):
                                 try:
                                     merged = self._merge_subset_into_target(
-                                        source_content_text, target_content,
+                                        source_content_text,
+                                        target_content,
                                     )
                                     if merged is not None:
                                         target_path.write_text(
-                                            merged, encoding="utf-8",
+                                            merged,
+                                            encoding="utf-8",
                                         )
                                         result_obj_metadata.setdefault(
-                                            "merge_repair_advisory", [],
-                                        ).append({
-                                            "file": str(target_path),
-                                            "action": "merged_subset",
-                                            "confidence": "LOW",
-                                            "requires_review": True,
-                                            "source_lines": source_lines,
-                                            "target_lines": target_lines,
-                                            "ratio": ratio,
-                                        })
+                                            "merge_repair_advisory",
+                                            [],
+                                        ).append(
+                                            {
+                                                "file": str(target_path),
+                                                "action": "merged_subset",
+                                                "confidence": "LOW",
+                                                "requires_review": True,
+                                                "source_lines": source_lines,
+                                                "target_lines": target_lines,
+                                                "ratio": ratio,
+                                            }
+                                        )
                                         logger.info(
                                             "Size regression merge repair: "
                                             "%s (%d/%d lines merged into "
                                             "target)",
                                             source_path.name,
-                                            source_lines, target_lines,
+                                            source_lines,
+                                            target_lines,
                                             extra={"unit_id": unit.id},
                                         )
                                         _merge_repaired = True
-                                except (OSError, UnicodeDecodeError, TypeError) as _merge_exc:
+                                except (
+                                    OSError,
+                                    UnicodeDecodeError,
+                                    TypeError,
+                                ) as _merge_exc:
                                     logger.warning(
                                         "Size regression merge repair "
                                         "failed for %s: %s — falling "
                                         "back to block",
-                                        source_path.name, _merge_exc,
+                                        source_path.name,
+                                        _merge_exc,
                                         extra={"unit_id": unit.id},
                                     )
 
                             if _merge_repaired:
                                 integrated_files.append(target_path)
                                 listener.on_file_integrated(
-                                    unit, source_path, target_path,
+                                    unit,
+                                    source_path,
+                                    target_path,
                                 )
                             else:
                                 msg = (
@@ -2836,18 +3170,21 @@ class IntegrationEngine:
                                 )
                                 logger.error(msg, extra={"unit_id": unit.id})
                                 warnings.append(msg)
-                                skipped_files.append({
-                                    "path": str(source_path),
-                                    "reason": "size_regression",
-                                    "source_lines": source_lines,
-                                    "target_lines": target_lines,
-                                    "ratio": ratio,
-                                })
+                                skipped_files.append(
+                                    {
+                                        "path": str(source_path),
+                                        "reason": "size_regression",
+                                        "source_lines": source_lines,
+                                        "target_lines": target_lines,
+                                        "ratio": ratio,
+                                    }
+                                )
                             continue
                 except (OSError, UnicodeDecodeError) as exc:
                     logger.warning(
                         "Size regression check failed for %s: %s — proceeding",
-                        source_path.name, exc,
+                        source_path.name,
+                        exc,
                         extra={"unit_id": unit.id},
                     )
 
@@ -2871,8 +3208,7 @@ class IntegrationEngine:
             _unit_ctx = unit.context if hasattr(unit, "context") else {}
             _edit_mode = _unit_ctx.get("_edit_mode")
             _skip_merge = (
-                isinstance(_edit_mode, dict)
-                and _edit_mode.get("mode") == "edit"
+                isinstance(_edit_mode, dict) and _edit_mode.get("mode") == "edit"
             )
             if _skip_merge:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2887,7 +3223,8 @@ class IntegrationEngine:
                 result = self.merge_strategy.merge(source_path, target_path)
                 if result.status.value == "success":
                     logger.info(
-                        "Merged: %s", self._rel_display(target_path),
+                        "Merged: %s",
+                        self._rel_display(target_path),
                         extra={"unit_id": unit.id},
                     )
                     integrated_files.append(target_path)
@@ -2900,23 +3237,28 @@ class IntegrationEngine:
                     )
                     # REQ-MSR-100: Persist merge conflict details
                     result_obj_metadata.setdefault(
-                        "merge_conflicts", [],
-                    ).append({
-                        "file": self._rel_display(target_path),
-                        "conflicts": result.conflicts[:5],
-                    })
+                        "merge_conflicts",
+                        [],
+                    ).append(
+                        {
+                            "file": self._rel_display(target_path),
+                            "conflicts": result.conflicts[:5],
+                        }
+                    )
                     integrated_files.append(target_path)
                 else:
                     logger.error(
                         "Merge failed for %s: %s",
-                        target_path.name, result.error,
+                        target_path.name,
+                        result.error,
                         extra={"unit_id": unit.id},
                     )
             else:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target_path)
                 logger.info(
-                    "Copied: %s", self._rel_display(target_path),
+                    "Copied: %s",
+                    self._rel_display(target_path),
                     extra={"unit_id": unit.id},
                 )
                 integrated_files.append(target_path)
@@ -2929,8 +3271,7 @@ class IntegrationEngine:
             errors.append(error_msg)
             listener.on_integration_failed(unit, error_msg)
             status = (
-                IntegrationStatus.BLOCKED if skipped_files
-                else IntegrationStatus.FAILED
+                IntegrationStatus.BLOCKED if skipped_files else IntegrationStatus.FAILED
             )
             return IntegrationResult(
                 success=False,
@@ -2946,8 +3287,11 @@ class IntegrationEngine:
             # P2: Run language-specific post-merge cleanup (goimports, etc.)
             if self._language_profile is not None:
                 try:
-                    post_merge_warnings = self._language_profile.post_generation_cleanup(
-                        integrated_files, self.project_root,
+                    post_merge_warnings = (
+                        self._language_profile.post_generation_cleanup(
+                            integrated_files,
+                            self.project_root,
+                        )
                     )
                     for w in post_merge_warnings:
                         warnings.append(w)
@@ -2966,30 +3310,46 @@ class IntegrationEngine:
                         try:
                             subprocess.run(
                                 [
-                                    "python3", "-m", "ruff", "check", "--fix",
-                                    "--unsafe-fixes", "--select=E7,E9,F", str(ifile),
+                                    "python3",
+                                    "-m",
+                                    "ruff",
+                                    "check",
+                                    "--fix",
+                                    "--unsafe-fixes",
+                                    "--select=E7,E9,F",
+                                    str(ifile),
                                 ],
-                                capture_output=True, text=True,
-                                cwd=self.project_root, timeout=30,
+                                capture_output=True,
+                                text=True,
+                                cwd=self.project_root,
+                                timeout=30,
                             )
                         except Exception:
                             pass  # best-effort
 
             logger.info(
-                "Running integration checkpoints for '%s'...", unit.name,
+                "Running integration checkpoints for '%s'...",
+                unit.name,
             )
             results = self.checkpoint.run_all_checkpoints(
-                integrated_files, unit.name,
+                integrated_files,
+                unit.name,
             )
 
             # ── Repair pipeline hook (REQ-RPL-200, R6-S1, R6-S2) ──
             results, repair_success = self._attempt_repair(
-                results, integrated_files, unit, attempt, result_obj_metadata,
+                results,
+                integrated_files,
+                unit,
+                attempt,
+                result_obj_metadata,
             )
 
             # ── Contract violation repair (Fix-2) ──
             self._attempt_contract_violation_repair(
-                integrated_files, unit, result_obj_metadata,
+                integrated_files,
+                unit,
+                result_obj_metadata,
             )
 
             # ── Semantic checks (Phase D — Kaizen Quality) ──
@@ -3002,7 +3362,8 @@ class IntegrationEngine:
                 # Re-capture compliance after repair to reflect final state
                 if sem_repair.get("issues_repaired", 0) > 0:
                     compliance_results = self._run_semantic_checks(
-                        integrated_files, unit,
+                        integrated_files,
+                        unit,
                     )
 
             # REQ-RFL-100: Persist disk compliance for downstream consumers
@@ -3015,6 +3376,7 @@ class IntegrationEngine:
                     from startd8.forward_manifest_validator import (
                         compute_disk_quality_score,
                     )
+
                     scores = [
                         compute_disk_quality_score(SimpleNamespace(**d))
                         for d in compliance_results.values()
@@ -3043,7 +3405,9 @@ class IntegrationEngine:
                     ):
                         for err in r.errors or []:
                             logger.warning(
-                                "Advisory %s: %s", r.name.lower(), err,
+                                "Advisory %s: %s",
+                                r.name.lower(),
+                                err,
                                 extra={"unit_id": unit.id},
                             )
                         r.status = CheckpointStatus.WARNING
@@ -3054,12 +3418,15 @@ class IntegrationEngine:
             for cr in results:
                 try:
                     gate = GateEmitter.from_checkpoint_result(
-                        cr, workflow_id=unit.id, trace_id=None,
+                        cr,
+                        workflow_id=unit.id,
+                        trace_id=None,
                     )
                     GateEmitter.emit(gate)
                 except Exception as gate_exc:
                     logger.warning(
-                        "Failed to emit checkpoint gate result: %s", gate_exc,
+                        "Failed to emit checkpoint gate result: %s",
+                        gate_exc,
                     )
                 listener.on_checkpoint_result(unit, cr)
 
@@ -3082,8 +3449,7 @@ class IntegrationEngine:
                 result_obj_metadata["checkpoint_details"] = _cp_details
 
             all_passed = (
-                True if repair_success
-                else self.checkpoint.summarize_results(results)
+                True if repair_success else self.checkpoint.summarize_results(results)
             )
 
             if not all_passed:
@@ -3147,7 +3513,8 @@ class IntegrationEngine:
         # Determine final status
         if skipped_files:
             final_status = (
-                IntegrationStatus.PARTIAL if integrated_files
+                IntegrationStatus.PARTIAL
+                if integrated_files
                 else IntegrationStatus.BLOCKED
             )
         else:
@@ -3156,14 +3523,25 @@ class IntegrationEngine:
         # 8b. Element registry provenance (ER-008) — record merge outcomes
         if self._element_registry is not None:
             self._record_element_merge_outcomes(
-                unit, integrated_files, skipped_files,
+                unit,
+                integrated_files,
+                skipped_files,
             )
 
         # REQ-MSR-310: Export element registry repair summary
         if self._element_registry is not None:
             try:
-                all_elements = list(self._element_registry._elements.values()) if hasattr(self._element_registry, "_elements") else []
-                repaired = [e for e in all_elements if isinstance(e, dict) and e.get("phase_status", {}).get("integrate") == "repaired"]
+                all_elements = (
+                    list(self._element_registry._elements.values())
+                    if hasattr(self._element_registry, "_elements")
+                    else []
+                )
+                repaired = [
+                    e
+                    for e in all_elements
+                    if isinstance(e, dict)
+                    and e.get("phase_status", {}).get("integrate") == "repaired"
+                ]
                 if repaired:
                     repair_by_type: Dict[str, int] = {}
                     for e in repaired:
@@ -3184,7 +3562,8 @@ class IntegrationEngine:
         # 9. Notify completed
         listener.on_integration_completed(unit, integrated_files)
         logger.info(
-            "'%s' integrated successfully", unit.name,
+            "'%s' integrated successfully",
+            unit.name,
             extra={"unit_id": unit.id, "files_count": len(integrated_files)},
         )
 
