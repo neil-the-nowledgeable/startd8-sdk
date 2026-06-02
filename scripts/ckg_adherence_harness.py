@@ -90,17 +90,25 @@ def main(argv=None) -> int:
     ap.add_argument("--agent", default="anthropic:claude-sonnet-4-20250514")
     ap.add_argument("--seeds", type=int, default=DEFAULT_SEEDS)
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    ap.add_argument(
+        "--scoring", choices=("denylist", "structural"), default="structural",
+        help="denylist = literal-token check (mechanics); structural = Phase-1 "
+             "detectors (uses-only-real-fields/paths, catches novel inventions)",
+    )
     args = ap.parse_args(argv)
 
     backend = _mock_backend() if args.backend == "mock" else _startd8_backend(args.agent)
 
     # The real gate: baseline (no injection) vs injected, same seeds, per-Gap rate.
     baseline = run_suite(
-        RUN011_CASES, backend, inject=False, n_seeds=args.seeds, threshold=args.threshold,
+        RUN011_CASES, backend, inject=False, n_seeds=args.seeds,
+        threshold=args.threshold, scoring=args.scoring,
     )
     injected = run_suite(
-        RUN011_CASES, backend, inject=True, n_seeds=args.seeds, threshold=args.threshold,
+        RUN011_CASES, backend, inject=True, n_seeds=args.seeds,
+        threshold=args.threshold, scoring=args.scoring,
     )
+    print(f"(scoring={args.scoring}, agent={args.agent})")
     _print_report(baseline, inject=False, label="BASELINE")
     _print_report(injected, inject=True, label="INJECTED")
 

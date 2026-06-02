@@ -11,6 +11,7 @@ from startd8.contractors.project_knowledge.adherence import (
     MockBackend,
     build_spec_prompt,
     measure_adherence,
+    measure_adherence_structural,
     run_case,
     run_suite,
 )
@@ -46,6 +47,40 @@ class TestMeasurement:
     def test_not_adherent_when_invention_present(self):
         assert measure_adherence("const x = { id, aiRefId }", CASE_A) is False
         assert measure_adherence("import x from '@/lib/prisma'", CASE_B) is False
+
+
+class TestStructuralScoring:
+    # --- Gap A (Prisma field invention via db.<model> usage) ---
+    def test_gapA_real_fields_adherent(self):
+        code = "const c = await db.capability.update({ where: { id }, data: { score: 5 } })"
+        assert measure_adherence_structural(code, CASE_A) is True
+
+    def test_gapA_denylisted_invention_caught(self):
+        code = "await db.capability.create({ data: { aiRefId: 1, name: 'x' } })"
+        assert measure_adherence_structural(code, CASE_A) is False
+
+    def test_gapA_novel_invention_caught_where_denylist_false_passes(self):
+        # `bogusField` is NOT on CASE_A.forbidden → denylist FALSE-PASSES it...
+        code = "await db.capability.create({ data: { bogusField: 1 } })"
+        assert measure_adherence(code, CASE_A) is True          # denylist misses it
+        assert measure_adherence_structural(code, CASE_A) is False  # structural catches it
+
+    # --- Gap B (module-path invention) ---
+    def test_gapB_real_module_adherent(self):
+        assert measure_adherence_structural("import { db } from '@/lib/db'", CASE_B) is True
+
+    def test_gapB_denylisted_path_caught(self):
+        assert measure_adherence_structural("import { prisma } from '@/lib/prisma'", CASE_B) is False
+
+    def test_gapB_novel_path_caught_where_denylist_false_passes(self):
+        # `@/lib/database` is NOT on CASE_B.forbidden → denylist FALSE-PASSES it...
+        code = "import x from '@/lib/database'"
+        assert measure_adherence(code, CASE_B) is True            # denylist misses it
+        assert measure_adherence_structural(code, CASE_B) is False  # structural catches it
+
+    def test_gapB_bare_package_import_ignored(self):
+        # bare npm packages are not project modules → never flagged
+        assert measure_adherence_structural("import { z } from 'zod'\nimport { db } from '@/lib/db'", CASE_B) is True
 
 
 class TestRateAndThreshold:

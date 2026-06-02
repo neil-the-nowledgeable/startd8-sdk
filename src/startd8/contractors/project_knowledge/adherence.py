@@ -38,6 +38,7 @@ __all__ = [
     "DEFAULT_SEEDS",
     "build_spec_prompt",
     "measure_adherence",
+    "measure_adherence_structural",
     "run_case",
     "run_suite",
 ]
@@ -68,6 +69,12 @@ class AdherenceCase:
     target_files: Tuple[str, ...]
     prisma_schema: str
     forbidden: Tuple[str, ...]
+    # Structural-scoring inputs (REQ-CKG-530 hardening): the `@/`-aliased modules the
+    # feature may legitimately import. For Gap-B cases, any other `@/` import is an
+    # invention — a positive check that catches novel wrong paths the `forbidden`
+    # denylist would miss.
+    real_modules: Tuple[str, ...] = ()
+    prisma_path: str = "prisma/schema.prisma"
 
 
 # RUN-011 M4 field/path invention reproductions (Gap A + Gap B).
@@ -89,12 +96,14 @@ RUN011_CASES: Tuple[AdherenceCase, ...] = (
         description="API route that queries Capability rows via the Prisma client.",
         target_files=("app/api/capability/route.ts",), prisma_schema=_CAP_SCHEMA,
         forbidden=("@/lib/prisma", "@/lib/db/capability"),
+        real_modules=("@/lib/db",),
     ),
     AdherenceCase(
         case_id="PI-007", gap="B", feature_name="outcome-service",
         description="Service that loads Outcome rows and calls the AI service.",
         target_files=("lib/outcome-service.ts",), prisma_schema=_CAP_SCHEMA,
         forbidden=("@/lib/prisma", "@/lib/ai/client"),
+        real_modules=("@/lib/db", "@/lib/ai/service"),
     ),
 )
 
@@ -193,13 +202,47 @@ def _scope_to_entities(pk, entities):
 
 
 def measure_adherence(code: str, case: AdherenceCase) -> bool:
-    """Adherent iff the generated code contains none of the RUN-011 inventions.
-
-    Intentionally conservative/literal for the scaffold — a later revision can
-    delegate to the Phase-1 detectors (`evaluate_cross_file_integrity`,
-    `cross_file_imports`) for structural rather than token-level measurement.
+    """Denylist scoring: adherent iff the code contains none of the literal
+    RUN-011 invention tokens. Fast/deterministic — used for harness mechanics
+    and the unit tests. Can FALSE-PASS a *different* invented field/path.
     """
     return not any(tok in code for tok in case.forbidden)
+
+
+def measure_adherence_structural(code: str, case: AdherenceCase) -> bool:
+    """Structural scoring (REQ-CKG-530 hardening): a POSITIVE check via the Phase-1
+    detectors — adherent iff the code uses only *real* fields/paths, catching
+    inventions the denylist would miss (the false-pass killer).
+
+    - **Gap A (fields):** run `scan_prisma_usage` (db.<model> calls) + the Prisma↔Zod
+      symmetry check against the case's real schema; any error finding = non-adherent.
+    - **Gap B (paths):** any ``@/``-aliased import not under a declared real module = non-adherent.
+    """
+    if case.gap == "A":
+        from ...validators.prisma_usage import scan_prisma_usage
+        from ...validators.prisma_zod_symmetry import evaluate_cross_file_integrity
+
+        sources = {case.prisma_path: case.prisma_schema, "generated.ts": code}
+        if scan_prisma_usage(sources, "."):
+            return False
+        if any(f.severity == "error" for f in evaluate_cross_file_integrity(sources)):
+            return False
+        return True
+
+    # Gap B: positive allowlist over @/-aliased imports.
+    from ..upstream_interface import extract_import_specifiers
+
+    reals = [m.rstrip("/") for m in case.real_modules]
+    for spec in extract_import_specifiers(code):
+        if not spec.startswith("@/"):
+            continue  # bare packages (zod, next, …) are not project modules
+        s = spec.rstrip("/")
+        if not any(s == m or s.startswith(m + "/") for m in reals):
+            return False  # an @/ import outside the real module set → invention
+    return True
+
+
+_SCORERS = {"denylist": measure_adherence, "structural": measure_adherence_structural}
 
 
 def run_case(
@@ -208,11 +251,13 @@ def run_case(
     *,
     inject: bool,
     n_seeds: int = DEFAULT_SEEDS,
+    scoring: str = "denylist",
 ) -> AdherenceResult:
+    score = _SCORERS[scoring]
     prompt = build_spec_prompt(case, inject=inject)
     adherent = sum(
         1 for s in range(n_seeds)
-        if measure_adherence(backend.generate(prompt=prompt, seed=s), case)
+        if score(backend.generate(prompt=prompt, seed=s), case)
     )
     return AdherenceResult(case.case_id, case.gap, inject, n_seeds, adherent)
 
@@ -224,8 +269,10 @@ def run_suite(
     inject: bool,
     n_seeds: int = DEFAULT_SEEDS,
     threshold: float = DEFAULT_THRESHOLD,
+    scoring: str = "denylist",
 ) -> SuiteReport:
     results = tuple(
-        run_case(c, backend, inject=inject, n_seeds=n_seeds) for c in cases
+        run_case(c, backend, inject=inject, n_seeds=n_seeds, scoring=scoring)
+        for c in cases
     )
     return SuiteReport(results=results, threshold=threshold)

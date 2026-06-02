@@ -3,11 +3,17 @@
 **Date:** 2026-06-02
 **Requirement:** REQ-CKG-530 (D1: injection ≠ adherence) · resolves first data point for **OQ-2**
 **Harness:** `scripts/ckg_adherence_harness.py --backend startd8` (core: `contractors/project_knowledge/adherence.py`)
-**Status:** First empirical run — **Phase-2 premise validated on this sample; no escalation to Approach C.**
+**Status:** First empirical run, **then re-scored structurally (see §6 — the corrected read).**
 
-> One-line takeaway: **injecting the Knowledge Provider's authoritative context closes the model-tier
-> gap** — `gemini-2.5-flash` + injection performs identically to `gemini-2.5-pro` + injection (perfect)
-> on the RUN-011 invention classes, even though flash-without-help is meaningfully worse.
+> ⚠️ **Read §6 first.** §§1–5 below report the initial **denylist-scored** gemini runs and the conclusion
+> drawn from them ("injection closes the tier gap"). A later **structural re-scoring** (§6) showed the
+> denylist misleads *both* ways, and **narrowed** the validated claim: the **explicit-negatives / Gap-B**
+> half is robustly validated across all tiers; the **field-set / Gap-A** half is **inconclusive** on these
+> cases. §§1–5 are retained as the record of the initial pass.
+
+> One-line takeaway (corrected, §6): **the module-path-negatives half of the Knowledge Provider (D2 / Gap B)
+> is validated across `gemini-2.5-pro`, `gemini-2.5-flash`, and `claude-haiku-4-5`; the field-set-authority
+> half (Gap A) is not yet measurable with this harness.**
 
 ---
 
@@ -99,3 +105,38 @@
   faithful answer to design **OQ-5 (prevent-vs-detect split)** and is currently **undefined** (no
   requirements/plan). Worth a `/reflective-requirements` cycle *if* end-to-end fidelity is wanted; the
   isolated harness already answers the prevention-layer question.
+
+---
+
+## 6. Correction — structural re-scoring + Haiku (the trustworthy read)
+
+After the gemini runs, the harness gained **structural scoring** (`--scoring structural`): a *positive*
+check via the Phase-1 detectors — Gap A = `scan_prisma_usage` + Prisma↔Zod symmetry (no error finding);
+Gap B = every `@/`-aliased import resolves under a declared real module. Re-running on `claude-haiku-4-5`
+(the actual cheap target tier) exposed that the denylist scoring in §§1–5 **misleads in both directions**:
+
+| `claude-haiku-4-5` | denylist N=5 | structural N=10 |
+|---|---|---|
+| Gap A baseline → injected | 0.60 → 0.80 | **1.00 → 1.00** |
+| Gap B baseline → injected | 0.50 → 0.70 | **0.40 → 1.00** |
+
+- **Denylist false-*failed* Gap A.** PI-004's denylist `("bio","label","headline")` is a *card* feature;
+  Haiku uses "label"/"headline" as ordinary JSX/UI words, so the substring match counted them as field
+  inventions. Structurally Haiku never misused a Prisma field → 1.00. (The §§1–5 gemini Gap-A numbers are
+  suspect for the same reason and were never re-scored.)
+- **Denylist N=5 noise.** PI-007's apparent 5/5→3/5 "regression" became 8/10→10/10 at N=10 structural — noise.
+- **Structural has its own blind spot:** it only inspects `db.<model>` calls / Zod schemas, so it **misses
+  property-access invention** (`capability.aiRefId` in JSX). So Gap-A baseline 1.00 = "no *detectable*
+  misuse," not "proven clean."
+
+**Corrected synthesis:**
+
+| Signal | Status |
+|---|---|
+| **Gap B — module-path invention (D2 explicit negatives)** | ✅ **robustly validated**: baseline 0.0–0.6 → injected **1.00** across pro / flash / haiku, both scorers, up to N=10. The `@/lib/prisma` prior is strong; explicit negatives eliminate it. |
+| **Gap A — Prisma field invention (field-set authority)** | ⚠️ **inconclusive**: denylist false-fails on common words; structural misses property-access. Not measurable with these synthetic cases + scorers. |
+
+**Net:** the **negatives** half of the Knowledge Provider earns its keep empirically (incl. on the cheap
+tier); the **field-set-authority** half is **unmeasured** here. To measure Gap A properly: harder cases
+(real `db.<model>` *and* property-access usage) or the **end-to-end OQ-5 test** scored by the full Verifier
++ build. The initial "premise validated across tiers" (§§5) is **superseded by this narrower, scorer-correct claim.**
