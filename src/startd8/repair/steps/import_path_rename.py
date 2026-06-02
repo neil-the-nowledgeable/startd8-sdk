@@ -15,6 +15,7 @@ Anything else abstains. The rewrite only touches the exact quoted specifier in
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -128,12 +129,23 @@ def _resolve_specifier(spec: str, negatives, resolvable, root: str) -> Optional[
 
 
 def _rewrite_specifier(code: str, spec: str, target: str) -> Tuple[str, bool]:
-    """Replace the exact quoted *spec* with *target* in import/require statements."""
-    out = code
+    """Replace the quoted *spec* with *target* — only in module-specifier positions.
+
+    Anchored to ``from '…'`` / ``import '…'`` / ``require('…')`` / ``import('…')``
+    so the same quoted token appearing in an unrelated string literal or comment
+    is **not** rewritten (a global replace would corrupt it — non-destructive).
+    """
+    # pre-context that legitimately precedes a module specifier
+    pattern = re.compile(
+        r"(?P<pre>\bfrom\s+|\bimport\s+|\brequire\s*\(\s*|\bimport\s*\(\s*)"
+        r"(?P<q>['\"`])" + re.escape(spec) + r"(?P=q)"
+    )
     changed = False
-    for q in ("'", '"', "`"):
-        token = q + spec + q
-        if token in out:
-            out = out.replace(token, q + target + q)
-            changed = True
+
+    def _sub(m: "re.Match[str]") -> str:
+        nonlocal changed
+        changed = True
+        return f"{m.group('pre')}{m.group('q')}{target}{m.group('q')}"
+
+    out = pattern.sub(_sub, code)
     return out, changed

@@ -156,6 +156,35 @@ def test_import_rename_typo_nearest_match():
     assert "from '@/lib/logger'" in res.code
 
 
+def test_import_rename_only_touches_import_positions():
+    """Bug fix: a specifier in a string literal/comment must NOT be rewritten."""
+    code = (
+        "import { db } from '@/lib/prisma'\n"
+        "const note = \"see '@/lib/prisma' for details\"\n"
+        "// also '@/lib/prisma' in a comment\n"
+        "export { x } from '@/lib/prisma'\n"
+    )
+    diag = WrongImportPathDiagnostic(category="content_contract", message="", file="lib/x.ts", specifier="@/lib/prisma")
+    ts = StubTruthSource(negatives=_NEGATIVES, resolvable=_RESOLVABLE)
+    res = ImportPathRenameStep(ts)(code, _ctx([diag]), Path("lib/x.ts"))
+    # The import and the export-from are rewritten:
+    assert "import { db } from '@/lib/db'" in res.code
+    assert "export { x } from '@/lib/db'" in res.code
+    # The string literal and comment are untouched:
+    assert "const note = \"see '@/lib/prisma' for details\"" in res.code
+    assert "// also '@/lib/prisma' in a comment" in res.code
+
+
+def test_import_rename_handles_require_and_dynamic_import():
+    code = "const m = require('@/lib/prisma'); const d = import('@/lib/prisma');\n"
+    diag = WrongImportPathDiagnostic(category="content_contract", message="", file="lib/x.ts", specifier="@/lib/prisma")
+    ts = StubTruthSource(negatives=_NEGATIVES, resolvable=_RESOLVABLE)
+    res = ImportPathRenameStep(ts)(code, _ctx([diag]), Path("lib/x.ts"))
+    assert "require('@/lib/db')" in res.code
+    assert "import('@/lib/db')" in res.code
+    assert "@/lib/prisma" not in res.code
+
+
 def test_import_rename_abstains_when_no_candidate():
     code = "import { z } from '@/lib/totallyunrelatedxyz'\n"
     diag = WrongImportPathDiagnostic(category="content_contract", message="", file="lib/x.ts",
