@@ -1720,6 +1720,11 @@ def generate_service_monitor(
     )
 
 
+# A channel identifier shaped like an email routes to email_configs, not slack_configs
+# (REQ-CDP-OBS-005 allows Slack names, PagerDuty keys, or email addresses).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 def generate_notification_policy(
     service: ServiceHints,
     business: BusinessContext,
@@ -1739,28 +1744,37 @@ def generate_notification_policy(
     receiver = f"{service.service_id}-{severity}"
 
     channels = business.routing_channels()
+    # Route by channel shape: email-like → email_configs, everything else → slack_configs
+    # (a PagerDuty key or chat channel still routes via slack_configs' channel field; an
+    # email must NOT land in a Slack receiver or alerts are silently undelivered).
+    slack_channels = [c for c in channels if not _EMAIL_RE.match(c)]
+    channel_emails = [c for c in channels if _EMAIL_RE.match(c)]
     owner_emails = [
         str(o["email"]) for o in business.owners
         if isinstance(o, dict) and o.get("email")
     ]
+    # Dedup-preserving union of email contacts (owners + email-shaped channels).
+    all_emails = list(dict.fromkeys(owner_emails + channel_emails))
 
     receiver_doc: Dict[str, Any] = {"name": receiver}
-    if channels:
+    if slack_channels:
         # Channel identifiers from the manifest; transport (api_url) is a deploy-time
         # secret, referenced not fabricated.
         receiver_doc["slack_configs"] = [
             {"channel": ch, "api_url": "${SLACK_API_URL}", "send_resolved": True}
-            for ch in channels
+            for ch in slack_channels
         ]
+    if channels:
         derivations.append(DerivationTrace(
             field="alert_channels", source="manifest.spec.observability.alertChannels",
-            transformation=f"route → {channels}", tier="manifest",
+            transformation=f"slack={slack_channels} email={channel_emails}", tier="manifest",
         ))
-    if owner_emails:
-        receiver_doc["email_configs"] = [{"to": e} for e in owner_emails]
+    if all_emails:
+        receiver_doc["email_configs"] = [{"to": e} for e in all_emails]
         derivations.append(DerivationTrace(
-            field="owner_contacts", source="manifest.metadata.owners[].email",
-            transformation=f"email → {owner_emails}", tier="manifest",
+            field="owner_contacts",
+            source="manifest.metadata.owners[].email + email-shaped alertChannels",
+            transformation=f"email → {all_emails}", tier="manifest",
         ))
 
     doc: Dict[str, Any] = {

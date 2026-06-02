@@ -156,12 +156,14 @@ def check_span_name_patterns(
     """Sub-check (d), best-effort: a declared span's static name prefix should appear
     in a span literal, unless attributes_dynamic."""
     root = root or _src_root()
-    blob = ""
+    # Read each file once into a list (avoids an O(n^2) string-concat blob), then test
+    # each span prefix with early-exit on the first matching file.
+    texts: List[str] = []
     for py in root.rglob("*.py"):
         if "__pycache__" in py.parts:
             continue
         try:
-            blob += py.read_text(encoding="utf-8")
+            texts.append(py.read_text(encoding="utf-8"))
         except OSError:
             continue
 
@@ -170,7 +172,7 @@ def check_span_name_patterns(
         if s.attributes_dynamic:
             continue
         prefix = re.split(r"[{:]", s.name_pattern)[0]
-        if prefix and prefix not in blob:
+        if prefix and not any(prefix in t for t in texts):
             missing.append(s.name_pattern)
     return missing
 

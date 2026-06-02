@@ -1679,3 +1679,30 @@ class TestOQ8Precedence:
         ctx = load_business_context(p, {})
         assert ctx.prometheus_datasource == "mimir-prod"
         assert ctx.runbook_base == "https://rb.acme.io"
+
+
+class TestChannelBackendRouting:
+    """Code-review fix: email-shaped channels route to email_configs, not slack_configs."""
+
+    def test_email_channel_not_in_slack(self, grpc_service):
+        biz = BusinessContext(alert_channels=["#alerts", "ops@acme.io"])
+        result = generate_notification_policy(grpc_service, biz)
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in result.content.splitlines() if not ln.startswith("#"))
+        )
+        recv = doc["receivers"][0]
+        slack = [c["channel"] for c in recv.get("slack_configs", [])]
+        emails = [c["to"] for c in recv.get("email_configs", [])]
+        assert slack == ["#alerts"]
+        assert "ops@acme.io" in emails
+        assert "ops@acme.io" not in slack
+
+    def test_all_email_channels_no_slack_block(self, grpc_service):
+        biz = BusinessContext(alert_channels=["a@x.io", "b@y.io"])
+        doc = yaml.safe_load(
+            "\n".join(ln for ln in generate_notification_policy(grpc_service, biz).content.splitlines()
+                      if not ln.startswith("#"))
+        )
+        recv = doc["receivers"][0]
+        assert "slack_configs" not in recv
+        assert {c["to"] for c in recv["email_configs"]} == {"a@x.io", "b@y.io"}
