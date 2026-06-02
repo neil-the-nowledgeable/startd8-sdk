@@ -8,12 +8,18 @@
 
 ## TL;DR of where we landed
 
-We started building a TS-Next deterministic "frontend spine generator," then **pivoted**: the
-SDK's durable strength is **polyglot microservices + a contract-first deterministic codegen
-kernel**, and the TS-monolith frontend generator was deprioritized as narrow tech debt. The
-front-end direction is now: **a thin UI service over a *generated* typed client, with a locked
-component library** — the framework matters less than those two levers. Prior StartDate runs
-(007–018) are **test runs**.
+We started building a TS-Next deterministic "frontend spine generator," then **pivoted twice**:
+(1) the SDK's durable strength is **microservices + a contract-first deterministic codegen
+kernel** (TS-monolith spine generator = narrow debt, retired); then (2) — the **current,
+canonical direction** — the real app is **greenfield, all-Python, contract-first, server-rendered
+(FastAPI + Pydantic + HTMX), modular-monolith-microservice-ready**, chosen to **maximize
+deterministic assembly and minimize LLM cost** (~60–75% deterministic ceiling; **no React/Next** —
+the JS-front-end invention classes vanish; the "front-end framework" question dissolved). Python
+is the SDK's strongest language; polyglot is optional. "StartDate" was a prototype, retired.
+
+> **READ FIRST next session:** `docs/design/IDEAL_TARGET_ARCHITECTURE.md` (canonical) +
+> `deterministic-frontend/DETERMINISTIC_CONTRACT_CODEGEN_CHARTER.md` (Direction update §). The
+> TS-framed `STARTDATE_NEXT_ITERATION_ARCHITECTURE_GUIDANCE.md` + the SPINE docs are SUPERSEDED.
 
 ---
 
@@ -40,23 +46,25 @@ component library** — the framework matters less than those two levers. Prior 
 - Pre-existing repo WIP (CLAUDE.md, CKG handoff, exemplar-registry, many other untracked files) —
   **not ours**, left untouched.
 
-## Open decisions for the next session (recommendations in the guidance doc)
-1. **Contract format at the UI edge:** OpenAPI (lean) vs gRPC-web. Drives the generated-client tool.
-2. **UI framework:** Next.js App Router (lean) vs RedwoodJS vs AdonisJS+Inertia — *lower-stakes* once the client is generated.
-3. **Component library:** pick + **install** one (kills the shadcn-invention class).
-4. **Build StartDate as microservices** (docker-compose, online-boutique-shaped) vs keep local-first single-process — weigh against NFR-1.
-5. **Where front-end fits the SDK roadmap:** the contract-codegen kernel (`ProtoStubProvider` + per-LanguageProfile build gate) is the SDK-side enabler; the UI is one consumer.
+## Open decisions for the next session (small; see `IDEAL_TARGET_ARCHITECTURE.md` §9)
+1. **ORM:** SQLModel (Pydantic-native — one def = contract + table; *lean*) vs SQLAlchemy vs Prisma-py.
+2. **Deploy shape:** modular monolith now (microservice-ready; *lean*) vs services-from-day-one.
+3. **HTMX ceiling:** flag any screen that genuinely needs rich client interactivity (the only place a thin-TS island over the auto-OpenAPI client is warranted).
+> RESOLVED this session: UI = **server-rendered FastAPI + HTMX (no React/Next)**; **no component
+> library / no JS framework** (the shadcn "ban" was a prototype artifact, moot here); polyglot
+> deferred; objective = max deterministic assembly / min LLM cost.
 
-## Recommended next front-end steps (in order)
-1. **Decide the UI-edge contract + client generator** (OpenAPI+`openapi-typescript`/`orval`, or gRPC-web+`connect-es`/`ts-proto`). This is the keystone — it removes the type/path-invention classes.
-2. **Pick + install one component library**; record it as a project convention so imports always resolve.
-3. **Promote the canonical `ValueModel` to a contract** (`value_model.proto` or OpenAPI component); make `value-model.ts` a *generated* artifact from it (the renderer generalizes to "contract→DTO in N languages").
-4. **SDK side:** spec/build the `ProtoStubProvider` + per-LanguageProfile build gate (charter) — the first concrete payoff of the kernel; register it via the provider registry (the pattern is already in place).
-5. **Pilot one vertical slice** (Profile: `valuemodel-svc` + `bff` + `frontend-svc`) end-to-end to validate the generated-client + build-gate + skip-hook on real services.
+## Recommended next steps (in order) — Python-first
+1. **Author the canonical data contract** (Pydantic models / a schema) — the keystone input the SDK projects from.
+2. **SDK build (charter §sequencing ii):** `PydanticModelProvider` (schema→Pydantic, generalize `render_zod_schema`) + **FastAPI CRUD + HTMX-template generators** + completeness/export emitters + a **Python project build/test gate** (generalize `run_project_typecheck` onto the Python LanguageProfile; preserve "absent ⇒ non-pass"). Register the provider via the shipped registry.
+3. **Pilot one bounded context end-to-end:** model → generated CRUD → generated HTMX form/list → `$0.00` skip on regen + Python build gate green. Prove the loop, then widen.
+4. **Author only the semantic core** (AI passes + non-CRUD logic) grounded on the generated contract, gated by the build.
+5. **Defer:** polyglot (`ProtoStubProvider`/other languages), true service split — both future, per-need.
 
 ## Gotchas to remember
-- The pipeline runs in `$SDK_ROOT/.venv` — verify its protobuf is `>=6.33.5` before a run (my fix was user-site).
-- The whole-project tsc gate is **informational by default**; set `STARTD8_TS_GATE_STRICT=1` to enforce.
-- Don't resurrect the TS-spine route-handler generator (superseded); generalize via the kernel instead.
+- The whole-project **tsc** gate is TS-specific + informational by default (`STARTD8_TS_GATE_STRICT=1` to enforce); the **Python** build gate is the one to build next (it doesn't exist yet).
+- Don't resurrect the TS-spine route-handler generator OR a React/Next front end (both superseded); the UI is server-rendered HTMX.
+- protobuf pin `>=6.33.5` is in pyproject; the pipeline `.venv` may need a reinstall to pick it up.
+- The shipped `frontend_codegen` (Prisma→Zod) stays as a reference impl / provider; the next renderer is its Python sibling (Pydantic), same pattern.
 
 *Companion handoffs: `CKG_NEXT_SESSION_HANDOFF.md` (separate CKG track).*

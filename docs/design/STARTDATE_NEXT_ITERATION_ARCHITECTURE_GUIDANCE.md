@@ -1,5 +1,14 @@
 # StartDate (next iteration) — Target Architecture Guidance
 
+> **⚠️ SUPERSEDED (2026-06-02) — see `IDEAL_TARGET_ARCHITECTURE.md`.** This doc assumed a
+> **TS/React/Next** front end and pitched **polyglot-now**. Two clarifications retired that
+> framing: (1) the SDK's strongest language is **Python** and its shape is microservices with
+> **polyglot optional**; (2) "StartDate" was a prototype — the real app is greenfield, designed
+> for max SDK support + **maximum deterministic assembly to minimize LLM cost**. The correct
+> target is **all-Python, contract-first, server-rendered (FastAPI + Pydantic + HTMX)** — which
+> raises the deterministic ceiling to ~60–75% and deletes the JS-front-end invention classes.
+> Kept for the reasoning trail; **build to `IDEAL_TARGET_ARCHITECTURE.md`.**
+
 **Date:** 2026-06-02 · **Audience:** the StartDate product/eng team (hand-off to update
 `strtd8/docs/REQUIREMENTS.md` + `PLAN.md`) · **Status:** strategy guidance, pre-build
 **Companion:** `deterministic-frontend/DETERMINISTIC_CONTRACT_CODEGEN_CHARTER.md` (the SDK

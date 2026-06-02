@@ -13,6 +13,22 @@ generator — retired). **Builds on:** the shipped `value-model.ts` Prisma→Zod
 > microservices contract layer** (online-boutique style: proto/gRPC + OpenAPI → typed stubs/DTOs
 > across the existing 5 LanguageProfiles).
 
+> **Direction update (2026-06-02) — Python-first + cost as the objective** (see
+> `../IDEAL_TARGET_ARCHITECTURE.md`):
+> 1. **Governing objective: maximum (reasonable) deterministic assembly to minimize LLM cost** —
+>    owned artifacts are $0 LLM (skip-hook), so the kernel's value *is* the cost lever.
+> 2. **First concrete instantiation is PYTHON, not the generic 5-language proto kernel.** The real
+>    greenfield app is **all-Python, contract-first, server-rendered (FastAPI + Pydantic + HTMX)**
+>    (Python = the SDK's strongest language; polyglot = future per-service option). First build:
+>    a **`PydanticModelProvider`** (schema → Pydantic, generalizing `render_zod_schema`) +
+>    **FastAPI CRUD + HTMX-template generators** + a **Python build/test gate**. The kernel's scope
+>    **extends beyond contract→stubs to server-rendered UI templates** — the biggest
+>    determinism/cost win (forms/lists become generated HTML, not hand-authored React). The generic
+>    `ProtoStubProvider`-across-5-languages (§4) stays the longer-term generalization.
+> 3. **Sequencing step (i) is SHIPPED** (this session): the `DeterministicFileProvider`
+>    protocol/registry + `PrismaZodFileProvider` re-home — core decoupled
+>    (`contractors/deterministic_providers.py` + `frontend_codegen/provider.py`).
+
 ---
 
 ## 1. Why
@@ -166,8 +182,13 @@ kernel compounds existing value rather than opening a new narrow front.
    protocol exposes `syntax_check_command` / `validate_syntax` and per-language build methods, but the
    *project-level* gate (like `run_project_typecheck`) is currently TS-specific. Define the
    per-language equivalent and preserve the "absent toolchain ⇒ non-pass" rule everywhere.
-3. **Sequencing.** Likely order: (i) land the `DeterministicFileProvider` protocol + registry and
-   re-home the Prisma/Zod logic as `PrismaZodFileProvider` (pure decoupling, no behavior change);
-   (ii) add a `ProtoStubProvider` for one online-boutique service end-to-end (one language) to validate
-   the gate-mapping; (iii) fan out across the 5 `LanguageProfiles`. Confirm this ordering and the
-   first target service.
+3. **Sequencing (updated — Python-first per the Direction update / `IDEAL_TARGET_ARCHITECTURE.md`):**
+   - **(i) DONE** — `DeterministicFileProvider` protocol + registry + `PrismaZodFileProvider` re-home
+     (core decoupled).
+   - **(ii) NEXT — the Python contract-codegen path** for the greenfield all-Python app:
+     `PydanticModelProvider` (schema → Pydantic) + FastAPI CRUD + HTMX-template generators +
+     completeness/export emitters + a **Python project build/test gate** (generalize
+     `run_project_typecheck` onto the Python `LanguageProfile`; preserve "absent ⇒ non-pass").
+     Pilot one bounded context end-to-end (model → CRUD → HTMX form → $0.00 skip on regen).
+   - **(iii) LATER — generic polyglot:** `ProtoStubProvider` for one online-boutique service, then
+     fan out across the 5 `LanguageProfiles`. Open: parser reuse (Q1) + per-language gate mapping (Q2).
