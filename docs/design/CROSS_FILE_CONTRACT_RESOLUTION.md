@@ -341,3 +341,88 @@ Honest scoping: for **TS specifically, SCIP's marginal value over the `tsc` gate
 ---
 
 *Authored 2026-06-01 from the cumulative evidence of RUN_003 / RUN_007 / RUN_008 / RUN_009 postmortems plus the RUN_009 attempt-2 direct-fix pass (commits d5016ee and 87b06f9 on the startd8 repo). Evidence specifics — the 16 contract-failure enumeration in §1 — was collected during the `npm install && npx prisma generate && npm run build` iteration that took the attempt-2 outputs from "13 broken imports + multiple schema mismatches" to a green build. The composition recommendations in §§6–8 are stated in priority order for an SDK-level fix roadmap; the postmortem-specific fix specs in §7 map cleanly onto the approaches and are not abandoned by this analysis — they are repositioned within a larger structural frame.*
+
+---
+
+## 12. Empirical update — RUN-011 and RUN-012 evidence (2026-06-01)
+
+*Added after the M4 and M5 batches on the strtd8 repo produced two more postmortems that converge on the same architectural pattern.*
+
+This document was authored after RUN-009 with 16 contract failures enumerated in §1. Two further runs — RUN-011 (M4 batch) and RUN-012 (M5 batch) — produced new evidence that **strengthens** every load-bearing claim in this doc while also revealing the **limit** of the simplest plan-level countermeasure.
+
+### 12.1 The simplest countermeasure (per-plan canonical-name discipline block) WORKS — but only for the domains it covers
+
+The M5 plan introduced an explicit "Canonical-name discipline" block enumerating Prisma model fields, the `@/lib/db` import path, and the `@/lib/value-model` Zod schema location. **Result in RUN-012:** zero `@/lib/prisma` imports across all 15 generated files. Zero invented Prisma field names. The Prisma-domain failure mode that had recurred across RUN-007 through RUN-011 was **eliminated** in RUN-012 by a paragraph of explicit guidance in the plan.
+
+This is real evidence that **per-domain canonical-name enumeration is a load-bearing countermeasure**. The structural argument of this doc (§§4–6) is empirically confirmed at the single-domain level.
+
+**But the same RUN-012 produced 5 new failures in 3 new flavors** — all in domains the plan did NOT explicitly enumerate:
+
+| Flavor | Failed features (run-012) | Counter NOT in plan | LLM training prior |
+|---|---|---|---|
+| CSS Modules invention (`*.module.css`) | PI-005, PI-007, PI-011 | "Inline-styled (no Tailwind)" ruled out one option but didn't enumerate which others are acceptable | "React components have a CSS-sibling pattern" |
+| Barrel-import invention | PI-008 (Opus tier, $0.3247) | Plan named `components/wizard/WizardSteps.tsx`; did not explicitly state "no barrel export at `components/wizard/steps/`" | "`components/{kind}/index.ts` is the barrel" |
+| Top-level `types/` directory invention | PI-012 | Plan named `components/wizard/types.ts`; did not state "there is no top-level `types/` directory" | "shared types live at top-level `types/`" |
+
+**The countermeasure is per-domain whack-a-mole.** Each domain the plan doesn't pre-empt becomes the next batch's failure mode. This is exactly the failure model §4 of this doc predicted: priors override plan directives at the per-file generation boundary; the only reliable defense is *enumeration* of every counter-pattern. M5's plan enumerated for the data domain (worked) and not for the frontend-organization domain (failed). M6's plan now enumerates both.
+
+This **strengthens** the §5 case for Approach A (programmatic pre-flight project-knowledge artifact). The per-plan hand-written discipline block is a manual instance of what Approach A produces automatically. The human author has to know **in advance** which domains will surface; the LLM's priors span every domain it was trained on. Programmatic enumeration is the only way to scale this.
+
+### 12.2 Mode A inheritance is non-deterministic at sibling boundaries — the sharpest A/B yet
+
+RUN-012 produced two clean A/B experiments where the convention was **observably correct in the same batch's sibling files** at the time the failing features were generated:
+
+**CSS Modules A/B (3 fail / 2 pass within wizard steps):**
+- ProfileStep, ValuePropsStep, ArtifactsStep: inline `style={{...}}` objects — correct
+- ProofPointStep: invented `import styles from "./ProofPointStep.module.css"` — wrong
+- All 5 generated in the same batch with the same set of plan directives and the same available sibling outputs.
+
+**Top-level `types/` A/B (4 pass / 1 fail within wizard steps):**
+- ProfileStep imported `from "../types"` — correct (relative)
+- ProofPointStep, ValuePropsStep, ArtifactsStep imported `from "@/components/wizard/types"` — correct (alias)
+- EnrichStep invented `from "../../../types/wizard"` — wrong
+- All 5 in the same batch; PI-006 (the types file) was generated correctly and on disk by the time PI-012 ran.
+
+This is direct evidence that **Mode A intra-batch sibling-output inheritance is probabilistic, not guaranteed**. Per §2 of this doc, Mode A was already characterized as fragile — but the RUN-012 A/B is the **first time we have N-of-5 sibling outcomes** showing the convention was visible-and-correct yet didn't propagate. The §4 "per-file probabilistic generation locality" frame is the only one that fits this evidence.
+
+**Implication for Approach D (single-pass batch synthesis):** if intra-batch inheritance is N-of-K probabilistic, batch synthesis would need a final-pass consistency check across all features in the batch — independent of any per-feature classifier signature — that bucket failures by invention category and surface the dominant pattern. RUN-012's `cross_feature_patterns` reported only `cost_outlier`; it did NOT detect that 3 features invented `.module.css` imports. The classifier is feature-local; the failure pattern is batch-level.
+
+### 12.3 Opus tier does not fix structural priors — second confirmation
+
+RUN-011 PI-010 (Value Propositions library): $0.4194, COMPLEX-tier Opus routing — still invented `@/lib/prisma`, `text`, `capabilityId`, `outcomeId`. Same patterns as the Sonnet-tier siblings in the same batch.
+
+RUN-012 PI-008 (WizardShell): $0.3247, 2.2× the average — Opus-tier signature again. Still invented `@/components/wizard/steps` as a barrel-export path. The convention (`WizardSteps.tsx` as the registry file) was named explicitly in the plan AND was generated correctly by PI-015 in the same batch.
+
+**Two postmortems, two domains, same finding:** model capability does NOT prevent invention at the per-file generation boundary. The relevant constraint is the LLM's prior for the per-file content shape, not the model's reasoning capability for the broader plan. This **strengthens the argument that the structural fix is upstream of the model** — Approach A injects evidence the LLM can't generate from its prior; Approach B catches priors that slipped through; no amount of model capability inside the generation step fixes either.
+
+### 12.4 Score-vs-reality inversion is fixable — empirical evidence the classifier signature approach works
+
+RUN-011 showed score-vs-reality inversion: high-verdict features were structurally undeliverable (Gap C from RUN_011 postmortem). The Fix 2 TS2345 type_class_mismatch signature shipped mid-RUN-011 authoring.
+
+RUN-012 verdict score is 0.67 — accurately reflecting 10/15 delivered. The 5 failed features were correctly attributed to `cross_feature_contract / cross_file_contract`. **Score-vs-reality is recoupled** — first run in this sequence where the headline metric is a reliable signal.
+
+This validates the Approach B direction (§5.B + §6) at the per-signature level: each load-bearing signature that ships **converts a previously-invisible failure mode into an attributed-and-scored one**. It does NOT prevent the failure (RUN-012 still produced 5 failures); but it makes the failures legible to the verdict layer.
+
+**The composition principle holds (per §6):** Approach A reduces the rate of invention; Approach B makes any invention that slips through legible. Neither alone is sufficient; the combination is what makes the pipeline trustworthy.
+
+### 12.5 Updated priority for the SDK fix roadmap
+
+Concrete prioritization update based on RUN-011 and RUN-012:
+
+1. **Approach A (project-knowledge artifact, §5.A)** — load-bearing. RUN-012 evidence is the strongest case yet: a paragraph of hand-written enumeration prevented a category of failures the prior 4 runs all hit. Programmatic generation of the same enumeration would scale to every domain. **Now the #1 SDK roadmap item.**
+
+2. **Approach B continued — per-failure-mode classifier signatures (§5.B / §6)** — RUN-012 validates the approach at the per-signature level (TS2345 worked). The next signature additions, in priority order from the RUN-012 evidence:
+   - **`unresolvable_css_module`** — fires when generated code imports a `.module.css` sibling that doesn't exist. Trivially detectable.
+   - **`barrel_import_to_non_existent_index`** — fires when an `@/components/X` import targets a directory that has no `index.ts`/`index.tsx`/registry file at the expected location.
+   - **`top_level_types_dir_invented`** — fires when any generated file imports from `../../../types/*` or `@/types/*` and that path doesn't exist.
+   - These three would have caught 5 of 5 RUN-012 failures.
+
+3. **Cross-feature pattern detection (new — RUN-012 Gap H)** — bucket failures by invention category and surface the dominant pattern in `cross_feature_patterns`. The CSS Modules pattern (3 features, 60% of failures) was not surfaced because the classifier is feature-local. Cheap fix: if ≥N features failed with the same error-message regex, emit a `dominant_invention_pattern` finding.
+
+4. **Pipeline attribution rollup reliability (RUN-012 Gap I)** — `pipeline_attribution` was populated in RUN-011's mid-authoring regen but empty in RUN-012. Either the rollup step is non-deterministic across runs, or the late-regen path is the only one that populates it. Either way, the user-facing reports can't trust this table.
+
+The §6 recommended composition (A + B together) is **strengthened** by RUN-011 / RUN-012 evidence, not refuted. The empirical pattern is: **plan-level discipline blocks reduce per-domain failure rates; classifier signatures reliably attribute the remainder; Approach A programmatically removes the human bottleneck of "anticipate every domain."**
+
+---
+
+*Section 12 added 2026-06-01 from the cumulative evidence of RUN_011 (`docs/design/RUN_011_M4_FIELD_AND_PATH_INVENTION_POSTMORTEM.md`) and RUN_012 (`docs/design/RUN_012_M5_REACT_ORG_INVENTION_POSTMORTEM.md`). The §12.2 sibling A/B is the load-bearing new empirical evidence — 3-of-5 and 4-of-5 outcomes within a single batch establish that intra-batch inheritance is probabilistic rather than guaranteed, which the earlier postmortems suggested but did not directly demonstrate.*
