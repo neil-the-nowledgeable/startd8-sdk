@@ -172,13 +172,22 @@ def extract_metrics(output_dir: Path) -> dict[str, Any]:
     succeeded = int(prime_result.get("succeeded", 0) or 0)
     failed = int(prime_result.get("failed", 0) or 0)
 
+    # Cross-file integrity gate (capability signal present even when no postmortem is emitted).
+    gate = prime_result.get("cross_file_gate") or {}
+    gate_failures = gate.get("cross_file_failures") or []
+
+    # disk_quality / assembly_delta only exist if the postmortem step ran (optional).
     features = postmortem.get("features", []) or []
     mean_disk = _mean([f.get("disk_quality_score") for f in features])
     semantic_errors = sum(int(f.get("semantic_error_count", 0) or 0) for f in features)
 
-    # Cost: prefer the postmortem's own per-run summary; DB time-window is the fallback (S5).
-    cost_summary = postmortem.get("cost_summary") or {}
-    total_cost = cost_summary.get("total_usd")
+    # Cost: prime-result.json carries the authoritative per-run total (total_cost_usd);
+    # the postmortem cost_summary and the DB time-window are fallbacks (S5).
+    total_cost = prime_result.get("total_cost_usd")
+    cost_source = "prime_result" if total_cost is not None else None
+    if total_cost is None:
+        total_cost = (postmortem.get("cost_summary") or {}).get("total_usd")
+        cost_source = "postmortem" if total_cost is not None else None
 
     return {
         "status": "success" if prime_result.get("success") else "failed",
@@ -186,12 +195,17 @@ def extract_metrics(output_dir: Path) -> dict[str, Any]:
         "succeeded": succeeded,
         "failed": failed,
         "completion_rate": _safe_div(succeeded, processed),
+        "gate_verdict": gate.get("verdict"),
+        "gate_score": gate.get("score"),
+        "gate_failures": len(gate_failures),
         "mean_disk_quality_score": mean_disk,
         "aggregate_score": postmortem.get("aggregate_score"),
         "avg_assembly_delta": postmortem.get("avg_assembly_delta"),
         "semantic_error_count": semantic_errors,
+        "input_tokens": prime_result.get("total_input_tokens"),
+        "output_tokens": prime_result.get("total_output_tokens"),
         "total_cost": total_cost,
-        "cost_source": "postmortem" if total_cost is not None else None,
+        "cost_source": cost_source,
         "cost_per_succeeded_feature": _safe_div(total_cost, succeeded),
         "artifacts_found": bool(prime_result or postmortem),
     }
@@ -211,14 +225,23 @@ def cost_from_db(start_ts: datetime, end_ts: datetime) -> Optional[float]:
 # --------------------------------------------------------------------------- ranking + report (S6)
 
 def rank_models(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Highest mean disk_quality_score wins; tie-break lowest cost-per-succeeded-feature."""
+    """Rank by capability then cost. Quality = mean disk_quality_score when the postmortem ran,
+    else the cross-file gate outcome (fewer failures, higher gate score). Tie-break: cheaper.
+    """
     def key(r: dict[str, Any]):
         m = r["metrics"]
         disk = m.get("mean_disk_quality_score")
+        gate_score = m.get("gate_score")
+        gate_failures = m.get("gate_failures")
         cpsf = m.get("cost_per_succeeded_feature")
-        # Missing disk score sorts last regardless of scale (no assumption that scores are >= 0).
         return (
+            # Primary: disk quality when available (missing sorts last).
             -(disk if disk is not None else float("-inf")),
+            # Secondary: fewer cross-file gate failures is better (missing sorts last).
+            gate_failures if gate_failures is not None else float("inf"),
+            # Tertiary: higher gate score is better.
+            -(gate_score if gate_score is not None else float("-inf")),
+            # Quaternary: cheaper per succeeded feature.
             cpsf if cpsf is not None else float("inf"),
         )
     return sorted(results, key=key)
@@ -230,10 +253,13 @@ _METRIC_ROWS = [
     ("Succeeded", "succeeded", 0),
     ("Failed", "failed", 0),
     ("Completion rate", "completion_rate", 4),
+    ("Cross-file gate", "gate_verdict", None),
+    ("Gate score", "gate_score", 4),
+    ("Gate failures", "gate_failures", 0),
     ("Mean disk quality", "mean_disk_quality_score", 4),
-    ("Aggregate score", "aggregate_score", 4),
-    ("Avg assembly delta", "avg_assembly_delta", 4),
     ("Semantic errors", "semantic_error_count", 0),
+    ("Input tokens", "input_tokens", 0),
+    ("Output tokens", "output_tokens", 0),
     ("Total cost ($)", "total_cost", 6),
     ("$/succeeded feature", "cost_per_succeeded_feature", 6),
 ]
@@ -270,12 +296,14 @@ def build_markdown(payload: dict[str, Any]) -> str:
     lines += ["", "## Verdict", ""]
     winner = ranked[0]
     wm = winner["metrics"]
+    gate = wm.get("gate_verdict")
+    gate_str = (f"gate {gate} ({wm.get('gate_failures')} failure(s), score {_fmt(wm.get('gate_score'))})"
+                if gate is not None else f"disk quality {_fmt(wm.get('mean_disk_quality_score'))}")
     lines.append(
-        f"**Recommended: `{winner['model']}`** — mean disk quality "
-        f"{_fmt(wm.get('mean_disk_quality_score'))}, "
-        f"{wm.get('succeeded')}/{wm.get('processed')} features, "
-        f"${_fmt(wm.get('total_cost'), 6)} total "
-        f"(${_fmt(wm.get('cost_per_succeeded_feature'), 6)}/succeeded feature)."
+        f"**Recommended: `{winner['model']}`** — "
+        f"{wm.get('succeeded')}/{wm.get('processed')} features, {gate_str}, "
+        f"${_fmt(wm.get('total_cost'), 4)} total "
+        f"(${_fmt(wm.get('cost_per_succeeded_feature'), 4)}/succeeded feature)."
     )
     incomplete = [r["model"] for r in ranked if not r["metrics"].get("artifacts_found")]
     if incomplete:

@@ -98,6 +98,34 @@ def test_extract_metrics_full(harness, tmp_path):
     assert m["artifacts_found"] is True
 
 
+def test_extract_metrics_reads_prime_result_cost_and_gate(harness, tmp_path):
+    """Cost + cross-file gate come from prime-result.json, not the (often absent) postmortem."""
+    tmp_path.joinpath("prime-result.json").write_text(json.dumps({
+        "processed": 5, "succeeded": 5, "failed": 0, "success": True,
+        "total_cost_usd": 0.37, "total_input_tokens": 142918, "total_output_tokens": 38143,
+        "cross_file_gate": {"verdict": "FAIL", "score": 0.396,
+                            "cross_file_failures": [{"feature_id": "PI-004"}]},
+    }))
+    m = harness.extract_metrics(tmp_path)
+    assert m["total_cost"] == pytest.approx(0.37)
+    assert m["cost_source"] == "prime_result"
+    assert m["cost_per_succeeded_feature"] == pytest.approx(0.37 / 5)
+    assert m["gate_verdict"] == "FAIL" and m["gate_failures"] == 1
+    assert m["gate_score"] == pytest.approx(0.396)
+    assert m["input_tokens"] == 142918 and m["output_tokens"] == 38143
+
+
+def test_rank_prefers_fewer_gate_failures_when_no_disk_score(harness):
+    """With no postmortem disk score, fewer cross-file gate failures wins."""
+    results = [
+        {"model": "more_fails", "metrics": {"mean_disk_quality_score": None, "gate_score": 0.40,
+                                            "gate_failures": 2, "cost_per_succeeded_feature": 0.27}},
+        {"model": "fewer_fails", "metrics": {"mean_disk_quality_score": None, "gate_score": 0.396,
+                                             "gate_failures": 1, "cost_per_succeeded_feature": 0.07}},
+    ]
+    assert [r["model"] for r in harness.rank_models(results)][0] == "fewer_fails"
+
+
 def test_extract_metrics_missing_artifacts(harness, tmp_path):
     """No crash, all None/zero when a run produced nothing (FR-3/FR-10)."""
     m = harness.extract_metrics(tmp_path)
