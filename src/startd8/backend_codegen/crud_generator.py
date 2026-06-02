@@ -33,6 +33,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "fastapi-routers": "app/routers.py",
     "fastapi-db": "app/db.py",
     "fastapi-main": "app/main.py",
+    "fastapi-web": "app/web.py",
 }
 
 

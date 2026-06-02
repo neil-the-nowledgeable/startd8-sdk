@@ -61,9 +61,12 @@ wiring). `CANONICAL_LAYOUT` fixes the five artifacts to one `app/` package so im
 construction. Three new artifact kinds (`fastapi-routers`/`-db`/`-main`) registered in the drift
 dispatch, so the one provider $0.00-recognizes them too. *Depended on: Steps 1–2 (models) + 3 (gate).*
 
-**Step 5 — HTMX/Jinja templates + inline validation (FR-4).** `htmx_templates` emits list / detail /
-create+edit form / delete + validate-on-blur endpoints + field-level error partials + partial swaps;
-field→widget map derived from the model. *Depends on: Step 4 (routes to target).*
+**Step 5 — HTMX/Jinja templates + inline validation (FR-4). ✅ SHIPPED.** `htmx_generator.py`:
+`app/web.py` (list/new/create/detail/edit/update/delete + `/validate`) and Jinja templates
+(`base`, `_field_error`, per-entity `list/detail/form`). Field→widget map; inline validation via
+`hx-post`/`hx-trigger=blur`; `outerHTML` swaps. Template headers wrap `#` provenance in a Jinja
+`{# #}` comment so the existing drift path recognizes them (entity-aware dispatch added). Six new
+artifact kinds (`fastapi-web`, `htmx-base/-field-error/-list/-detail/-form`). *Depended on: Step 4.*
 
 **Step 6 — Pure emitters + AI schemas (FR-6, FR-7, FR-8).** `completeness` (declared signal set →
 score+nudges), `export` (JSON pure + MD from declared layout), and AI tool/IO schema projection

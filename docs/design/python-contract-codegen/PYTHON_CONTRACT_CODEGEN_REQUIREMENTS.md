@@ -98,10 +98,15 @@ the SQLModel class → session op → response; entities without a single-column
 only), `app/db.py` (SQLite engine + `get_session` + `init_db`), `app/main.py` (FastAPI app + all
 routers). Canonical imports only; no invented module paths.
 
-**FR-4 — HTMX/Jinja template generator.** Per entity, emit the **locked HTMX output set**: list,
-detail, create+edit form, delete — **plus inline validation** (validate-on-blur endpoints,
-field-level error partials, partial swaps). Field→input widget mapping derived from the model
-(enum→select, date→date input, bool→checkbox, relation→picker stub, str→input/textarea). Owned.
+**FR-4 — HTMX/Jinja template generator. Shipped (Step 5).** `htmx_generator.py` emits the owned UI:
+`app/web.py` (HTML routes — list / new / create / detail / edit / update / delete + a `/validate`
+inline endpoint) and Jinja templates (`base.html`, `_field_error.html`, per-entity
+`list/detail/form.html`). The **locked HTMX output set** — CRUD + **inline validation**
+(validate-on-blur via `hx-post`+`hx-trigger`, field-level error slots, `outerHTML` partial swaps on
+delete). Field→widget map derived from the model (enum→`<select>`, bool→checkbox, Int/Float→number,
+DateTime→datetime-local, else→text). Template provenance is a `#` header wrapped in a Jinja `{# #}`
+comment, so the **existing drift path recognizes templates** (entity-aware dispatch) with no new
+machinery. Owned; `$0.00`-skippable.
 
 **FR-5 — Python project build gate. Shipped (Step 3).** `validators/python_toolchain.py` mirrors
 `ts_toolchain`'s **verdict contract** (`checked`/`unavailable`/`timeout`/`error` →

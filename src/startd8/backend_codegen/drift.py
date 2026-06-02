@@ -25,33 +25,59 @@ ERROR = 2
 _HEADER_SHA_RE = re.compile(r"#\s*schema-sha256:\s*([0-9a-f]{64})")
 _HEADER_SRC_RE = re.compile(r"#\s*GENERATED from\s+(\S+)")
 _HEADER_KIND_RE = re.compile(r"#\s*startd8-artifact:\s*(\S+)")
+_HEADER_ENTITY_RE = re.compile(r"#\s*startd8-entity:\s*(\S+)")
 _GENERATED_MARKER = "# GENERATED from"
 
 
-def _renderers() -> Dict[str, Callable[[str, str], str]]:
-    """Map artifact-kind → a ``(schema_text, source_file) -> text`` renderer.
+def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
+    """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
     Imported lazily so this module has no load-order dependency on the renderers. Each backend
-    artifact tags its header with ``# startd8-artifact: <kind>`` so a single provider/drift path
-    re-renders it with the *right* renderer (a Pydantic-models file and a SQLModel-tables file both
-    carry the GENERATED marker, so the kind tag is what disambiguates them).
+    artifact tags its header with ``# startd8-artifact: <kind>`` (and, for per-entity templates,
+    ``# startd8-entity: <Name>``) so a single provider/drift path re-renders it with the *right*
+    renderer — every backend artifact carries the GENERATED marker, so the kind+entity tags are
+    what disambiguate them. ``entity`` is ``None`` for app-wide artifacts.
     """
     from .crud_generator import render_db, render_main, render_routers
+    from .htmx_generator import (
+        render_base_template,
+        render_detail_template,
+        render_field_error_template,
+        render_form_template,
+        render_list_template,
+        render_web,
+    )
     from .pydantic_renderer import render_pydantic_models
     from .sqlmodel_renderer import render_sqlmodel_tables
 
     return {
-        "pydantic-models": lambda s, sf: render_pydantic_models(s, source_file=sf).text,
-        "sqlmodel-tables": lambda s, sf: render_sqlmodel_tables(s, source_file=sf).text,
-        "fastapi-routers": lambda s, sf: render_routers(s, sf),
-        "fastapi-db": lambda s, sf: render_db(s, sf),
-        "fastapi-main": lambda s, sf: render_main(s, sf),
+        "pydantic-models": lambda s, sf, e: render_pydantic_models(
+            s, source_file=sf
+        ).text,
+        "sqlmodel-tables": lambda s, sf, e: render_sqlmodel_tables(
+            s, source_file=sf
+        ).text,
+        "fastapi-routers": lambda s, sf, e: render_routers(s, sf),
+        "fastapi-db": lambda s, sf, e: render_db(s, sf),
+        "fastapi-main": lambda s, sf, e: render_main(s, sf),
+        "fastapi-web": lambda s, sf, e: render_web(s, sf),
+        "htmx-base": lambda s, sf, e: render_base_template(s, sf),
+        "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
+        "htmx-list": lambda s, sf, e: render_list_template(s, sf, e),
+        "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e),
+        "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
     }
 
 
 def embedded_artifact_kind(ondisk_text: str) -> Optional[str]:
     """The ``startd8-artifact`` kind recorded in a generated file's header, or ``None``."""
     m = _HEADER_KIND_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_entity(ondisk_text: str) -> Optional[str]:
+    """The ``startd8-entity`` name recorded in a per-entity template header, or ``None``."""
+    m = _HEADER_ENTITY_RE.search(ondisk_text or "")
     return m.group(1) if m else None
 
 
@@ -142,7 +168,7 @@ def check_drift(
             DRIFT,
             f"unknown or missing startd8-artifact kind ({kind!r}) — cannot verify",
         )
-    rendered = renderer(schema_text, source_file)
+    rendered = renderer(schema_text, source_file, embedded_entity(ondisk_text))
     if rendered != ondisk_text:
         return DriftResult(
             "tampered",

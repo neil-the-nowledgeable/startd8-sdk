@@ -16,6 +16,7 @@ from .crud_generator import (
     render_spine,
 )
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
+from .htmx_generator import render_ui, render_web
 from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
@@ -30,6 +31,8 @@ __all__ = [
     "render_db",
     "render_main",
     "render_spine",
+    "render_web",
+    "render_ui",
     "CANONICAL_LAYOUT",
     "check_drift",
     "owned_file_in_sync",
