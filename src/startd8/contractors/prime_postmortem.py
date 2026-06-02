@@ -50,8 +50,10 @@ _PARTIAL_THRESHOLD = 0.4
 _POSTMORTEM_TIMEOUT_S = 300
 _COST_OUTLIER_FACTOR = 2.0  # Feature costing 2x+ average is an outlier
 _CROSS_FEATURE_PATTERN_MIN = 2  # Minimum occurrences for repeated_root_cause
-_ESCALATION_MIN_FEATURES = 3   # Minimum distinct features for escalation patterns (REQ-KZ-401a)
-_ESCALATION_MIN_ELEMENTS = 5   # Minimum total element escalations (REQ-KZ-401a)
+_ESCALATION_MIN_FEATURES = (
+    3  # Minimum distinct features for escalation patterns (REQ-KZ-401a)
+)
+_ESCALATION_MIN_ELEMENTS = 5  # Minimum total element escalations (REQ-KZ-401a)
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -77,7 +79,9 @@ class RootCause(str, Enum):
     GENERATION_ERROR = "generation_error"
     DEPENDENCY_BLOCKED = "dependency_blocked"
     REPAIR_LANGUAGE_MISMATCH = "repair_language_mismatch"
-    CROSS_FILE_CONTRACT = "cross_file_contract"  # RUN-008 FR-10: Prisma↔Zod / import seam divergence
+    CROSS_FILE_CONTRACT = (
+        "cross_file_contract"  # RUN-008 FR-10: Prisma↔Zod / import seam divergence
+    )
     TYPE_CLASS_MISMATCH = "type_class_mismatch"  # RUN-011 Gap C: TS231x/232x/234x assignment/overload/binding errors
     UNKNOWN = "unknown"
 
@@ -93,7 +97,9 @@ class PipelineStage(str, Enum):
     SPLICER = "splicer"
     FALLBACK = "fallback"
     INTEGRATION = "integration"
-    CROSS_FEATURE_CONTRACT = "cross_feature_contract"  # RUN-008 FR-10: divergence between sibling features
+    CROSS_FEATURE_CONTRACT = (
+        "cross_feature_contract"  # RUN-008 FR-10: divergence between sibling features
+    )
     TYPECHECK = "typecheck"  # RUN-011 Gap C: surfaced by tsc --noEmit, survives per-file isolation
     UNKNOWN = "unknown"
 
@@ -104,50 +110,104 @@ class PipelineStage(str, Enum):
 
 # Compiled patterns mapping error strings to (RootCause, PipelineStage)
 _ERROR_PATTERNS: List[Tuple[re.Pattern, RootCause, PipelineStage]] = [
-    (re.compile(r"F811|redefinition of unused", re.IGNORECASE),
-     RootCause.DUPLICATE_IMPORT, PipelineStage.REPAIR),
-    (re.compile(r"NotImplementedError|unfilled stub", re.IGNORECASE),
-     RootCause.UNFILLED_STUB, PipelineStage.OLLAMA_GENERATION),
-    (re.compile(r"nested class|scope corruption|unexpected indent", re.IGNORECASE),
-     RootCause.SCOPE_CORRUPTION, PipelineStage.SPLICER),
-    (re.compile(r"phantom import|no module named|cannot import", re.IGNORECASE),
-     RootCause.PHANTOM_IMPORT, PipelineStage.OLLAMA_GENERATION),
-    (re.compile(r"skeleton.*missing|no skeleton|skeleton not found", re.IGNORECASE),
-     RootCause.SKELETON_MISSING, PipelineStage.SKELETON),
-    (re.compile(r"timeout|timed out", re.IGNORECASE),
-     RootCause.OLLAMA_TIMEOUT, PipelineStage.OLLAMA_GENERATION),
-    (re.compile(r"empty response|no response", re.IGNORECASE),
-     RootCause.OLLAMA_EMPTY_RESPONSE, PipelineStage.OLLAMA_GENERATION),
-    (re.compile(r"circuit.?breaker", re.IGNORECASE),
-     RootCause.OLLAMA_CIRCUIT_BREAKER, PipelineStage.OLLAMA_GENERATION),
-    (re.compile(r"repair exhausted|max repair", re.IGNORECASE),
-     RootCause.REPAIR_EXHAUSTED, PipelineStage.REPAIR),
-    (re.compile(r"splice|splicer.*mismatch", re.IGNORECASE),
-     RootCause.SPLICER_MISMATCH, PipelineStage.SPLICER),
-    (re.compile(r"size regression|size.*guard|file.*too large", re.IGNORECASE),
-     RootCause.SIZE_REGRESSION, PipelineStage.INTEGRATION),
-    (re.compile(r"ast.*fail|syntax error|invalid syntax", re.IGNORECASE),
-     RootCause.AST_FAILURE, PipelineStage.REPAIR),
+    (
+        re.compile(r"F811|redefinition of unused", re.IGNORECASE),
+        RootCause.DUPLICATE_IMPORT,
+        PipelineStage.REPAIR,
+    ),
+    (
+        re.compile(r"NotImplementedError|unfilled stub", re.IGNORECASE),
+        RootCause.UNFILLED_STUB,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
+    (
+        re.compile(r"nested class|scope corruption|unexpected indent", re.IGNORECASE),
+        RootCause.SCOPE_CORRUPTION,
+        PipelineStage.SPLICER,
+    ),
+    (
+        re.compile(r"phantom import|no module named|cannot import", re.IGNORECASE),
+        RootCause.PHANTOM_IMPORT,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
+    (
+        re.compile(r"skeleton.*missing|no skeleton|skeleton not found", re.IGNORECASE),
+        RootCause.SKELETON_MISSING,
+        PipelineStage.SKELETON,
+    ),
+    (
+        re.compile(r"timeout|timed out", re.IGNORECASE),
+        RootCause.OLLAMA_TIMEOUT,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
+    (
+        re.compile(r"empty response|no response", re.IGNORECASE),
+        RootCause.OLLAMA_EMPTY_RESPONSE,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
+    (
+        re.compile(r"circuit.?breaker", re.IGNORECASE),
+        RootCause.OLLAMA_CIRCUIT_BREAKER,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
+    (
+        re.compile(r"repair exhausted|max repair", re.IGNORECASE),
+        RootCause.REPAIR_EXHAUSTED,
+        PipelineStage.REPAIR,
+    ),
+    (
+        re.compile(r"splice|splicer.*mismatch", re.IGNORECASE),
+        RootCause.SPLICER_MISMATCH,
+        PipelineStage.SPLICER,
+    ),
+    (
+        re.compile(r"size regression|size.*guard|file.*too large", re.IGNORECASE),
+        RootCause.SIZE_REGRESSION,
+        PipelineStage.INTEGRATION,
+    ),
+    (
+        re.compile(r"ast.*fail|syntax error|invalid syntax", re.IGNORECASE),
+        RootCause.AST_FAILURE,
+        PipelineStage.REPAIR,
+    ),
     # RUN-011 Gap C — TypeScript type-class errors (assignment/binding/operator):
     # TS231x (operator overload), TS232x (binding/assignment), TS234x (argument
     # assignment, e.g. TS2345 Set<unknown> not assignable to Set<string>). These
     # are REAL type errors that survive per-file isolation (not the module-resolution
     # / target-lib false positives nodejs.py strips) — attribute them, don't leave
     # them as unknown/unknown. Case-sensitive on the TS code to avoid stray matches.
-    (re.compile(r"error TS23[124]\d\b"),
-     RootCause.TYPE_CLASS_MISMATCH, PipelineStage.TYPECHECK),
-    (re.compile(r"blocked by.*dependency|dependency.*failed", re.IGNORECASE),
-     RootCause.DEPENDENCY_BLOCKED, PipelineStage.INTEGRATION),
-    (re.compile(r"generation.*error|generation.*fail", re.IGNORECASE),
-     RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
+    (
+        re.compile(r"error TS23[124]\d\b"),
+        RootCause.TYPE_CLASS_MISMATCH,
+        PipelineStage.TYPECHECK,
+    ),
+    (
+        re.compile(r"blocked by.*dependency|dependency.*failed", re.IGNORECASE),
+        RootCause.DEPENDENCY_BLOCKED,
+        PipelineStage.INTEGRATION,
+    ),
+    (
+        re.compile(r"generation.*error|generation.*fail", re.IGNORECASE),
+        RootCause.GENERATION_ERROR,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
     # Agent API contract errors — TypeError/unexpected keyword from
     # mismatched agent.generate() signatures (Run-027: 'stop' kwarg).
-    (re.compile(r"unexpected keyword argument|TypeError.*agenerate|TypeError.*generate", re.IGNORECASE),
-     RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
+    (
+        re.compile(
+            r"unexpected keyword argument|TypeError.*agenerate|TypeError.*generate",
+            re.IGNORECASE,
+        ),
+        RootCause.GENERATION_ERROR,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
     # Catch-all: "Exception during code generation" wrapper from
     # develop_feature()'s except block — the real error is in the suffix.
-    (re.compile(r"Exception during code generation", re.IGNORECASE),
-     RootCause.GENERATION_ERROR, PipelineStage.OLLAMA_GENERATION),
+    (
+        re.compile(r"Exception during code generation", re.IGNORECASE),
+        RootCause.GENERATION_ERROR,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
 ]
 
 # Maps EscalationReason string values to (RootCause, PipelineStage)
@@ -158,9 +218,15 @@ _ESCALATION_MAP: Dict[str, Tuple[RootCause, PipelineStage]] = {
     "ollama_unavailable": (RootCause.OLLAMA_TIMEOUT, PipelineStage.OLLAMA_GENERATION),
     "tier_too_high": (RootCause.TIER_ESCALATION, PipelineStage.CLASSIFICATION),
     "repair_exhausted": (RootCause.REPAIR_EXHAUSTED, PipelineStage.REPAIR),
-    "empty_response": (RootCause.OLLAMA_EMPTY_RESPONSE, PipelineStage.OLLAMA_GENERATION),
+    "empty_response": (
+        RootCause.OLLAMA_EMPTY_RESPONSE,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
     "timeout": (RootCause.OLLAMA_TIMEOUT, PipelineStage.OLLAMA_GENERATION),
-    "circuit_breaker": (RootCause.OLLAMA_CIRCUIT_BREAKER, PipelineStage.OLLAMA_GENERATION),
+    "circuit_breaker": (
+        RootCause.OLLAMA_CIRCUIT_BREAKER,
+        PipelineStage.OLLAMA_GENERATION,
+    ),
 }
 
 
@@ -399,7 +465,6 @@ class PrimePostMortemReport:
 # ---------------------------------------------------------------------------
 
 from startd8.forward_manifest_validator import compute_disk_quality_score  # noqa: F401
-
 
 # ---------------------------------------------------------------------------
 # Kaizen suggestion generation (Phase C — moved from scripts/)
@@ -710,8 +775,8 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "Prior run had empty catch/except blocks that silently swallow errors. "
             "ALWAYS log the exception. Prefer catching specific exception types. "
             "C#: catch (SpecificException ex) { _logger.LogError(ex, ...); } "
-            "Java: catch (IOException e) { logger.error(\"msg\", e); } "
-            "Go: if err != nil { return fmt.Errorf(\"context: %w\", err) }"
+            'Java: catch (IOException e) { logger.error("msg", e); } '
+            'Go: if err != nil { return fmt.Errorf("context: %w", err) }'
         ),
     },
     "unchecked_error_detected": {
@@ -787,7 +852,7 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
         "hint": (
             "Prior run generated SQL queries with string interpolation. "
             "CRITICAL: Use ONLY parameterized queries. Example:\n"
-            '  BAD:  $"SELECT * FROM cart WHERE user_id = \'{userId}\'"\n'
+            "  BAD:  $\"SELECT * FROM cart WHERE user_id = '{userId}'\"\n"
             '  GOOD: cmd.CommandText = "SELECT * FROM cart WHERE user_id = @userId";\n'
             '        cmd.Parameters.AddWithValue("@userId", userId);\n'
             'For Spanner: new SpannerCommand("SELECT * FROM Cart WHERE UserId = @userId", conn)\n'
@@ -834,7 +899,7 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
     "dot_import_detected": {
         "phase": "draft",
         "hint": (
-            "Prior run used dot-imports (import . \"pkg\") which pollute the namespace. "
+            'Prior run used dot-imports (import . "pkg") which pollute the namespace. '
             "Always use explicit package-qualified access (e.g., fmt.Println, not Println)."
         ),
     },
@@ -1146,16 +1211,18 @@ def generate_kaizen_suggestions(
         template = CAUSE_TO_SUGGESTION.get(pattern_type)
         if not template:
             continue
-        suggestions.append({
-            "pattern": getattr(pattern, "description", ""),
-            "pattern_type": pattern_type,
-            "frequency": pattern.frequency,
-            "suggested_action": template["hint"],
-            "config_key": "prompt_hints",
-            "phase": template["phase"],
-            "confidence": "high" if pattern.frequency >= 3 else "medium",
-            "auto_applicable": False,
-        })
+        suggestions.append(
+            {
+                "pattern": getattr(pattern, "description", ""),
+                "pattern_type": pattern_type,
+                "frequency": pattern.frequency,
+                "suggested_action": template["hint"],
+                "config_key": "prompt_hints",
+                "phase": template["phase"],
+                "confidence": "high" if pattern.frequency >= 3 else "medium",
+                "auto_applicable": False,
+            }
+        )
 
     # Scan per-feature semantic_issues for recurring categories (e.g. sql_injection_risk).
     # When 2+ features share the same semantic issue category, generate a suggestion
@@ -1181,16 +1248,22 @@ def generate_kaizen_suggestions(
         template = CAUSE_TO_SUGGESTION.get(suggestion_key)
         if not template:
             continue
-        suggestions.append({
-            "pattern": f"Semantic issue '{category}' found in {len(affected)} features",
-            "pattern_type": suggestion_key,
-            "frequency": len(affected),
-            "suggested_action": template["hint"],
-            "config_key": template.get("confidence", "prompt_hints") if isinstance(template.get("confidence"), str) else "prompt_hints",
-            "phase": template["phase"],
-            "confidence": "high" if len(affected) >= 3 else "medium",
-            "auto_applicable": False,
-        })
+        suggestions.append(
+            {
+                "pattern": f"Semantic issue '{category}' found in {len(affected)} features",
+                "pattern_type": suggestion_key,
+                "frequency": len(affected),
+                "suggested_action": template["hint"],
+                "config_key": (
+                    template.get("confidence", "prompt_hints")
+                    if isinstance(template.get("confidence"), str)
+                    else "prompt_hints"
+                ),
+                "phase": template["phase"],
+                "confidence": "high" if len(affected) >= 3 else "medium",
+                "auto_applicable": False,
+            }
+        )
 
     # --- Observability artifact feedback loop (REQ-KZ-OBS-600) ---
     # Scan observability-quality.json for issues that map to obs_* suggestions.
@@ -1247,16 +1320,20 @@ def _append_obs_suggestions(
 
         # Detect missing artifact types (score == 0 means missing)
         if svc_eval.get("slo_score", 1.0) == 0.0:
-            category_services.setdefault(
-                "obs_missing_availability_slo", []
-            ).append(svc_id)
+            category_services.setdefault("obs_missing_availability_slo", []).append(
+                svc_id
+            )
 
     # Cross-artifact issues
     cross = obs.get("cross_artifact_issues", {})
     if cross.get("unvisualized_alerts", 0) > 0:
-        category_services.setdefault("obs_missing_red_panels", []).append("cross-artifact")
+        category_services.setdefault("obs_missing_red_panels", []).append(
+            "cross-artifact"
+        )
     if cross.get("misaligned_thresholds", 0) > 0:
-        category_services.setdefault("obs_threshold_mismatch", []).append("cross-artifact")
+        category_services.setdefault("obs_threshold_mismatch", []).append(
+            "cross-artifact"
+        )
 
     # Emit suggestions for each observed category
     seen_types = {s.get("pattern_type") for s in suggestions}
@@ -1267,16 +1344,18 @@ def _append_obs_suggestions(
         template = CAUSE_TO_SUGGESTION.get(suggestion_key)
         if not template:
             continue
-        suggestions.append({
-            "pattern": f"Observability issue '{cat}' in {len(services)} service(s): {', '.join(services[:5])}",
-            "pattern_type": suggestion_key,
-            "frequency": len(services),
-            "suggested_action": template["hint"],
-            "config_key": "prompt_hints",
-            "phase": template["phase"],
-            "confidence": "high" if len(services) >= 2 else "medium",
-            "auto_applicable": False,
-        })
+        suggestions.append(
+            {
+                "pattern": f"Observability issue '{cat}' in {len(services)} service(s): {', '.join(services[:5])}",
+                "pattern_type": suggestion_key,
+                "frequency": len(services),
+                "suggested_action": template["hint"],
+                "config_key": "prompt_hints",
+                "phase": template["phase"],
+                "confidence": "high" if len(services) >= 2 else "medium",
+                "auto_applicable": False,
+            }
+        )
 
 
 def _obs_check_to_category(check_id: str) -> Optional[str]:
@@ -1358,7 +1437,10 @@ class PrimePostMortemEvaluator:
                     fid in force_regenerated_ids if force_regenerated_ids else False
                 )
                 fpm = self._evaluate_feature(
-                    feature_dict, hist_entry, seed_task, fid,
+                    feature_dict,
+                    hist_entry,
+                    seed_task,
+                    fid,
                     force_regenerated=is_force_regen,
                 )
                 report.features.append(fpm)
@@ -1367,16 +1449,18 @@ class PrimePostMortemEvaluator:
                 logger.warning("Error evaluating feature %s", fid, exc_info=True)
                 # Create a minimal entry so the feature isn't silently dropped
                 fd = feature_dict if isinstance(feature_dict, dict) else {}
-                report.features.append(FeaturePostMortem(
-                    feature_id=fid,
-                    name=fd.get("name", fid),
-                    status=fd.get("status", "unknown"),
-                    success=False,
-                    error_message="Post-mortem evaluation error",
-                    root_cause=RootCause.UNKNOWN,
-                    pipeline_stage=PipelineStage.UNKNOWN,
-                    verdict="ERROR",
-                ))
+                report.features.append(
+                    FeaturePostMortem(
+                        feature_id=fid,
+                        name=fd.get("name", fid),
+                        status=fd.get("status", "unknown"),
+                        success=False,
+                        error_message="Post-mortem evaluation error",
+                        root_cause=RootCause.UNKNOWN,
+                        pipeline_stage=PipelineStage.UNKNOWN,
+                        verdict="ERROR",
+                    )
+                )
 
         # Aggregate metrics
         report.total_features = len(report.features)
@@ -1424,10 +1508,15 @@ class PrimePostMortemEvaluator:
                         agg_pre.update(sem.get("pre_repair_scores", {}))
                         agg_per_file.update(sem.get("per_file", {}))
                 if agg_pre or agg_per_file:
-                    aggregated_repair = {"pre_repair_scores": agg_pre, "per_file": agg_per_file}
+                    aggregated_repair = {
+                        "pre_repair_scores": agg_pre,
+                        "per_file": agg_per_file,
+                    }
 
             self._evaluate_disk_quality(
-                report.features, project_root, forward_manifest,
+                report.features,
+                project_root,
+                forward_manifest,
                 seed_by_id=seed_by_id,
                 semantic_repair_data=aggregated_repair if aggregated_repair else None,
                 history_by_id=history_by_id,
@@ -1442,29 +1531,37 @@ class PrimePostMortemEvaluator:
             # Env-gated (STARTD8_TS_TYPECHECK) — only runs where the host provisions
             # the Node toolchain (OQ-3). Toolchain-absent is surfaced, never a silent PASS.
             self._evaluate_ts_toolchain(report.features, project_root)
+            # OQ-5: project-level Python build gate (compileall + mypy) over a generated
+            # all-Python backend (backend_codegen path). Env-gated (STARTD8_PY_TYPECHECK);
+            # mypy import-resolution noise from absent app deps is treated as infra, not fault.
+            self._evaluate_python_toolchain(report.features, project_root)
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
-                f.assembly_delta for f in report.features
+                f.assembly_delta
+                for f in report.features
                 if f.assembly_delta is not None
             ]
             if deltas:
                 report.avg_assembly_delta = sum(deltas) / len(deltas)
                 # Cross-feature pattern: large assembly quality gap
                 large_gaps = [
-                    f.feature_id for f in report.features
+                    f.feature_id
+                    for f in report.features
                     if f.assembly_delta is not None and f.assembly_delta > 0.2
                 ]
                 if len(large_gaps) >= 2:
-                    report.cross_feature_patterns.append(CrossFeaturePattern(
-                        pattern_type="assembly_quality_gap",
-                        description=(
-                            f"Assembly degrades quality by >0.2 in "
-                            f"{len(large_gaps)} features"
-                        ),
-                        affected_features=large_gaps,
-                        frequency=len(large_gaps),
-                        severity="high" if len(large_gaps) >= 3 else "medium",
-                    ))
+                    report.cross_feature_patterns.append(
+                        CrossFeaturePattern(
+                            pattern_type="assembly_quality_gap",
+                            description=(
+                                f"Assembly degrades quality by >0.2 in "
+                                f"{len(large_gaps)} features"
+                            ),
+                            affected_features=large_gaps,
+                            frequency=len(large_gaps),
+                            severity="high" if len(large_gaps) >= 3 else "medium",
+                        )
+                    )
 
             # Recompute aggregate score using disk quality scores so that
             # semantic validation findings influence the PASS/FAIL verdict.
@@ -1480,12 +1577,8 @@ class PrimePostMortemEvaluator:
 
             # Recount successes — disk evaluation may have flipped
             # feature verdicts via the semantic verdict gate.
-            report.successful_features = sum(
-                1 for f in report.features if f.success
-            )
-            report.failed_features = (
-                report.total_features - report.successful_features
-            )
+            report.successful_features = sum(1 for f in report.features if f.success)
+            report.failed_features = report.total_features - report.successful_features
 
             # Re-evaluate verdict with updated score.
             if report.aggregate_score >= _PASS_THRESHOLD:
@@ -1569,11 +1662,9 @@ class PrimePostMortemEvaluator:
         target_files = feature_dict.get("target_files", [])
         generated_files = feature_dict.get("generated_files", [])
         missing_files = [
-            f for f in target_files
-            if not any(
-                g == f or g.endswith("/" + f)
-                for g in generated_files
-            )
+            f
+            for f in target_files
+            if not any(g == f or g.endswith("/" + f) for g in generated_files)
         ]
 
         # Element analysis from micro-prime metadata
@@ -1603,20 +1694,22 @@ class PrimePostMortemEvaluator:
                 elif raw_attr is not None and hasattr(raw_attr, "model_dump"):
                     repair_attr = raw_attr.model_dump()
 
-                elements.append(ElementPostMortem(
-                    element_name=er.get("element_name", ""),
-                    file_path=er.get("file_path", fr.get("file_path", "")),
-                    tier=er.get("tier", "unknown"),
-                    success=elem_success,
-                    root_cause=elem_cause,
-                    pipeline_stage=elem_stage,
-                    escalation_reason=escalation_reason,
-                    template_used=er.get("template_used", False),
-                    repair_steps=er.get("repair_steps_applied", []),
-                    generation_time_ms=er.get("generation_time_ms", 0.0),
-                    ast_valid_before_repair=er.get("ast_valid_before_repair"),
-                    repair_attribution=repair_attr,
-                ))
+                elements.append(
+                    ElementPostMortem(
+                        element_name=er.get("element_name", ""),
+                        file_path=er.get("file_path", fr.get("file_path", "")),
+                        tier=er.get("tier", "unknown"),
+                        success=elem_success,
+                        root_cause=elem_cause,
+                        pipeline_stage=elem_stage,
+                        escalation_reason=escalation_reason,
+                        template_used=er.get("template_used", False),
+                        repair_steps=er.get("repair_steps_applied", []),
+                        generation_time_ms=er.get("generation_time_ms", 0.0),
+                        ast_valid_before_repair=er.get("ast_valid_before_repair"),
+                        repair_attribution=repair_attr,
+                    )
+                )
 
         # Requirement matching — incorporate element-level success rate
         # when micro-prime elements are present.
@@ -1714,13 +1807,17 @@ class PrimePostMortemEvaluator:
         sources: Dict[str, str] = {}
         not_materialized: List[str] = []
         for fpm in features:
-            for fp in (fpm.generated_files or fpm.target_files):
+            for fp in fpm.generated_files or fpm.target_files:
                 if not str(fp).endswith((".prisma", ".ts", ".tsx")):
                     continue
-                candidate = Path(fp) if Path(fp).is_absolute() else Path(project_root) / fp
+                candidate = (
+                    Path(fp) if Path(fp).is_absolute() else Path(project_root) / fp
+                )
                 try:
                     if candidate.is_file():
-                        sources[fp] = candidate.read_text(encoding="utf-8", errors="replace")
+                        sources[fp] = candidate.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
                         path_to_feature[fp] = fpm
                     else:
                         not_materialized.append(str(fp))
@@ -1730,7 +1827,8 @@ class PrimePostMortemEvaluator:
             logger.warning(
                 "cross-file: %d generated file(s) not materialized on disk — unverified "
                 "(skipped_not_materialized): %s",
-                len(not_materialized), not_materialized[:5],
+                len(not_materialized),
+                not_materialized[:5],
             )
 
         # Inc-4: delegate to the unified verifier (REQ-CKG-600) — the 5 shipped signatures
@@ -1742,14 +1840,19 @@ class PrimePostMortemEvaluator:
         # never a silent PASS — REQ-CKG-230).
         scip = None
         import os
+
         if os.environ.get("STARTD8_CKG_SCIP"):
             try:
                 from startd8.code_observability import run_index
                 from startd8.code_observability.scip_reader import ScipReader
+
                 _idx = run_index(project_root)
                 scip = ScipReader.from_path(_idx) if _idx else None
             except Exception:
-                logger.warning("cross-file: SCIP index unavailable — external check advisory", exc_info=True)
+                logger.warning(
+                    "cross-file: SCIP index unavailable — external check advisory",
+                    exc_info=True,
+                )
 
         findings = run_checks(sources, project_root, scip=scip).errors
         if not findings:
@@ -1759,8 +1862,14 @@ class PrimePostMortemEvaluator:
         # source file can't be mapped, fall back to the feature owning the
         # Prisma schema (the producer side of the seam).
         prisma_feature = next(
-            (fpm for fpm in features
-             if any(str(f).endswith(".prisma") for f in (fpm.generated_files or fpm.target_files))),
+            (
+                fpm
+                for fpm in features
+                if any(
+                    str(f).endswith(".prisma")
+                    for f in (fpm.generated_files or fpm.target_files)
+                )
+            ),
             None,
         )
         by_feature: Dict[int, List[Any]] = {}
@@ -1778,11 +1887,13 @@ class PrimePostMortemEvaluator:
             if fpm.disk_compliance is None:
                 fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
             for f in fs:
-                fpm.disk_compliance.semantic_issues.append({
-                    "category": f.kind,
-                    "severity": "error",
-                    "message": f.message,
-                })
+                fpm.disk_compliance.semantic_issues.append(
+                    {
+                        "category": f.kind,
+                        "severity": "error",
+                        "message": f.message,
+                    }
+                )
             # Hard FAIL: cross-file incoherence is not a successful generation
             # regardless of per-file syntax or requirement score.
             fpm.disk_quality_score = 0.0
@@ -1795,10 +1906,7 @@ class PrimePostMortemEvaluator:
                 fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
             fpm.semantic_error_count += len(fs)
             if not fpm.error_message:
-                shown = "; ".join(
-                    f"{f.kind}:{f.locus}"
-                    for f in fs[:4]
-                )
+                shown = "; ".join(f"{f.kind}:{f.locus}" for f in fs[:4])
                 more = "" if len(fs) <= 4 else f" (+{len(fs) - 4} more)"
                 fpm.error_message = f"cross-file contract violations: {shown}{more}"
 
@@ -1844,7 +1952,7 @@ class PrimePostMortemEvaluator:
         ts_exts = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
         path_to_feature: Dict[str, FeaturePostMortem] = {}
         for fpm in features:
-            for fp in (fpm.generated_files or fpm.target_files):
+            for fp in fpm.generated_files or fpm.target_files:
                 if str(fp).endswith(ts_exts):
                     path_to_feature[Path(fp).name] = fpm
         if not path_to_feature:
@@ -1857,14 +1965,17 @@ class PrimePostMortemEvaluator:
             for fpm in {id(f): f for f in path_to_feature.values()}.values():
                 if fpm.disk_compliance is None:
                     fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
-                fpm.disk_compliance.semantic_issues.append({
-                    "category": "ts_verification_unavailable",
-                    "severity": "warning",
-                    "message": f"TypeScript typecheck unavailable: {result.message}",
-                })
+                fpm.disk_compliance.semantic_issues.append(
+                    {
+                        "category": "ts_verification_unavailable",
+                        "severity": "warning",
+                        "message": f"TypeScript typecheck unavailable: {result.message}",
+                    }
+                )
             logger.warning(
                 "FR-9: TS typecheck enabled but toolchain unavailable (%s) — "
-                "TS features unverified, not silently passed.", result.message,
+                "TS features unverified, not silently passed.",
+                result.message,
             )
             return
 
@@ -1883,16 +1994,23 @@ class PrimePostMortemEvaluator:
             if fpm.disk_compliance is None:
                 fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
             for d in diags:
-                fpm.disk_compliance.semantic_issues.append({
-                    "category": f"tsc_{d.code}",
-                    "severity": "error",
-                    "message": f"{d.code} {Path(d.file).name}:{d.line} {d.message}",
-                })
+                fpm.disk_compliance.semantic_issues.append(
+                    {
+                        "category": f"tsc_{d.code}",
+                        "severity": "error",
+                        "message": f"{d.code} {Path(d.file).name}:{d.line} {d.message}",
+                    }
+                )
             fpm.semantic_error_count += len(diags)
         for fpm in affected.values():
             fpm.disk_quality_score = 0.0
             fpm.success = False
-            if fpm.verdict not in ("FAIL", "FAIL:semantic", "FAIL:disk_quality", "FAIL:cross_file"):
+            if fpm.verdict not in (
+                "FAIL",
+                "FAIL:semantic",
+                "FAIL:disk_quality",
+                "FAIL:cross_file",
+            ):
                 fpm.verdict = "FAIL:typecheck"
             if fpm.root_cause == RootCause.UNKNOWN:
                 fpm.root_cause = RootCause.CROSS_FILE_CONTRACT
@@ -1900,6 +2018,112 @@ class PrimePostMortemEvaluator:
                 fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
             if not fpm.error_message:
                 fpm.error_message = "tsc --noEmit reported errors (see semantic_issues)"
+
+    def _evaluate_python_toolchain(
+        self,
+        features: List[FeaturePostMortem],
+        project_root: str,
+    ) -> None:
+        """OQ-5 — project-level Python build gate over a generated all-Python backend.
+
+        The Python sibling of :meth:`_evaluate_ts_toolchain` for the contract-codegen path
+        (``backend_codegen``). Env-gated via ``STARTD8_PY_TYPECHECK`` (off by default). When
+        enabled and the batch has ``.py`` files:
+        - real ``compileall``/``mypy`` faults → the owning feature(s) FAIL (`cross_file_contract`);
+        - toolchain unavailable → surfaced as a warning (FR-9: never a silent PASS).
+
+        ``mypy`` import-resolution noise ("cannot find stub for fastapi/sqlmodel/...") is filtered:
+        the generated app's third-party deps may be absent from the *run host*, which is an
+        infra/provisioning condition (like missing ``node_modules`` for the TS gate), not a code
+        fault. Real type/name faults still fail. ``pytest`` is not run (gen-gate, not a test run).
+        """
+        try:
+            from startd8.validators.python_toolchain import (
+                python_typecheck_enabled,
+                run_project_check,
+            )
+            from startd8.forward_manifest_validator import DiskComplianceResult
+        except ImportError:
+            return
+        if not python_typecheck_enabled():
+            return
+
+        path_to_feature: Dict[str, FeaturePostMortem] = {}
+        for fpm in features:
+            for fp in fpm.generated_files or fpm.target_files:
+                if str(fp).endswith(".py"):
+                    path_to_feature[Path(fp).name] = fpm
+        if not path_to_feature:
+            return  # no Python in this batch — nothing to gate
+
+        result = run_project_check(project_root, run_mypy=True, run_pytest=False)
+
+        if result.status != "checked":
+            for fpm in {id(f): f for f in path_to_feature.values()}.values():
+                if fpm.disk_compliance is None:
+                    fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+                fpm.disk_compliance.semantic_issues.append(
+                    {
+                        "category": "py_verification_unavailable",
+                        "severity": "warning",
+                        "message": f"Python build gate unavailable: {result.message}",
+                    }
+                )
+            logger.warning(
+                "FR-9: Python gate enabled but toolchain unavailable (%s) — "
+                "Python features unverified, not silently passed.",
+                result.message,
+            )
+            return
+
+        # Drop mypy import-resolution noise (absent third-party deps = provisioning, not a fault).
+        def _is_provisioning_noise(diag: Any) -> bool:
+            code = (diag.code or "").lower()
+            msg = diag.message.lower()
+            return (
+                code in ("import", "import-not-found", "import-untyped")
+                or "cannot find implementation or library stub" in msg
+                or "find module" in msg
+            )
+
+        real = [d for d in result.diagnostics if not _is_provisioning_noise(d)]
+        if not real:
+            return  # compileall floor passed; any mypy findings were provisioning noise
+
+        affected: Dict[int, FeaturePostMortem] = {}
+        for d in real:
+            fpm = path_to_feature.get(Path(d.file).name)
+            if fpm is None:
+                continue
+            affected[id(fpm)] = fpm
+            if fpm.disk_compliance is None:
+                fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+            fpm.disk_compliance.semantic_issues.append(
+                {
+                    "category": f"py_{d.stage}_{d.code or 'error'}",
+                    "severity": "error",
+                    "message": f"{d.stage} {Path(d.file).name}:{d.line} {d.code}: {d.message}",
+                }
+            )
+            fpm.semantic_error_count += 1
+        for fpm in affected.values():
+            fpm.disk_quality_score = 0.0
+            fpm.success = False
+            if fpm.verdict not in (
+                "FAIL",
+                "FAIL:semantic",
+                "FAIL:disk_quality",
+                "FAIL:cross_file",
+            ):
+                fpm.verdict = "FAIL:typecheck"
+            if fpm.root_cause == RootCause.UNKNOWN:
+                fpm.root_cause = RootCause.CROSS_FILE_CONTRACT
+            if fpm.pipeline_stage == PipelineStage.UNKNOWN:
+                fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
+            if not fpm.error_message:
+                fpm.error_message = (
+                    "Python build gate reported errors (see semantic_issues)"
+                )
 
     def _evaluate_disk_quality(
         self,
@@ -1967,7 +2191,9 @@ class PrimePostMortemEvaluator:
         for fpm in features:
             # Prefer generated_files (absolute paths to actual output) over
             # target_files (relative paths that may not exist at project root).
-            files_to_check = fpm.generated_files if fpm.generated_files else fpm.target_files
+            files_to_check = (
+                fpm.generated_files if fpm.generated_files else fpm.target_files
+            )
             for file_path in files_to_check:
                 try:
                     abs_file = Path(file_path)
@@ -1991,7 +2217,8 @@ class PrimePostMortemEvaluator:
                     # Build sibling files for import resolution (same directory)
                     effective_parent = str(Path(effective_file).parent)
                     sibling_files = [
-                        f for f in all_generated
+                        f
+                        for f in all_generated
                         if str(Path(f).parent) == effective_parent
                         and f != effective_file
                     ]
@@ -2007,7 +2234,9 @@ class PrimePostMortemEvaluator:
                     sib_imports = _dir_imports.get(abs_parent)
 
                     compliance = validate_disk_compliance(
-                        effective_file, effective_root, forward_manifest,
+                        effective_file,
+                        effective_root,
+                        forward_manifest,
                         sibling_files=sibling_files if sibling_files else None,
                         sibling_imports=sib_imports,
                         import_map=import_map,
@@ -2017,16 +2246,23 @@ class PrimePostMortemEvaluator:
                     # Compute disk quality score (P3-2: language-aware severity)
                     _ext = Path(file_path).suffix.lower()
                     _EXT_LANG = {
-                        ".py": "python", ".go": "go",
-                        ".java": "java", ".kt": "java",
-                        ".cs": "csharp", ".csproj": "csharp",
-                        ".js": "nodejs", ".ts": "nodejs",
-                        ".mjs": "nodejs", ".cjs": "nodejs",
-                        ".jsx": "nodejs", ".tsx": "nodejs",
+                        ".py": "python",
+                        ".go": "go",
+                        ".java": "java",
+                        ".kt": "java",
+                        ".cs": "csharp",
+                        ".csproj": "csharp",
+                        ".js": "nodejs",
+                        ".ts": "nodejs",
+                        ".mjs": "nodejs",
+                        ".cjs": "nodejs",
+                        ".jsx": "nodejs",
+                        ".tsx": "nodejs",
                     }
                     _lang = _EXT_LANG.get(_ext)
                     fpm.disk_quality_score = compute_disk_quality_score(
-                        compliance, language_id=_lang,
+                        compliance,
+                        language_id=_lang,
                     )
 
                     # Merge Anzen gate findings into semantic_issues so the
@@ -2045,17 +2281,20 @@ class PrimePostMortemEvaluator:
                         for finding in ag_entry.get("findings", []):
                             if not isinstance(finding, dict):
                                 continue
-                            compliance.semantic_issues.append({
-                                "category": f"query_security_{finding.get('check_type', 'unknown')}",
-                                "severity": finding.get("severity", "error"),
-                                "message": finding.get("message", ""),
-                                "line": finding.get("line"),
-                            })
+                            compliance.semantic_issues.append(
+                                {
+                                    "category": f"query_security_{finding.get('check_type', 'unknown')}",
+                                    "severity": finding.get("severity", "error"),
+                                    "message": finding.get("message", ""),
+                                    "line": finding.get("line"),
+                                }
+                            )
 
                     # Count error-severity semantic issues for Kaizen label.
                     sem_issues = getattr(compliance, "semantic_issues", []) or []
                     err_count = sum(
-                        1 for i in sem_issues
+                        1
+                        for i in sem_issues
                         if isinstance(i, dict) and i.get("severity") == "error"
                     )
                     fpm.semantic_error_count = err_count
@@ -2065,7 +2304,11 @@ class PrimePostMortemEvaluator:
                     # failures, not just syntactic ones.
                     if err_count >= 2 and fpm.verdict == "PASS":
                         fpm.verdict = "PARTIAL:semantic"
-                    elif err_count >= 4 and fpm.verdict in ("PASS", "PARTIAL", "PARTIAL:semantic"):
+                    elif err_count >= 4 and fpm.verdict in (
+                        "PASS",
+                        "PARTIAL",
+                        "PARTIAL:semantic",
+                    ):
                         fpm.verdict = "FAIL:semantic"
                         fpm.success = False
 
@@ -2093,25 +2336,39 @@ class PrimePostMortemEvaluator:
                             fpm.error_message = _disk_err
 
                     # Semantic repair dual scoring (DC-3, REQ-SR)
-                    pre_scores = (semantic_repair_data or {}).get("pre_repair_scores", {})
+                    pre_scores = (semantic_repair_data or {}).get(
+                        "pre_repair_scores", {}
+                    )
                     per_file_data = (semantic_repair_data or {}).get("per_file", {})
-                    pre_score = pre_scores.get(file_path) or pre_scores.get(str(abs_file))
+                    pre_score = pre_scores.get(file_path) or pre_scores.get(
+                        str(abs_file)
+                    )
                     if pre_score is not None:
                         fpm.pre_semantic_repair_score = pre_score
-                    file_repair = per_file_data.get(file_path) or per_file_data.get(str(abs_file))
+                    file_repair = per_file_data.get(file_path) or per_file_data.get(
+                        str(abs_file)
+                    )
                     if isinstance(file_repair, dict):
                         fpm.semantic_repairs_applied = file_repair.get("repaired", 0)
-                        fpm.semantic_repair_categories = file_repair.get("categories", [])
+                        fpm.semantic_repair_categories = file_repair.get(
+                            "categories", []
+                        )
 
                     # Assembly delta: use pre-repair score for Kaizen (generator quality)
                     # and post-repair score for display (output quality).
                     if fpm.disk_quality_score is not None:
-                        kaizen_score = pre_score if pre_score is not None else fpm.disk_quality_score
+                        kaizen_score = (
+                            pre_score
+                            if pre_score is not None
+                            else fpm.disk_quality_score
+                        )
                         fpm.assembly_delta = fpm.requirement_score - kaizen_score
                 except Exception as exc:
                     logger.debug(
                         "Disk validation failed for %s in %s: %s",
-                        file_path, fpm.feature_id, exc,
+                        file_path,
+                        fpm.feature_id,
+                        exc,
                     )
 
     def _build_pipeline_attribution(
@@ -2149,9 +2406,7 @@ class PrimePostMortemEvaluator:
         analysis = MicroPrimeAnalysis()
         analysis.total_elements = len(elements)
         analysis.successful_elements = sum(1 for e in elements if e.success)
-        analysis.escalated_elements = sum(
-            1 for e in elements if e.escalation_reason
-        )
+        analysis.escalated_elements = sum(1 for e in elements if e.escalation_reason)
 
         # Tier distribution
         tier_counter: Counter = Counter()
@@ -2204,20 +2459,22 @@ class PrimePostMortemEvaluator:
 
         for cause, fids in cause_features.items():
             if len(fids) >= _CROSS_FEATURE_PATTERN_MIN:
-                patterns.append(CrossFeaturePattern(
-                    pattern_type="repeated_root_cause",
-                    description=(
-                        f"Root cause '{cause.value}' repeated across "
-                        f"{len(fids)} features"
-                    ),
-                    affected_features=fids,
-                    frequency=len(fids),
-                    severity="high" if len(fids) >= 3 else "medium",
-                ))
+                patterns.append(
+                    CrossFeaturePattern(
+                        pattern_type="repeated_root_cause",
+                        description=(
+                            f"Root cause '{cause.value}' repeated across "
+                            f"{len(fids)} features"
+                        ),
+                        affected_features=fids,
+                        frequency=len(fids),
+                        severity="high" if len(fids) >= 3 else "medium",
+                    )
+                )
 
         # Pattern 2: Repeated escalation reason — subtyped by reason (REQ-KZ-401a)
         # Track both element count (total escalations) and feature count separately.
-        esc_elements: Dict[str, int] = {}       # reason → total element escalations
+        esc_elements: Dict[str, int] = {}  # reason → total element escalations
         esc_feature_sets: Dict[str, List[str]] = {}  # reason → feature IDs (with dupes)
         for fpm in features:
             for elem in fpm.elements:
@@ -2230,24 +2487,28 @@ class PrimePostMortemEvaluator:
             unique_fids = list(dict.fromkeys(fids))
             element_count = esc_elements[reason]
             # Dual threshold: enough features AND enough total elements
-            if (len(unique_fids) >= _ESCALATION_MIN_FEATURES
-                    and element_count >= _ESCALATION_MIN_ELEMENTS):
+            if (
+                len(unique_fids) >= _ESCALATION_MIN_FEATURES
+                and element_count >= _ESCALATION_MIN_ELEMENTS
+            ):
                 # Dynamic severity based on scope
                 if len(unique_fids) >= 5 or element_count >= 10:
                     severity = "high"
                 else:
                     severity = "medium"
-                patterns.append(CrossFeaturePattern(
-                    pattern_type=f"repeated_escalation:{reason}",
-                    description=(
-                        f"Escalation reason '{reason}': {element_count} elements "
-                        f"across {len(unique_fids)} features"
-                    ),
-                    affected_features=unique_fids,
-                    frequency=element_count,
-                    severity=severity,
-                    affected_feature_count=len(unique_fids),
-                ))
+                patterns.append(
+                    CrossFeaturePattern(
+                        pattern_type=f"repeated_escalation:{reason}",
+                        description=(
+                            f"Escalation reason '{reason}': {element_count} elements "
+                            f"across {len(unique_fids)} features"
+                        ),
+                        affected_features=unique_fids,
+                        frequency=element_count,
+                        severity=severity,
+                        affected_feature_count=len(unique_fids),
+                    )
+                )
 
         # Pattern 3: Cost outliers
         costs = [f.cost_usd for f in features if f.cost_usd > 0]
@@ -2260,16 +2521,18 @@ class PrimePostMortemEvaluator:
                     if f.cost_usd >= avg_cost * _COST_OUTLIER_FACTOR
                 ]
                 if outliers:
-                    patterns.append(CrossFeaturePattern(
-                        pattern_type="cost_outlier",
-                        description=(
-                            f"{len(outliers)} feature(s) cost {_COST_OUTLIER_FACTOR}x+ "
-                            f"average (${avg_cost:.4f})"
-                        ),
-                        affected_features=outliers,
-                        frequency=len(outliers),
-                        severity="low",
-                    ))
+                    patterns.append(
+                        CrossFeaturePattern(
+                            pattern_type="cost_outlier",
+                            description=(
+                                f"{len(outliers)} feature(s) cost {_COST_OUTLIER_FACTOR}x+ "
+                                f"average (${avg_cost:.4f})"
+                            ),
+                            affected_features=outliers,
+                            frequency=len(outliers),
+                            severity="low",
+                        )
+                    )
 
         # Pattern 4: Language mismatch in generated files (REQ-MLT-401)
         mismatch_features: List[str] = []
@@ -2288,22 +2551,22 @@ class PrimePostMortemEvaluator:
                         break
 
         if len(mismatch_features) >= 2:
-            patterns.append(CrossFeaturePattern(
-                pattern_type="language_mismatch_in_generation",
-                description=(
-                    f"{len(mismatch_features)} feature(s) have language mismatch "
-                    f"errors (non-Python files received Python stubs)"
-                ),
-                affected_features=mismatch_features,
-                frequency=len(mismatch_features),
-                severity="high" if len(mismatch_features) >= 3 else "medium",
-            ))
+            patterns.append(
+                CrossFeaturePattern(
+                    pattern_type="language_mismatch_in_generation",
+                    description=(
+                        f"{len(mismatch_features)} feature(s) have language mismatch "
+                        f"errors (non-Python files received Python stubs)"
+                    ),
+                    affected_features=mismatch_features,
+                    frequency=len(mismatch_features),
+                    severity="high" if len(mismatch_features) >= 3 else "medium",
+                )
+            )
 
         return patterns
 
-    def _build_cost_summary(
-        self, features: List[FeaturePostMortem]
-    ) -> CostSummary:
+    def _build_cost_summary(self, features: List[FeaturePostMortem]) -> CostSummary:
         """Build cost summary from feature data."""
         summary = CostSummary()
         for fpm in features:
@@ -2326,42 +2589,50 @@ class PrimePostMortemEvaluator:
         # Lesson from each cross-feature pattern
         for pattern in report.cross_feature_patterns:
             severity = Severity.HIGH if pattern.severity == "high" else Severity.MEDIUM
-            lessons.append(Lesson(
-                lesson_id=str(uuid.uuid4()),
-                title=f"Pattern: {pattern.description}",
-                description=(
-                    f"{pattern.pattern_type}: {pattern.description}. "
-                    f"Affected features: {', '.join(pattern.affected_features)}"
-                ),
-                category=LessonCategory.PROCESS,
-                severity=severity,
-                tags=["prime-contractor", "cross-feature", pattern.pattern_type],
-                source_phase="prime-postmortem",
-                source_context={"report_id": report.report_id},
-                created_at=now,
-            ))
+            lessons.append(
+                Lesson(
+                    lesson_id=str(uuid.uuid4()),
+                    title=f"Pattern: {pattern.description}",
+                    description=(
+                        f"{pattern.pattern_type}: {pattern.description}. "
+                        f"Affected features: {', '.join(pattern.affected_features)}"
+                    ),
+                    category=LessonCategory.PROCESS,
+                    severity=severity,
+                    tags=["prime-contractor", "cross-feature", pattern.pattern_type],
+                    source_phase="prime-postmortem",
+                    source_context={"report_id": report.report_id},
+                    created_at=now,
+                )
+            )
 
         # Lesson from dominant pipeline stage
         if report.pipeline_attribution:
             top_stage = report.pipeline_attribution[0]
             if top_stage.failure_count >= 2:
-                lessons.append(Lesson(
-                    lesson_id=str(uuid.uuid4()),
-                    title=(
-                        f"Pipeline stage '{top_stage.stage.value}' is the "
-                        f"primary failure point ({top_stage.failure_count} failures)"
-                    ),
-                    description=(
-                        f"Root causes at this stage: "
-                        f"{json.dumps(top_stage.root_causes)}"
-                    ),
-                    category=LessonCategory.ARCHITECTURE,
-                    severity=Severity.HIGH,
-                    tags=["prime-contractor", "pipeline-attribution", top_stage.stage.value],
-                    source_phase="prime-postmortem",
-                    source_context={"report_id": report.report_id},
-                    created_at=now,
-                ))
+                lessons.append(
+                    Lesson(
+                        lesson_id=str(uuid.uuid4()),
+                        title=(
+                            f"Pipeline stage '{top_stage.stage.value}' is the "
+                            f"primary failure point ({top_stage.failure_count} failures)"
+                        ),
+                        description=(
+                            f"Root causes at this stage: "
+                            f"{json.dumps(top_stage.root_causes)}"
+                        ),
+                        category=LessonCategory.ARCHITECTURE,
+                        severity=Severity.HIGH,
+                        tags=[
+                            "prime-contractor",
+                            "pipeline-attribution",
+                            top_stage.stage.value,
+                        ],
+                        source_phase="prime-postmortem",
+                        source_context={"report_id": report.report_id},
+                        created_at=now,
+                    )
+                )
 
         # Sanitize lessons
         lessons = self._sanitizer.sanitize_lessons(lessons)
@@ -2417,10 +2688,13 @@ class PrimePostMortemEvaluator:
                 )
                 logger.info(
                     "Kaizen suggestions auto-emitted: %s (%d hints)",
-                    suggestions_path, len(suggestions),
+                    suggestions_path,
+                    len(suggestions),
                 )
         except Exception:
-            logger.debug("Kaizen suggestion auto-emit failed (non-fatal)", exc_info=True)
+            logger.debug(
+                "Kaizen suggestion auto-emit failed (non-fatal)", exc_info=True
+            )
 
         # REQ-QPA-100: Merge query_security into pipeline-output kaizen-metrics.json.
         # The Anzen gate writes to project root; the postmortem writes to pipeline
@@ -2430,7 +2704,10 @@ class PrimePostMortemEvaluator:
             qp_report = self._result_dict.get("_query_security_report")
             if qp_report and qp_report.get("total_work_items", 0) > 0:
                 try:
-                    from startd8.security_prime.kaizen import update_query_security_metrics
+                    from startd8.security_prime.kaizen import (
+                        update_query_security_metrics,
+                    )
+
                     update_query_security_metrics(output_dir, qp_report)
                     logger.info(
                         "Query security metrics merged into pipeline output "
@@ -2442,7 +2719,9 @@ class PrimePostMortemEvaluator:
                     logger.debug("Pipeline query_security merge skipped: %s", exc)
 
     def _extract_exemplars(
-        self, report: PrimePostMortemReport, output_dir: str,
+        self,
+        report: PrimePostMortemReport,
+        output_dir: str,
     ) -> None:
         """Extract exemplars from features scoring 1.00 (REQ-PEP-000)."""
         from startd8.exemplars.extractor import extract_exemplars_from_run
@@ -2456,7 +2735,9 @@ class PrimePostMortemEvaluator:
             registry.save(registry_path)
             logger.info(
                 "Exemplars: extracted %d, promotions %d, total %d",
-                len(extracted), len(promotions), len(registry),
+                len(extracted),
+                len(promotions),
+                len(registry),
             )
 
     def _scan_todos(
@@ -2534,7 +2815,8 @@ class PrimePostMortemEvaluator:
                                     )
                                     existing["observability_artifacts"] = obs
                                     metrics_path.write_text(
-                                        json.dumps(existing, indent=2, default=str) + "\n",
+                                        json.dumps(existing, indent=2, default=str)
+                                        + "\n",
                                         encoding="utf-8",
                                     )
                                     logger.info(
@@ -2591,16 +2873,16 @@ class PrimePostMortemEvaluator:
 
         # Pipeline Attribution
         if report.pipeline_attribution:
-            lines.extend([
-                "## Pipeline Attribution",
-                "",
-                "| Stage | Failures | Root Causes |",
-                "|-------|----------|-------------|",
-            ])
+            lines.extend(
+                [
+                    "## Pipeline Attribution",
+                    "",
+                    "| Stage | Failures | Root Causes |",
+                    "|-------|----------|-------------|",
+                ]
+            )
             for attr in report.pipeline_attribution:
-                causes_str = ", ".join(
-                    f"{k}({v})" for k, v in attr.root_causes.items()
-                )
+                causes_str = ", ".join(f"{k}({v})" for k, v in attr.root_causes.items())
                 lines.append(
                     f"| {attr.stage.value} | {attr.failure_count} | {causes_str} |"
                 )
@@ -2611,28 +2893,32 @@ class PrimePostMortemEvaluator:
         if failed:
             lines.extend(["## Failed Features", ""])
             for fpm in failed:
-                lines.extend([
-                    f"### {fpm.name} (`{fpm.feature_id}`)",
-                    "",
-                    f"- **Root cause:** {fpm.root_cause.value}",
-                    f"- **Pipeline stage:** {fpm.pipeline_stage.value}",
-                    f"- **Error:** {fpm.error_message or '(none)'}",
-                    f"- **Cost:** ${fpm.cost_usd:.4f}",
-                    "",
-                ])
+                lines.extend(
+                    [
+                        f"### {fpm.name} (`{fpm.feature_id}`)",
+                        "",
+                        f"- **Root cause:** {fpm.root_cause.value}",
+                        f"- **Pipeline stage:** {fpm.pipeline_stage.value}",
+                        f"- **Error:** {fpm.error_message or '(none)'}",
+                        f"- **Cost:** ${fpm.cost_usd:.4f}",
+                        "",
+                    ]
+                )
 
         # Micro Prime Analysis
         if report.micro_prime_analysis:
             mpa = report.micro_prime_analysis
-            lines.extend([
-                "## Micro Prime Analysis",
-                "",
-                f"- Total elements: {mpa.total_elements}",
-                f"- Successful: {mpa.successful_elements}",
-                f"- Escalated: {mpa.escalated_elements}",
-                f"- Avg generation time: {mpa.avg_generation_time_ms:.1f}ms",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Micro Prime Analysis",
+                    "",
+                    f"- Total elements: {mpa.total_elements}",
+                    f"- Successful: {mpa.successful_elements}",
+                    f"- Escalated: {mpa.escalated_elements}",
+                    f"- Avg generation time: {mpa.avg_generation_time_ms:.1f}ms",
+                    "",
+                ]
+            )
             if mpa.tier_distribution:
                 lines.append("**Tier distribution:**")
                 for tier, count in sorted(mpa.tier_distribution.items()):
@@ -2643,9 +2929,11 @@ class PrimePostMortemEvaluator:
         if report.cross_feature_patterns:
             lines.extend(["## Cross-Feature Patterns", ""])
             for pat in report.cross_feature_patterns:
-                lines.extend([
-                    f"- **{pat.pattern_type}** ({pat.severity}): {pat.description}",
-                ])
+                lines.extend(
+                    [
+                        f"- **{pat.pattern_type}** ({pat.severity}): {pat.description}",
+                    ]
+                )
             lines.append("")
 
         # Lessons
@@ -2658,9 +2946,12 @@ class PrimePostMortemEvaluator:
         # Query Security (REQ-KQP-502)
         # Render when any features have query_security semantic issues
         _qs_features = [
-            f for f in report.features
-            if f.disk_compliance and any(
-                isinstance(si, dict) and si.get("category", "").startswith("query_security")
+            f
+            for f in report.features
+            if f.disk_compliance
+            and any(
+                isinstance(si, dict)
+                and si.get("category", "").startswith("query_security")
                 for si in (getattr(f.disk_compliance, "semantic_issues", None) or [])
             )
         ]
@@ -2668,27 +2959,36 @@ class PrimePostMortemEvaluator:
             getattr(f, "semantic_error_count", 0) for f in _qs_features
         )
         if _qs_features or _qs_total_issues > 0:
-            lines.extend([
-                "## Query Security",
-                "",
-                f"- Features with query security findings: {len(_qs_features)}",
-                f"- Total security semantic errors: {_qs_total_issues}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Query Security",
+                    "",
+                    f"- Features with query security findings: {len(_qs_features)}",
+                    f"- Total security semantic errors: {_qs_total_issues}",
+                    "",
+                ]
+            )
             # Per-database breakdown from semantic issues
             _qs_by_db: dict = {}
             for f in _qs_features:
-                for si in (getattr(f.disk_compliance, "semantic_issues", None) or []):
-                    if isinstance(si, dict) and si.get("category", "").startswith("query_security"):
-                        db = getattr(f.disk_compliance, "detected_database", "unknown") or "unknown"
+                for si in getattr(f.disk_compliance, "semantic_issues", None) or []:
+                    if isinstance(si, dict) and si.get("category", "").startswith(
+                        "query_security"
+                    ):
+                        db = (
+                            getattr(f.disk_compliance, "detected_database", "unknown")
+                            or "unknown"
+                        )
                         _qs_by_db.setdefault(db, {"findings": 0, "features": set()})
                         _qs_by_db[db]["findings"] += 1
                         _qs_by_db[db]["features"].add(f.name)
             if _qs_by_db:
-                lines.extend([
-                    "| Database | Findings | Features |",
-                    "|----------|----------|----------|",
-                ])
+                lines.extend(
+                    [
+                        "| Database | Findings | Features |",
+                        "|----------|----------|----------|",
+                    ]
+                )
                 for db, data in sorted(_qs_by_db.items()):
                     lines.append(
                         f"| {db} | {data['findings']} | {', '.join(sorted(data['features']))} |"
@@ -2698,14 +2998,16 @@ class PrimePostMortemEvaluator:
         # Cost Summary
         if report.cost_summary:
             cs = report.cost_summary
-            lines.extend([
-                "## Cost Summary",
-                "",
-                f"- Total: ${cs.total_usd:.4f}",
-                f"- Average per feature: ${cs.avg_per_feature:.4f}",
-                f"- Max: {cs.max_feature} (${cs.max_usd:.4f})",
-                "",
-            ])
+            lines.extend(
+                [
+                    "## Cost Summary",
+                    "",
+                    f"- Total: ${cs.total_usd:.4f}",
+                    f"- Average per feature: ${cs.avg_per_feature:.4f}",
+                    f"- Max: {cs.max_feature} (${cs.max_usd:.4f})",
+                    "",
+                ]
+            )
 
         return "\n".join(lines)
 

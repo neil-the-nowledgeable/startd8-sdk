@@ -159,8 +159,9 @@ v1 acceptance milestone, proven end-to-end via the real CLI.
 **FR-13 — CLI surface. Shipped (Step 7).** `startd8 generate backend` — one `@generate_app.command`
 in `cli_generate.py` (zero changes to `cli.py`): `--schema`/`--out`/`--check`/`--gate`/
 `--source-label`. Writes the whole `app/` package (via `render_backend`); `--check` drift-checks
-every owned artifact (exit 1 on drift); `--gate` runs the Python build gate. Prime-contractor
-`integration_engine` wiring is the remaining follow-on (OQ-5).
+every owned artifact (exit 1 on drift); `--gate` runs the Python build gate. Prime-contractor wiring
+is **done** (OQ-5): the gate runs in `prime_postmortem._evaluate_python_toolchain`, and the skip-hook
+auto-recognizes the artifacts via the `pydantic-sqlmodel` entry point.
 
 ---
 
@@ -196,8 +197,11 @@ every owned artifact (exit 1 on drift); `--gate` runs the Python build gate. Pri
 - **OQ-4 → resolved (Step 6).** Not derivable from the schema (the `.prisma` doesn't encode "≥3
   ProofPoints"). v1 ships a schema-derived **presence** rule; domain-weighted thresholds are a
   declared-manifest refinement, deferred.
-- **OQ-5 — Prime-contractor integration hook** *(narrowed)*. Beyond the standalone CLI, wire the
-  Python gate into `integration_engine` post-generation (matching the TS tsc gate placement)?
+- **OQ-5 → resolved.** Both halves wired: (a) the **$0.00 skip-hook** auto-recognizes backend
+  artifacts via the `pydantic-sqlmodel` entry point (active on `pip install -e`); (b) the **build
+  gate** is `prime_postmortem._evaluate_python_toolchain` (alongside the TS gate's
+  `_evaluate_ts_toolchain`), env-gated `STARTD8_PY_TYPECHECK`, attributing real compileall/mypy
+  faults to features and filtering mypy import-resolution noise (absent app deps = infra, not fault).
 - **OQ-7 — Contract source-of-truth** *(new, load-bearing)*. Keep `.prisma` as the neutral IDL
   (maximal reuse; *recommended*) vs author Pydantic natively (purist; net-new parser). Leaning
   `.prisma`-as-IDL for v1.
