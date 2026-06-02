@@ -55,7 +55,10 @@ _PRISMA_TO_ZOD: Dict[str, frozenset[str]] = {
     "Int": frozenset({"number"}),
     "BigInt": frozenset({"number", "bigint"}),
     "Float": frozenset({"number"}),
-    "Decimal": frozenset({"number"}),
+    # Decimal accepts both: `z.number()` (numeric) and `z.string()` (money-safe, the
+    # deterministic frontend generator's choice — avoids float precision loss in JSON).
+    # See REQ deterministic-frontend FR-2 / CRP R2-S1.
+    "Decimal": frozenset({"number", "string"}),
     "DateTime": frozenset({"string", "date"}),  # run-008 maps DateTime → z.string().datetime()
     "Json": frozenset({"unknown", "object", "array"}),
     "Bytes": frozenset({"string", "unknown"}),
