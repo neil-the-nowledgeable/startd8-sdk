@@ -54,10 +54,12 @@ on a `# startd8-artifact:` header tag so one provider verifies both `models.py` 
 ts_toolchain verdict contract; absent/disabled stages recorded in `stages_skipped` (loud-degrade).
 `python_typecheck_enabled()` toggles on `STARTD8_PY_TYPECHECK`. *Was parallelizable with 1–2.*
 
-**Step 4 — FastAPI CRUD + canonical layout (FR-3, FR-11).** `crud_generator` emits list/detail/
-create/update/delete handlers (validate Pydantic → SQLModel op → response), canonical imports only.
-`skeleton` fixes the directory layout + `__init__.py` re-exports so imports resolve; the Step-3 gate
-fails on invention. *Depends on: Steps 1–2 (models) + 3 (gate to verify).*
+**Step 4 — FastAPI CRUD + canonical layout (FR-3, FR-11). ✅ SHIPPED.** `crud_generator.py` emits
+`app/routers.py` (one APIRouter/entity: list/detail/create/update/delete; keyless entities get
+list+create), `app/db.py` (engine + `get_session` + `init_db`), `app/main.py` (FastAPI app + router
+wiring). `CANONICAL_LAYOUT` fixes the five artifacts to one `app/` package so imports resolve by
+construction. Three new artifact kinds (`fastapi-routers`/`-db`/`-main`) registered in the drift
+dispatch, so the one provider $0.00-recognizes them too. *Depended on: Steps 1–2 (models) + 3 (gate).*
 
 **Step 5 — HTMX/Jinja templates + inline validation (FR-4).** `htmx_templates` emits list / detail /
 create+edit form / delete + validate-on-blur endpoints + field-level error partials + partial swaps;

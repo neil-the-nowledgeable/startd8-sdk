@@ -8,6 +8,13 @@ projection of it.
 
 from __future__ import annotations
 
+from .crud_generator import (
+    CANONICAL_LAYOUT,
+    render_db,
+    render_main,
+    render_routers,
+    render_spine,
+)
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
 from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
 from .provider import PydanticSQLModelProvider
@@ -19,6 +26,11 @@ __all__ = [
     "PydanticRenderResult",
     "render_sqlmodel_tables",
     "SQLModelRenderResult",
+    "render_routers",
+    "render_db",
+    "render_main",
+    "render_spine",
+    "CANONICAL_LAYOUT",
     "check_drift",
     "owned_file_in_sync",
     "is_owned_generated_file",

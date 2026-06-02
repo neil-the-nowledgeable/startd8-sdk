@@ -92,9 +92,11 @@ schemas (API/validation/AI) are co-generated projections. Enums emit as `str, En
 scalars as JSON columns; `@id` → `Field(primary_key=True)`. **Shipped (Step 2).** *(FK constraints
 + `Relationship()` deferred — FK scalars render as plain columns for v1.)*
 
-**FR-3 — FastAPI CRUD generator.** Per entity, emit owned route handlers for list / detail /
-create / update / delete: validate Pydantic → SQLModel op → response. Canonical imports only (the
-generated models module, the DB session). No invented module paths.
+**FR-3 — FastAPI CRUD generator. Shipped (Step 4).** `crud_generator.py` emits the owned spine —
+`app/routers.py` (one `APIRouter` per entity: list / detail / create / update / delete, validate via
+the SQLModel class → session op → response; entities without a single-column PK get list+create
+only), `app/db.py` (SQLite engine + `get_session` + `init_db`), `app/main.py` (FastAPI app + all
+routers). Canonical imports only; no invented module paths.
 
 **FR-4 — HTMX/Jinja template generator.** Per entity, emit the **locked HTMX output set**: list,
 detail, create+edit form, delete — **plus inline validation** (validate-on-blur endpoints,
@@ -133,10 +135,12 @@ regenerated on contract change; never hand-edited. **Shipped (Step 1).**
 contract; permit a **small declared manifest** for irreducible choices (which entities get CRUD,
 which routes are AI-trigger wrappers, AI-pass names). *(Pure-contract vs manifest → OQ-1.)*
 
-**FR-11 — Canonical layout + generated imports.** Fix a project directory/convention layout
-(reusing `skeleton._canonical_dirs` + `detect_project_conventions`; `__init__.py` re-exports instead
-of TS barrels) so all generated imports resolve by construction; the build gate (FR-5) fails on any
-invented path.
+**FR-11 — Canonical layout + generated imports. Shipped (Step 4).** A `CANONICAL_LAYOUT` constant
+fixes the five artifacts to one `app/` package (`models.py`/`tables.py`/`routers.py`/`db.py`/
+`main.py`), so the generated relative imports (`from .db import get_session`, `from .tables import
+X`, `from .routers import all_routers`) resolve by construction; the FR-5 build gate fails on any
+invented path. *(A bespoke layout constant proved simpler than the planned `skeleton._canonical_dirs`
+reuse, which is TS/barrel-oriented — corrected from v0.2.)*
 
 **FR-12 — Pilot.** Drive **ProofPoint + Metric** end-to-end: `.prisma` contract → generated Pydantic
 + SQLModel + FastAPI CRUD + HTMX form/list (with inline validation) → `$0.00` skip on regen →

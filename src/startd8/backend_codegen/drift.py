@@ -36,12 +36,16 @@ def _renderers() -> Dict[str, Callable[[str, str], str]]:
     re-renders it with the *right* renderer (a Pydantic-models file and a SQLModel-tables file both
     carry the GENERATED marker, so the kind tag is what disambiguates them).
     """
+    from .crud_generator import render_db, render_main, render_routers
     from .pydantic_renderer import render_pydantic_models
     from .sqlmodel_renderer import render_sqlmodel_tables
 
     return {
         "pydantic-models": lambda s, sf: render_pydantic_models(s, source_file=sf).text,
         "sqlmodel-tables": lambda s, sf: render_sqlmodel_tables(s, source_file=sf).text,
+        "fastapi-routers": lambda s, sf: render_routers(s, sf),
+        "fastapi-db": lambda s, sf: render_db(s, sf),
+        "fastapi-main": lambda s, sf: render_main(s, sf),
     }
 
 

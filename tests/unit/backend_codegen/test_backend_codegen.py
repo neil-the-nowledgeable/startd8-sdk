@@ -14,9 +14,14 @@ from pathlib import Path
 import pytest
 
 from startd8.backend_codegen import (
+    CANONICAL_LAYOUT,
     PydanticSQLModelProvider,
     owned_file_in_sync,
+    render_db,
+    render_main,
     render_pydantic_models,
+    render_routers,
+    render_spine,
     render_sqlmodel_tables,
     verify_pydantic_fidelity,
     verify_sqlmodel_fidelity,
@@ -319,3 +324,85 @@ def test_sqlmodel_file_provided_via_registry(tmp_path):
     out.write_text(tables, encoding="utf-8")
     # same provider recognizes the SQLModel artifact too (kind-dispatched) -> $0.00 skip
     assert is_deterministically_provided(out, tables, _ctx(tmp_path)) is True
+
+
+# --------------------------------------------------------------------------- #
+# FastAPI CRUD + app spine (Step 4 / FR-3, FR-11)
+# --------------------------------------------------------------------------- #
+
+
+def test_routers_crud_handlers_and_canonical_imports():
+    text = render_routers(PILOT_SCHEMA)
+    assert (
+        'proofpoint_router = APIRouter(prefix="/proofpoint", tags=["proofpoint"])'
+        in text
+    )
+    assert "all_routers = [proofpoint_router, metric_router]" in text
+    for verb in (
+        "list_proofpoint",
+        "create_proofpoint",
+        "get_proofpoint",
+        "update_proofpoint",
+        "delete_proofpoint",
+    ):
+        assert f"def {verb}(" in text
+    # canonical imports (FR-11) — resolve within the app/ package
+    assert "from .db import get_session" in text
+    assert "from .tables import Metric, ProofPoint" in text
+    # SQLModel class used as body + response (OQ-3 single class)
+    assert "def create_proofpoint(item: ProofPoint" in text
+    compile(text, "<routers>", "exec")
+
+
+def test_keyless_entity_gets_list_create_only():
+    schema = (
+        "model Tag {\n  posts Post[]\n}\n"
+        "model Post {\n  id String @id\n  tagId String\n"
+        "  tag Tag @relation(fields: [tagId], references: [id])\n}\n"
+    )
+    text = render_routers(schema)
+    assert "def list_tag(" in text and "def create_tag(" in text
+    assert "def get_tag(" not in text  # no single-column PK -> no by-id routes
+    assert "def get_post(" in text  # Post has @id -> full CRUD
+
+
+def test_db_and_main_spine():
+    db = render_db(PILOT_SCHEMA)
+    assert "def get_session() -> Iterator[Session]:" in db
+    assert "def init_db() -> None:" in db
+    assert "from . import tables" in db  # registers tables on metadata
+    compile(db, "<db>", "exec")
+
+    main = render_main(PILOT_SCHEMA)
+    assert "app = FastAPI(title=" in main
+    assert "from .routers import all_routers" in main
+    assert "app.include_router(_router)" in main
+    compile(main, "<main>", "exec")
+
+
+def test_spine_artifacts_drift_in_sync_and_kind_dispatched():
+    for _path, text in render_spine(PILOT_SCHEMA):
+        assert owned_file_in_sync(PILOT_SCHEMA, text) is True
+    assert set(CANONICAL_LAYOUT.values()) >= {
+        "app/models.py",
+        "app/tables.py",
+        "app/routers.py",
+        "app/db.py",
+        "app/main.py",
+    }
+
+
+def test_router_file_provided_via_registry(tmp_path):
+    _write_schema(tmp_path)
+    dp.register_provider(PydanticSQLModelProvider())
+    routers = render_routers(PILOT_SCHEMA, source_file="prisma/schema.prisma")
+    out = tmp_path / "app" / "routers.py"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(routers, encoding="utf-8")
+    assert is_deterministically_provided(out, routers, _ctx(tmp_path)) is True
+    assert (
+        is_deterministically_provided(
+            out, routers.replace("/proofpoint", "/pwned", 1), _ctx(tmp_path)
+        )
+        is False
+    )
