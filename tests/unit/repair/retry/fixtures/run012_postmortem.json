@@ -1,0 +1,136 @@
+{
+  "_provenance": "Trimmed from run-012-20260601T1838/plan-ingestion/prime-postmortem-report.json (real incident). Loader-relevant fields only; semantic_issues kept verbatim. Do not hand-edit message strings (R1-F9).",
+  "report_id": "86bd415e-b379-43c0-afaf-bb777c36a243",
+  "total_features": 15,
+  "successful_features": 10,
+  "failed_features": 5,
+  "aggregate_score": 0.6653333333333333,
+  "aggregate_verdict": "FAIL",
+  "features": [
+    {
+      "feature_id": "PI-012",
+      "name": "EnrichStep wizard step component",
+      "success": false,
+      "target_files": [
+        "components/wizard/steps/EnrichStep.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/steps/EnrichStep.tsx",
+        "semantic_issues": [
+          {
+            "category": "unresolvable_import",
+            "severity": "error",
+            "message": "`/Users/neilyashinsky/Documents/dev/strtd8/strtd8/.cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/steps/EnrichStep.tsx` imports `../../../types/wizard` which resolves to neither the generated batch nor an on-disk project file"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-007",
+      "name": "StepNav component",
+      "success": false,
+      "target_files": [
+        "components/wizard/StepNav.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/StepNav.tsx",
+        "semantic_issues": [
+          {
+            "category": "unresolvable_import",
+            "severity": "error",
+            "message": "`/Users/neilyashinsky/Documents/dev/strtd8/strtd8/.cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/StepNav.tsx` imports `./StepNav.module.css` which resolves to neither the generated batch nor an on-disk project file"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-005",
+      "name": "ModeToggle component",
+      "success": false,
+      "target_files": [
+        "components/ModeToggle.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/ModeToggle.tsx",
+        "semantic_issues": [
+          {
+            "category": "duplicate_require",
+            "severity": "warning",
+            "message": "Duplicate import of `@/lib/preferences` (first at line 4)"
+          },
+          {
+            "category": "unresolvable_import",
+            "severity": "error",
+            "message": "`/Users/neilyashinsky/Documents/dev/strtd8/strtd8/.cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/ModeToggle.tsx` imports `./ModeToggle.module.css` which resolves to neither the generated batch nor an on-disk project file"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-008",
+      "name": "WizardShell component",
+      "success": false,
+      "target_files": [
+        "components/wizard/WizardShell.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/WizardShell.tsx",
+        "semantic_issues": [
+          {
+            "category": "unresolvable_import",
+            "severity": "error",
+            "message": "`/Users/neilyashinsky/Documents/dev/strtd8/strtd8/.cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/WizardShell.tsx` imports `@/components/wizard/steps` which resolves to neither the generated batch nor an on-disk project file"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-011",
+      "name": "ProofPointStep wizard step component",
+      "success": false,
+      "target_files": [
+        "components/wizard/steps/ProofPointStep.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/steps/ProofPointStep.tsx",
+        "semantic_issues": [
+          {
+            "category": "unresolvable_import",
+            "severity": "error",
+            "message": "`/Users/neilyashinsky/Documents/dev/strtd8/strtd8/.cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/steps/ProofPointStep.tsx` imports `./ProofPointStep.module.css` which resolves to neither the generated batch nor an on-disk project file"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-003",
+      "name": "Preferences library with useMode hook",
+      "success": true,
+      "target_files": [
+        "lib/preferences.ts"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/lib/preferences.ts",
+        "semantic_issues": [
+          {
+            "category": "unhandled_promise",
+            "severity": "warning",
+            "message": "Potentially unhandled promise \u2014 add `await` or `.catch()` for error handling"
+          }
+        ]
+      }
+    },
+    {
+      "feature_id": "PI-013",
+      "name": "ValuePropsStep wizard step component",
+      "success": true,
+      "target_files": [
+        "components/wizard/steps/ValuePropsStep.tsx"
+      ],
+      "disk_compliance": {
+        "file_path": ".cap-dev-pipe/pipeline-output/startd8/run-012-20260601T1838/plan-ingestion/generated/components/wizard/steps/ValuePropsStep.tsx",
+        "semantic_issues": []
+      }
+    }
+  ]
+}
