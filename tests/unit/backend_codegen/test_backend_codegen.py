@@ -291,6 +291,27 @@ def test_sqlmodel_fidelity_clean_and_flags():
     )
 
 
+def test_sqlmodel_dto_split():
+    """OQ-3: Create/Read/Update DTOs alongside the (unchanged) table class."""
+    text = render_sqlmodel_tables(PILOT_SCHEMA).text
+    for cls in (
+        "class ProofPoint(SQLModel, table=True):",
+        "class ProofPointCreate(SQLModel):",
+        "class ProofPointRead(SQLModel):",
+        "class ProofPointUpdate(SQLModel):",
+    ):
+        assert cls in text, cls
+    # Create carries the editable surface (incl. client-supplied id; no @default in the pilot)
+    create = text.split("class ProofPointCreate")[1].split("class ProofPointRead")[0]
+    assert "id: str" in create and "tags: list[str]" in create
+    assert "primary_key=True" not in create and "sa_column" not in create  # plain DTO
+    # Update excludes the PK and makes every field optional (partial PATCH)
+    update = text.split("class ProofPointUpdate")[1].split("class Metric")[0]
+    assert "id:" not in update
+    assert "result: Optional[str] = None" in update
+    assert "tags: Optional[list[str]] = None" in update
+
+
 # --------------------------------------------------------------------------- #
 # Multi-artifact drift dispatch (the kind-tag disambiguation)
 # --------------------------------------------------------------------------- #
@@ -346,11 +367,16 @@ def test_routers_crud_handlers_and_canonical_imports():
         "delete_proofpoint",
     ):
         assert f"def {verb}(" in text
-    # canonical imports (FR-11) — resolve within the app/ package
+    # canonical imports (FR-11) — resolve within the app/ package; DTOs imported (OQ-3)
     assert "from .db import get_session" in text
-    assert "from .tables import Metric, ProofPoint" in text
-    # SQLModel class used as body + response (OQ-3 single class)
-    assert "def create_proofpoint(item: ProofPoint" in text
+    assert (
+        "from .tables import Metric, MetricCreate, MetricRead, MetricUpdate, "
+        "ProofPoint, ProofPointCreate, ProofPointRead, ProofPointUpdate" in text
+    )
+    # OQ-3 DTO split: Create body, Read response, Update for PATCH (table stays persistence-only)
+    assert "def create_proofpoint(item: ProofPointCreate" in text
+    assert "-> ProofPointRead:" in text
+    assert "def update_proofpoint(\n    item_id: str, data: ProofPointUpdate" in text
     compile(text, "<routers>", "exec")
 
 

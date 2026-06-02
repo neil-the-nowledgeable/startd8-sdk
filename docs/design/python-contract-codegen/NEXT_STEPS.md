@@ -47,10 +47,12 @@ The strtd8 app tree is still Next.js. Tag it (`retired-ts-prototype`) and clear 
 `app/` can be generated cleanly. Pair with #1. (Not yet ready for multi-phase cap-dev-pipe runs
 until this is done.)
 
-### 3. SQLModel `Create`/`Read` DTO split (OQ-3 refinement)  ·  *after #1*
-Today the SQLModel table class is used directly as request body + response, so clients can supply
-server-set fields (e.g. `id`) on create. Generate `XCreate`/`XRead` DTOs to hide them. Do it **after**
-#1 — the runtime test tells you exactly which fields need hiding.
+### 3. SQLModel `Create`/`Read`/`Update` DTO split (OQ-3)  ·  ✅ DONE
+`sqlmodel_renderer` now emits `XCreate` (editable surface, hides `@default` server-set fields),
+`XRead` (full view), and `XUpdate` (every non-PK field optional, partial PATCH) alongside the
+unchanged table class; routers use them (`item: XCreate` → `-> XRead`; `data: XUpdate`). The runtime
+test (#1) may still reveal which `@default`/server-set fields a real schema needs hidden — confirm
+then.
 
 ### 4. Lower priority
 - **FK constraints + `Relationship()`** — real referential integrity (FK scalars are plain columns

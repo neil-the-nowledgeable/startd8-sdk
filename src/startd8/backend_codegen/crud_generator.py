@@ -70,23 +70,24 @@ _LIST_CREATE = """\
 
 
 @{rname}.get("/")
-def list_{prefix}(session: Session = Depends(get_session)) -> list[{name}]:
+def list_{prefix}(session: Session = Depends(get_session)) -> list[{name}Read]:
     return list(session.exec(select({name})).all())
 
 
 @{rname}.post("/")
-def create_{prefix}(item: {name}, session: Session = Depends(get_session)) -> {name}:
-    session.add(item)
+def create_{prefix}(item: {name}Create, session: Session = Depends(get_session)) -> {name}Read:
+    obj = {name}(**item.model_dump())
+    session.add(obj)
     session.commit()
-    session.refresh(item)
-    return item"""
+    session.refresh(obj)
+    return obj"""
 
 
 _BY_PK = """
 
 
 @{rname}.get("/{{item_id}}")
-def get_{prefix}(item_id: {pktype}, session: Session = Depends(get_session)) -> {name}:
+def get_{prefix}(item_id: {pktype}, session: Session = Depends(get_session)) -> {name}Read:
     obj = session.get({name}, item_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="{name} not found")
@@ -95,8 +96,8 @@ def get_{prefix}(item_id: {pktype}, session: Session = Depends(get_session)) -> 
 
 @{rname}.patch("/{{item_id}}")
 def update_{prefix}(
-    item_id: {pktype}, data: {name}, session: Session = Depends(get_session)
-) -> {name}:
+    item_id: {pktype}, data: {name}Update, session: Session = Depends(get_session)
+) -> {name}Read:
     obj = session.get({name}, item_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="{name} not found")
@@ -143,7 +144,12 @@ def render_routers(schema_text: str, source_file: str = "prisma/schema.prisma") 
         "from .db import get_session\n"
     )
     if names:
-        imports += "from .tables import " + ", ".join(sorted(names)) + "\n"
+        imported: List[str] = []
+        for n in names:
+            imported += [n, f"{n}Create", f"{n}Read"]
+            if _pk_field(schema, n) is not None:
+                imported.append(f"{n}Update")  # only by-id PATCH uses the Update DTO
+        imports += "from .tables import " + ", ".join(sorted(set(imported))) + "\n"
 
     blocks = [_entity_block(schema, n) for n in names]
     all_routers = (

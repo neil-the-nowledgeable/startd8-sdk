@@ -6,14 +6,16 @@ contract). Both are generated from one schema, so "nothing is hand-typed twice".
 Step 1 scalar map / import machinery and the stack-neutral ``schema_sha256`` /
 ``composite_type_names`` helpers.
 
-**OQ-3 decision (v1):** one ``class X(SQLModel, table=True)`` per entity, serving as both the table
-and the canonical persisted contract. The ``Base``/``Create``/``Read`` DTO hierarchy is **deferred**
-(a documented refinement for when the CRUD edge must hide server-set fields).
+**OQ-3 (resolved):** the ``class X(SQLModel, table=True)`` is the persistence truth; the API edge
+gets typed DTOs generated *alongside* it — ``<Name>Create`` (editable surface, hides ``@default``
+server-set fields), ``<Name>Read`` (full view), ``<Name>Update`` (every non-PK field optional, for
+partial PATCH). The table class stays unchanged, so the fidelity gate is unaffected.
 
-Scope (Step 2): primary keys (``@id`` → ``Field(primary_key=True)``), scalar columns, enum classes
-(``str, Enum``), and list scalars as JSON columns. **Deferred (flagged, not silent):** foreign-key
-constraints + ``Relationship()`` — FK scalars render as plain columns for v1 (they function on
-SQLite); proper FK wiring needs the ``@relation(fields:…, references:…)`` cross-field parse.
+Scope: primary keys (``@id`` → ``Field(primary_key=True)``), scalar columns, enum classes
+(``str, Enum``), list scalars as JSON columns, and the Create/Read/Update DTOs. **Deferred (flagged,
+not silent):** foreign-key constraints + ``Relationship()`` — FK scalars render as plain columns for
+v1 (they function on SQLite); proper FK wiring needs the ``@relation(fields:…, references:…)``
+cross-field parse.
 """
 
 from __future__ import annotations
@@ -87,6 +89,55 @@ def _render_table_field(
     return f"    {field.name}: {base}", unrenderable
 
 
+def _server_set(field: PrismaField) -> bool:
+    """Server-filled fields (a Prisma ``@default`` / ``@updatedAt``) — hidden from the Create DTO."""
+    return any(
+        a.startswith("@default") or a.startswith("@updatedAt") or a == "@updatedAt"
+        for a in field.attributes
+    )
+
+
+def _dto_field_line(
+    field: PrismaField,
+    schema: PrismaSchema,
+    needs: Set[str],
+    enums_used: Set[str],
+    *,
+    force_optional: bool,
+) -> str:
+    """One DTO field line — a plain Pydantic annotation (no ``Field()``/``sa_column``: DTOs aren't
+    tables). ``force_optional`` makes every field ``Optional[...] = None`` (the Update DTO).
+    """
+    base = _base_type(field, schema, needs, enums_used)
+    ann = f"list[{base}]" if field.is_list else base
+    if force_optional or field.is_optional:
+        needs.add("Optional")
+        return f"    {field.name}: Optional[{ann}] = None"
+    return f"    {field.name}: {ann}"
+
+
+def _dto_block(
+    name: str,
+    suffix: str,
+    fields: List[PrismaField],
+    schema: PrismaSchema,
+    needs: Set[str],
+    enums_used: Set[str],
+    *,
+    force_optional: bool = False,
+) -> str:
+    """A non-table SQLModel DTO class (``<Name>Create``/``Read``/``Update``) for the API edge."""
+    lines = [f"class {name}{suffix}(SQLModel):"]
+    if not fields:
+        lines.append("    pass")
+        return "\n".join(lines)
+    for f in fields:
+        lines.append(
+            _dto_field_line(f, schema, needs, enums_used, force_optional=force_optional)
+        )
+    return "\n".join(lines)
+
+
 def _import_block(needs: Set[str]) -> str:
     """Synthesize the import block: __future__ / stdlib (datetime, decimal, enum, typing) /
     third-party (sqlalchemy, sqlmodel)."""
@@ -138,9 +189,9 @@ def render_sqlmodel_tables(
 
     Emits, in **schema source order**: a ``#`` GENERATED header (artifact ``sqlmodel-tables``) with
     the embedded ``schema-sha256``; the synthesized imports; one ``str, Enum`` class per **used**
-    enum (declaration order); and one ``class <Model>(SQLModel, table=True)`` per model (composites
-    excluded). List scalars become JSON columns; ``@id`` fields become primary keys. Unmappable
-    scalar types are flagged in the result, never raised.
+    enum (declaration order); and per model (composites excluded) a ``class <Model>(SQLModel,
+    table=True)`` plus its ``<Model>Create``/``Read``/``Update`` DTOs. List scalars become JSON
+    columns; ``@id`` fields become primary keys. Unmappable scalar types are flagged, never raised.
     """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
@@ -170,6 +221,29 @@ def render_sqlmodel_tables(
                     )
                 )
         blocks.append("\n".join(lines))
+
+        # API DTOs (OQ-3): Create hides server-set (@default) fields; Read is the full view;
+        # Update makes every non-PK field optional (partial PATCH). The table class above stays
+        # the persistence truth and is unchanged.
+        create_fields = [f for f in scalars if not _server_set(f)]
+        update_fields = [f for f in scalars if not f.is_id]
+        blocks.append(
+            _dto_block(name, "Create", create_fields, schema, needs, enums_used)
+        )
+        blocks.append(
+            _dto_block(name, "Read", list(scalars), schema, needs, enums_used)
+        )
+        blocks.append(
+            _dto_block(
+                name,
+                "Update",
+                update_fields,
+                schema,
+                needs,
+                enums_used,
+                force_optional=True,
+            )
+        )
 
     # Enum classes, in schema declaration order, only those actually used.
     enum_blocks = [

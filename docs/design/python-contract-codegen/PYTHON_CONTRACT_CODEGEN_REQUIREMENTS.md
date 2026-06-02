@@ -190,10 +190,11 @@ auto-recognizes the artifacts via the `pydantic-sqlmodel` entry point.
 - **OQ-2 — Templating engine.** Pure string templates (the proven `value-model.ts` pattern) vs a
   structured/AST emitter — and how each stays convention-true to FastAPI app structure + Jinja/HTMX
   idioms.
-- **OQ-3 → resolved (Step 2).** One `class X(SQLModel, table=True)` per entity = the table + the
-  canonical persisted contract; the FR-1 pure-Pydantic schemas serve the API/AI edge. The
-  `Base`/`Create`/`Read` DTO hierarchy is **deferred** until the CRUD edge (Step 4) must hide
-  server-set fields like `id`.
+- **OQ-3 → fully resolved (Step 2 table + DTO refinement).** The `class X(SQLModel, table=True)` is
+  the persistence truth; typed DTOs are generated alongside it for the API edge — `XCreate`
+  (editable surface, hides `@default` server-set fields), `XRead` (full view), `XUpdate` (every
+  non-PK field optional, partial PATCH). Routers use the DTOs (`item: XCreate` → `-> XRead`;
+  `data: XUpdate`); the table class is unchanged, so the fidelity gate is unaffected.
 - **OQ-4 → resolved (Step 6).** Not derivable from the schema (the `.prisma` doesn't encode "≥3
   ProofPoints"). v1 ships a schema-derived **presence** rule; domain-weighted thresholds are a
   declared-manifest refinement, deferred.
