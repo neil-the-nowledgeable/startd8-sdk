@@ -3,7 +3,12 @@
 **Date:** 2026-06-01
 **From:** the CKG Phase-1 implementation session
 **To:** the next session that picks up CKG (branch from *current* main)
-**Status:** Phase 1 (detection/verification) **landed on main**; two tracks remain.
+**Status:** Phase 1 (detection/verification) **landed on main**. **TRACK 1 (REQ-CKG-240 synchronous
+verdict gate) is now also DONE** (merged `19974b65` + fix `7c7f2ead`, verified 2026-06-01 — see below).
+**One track remains: TRACK 2 — Phase-2 Knowledge Provider (now the lead track).**
+
+> **Update 2026-06-01:** This hand-off originally listed TRACK 1 as "do FIRST"; it was completed in
+> the same session that wrote this doc. The TRACK 1 section below is retained for history, marked DONE.
 
 > One-screen orientation so a fresh session can start without re-reading the whole doc set.
 > Deep context: `project_code_observability.md` (memory), `CODE_KNOWLEDGE_GRAPH_DESIGN.md`.
@@ -42,22 +47,28 @@ Phase-2 (Knowledge Provider) **requirements skeleton** drafted:
 
 ---
 
-## TRACK 1 — REQ-CKG-240 synchronous verdict consumption (finishes Phase 1; do FIRST)
+## TRACK 1 — REQ-CKG-240 synchronous verdict consumption ✅ DONE (2026-06-01)
 
-**Problem (code-verified):** the cross-file verdict is computed in a detached
-`daemon=False` thread (`prime_postmortem.launch_prime_postmortem_async:~2728`) **after**
-`prime_contractor.run()` already returned `result_dict` (`prime_contractor.py:~5241`) — so the
-FAIL never gates the run. The aggregate rule (Inc-5) makes the *report* verdict correct, but it
-isn't consumed.
+**Status: COMPLETE — merged to main** (`19974b65` synchronous verdict gate + `7c7f2ead` "make
+sync-gate failure explicit"; merge `71396514`). Verified: `test_req_ckg_240_sync_gate.py` 5/5 green;
+`test_seam_structural_scoping.py` present.
 
-**Do:** run the cross-file gate synchronously (or join the postmortem thread deterministically
-in CI/acceptance), fold the verdict into `result_dict` + CLI exit code.
-**Acceptance:** a batch containing #4/#11 yields a **non-PASS run result / exit code** (not just
-an async log line); **NFR-5 determinism** (20 repeats, identical verdict, no race).
-**Caution:** edits `prime_contractor.py` — the file dirty on main now (see Prereq 1). Smaller/
-contained (one orchestrator seam) but central; add an integration test.
+**What landed:** the cross-file verdict is now folded into `result_dict` as `cross_file_gate` +
+`postmortem_verdict` (no longer a detached daemon thread after `run()` returned). `run_prime_workflow.py:871-879`
+returns **exit 1** on an error-severity cross-file finding **even when per-feature status is clean** —
+closing the score-vs-reality inversion (RUN_008 Gap D). Touched `prime_contractor.py`,
+`prime_postmortem.py`, `run_prime_workflow.py`.
 
-## TRACK 2 — Phase-2 Knowledge Provider (Approach A converged; do SECOND)
+**Operational caveat:** the SCIP-based checks are env-gated by `STARTD8_CKG_SCIP` (default OFF →
+advisory-degrade); the non-SCIP validators (external-type-presence, tsconfig-paths, Prisma/Zod) run
+regardless. Set `STARTD8_CKG_SCIP` in the run env for full gate strength.
+
+*(Original problem statement retained for history: the verdict was computed in a detached
+`daemon=False` thread (`prime_postmortem.launch_prime_postmortem_async:~2728`) after
+`prime_contractor.run()` returned `result_dict` (`prime_contractor.py:~5241`), so the FAIL never gated
+the run. Now resolved.)*
+
+## TRACK 2 — Phase-2 Knowledge Provider (Approach A converged) — **NOW THE LEAD TRACK (do FIRST)**
 
 **Spec:** `CODE_KNOWLEDGE_GRAPH_PHASE2_KNOWLEDGE_PROVIDER_REQUIREMENTS.md` (v0.1 skeleton).
 **Process:** run `/reflective-requirements` then `/new-cnvrg-rvw-prmpt` on it first (as Phase 1 did).
