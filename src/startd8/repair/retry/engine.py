@@ -54,7 +54,17 @@ class RepairRetryEngine:
         # <run>/plan-ingestion/{prime-postmortem-report.json, generated/}
         self._ingestion = self._report.parent
         self._generated_root = self._ingestion / "generated"
+        # Resolved form for relative-path display (the scaffold guard returns
+        # realpath-resolved paths; on macOS /var -> /private/var would otherwise
+        # break a relative_to against the unresolved root).
+        self._gen_resolved = self._generated_root.resolve(strict=False)
         self._search = DiskTargetSearch(self._generated_root)
+
+    def _rel_display(self, p: Path) -> str:
+        try:
+            return str(p.resolve(strict=False).relative_to(self._gen_resolved))
+        except ValueError:
+            return p.name
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -203,9 +213,7 @@ class RepairRetryEngine:
             report.worklist.append(_wl_asset(v, "scaffold_did_not_resolve"))
             return
         report.scaffolded += 1
-        report.dispositions.append(
-            _disp(v, "scaffolded", str(created.relative_to(self._generated_root)))
-        )
+        report.dispositions.append(_disp(v, "scaffolded", self._rel_display(created)))
 
     def _do_barrel(
         self, v: RetryViolation, directory, scaffold: bool, report: RetryReport
@@ -235,9 +243,7 @@ class RepairRetryEngine:
             report.needs_regen += 1
             return
         report.scaffolded += 1
-        report.dispositions.append(
-            _disp(v, "scaffolded", str(created.relative_to(self._generated_root)))
-        )
+        report.dispositions.append(_disp(v, "scaffolded", self._rel_display(created)))
 
     def _emit(self, report: RetryReport) -> None:
         out_dir = self._ingestion / "repair-retry"

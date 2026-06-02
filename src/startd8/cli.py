@@ -919,24 +919,77 @@ app.add_typer(dashboard_app, name="dashboard")
 # ──────────────────────────────────────────────────────────────────────────
 
 
+def _repair_from_run(report_or_dir: Path, *, scaffold: bool) -> None:
+    """repair-retry mode: deterministic post-job repair from a postmortem report."""
+    from .repair.retry import RepairRetryEngine
+
+    try:
+        report = RepairRetryEngine(report_or_dir).run(scaffold=scaffold)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
+
+    console.print(f"[bold]Repair-retry:[/bold] {report.resolution}")
+    console.print(
+        f"  rewritten={report.rewritten}  scaffolded={report.scaffolded}  "
+        f"already_resolved={report.already_resolved}  rolled_back={report.rolled_back}  "
+        f"needs_regen={report.needs_regen}"
+    )
+    for d in report.dispositions:
+        if d["disposition"] not in ("already_resolved",):
+            console.print(f"  [{d['disposition']}] {d['feature_id']} {d['specifier']}  {d['detail']}")
+    # R1-S10: print the machine-consumable artifact paths.
+    console.print(f"  report:   {report.report_path}")
+    console.print(f"  worklist: {report.worklist_path}")
+    # Exit non-zero iff there is unresolved residue.
+    if report.worklist:
+        raise typer.Exit(1)
+
+
 @app.command("repair")
 def repair(
-    files: List[Path] = typer.Argument(..., help="Python files to repair"),
+    files: Optional[List[Path]] = typer.Argument(
+        None, help="Python files to repair ([FILES] mode)"
+    ),
+    from_run: Optional[Path] = typer.Option(
+        None, "--from-run",
+        help="A prime-postmortem-report.json or run dir — repair its cross-file "
+             "contract violations deterministically (repair-retry mode).",
+    ),
+    scaffold: bool = typer.Option(
+        True, "--scaffold/--no-scaffold",
+        help="(--from-run only) scaffold missing co-files/barrels; else worklist them.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be repaired without modifying files"
     ),
 ):
-    """Run deterministic repair on local Python files.
+    """Run deterministic repair on local files.
 
-    Detects syntax errors (via ast.parse) and lint issues (via ruff) then
-    applies the shared repair pipeline to fix them.
+    Two modes:
+
+    * **[FILES] mode** — detect syntax/lint issues in Python files and fix them.
+    * **--from-run mode** — repair a failed prime-contractor run's cross-file
+      contract violations (invented import paths, missing CSS co-files, barrels)
+      from its prime-postmortem-report.json. Zero LLM calls.
 
     Examples:
 
         startd8 repair src/mymodule/broken.py
 
-        startd8 repair --dry-run src/mymodule/*.py
+        startd8 repair --from-run pipeline-output/.../run-013-.../plan-ingestion
     """
+    # ── Mode validation (R1-S6) ──────────────────────────────────────────────
+    if from_run is not None:
+        if files:
+            console.print("[red]--from-run and [FILES] are mutually exclusive.[/red]")
+            raise typer.Exit(2)
+        _repair_from_run(from_run, scaffold=scaffold)
+        return
+    if not files:
+        console.print("[red]Provide [FILES] to repair, or --from-run <report|run-dir>.[/red]")
+        raise typer.Exit(2)
+
     import ast as _ast
 
     from .repair.config import RepairConfig
