@@ -401,6 +401,21 @@ def _read_prisma_anchor(seed_upstream_anchors, project_root) -> str:
     return ""
 
 
+def _build_project_knowledge(seed_upstream_anchors, project_root):
+    """Build the per-batch ProjectKnowledge artifact (REQ-CKG-500/NFR-2).
+
+    Parses the Prisma anchor ONCE so the per-feature injection seam only scopes +
+    renders (no per-feature disk read / re-parse). Returns an artifact whose
+    ``field_sets`` carry every entity's authoritative scalar field set. Module-level
+    (mirrors ``_read_prisma_anchor``) so the stub-based seam tests don't bind it.
+    """
+    from .project_knowledge import DraftModeProducer
+
+    prisma_text = _read_prisma_anchor(seed_upstream_anchors, project_root)
+    sources = {"prisma/schema.prisma": prisma_text} if prisma_text else {}
+    return DraftModeProducer().build(sources, str(project_root))
+
+
 class PrimeContractorWorkflow:
     """
     Orchestrates code generation with continuous integration.
@@ -4343,27 +4358,34 @@ class PrimeContractorWorkflow:
         # Primary: the entities the feature references by name (catches PI-001,
         # which the keyword gate skipped). Fallback: a whole-data-model mirror that
         # names no specific entity still inherits the full set (RUN-009 value-model).
-        prisma_text = _read_prisma_anchor(self.seed_upstream_anchors, self.project_root)
-        if prisma_text:
-            from .project_knowledge import referenced_entities
-            from .upstream_interface import render_prisma_field_sets
-            from ..languages.prisma_parser import parse_prisma_schema
+        # REQ-CKG-500/NFR-2: the field-set authority is parsed ONCE per batch
+        # (self._project_knowledge, built in run()); the per-feature seam only
+        # scopes + renders it — no per-feature disk read or re-parse. Falls back to
+        # an inline build for the single-feature path and the stub-based seam tests.
+        pk = getattr(self, "_project_knowledge", None)
+        if pk is None:
+            pk = _build_project_knowledge(self.seed_upstream_anchors, self.project_root)
+        if pk.field_sets:
+            from .project_knowledge import ProjectKnowledge, referenced_entities
+            from .project_knowledge import render as _render_field_sets
 
-            model_names = list(parse_prisma_schema(prisma_text).models)
             signal = " ".join(filter(None, [
                 feature.name or "",
                 getattr(feature, "description", "") or "",
                 *[Path(str(t)).stem for t in (feature.target_files or [])],
             ]))
-            referenced = referenced_entities([signal], model_names)
+            referenced = referenced_entities([signal], pk.entities())
             if referenced:
-                entities = sorted(referenced)
+                scoped = tuple(fs for fs in pk.field_sets if fs.entity in referenced)
             elif self._feature_mirrors_data_model(feature):
-                entities = None  # whole-model mirror → inherit the full field set
+                scoped = pk.field_sets  # whole-model mirror → inherit the full set
             else:
-                entities = []
-            if entities is None or entities:
-                prisma_render = render_prisma_field_sets(prisma_text, entities=entities)
+                scoped = ()
+            if scoped:
+                prisma_render = _render_field_sets(
+                    ProjectKnowledge(project_root=pk.project_root, field_sets=scoped),
+                    log=False,
+                )
                 if prisma_render:
                     parts.append(prisma_render)
 
@@ -5178,6 +5200,13 @@ class PrimeContractorWorkflow:
 
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
+
+        # REQ-CKG-500/NFR-2: build the read-only Knowledge Provider artifact ONCE per
+        # batch (anchors are now frozen). The per-feature injection seam scopes/renders
+        # this snapshot instead of re-reading + re-parsing schema.prisma per feature.
+        self._project_knowledge = _build_project_knowledge(
+            self.seed_upstream_anchors, self.project_root,
+        )
 
         # REQ-RFL-200: Within-run quality accumulator (reset per run)
         from startd8.contractors.run_quality_accumulator import (

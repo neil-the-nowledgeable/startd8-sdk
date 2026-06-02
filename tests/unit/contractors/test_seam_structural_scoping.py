@@ -8,7 +8,6 @@ fallback that preserves the RUN-009 whole-model-mirror case.
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from startd8.contractors.prime_contractor import PrimeContractorWorkflow
@@ -74,3 +73,44 @@ class TestStructuralScoping:
         feat = _feature(name="render footer", target_files=["app/footer.tsx"])
         out = _collect(_stub(["prisma/schema.prisma"], d), feat)
         assert out == ""
+
+
+class TestPerBatchArtifact:
+    """REQ-CKG-500/NFR-2: the schema is parsed once per batch, reused per feature."""
+
+    def test_uses_cached_artifact_without_rebuilding(self, monkeypatch):
+        import startd8.contractors.prime_contractor as pc
+        from startd8.contractors.project_knowledge import DraftModeProducer
+
+        # the workflow built this once in run(); the seam must reuse it...
+        cached = DraftModeProducer().build({"prisma/schema.prisma": SCHEMA}, "/x")
+        # ...and must NOT re-parse per feature — guard by making a rebuild explode.
+        def _boom(*a, **k):
+            raise AssertionError("per-feature rebuild — the per-batch cache was bypassed")
+
+        monkeypatch.setattr(pc, "_build_project_knowledge", _boom)
+
+        stub = SimpleNamespace(
+            seed_upstream_anchors=[], project_root="/x", queue=None,
+            _feature_mirrors_data_model=_mirrors, _project_knowledge=cached,
+        )
+        out = _collect(stub, _feature(name="enrich-capabilities",
+                                      target_files=["app/actions/enrich.ts"]))
+        assert "`Capability`" in out  # rendered from the cached artifact, no rebuild
+
+    def test_builds_inline_when_no_cache(self, tmp_path, monkeypatch):
+        import startd8.contractors.prime_contractor as pc
+        d = _project(tmp_path)
+        called = {}
+        real = pc._build_project_knowledge
+
+        def _spy(anchors, root):
+            called["hit"] = True
+            return real(anchors, root)
+
+        monkeypatch.setattr(pc, "_build_project_knowledge", _spy)
+        # stub has no _project_knowledge → seam builds inline (single-feature path)
+        out = _collect(_stub(["prisma/schema.prisma"], d),
+                       _feature(name="enrich-capabilities", target_files=["x.ts"]))
+        assert called.get("hit") is True
+        assert "`Capability`" in out
