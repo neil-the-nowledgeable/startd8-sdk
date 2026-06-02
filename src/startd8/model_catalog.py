@@ -89,8 +89,11 @@ class Models:
     # OpenAI Models
     # ==========================================================================
 
-    # Flagship - most capable
-    GPT_FLAGSHIP_LATEST = "openai:gpt-5.5-pro"
+    # Flagship - most capable model callable via Chat Completions.
+    # NOTE: gpt-5.5-pro is the nominal top model but is Responses-API-only (404 "not a chat model"
+    # on v1/chat/completions), so the latest-flagship default points at gpt-5.5 until Responses-API
+    # support lands. See docs/design/OPENAI_GPT_CONFIGURATION_QUESTIONS.md (Q3).
+    GPT_FLAGSHIP_LATEST = "openai:gpt-5.5"
 
     # Balanced - standard quality/cost
     GPT_STANDARD_LATEST = "openai:gpt-5.5"
