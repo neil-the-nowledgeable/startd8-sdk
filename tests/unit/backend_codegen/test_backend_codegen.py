@@ -264,10 +264,13 @@ def test_sqlmodel_render_tables_enums_pk_and_json():
         "    tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))"
         in text
     )
-    # optional + relation exclusion
+    # optional column; FK constraint from @relation; relation object excluded (no Relationship() yet)
     assert "    context: Optional[str] = None" in text
-    assert "    metricId: Optional[str] = None" in text
-    assert "metric:" not in text
+    assert (
+        '    metricId: Optional[str] = Field(default=None, foreign_key="metric.id")'
+        in text
+    )
+    assert "    metric:" not in text
     # synthesized imports
     assert "from sqlmodel import Field, SQLModel" in text
     assert "from sqlalchemy import JSON, Column" in text
@@ -310,6 +313,25 @@ def test_sqlmodel_dto_split():
     assert "id:" not in update
     assert "result: Optional[str] = None" in update
     assert "tags: Optional[list[str]] = None" in update
+
+
+def test_sqlmodel_foreign_keys():
+    """FK constraints from @relation -> Field(foreign_key=...); DTOs stay plain (no FK)."""
+    text = render_sqlmodel_tables(PILOT_SCHEMA).text
+    # optional FK on the table column
+    assert (
+        'metricId: Optional[str] = Field(default=None, foreign_key="metric.id")' in text
+    )
+    # DTOs carry the FK scalar but NOT the constraint (they aren't tables)
+    create = text.split("class ProofPointCreate")[1].split("class ProofPointRead")[0]
+    assert "metricId: Optional[str] = None" in create and "foreign_key" not in create
+    # required FK (no `?`) -> Field(foreign_key=...) without a default
+    req = (
+        "model A { id String @id }\n"
+        "model Link {\n  aId String\n"
+        "  a A @relation(fields: [aId], references: [id])\n}\n"
+    )
+    assert 'aId: str = Field(foreign_key="a.id")' in render_sqlmodel_tables(req).text
 
 
 # --------------------------------------------------------------------------- #

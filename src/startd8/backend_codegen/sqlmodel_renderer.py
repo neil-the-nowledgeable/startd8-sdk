@@ -12,16 +12,19 @@ server-set fields), ``<Name>Read`` (full view), ``<Name>Update`` (every non-PK f
 partial PATCH). The table class stays unchanged, so the fidelity gate is unaffected.
 
 Scope: primary keys (``@id`` → ``Field(primary_key=True)``), scalar columns, enum classes
-(``str, Enum``), list scalars as JSON columns, and the Create/Read/Update DTOs. **Deferred (flagged,
-not silent):** foreign-key constraints + ``Relationship()`` — FK scalars render as plain columns for
-v1 (they function on SQLite); proper FK wiring needs the ``@relation(fields:…, references:…)``
-cross-field parse.
+(``str, Enum``), list scalars as JSON columns, the Create/Read/Update DTOs, and **foreign-key
+constraints** (``@relation(fields:…, references:…)`` → ``Field(foreign_key="table.col")``;
+runtime-verified: the constraint is declared on the SQLAlchemy table and ``create_all`` dependency-
+orders the tables). **Deferred:** ``Relationship()`` ORM-navigation attributes — they need
+cross-model relation-pairing for correct ``back_populates`` (and ``@relation``-name disambiguation
+for multi-relation models), a larger pass than the column constraint.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import List, Set, Tuple
+from typing import Dict, List, Set, Tuple
 
 from ..frontend_codegen.schema_renderer import (
     UnrenderableField,
@@ -30,6 +33,39 @@ from ..frontend_codegen.schema_renderer import (
 )
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from .pydantic_renderer import _PY_SCALAR
+
+_REL_FIELDS_RE = re.compile(r"fields:\s*\[([^\]]*)\]")
+_REL_REFS_RE = re.compile(r"references:\s*\[([^\]]*)\]")
+
+
+def _fk_map(schema: PrismaSchema, model_name: str) -> Dict[str, str]:
+    """Map ``fk_scalar_name -> "<target_table>.<ref_col>"`` from a model's ``@relation`` fields.
+
+    A Prisma relation field (``metric Metric? @relation(fields: [metricId], references: [id])``)
+    names the FK scalar (``metricId``), the referenced column (``id``), and — via its type — the
+    target model (``Metric`` → table ``metric``, SQLModel's default lowercased tablename). The
+    composite (multi-column) FK case is handled by zipping ``fields`` with ``references``.
+    """
+    out: Dict[str, str] = {}
+    model = schema.model(model_name)
+    if model is None:
+        return out
+    for f in model.fields:
+        rel = next((a for a in f.attributes if a.startswith("@relation(")), None)
+        if not rel:
+            continue
+        fm = _REL_FIELDS_RE.search(rel)
+        rm = _REL_REFS_RE.search(rel)
+        if not fm or not rm:
+            continue
+        fk_fields = [x.strip() for x in fm.group(1).split(",") if x.strip()]
+        ref_cols = [x.strip() for x in rm.group(1).split(",") if x.strip()]
+        target_table = (
+            f.type.lower()
+        )  # SQLModel default __tablename__ is the lowercased class name
+        for fk, ref in zip(fk_fields, ref_cols):
+            out[fk] = f"{target_table}.{ref}"
+    return out
 
 
 @dataclass(frozen=True)
@@ -62,9 +98,16 @@ def _base_type(
 
 
 def _render_table_field(
-    field: PrismaField, schema: PrismaSchema, needs: Set[str], enums_used: Set[str]
+    field: PrismaField,
+    schema: PrismaSchema,
+    needs: Set[str],
+    enums_used: Set[str],
+    fk: str = "",
 ) -> Tuple[str, bool]:
-    """Render one ``    <name>: <ann>[ = ...]`` line. Returns (line, was_unrenderable)."""
+    """Render one ``    <name>: <ann>[ = ...]`` line. Returns (line, was_unrenderable).
+
+    ``fk`` (``"table.col"``) adds a ``foreign_key=`` constraint to the scalar column.
+    """
     base = _base_type(field, schema, needs, enums_used)
     unrenderable = base == "Any" and field.type not in ("Json",)
 
@@ -75,17 +118,25 @@ def _render_table_field(
             f"Field(default_factory=list, sa_column=Column(JSON))",
             unrenderable,
         )
+
+    # Compose Field(...) args from primary-key + foreign-key constraints (order: default, pk, fk).
+    args: List[str] = []
     if field.is_id:
-        if field.is_optional:
-            needs.add("Optional")
-            return (
-                f"    {field.name}: Optional[{base}] = Field(default=None, primary_key=True)",
-                unrenderable,
-            )
-        return f"    {field.name}: {base} = Field(primary_key=True)", unrenderable
+        args.append("primary_key=True")
+    if fk:
+        args.append(f'foreign_key="{fk}"')
+
     if field.is_optional:
         needs.add("Optional")
+        if args:
+            return (
+                f"    {field.name}: Optional[{base}] = Field(default=None, {', '.join(args)})",
+                unrenderable,
+            )
         return f"    {field.name}: Optional[{base}] = None", unrenderable
+
+    if args:
+        return f"    {field.name}: {base} = Field({', '.join(args)})", unrenderable
     return f"    {field.name}: {base}", unrenderable
 
 
@@ -205,11 +256,14 @@ def render_sqlmodel_tables(
 
     for name in model_names:
         scalars = schema.scalar_fields(name)
+        fkmap = _fk_map(schema, name)
         lines = [f"class {name}(SQLModel, table=True):"]
         if not scalars:
             lines.append("    pass")
         for f in scalars:
-            line, bad = _render_table_field(f, schema, needs, enums_used)
+            line, bad = _render_table_field(
+                f, schema, needs, enums_used, fk=fkmap.get(f.name, "")
+            )
             lines.append(line)
             if bad:
                 flagged.append(

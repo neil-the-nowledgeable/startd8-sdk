@@ -55,9 +55,15 @@ unchanged table class; routers use them (`item: XCreate` → `-> XRead`; `data: 
 test (#1) may still reveal which `@default`/server-set fields a real schema needs hidden — confirm
 then.
 
-### 4. Lower priority
-- **FK constraints + `Relationship()`** — real referential integrity (FK scalars are plain columns
-  in v1).
+### 4. FK constraints  ·  ✅ DONE (Relationship() still open)
+`@relation(fields:…, references:…)` → `Field(foreign_key="table.col")` on the FK scalar column;
+runtime-verified (constraint declared on the SQLAlchemy table; `create_all` dependency-orders the
+tables; a referencing insert round-trips). **Still open:** `Relationship()` ORM-navigation
+attributes (`proofpoint.metric`) — they need cross-model `back_populates` pairing (and `@relation`-
+name disambiguation for multi-relation / M2M models), a larger and riskier pass than the column
+constraint, so it's intentionally separated.
+
+### 5. Lower priority
 - **Completeness domain-manifest (OQ-4)** — replace the v1 presence rule with the real thresholds
   (Profile present, ≥3 confirmed ProofPoints, ≥1 Outcome/Metric/Differentiator) via a declared
   signal manifest.

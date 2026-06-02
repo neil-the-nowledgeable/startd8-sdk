@@ -38,6 +38,7 @@ model ProofPoint {
   confidence Confidence
   tags       String[]
   metricId   String?
+  metric     Metric?    @relation(fields: [metricId], references: [id])
 }
 
 model Metric {
@@ -67,10 +68,18 @@ def test_generated_app_serves_full_cycle(tmp_path, monkeypatch):
     _purge_app_modules()
     try:
         main = importlib.import_module("app.main")
+        tables = importlib.import_module("app.tables")
         from fastapi.testclient import TestClient
 
+        # FK constraint is declared on the SQLAlchemy table (from @relation)
+        fks = list(tables.ProofPoint.__table__.c.metricId.foreign_keys)
+        assert fks and fks[0].target_fullname == "metric.id"
+
         with TestClient(main.app) as c:  # context-manager triggers lifespan -> init_db
-            # JSON API with the DTO split
+            # a Metric to reference (create_all dependency-ordered the tables)
+            assert c.post("/metric", json={"id": "m1", "value": 2.5}).status_code == 200
+
+            # JSON API with the DTO split + a valid FK reference
             body = {
                 "id": "p1",
                 "situation": "S",
@@ -78,12 +87,13 @@ def test_generated_app_serves_full_cycle(tmp_path, monkeypatch):
                 "result": "shipped",
                 "confidence": "draft",
                 "tags": ["growth", "ml"],
-                "metricId": None,
+                "metricId": "m1",
             }
             r = c.post("/proofpoint", json=body)
             assert r.status_code == 200, r.text
             assert r.json()["tags"] == ["growth", "ml"]  # JSON-list column round-trip
             assert r.json()["confidence"] == "draft"  # enum
+            assert r.json()["metricId"] == "m1"  # FK reference persisted
 
             # partial PATCH via XUpdate leaves other fields intact
             r = c.patch("/proofpoint/p1", json={"result": "promoted"})
