@@ -79,17 +79,31 @@ class AdherenceCase:
 
 # RUN-011 M4 field/path invention reproductions (Gap A + Gap B).
 RUN011_CASES: Tuple[AdherenceCase, ...] = (
+    # Gap A is described in DOMAIN SYNONYMS that differ from the real column names,
+    # and forced through `db.<model>({ data: {...} })` so the field choice lands where
+    # scan_prisma_usage can measure it. Without the schema the model must guess the
+    # column names (→ invents); with injection it should use the real ones.
     AdherenceCase(
-        case_id="PI-001", gap="A", feature_name="enrich-capabilities",
-        description="Enrich each Capability with a derived Outcome score.",
-        target_files=("app/actions/enrich.ts",), prisma_schema=_CAP_SCHEMA,
-        forbidden=("aiRefId", "supportingEvidence", "title"),
+        case_id="PI-001", gap="A", feature_name="save-capability",
+        description=(
+            "Next.js server action that persists a NEW capability record by calling "
+            "`await db.capability.create({ data: { ... } })` with an inline object literal. "
+            "A capability has a title, a one-line blurb, and a numeric importance rating — "
+            "map each to the model's real columns (do not invent column names)."
+        ),
+        target_files=("app/actions/save-capability.ts",), prisma_schema=_CAP_SCHEMA,
+        forbidden=("title", "blurb", "importance", "rating", "aiRefId"),
     ),
     AdherenceCase(
-        case_id="PI-004", gap="A", feature_name="capability-card",
-        description="Render a Capability summary card.",
-        target_files=("components/CapabilityCard.tsx",), prisma_schema=_CAP_SCHEMA,
-        forbidden=("bio", "label", "headline"),
+        case_id="PI-004", gap="A", feature_name="rename-outcome",
+        description=(
+            "Repository function that updates an existing outcome's caption by calling "
+            "`await db.outcome.update({ where: { id }, data: { ... } })` with an inline "
+            "object literal. An outcome has a short caption text — map it to the model's "
+            "real column (do not invent a column name)."
+        ),
+        target_files=("lib/outcome-repo.ts",), prisma_schema=_CAP_SCHEMA,
+        forbidden=("caption", "text", "title"),
     ),
     AdherenceCase(
         case_id="PI-002", gap="B", feature_name="capability-route",

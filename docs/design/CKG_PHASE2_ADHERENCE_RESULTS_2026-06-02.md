@@ -11,9 +11,10 @@
 > half is robustly validated across all tiers; the **field-set / Gap-A** half is **inconclusive** on these
 > cases. §§1–5 are retained as the record of the initial pass.
 
-> One-line takeaway (corrected, §6): **the module-path-negatives half of the Knowledge Provider (D2 / Gap B)
-> is validated across `gemini-2.5-pro`, `gemini-2.5-flash`, and `claude-haiku-4-5`; the field-set-authority
-> half (Gap A) is not yet measurable with this harness.**
+> One-line takeaway (final, §7): **both halves of the Knowledge Provider are validated on the cheap tier
+> (`claude-haiku-4-5`, structural, N=10) — module-path negatives (Gap B) 0.40→1.00, and field-set authority
+> (Gap A) 0.05→1.00 once the cases force a real `db.<model>` write described in domain synonyms.** §6's
+> "Gap A inconclusive" was a weak-case artifact, superseded by §7.
 
 ---
 
@@ -138,5 +139,32 @@ Gap B = every `@/`-aliased import resolves under a declared real module. Re-runn
 
 **Net:** the **negatives** half of the Knowledge Provider earns its keep empirically (incl. on the cheap
 tier); the **field-set-authority** half is **unmeasured** here. To measure Gap A properly: harder cases
-(real `db.<model>` *and* property-access usage) or the **end-to-end OQ-5 test** scored by the full Verifier
-+ build. The initial "premise validated across tiers" (§§5) is **superseded by this narrower, scorer-correct claim.**
+(real `db.<model>` usage) or the **end-to-end OQ-5 test**. The initial "premise validated across tiers"
+(§§5) is **superseded by this narrower claim** — itself superseded by §7, which measures Gap A.
+
+---
+
+## 7. Gap A measured — strengthened cases (the field-set-authority validation)
+
+§6 left Gap A unmeasured because the cases were presentation features (no `db.<model>` calls for the
+structural scorer to inspect). **Fix:** redesign Gap-A cases as `db.<model>({ data: {…} })` writes
+described in *domain synonyms* that differ from the real columns (a capability's "title / blurb /
+importance rating" → real `name / summary / score`), so an unaided model must guess the column names
+(→ invents) while an injected model has the real set. Re-run on `claude-haiku-4-5` (structural, N=10):
+
+| `claude-haiku-4-5` (strengthened cases) | Baseline | Injected |
+|---|---|---|
+| **Gap A — field invention** | **0.05** (PI-001 0/10, PI-004 1/10) | **1.00** (10/10, 10/10) |
+| **Gap B — path invention** | 0.40 | 1.00 |
+
+Haiku invents the column names **~95% of the time** without the schema; injecting the real field set makes
+it **perfect**. **Both halves of the Knowledge Provider are now validated on the cheap target tier with
+structural measurement** (field-set authority 0.05→1.00; module-path negatives 0.40→1.00).
+
+**Methodology arc worth remembering:** denylist N=5 *looked* validated (artifact) → structural N=10 on
+weak cases showed Gap A *already perfect* (cases too easy / scorer blind to property-access) → structural
+N=10 on **strengthened** cases shows the real 0.05→1.00. The result is only trustworthy because both the
+*scorer* (structural) and the *cases* (force `db.<model>`, synonym-described) were hardened.
+
+**Remaining:** cross-tier confirmation with strengthened cases (pro/flash — expected higher baseline, same
+direction); and the **end-to-end OQ-5** test for full pipeline fidelity (Verifier + build + repair).
