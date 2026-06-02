@@ -381,6 +381,26 @@ class PrimeContractorListener:
             files_count=len(files),
         )
 
+
+def _read_prisma_anchor(seed_upstream_anchors, project_root) -> str:
+    """Return the first on-disk ``.prisma`` upstream anchor's text, or ``""``.
+
+    Module-level (not a method) so the stub-based seam tests that call
+    ``_collect_upstream_interfaces`` with a ``SimpleNamespace`` ``self`` don't
+    need to bind it.
+    """
+    for anchor in seed_upstream_anchors or []:
+        if not str(anchor).endswith(".prisma"):
+            continue
+        ap = Path(anchor) if Path(anchor).is_absolute() else Path(project_root) / anchor
+        if ap.is_file():
+            try:
+                return ap.read_text(encoding="utf-8")
+            except OSError:
+                return ""
+    return ""
+
+
 class PrimeContractorWorkflow:
     """
     Orchestrates code generation with continuous integration.
@@ -4276,6 +4296,7 @@ class PrimeContractorWorkflow:
             )
 
         parts: List[str] = []
+        ts_render = ""
 
         # Mode A + Mode B: TS/JS module-interface inheritance.
         if producer_files:
@@ -4297,22 +4318,54 @@ class PrimeContractorWorkflow:
             if ts_render:
                 parts.append(ts_render)
 
-        # FR-3: Prisma field-set inheritance for data-model-mirroring features.
-        if self._feature_mirrors_data_model(feature):
-            for anchor in self.seed_upstream_anchors:
-                if not str(anchor).endswith(".prisma"):
-                    continue
-                ap = Path(anchor) if Path(anchor).is_absolute() else Path(self.project_root) / anchor
-                if not ap.is_file():
-                    continue
-                try:
-                    from .upstream_interface import render_prisma_field_sets
-                    prisma_render = render_prisma_field_sets(ap.read_text(encoding="utf-8"))
-                except OSError:
-                    prisma_render = ""
+        # REQ-CKG-522 (D2): explicit module-path negatives, rendered only when the
+        # feature actually imports real upstream modules (where path-invention
+        # happens). Gated on a concrete TS interface render so non-TS features
+        # aren't noised; the seed list is filtered to the project's real modules.
+        if ts_render:
+            from .project_knowledge import (
+                ProjectKnowledge,
+                canonical_specifier,
+                relevant_negatives,
+            )
+            from .project_knowledge import render as _render_pk
+            negs = relevant_negatives([canonical_specifier(p) for p in producer_files])
+            if negs:
+                neg_section = _render_pk(
+                    ProjectKnowledge(project_root=str(self.project_root), negatives=tuple(negs)),
+                    log=False,
+                )
+                if neg_section:
+                    parts.append(neg_section)
+
+        # REQ-CKG-524/527 (D4): structural Prisma field-set scoping replaces the
+        # _feature_mirrors_data_model SKIP-gate (the likely RUN-011 Gap-A miss).
+        # Primary: the entities the feature references by name (catches PI-001,
+        # which the keyword gate skipped). Fallback: a whole-data-model mirror that
+        # names no specific entity still inherits the full set (RUN-009 value-model).
+        prisma_text = _read_prisma_anchor(self.seed_upstream_anchors, self.project_root)
+        if prisma_text:
+            from .project_knowledge import referenced_entities
+            from .upstream_interface import render_prisma_field_sets
+            from ..languages.prisma_parser import parse_prisma_schema
+
+            model_names = list(parse_prisma_schema(prisma_text).models)
+            signal = " ".join(filter(None, [
+                feature.name or "",
+                getattr(feature, "description", "") or "",
+                *[Path(str(t)).stem for t in (feature.target_files or [])],
+            ]))
+            referenced = referenced_entities([signal], model_names)
+            if referenced:
+                entities = sorted(referenced)
+            elif self._feature_mirrors_data_model(feature):
+                entities = None  # whole-model mirror → inherit the full field set
+            else:
+                entities = []
+            if entities is None or entities:
+                prisma_render = render_prisma_field_sets(prisma_text, entities=entities)
                 if prisma_render:
                     parts.append(prisma_render)
-                break
 
         return "\n\n".join(parts)
 
@@ -5303,18 +5356,26 @@ class PrimeContractorWorkflow:
         except Exception:
             logger.warning("Anzen gate finalization skipped", exc_info=True)
 
-        # Launch async post-mortem evaluation
+        # REQ-CKG-240: run the post-mortem synchronously so the cross-file
+        # verifier verdict GATES the run. Previously this was a detached
+        # daemon=False thread launched *after* result_dict was returned, so its
+        # FAIL verdict was logged but never consumed. We now evaluate inline and
+        # fold the verdict into result_dict (and, downstream, the CLI exit code).
         try:
-            from .prime_postmortem import launch_prime_postmortem_async
-            launch_prime_postmortem_async(
+            from .prime_postmortem import (
+                apply_cross_file_gate,
+                evaluate_prime_postmortem_sync,
+            )
+            _pm_report = evaluate_prime_postmortem_sync(
                 result_dict=result_dict,
                 queue=self.queue,
                 seed_path=getattr(self, '_seed_path', None),
                 output_dir=str(self._manifest_path().parent),
                 project_root=str(self.project_root),
             )
+            apply_cross_file_gate(result_dict, _pm_report)
         except Exception:
-            logger.warning("Prime postmortem launch failed", exc_info=True)
+            logger.warning("Prime postmortem (sync gate) failed", exc_info=True)
 
         return result_dict
 

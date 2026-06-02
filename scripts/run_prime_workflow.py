@@ -846,6 +846,9 @@ def main() -> int:
         "seed_path": str(seed_path),
         "task_filter": task_filter,
         "history": result.get("history", []),
+        # REQ-CKG-240: cross-file integrity verdict, now gated synchronously.
+        "cross_file_gate": result.get("cross_file_gate"),
+        "postmortem_verdict": result.get("postmortem_verdict"),
     }
 
     if not args.dry_run:
@@ -860,6 +863,19 @@ def main() -> int:
     if result.get("aborted"):
         return 1
     if result.get("failed", 0) > 0:
+        return 1
+
+    # REQ-CKG-240: an error-severity cross-file finding is build-breaking, so it
+    # fails the run (non-PASS exit code) even when per-feature status is clean —
+    # this is the score-vs-reality inversion CKG Phase 1 closes.
+    gate = result.get("cross_file_gate")
+    if gate and not gate.get("passed", True):
+        failures = gate.get("cross_file_failures", [])
+        logger.error(
+            "Cross-file integrity gate FAILED (verdict=%s): %s",
+            gate.get("verdict"),
+            ", ".join(f.get("feature_id", "?") for f in failures) or "?",
+        )
         return 1
 
     # --strict-validation: non-zero exit if any feature has validation failures
