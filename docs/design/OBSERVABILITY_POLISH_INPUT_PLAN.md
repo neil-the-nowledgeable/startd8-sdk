@@ -27,21 +27,31 @@ Phase 6  Backward-compat + parameter-classification fallback + golden   FR-CONS-
 
 ---
 
-## Phase 0 — Confirm field shapes (prerequisite)
+## Phase 0 — Confirm field shapes ✅ DONE (verified against real manifests)
 
-**Don't guess the manifest.** Before wiring, confirm the exact shape of each field against a **real
-`.contextcore.yaml`** from a pipeline run (or ContextCore's manifest schema):
+Confirmed against real `.contextcore.yaml` files (generated run-011 + hand-authored startd8-sdk):
 
-| Field | Assumed shape (verify) |
-|-------|------------------------|
-| `spec.observability.alertChannels` | list of channel identifiers (e.g. `["#alerts", "#oncall"]`) — or `{severity: channel}`? |
-| `metadata.owners` | list of `{name, email?, team?}` or a map? (REQ-CDP-INT-002 validates plausibility) |
-| `spec.targets[]` | list of `{name, namespace}` |
-| `spec.observability.metricsInterval` | duration string (`"30s"`) |
+| Field | **Confirmed shape** | Example |
+|-------|---------------------|---------|
+| `spec.observability.alertChannels` | **`list[str]`** of channel ids (NOT a severity→URL map — confirms OQ-6) | `['#alerts', '#oncall']` |
+| `metadata.owners` | **`list[{team, slack?, email?}]`** | `[{team: platform, slack: '#startd8-dev', email: t@x.com}]` |
+| `spec.targets[]` | **`list[{kind, name, namespace}]`** | `[{kind: Deployment, name: strtd8, namespace: default}]` |
+| `spec.observability.metricsInterval` | duration string | `"30s"` |
+| `spec.requirements.{availability,latencyP99,throughput}` | strings | `"99.9"`, `"500ms"`, `"100rps"` |
+| `runbookBase` / `datasource` | **absent** — no manifest home today | → OQ-8 |
 
-**Validation:** a sample manifest is checked into `tests/` fixtures with the confirmed shapes; the rest
-of the plan codes against *that*, not an assumption. (This is the step that caught the `spec.delivery`
-mistake — keep it.)
+**Two findings for the wiring:**
+1. **Channel-source fallback (important).** `alertChannels` is present in *generated* manifests but
+   **omitted in hand-authored ones**, which instead carry `metadata.owners[].slack`. FR-CONS-1 MUST
+   prefer `spec.observability.alertChannels`, then fall back to `metadata.owners[].slack`, then to the
+   required-unresolved path (no fabricated URL).
+2. **Data quality is upstream's job.** Real generated manifests contain garbage values (`#1-20`,
+   `team: contact`) — this is the exact class REQ-CDP-INT-002 / OBS-005 validation owns. startd8
+   **trusts validated values** (reqs §2.2); the test fixture uses *clean* values, and a malformed
+   channel is not startd8's to reject.
+
+**Validation:** check a clean sample manifest into `tests/` fixtures with these confirmed shapes; code
+the rest of the plan against that fixture. (This is the step that caught the `spec.delivery` mistake.)
 
 ---
 

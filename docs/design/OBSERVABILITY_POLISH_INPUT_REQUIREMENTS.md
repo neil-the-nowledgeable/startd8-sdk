@@ -154,12 +154,19 @@ today except the placeholders are no longer fabricated.
 
 ## 4. Open Questions
 
-OQ-1..5 resolved in §0 (v0.2 planning); OQ-6/7 resolved in §0.2 (cross-repo grounding). One live:
+OQ-1..5 resolved in §0 (v0.2 planning); OQ-6/7 resolved in §0.2 (cross-repo grounding). OQ-8 **opened**:
 
-- **OQ-8 (live — needs a decision before implementation).** Manifest home for **runbook URL base** and
-  **datasource name**: does ContextCore add `spec.observability.runbookBase` / `…datasource`, or does
-  startd8 treat them as env/config defaults? Drives FR-CONS-2/3. (Recommendation: env/config defaults
-  now; propose ContextCore fields if they become per-project intent.)
+- **OQ-8 (OPENED — pending ContextCore triage; interim decision made).** Manifest home for **runbook
+  URL base** and **datasource name**. Raised to ContextCore/cap-dev-pipe as
+  `pipeline-requirements.md` Appendix C **Review Round R2 (R2-F1 runbookBase, R2-F2 datasource)** —
+  field-vs-config decision. **Interim (unblocks implementation):** treat both as env/config defaults
+  (`OBS_RUNBOOK_BASE`; `OBS_PROM_DATASOURCE` default `"prometheus"`); when unset, the generator
+  **omits** the runbook annotation rather than emitting `runbooks.example.com`. If ContextCore adds
+  fields, FR-CONS-2/3 read them first. Phases 1–4 + 6 are **unblocked**; Phase 5 uses the interim.
+
+**Phase 0 (confirm field shapes) — DONE:** verified against real `.contextcore.yaml` (see plan §Phase 0).
+Key finding: channel source is `spec.observability.alertChannels` (`list[str]`) with fallback to
+`metadata.owners[].slack`; data-quality is upstream's (REQ-CDP-INT-002), startd8 trusts validated values.
 
 ---
 
