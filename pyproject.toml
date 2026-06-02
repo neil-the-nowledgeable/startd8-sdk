@@ -147,6 +147,7 @@ simple = "startd8.contractors.adapters.standalone:SimpleMergeStrategy"
 # target file is deterministically provided + in-sync (no stack coupling in the core).
 [project.entry-points."startd8.contractors.deterministic_providers"]
 prisma-zod = "startd8.frontend_codegen.provider:PrismaZodFileProvider"
+pydantic-sqlmodel = "startd8.backend_codegen.provider:PydanticSQLModelProvider"
 
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
