@@ -17,11 +17,20 @@ from .conventions import (
     ProjectConventions,
     detect_project_conventions,
 )
+from .drift import DriftResult, check_drift, embedded_schema_sha
 from .gates import assert_symmetric, verify_render_fidelity
+from .skeleton import (
+    SkeletonArtifact,
+    SkeletonPlan,
+    plan_frontend_skeleton,
+    render_barrel,
+    render_css_module_stub,
+)
 from .schema_renderer import (
     SCALAR_MAP,
     RenderResult,
     UnrenderableField,
+    composite_type_names,
     field_completeness_issues,
     model_field_sets,
     render_field,
@@ -38,9 +47,18 @@ __all__ = [
     "RenderResult",
     "SCALAR_MAP",
     "UnrenderableField",
+    "DriftResult",
+    "SkeletonArtifact",
+    "SkeletonPlan",
     "assert_symmetric",
+    "check_drift",
+    "composite_type_names",
     "detect_project_conventions",
+    "embedded_schema_sha",
     "field_completeness_issues",
+    "plan_frontend_skeleton",
+    "render_barrel",
+    "render_css_module_stub",
     "model_field_sets",
     "render_field",
     "render_field_base",

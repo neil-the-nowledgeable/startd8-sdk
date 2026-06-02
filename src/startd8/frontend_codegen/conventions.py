@@ -121,21 +121,26 @@ def _walk_source_files(root: Path) -> Iterator[Path]:
             yield Path(dirpath) / name
 
 
-def _detect_barrels(root: Path) -> bool:
-    """True if any ``index.ts(x)`` re-exports a sibling (a barrel file)."""
+def _detect_barrels_and_css(root: Path) -> Tuple[bool, bool]:
+    """Single tree walk → ``(uses_barrels, uses_css_modules)``.
+
+    A barrel is an ``index.ts(x)`` that re-exports a sibling; CSS-module usage is any
+    ``*.module.css``. One pass (F9) — short-circuits once both are found.
+    """
+    uses_barrels = False
+    uses_css = False
     for path in _walk_source_files(root):
-        if path.name in ("index.ts", "index.tsx"):
+        if not uses_css and path.name.endswith(".module.css"):
+            uses_css = True
+        elif not uses_barrels and path.name in ("index.ts", "index.tsx"):
             try:
                 if _REEXPORT_RE.search(path.read_text(encoding="utf-8")):
-                    return True
+                    uses_barrels = True
             except OSError:
-                continue
-    return False
-
-
-def _detect_css_modules(root: Path) -> bool:
-    """True if the project contains any ``*.module.css`` file."""
-    return any(p.name.endswith(".module.css") for p in _walk_source_files(root))
+                pass
+        if uses_barrels and uses_css:
+            break
+    return uses_barrels, uses_css
 
 
 def detect_project_conventions(project_root: str | os.PathLike) -> ProjectConventions:
@@ -148,10 +153,11 @@ def detect_project_conventions(project_root: str | os.PathLike) -> ProjectConven
     """
     root = Path(project_root)
     alias, target = _detect_alias(root)
+    uses_barrels, uses_css_modules = _detect_barrels_and_css(root)
     return ProjectConventions(
         alias=alias,
         alias_target=target,
-        uses_barrels=_detect_barrels(root),
-        uses_css_modules=_detect_css_modules(root),
+        uses_barrels=uses_barrels,
+        uses_css_modules=uses_css_modules,
         has_types_dir=(root / "types").is_dir(),
     )

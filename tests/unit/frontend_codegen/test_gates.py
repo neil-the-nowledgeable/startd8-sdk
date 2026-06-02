@@ -142,3 +142,49 @@ def test_fidelity_catches_field_count_mismatch():
     mutated = "\n".join(line for line in rendered.splitlines() if "bio:" not in line)
     issues = verify_render_fidelity(mutated, SCHEMA)
     assert any("Profile" in i and "mismatch" in i for i in issues)
+
+
+# --------------------------------------------------------------------------- #
+# Landmine regressions
+# --------------------------------------------------------------------------- #
+
+
+def test_extract_field_exprs_preserves_slashes_in_string_literals():
+    # F1: a `//` inside a string literal must NOT be treated as a comment / truncate the expr.
+    from startd8.frontend_codegen.gates import _extract_field_exprs
+
+    rendered = (
+        "export const MSchema = z.object({\n"
+        '  site: z.string().url().default("https://example.com"),\n'
+        "  name: z.string(),\n"
+        "});\n"
+    )
+    got = _extract_field_exprs(rendered)
+    assert got["M"] == [
+        ("site", 'z.string().url().default("https://example.com")'),
+        ("name", "z.string()"),
+    ]
+
+
+def test_decimal_string_is_strict_by_default_but_opt_in_for_generator():
+    # F3: the global default must still flag Decimal→string (protects postmortem/verifier);
+    # only frontend_codegen's assert_symmetric opts in.
+    from startd8.languages.prisma_parser import parse_prisma_schema
+    from startd8.validators.prisma_zod_symmetry import (
+        check_prisma_zod_symmetry,
+        extract_zod_objects,
+    )
+
+    schema = "model M {\n  id String @id\n  price Decimal\n}"
+    rendered = (
+        "export const MSchema = z.object({\n"
+        "  id: z.string(),\n"
+        "  price: z.string(),\n"
+        "});"
+    )
+    prisma = parse_prisma_schema(schema)
+    zod = extract_zod_objects(rendered)
+    strict = check_prisma_zod_symmetry(prisma, zod)  # default: strict
+    assert any(v.field == "price" and v.kind == "field_type_mismatch" for v in strict)
+    # frontend_codegen opts in → no violation
+    assert assert_symmetric(rendered, schema) == []

@@ -68,6 +68,22 @@ class UnrenderableField:
     reason: str
 
 
+def composite_type_names(schema_text: str) -> frozenset:
+    """Names of composite ``type {...}`` blocks (NOT models).
+
+    ``parse_prisma_schema`` stores composite ``type`` blocks in the same ``models`` dict as
+    real models with no kind marker (`prisma_parser.py:291`), so callers that want to treat
+    models and composites differently must recover the distinction here, from the block
+    ``kind`` that ``_iter_blocks`` exposes. Used to keep composite types from being emitted
+    as phantom top-level schemas and to flag composite-typed fields (F4).
+    """
+    return frozenset(
+        name
+        for kind, name, _ in _iter_blocks(_strip_comments(schema_text or ""))
+        if kind == "type"
+    )
+
+
 def _enum_base(values: Tuple[str, ...]) -> str:
     inner = ", ".join(f'"{v}"' for v in values)
     return f"z.enum([{inner}])"
@@ -143,11 +159,17 @@ def model_field_sets(
 ) -> Tuple[FieldSetAuthority, ...]:
     """Per-model scalar field sets in **schema source order** (FR-4 determinism).
 
-    Uses ``schema.scalar_fields`` — the SAME projection the injection path's
-    ``DraftModeProducer._field_sets`` uses (FR-13) — so the two never diverge. Unlike the
-    producer it preserves **source order** (``schema.models`` is an insertion-ordered
-    dict) and keeps **every** model including join tables (their FK columns are real
-    scalars); it does not sort alphabetically or drop empties. The renderer must never
+    Shares the **per-entity projection** with the injection path (FR-13): both this and
+    ``DraftModeProducer._field_sets`` build each entity's fields from the same
+    ``schema.scalar_fields`` + ``FieldSpec`` — so for any given entity the two produce an
+    **identical** field set (asserted by ``test_field_set_matches_injection_path_projection``),
+    and the generated file can't disagree with the injected truth about *which scalar
+    fields an entity has*.
+
+    The two intentionally differ in **ordering and membership**: this preserves source
+    order (``schema.models`` is insertion-ordered) and keeps **every** model — including
+    join tables and empty models — because the renderer must emit them all; the producer
+    sorts alphabetically and drops empty models (its needs differ). The renderer must never
     iterate a ``set``/``frozenset`` for ordering (FR-4 / R4-F6).
     """
     out: List[FieldSetAuthority] = []
@@ -208,12 +230,17 @@ def schema_sha256(schema_text: str) -> str:
 
 
 def _render_object_block(
-    name: str, schema: PrismaSchema, conventions: FieldConventions
+    name: str,
+    schema: PrismaSchema,
+    conventions: FieldConventions,
+    composite_types: frozenset = frozenset(),
 ) -> Tuple[str, List[UnrenderableField]]:
     """Render one ``export const <Name>Schema = z.object({...})`` block.
 
     An unrenderable field is emitted as ``z.unknown()`` with an inline ``UNRENDERABLE``
     marker (never silently dropped — FR-1) and reported in the returned list (FR-2/R4-S5).
+    A composite-typed field (excluded from ``scalar_fields`` because the parser treats the
+    composite as a relation) is **flagged** rather than silently dropped (F4).
     """
     lines = [f"export const {name}Schema = z.object({{"]
     flagged: List[UnrenderableField] = []
@@ -235,6 +262,21 @@ def _render_object_block(
         else:
             lines.append(f"  {f.name}: {expr},")
     lines.append("});")
+
+    # Surface composite-typed fields the parser hid as relations (F4) — a real column that
+    # would otherwise vanish with no signal. Inline composite rendering is a later increment.
+    model = schema.model(name)
+    if model is not None and composite_types:
+        for f in model.fields:
+            if f.type in composite_types and not f.has_relation_attr:
+                flagged.append(
+                    UnrenderableField(
+                        entity=name,
+                        field=f.name,
+                        prisma_type=f.type,
+                        reason="composite type not yet supported (rendered as omitted)",
+                    )
+                )
     return "\n".join(lines), flagged
 
 
@@ -253,16 +295,25 @@ def render_zod_schema(
     per model (the committed file ships these — FR-9 byte-equality needs them, R4-F4).
 
     The composite ``ValueModelSchema`` aggregate is **not** produced — it is not derivable
-    from any single Prisma model and is out of v1 scope (FR-9). Unrenderable fields are
-    flagged in the result, never raised (FR-2).
+    from any single Prisma model and is out of v1 scope (FR-9). Composite ``type {...}``
+    blocks are **not** emitted as phantom top-level schemas (F4); a field typed as a
+    composite is flagged. Unrenderable fields are flagged in the result, never raised (FR-2).
+
+    The ``schema-sha256`` is taken over the **verbatim** ``schema_text`` bytes — pass the
+    same bytes to ``--check`` (FR-11), since a re-stripped/normalized schema hashes
+    differently.
     """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
+    composites = composite_type_names(schema_text)
 
     flagged: List[UnrenderableField] = []
     blocks: List[str] = []
-    for name in schema.models:  # source/declaration order
-        block, block_flagged = _render_object_block(name, schema, conventions)
+    model_names = [n for n in schema.models if n not in composites]
+    for name in model_names:  # source/declaration order, composites excluded
+        block, block_flagged = _render_object_block(
+            name, schema, conventions, composites
+        )
         blocks.append(block)
         flagged.extend(block_flagged)
 
@@ -272,11 +323,11 @@ def render_zod_schema(
     ]
     if blocks:
         sections.append("\n\n".join(blocks))
-    if emit_infer and schema.models:
+    if emit_infer and model_names:
         sections.append(
             "\n".join(
                 f"export type {name} = z.infer<typeof {name}Schema>;"
-                for name in schema.models
+                for name in model_names
             )
         )
 

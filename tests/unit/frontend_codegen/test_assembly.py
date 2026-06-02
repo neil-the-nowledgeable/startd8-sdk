@@ -111,3 +111,18 @@ def test_unrenderable_field_is_flagged_not_dropped():
 
 def test_clean_schema_has_no_unrenderable():
     assert render_zod_schema(SCHEMA).unrenderable == ()
+
+
+def test_composite_type_block_not_emitted_as_phantom_schema():
+    # F4: a composite `type {}` block must NOT become a top-level schema, and a field typed
+    # as a composite must be flagged (not silently dropped).
+    schema = (
+        "type Address {\n  street String\n  city String\n}\n"
+        "model User {\n  id String @id\n  name String\n  address Address\n}\n"
+    )
+    r = render_zod_schema(schema)
+    assert "AddressSchema" not in r.text  # no phantom schema
+    assert "export type Address =" not in r.text  # no phantom alias
+    assert "export const UserSchema = z.object({" in r.text
+    # the composite-typed field is surfaced, not silently dropped
+    assert any(u.field == "address" and "composite" in u.reason for u in r.unrenderable)

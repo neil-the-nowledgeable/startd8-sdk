@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from ..languages.prisma_parser import parse_prisma_schema
 from ..validators.prisma_zod_symmetry import (
     SymmetryViolation,
+    _strip_ts_comments,
     check_prisma_zod_symmetry,
     extract_zod_objects,
 )
@@ -44,7 +45,11 @@ def assert_symmetric(
     """
     prisma = parse_prisma_schema(schema_text)
     zod = extract_zod_objects(rendered)
-    return check_prisma_zod_symmetry(prisma, zod, entity_map=entity_map)
+    # Opt into Decimal→string acceptance: the generator renders Decimal as a money-safe
+    # string (FR-2). Existing consumers keep the strict default (F3 / R2-S1).
+    return check_prisma_zod_symmetry(
+        prisma, zod, entity_map=entity_map, decimal_accepts_string=True
+    )
 
 
 def _extract_field_exprs(rendered: str) -> Dict[str, List[Tuple[str, str]]]:
@@ -53,8 +58,11 @@ def _extract_field_exprs(rendered: str) -> Dict[str, List[Tuple[str, str]]]:
     Independent of the renderer internals — it reads the emitted text, so it can detect a
     render that dropped a decorator the symmetry gate ignores.
     """
+    # Strip comments **quote-aware** first (reusing the validator's TS comment stripper), so
+    # a `//` inside a string literal — e.g. `.default("https://x")` — is never mistaken for a
+    # trailing comment (F1). After stripping, a line is `name: <expr>,` with no comment.
+    lines = _strip_ts_comments(rendered).splitlines()
     out: Dict[str, List[Tuple[str, str]]] = {}
-    lines = rendered.splitlines()
     i = 0
     n = len(lines)
     while i < n:
@@ -66,8 +74,7 @@ def _extract_field_exprs(rendered: str) -> Dict[str, List[Tuple[str, str]]]:
         fields: List[Tuple[str, str]] = []
         i += 1
         while i < n and not lines[i].strip().startswith("});"):
-            raw = lines[i].strip()
-            code = raw.split("//", 1)[0].strip().rstrip(",").strip()
+            code = lines[i].strip().rstrip(",").strip()
             fm = _FIELD_LINE.match(code)
             if fm:
                 fields.append((fm.group(1), fm.group(2).strip()))
