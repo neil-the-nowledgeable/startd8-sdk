@@ -1598,6 +1598,12 @@ class PrimePostMortemEvaluator:
             # all-Python backend (backend_codegen path). Env-gated (STARTD8_PY_TYPECHECK);
             # mypy import-resolution noise from absent app deps is treated as infra, not fault.
             self._evaluate_python_toolchain(report.features, project_root)
+            # C-6 runtime boot-smoke: actually BOOT the generated app (app.server:app, else
+            # app.main:app) and confirm it serves /openapi.json. Catches the import-class that
+            # compileall/mypy/structural scoring miss (run-021..026: `from ai.x` wrong root, bare
+            # `import get_session` — modules that pass syntax but fail at import). Default-on;
+            # gracefully degrades to a warning (never a silent PASS) when app deps aren't installed.
+            self._evaluate_boot_smoke(report.features, project_root)
             # Compute avg_assembly_delta across features that have disk scores
             deltas = [
                 f.assembly_delta
@@ -2187,6 +2193,103 @@ class PrimePostMortemEvaluator:
                 fpm.error_message = (
                     "Python build gate reported errors (see semantic_issues)"
                 )
+
+    def _evaluate_boot_smoke(
+        self,
+        features: List[FeaturePostMortem],
+        project_root: str,
+    ) -> None:
+        """C-6 Layer 1 — boot the generated app and confirm it serves ``/openapi.json``.
+
+        Boots ``app.server:app`` (the AI composition entrypoint) if present, else ``app.main:app``,
+        in a subprocess. A boot **failure** (import error, crash) marks the implicated Python
+        feature(s) ``FAIL:boot`` — this is the gate that converts the run-021..026 "compiles but
+        won't import" hollow PASS into an honest verdict. App deps absent ⇒ ``unavailable`` ⇒ a
+        per-feature **warning**, never a silent PASS (NFR-MA-2 / FR-9). Best-effort blame: features
+        whose generated filename appears in the boot trace; if none localize, the whole non-bootable
+        app fails (nothing is usable — cf. run-025 "0/4 usable").
+        """
+        try:
+            from startd8.validators.boot_smoke import run_boot_smoke
+            from startd8.forward_manifest_validator import DiskComplianceResult
+        except ImportError:
+            return
+
+        root = Path(project_root)
+        if (root / "app" / "server.py").is_file():
+            app_spec = "app.server:app"
+        elif (root / "app" / "main.py").is_file():
+            app_spec = "app.main:app"
+        else:
+            return  # no generated app entrypoint to boot
+
+        py_features: Dict[int, FeaturePostMortem] = {}
+        file_names: Dict[int, List[str]] = {}
+        for fpm in features:
+            for fp in fpm.generated_files or fpm.target_files:
+                if str(fp).endswith(".py"):
+                    py_features[id(fpm)] = fpm
+                    file_names.setdefault(id(fpm), []).append(Path(fp).name)
+        if not py_features:
+            return
+
+        result = run_boot_smoke(project_root, app=app_spec)
+
+        if result.verdict == "pass":
+            return  # the app boots and serves OpenAPI — good
+
+        if result.status == "unavailable":
+            for fpm in py_features.values():
+                if fpm.disk_compliance is None:
+                    fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+                fpm.disk_compliance.semantic_issues.append(
+                    {
+                        "category": "boot_smoke_unavailable",
+                        "severity": "warning",
+                        "message": f"Boot-smoke unavailable ({app_spec}): {result.message} "
+                        "— app deps not provisioned; not verified to boot, not silently passed.",
+                    }
+                )
+            logger.warning(
+                "C-6: boot-smoke unavailable (%s: %s) — app unverified, not silently passed.",
+                app_spec,
+                result.message,
+            )
+            return
+
+        # status == checked and NOT a pass → a real boot/serve failure.
+        blob = (result.message or "") + " " + " ".join(result.diagnostics)
+        culprits = {
+            fid: fpm
+            for fid, fpm in py_features.items()
+            if any(name in blob for name in file_names.get(fid, []))
+        }
+        affected = culprits or py_features  # can't localize → the whole app is non-bootable
+        detail = result.message or "boot failed"
+        if result.missing_routes:
+            detail += f"; missing routes: {', '.join(result.missing_routes)}"
+        for fpm in affected.values():
+            if fpm.disk_compliance is None:
+                fpm.disk_compliance = DiskComplianceResult(file_path=fpm.feature_id)
+            fpm.disk_compliance.semantic_issues.append(
+                {
+                    "category": "boot_smoke_failure",
+                    "severity": "error",
+                    "message": f"app does not boot ({app_spec}): {detail}",
+                }
+            )
+            fpm.semantic_error_count += 1
+            fpm.disk_quality_score = 0.0
+            fpm.success = False
+            if not str(fpm.verdict).startswith("FAIL"):
+                fpm.verdict = "FAIL:boot"
+            if fpm.root_cause == RootCause.UNKNOWN:
+                fpm.root_cause = RootCause.CROSS_FILE_CONTRACT
+            if fpm.pipeline_stage == PipelineStage.UNKNOWN:
+                fpm.pipeline_stage = PipelineStage.CROSS_FEATURE_CONTRACT
+            if not fpm.error_message:
+                fpm.error_message = f"Runtime boot-smoke failed: app does not boot ({app_spec})"
+        logger.warning("C-6: boot-smoke FAILED (%s): %s", app_spec, detail)
 
     def _evaluate_disk_quality(
         self,
