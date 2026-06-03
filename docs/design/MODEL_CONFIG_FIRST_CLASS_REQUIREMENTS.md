@@ -173,9 +173,16 @@ model selection.
 > **Surface 3 CLI DONE** (this commit): `generate backend --ai-agent-spec
 > <provider:model>` threads through `render_backend → render_ai_layer`; `--check`
 > stays `in_sync` without re-passing the flag (self-describing). **Surface 3
-> complete.** Remaining: step 2 shared `resolve_role_agent`, step 5 other-site
-> migration, step 7 full per-role provenance, step 8 guard, **Phase 2 pipe wiring
-> (all 3 surfaces — the remaining gap to an end-to-end single-provider run).**
+> complete.**
+> **Phase 2 pipe wiring DONE (surfaces 1 & 2):** one `MODEL_PROVIDER` in
+> `pipeline.env` → contractor gets `--provider $MODEL_PROVIDER` (drives
+> lead/drafter/tier3; no anthropic tier3 pin in single-provider mode) and
+> `run-plan-ingestion.sh` injects `default_provider` into the ingestion `--config`
+> (closes the run-026 leak). Unset = today's mixed Sonnet/Opus default (backward
+> compatible). Surface 3 in the pipe is a documented `generate backend
+> --ai-agent-spec` step (not a cap-dev-pipe stage). Remaining: step 2 shared
+> `resolve_role_agent`, step 5 other-site migration, step 7 full per-role
+> provenance, step 8 guard.
 
 **Phase 1 — SDK (smallest correct surface first):**
 
