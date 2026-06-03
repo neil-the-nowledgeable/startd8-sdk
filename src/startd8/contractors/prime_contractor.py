@@ -2488,7 +2488,14 @@ class PrimeContractorWorkflow:
         try:
             spec_prompt = spec_builder.build_spec_prompt(
                 task_description=feature.description,
-                context=dict(gen_context),  # copy — build_spec_prompt mutates context
+                # copy — build_spec_prompt mutates context. Thread project_root so the
+                # Controlled Corpus read path (R4-S2) resolves the SAME .startd8 the
+                # postmortem write path uses (project-scoped, not cwd fallback).
+                context={
+                    **gen_context,
+                    "project_root": gen_context.get("project_root")
+                    or (str(self.project_root) if getattr(self, "project_root", None) else None),
+                },
                 output_format=None,
             )
         except Exception as exc:
@@ -3236,10 +3243,15 @@ class PrimeContractorWorkflow:
 
         # --- Spec phase ---
         try:
-            # build_spec_prompt pops keys from context, so pass a copy
+            # build_spec_prompt pops keys from context, so pass a copy.
+            # Thread project_root for the Controlled Corpus read path (R4-S2).
             spec_prompt = spec_builder.build_spec_prompt(
                 task_description=feature.description,
-                context=dict(gen_context),
+                context={
+                    **gen_context,
+                    "project_root": gen_context.get("project_root")
+                    or (str(self.project_root) if getattr(self, "project_root", None) else None),
+                },
                 output_format=None,
             )
         except Exception as exc:

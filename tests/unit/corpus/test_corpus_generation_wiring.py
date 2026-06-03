@@ -67,3 +67,15 @@ def test_no_authorities_when_disabled_in_spec_prompt():
            "target_files": ["src/new.py"]}
     prompt = build_spec_prompt("Implement a new thing", ctx, None)
     assert "Established project vocabulary" not in prompt
+
+
+def test_project_root_resolves_on_disk_corpus(tmp_path):
+    """The R4-S2 read path resolves <project_root>/.startd8/controlled-corpus.json
+    (the same location the postmortem write path uses)."""
+    from startd8.paths import controlled_corpus_path
+    cp = controlled_corpus_path(tmp_path)
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    _mature_registry().save(cp)
+    section = _build_corpus_authorities_section({"project_root": str(tmp_path)})
+    assert "Established project vocabulary" in section
+    assert "src/emailservice/logger.py" in section
