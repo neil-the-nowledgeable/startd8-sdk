@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
+from ._headers import header_standard as _header  # shared provenance header (one source of truth)
 from .pydantic_renderer import _PY_SCALAR
 
 # Canonical generated layout: artifact-kind -> path relative to the project root (FR-11).
@@ -41,14 +42,6 @@ CANONICAL_LAYOUT: Dict[str, str] = {
 }
 
 
-def _header(source_file: str, sha: str, kind: str) -> str:
-    return (
-        f"# GENERATED from {source_file} — do not edit by hand; "
-        f"regenerate via `startd8 generate backend`.\n"
-        f"# startd8-artifact: {kind}\n"
-        f"# Source of truth: the Prisma schema.\n"
-        f"# schema-sha256: {sha}"
-    )
 
 
 def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:

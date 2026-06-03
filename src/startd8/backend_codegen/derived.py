@@ -23,16 +23,7 @@ from typing import Dict, List, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
-
-
-def _header(source_file: str, sha: str, kind: str) -> str:
-    return (
-        f"# GENERATED from {source_file} — do not edit by hand; "
-        f"regenerate via `startd8 generate backend`.\n"
-        f"# startd8-artifact: {kind}\n"
-        f"# Source of truth: the Prisma schema.\n"
-        f"# schema-sha256: {sha}"
-    )
+from ._headers import header_standard as _header  # shared provenance header (one source of truth)
 
 
 def _model_names(schema: PrismaSchema, schema_text: str) -> List[str]:
