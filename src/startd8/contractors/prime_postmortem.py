@@ -47,6 +47,11 @@ logger = get_logger(__name__)
 
 _PASS_THRESHOLD = 0.8
 _PARTIAL_THRESHOLD = 0.4
+
+# Semantic issue categories that individually disqualify a feature from
+# "complete" — a single occurrence means the feature is non-functional,
+# regardless of requirement_score or error count (M3 run-021).
+_CRITICAL_SEMANTIC_CATEGORIES = frozenset({"fake_work_stub"})
 _POSTMORTEM_TIMEOUT_S = 300
 _COST_OUTLIER_FACTOR = 2.0  # Feature costing 2x+ average is an outlier
 _CROSS_FEATURE_PATTERN_MIN = 2  # Minimum occurrences for repeated_root_cause
@@ -714,6 +719,17 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "indicate a missing dependency or typo in the import path."
         ),
     },
+    "fake_work_stub_detected": {
+        "phase": "draft",
+        "hint": (
+            "Do NOT simulate work with `asyncio.sleep(...)`/`time.sleep(...)` and "
+            "return canned data. Route handlers and service functions must IMPORT "
+            "and CALL the real target modules (e.g. `from app.ai.extract import "
+            "extract`) — never re-implement them as local placeholder stubs. A "
+            "feature that returns fabricated data without invoking real logic is "
+            "non-functional even though it compiles."
+        ),
+    },
     # --- Python L1-L10 disk compliance check hints (P3-4) ---
     "import_resolution_detected": {
         "phase": "draft",
@@ -1178,6 +1194,7 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "duplicate_definition": "duplicate_definition_detected",
     "bare_except_pass": "bare_except_pass_detected",
     "phantom_dependency": "phantom_dependency_detected",
+    "fake_work_stub": "fake_work_stub_detected",
     # Python L1-L10 disk compliance categories (P3-4 terminology alignment)
     "import_resolution": "import_resolution_detected",
     "cross_scope_duplicate": "cross_scope_duplicate_detected",
@@ -2299,10 +2316,32 @@ class PrimePostMortemEvaluator:
                     )
                     fpm.semantic_error_count = err_count
 
+                    # Critical-category gate (M3 run-021): some semantic issues
+                    # are individually disqualifying — a single occurrence means
+                    # the feature is non-functional, so it cannot score
+                    # "complete" no matter how high the requirement_score. A
+                    # `fake_work_stub` handler simulates work with sleep() and
+                    # returns canned data without calling the real modules: it
+                    # compiles and passes shallow checks but does nothing. One is
+                    # enough to fail the feature (the "PASS on a non-working
+                    # feature" trap).
+                    has_critical_semantic = any(
+                        isinstance(i, dict)
+                        and i.get("category") in _CRITICAL_SEMANTIC_CATEGORIES
+                        for i in sem_issues
+                    )
+
                     # Semantic verdict gate: error-severity issues downgrade
                     # the verdict so Kaizen correlations learn from semantic
                     # failures, not just syntactic ones.
-                    if err_count >= 2 and fpm.verdict == "PASS":
+                    if has_critical_semantic and fpm.verdict not in (
+                        "FAIL",
+                        "FAIL:semantic",
+                        "FAIL:disk_quality",
+                    ):
+                        fpm.verdict = "FAIL:semantic"
+                        fpm.success = False
+                    elif err_count >= 2 and fpm.verdict == "PASS":
                         fpm.verdict = "PARTIAL:semantic"
                     elif err_count >= 4 and fpm.verdict in (
                         "PASS",
@@ -2364,11 +2403,19 @@ class PrimePostMortemEvaluator:
                         )
                         fpm.assembly_delta = fpm.requirement_score - kaizen_score
                 except Exception as exc:
-                    logger.debug(
+                    # Disk validation is deterministic for normal inputs, so a
+                    # failure here is almost always a 100%-reproducing bug (e.g.
+                    # the ast.Str removal that silently zeroed all disk scoring),
+                    # not a per-file edge case. Log LOUD (warning + traceback) so
+                    # such poison surfaces in Loki instead of vanishing at debug,
+                    # while still degrading gracefully rather than crashing the
+                    # whole post-mortem.
+                    logger.warning(
                         "Disk validation failed for %s in %s: %s",
                         file_path,
                         fpm.feature_id,
                         exc,
+                        exc_info=True,
                     )
 
     def _build_pipeline_attribution(

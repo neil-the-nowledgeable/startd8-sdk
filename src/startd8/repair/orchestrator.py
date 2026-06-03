@@ -890,7 +890,12 @@ def _repair_single_file(
     try:
         compliance = validate_disk_compliance(str(fpath), str(project_root))
     except Exception as exc:
-        logger.debug("Disk compliance failed for %s: %s", fpath, exc)
+        # Deterministic validation: a failure here silently disables ALL
+        # semantic repair for this file. Warn (not debug) so a reproducing
+        # bug (cf. ast.Str) surfaces instead of repairs vanishing silently.
+        logger.warning(
+            "Disk compliance failed for %s: %s", fpath, exc, exc_info=True,
+        )
         return None
 
     repairable = [

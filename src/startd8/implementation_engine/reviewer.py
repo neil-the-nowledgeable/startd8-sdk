@@ -612,12 +612,22 @@ def review_draft(
     review_text = response_text
     score = parse_score(review_text)
     has_pass_verdict = bool(re.search(r'\bPASS\b', review_text, re.IGNORECASE))
-    passed = score >= pass_threshold and has_pass_verdict
 
     issues = parse_list_section(review_text, "Issues")
     blocking = parse_list_section(review_text, "Blocking Issues")
     suggestions = parse_list_section(review_text, "Suggestions")
     strengths = parse_list_section(review_text, "Strengths")
+
+    # A review cannot be "PASS" while it still lists unresolved blocking
+    # issues — that is the "PASS on a non-working feature" trap. A high score
+    # plus the word PASS is not enough if the reviewer itself flagged blockers.
+    # Filter placeholder entries ("None"/"N/A") so an explicitly-empty section
+    # doesn't false-fail.
+    real_blocking = [
+        b for b in blocking
+        if b.strip().lower().rstrip(".") not in ("none", "n/a", "na", "")
+    ]
+    passed = score >= pass_threshold and has_pass_verdict and not real_blocking
 
     review = ReviewResult(
         review_id=review_id,

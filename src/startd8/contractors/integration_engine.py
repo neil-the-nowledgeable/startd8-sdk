@@ -2641,17 +2641,40 @@ class IntegrationEngine:
                     CONFIDENCE_HIGH,
                     CONFIDENCE_HIGH_PROSE,
                     CONFIDENCE_IS_TRUNCATED,
+                    MIN_LINES_TRUNCATION_BLOCKING,
+                    detect_multifile_concatenation,
                     detect_truncation,
                     get_expected_sections_for_code,
                     log_truncation_result,
                 )
 
                 source_content = source_path.read_text(encoding="utf-8")
+
+                # Concatenation guard: a single target file that embeds multiple
+                # files (path-header markers) is broken — reject it with a clear
+                # reason instead of letting it fail obscurely in repair and get
+                # silently dropped (M3 run-023 server.py).
+                _concat_reason = detect_multifile_concatenation(source_content)
+                if _concat_reason:
+                    logger.error(
+                        "REJECTED %s: %s — integration blocked",
+                        source_path.name, _concat_reason,
+                        extra={"unit_id": unit.id},
+                    )
+                    continue
+                # Legitimately-tiny files (e.g. a 3-line composition entrypoint,
+                # 1-line __init__.py) trip structural heuristics but cannot be
+                # meaningfully truncated by them — exclude from blocking, matching
+                # the INTEGRATE gate in context_seed (M3 run-021 server.py).
+                _source_lines = len(source_content.strip().splitlines())
                 expected = get_expected_sections_for_code(source_content)
                 trunc_result = detect_truncation(
                     source_content, expected_sections=expected, strict_mode=False,
                 )
-                if trunc_result.is_truncated:
+                if (
+                    trunc_result.is_truncated
+                    and _source_lines >= MIN_LINES_TRUNCATION_BLOCKING
+                ):
                     log_truncation_result(
                         trunc_result,
                         source_file=str(source_path),
@@ -3064,8 +3087,11 @@ class IntegrationEngine:
                     if scores:
                         result_obj_metadata["disk_quality_score"] = min(scores)
                 except Exception:
-                    logger.debug(
-                        "Disk quality score computation failed",
+                    # Deterministic computation — a failure is a reproducing bug,
+                    # not an edge case. Warn (not debug) so it can't silently drop
+                    # the whole batch's disk_quality_score (cf. the ast.Str poison).
+                    logger.warning(
+                        "Disk quality score computation failed for batch",
                         exc_info=True,
                     )
 

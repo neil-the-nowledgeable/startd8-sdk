@@ -4,6 +4,7 @@ Draft generator for the implementation engine.
 Produces code implementations from specs with mode-aware system prompts.
 """
 
+import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,6 +15,7 @@ from ..utils.code_extraction import extract_code_from_response
 from ..truncation_detection import (
     CONFIDENCE_HIGH,
     CONFIDENCE_IS_TRUNCATED,
+    MIN_LINES_TRUNCATION_BLOCKING,
     detect_truncation,
     get_expected_sections_for_code,
 )
@@ -786,13 +788,23 @@ def detect_size_regression(
     # a non-Python target like requirements.in.
     if _all_files_non_python(target_files=target_files, existing_files=existing_files):
         return False
-    # TODO: existing_total includes sibling .py files added for import context,
-    # inflating the baseline. A 50-line target with a 200-line sibling produces
-    # a 250-line baseline, making a correct 50-line output look like 20% ratio.
-    # Scope to target_files only when available. Not yet observed as a false
-    # positive on Python targets — the regression threshold is low enough that
-    # sibling inflation doesn't cross it in practice.
-    existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+    # Scope the baseline to the TARGET file(s) only. existing_files also carries
+    # sibling files added purely for import context; counting them inflates the
+    # baseline so a correct tiny target (e.g. a 2-line __init__.py next to a
+    # 671-line service.py sibling) reads as a catastrophic regression and gets
+    # hard-failed as truncated. (M3 gpt-m3: this aborted the whole batch.)
+    # When no existing target content is found, the target is effectively a new
+    # file — there is no baseline to regress from, so skip the check.
+    if target_files:
+        target_set = set(target_files)
+        target_bases = {os.path.basename(t) for t in target_files}
+        scoped = {
+            k: v for k, v in existing_files.items()
+            if k in target_set or os.path.basename(k) in target_bases
+        }
+        existing_total = sum(len((c or "").splitlines()) for c in scoped.values())
+    else:
+        existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
         return False
     if existing_total <= DRAFT_SIZE_REGRESSION_MIN_LINES:
@@ -1336,6 +1348,16 @@ def create_draft(
         # meaningless and produce false positives (e.g. requirements.in).
         heuristic_truncated = False
         skip_heuristics = _all_files_non_python(target_files, existing_files)
+        # Legitimately-tiny outputs (e.g. a 3-line composition entrypoint) look
+        # "incomplete" to structural heuristics but cannot be meaningfully
+        # truncated by them. API-level truncation and size-regression (below)
+        # still apply, so real truncation is not missed. (M3 run-021 server.py
+        # false-positive.)
+        if implementation_code and (
+            len(implementation_code.strip().splitlines())
+            < MIN_LINES_TRUNCATION_BLOCKING
+        ):
+            skip_heuristics = True
         if check_truncation and not api_truncated and implementation_code and not skip_heuristics:
             confidence_threshold = (
                 CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH

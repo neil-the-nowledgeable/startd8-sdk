@@ -135,6 +135,105 @@ def check_bare_except_pass(tree: ast.AST) -> List[SemanticIssue]:
     return issues
 
 
+# Calls that do not constitute "real work" — data fabrication, builtins, and
+# the sleep calls themselves. A function whose only calls are drawn from this
+# set (plus a sleep) does no real I/O or integration: it is a placeholder.
+_TRIVIAL_CALL_NAMES = frozenset({
+    # builtin containers / coercions
+    "dict", "list", "tuple", "set", "frozenset", "str", "int", "float",
+    "bool", "bytes", "len", "range", "enumerate", "print", "repr",
+    # fabricated identifiers / timestamps that stubs use to look real
+    "uuid1", "uuid3", "uuid4", "uuid5", "now", "utcnow", "today",
+    "time", "monotonic", "fromtimestamp", "isoformat",
+})
+
+# Sleep calls used to *simulate* latency in placeholder handlers.
+_SLEEP_CALL_NAMES = frozenset({"sleep"})
+
+
+def _call_name(func: ast.expr) -> str:
+    """Return the simple callable name for a Call.func node.
+
+    ``foo()`` -> ``"foo"``; ``mod.foo()`` -> ``"foo"``; otherwise ``""``.
+    """
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _is_sleep_call(node: ast.Call) -> bool:
+    """True if ``node`` is ``asyncio.sleep(...)``/``time.sleep(...)``/``sleep(...)``."""
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        # match asyncio.sleep / time.sleep (and aliased module access)
+        return func.attr in _SLEEP_CALL_NAMES
+    if isinstance(func, ast.Name):
+        return func.id in _SLEEP_CALL_NAMES
+    return False
+
+
+def check_fake_work_stub(tree: ast.AST) -> List[SemanticIssue]:
+    """Flag functions that *simulate* work with ``sleep()`` and do nothing real.
+
+    The classic LLM placeholder pattern: a handler awaits ``asyncio.sleep(...)``
+    (to look like it is doing I/O) and returns canned/fabricated data, never
+    calling into the real target modules. Such a feature compiles and passes
+    shallow checks but is semantically a no-op — the "PASS on a non-working
+    feature" trap (M3 run-021 ``routes.py``).
+
+    A function is flagged when **all** hold:
+
+    1. It contains a ``sleep(...)`` call (``asyncio.sleep``/``time.sleep``).
+    2. It makes **no** other call outside ``_TRIVIAL_CALL_NAMES`` — i.e. no
+       real I/O, service, or DB calls.
+    3. It has more than just the sleep (a bare ``sleep`` one-liner with no
+       fabricated return is more likely real backoff/throttling).
+
+    This is intentionally conservative: real retry/backoff/poll loops call the
+    thing they are retrying (a non-trivial call), so they are not flagged.
+    """
+    issues: List[SemanticIssue] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+
+        has_sleep = False
+        has_real_call = False
+        returns_fabricated = False
+
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                if _is_sleep_call(sub):
+                    has_sleep = True
+                    continue
+                name = _call_name(sub.func)
+                if name and name not in _TRIVIAL_CALL_NAMES:
+                    has_real_call = True
+            elif isinstance(sub, ast.Return) and sub.value is not None:
+                # Canned data: a literal, dict/list/tuple/set, or f-string.
+                if isinstance(
+                    sub.value,
+                    (ast.Constant, ast.Dict, ast.List, ast.Tuple,
+                     ast.Set, ast.JoinedStr),
+                ):
+                    returns_fabricated = True
+
+        if has_sleep and not has_real_call and returns_fabricated:
+            issues.append(SemanticIssue(
+                check="fake_work_stub",
+                severity="error",
+                message=(
+                    f"Function '{node.name}' simulates work with sleep() and "
+                    f"returns canned data without calling any real module — "
+                    f"likely a placeholder stub, not a working implementation"
+                ),
+                line=node.lineno,
+            ))
+    return issues
+
+
 def check_block_scoped_namespace(
     source: str,
     file_path: str = "",
@@ -246,6 +345,7 @@ def run_semantic_checks(
     issues.extend(check_duplicate_main_guards(tree))
     issues.extend(check_duplicate_definitions(tree))
     issues.extend(check_bare_except_pass(tree))
+    issues.extend(check_fake_work_stub(tree))
     issues.extend(check_phantom_dependencies(tree, known_packages))
 
     # Stamp file_path on all issues

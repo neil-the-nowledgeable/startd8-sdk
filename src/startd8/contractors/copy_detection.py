@@ -242,7 +242,7 @@ def _strip_comments_and_docstrings(source: str) -> str:
             if (
                 node.body
                 and isinstance(node.body[0], _ast.Expr)
-                and isinstance(node.body[0].value, (_ast.Constant, _ast.Str))
+                and isinstance(node.body[0].value, _ast.Constant)
             ):
                 ds_node = node.body[0]
                 for line_no in range(ds_node.lineno, ds_node.end_lineno + 1):

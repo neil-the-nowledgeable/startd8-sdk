@@ -5028,7 +5028,7 @@ class PrimeContractorWorkflow:
                         "passed": False,
                         "issues": _dv_issues[:10],
                         "domain": (
-                            self._current_enrichment.get("domain", "general")
+                            self._current_enrichment.domain.value
                             if self._current_enrichment else "general"
                         ),
                     }
