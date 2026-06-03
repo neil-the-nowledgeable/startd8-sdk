@@ -104,7 +104,10 @@ class TestTaskComplexitySignals:
         d = signals.to_dict()
         assert d["blast_radius"] == 3
         assert d["edit_mode"] == "create"
-        assert len(d) == 13  # All 13 fields (includes file_extension, security_sensitive)
+        # All 14 fields incl. file_extension, security_sensitive, and
+        # has_fillable_elements (RUN-007 FR-7, added after this test).
+        assert len(d) == 14
+        assert "has_fillable_elements" in d
 
     def test_frozen(self) -> None:
         signals = TaskComplexitySignals()

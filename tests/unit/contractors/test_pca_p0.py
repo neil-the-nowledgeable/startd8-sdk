@@ -834,6 +834,9 @@ class TestPCA402OnboardingConsumption:
         _track_onboarding_consumption(context, "service_metadata", "IMPLEMENT")
 
         assert context["_onboarding_consumption"] == {
+            # REQ-GPC-700: the consumption audit records the generation profile
+            # (defaults to "full" when not set in context).
+            "_generation_profile": "full",
             "service_metadata": ["IMPLEMENT"],
         }
 

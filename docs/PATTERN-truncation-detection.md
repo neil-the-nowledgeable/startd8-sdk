@@ -191,3 +191,43 @@ This makes false positives diagnosable without reading the SDK source.
 | Raw LLM response with unclosed code block | Truncated | Fail (missing closing ```) |
 | TS file with template literals `${foo}` | Not truncated | Pass (template literals are valid code) |
 | File with trailing comma in last arg | Not truncated | Pass (trailing commas are valid TS) |
+
+---
+
+## Update 2026-06-03 — small-file floor, size-regression scoping, concatenation guard
+
+Three M3 codegen post-mortems (`strtd8` run-021 / gpt-m3 / run-023) surfaced
+related failure modes. See `docs/design/M3_POSTMORTEM_SDK_FIXES_2026-06-03.md`.
+
+### Small-file floor (`MIN_LINES_TRUNCATION_BLOCKING`)
+
+Legitimately-tiny files (a 3-line composition `server.py`, a 1-line `__init__.py`)
+trip structural heuristics but cannot be meaningfully truncated by them. Files
+below `MIN_LINES_TRUNCATION_BLOCKING` (5) are now **excluded from heuristic
+blocking** at both gates:
+- `implementation_engine/drafter.py` — heuristic block skipped for tiny output.
+- `contractors/integration_engine.py` — pre-merge truncation rejection skipped for
+  tiny source.
+
+API-level truncation (`token_usage.was_truncated`) and size-regression still apply,
+so real truncation is never missed. (Matches the long-standing floor in
+`context_seed/core.py`.)
+
+### Size-regression baseline scoped to target files
+
+`detect_size_regression` previously summed **all** `existing_files`, including
+sibling files added only for import context. A correct 2-line `__init__.py` beside
+a 671-line `service.py` sibling read as a 0.3% "catastrophic regression", was
+flagged truncated, and **hard-failed the whole batch** (gpt-m3). The baseline is now
+scoped strictly to the target file(s); a new target (no prior content) has no
+baseline and cannot regress.
+
+### Multi-file concatenation guard
+
+`detect_multifile_concatenation()` rejects a single file that embeds **≥2**
+file-separator markers (`--- app/routes.py ---`, `=== file.py ===`,
+`# --- app/x.py ---`) — i.e. several files dumped into one (run-023 `server.py`,
+~1059 lines → ast_failure → silently dropped). It is conservative: the marker must
+name a path **with an extension**, so markdown/YAML `---` rules and single section
+comments do not trip it. Wired into the integration pre-merge gate to reject with a
+clear reason rather than failing obscurely in repair.
