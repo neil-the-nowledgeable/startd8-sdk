@@ -26,15 +26,20 @@
 `corpus/provider.py` (`route`/`generate`/`dict_content_resolver`) + 8 tests + real-trove demo
 (serves 12, refuses 7 false-PASS). Proves route→emit→fall-through + the guardrail.
 
-### I1 — Durable proven-content store (FR-9, FR-2)
-- New `corpus/content_store.py`: `put(term_id, source_checksum, target_file, content)` →
-  `.startd8/corpus-content/<term_id>/<source_checksum>`; `get(term_id, source_checksum) -> str|None`.
-- Write at postmortem: in `_extract_corpus` (already wired), for each served-eligible feature copy the
-  freshly-generated proven content into the store, keyed by the feature's `source_checksum`. Gated by
-  `STARTD8_CORPUS_ENABLED`; non-fatal.
-- `content_store_resolver(corpus, store)` implementing FR-2's `content_resolver`.
-- **Tests:** put→get round-trip; checksum-miss → None (OQ-2 invalidation); missing store → None.
-- **Exit:** resolver returns durable content cross-run on the trove replay (no run-dir dependency).
+### I1 — Durable proven-content store (FR-9, FR-2) ✅ (shipped — zero live impact)
+- `corpus/content_store.py`: `ContentStore.put/get/has` →
+  `.startd8/corpus-content/<safe_term_id>/<source_checksum>`; `content_store_resolver(corpus, store,
+  source_checksum)` (FR-2, checksum-bound for OQ-2 invalidation); `populate_from_run(report,
+  source_checksum, store)` (standalone copy of proven content from a run's `generated_files`).
+- `paths.corpus_content_dir()` added. Exports + tests added.
+- **Constraint honored:** the **postmortem write-wiring is DEFERRED to I3** (not added to
+  `_extract_corpus`) so no live workflow changes. v1 populate is standalone (validator/bootstrap/tests).
+  Only additive edits: `paths.py` (+func), `corpus/__init__.py` (+exports). `_extract_corpus` and
+  `prime_contractor` untouched.
+- **Done:** 6 unit tests (round-trip, checksum-miss/invalidation, missing-store, resolver,
+  provider-from-store, populate); `validate_corpus_integration.py store` populates 231 files across 20
+  trove runs and serves 12 **cross-run** from the durable store with checksum invalidation. 64 corpus
+  tests green.
 
 ### I2 — Provider on the durable store + validation (FR-1/2/3/4/5)
 - Point `DeterministicCorpusProvider` at `content_store_resolver`; add `AstParseValidator` as the
@@ -43,11 +48,14 @@
   fall-through (AST fail). (Extends the I0 suite.)
 - **Exit:** provider serves real trove content from the durable store with the validation gate live.
 
-### I3 — Live wiring: Phase 0.7 `_try_corpus_shortcut` (FR-7/8) — flag default OFF
-- Add `_try_corpus_shortcut(feature, ...)` in `prime_contractor.py` after Phase 0.6: load corpus +
-  store (project-scoped), `provider.generate(target_file)`; on hit, write the file, mark feature
-  `GENERATED` at `$0.00`, return shortcut; else `None` (→ existing flow unchanged).
-- Gate by `STARTD8_CORPUS_DETERMINISTIC` (default **off**) — zero behavior change until flipped.
+### I3 — Live wiring: Phase 0.7 `_try_corpus_shortcut` + postmortem write (FR-7/8) — flag default OFF
+- **Postmortem write (moved from I1):** call `populate_from_run` inside `_extract_corpus` (reading the
+  seed's `source_checksum`), gated by a **new default-off** `STARTD8_CORPUS_CONTENT_STORE` so the live
+  postmortem only starts persisting content when explicitly enabled.
+- **Read/serve:** add `_try_corpus_shortcut(feature, ...)` in `prime_contractor.py` after Phase 0.6:
+  load corpus + store (project-scoped), `provider.generate(target_file)`; on hit, write the file, mark
+  feature `GENERATED` at `$0.00`, return shortcut; else `None` (→ existing flow unchanged).
+- Gate read by `STARTD8_CORPUS_DETERMINISTIC` (default **off**) — zero behavior change until flipped.
 - **Tests:** eligible+content → shortcut taken (no drafter call, mock asserts); ineligible/flag-off →
   drafter runs; false_pass never shortcut.
 - **Exit:** with flag off, byte-identical pipeline behavior (regression-safe merge).

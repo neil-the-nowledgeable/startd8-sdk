@@ -41,6 +41,14 @@ def controlled_corpus_path(data_dir: Optional[Path] = None) -> Path:
     return resolve_data_dir(data_dir) / "controlled-corpus.json"
 
 
+def corpus_content_dir(data_dir: Optional[Path] = None) -> Path:
+    """Durable proven-content store for the deterministic provider (FR-9).
+
+    Project-scoped, sibling to controlled-corpus.json under .startd8/.
+    """
+    return resolve_data_dir(data_dir) / "corpus-content"
+
+
 def shared_corpus_path() -> Path:
     """Path to the (future) cross-project shared domain corpus (CONTROLLED_CORPUS OQ-5).
 

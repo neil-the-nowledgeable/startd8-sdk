@@ -180,11 +180,65 @@ def provider_demo() -> bool:
     return ok
 
 
+def store_demo() -> bool:
+    """Plan I1: durable content store proves a CROSS-RUN round-trip on real data —
+    populate from one run's generated content, then serve it on a later 'run' via the
+    store (no dependency on the original run dir), with checksum-keyed invalidation."""
+    from startd8.corpus.registry import ControlledCorpusRegistry
+    from startd8.corpus.extractor import extract_corpus_from_run, stable_run_id
+    from startd8.corpus.content_store import ContentStore, content_store_resolver, populate_from_run
+    from startd8.corpus.provider import DeterministicCorpusProvider
+
+    runs = sorted(d for d in TROVE.glob("run-*")
+                  if (d / "plan-ingestion" / "prime-postmortem-report.json").exists())
+    if len(runs) < 3:
+        print("store: need >=3 trove runs; SKIP"); return True
+
+    # Build corpus from all runs (so target files reach maturity).
+    reg = ControlledCorpusRegistry()
+    reports = []
+    for d in runs:
+        pm = json.loads((d / "plan-ingestion" / "prime-postmortem-report.json").read_text())
+        feats = []
+        for f in pm.get("features", []):
+            gfs = [str((d / "plan-ingestion" / "generated" / tf)) for tf in (f.get("target_files") or [])]
+            feats.append(SimpleNamespace(name=f.get("name"), target_files=f.get("target_files"),
+                         success=f.get("success"), requirement_score=f.get("requirement_score"),
+                         disk_quality_score=f.get("disk_quality_score"), generated_files=gfs))
+        report = SimpleNamespace(report_id=d.name, total_features=pm.get("total_features"), features=feats)
+        reports.append(report)
+        reg.merge_run(stable_run_id(str(d / "plan-ingestion")), extract_corpus_from_run(report, d.name))
+
+    proj = Path(tempfile.mkdtemp())
+    store = ContentStore(proj / ".startd8" / "corpus-content")
+    chk = "checksumA"
+    # populate the durable store cumulatively (runs vary in which files they generated)
+    n = sum(populate_from_run(r, chk, store) for r in reports)
+    print(f"store: populated {n} files across {len(reports)} runs into durable store")
+
+    # serve via the store on a LATER 'run' (original run dir not consulted for content)
+    prov = DeterministicCorpusProvider(reg, content_store_resolver(reg, store, chk))
+    served = [t.canonical_key for t in reg.terms if t.kind == "file"
+              and prov.generate(t.canonical_key) is not None]
+    ok = True
+    ok &= _ok(n > 0, "populated proven content into durable store")
+    ok &= _ok(len(served) > 0, f"served {len(served)} files cross-run from the durable store")
+    # checksum invalidation: a different checksum serves nothing (OQ-2)
+    prov_stale = DeterministicCorpusProvider(reg, content_store_resolver(reg, store, "checksumB"))
+    stale_served = [t.canonical_key for t in reg.terms if t.kind == "file"
+                    and prov_stale.generate(t.canonical_key) is not None]
+    ok &= _ok(len(stale_served) == 0, "stale source_checksum serves nothing (OQ-2 invalidation)")
+    return ok
+
+
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "postrun":
+    mode = sys.argv[1] if len(sys.argv) >= 2 else "offline"
+    if mode == "postrun":
         result = postrun(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) >= 2 and sys.argv[1] == "provider":
+    elif mode == "provider":
         result = provider_demo()
+    elif mode == "store":
+        result = store_demo()
     else:
         result = offline()
     print(f"\n{'✅ VALIDATION PASSED' if result else '❌ VALIDATION FAILED'}")

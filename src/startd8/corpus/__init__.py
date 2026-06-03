@@ -17,6 +17,11 @@ from startd8.corpus.models import (
     SCHEMA_VERSION,
     TermObservation,
 )
+from startd8.corpus.content_store import (
+    ContentStore,
+    content_store_resolver,
+    populate_from_run,
+)
 from startd8.corpus.provider import (
     DeterministicCorpusProvider,
     ProviderResult,
@@ -51,4 +56,8 @@ __all__ = [
     "ProviderResult",
     "RouteDecision",
     "dict_content_resolver",
+    # durable content store (FR-9)
+    "ContentStore",
+    "content_store_resolver",
+    "populate_from_run",
 ]
