@@ -33,9 +33,13 @@ from ._headers import header_ai_layer
 # unknowns collapse to ``str`` so generated edge schemas stay dependency-free (just pydantic).
 _EDGE_PY = {"String": "str", "Int": "int", "BigInt": "int", "Float": "float", "Boolean": "bool"}
 
-# Provenance fields the *harness* owns (set to source="ai"/confirmed=False) — never AI-authored, so
-# they are kept out of the edge (tool-input) schema regardless of human_inputs.
-_PROVENANCE_OMIT = {"source", "confirmed"}
+# Server-managed fields the *harness*/DB own — never AI-authored, so they are kept out of the edge
+# (tool-input) schema regardless of human_inputs. `source`/`confirmed` are set by the harness;
+# `ownerId` and the `createdAt`/`updatedAt` timestamps come from the table's column defaults. (`id`
+# is dropped separately via `f.is_id`.) Emitting the timestamps here made them REQUIRED `str` edge
+# fields, and `_persist` forwarded those strings into the SQLModel datetime columns → commit crashed
+# with "SQLite DateTime type only accepts Python datetime and date objects".
+_PROVENANCE_OMIT = {"source", "confirmed", "ownerId", "createdAt", "updatedAt"}
 
 # AI artifact kinds (registered into drift._AI_KINDS). Per-pass modules share the `ai-pass` kind
 # and carry the pass name in the `startd8-entity` header slot for re-render dispatch.
@@ -326,7 +330,11 @@ _SUMMARY_HELPER = '''def _summary(obj: Any) -> dict[str, Any]:
 _PERSIST_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -> int:
     """Persist one edge object as an owned row (source=ai, confirmed=false); dedup by name. 0/1."""
     data = edge_obj.model_dump(exclude_none=True)
-    fields = {k: v for k, v in data.items() if hasattr(model, k)}
+    # Server-managed columns are never AI-authored: the harness sets source/confirmed and the table
+    # defaults supply id/ownerId/timestamps. Dropping them here keeps str timestamps out of datetime
+    # columns even if an edge schema ever carries them (belt-and-suspenders to _PROVENANCE_OMIT).
+    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
     name = fields.get("name")
     if name and hasattr(model, "name"):
         if session.exec(select(model).where(model.name == name)).first() is not None:
@@ -337,6 +345,7 @@ _PERSIST_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -
     if hasattr(row, "confirmed"):
         row.confirmed = False
     session.add(row)
+    session.flush()  # surface constraint errors here so the caller's savepoint can isolate them
     return 1
 '''
 
@@ -368,6 +377,7 @@ def _render_pass_text(ps: AiPass) -> str:
     lines = [
         "from __future__ import annotations",
         "",
+        "import logging",
         "from pathlib import Path",
         "from typing import Any",
         "",
@@ -376,6 +386,8 @@ def _render_pass_text(ps: AiPass) -> str:
         "from app.ai.service import call_ai_service",
         f"from app.ai.edge_schemas import {out}Edge",
         f"from app.tables import {out}",
+        "",
+        "logger = logging.getLogger(__name__)",
         "",
         "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
         f"_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}",
@@ -386,7 +398,12 @@ def _render_pass_text(ps: AiPass) -> str:
         '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
         f'    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()',
         f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
-        f"    created = _persist(session, {out}, result)",
+        "    created = 0",
+        "    try:",
+        f"        with session.begin_nested():  # isolate the row (M1)",
+        f"            created = _persist(session, {out}, result)",
+        "    except Exception as exc:  # noqa: BLE001",
+        f'        logger.warning("skipping {out} row: %s", exc)',
         "    session.commit()",
         f'    return {{"created": {{{out!r}: created}}}}',
         "",
@@ -407,23 +424,30 @@ def _render_pass_read(ps: AiPass) -> str:
     tables = ", ".join(sorted(set(outputs) | set(inputs)))
     read_pairs = ", ".join(f"({e}, {e!r})" for e in inputs)
     persist_pairs = ", ".join(f"({_plural_field(e)!r}, {e})" for e in outputs)
-    result_fields = [f"    {_plural_field(e)}: list[{e}Edge] = []" for e in outputs]
+    result_fields = [
+        f"    {_plural_field(e)}: list[{e}Edge] = Field(default_factory=list)" for e in outputs
+    ]
     lines = [
         "from __future__ import annotations",
         "",
         "import json",
+        "import logging",
         "from pathlib import Path",
         "from typing import Any",
         "",
-        "from pydantic import BaseModel",
+        "from pydantic import BaseModel, Field",
         "from sqlmodel import Session, select",
         "",
         "from app.ai.service import call_ai_service",
         f"from app.ai.edge_schemas import {edge_imports}",
         f"from app.tables import {tables}",
         "",
+        "logger = logging.getLogger(__name__)",
+        "",
         "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
         f"_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}",
+        "# Cap rows fed into the prompt so a large dataset can't blow up context/cost (H2).",
+        "_MAX_INPUT_ROWS = 200",
         "",
         "",
         f"class {result_cls}(BaseModel):",
@@ -436,15 +460,23 @@ def _render_pass_read(ps: AiPass) -> str:
         '(source=ai, confirmed=false)."""',
         "    context: dict[str, Any] = {}",
         f"    for model, label in [{read_pairs}]:",
-        "        rows = session.exec(select(model).where(model.confirmed.is_(True))).all()",
+        "        rows = session.exec(",
+        "            select(model).where(model.confirmed.is_(True)).limit(_MAX_INPUT_ROWS)",
+        "        ).all()",
         "        context[label] = [_summary(r) for r in rows]",
         '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
         '    full_prompt = prompt + "\\n\\n## Input data\\n" + json.dumps(context, default=str, indent=2)',
         f"    result = call_ai_service({ps.name!r}, full_prompt, {result_cls}, session)",
         "    created: dict[str, int] = {}",
         f"    for field, model in [{persist_pairs}]:",
-        "        items = getattr(result, field, None) or []",
-        "        created[model.__name__] = sum(_persist(session, model, it) for it in items)",
+        "        n = 0",
+        "        for item in getattr(result, field, None) or []:",
+        "            try:",
+        "                with session.begin_nested():  # isolate each row — one bad row can't abort the batch (M1)",
+        "                    n += _persist(session, model, item)",
+        "            except Exception as exc:  # noqa: BLE001 — skip the offending row, keep going",
+        '                logger.warning("skipping %s row: %s", model.__name__, exc)',
+        "        created[model.__name__] = n",
         "    session.commit()",
         '    return {"created": created}',
         "",
@@ -540,8 +572,7 @@ def render_ai_layer(
     ``ai_agent_spec`` (surface 3 / MODEL_CONFIG) is baked into the generated service's
     ``DEFAULT_AGENT_SPEC``; ``None`` keeps the catalog default.
     """
-    parse_ai_passes(manifest_text)  # fail loud on a malformed manifest before emitting anything
-    passes = parse_ai_passes(manifest_text)
+    passes = parse_ai_passes(manifest_text)  # fail loud on a malformed manifest before emitting
     out: List[Tuple[str, str]] = [("app/ai/__init__.py", "")]
     out.append(("app/ai/service.py", render_ai_service(
         schema_text, manifest_text, human_text, source_file, ai_agent_spec=ai_agent_spec)))
