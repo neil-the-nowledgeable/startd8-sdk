@@ -52,6 +52,52 @@ _PARTIAL_THRESHOLD = 0.4
 # "complete" — a single occurrence means the feature is non-functional,
 # regardless of requirement_score or error count (M3 run-021).
 _CRITICAL_SEMANTIC_CATEGORIES = frozenset({"fake_work_stub"})
+
+# Extracts the unresolved module from a mypy import diagnostic, e.g.
+# `Cannot find implementation or library stub for module named "app.ai.extract"`.
+_MODULE_NAMED_RE = re.compile(r"""module named ["']([^"']+)["']""")
+
+
+def _first_party_roots(project_root: str) -> set:
+    """Top-level importable names the generator owns under *project_root* (C-3 first-party set).
+
+    A module whose top segment is in this set MUST resolve — a mypy ``import-not-found`` against it
+    is a real fault, not third-party "provisioning noise". Derived from disk (packages with
+    ``__init__.py`` + top-level ``.py`` modules); always includes the ``app`` codegen convention.
+    """
+    roots = {"app"}
+    try:
+        for entry in Path(project_root).iterdir():
+            if entry.is_dir() and (entry / "__init__.py").is_file():
+                roots.add(entry.name)
+            elif entry.is_file() and entry.suffix == ".py":
+                roots.add(entry.stem)
+    except OSError:
+        pass
+    return roots
+
+
+def _is_import_provisioning_noise(diag: Any, first_party_roots: set) -> bool:
+    """True iff *diag* is a mypy import error against an absent **third-party** dep (ignorable).
+
+    A first-party (`app.*` / other owned-root) ``import-not-found`` is the C-3 bug class — a real
+    fault — and returns ``False`` so it is NOT filtered. Non-import diagnostics also return ``False``.
+    """
+    code = (getattr(diag, "code", "") or "").lower()
+    msg = (getattr(diag, "message", "") or "").lower()
+    is_import_diag = (
+        code in ("import", "import-not-found", "import-untyped")
+        or "cannot find implementation or library stub" in msg
+        or "find module" in msg
+    )
+    if not is_import_diag:
+        return False
+    m = _MODULE_NAMED_RE.search(getattr(diag, "message", "") or "")
+    if m and m.group(1).split(".")[0] in first_party_roots:
+        return False  # first-party import failure → real fault, never noise
+    return True
+
+
 _POSTMORTEM_TIMEOUT_S = 300
 _COST_OUTLIER_FACTOR = 2.0  # Feature costing 2x+ average is an outlier
 _CROSS_FEATURE_PATTERN_MIN = 2  # Minimum occurrences for repeated_root_cause
@@ -2093,17 +2139,17 @@ class PrimePostMortemEvaluator:
             )
             return
 
-        # Drop mypy import-resolution noise (absent third-party deps = provisioning, not a fault).
-        def _is_provisioning_noise(diag: Any) -> bool:
-            code = (diag.code or "").lower()
-            msg = diag.message.lower()
-            return (
-                code in ("import", "import-not-found", "import-untyped")
-                or "cannot find implementation or library stub" in msg
-                or "find module" in msg
-            )
-
-        real = [d for d in result.diagnostics if not _is_provisioning_noise(d)]
+        # Drop mypy import-resolution noise (absent third-party deps = provisioning) — but NOT for
+        # FIRST-PARTY (`app.*`) imports. A first-party `import-not-found` is the C-3 bug class
+        # (e.g. `from app.models import AiCall` when AiCall lives in app.tables; or `from ai.x`
+        # with the wrong package root): a real fault that boot would hit. run-021/023/024/025 all
+        # produced exactly this, and the old filter swallowed it. (M4 landmine; M-E.)
+        first_party_roots = _first_party_roots(project_root)
+        real = [
+            d
+            for d in result.diagnostics
+            if not _is_import_provisioning_noise(d, first_party_roots)
+        ]
         if not real:
             return  # compileall floor passed; any mypy findings were provisioning noise
 
