@@ -104,9 +104,87 @@ def postrun(run_dir: str, project_root: str) -> bool:
     return ok
 
 
+def provider_demo() -> bool:
+    """Prototype demo: route REAL deterministic_candidate files to proven content (no LLM),
+    refuse false_pass_risk — on real trove data."""
+    from startd8.corpus.registry import ControlledCorpusRegistry
+    from startd8.corpus.extractor import (
+        extract_corpus_from_run, extract_seed_terms_from_context, stable_run_id,
+    )
+    from startd8.corpus.provider import DeterministicCorpusProvider, ProviderResult
+
+    runs = sorted(d for d in TROVE.glob("run-*")
+                  if (d / "plan-ingestion" / "prime-postmortem-report.json").exists())
+    if len(runs) < 2:
+        print("provider: need >=2 trove runs; SKIP"); return True
+
+    # Build corpus from all runs.
+    reg = ControlledCorpusRegistry()
+    for d in runs:
+        pm = json.loads((d / "plan-ingestion" / "prime-postmortem-report.json").read_text())
+        feats = [SimpleNamespace(**{k: f.get(k) for k in
+                 ("name", "target_files", "success", "requirement_score", "disk_quality_score")})
+                 for f in pm.get("features", [])]
+        report = SimpleNamespace(report_id=d.name, total_features=pm.get("total_features"), features=feats)
+        rid = stable_run_id(str(d / "plan-ingestion"))
+        reg.merge_run(rid, extract_corpus_from_run(report, rid)
+                      + extract_seed_terms_from_context(str(d / "plan-ingestion"), rid))
+
+    # Content resolver: read the proven generated file from the latest run that has it.
+    def resolve(target_file: str):
+        for d in reversed(runs):
+            p = d / "plan-ingestion" / "generated" / target_file
+            if p.is_file():
+                return p.read_text(encoding="utf-8", errors="replace")
+        return None
+
+    def is_valid_py(tf, content):
+        if not tf.endswith(".py"):
+            return True
+        import ast
+        try:
+            ast.parse(content); return True
+        except SyntaxError:
+            return False
+
+    prov = DeterministicCorpusProvider(reg, resolve, min_maturity=3, validator=is_valid_py)
+
+    file_terms = [t for t in reg.terms if t.kind == "file"]
+    served, refused, fellthrough = [], [], []
+    for t in file_terms:
+        tf = t.canonical_key
+        d = prov.route(tf)
+        if d.reason == "refused:false_pass_risk":
+            refused.append(tf); continue
+        res = prov.generate(tf)
+        (served if isinstance(res, ProviderResult) else fellthrough).append(tf)
+
+    print(f"provider demo over {len(file_terms)} real file-terms ({len(runs)} runs):")
+    print(f"  served deterministically ($0, no LLM): {len(served)}")
+    for tf in served[:8]:
+        print(f"    - {tf}")
+    print(f"  REFUSED (false_pass_risk, kept on LLM): {len(refused)}")
+    for tf in refused[:8]:
+        print(f"    - {tf}")
+    print(f"  fell through to LLM (ineligible/no-content): {len(fellthrough)}")
+
+    ok = True
+    ok &= _ok(len(served) >= 1, "provider served >=1 real file deterministically")
+    ok &= _ok(all(reg.find_by_canonical_key('file', tf).determinism.corpus_class
+                  != 'false_pass_risk' for tf in served), "no false_pass_risk file was served")
+    # prove byte-content for one served file
+    if served:
+        res = prov.generate(served[0])
+        ok &= _ok(res is not None and res.content == resolve(served[0]),
+                  f"emitted byte-identical proven content for {served[0]}")
+    return ok
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "postrun":
         result = postrun(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) >= 2 and sys.argv[1] == "provider":
+        result = provider_demo()
     else:
         result = offline()
     print(f"\n{'✅ VALIDATION PASSED' if result else '❌ VALIDATION FAILED'}")

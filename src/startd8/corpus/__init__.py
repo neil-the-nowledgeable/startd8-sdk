@@ -17,6 +17,12 @@ from startd8.corpus.models import (
     SCHEMA_VERSION,
     TermObservation,
 )
+from startd8.corpus.provider import (
+    DeterministicCorpusProvider,
+    ProviderResult,
+    RouteDecision,
+    dict_content_resolver,
+)
 from startd8.corpus.registry import ControlledCorpusRegistry
 from startd8.corpus.view import (
     as_project_knowledge,
@@ -40,4 +46,9 @@ __all__ = [
     "stable_authorities",
     "render_authorities_md",
     "as_project_knowledge",
+    # deterministic provider (DETERMINISTIC_PROVIDER_REQUIREMENTS)
+    "DeterministicCorpusProvider",
+    "ProviderResult",
+    "RouteDecision",
+    "dict_content_resolver",
 ]
