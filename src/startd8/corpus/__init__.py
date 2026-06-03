@@ -26,6 +26,8 @@ from startd8.corpus.provider import (
     DeterministicCorpusProvider,
     ProviderResult,
     RouteDecision,
+    build_corpus_provider,
+    default_content_validator,
     dict_content_resolver,
 )
 from startd8.corpus.registry import ControlledCorpusRegistry
@@ -56,6 +58,8 @@ __all__ = [
     "ProviderResult",
     "RouteDecision",
     "dict_content_resolver",
+    "default_content_validator",
+    "build_corpus_provider",
     # durable content store (FR-9)
     "ContentStore",
     "content_store_resolver",

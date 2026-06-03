@@ -14,6 +14,7 @@ the route→emit→fall-through mechanism; live wiring is gated on the validatio
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from startd8.corpus.registry import ControlledCorpusRegistry
@@ -22,7 +23,7 @@ from startd8.logging_config import get_logger
 logger = get_logger(__name__)
 
 __all__ = ["RouteDecision", "ProviderResult", "DeterministicCorpusProvider",
-           "dict_content_resolver"]
+           "dict_content_resolver", "default_content_validator", "build_corpus_provider"]
 
 # A resolver maps a target_file -> proven content (or None if unavailable).
 ContentResolver = Callable[[str], Optional[str]]
@@ -105,3 +106,50 @@ class DeterministicCorpusProvider:
 def dict_content_resolver(mapping: dict) -> ContentResolver:
     """Simple resolver backed by a {target_file: content} dict (tests / golden cache)."""
     return lambda tf: mapping.get(tf)
+
+
+def default_content_validator(target_file: str, content: str) -> bool:
+    """FR-5 structural gate: cheap, dependency-free, language-aware.
+
+    Rejects empty content; AST-parses Python (reusing repair's AstParseValidator when
+    available, else stdlib ast); accepts other languages (a deeper per-language syntax
+    check needs a toolchain — out of scope for this cheap gate). On any failure the
+    provider falls through to the LLM rather than emit broken content.
+    """
+    if not content or not content.strip():
+        return False
+    if target_file.endswith(".py"):
+        try:
+            from startd8.repair.protocol import AstParseValidator
+            return bool(AstParseValidator().validate(content))
+        except Exception:
+            import ast
+            try:
+                ast.parse(content)
+                return True
+            except SyntaxError:
+                return False
+    return True  # non-Python: non-empty is the cheap bar for v1
+
+
+def build_corpus_provider(
+    corpus: ControlledCorpusRegistry,
+    store: "object",
+    source_checksum: str,
+    *,
+    min_maturity: int = _DEFAULT_MIN_MATURITY,
+    validator: Optional[ContentValidator] = None,
+) -> "DeterministicCorpusProvider":
+    """Factory: a provider backed by the durable content store + the default validation gate.
+
+    Wires `content_store_resolver(corpus, store, source_checksum)` (checksum-bound, OQ-2
+    invalidation) and `default_content_validator` (FR-5). This is the production wiring; the
+    raw `DeterministicCorpusProvider` stays validator-optional for tests.
+    """
+    from startd8.corpus.content_store import content_store_resolver
+    return DeterministicCorpusProvider(
+        corpus,
+        content_store_resolver(corpus, store, source_checksum),
+        min_maturity=min_maturity,
+        validator=validator if validator is not None else default_content_validator,
+    )

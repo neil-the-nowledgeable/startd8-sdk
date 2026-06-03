@@ -41,12 +41,15 @@
   trove runs and serves 12 **cross-run** from the durable store with checksum invalidation. 64 corpus
   tests green.
 
-### I2 — Provider on the durable store + validation (FR-1/2/3/4/5)
-- Point `DeterministicCorpusProvider` at `content_store_resolver`; add `AstParseValidator` as the
-  default validator (FR-5). Keep `dict_content_resolver` as the test double.
-- **Tests:** serve-from-store; false_pass refuse; stale-checksum fall-through; corrupt-content
-  fall-through (AST fail). (Extends the I0 suite.)
-- **Exit:** provider serves real trove content from the durable store with the validation gate live.
+### I2 — Provider on the durable store + validation (FR-1/2/3/4/5) ✅ (shipped — zero live impact)
+- `build_corpus_provider(corpus, store, source_checksum, ...)` factory wires `content_store_resolver`
+  + `default_content_validator` (FR-5: empty→reject; `.py`→`AstParseValidator`/`ast` reuse;
+  non-Python→non-empty bar). Raw `DeterministicCorpusProvider` stays validator-optional for tests.
+- **Tests (7):** validator empty/py-valid/py-invalid/non-py; factory serves-valid, rejects-invalid-py
+  (fall-through), checksum-mismatch fall-through, refuses false_pass_risk.
+- **Done:** 71 corpus tests green. Only additive edits to `corpus/provider.py` + `__init__`; no live
+  path touched.
+- **Exit met:** provider serves durable-store content behind the live validation gate (offline).
 
 ### I3 — Live wiring: Phase 0.7 `_try_corpus_shortcut` + postmortem write (FR-7/8) — flag default OFF
 - **Postmortem write (moved from I1):** call `populate_from_run` inside `_extract_corpus` (reading the
