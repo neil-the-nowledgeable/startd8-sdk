@@ -56,3 +56,42 @@ def assist_scan(
         console.print(f"  ↳ {report.summary.top_recommendation}")
     if report.events_emitted:
         console.print(f"  [dim]events: {', '.join(e.type for e in report.events_emitted)}[/dim]")
+
+
+@assist_app.command("semantic-review")
+def assist_semantic_review(
+    output_dir: Path = typer.Argument(
+        ..., help="Run output dir (contains prime-postmortem-report.json + prime-context-seed*.json)."
+    ),
+    project_root: Optional[Path] = typer.Option(
+        None, "--project-root", help="Project root to resolve generated file paths against."
+    ),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Explicit run id (else dir name)."),
+    no_emit: bool = typer.Option(False, "--no-emit", help="Skip EventBus emission."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the summary print."),
+) -> None:
+    """Review whether generated code semantically complies with its input requirement.
+
+    Tiered Haiku→Sonnet; advisory (feeds Kaizen). Writes semantic-compliance-report.json/.md and
+    appends structured Kaizen suggestions. Requires provider API keys for the reviewing models.
+    """
+    from .semantic_compliance import run_semantic_compliance
+
+    report = run_semantic_compliance(
+        output_dir, run_id=run_id, project_root=project_root, emit_events=not no_emit
+    )
+    if quiet:
+        return
+    s = report.summary
+    agg = f"{s.semantic_compliance_aggregate:.2f}" if s.semantic_compliance_aggregate is not None else "—"
+    color = "red" if s.fail else "green"
+    console.print(
+        f"[{color}]{report.run_id}: reviewed {s.reviewed}/{s.total_features} — "
+        f"pass {s.pass_} · fail {s.fail} · inconclusive {s.inconclusive} (compliance {agg})[/{color}]"
+    )
+    for f in report.features:
+        if f.verdict.verdict.value == "fail":
+            top = f.issues[0].description if f.issues else ""
+            console.print(f"  ✗ [red]{f.feature_id}[/red] ({f.verdict.confidence:.2f}): {top}")
+    if report.summary.inconclusive_rate_exceeded:
+        console.print("  [yellow]⚠ inconclusive rate exceeded — SYSTEM_WARNING[/yellow]")

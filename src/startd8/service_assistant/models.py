@@ -122,6 +122,17 @@ class CursorInfo:
 
 
 @dataclass
+class SemanticReviewRef:
+    """Folded summary of a Semantic Compliance Reviewer report, when present (FR-12)."""
+
+    status: str                      # complete | pending
+    report_path: str
+    aggregate: Optional[float] = None
+    fail: int = 0
+    inconclusive: int = 0
+
+
+@dataclass
 class Summary:
     headline: str
     top_recommendation: Optional[str] = None
@@ -144,6 +155,7 @@ class TriageReport:
     cross_feature_patterns: List[CrossFeaturePatternView] = field(default_factory=list)
     batch: Optional[BatchInfo] = None
     events_emitted: List[EmittedEvent] = field(default_factory=list)
+    semantic_review: Optional[SemanticReviewRef] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)

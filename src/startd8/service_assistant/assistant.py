@@ -106,6 +106,7 @@ class ServiceAssistant:
                 run_checksum=detection.checksum,
             ),
             summary=_build_summary(detection, verdict, failures),
+            semantic_review=_fold_semantic_review(output_dir),
         )
 
         if self.write_artifact:
@@ -124,6 +125,32 @@ class ServiceAssistant:
         )
         (output_dir / TRIAGE_MD).write_text(_render_markdown(report), encoding="utf-8")
         logger.info("Service Assistant triage: %s", output_dir / TRIAGE_JSON)
+
+
+def _fold_semantic_review(output_dir: Path):
+    """Fold an existing Semantic Compliance Reviewer report into the triage artifact (FR-12).
+
+    Read-only: the SA surfaces the SCR report if one is present; it does not launch the reviewer
+    here (auto-launch is gated/deferred to avoid surprise spend — see semantic_compliance/)."""
+    import json
+
+    from .models import SemanticReviewRef
+
+    path = output_dir / "semantic-compliance-report.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    summary = data.get("summary", {}) or {}
+    return SemanticReviewRef(
+        status=str(data.get("status", "complete")),
+        report_path=str(path),
+        aggregate=summary.get("semantic_compliance_aggregate"),
+        fail=int(summary.get("fail", 0) or 0),
+        inconclusive=int(summary.get("inconclusive", 0) or 0),
+    )
 
 
 def _build_summary(detection, verdict, failures) -> Summary:

@@ -523,6 +523,18 @@ from startd8.forward_manifest_validator import compute_disk_quality_score  # noq
 
 # All 16 RootCause values mapped to prompt hints.
 CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
+    # Generic fallback for Semantic Compliance Reviewer findings (FR-10). The SCR emits
+    # feature-specific, templated hints directly into kaizen-suggestions.json; this entry
+    # is the catch-all used when no per-issue hint is available.
+    "requirement_semantic_gap": {
+        "phase": "draft",
+        "hint": (
+            "Re-read the feature's requirement before generating: implement the asked-for "
+            "behavior, honor named field authorities (do not compute/invent fields the "
+            "requirement marks as caller-provided), and respect the negative scope "
+            "('invent X -> use Y')."
+        ),
+    },
     # RUN-008 FR-10 — cross-feature contract divergence (Prisma↔Zod). The
     # categories below match SymmetryViolation.kind so the Kaizen loop maps
     # them directly.

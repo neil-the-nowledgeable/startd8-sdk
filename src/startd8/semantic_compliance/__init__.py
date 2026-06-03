@@ -24,9 +24,12 @@ from .models import (
     Tier,
     Verdict,
 )
+from .orchestrator import SemanticComplianceOrchestrator, run_semantic_compliance
 from .scoring import compute_compliance_score, severity_weight
 
 __all__ = [
+    "SemanticComplianceOrchestrator",
+    "run_semantic_compliance",
     "SemanticComplianceReport",
     "FeatureReview",
     "ReportConfig",

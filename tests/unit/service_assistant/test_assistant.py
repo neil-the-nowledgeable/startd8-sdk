@@ -92,6 +92,28 @@ def test_idempotent_second_run_is_noop(tmp_path):
     assert second is None  # FR-3
 
 
+def test_folds_semantic_review_when_present(tmp_path):
+    run_dir = _failed_run(tmp_path)
+    # An SCR report already sitting in the run dir is folded into the triage (FR-12).
+    (run_dir / "semantic-compliance-report.json").write_text(json.dumps({
+        "status": "complete",
+        "summary": {"semantic_compliance_aggregate": 0.42, "fail": 2, "inconclusive": 1},
+    }), encoding="utf-8")
+    report = run_service_assistant(run_dir, emit=False)
+    assert report.semantic_review is not None
+    assert report.semantic_review.fail == 2
+    assert report.semantic_review.aggregate == 0.42
+    # Surfaced into the on-disk artifact too.
+    data = json.loads((run_dir / "service-assistant-triage.json").read_text())
+    assert data["semantic_review"]["status"] == "complete"
+
+
+def test_no_semantic_review_when_absent(tmp_path):
+    run_dir = _failed_run(tmp_path)
+    report = run_service_assistant(run_dir, emit=False)
+    assert report.semantic_review is None
+
+
 def test_hard_abort_emits_run_failed(tmp_path):
     import os
     from startd8.service_assistant import detector
