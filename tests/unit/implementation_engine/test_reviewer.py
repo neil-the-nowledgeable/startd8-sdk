@@ -89,6 +89,33 @@ class TestReviewDraft:
 
         assert result.blocking_issues == ["Missing import", "Syntax error"]
 
+    def test_pass_with_blocking_issues_fails(self):
+        """High score + 'PASS' must NOT pass while blocking issues remain.
+
+        The "PASS on a non-working feature" trap: the reviewer says PASS but
+        still lists unresolved blockers.
+        """
+        review_text = (
+            "### Score: 95\n### Verdict: PASS\n"
+            "### Blocking Issues\n- Does not import the real module\n"
+        )
+        agent = self._make_agent(review_text)
+        result = review_draft(agent, "task", self._make_spec(), "code")
+
+        assert result.passed is False
+        assert result.blocking_issues == ["Does not import the real module"]
+
+    def test_pass_with_none_blocking_placeholder_passes(self):
+        """An explicit 'None' under Blocking Issues must not false-fail PASS."""
+        review_text = (
+            "### Score: 90\n### Verdict: PASS\n"
+            "### Blocking Issues\n- None\n"
+        )
+        agent = self._make_agent(review_text)
+        result = review_draft(agent, "task", self._make_spec(), "code")
+
+        assert result.passed is True
+
     def test_suggestions_parsed(self):
         review_text = (
             "### Score: 85\n### Verdict: PASS\n"

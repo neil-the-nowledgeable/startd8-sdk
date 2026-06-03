@@ -465,6 +465,28 @@ class TestCreateDraft:
         assert draft.truncation_source == "api"
 
     @patch("startd8.implementation_engine.drafter.extract_code_from_response")
+    def test_tiny_file_not_heuristically_truncated(self, mock_extract):
+        """A legitimately-tiny composition file must not heuristic-fail.
+
+        M3 run-021: a 3-line server entrypoint tripped the structural
+        truncation heuristic. Files below MIN_LINES_TRUNCATION_BLOCKING are
+        excluded from heuristic blocking (API truncation still applies).
+        """
+        tiny = (
+            "from app.ai.routes import router as ai_router\n"
+            "from app.main import app\n"
+            "app.include_router(ai_router)\n"
+        )
+        mock_extract.return_value = tiny
+        agent = self._make_agent(response_text=tiny, was_truncated=False)
+        spec = self._make_spec()
+
+        draft = create_draft(agent, spec, target_files=["app/server.py"])
+
+        assert draft.was_truncated is False
+        assert draft.truncation_source != "heuristic"
+
+    @patch("startd8.implementation_engine.drafter.extract_code_from_response")
     def test_feedback_passed_to_prompt(self, mock_extract):
         mock_extract.return_value = "code"
         agent = self._make_agent()

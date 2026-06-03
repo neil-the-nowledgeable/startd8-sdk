@@ -456,9 +456,14 @@ def validate_disk_compliance(
         from startd8.validators.semantic_checks import (
             check_duplicate_main_guards,
             check_bare_except_pass,
+            check_fake_work_stub,
         )
 
-        for _check_fn in (check_duplicate_main_guards, check_bare_except_pass):
+        for _check_fn in (
+            check_duplicate_main_guards,
+            check_bare_except_pass,
+            check_fake_work_stub,
+        ):
             for issue in _check_fn(tree):
                 result.semantic_issues.append({
                     "category": issue.check,
@@ -1911,10 +1916,14 @@ def _count_stubs(tree: ast.AST) -> int:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             body = node.body
             # Strip leading docstring
+            # ast.Constant subsumes the removed ast.Str/ast.Num aliases
+            # (gone in Python 3.12+); referencing ast.Str here raised
+            # AttributeError and was silently swallowed by the postmortem's
+            # broad except, disabling ALL disk-quality scoring on 3.12+.
             if (
                 body
                 and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, (ast.Constant, ast.Str))
+                and isinstance(body[0].value, ast.Constant)
             ):
                 body = body[1:]
             if len(body) == 1:

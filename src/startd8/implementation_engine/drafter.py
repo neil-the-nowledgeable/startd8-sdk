@@ -14,6 +14,7 @@ from ..utils.code_extraction import extract_code_from_response
 from ..truncation_detection import (
     CONFIDENCE_HIGH,
     CONFIDENCE_IS_TRUNCATED,
+    MIN_LINES_TRUNCATION_BLOCKING,
     detect_truncation,
     get_expected_sections_for_code,
 )
@@ -1336,6 +1337,16 @@ def create_draft(
         # meaningless and produce false positives (e.g. requirements.in).
         heuristic_truncated = False
         skip_heuristics = _all_files_non_python(target_files, existing_files)
+        # Legitimately-tiny outputs (e.g. a 3-line composition entrypoint) look
+        # "incomplete" to structural heuristics but cannot be meaningfully
+        # truncated by them. API-level truncation and size-regression (below)
+        # still apply, so real truncation is not missed. (M3 run-021 server.py
+        # false-positive.)
+        if implementation_code and (
+            len(implementation_code.strip().splitlines())
+            < MIN_LINES_TRUNCATION_BLOCKING
+        ):
+            skip_heuristics = True
         if check_truncation and not api_truncated and implementation_code and not skip_heuristics:
             confidence_threshold = (
                 CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH

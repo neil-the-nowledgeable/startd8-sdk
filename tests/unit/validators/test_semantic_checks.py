@@ -14,6 +14,7 @@ from startd8.validators.semantic_checks import (
     check_bare_except_pass,
     check_duplicate_definitions,
     check_duplicate_main_guards,
+    check_fake_work_stub,
     check_phantom_dependencies,
     run_semantic_checks,
 )
@@ -70,6 +71,99 @@ class TestCheckDuplicateMainGuards:
         tree = ast.parse(source)
         issues = check_duplicate_main_guards(tree)
         assert len(issues) == 1
+
+
+# -----------------------------------------------------------------------
+# check_fake_work_stub
+# -----------------------------------------------------------------------
+
+
+class TestCheckFakeWorkStub:
+    """Tests for check_fake_work_stub (M3 run-021 semantic-stub trap)."""
+
+    def test_async_sleep_stub_flagged(self):
+        """The run-021 exemplar: async handler that sleeps + returns canned data."""
+        source = textwrap.dedent("""\
+            import asyncio
+
+            async def extract(req):
+                \"\"\"Extract entities.\"\"\"
+                await asyncio.sleep(0.1)
+                return {"entities": [], "confirmed": False}
+        """)
+        issues = check_fake_work_stub(ast.parse(source))
+        assert len(issues) == 1
+        assert issues[0].check == "fake_work_stub"
+        assert issues[0].severity == "error"
+        assert "extract" in issues[0].message
+
+    def test_time_sleep_stub_flagged(self):
+        source = textwrap.dedent("""\
+            import time
+
+            def generate_artifacts(spec):
+                time.sleep(2)
+                return [{"id": 1, "source": "ai"}]
+        """)
+        issues = check_fake_work_stub(ast.parse(source))
+        assert len(issues) == 1
+        assert issues[0].check == "fake_work_stub"
+
+    def test_real_handler_not_flagged(self):
+        """Handler that imports and calls the real module is not a stub."""
+        source = textwrap.dedent("""\
+            from app.ai.extract import extract as do_extract
+
+            async def extract(req, session):
+                result = await do_extract(req.text, session)
+                return result
+        """)
+        assert check_fake_work_stub(ast.parse(source)) == []
+
+    def test_retry_backoff_not_flagged(self):
+        """Real retry/backoff loops sleep AND call the thing they retry."""
+        source = textwrap.dedent("""\
+            import asyncio
+
+            async def fetch_with_retry(url, client):
+                for _ in range(3):
+                    resp = await client.get(url)
+                    if resp.ok:
+                        return resp
+                    await asyncio.sleep(1)
+                return None
+        """)
+        assert check_fake_work_stub(ast.parse(source)) == []
+
+    def test_sleep_without_canned_return_not_flagged(self):
+        """A bare sleep with no fabricated return is more likely real throttling."""
+        source = textwrap.dedent("""\
+            import asyncio
+
+            async def throttle():
+                await asyncio.sleep(0.5)
+        """)
+        assert check_fake_work_stub(ast.parse(source)) == []
+
+    def test_no_sleep_not_flagged(self):
+        source = textwrap.dedent("""\
+            def build():
+                return {"ok": True}
+        """)
+        assert check_fake_work_stub(ast.parse(source)) == []
+
+    def test_wired_into_run_semantic_checks(self):
+        source = textwrap.dedent("""\
+            import asyncio
+
+            async def extract(req):
+                await asyncio.sleep(0.1)
+                return {"entities": []}
+        """)
+        issues = run_semantic_checks(source, file_path="app/ai/routes.py")
+        stub_issues = [i for i in issues if i.check == "fake_work_stub"]
+        assert len(stub_issues) == 1
+        assert stub_issues[0].file_path == "app/ai/routes.py"
 
 
 # -----------------------------------------------------------------------
