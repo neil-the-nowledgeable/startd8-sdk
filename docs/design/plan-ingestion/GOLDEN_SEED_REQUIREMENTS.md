@@ -31,8 +31,15 @@ These improvements are **ephemeral** — they exist only in the JSON seed artifa
 Source Documents (plan.md + requirements.md)
     │
     ▼
-Plan Ingestion Pipeline (PARSE → TRANSFORM → REFINE)
-    │
+Plan Ingestion Pipeline
+  PARSE (LLM) ──► features = SOURCE OF TRUTH for tasks
+    │             (_derive_tasks_from_features: title=feature.name,
+    │              task_description=feature.description)
+    ├─ ASSESS    (deterministic by default; telemetry-only composite)
+    ├─ TRANSFORM (deterministic by default; YAML is NOT the task source)
+    └─ REFINE → deterministic ENRICH → EMIT
+    │   NOTE: seed tasks derive from PARSE features, not the TRANSFORM YAML.
+    │   See docs/design/plan-ingestion/DETERMINISTIC_INGESTION_REQUIREMENTS.md (FR-1/FR-3).
     ▼
 Enriched Seed (prime-context-seed-enriched.json)  ← improvements live here
     │

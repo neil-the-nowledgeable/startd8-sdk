@@ -1,0 +1,464 @@
+{
+  "anchor_cluster_feature_count": 17,
+  "anchor_runs": [
+    "gemini-python-0141",
+    "run-002-20260301T2122",
+    "run-003-20260304T1202",
+    "run-004-20260306T1620",
+    "run-007-20260307T1738",
+    "run-011-20260308T1539",
+    "run-012-20260308T1720",
+    "run-021-20260309T2219",
+    "run-025-20260310T1231",
+    "run-026-20260310T1357",
+    "run-030-20260310T1836",
+    "run-031-20260310T1920",
+    "run-032-20260310T2018",
+    "run-036-20260311T1814",
+    "run-040-20260312T1236",
+    "run-105-20260322T2140",
+    "run-109-20260323T1224",
+    "run-110-20260323T1305",
+    "run-111-20260323T1412",
+    "run-112-20260323T1438",
+    "run-122-20260514T1140"
+  ],
+  "labeled_points_used": 49,
+  "labeled_points_skipped_outside_cluster_or_unmapped": 274,
+  "join_key": "target_file (NOT positional PI-id)",
+  "caveat": "Stability is measured per target_file WITHIN the anchor cluster. title_variants shows the natural-language drift for the SAME binding (the stochastic residue the corpus abstracts away).",
+  "features": [
+    {
+      "target_file": "src/emailservice/logger.py",
+      "n_observations": 4,
+      "n_runs": 4,
+      "pass": 4,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 3,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Email Service JSON Logger",
+        "Shared JSON Logger Utility \u2014 emailservice",
+        "Shared JSON Logger \u2014 emailservice"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/loadgenerator/locustfile.py",
+      "n_observations": 4,
+      "n_runs": 4,
+      "pass": 4,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 3,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Load Generator \u2014 Locust Traffic Simulation"
+      ],
+      "title_variant_count": 1,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/emailservice/email_server.py",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Email Service gRPC Server",
+        "Email Service \u2014 gRPC Server"
+      ],
+      "title_variant_count": 2,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/emailservice/templates/confirmation.html",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Email Service Confirmation Template",
+        "Email Service Order Confirmation Template",
+        "Email Service \u2014 Confirmation HTML Template",
+        "Email Service \u2014 Jinja2 Confirmation Template",
+        "Email Service \u2014 Jinja2 Order Confirmation Template",
+        "Email Service \u2014 Order Confirmation HTML Template",
+        "Email Service \u2014 Order Confirmation Template"
+      ],
+      "title_variant_count": 7,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/loadgenerator/requirements.in",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Load Generator Requirements File",
+        "Load Generator \u2014 Requirements File",
+        "Load Generator \u2014 requirements.in",
+        "Requirements File \u2014 loadgenerator",
+        "Requirements \u2014 loadgenerator"
+      ],
+      "title_variant_count": 5,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/recommendationservice/client.py",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Recommendation Service Test Client",
+        "Recommendation Service \u2014 Test Client",
+        "Recommendation Service \u2014 gRPC Test Client"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/recommendationservice/recommendation_server.py",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Recommendation Service gRPC Server",
+        "Recommendation Service \u2014 gRPC Server"
+      ],
+      "title_variant_count": 2,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/shoppingassistantservice/requirements.in",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 3,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Requirements File \u2014 shoppingassistantservice",
+        "Requirements \u2014 shoppingassistantservice",
+        "Shopping Assistant Service Requirements File",
+        "Shopping Assistant Service \u2014 Requirements File",
+        "Shopping Assistant Service \u2014 requirements.in"
+      ],
+      "title_variant_count": 5,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/emailservice/requirements.in",
+      "n_observations": 2,
+      "n_runs": 2,
+      "pass": 2,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 1,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Email Service Requirements File",
+        "Email Service \u2014 Requirements File",
+        "Email Service \u2014 requirements.in",
+        "Requirements File \u2014 emailservice",
+        "Requirements \u2014 emailservice"
+      ],
+      "title_variant_count": 5,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/recommendationservice/Dockerfile",
+      "n_observations": 2,
+      "n_runs": 2,
+      "pass": 2,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 1,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Dockerfile \u2014 recommendationservice",
+        "Recommendation Service Dockerfile",
+        "Recommendation Service \u2014 Dockerfile"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/recommendationservice/requirements.in",
+      "n_observations": 2,
+      "n_runs": 2,
+      "pass": 2,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 1,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Recommendation Service Requirements File",
+        "Recommendation Service \u2014 Requirements File",
+        "Recommendation Service \u2014 requirements.in",
+        "Requirements File \u2014 recommendationservice",
+        "Requirements \u2014 recommendationservice"
+      ],
+      "title_variant_count": 5,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/recommendationservice/logger.py",
+      "n_observations": 1,
+      "n_runs": 1,
+      "pass": 1,
+      "fail": 0,
+      "stability": 1.0,
+      "by_model": {
+        "claude": {
+          "pass": 0,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Recommendation Service JSON Logger",
+        "Shared JSON Logger Utility \u2014 recommendationservice",
+        "Shared JSON Logger \u2014 recommendationservice"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "deterministic_candidate"
+    },
+    {
+      "target_file": "src/emailservice/Dockerfile",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 2,
+      "fail": 1,
+      "stability": 0.667,
+      "by_model": {
+        "claude": {
+          "pass": 1,
+          "fail": 1
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Dockerfile \u2014 emailservice",
+        "Email Service Dockerfile",
+        "Email Service \u2014 Dockerfile"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "residue_corpus_gap"
+    },
+    {
+      "target_file": "src/loadgenerator/Dockerfile",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 2,
+      "fail": 1,
+      "stability": 0.667,
+      "by_model": {
+        "claude": {
+          "pass": 1,
+          "fail": 1
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Dockerfile \u2014 loadgenerator",
+        "Load Generator Dockerfile",
+        "Load Generator \u2014 Dockerfile"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "residue_corpus_gap"
+    },
+    {
+      "target_file": "src/shoppingassistantservice/Dockerfile",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 2,
+      "fail": 1,
+      "stability": 0.667,
+      "by_model": {
+        "claude": {
+          "pass": 2,
+          "fail": 0
+        },
+        "gemini": {
+          "pass": 0,
+          "fail": 1
+        }
+      },
+      "title_variants": [
+        "Dockerfile \u2014 shoppingassistantservice",
+        "Shopping Assistant Service Dockerfile",
+        "Shopping Assistant Service \u2014 Dockerfile"
+      ],
+      "title_variant_count": 3,
+      "corpus_class": "residue_corpus_gap"
+    },
+    {
+      "target_file": "src/emailservice/email_client.py",
+      "n_observations": 3,
+      "n_runs": 3,
+      "pass": 1,
+      "fail": 2,
+      "stability": 0.333,
+      "by_model": {
+        "claude": {
+          "pass": 0,
+          "fail": 2
+        },
+        "gemini": {
+          "pass": 1,
+          "fail": 0
+        }
+      },
+      "title_variants": [
+        "Email Service Test Client",
+        "Email Service gRPC Test Client",
+        "Email Service \u2014 Test Client",
+        "Email Service \u2014 gRPC Test Client"
+      ],
+      "title_variant_count": 4,
+      "corpus_class": "residue_corpus_gap"
+    },
+    {
+      "target_file": "src/shoppingassistantservice/shoppingassistantservice.py",
+      "n_observations": 4,
+      "n_runs": 4,
+      "pass": 0,
+      "fail": 4,
+      "stability": 0.0,
+      "by_model": {
+        "claude": {
+          "pass": 0,
+          "fail": 3
+        },
+        "gemini": {
+          "pass": 0,
+          "fail": 1
+        }
+      },
+      "title_variants": [
+        "Shopping Assistant Service \u2014 Flask RAG"
+      ],
+      "title_variant_count": 1,
+      "corpus_class": "residue_corpus_gap"
+    }
+  ]
+}

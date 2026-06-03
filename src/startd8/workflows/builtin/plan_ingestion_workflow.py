@@ -4212,25 +4212,52 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.ASSESS
 
             _used_heuristic_assess = False
-            complexity, assess_step = self._phase_assess(
-                parsed_plan, assessor, threshold, force_route,
-            )
-            if assess_step.error and enable_heuristic_parse_fallback:
+            if cfg.enable_llm_assess:
+                # Opt-in LLM complexity scoring (FR-2). Heuristic remains the
+                # on-failure fallback when enabled.
+                complexity, assess_step = self._phase_assess(
+                    parsed_plan, assessor, threshold, force_route,
+                )
+                if assess_step.error and enable_heuristic_parse_fallback:
+                    _used_heuristic_assess = True
+                    complexity = _heuristic_assess_complexity(
+                        parsed_plan,
+                        threshold=threshold,
+                        force_route=force_route,
+                    )
+                    assess_step.error = None
+                    assess_step.output = (
+                        assess_step.output + "\n[heuristic fallback] assess succeeded deterministically"
+                    )[:_OUTPUT_TRUNCATION]
+                    assess_step.metadata["heuristic_fallback"] = True
+                    if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                        _assess_span.add_event("decision.heuristic_fallback", {
+                            "phase": "assess",
+                            "reason": "LLM assess failed, heuristic enabled",
+                        })
+            else:
+                # FR-2: deterministic complexity scoring is the default — the
+                # composite is telemetry-only (route is always prime, REQ-SU-102),
+                # so the LLM round-trip adds no decision value. Zero LLM cost.
                 _used_heuristic_assess = True
                 complexity = _heuristic_assess_complexity(
                     parsed_plan,
                     threshold=threshold,
                     force_route=force_route,
                 )
-                assess_step.error = None
-                assess_step.output = (
-                    assess_step.output + "\n[heuristic fallback] assess succeeded deterministically"
-                )[:_OUTPUT_TRUNCATION]
-                assess_step.metadata["heuristic_fallback"] = True
+                assess_step = StepResult(
+                    step_name="assess",
+                    agent_name="deterministic",
+                    input="",
+                    output="Deterministic complexity scoring (FR-2, zero LLM cost)",
+                    time_ms=0,
+                    cost=0.0,
+                    metadata={"deterministic": True},
+                )
                 if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
-                    _assess_span.add_event("decision.heuristic_fallback", {
+                    _assess_span.add_event("decision.deterministic_default", {
                         "phase": "assess",
-                        "reason": "LLM assess failed, heuristic enabled",
+                        "reason": "enable_llm_assess=false (FR-2)",
                     })
             steps.append(assess_step)
             state.total_cost += assess_step.cost
@@ -4240,10 +4267,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.complexity = complexity
             state.route = complexity.route
 
-            # When heuristic parse produced a degraded single-feature plan,
-            # the composite score is artificially low and quality metrics
-            # are inflated.  Override routing to artisan unless the user
-            # explicitly forced a route.
+            # Low-translation-quality handling (advisory only). Routing is
+            # always "prime" (REQ-SU-102; Artisan ON HOLD) — there is NO
+            # artisan override here despite the historical name
+            # "bias_artisan". The policy only decides whether low quality
+            # FAILS the run ("fail") or emits an advisory warning
+            # ("bias_artisan", the default). See DETERMINISTIC_INGESTION FR-4.
             low_quality_reasons: List[str] = []
             if (
                 translation_quality["requirements_coverage_percent"]
@@ -4315,22 +4344,49 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             progress("Transform")
             state.current_phase = IngestionPhase.TRANSFORM
-            transformer = self._resolve_transformer_agent(
-                config,
-                timeout_config=timeout_config,
-                retry_config=retry_config,
-            )
-
-            doc_path, transform_step = self._phase_transform(
-                parsed_plan, route, transformer, output_dir,
-            )
-            if transform_step.error and enable_heuristic_parse_fallback:
-                out_filename = "plan-ingestion-tasks.yaml"
+            out_filename = "plan-ingestion-tasks.yaml"
+            if cfg.enable_llm_transform:
+                # Opt-in LLM task-YAML (FR-1) — primarily for shared_contracts
+                # synthesis. Transformer agent is only resolved on this path.
+                transformer = self._resolve_transformer_agent(
+                    config,
+                    timeout_config=timeout_config,
+                    retry_config=retry_config,
+                )
+                doc_path, transform_step = self._phase_transform(
+                    parsed_plan, route, transformer, output_dir,
+                )
+                if transform_step.error and enable_heuristic_parse_fallback:
+                    doc_path = output_dir / out_filename
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    atomic_write(doc_path, _heuristic_transform_content(parsed_plan, route))
+                    transform_step.error = None
+                    transform_step.output = f"Wrote {doc_path} via heuristic fallback"
+            else:
+                # FR-1: deterministic task-YAML is the default. The prime seed
+                # derives tasks from PARSE features (_derive_tasks_from_features),
+                # NOT from this YAML — so the LLM transform reproduces feature
+                # content verbatim at ~60% of ingestion LLM cost. Emit the
+                # byte-equivalent YAML for free; the artifact is still written
+                # (same path/schema) for REFINE, Artisan context_seed, the
+                # shared_contracts scavenger, and standalone scripts.
                 doc_path = output_dir / out_filename
                 output_dir.mkdir(parents=True, exist_ok=True)
                 atomic_write(doc_path, _heuristic_transform_content(parsed_plan, route))
-                transform_step.error = None
-                transform_step.output = f"Wrote {doc_path} via heuristic fallback"
+                transform_step = StepResult(
+                    step_name="transform",
+                    agent_name="deterministic",
+                    input="",
+                    output=f"Wrote {doc_path} deterministically (FR-1, zero LLM cost)",
+                    time_ms=0,
+                    cost=0.0,
+                    metadata={"deterministic": True},
+                )
+                if _HAS_OTEL and not isinstance(_transform_span, _NoOpSpan):
+                    _transform_span.add_event("decision.deterministic_default", {
+                        "phase": "transform",
+                        "reason": "enable_llm_transform=false (FR-1)",
+                    })
             steps.append(transform_step)
             state.total_cost += transform_step.cost
             step_costs["transform"] = transform_step.cost
@@ -4599,6 +4655,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         code_extraction_fallback=_s.metadata.get(
                             "code_extraction_fallback", False,
                         ),
+                        deterministic=_s.metadata.get("deterministic", False),
                     )
 
             # Attach quality signals to phase diagnostics

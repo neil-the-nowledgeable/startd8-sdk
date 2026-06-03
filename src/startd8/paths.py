@@ -32,3 +32,20 @@ def resolve_config_dir(config_dir: Optional[Path]) -> Path:
     """Resolve an optional config directory to a concrete Path."""
     return Path(config_dir) if config_dir is not None else default_config_dir()
 
+
+def controlled_corpus_path(data_dir: Optional[Path] = None) -> Path:
+    """Path to the persistent Controlled Corpus registry (CONTROLLED_CORPUS FR-1).
+
+    Project-scoped, mirroring the exemplar-registry convention.
+    """
+    return resolve_data_dir(data_dir) / "controlled-corpus.json"
+
+
+def shared_corpus_path() -> Path:
+    """Path to the (future) cross-project shared domain corpus (CONTROLLED_CORPUS OQ-5).
+
+    v1 does NOT implement shared-corpus promotion (see Non-Requirements); this stub
+    reserves the user-scoped location so the v2 promotion boundary has a home.
+    """
+    return default_config_dir() / "corpus" / "shared-corpus.json"
+

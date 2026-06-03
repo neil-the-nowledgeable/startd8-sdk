@@ -97,7 +97,7 @@ The `complexity_threshold` field and the composite-score-based routing decision 
 - `ContractorRoute` enum retained for backward compatibility (existing seeds on disk reference it)
 - `force_route` config field retained but defaults to `"prime"` and documented as deprecated
 - Route margin telemetry (`_assess_q["route_margin"]`) reframed as "quality classification score" in log messages and `_ingestion_quality` metadata
-- Heuristic fallback override (line 4137) removed — no automatic routing to artisan
+- Heuristic fallback override removed — no automatic routing to artisan ✅ **VERIFIED DONE (2026-06-03):** `route` is only ever `ContractorRoute.PRIME` (`plan_ingestion_workflow.py:1682`); the low-quality block at ~4243 is advisory-only. Misleading comment/naming clarified per DETERMINISTIC_INGESTION_REQUIREMENTS FR-4.
 - No behavioral change for existing production flows (already forced to prime)
 
 ---

@@ -1,0 +1,2492 @@
+{
+  "corpus_version": 60,
+  "last_updated": "2026-06-03T21:11:45.961173+00:00",
+  "project_id": "online-boutique",
+  "schema_version": "1.0.0",
+  "terms": [
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Ad",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "ad",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Ad"
+      ],
+      "term_id": "entity:091f5e8ab0d8"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Product",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "product",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Product"
+      ],
+      "term_id": "entity:0a902ae2cc68"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "GetQuoteRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "getquoterequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "GetQuoteRequest"
+      ],
+      "term_id": "entity:163b739e9f28"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ShipOrderRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "shiporderrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ShipOrderRequest"
+      ],
+      "term_id": "entity:1692effd7f9e"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "EmptyCartRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "emptycartrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "EmptyCartRequest"
+      ],
+      "term_id": "entity:1f36907956a9"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Empty",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "empty",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Empty"
+      ],
+      "term_id": "entity:1f74110d51a3"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "AdResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "adresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "AdResponse"
+      ],
+      "term_id": "entity:3690d421c008"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "OrderResult",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "orderresult",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "OrderResult"
+      ],
+      "term_id": "entity:37bf4a47761d"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "SearchProductsResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "searchproductsresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "SearchProductsResponse"
+      ],
+      "term_id": "entity:3cff6aad4bb9"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "GetCartRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "getcartrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "GetCartRequest"
+      ],
+      "term_id": "entity:46ba70151f11"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "SendOrderConfirmationRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "sendorderconfirmationrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "SendOrderConfirmationRequest"
+      ],
+      "term_id": "entity:4f2b71dc1ce6"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "GetQuoteResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "getquoteresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "GetQuoteResponse"
+      ],
+      "term_id": "entity:573ae67fc948"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "CurrencyConversionRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "currencyconversionrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CurrencyConversionRequest"
+      ],
+      "term_id": "entity:645796d99c8e"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "GetProductRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "getproductrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "GetProductRequest"
+      ],
+      "term_id": "entity:6fc145205051"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Address",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "address",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Address"
+      ],
+      "term_id": "entity:73a5ceaf36aa"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ChargeRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "chargerequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ChargeRequest"
+      ],
+      "term_id": "entity:744a18c52ef8"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ListRecommendationsResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "listrecommendationsresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ListRecommendationsResponse"
+      ],
+      "term_id": "entity:91d076d4ae5e"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "CreditCardInfo",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "creditcardinfo",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CreditCardInfo"
+      ],
+      "term_id": "entity:9d3ac2f15892"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ListRecommendationsRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "listrecommendationsrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ListRecommendationsRequest"
+      ],
+      "term_id": "entity:a77d692f3e10"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ListProductsResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "listproductsresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ListProductsResponse"
+      ],
+      "term_id": "entity:aac990983c35"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "GetSupportedCurrenciesResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "getsupportedcurrenciesresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "GetSupportedCurrenciesResponse"
+      ],
+      "term_id": "entity:ac9f0c6879e9"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "PlaceOrderRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "placeorderrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "PlaceOrderRequest"
+      ],
+      "term_id": "entity:afeb58663633"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "OrderItem",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "orderitem",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "OrderItem"
+      ],
+      "term_id": "entity:b3ba011035ba"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "CartItem",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cartitem",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CartItem"
+      ],
+      "term_id": "entity:b66d44a7cb4e"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ChargeResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "chargeresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ChargeResponse"
+      ],
+      "term_id": "entity:b7e2cd7a8f22"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Money",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "money",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Money"
+      ],
+      "term_id": "entity:c5e8bbd3b7de"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "SearchProductsRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "searchproductsrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "SearchProductsRequest"
+      ],
+      "term_id": "entity:cb8928eb7297"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "AddItemRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "additemrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "AddItemRequest"
+      ],
+      "term_id": "entity:dad39af68388"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "ShipOrderResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "shiporderresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ShipOrderResponse"
+      ],
+      "term_id": "entity:ef970255b831"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "Cart",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cart",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "Cart"
+      ],
+      "term_id": "entity:f9d4192dba64"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "PlaceOrderResponse",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "placeorderresponse",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "PlaceOrderResponse"
+      ],
+      "term_id": "entity:fa95c430dc83"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "message",
+          "construct_ref": "AdRequest",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "adrequest",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "entity",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "AdRequest"
+      ],
+      "term_id": "entity:fd0d82403de3"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/Dockerfile",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/Dockerfile",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/Dockerfile-f2": {
+            "input_scope_id": "",
+            "requirement_score": 0.875,
+            "success": false
+          },
+          "replay-src/emailservice/Dockerfile-p0": {
+            "input_scope_id": "",
+            "requirement_score": 0.875,
+            "success": true
+          },
+          "replay-src/emailservice/Dockerfile-p1": {
+            "input_scope_id": "",
+            "requirement_score": 0.875,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-src/emailservice/Dockerfile-f2",
+        "replay-src/emailservice/Dockerfile-p0",
+        "replay-src/emailservice/Dockerfile-p1"
+      ],
+      "surface_forms": [
+        "Dockerfile \u2014 emailservice",
+        "Email Service Dockerfile"
+      ],
+      "term_id": "file:00c40b8cb063"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/shoppingassistantservice/requirements.in",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/shoppingassistantservice/requirements.in",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/shoppingassistantservice/requirements.in-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/requirements.in-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/requirements.in-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/shoppingassistantservice/requirements.in-p0",
+        "replay-src/shoppingassistantservice/requirements.in-p1",
+        "replay-src/shoppingassistantservice/requirements.in-p2"
+      ],
+      "surface_forms": [
+        "Requirements File \u2014 shoppingassistantservice",
+        "Requirements \u2014 shoppingassistantservice",
+        "Shopping Assistant Service \u2014 requirements.in"
+      ],
+      "term_id": "file:01fcd5fc5528"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/recommendationservice/requirements.in",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/recommendationservice/requirements.in",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/recommendationservice/requirements.in-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/requirements.in-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-src/recommendationservice/requirements.in-p0",
+        "replay-src/recommendationservice/requirements.in-p1"
+      ],
+      "surface_forms": [
+        "Requirements File \u2014 recommendationservice",
+        "Requirements \u2014 recommendationservice"
+      ],
+      "term_id": "file:0a850364b7dc"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-005",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-005",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-005-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 1,
+      "source_run_ids": [
+        "replay-PI-005-p0"
+      ],
+      "surface_forms": [
+        "Email Service \u2014 Jinja2 Order Confirmation Template"
+      ],
+      "term_id": "file:170eab2e8879"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-003",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-003",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-003-p0": {
+            "input_scope_id": "",
+            "requirement_score": 0.75,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 1,
+      "source_run_ids": [
+        "replay-PI-003-p0"
+      ],
+      "surface_forms": [
+        "Email Service \u2014 gRPC Server"
+      ],
+      "term_id": "file:1f75cfea7bb3"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/recommendationservice/Dockerfile",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/recommendationservice/Dockerfile",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/recommendationservice/Dockerfile-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/Dockerfile-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-src/recommendationservice/Dockerfile-p0",
+        "replay-src/recommendationservice/Dockerfile-p1"
+      ],
+      "surface_forms": [
+        "Dockerfile \u2014 recommendationservice"
+      ],
+      "term_id": "file:315ae92e499d"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/logger.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/logger.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/logger.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/logger.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/logger.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/logger.py-p3": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/emailservice/logger.py-p0",
+        "replay-src/emailservice/logger.py-p1",
+        "replay-src/emailservice/logger.py-p2",
+        "replay-src/emailservice/logger.py-p3"
+      ],
+      "surface_forms": [
+        "Email Service JSON Logger",
+        "Shared JSON Logger \u2014 emailservice"
+      ],
+      "term_id": "file:38354d833318"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/recommendationservice/logger.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/recommendationservice/logger.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/recommendationservice/logger.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/logger.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/logger.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/logger.py-p3": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/recommendationservice/logger.py-p0",
+        "replay-src/recommendationservice/logger.py-p1",
+        "replay-src/recommendationservice/logger.py-p2",
+        "replay-src/recommendationservice/logger.py-p3"
+      ],
+      "surface_forms": [
+        "Recommendation Service JSON Logger",
+        "Shared JSON Logger \u2014 recommendationservice"
+      ],
+      "term_id": "file:3b09d107ecd5"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/loadgenerator/Dockerfile",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/loadgenerator/Dockerfile",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/loadgenerator/Dockerfile-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/Dockerfile-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/Dockerfile-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/loadgenerator/Dockerfile-p0",
+        "replay-src/loadgenerator/Dockerfile-p1",
+        "replay-src/loadgenerator/Dockerfile-p2"
+      ],
+      "surface_forms": [
+        "Dockerfile \u2014 loadgenerator",
+        "Load Generator \u2014 Dockerfile"
+      ],
+      "term_id": "file:3c0955aae14a"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/email_server.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/email_server.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/email_server.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/email_server.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/email_server.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/emailservice/email_server.py-p0",
+        "replay-src/emailservice/email_server.py-p1",
+        "replay-src/emailservice/email_server.py-p2"
+      ],
+      "surface_forms": [
+        "Email Service gRPC Server",
+        "Email Service \u2014 gRPC Server"
+      ],
+      "term_id": "file:42580db2d6af"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-004",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-004",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-004-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 1,
+      "source_run_ids": [
+        "replay-PI-004-p0"
+      ],
+      "surface_forms": [
+        "Email Service \u2014 gRPC Test Client"
+      ],
+      "term_id": "file:61d2971ca308"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/email_client.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/email_client.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/email_client.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/email_client.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/email_client.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/emailservice/email_client.py-p0",
+        "replay-src/emailservice/email_client.py-p1",
+        "replay-src/emailservice/email_client.py-p2"
+      ],
+      "surface_forms": [
+        "Email Service Test Client",
+        "Email Service \u2014 Test Client"
+      ],
+      "term_id": "file:647312c4025f"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/recommendationservice/client.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/recommendationservice/client.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/recommendationservice/client.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/client.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/client.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/recommendationservice/client.py-p0",
+        "replay-src/recommendationservice/client.py-p1",
+        "replay-src/recommendationservice/client.py-p2"
+      ],
+      "surface_forms": [
+        "Recommendation Service Test Client",
+        "Recommendation Service \u2014 Test Client"
+      ],
+      "term_id": "file:69afc2bcb502"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/templates/confirmation.html",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/templates/confirmation.html",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/templates/confirmation.html-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/templates/confirmation.html-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/templates/confirmation.html-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/emailservice/templates/confirmation.html-p0",
+        "replay-src/emailservice/templates/confirmation.html-p1",
+        "replay-src/emailservice/templates/confirmation.html-p2"
+      ],
+      "surface_forms": [
+        "Email Service Confirmation Template",
+        "Email Service \u2014 Confirmation HTML Template",
+        "Email Service \u2014 Jinja2 Confirmation Template"
+      ],
+      "term_id": "file:7430ef799a45"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/recommendationservice/recommendation_server.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/recommendationservice/recommendation_server.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/recommendationservice/recommendation_server.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/recommendation_server.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/recommendationservice/recommendation_server.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/recommendationservice/recommendation_server.py-p0",
+        "replay-src/recommendationservice/recommendation_server.py-p1",
+        "replay-src/recommendationservice/recommendation_server.py-p2"
+      ],
+      "surface_forms": [
+        "Recommendation Service gRPC Server",
+        "Recommendation Service \u2014 gRPC Server"
+      ],
+      "term_id": "file:ab0c6891a349"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/loadgenerator/requirements.in",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/loadgenerator/requirements.in",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/loadgenerator/requirements.in-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/requirements.in-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/requirements.in-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/loadgenerator/requirements.in-p0",
+        "replay-src/loadgenerator/requirements.in-p1",
+        "replay-src/loadgenerator/requirements.in-p2"
+      ],
+      "surface_forms": [
+        "Load Generator \u2014 requirements.in",
+        "Requirements File \u2014 loadgenerator",
+        "Requirements \u2014 loadgenerator"
+      ],
+      "term_id": "file:abc440e9f16e"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/shoppingassistantservice/shoppingassistantservice.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/shoppingassistantservice/shoppingassistantservice.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/shoppingassistantservice/shoppingassistantservice.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 0.5,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/shoppingassistantservice.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 0.5,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/shoppingassistantservice.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 0.5,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/shoppingassistantservice.py-p3": {
+            "input_scope_id": "",
+            "requirement_score": 0.5,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 3,
+      "source_run_ids": [
+        "replay-src/shoppingassistantservice/shoppingassistantservice.py-p0",
+        "replay-src/shoppingassistantservice/shoppingassistantservice.py-p1",
+        "replay-src/shoppingassistantservice/shoppingassistantservice.py-p2",
+        "replay-src/shoppingassistantservice/shoppingassistantservice.py-p3"
+      ],
+      "surface_forms": [
+        "Shopping Assistant Service \u2014 Flask RAG"
+      ],
+      "term_id": "file:addaa16dfb13"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/loadgenerator/locustfile.py",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/loadgenerator/locustfile.py",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/loadgenerator/locustfile.py-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/locustfile.py-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/locustfile.py-p2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/loadgenerator/locustfile.py-p3": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 4,
+      "source_run_ids": [
+        "replay-src/loadgenerator/locustfile.py-p0",
+        "replay-src/loadgenerator/locustfile.py-p1",
+        "replay-src/loadgenerator/locustfile.py-p2",
+        "replay-src/loadgenerator/locustfile.py-p3"
+      ],
+      "surface_forms": [
+        "Load Generator \u2014 Locust Traffic Simulation"
+      ],
+      "term_id": "file:affed2898bfd"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/emailservice/requirements.in",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/emailservice/requirements.in",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/emailservice/requirements.in-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/emailservice/requirements.in-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-src/emailservice/requirements.in-p0",
+        "replay-src/emailservice/requirements.in-p1"
+      ],
+      "surface_forms": [
+        "Requirements File \u2014 emailservice",
+        "Requirements \u2014 emailservice"
+      ],
+      "term_id": "file:bfaf17c0ac16"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-006",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-006",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-006-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 1,
+      "source_run_ids": [
+        "replay-PI-006-p0"
+      ],
+      "surface_forms": [
+        "Recommendation Service \u2014 gRPC Server"
+      ],
+      "term_id": "file:c637e040fed1"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "src/shoppingassistantservice/Dockerfile",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "src/shoppingassistantservice/Dockerfile",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-src/shoppingassistantservice/Dockerfile-f2": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": false
+          },
+          "replay-src/shoppingassistantservice/Dockerfile-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          },
+          "replay-src/shoppingassistantservice/Dockerfile-p1": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-src/shoppingassistantservice/Dockerfile-f2",
+        "replay-src/shoppingassistantservice/Dockerfile-p0",
+        "replay-src/shoppingassistantservice/Dockerfile-p1"
+      ],
+      "surface_forms": [
+        "Dockerfile \u2014 shoppingassistantservice",
+        "Shopping Assistant Service \u2014 Dockerfile"
+      ],
+      "term_id": "file:c90e1281d463"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-001",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-001",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-001-p0": {
+            "input_scope_id": "",
+            "requirement_score": 0.45,
+            "success": true
+          },
+          "replay-PI-001-p1": {
+            "input_scope_id": "",
+            "requirement_score": 0.45,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 2,
+      "source_run_ids": [
+        "replay-PI-001-p0",
+        "replay-PI-001-p1"
+      ],
+      "surface_forms": [
+        "Shared JSON Logger Utility \u2014 emailservice",
+        "Shared JSON Logger \u2014 emailservice"
+      ],
+      "term_id": "file:e2aec4571623"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "file",
+          "construct_ref": "PI-002",
+          "language": "python",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "PI-002",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {
+          "replay-PI-002-p0": {
+            "input_scope_id": "",
+            "requirement_score": 1.0,
+            "success": true
+          }
+        }
+      },
+      "kind": "file",
+      "maturity": 1,
+      "source_run_ids": [
+        "replay-PI-002-p0"
+      ],
+      "surface_forms": [
+        "Shared JSON Logger Utility \u2014 recommendationservice"
+      ],
+      "term_id": "file:e8ee50b85f24"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "http_server_response_body_size_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "http-server-response-body-size-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "http_server_response_body_size_bucket"
+      ],
+      "term_id": "metric:12e8a97b7faa"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "rpc_server_duration_count",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "rpc-server-duration-count",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "rpc_server_duration_count"
+      ],
+      "term_id": "metric:415a60aff9c6"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "rpc_server_request_size_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "rpc-server-request-size-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "rpc_server_request_size_bucket"
+      ],
+      "term_id": "metric:505ede5284e4"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "rpc_server_duration_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "rpc-server-duration-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "rpc_server_duration_bucket"
+      ],
+      "term_id": "metric:5841bb5fb28c"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "http_server_duration_count",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "http-server-duration-count",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "http_server_duration_count"
+      ],
+      "term_id": "metric:7f7e46a719b2"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "rpc_server_requests_per_rpc_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "rpc-server-requests-per-rpc-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "rpc_server_requests_per_rpc_bucket"
+      ],
+      "term_id": "metric:84feb28b19db"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "http_server_request_body_size_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "http-server-request-body-size-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "http_server_request_body_size_bucket"
+      ],
+      "term_id": "metric:8ba850d12ac1"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "rpc_server_response_size_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "rpc-server-response-size-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "rpc_server_response_size_bucket"
+      ],
+      "term_id": "metric:8ca4dd5f19b8"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "metric",
+          "construct_ref": "http_server_duration_bucket",
+          "language": "prometheus",
+          "source_reference": "deterministic"
+        }
+      ],
+      "canonical_key": "http-server-duration-bucket",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "metric",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "http_server_duration_bucket"
+      ],
+      "term_id": "metric:d0e9abbfcfc1"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CartService.AddItem",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cartservice-additem",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CartService.AddItem"
+      ],
+      "term_id": "rpc:0d718496bc89"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "AdService.GetAds",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "adservice-getads",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "AdService.GetAds"
+      ],
+      "term_id": "rpc:14cbc6bf5f8f"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "ProductCatalogService.SearchProducts",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "productcatalogservice-searchproducts",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ProductCatalogService.SearchProducts"
+      ],
+      "term_id": "rpc:1589557a1404"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CurrencyService.GetSupportedCurrencies",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "currencyservice-getsupportedcurrencies",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CurrencyService.GetSupportedCurrencies"
+      ],
+      "term_id": "rpc:72fa78643ffd"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CurrencyService.Convert",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "currencyservice-convert",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CurrencyService.Convert"
+      ],
+      "term_id": "rpc:7b9e86017b62"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CartService.EmptyCart",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cartservice-emptycart",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CartService.EmptyCart"
+      ],
+      "term_id": "rpc:7df6dcda91bd"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "ShippingService.ShipOrder",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "shippingservice-shiporder",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ShippingService.ShipOrder"
+      ],
+      "term_id": "rpc:7e1fed304966"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CartService.GetCart",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cartservice-getcart",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CartService.GetCart"
+      ],
+      "term_id": "rpc:8ab65de982ed"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "ShippingService.GetQuote",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "shippingservice-getquote",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ShippingService.GetQuote"
+      ],
+      "term_id": "rpc:8eb3af263529"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "EmailService.SendOrderConfirmation",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "emailservice-sendorderconfirmation",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "EmailService.SendOrderConfirmation"
+      ],
+      "term_id": "rpc:b09093ecf795"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "PaymentService.Charge",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "paymentservice-charge",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "PaymentService.Charge"
+      ],
+      "term_id": "rpc:dd8df730dd38"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "CheckoutService.PlaceOrder",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "checkoutservice-placeorder",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CheckoutService.PlaceOrder"
+      ],
+      "term_id": "rpc:ddb748129268"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "ProductCatalogService.GetProduct",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "productcatalogservice-getproduct",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ProductCatalogService.GetProduct"
+      ],
+      "term_id": "rpc:de9ffc8d6cbd"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "ProductCatalogService.ListProducts",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "productcatalogservice-listproducts",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ProductCatalogService.ListProducts"
+      ],
+      "term_id": "rpc:f6df829a37d7"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "rpc",
+          "construct_ref": "RecommendationService.ListRecommendations",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "recommendationservice-listrecommendations",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "rpc",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "RecommendationService.ListRecommendations"
+      ],
+      "term_id": "rpc:f73f40c5d0d1"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "RecommendationService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "recommendationservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "RecommendationService"
+      ],
+      "term_id": "service:197053a378b8"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "CheckoutService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "checkoutservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CheckoutService"
+      ],
+      "term_id": "service:2607383b29ce"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "ShippingService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "shippingservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ShippingService"
+      ],
+      "term_id": "service:40e04aabe937"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "EmailService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "emailservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "EmailService"
+      ],
+      "term_id": "service:42066a8d81ce"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "AdService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "adservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "AdService"
+      ],
+      "term_id": "service:5c6192461633"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "CartService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "cartservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CartService"
+      ],
+      "term_id": "service:7068b97925ad"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "ProductCatalogService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "productcatalogservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "ProductCatalogService"
+      ],
+      "term_id": "service:b05009a54b94"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "PaymentService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "paymentservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "PaymentService"
+      ],
+      "term_id": "service:cbb042ba8203"
+    },
+    {
+      "bindings": [
+        {
+          "construct_kind": "service",
+          "construct_ref": "CurrencyService",
+          "language": "proto",
+          "source_reference": "proto"
+        }
+      ],
+      "canonical_key": "currencyservice",
+      "confidence": "explicit",
+      "determinism": {
+        "observations": {}
+      },
+      "kind": "service",
+      "maturity": 1,
+      "source_run_ids": [
+        "corpus-v0"
+      ],
+      "surface_forms": [
+        "CurrencyService"
+      ],
+      "term_id": "service:cc6c54c665cb"
+    }
+  ]
+}

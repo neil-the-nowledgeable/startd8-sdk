@@ -35,6 +35,8 @@ class PhaseDiagnostic:
     output_tokens: int = 0
     cost_usd: float = 0.0
     code_extraction_fallback: bool = False
+    # FR-6: True when this phase ran via its deterministic (zero-LLM) path.
+    deterministic: bool = False
     quality_signals: Dict[str, Any] = field(default_factory=dict)
 
 

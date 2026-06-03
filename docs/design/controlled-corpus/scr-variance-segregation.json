@@ -1,0 +1,284 @@
+{
+  "trove": "/Users/neilyashinsky/Documents/dev/online-boutique-demo/.cap-dev-pipe/pipeline-output/online-boutique",
+  "runs_with_seed": 37,
+  "distinct_source_checksums": 37,
+  "all_inputs_distinct": true,
+  "interpretation": "Every run has a distinct source_checksum => seeds were freshly re-derived (NOT cached) AND the input docs evolved across the dev phase. Cross-run consistency is therefore real stochastic re-derivation, but it spans MULTIPLE input scopes. The clean determinism signal is WITHIN a feature-count cluster.",
+  "clusters_by_feature_count": {
+    "7": [
+      "gemini-java-0212",
+      "run-108-20260323T1200",
+      "run-117-20260323T2248"
+    ],
+    "10": [
+      "run-107-20260323T1012"
+    ],
+    "15": [
+      "run-098-20260322T1034",
+      "run-104-20260322T1959",
+      "run-106-20260322T2306",
+      "run-113-20260323T1537",
+      "run-114-20260323T1702",
+      "run-115-20260323T1950",
+      "run-116-20260323T2134"
+    ],
+    "17": [
+      "gemini-python-0141",
+      "run-002-20260301T2122",
+      "run-003-20260304T1202",
+      "run-004-20260306T1620",
+      "run-007-20260307T1738",
+      "run-011-20260308T1539",
+      "run-012-20260308T1720",
+      "run-021-20260309T2219",
+      "run-025-20260310T1231",
+      "run-026-20260310T1357",
+      "run-030-20260310T1836",
+      "run-031-20260310T1920",
+      "run-032-20260310T2018",
+      "run-036-20260311T1814",
+      "run-040-20260312T1236",
+      "run-105-20260322T2140",
+      "run-109-20260323T1224",
+      "run-110-20260323T1305",
+      "run-111-20260323T1412",
+      "run-112-20260323T1438",
+      "run-122-20260514T1140"
+    ],
+    "40": [
+      "gemini-go-0007",
+      "run-118-20260323T2326",
+      "run-119-20260324T1057",
+      "run-120-20260324T1244",
+      "run-121-20260324T1618"
+    ]
+  },
+  "model_distribution": {
+    "gemini": 3,
+    "claude": 34
+  },
+  "inventory": [
+    {
+      "run_id": "gemini-go-0007",
+      "model": "gemini",
+      "source_checksum": "0e6264945428428f",
+      "feature_count": 40
+    },
+    {
+      "run_id": "gemini-java-0212",
+      "model": "gemini",
+      "source_checksum": "a552da49e35dedcf",
+      "feature_count": 7
+    },
+    {
+      "run_id": "gemini-python-0141",
+      "model": "gemini",
+      "source_checksum": "36b2ed5835a49529",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-002-20260301T2122",
+      "model": "claude",
+      "source_checksum": "c12a94b3e041937f",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-003-20260304T1202",
+      "model": "claude",
+      "source_checksum": "b2d6b89919c52737",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-004-20260306T1620",
+      "model": "claude",
+      "source_checksum": "8e2f42a307b6ef6e",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-007-20260307T1738",
+      "model": "claude",
+      "source_checksum": "c8c218ee20d1b7db",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-011-20260308T1539",
+      "model": "claude",
+      "source_checksum": "9df7972e5639d014",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-012-20260308T1720",
+      "model": "claude",
+      "source_checksum": "caae48908f8ccca4",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-021-20260309T2219",
+      "model": "claude",
+      "source_checksum": "5450fb95fbccf8e9",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-025-20260310T1231",
+      "model": "claude",
+      "source_checksum": "1fc9a3b1de85b007",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-026-20260310T1357",
+      "model": "claude",
+      "source_checksum": "1e028f6a41eafb8e",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-030-20260310T1836",
+      "model": "claude",
+      "source_checksum": "8d676327134d5a5b",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-031-20260310T1920",
+      "model": "claude",
+      "source_checksum": "a74eff17fe7f5d8d",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-032-20260310T2018",
+      "model": "claude",
+      "source_checksum": "cf9077157ece8036",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-036-20260311T1814",
+      "model": "claude",
+      "source_checksum": "7b23e56a29b80fb5",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-040-20260312T1236",
+      "model": "claude",
+      "source_checksum": "a1aac6bc1cc4a8cd",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-098-20260322T1034",
+      "model": "claude",
+      "source_checksum": "ea66c21ea9c52c48",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-104-20260322T1959",
+      "model": "claude",
+      "source_checksum": "9b812ae2a04ac19a",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-105-20260322T2140",
+      "model": "claude",
+      "source_checksum": "235dae0c9c38a615",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-106-20260322T2306",
+      "model": "claude",
+      "source_checksum": "7f5df42c2e8e07e9",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-107-20260323T1012",
+      "model": "claude",
+      "source_checksum": "cf54ff6a96b78bd9",
+      "feature_count": 10
+    },
+    {
+      "run_id": "run-108-20260323T1200",
+      "model": "claude",
+      "source_checksum": "f0e638a11a2a9696",
+      "feature_count": 7
+    },
+    {
+      "run_id": "run-109-20260323T1224",
+      "model": "claude",
+      "source_checksum": "e2b5dba1148e21f5",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-110-20260323T1305",
+      "model": "claude",
+      "source_checksum": "05f0515f56653b6c",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-111-20260323T1412",
+      "model": "claude",
+      "source_checksum": "fe14736d578d120c",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-112-20260323T1438",
+      "model": "claude",
+      "source_checksum": "a74f328b2075064d",
+      "feature_count": 17
+    },
+    {
+      "run_id": "run-113-20260323T1537",
+      "model": "claude",
+      "source_checksum": "e99e6024b71ab2e8",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-114-20260323T1702",
+      "model": "claude",
+      "source_checksum": "dfffe99e829aa483",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-115-20260323T1950",
+      "model": "claude",
+      "source_checksum": "e5b1470aab8967e0",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-116-20260323T2134",
+      "model": "claude",
+      "source_checksum": "67d678a1d566b948",
+      "feature_count": 15
+    },
+    {
+      "run_id": "run-117-20260323T2248",
+      "model": "claude",
+      "source_checksum": "ec3e77508abe58b5",
+      "feature_count": 7
+    },
+    {
+      "run_id": "run-118-20260323T2326",
+      "model": "claude",
+      "source_checksum": "0ff77a71b3a4e200",
+      "feature_count": 40
+    },
+    {
+      "run_id": "run-119-20260324T1057",
+      "model": "claude",
+      "source_checksum": "8603bfc5438595a7",
+      "feature_count": 40
+    },
+    {
+      "run_id": "run-120-20260324T1244",
+      "model": "claude",
+      "source_checksum": "2d2dedc0d8faebe5",
+      "feature_count": 40
+    },
+    {
+      "run_id": "run-121-20260324T1618",
+      "model": "claude",
+      "source_checksum": "373a3d817847fa91",
+      "feature_count": 40
+    },
+    {
+      "run_id": "run-122-20260514T1140",
+      "model": "claude",
+      "source_checksum": "d1e39b76ce22da72",
+      "feature_count": 17
+    }
+  ]
+}

@@ -1701,6 +1701,12 @@ class PrimePostMortemEvaluator:
         except Exception:
             logger.debug("TODO scan failed (non-fatal)", exc_info=True)
 
+        # Accumulate the Controlled Corpus (CONTROLLED_CORPUS FR-5/11)
+        try:
+            self._extract_corpus(report, project_root, output_dir)
+        except Exception:
+            logger.debug("Corpus extraction failed (non-fatal)", exc_info=True)
+
         return report
 
     # -- Private helpers ----------------------------------------------------
@@ -2947,6 +2953,59 @@ class PrimePostMortemEvaluator:
                 len(promotions),
                 len(registry),
             )
+
+    def _extract_corpus(
+        self,
+        report: PrimePostMortemReport,
+        project_root: Optional[str],
+        output_dir: str,
+    ) -> None:
+        """Merge this run's terms into the persistent Controlled Corpus (FR-5/11).
+
+        Project-scoped (accumulates across runs), unlike the run-local exemplar
+        registry. Idempotent: keyed on a stable run id derived from the output dir.
+        """
+        import os
+        from startd8.corpus.extractor import (
+            extract_corpus_from_run, extract_seed_terms_from_context, stable_run_id,
+        )
+        from startd8.corpus.registry import ControlledCorpusRegistry
+        from startd8.paths import controlled_corpus_path
+
+        # R4-S3: operator off-switch (default on).
+        if os.getenv("STARTD8_CORPUS_ENABLED", "1") not in ("1", "true", "yes", "on"):
+            return
+
+        run_id = stable_run_id(output_dir, fallback=report.report_id)
+        # file-outcome terms (determinism) + vocabulary terms from the seed (R4-S1)
+        observations = extract_corpus_from_run(report, run_id)
+        observations += extract_seed_terms_from_context(output_dir, run_id)
+        if not observations:
+            return
+
+        if project_root:
+            corpus_path = controlled_corpus_path(Path(project_root))
+        else:
+            # R2-S1: never write to the per-run output_dir — that would defeat
+            # cross-run accumulation. Fall back to a stable cwd-scoped location.
+            corpus_path = controlled_corpus_path()
+            logger.warning(
+                "Controlled corpus: project_root not provided; accumulating at %s "
+                "(cwd-scoped). Pass project_root for project-scoped accumulation.",
+                corpus_path,
+            )
+        registry = ControlledCorpusRegistry.load(corpus_path)
+        before = len(registry)
+        registry.merge_run(run_id, observations)
+        try:
+            registry.save(corpus_path)  # R2-S2: surface save failures to operators
+        except OSError as exc:
+            logger.warning("Controlled corpus SAVE failed at %s: %s", corpus_path, exc)
+            return
+        logger.info(
+            "Controlled corpus: run=%s merged %d observations, terms %d→%d",
+            run_id, len(observations), before, len(registry),
+        )
 
     def _scan_todos(
         self,

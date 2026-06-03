@@ -253,9 +253,17 @@ Each task in the seed MUST carry enrichment metadata for downstream phases.
 
 ## Layer 4: Route Parity (REQ-PI-011–012)
 
+> **⚠️ SUPERSEDED (2026-06-03) by REQ-SU-102 + DETERMINISTIC_INGESTION_REQUIREMENTS.**
+> Routing is deprecated: the route is **always `prime`** (Artisan is ON HOLD). There is no
+> live route selection. REQ-PI-011's "route-agnostic seed quality" is satisfied trivially
+> (one route), and REQ-PI-012's "route selection logging" no longer applies — the composite
+> score is retained as a telemetry-only quality classification, not a routing decision.
+> See `docs/design/plan-ingestion/DETERMINISTIC_INGESTION_REQUIREMENTS.md` (FR-3/FR-4) and
+> `docs/design/SEED_UNIFICATION_REQUIREMENTS.md` (REQ-SU-102).
+
 ### REQ-PI-011: Route-Agnostic Seed Quality
 
-**Status:** planned
+**Status:** superseded (always-prime; see note above)
 **Source files:** `plan_ingestion_workflow.py` (artisan route ~line 2668, prime route ~line 2779)
 
 The prime seed MUST contain the same structural fields as the artisan seed.
@@ -269,7 +277,7 @@ The prime seed MUST contain the same structural fields as the artisan seed.
 
 ### REQ-PI-012: Route Selection Logging
 
-**Status:** planned
+**Status:** superseded (no route selection; see Layer 4 note above)
 **Source files:** `plan_ingestion_workflow.py`
 
 The selected route and selection criteria MUST be logged.

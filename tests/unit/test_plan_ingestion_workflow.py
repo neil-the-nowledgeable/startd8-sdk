@@ -884,6 +884,10 @@ class TestEndToEnd:
         result = self.wf.run({
             "plan_path": str(plan_file),
             "output_dir": str(tmp_path),
+            # Opt in to LLM assess + transform so all three LLM phases run and
+            # their costs accumulate (deterministic is the default — FR-1/FR-2).
+            "enable_llm_assess": True,
+            "enable_llm_transform": True,
         })
 
         assert result.success
@@ -2482,6 +2486,10 @@ class TestSkipArcReview:
             "output_dir": str(tmp_path),
             "skip_arc_review": True,
             "review_rounds": 3,  # would normally trigger 3 rounds
+            # Opt in to LLM assess + transform so their costs are present to
+            # accumulate (deterministic is the default — FR-1/FR-2).
+            "enable_llm_assess": True,
+            "enable_llm_transform": True,
         })
 
         assert result.success
@@ -2869,3 +2877,97 @@ class TestIngestionAgentResolution:
     def test_lead_beats_default_provider(self):
         cfg = {"lead_agent": "gemini:gemini-2.5-pro", "default_provider": "openai"}
         assert self._resolve(cfg, "transformer_agent") == "gemini:gemini-2.5-pro"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic ingestion defaults (DETERMINISTIC_INGESTION_REQUIREMENTS
+# FR-1/FR-2/FR-4): ASSESS and TRANSFORM are deterministic by default; the LLM
+# paths are opt-in; low quality never routes to artisan.
+# ---------------------------------------------------------------------------
+class TestDeterministicIngestionDefaults:
+    def setup_method(self):
+        self.wf = PlanIngestionWorkflow()
+
+    def _run(self, tmp_path, extra_config=None, parse_only_side_effects=True):
+        """Run the workflow with refine skipped. By default the mock agent
+        yields a single PARSE response (deterministic assess/transform make
+        no further generate() calls)."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.10),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.20),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.30),
+        ]
+        config = {
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "skip_arc_review": True,
+        }
+        if extra_config:
+            config.update(extra_config)
+        with patch(
+            "startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec",
+            return_value=agent,
+        ):
+            result = self.wf.run(config)
+        return result, agent
+
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_assess_deterministic_by_default(self, mock_resolve, tmp_path):
+        """FR-2: with defaults, ASSESS makes no LLM call and costs nothing."""
+        result, agent = self._run(tmp_path)
+        assert result.success
+        # Only PARSE consumed generate() — assess + transform are deterministic.
+        assert agent.generate.call_count == 1
+        assess = next(s for s in result.steps if s.step_name == "assess")
+        assert assess.cost == 0.0
+        assert assess.metadata.get("deterministic") is True
+        # Complexity still populated for telemetry.
+        assert result.output["complexity_score"] is not None
+
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_transform_deterministic_by_default(self, mock_resolve, tmp_path):
+        """FR-1: TRANSFORM writes byte-equivalent YAML deterministically."""
+        import yaml
+        result, agent = self._run(tmp_path)
+        assert result.success
+        transform = next(s for s in result.steps if s.step_name == "transform")
+        assert transform.cost == 0.0
+        assert transform.metadata.get("deterministic") is True
+        # Artifact still written, valid, with feature-derived descriptions.
+        yaml_path = tmp_path / "plan-ingestion-tasks.yaml"
+        assert yaml_path.exists()
+        doc = yaml.safe_load(yaml_path.read_text())
+        descs = {t["config"]["task_description"] for t in doc["tasks"]}
+        # PARSE feature descriptions are the source of truth (FR-3).
+        assert "Implement the core widget" in descs
+        assert "Write tests" in descs
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_enable_llm_assess_opt_in(self, mock_resolve, MockReviewWf, tmp_path):
+        """FR-2: enable_llm_assess restores the ASSESS LLM call."""
+        result, agent = self._run(tmp_path, {"enable_llm_assess": True})
+        assert result.success
+        # PARSE + ASSESS consumed generate(); transform still deterministic.
+        assert agent.generate.call_count == 2
+
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_enable_llm_transform_opt_in(self, mock_resolve, tmp_path):
+        """FR-1: enable_llm_transform restores the TRANSFORM LLM call."""
+        result, agent = self._run(tmp_path, {"enable_llm_transform": True})
+        assert result.success
+        # PARSE + TRANSFORM consumed generate(); assess still deterministic.
+        assert agent.generate.call_count == 2
+
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_no_artisan_route_on_low_quality(self, mock_resolve, tmp_path):
+        """FR-4: low translation quality never routes to the ON-HOLD artisan path."""
+        result, agent = self._run(
+            tmp_path,
+            {"min_requirements_coverage": 100.0, "low_quality_policy": "bias_artisan"},
+        )
+        assert result.success
+        assert result.output["route"] == "prime"

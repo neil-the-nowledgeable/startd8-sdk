@@ -92,8 +92,18 @@ class PlanIngestionConfig:
     output_dir: Path = field(default_factory=lambda: Path("."))
 
     # Routing & complexity
-    complexity_threshold: int = 40
+    # NOTE: routing is deprecated — always "prime" (REQ-SU-102; Artisan ON HOLD).
+    # complexity_threshold/force_route are retained for backward-compat only and
+    # have NO effect on routing. See DETERMINISTIC_INGESTION_REQUIREMENTS FR-7.
+    complexity_threshold: int = 40   # Deprecated: no routing effect (REQ-SU-102)
     force_route: Optional[str] = "prime"  # Deprecated: always "prime" (REQ-SU-102)
+
+    # Deterministic ingestion (DETERMINISTIC_INGESTION_REQUIREMENTS FR-1/FR-2).
+    # ASSESS and TRANSFORM default to their proven deterministic paths
+    # (_heuristic_assess_complexity / _heuristic_transform_content), incurring
+    # zero LLM cost. The LLM paths remain reachable via these opt-in flags.
+    enable_llm_assess: bool = False      # FR-2: opt in to the LLM complexity scorer
+    enable_llm_transform: bool = False   # FR-1: opt in to LLM task-YAML (e.g. shared_contracts synthesis)
 
     # Review
     review_rounds: int = 2
@@ -189,6 +199,8 @@ class PlanIngestionConfig:
             output_dir=output_dir,
             complexity_threshold=int(config.get("complexity_threshold", 40)),
             force_route=config.get("force_route", "prime"),
+            enable_llm_assess=_as_bool_cfg(config.get("enable_llm_assess"), False),
+            enable_llm_transform=_as_bool_cfg(config.get("enable_llm_transform"), False),
             review_rounds=int(config.get("review_rounds", 2)),
             skip_arc_review=_as_bool_cfg(config.get("skip_arc_review"), False),
             review_quality_tier=str(config.get("review_quality_tier", "flagship")),

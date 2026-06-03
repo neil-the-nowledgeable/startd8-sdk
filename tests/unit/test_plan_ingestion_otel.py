@@ -337,6 +337,10 @@ class TestSpanHierarchy:
                     "plan_path": str(plan_file),
                     "output_dir": str(tmp_path / "output"),
                     "skip_arc_review": True,
+                    # ASSESS/TRANSFORM are deterministic by default (FR-1/FR-2)
+                    # and create no LLM span; opt in to exercise the LLM paths.
+                    "enable_llm_assess": True,
+                    "enable_llm_transform": True,
                 })
 
         assert result.success, f"Workflow failed: {result.error}"

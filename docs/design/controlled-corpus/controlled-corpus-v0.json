@@ -1,0 +1,2087 @@
+{
+  "corpus_version": "0.1",
+  "domain": "service-web-app / google-microservices-demo (hipstershop)",
+  "provenance": {
+    "proto": "/Users/neilyashinsky/Documents/dev/online-boutique-demo/.cap-dev-pipe/context/demo.proto",
+    "representative_seed_run": "run-122-20260514T1140",
+    "trove": "/Users/neilyashinsky/Documents/dev/online-boutique-demo/.cap-dev-pipe/pipeline-output/online-boutique"
+  },
+  "layer_1_canonical_terms": {
+    "services": [
+      {
+        "name": "CartService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "AddItem",
+            "request": "AddItemRequest",
+            "response": "Empty"
+          },
+          {
+            "name": "GetCart",
+            "request": "GetCartRequest",
+            "response": "Cart"
+          },
+          {
+            "name": "EmptyCart",
+            "request": "EmptyCartRequest",
+            "response": "Empty"
+          }
+        ]
+      },
+      {
+        "name": "RecommendationService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "ListRecommendations",
+            "request": "ListRecommendationsRequest",
+            "response": "ListRecommendationsResponse"
+          }
+        ]
+      },
+      {
+        "name": "ProductCatalogService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "ListProducts",
+            "request": "Empty",
+            "response": "ListProductsResponse"
+          },
+          {
+            "name": "GetProduct",
+            "request": "GetProductRequest",
+            "response": "Product"
+          },
+          {
+            "name": "SearchProducts",
+            "request": "SearchProductsRequest",
+            "response": "SearchProductsResponse"
+          }
+        ]
+      },
+      {
+        "name": "ShippingService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "GetQuote",
+            "request": "GetQuoteRequest",
+            "response": "GetQuoteResponse"
+          },
+          {
+            "name": "ShipOrder",
+            "request": "ShipOrderRequest",
+            "response": "ShipOrderResponse"
+          }
+        ]
+      },
+      {
+        "name": "CurrencyService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "GetSupportedCurrencies",
+            "request": "Empty",
+            "response": "GetSupportedCurrenciesResponse"
+          },
+          {
+            "name": "Convert",
+            "request": "CurrencyConversionRequest",
+            "response": "Money"
+          }
+        ]
+      },
+      {
+        "name": "PaymentService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "Charge",
+            "request": "ChargeRequest",
+            "response": "ChargeResponse"
+          }
+        ]
+      },
+      {
+        "name": "EmailService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "SendOrderConfirmation",
+            "request": "SendOrderConfirmationRequest",
+            "response": "Empty"
+          }
+        ]
+      },
+      {
+        "name": "CheckoutService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "PlaceOrder",
+            "request": "PlaceOrderRequest",
+            "response": "PlaceOrderResponse"
+          }
+        ]
+      },
+      {
+        "name": "AdService",
+        "protocol": "grpc",
+        "rpcs": [
+          {
+            "name": "GetAds",
+            "request": "AdRequest",
+            "response": "AdResponse"
+          }
+        ]
+      }
+    ],
+    "service_count": 9,
+    "rpc_count": 15,
+    "entities": [
+      {
+        "name": "CartItem",
+        "fields": [
+          {
+            "name": "product_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "quantity",
+            "type": "int32",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "AddItemRequest",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "item",
+            "type": "CartItem",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "EmptyCartRequest",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "GetCartRequest",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "Cart",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "items",
+            "type": "CartItem",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "Empty",
+        "fields": []
+      },
+      {
+        "name": "ListRecommendationsRequest",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "product_ids",
+            "type": "string",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "ListRecommendationsResponse",
+        "fields": [
+          {
+            "name": "product_ids",
+            "type": "string",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "Product",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "description",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "picture",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "price_usd",
+            "type": "Money",
+            "repeated": false
+          },
+          {
+            "name": "categories",
+            "type": "string",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "ListProductsResponse",
+        "fields": [
+          {
+            "name": "products",
+            "type": "Product",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "GetProductRequest",
+        "fields": [
+          {
+            "name": "id",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "SearchProductsRequest",
+        "fields": [
+          {
+            "name": "query",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "SearchProductsResponse",
+        "fields": [
+          {
+            "name": "results",
+            "type": "Product",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "GetQuoteRequest",
+        "fields": [
+          {
+            "name": "address",
+            "type": "Address",
+            "repeated": false
+          },
+          {
+            "name": "items",
+            "type": "CartItem",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "GetQuoteResponse",
+        "fields": [
+          {
+            "name": "cost_usd",
+            "type": "Money",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "ShipOrderRequest",
+        "fields": [
+          {
+            "name": "address",
+            "type": "Address",
+            "repeated": false
+          },
+          {
+            "name": "items",
+            "type": "CartItem",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "ShipOrderResponse",
+        "fields": [
+          {
+            "name": "tracking_id",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "Address",
+        "fields": [
+          {
+            "name": "street_address",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "city",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "state",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "country",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "zip_code",
+            "type": "int32",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "Money",
+        "fields": [
+          {
+            "name": "currency_code",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "units",
+            "type": "int64",
+            "repeated": false
+          },
+          {
+            "name": "nanos",
+            "type": "int32",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "GetSupportedCurrenciesResponse",
+        "fields": [
+          {
+            "name": "currency_codes",
+            "type": "string",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "CurrencyConversionRequest",
+        "fields": [
+          {
+            "name": "from",
+            "type": "Money",
+            "repeated": false
+          },
+          {
+            "name": "to_code",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "CreditCardInfo",
+        "fields": [
+          {
+            "name": "credit_card_number",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "credit_card_cvv",
+            "type": "int32",
+            "repeated": false
+          },
+          {
+            "name": "credit_card_expiration_year",
+            "type": "int32",
+            "repeated": false
+          },
+          {
+            "name": "credit_card_expiration_month",
+            "type": "int32",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "ChargeRequest",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "Money",
+            "repeated": false
+          },
+          {
+            "name": "credit_card",
+            "type": "CreditCardInfo",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "ChargeResponse",
+        "fields": [
+          {
+            "name": "transaction_id",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "OrderItem",
+        "fields": [
+          {
+            "name": "item",
+            "type": "CartItem",
+            "repeated": false
+          },
+          {
+            "name": "cost",
+            "type": "Money",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "OrderResult",
+        "fields": [
+          {
+            "name": "order_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "shipping_tracking_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "shipping_cost",
+            "type": "Money",
+            "repeated": false
+          },
+          {
+            "name": "shipping_address",
+            "type": "Address",
+            "repeated": false
+          },
+          {
+            "name": "items",
+            "type": "OrderItem",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "SendOrderConfirmationRequest",
+        "fields": [
+          {
+            "name": "email",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "order",
+            "type": "OrderResult",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "PlaceOrderRequest",
+        "fields": [
+          {
+            "name": "user_id",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "user_currency",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "address",
+            "type": "Address",
+            "repeated": false
+          },
+          {
+            "name": "email",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "credit_card",
+            "type": "CreditCardInfo",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "PlaceOrderResponse",
+        "fields": [
+          {
+            "name": "order",
+            "type": "OrderResult",
+            "repeated": false
+          }
+        ]
+      },
+      {
+        "name": "AdRequest",
+        "fields": [
+          {
+            "name": "context_keys",
+            "type": "string",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "AdResponse",
+        "fields": [
+          {
+            "name": "ads",
+            "type": "Ad",
+            "repeated": true
+          }
+        ]
+      },
+      {
+        "name": "Ad",
+        "fields": [
+          {
+            "name": "redirect_url",
+            "type": "string",
+            "repeated": false
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "repeated": false
+          }
+        ]
+      }
+    ],
+    "entity_count": 32
+  },
+  "layer_2_explicit_bindings": {
+    "note": "EXPLICIT-confidence forward_manifest contracts only (inferred-noise excluded).",
+    "counts": {
+      "config_key": 77,
+      "formula": 59,
+      "infrastructure": 13,
+      "render_pattern": 79
+    },
+    "by_category": {
+      "formula": [
+        {
+          "id": "fml/src_resolve_questions_status-8e30673f3156",
+          "binding_text": "[BINDING] | formula=q['status'] = 'resolved' | q['status'] must use 'resolved' (from existing source .cap-dev-pipe/resolve-questions.py)",
+          "description": "q['status'] must use 'resolved' (from existing source .cap-dev-pipe/resolve-questions.py)",
+          "formula": "q['status'] = 'resolved'"
+        },
+        {
+          "id": "fml/src_resolve_questions_answer-0e6eaad6ed6f",
+          "binding_text": "[BINDING] | formula=q['answer'] = answers[qid] | q['answer'] must use answers[qid] (from existing source .cap-dev-pipe/resolve-questions.py)",
+          "description": "q['answer'] must use answers[qid] (from existing source .cap-dev-pipe/resolve-questions.py)",
+          "formula": "q['answer'] = answers[qid]"
+        },
+        {
+          "id": "fml/src_resolve_provenance_latency_p99-19424c1f68e7",
+          "binding_text": "[BINDING] | formula=thresholds['latency_p99'] = transformation.split(' ')[0] | thresholds['latency_p99'] must use transformation.split(' ')[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "thresholds['latency_p99'] must use transformation.split(' ')[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "thresholds['latency_p99'] = transformation.split(' ')[0]"
+        },
+        {
+          "id": "fml/src_resolve_provenance_availability-e02c07b44d47",
+          "binding_text": "[BINDING] | formula=thresholds['availability'] = transformation.split(' ')[0] | thresholds['availability'] must use transformation.split(' ')[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "thresholds['availability'] must use transformation.split(' ')[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "thresholds['availability'] = transformation.split(' ')[0]"
+        },
+        {
+          "id": "fml/src_resolve_provenance_alert_severity-95555d21a5bf",
+          "binding_text": "[BINDING] | formula=thresholds['alert_severity'] = transformation | thresholds['alert_severity'] must use transformation (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "thresholds['alert_severity'] must use transformation (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "thresholds['alert_severity'] = transformation"
+        },
+        {
+          "id": "fml/src_resolve_provenance_window-03461dcf6e15",
+          "binding_text": "[BINDING] | formula=slo['window'] = transformation | slo['window'] must use transformation (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "slo['window'] must use transformation (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "slo['window'] = transformation"
+        },
+        {
+          "id": "fml/src_resolve_provenance_alert_thresholds-4d5d98491bca",
+          "binding_text": "[BINDING] | formula=hint['alert_thresholds'] = thresholds | hint['alert_thresholds'] must use thresholds (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "hint['alert_thresholds'] must use thresholds (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "hint['alert_thresholds'] = thresholds"
+        },
+        {
+          "id": "fml/src_resolve_provenance_slo_targets-e04ba7551fff",
+          "binding_text": "[BINDING] | formula=hint['slo_targets'] = slo | hint['slo_targets'] must use slo (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "hint['slo_targets'] must use slo (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "hint['slo_targets'] = slo"
+        },
+        {
+          "id": "fml/src_resolve_provenance_project_root-43520b4990a5",
+          "binding_text": "[BINDING] | formula=config['project_root'] = project_root | config['project_root'] must use project_root (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['project_root'] must use project_root (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['project_root'] = project_root"
+        },
+        {
+          "id": "fml/src_resolve_provenance_requirements_path-3333e5449e7a",
+          "binding_text": "[BINDING] | formula=config['requirements_path'] = requirements_paths[0] | config['requirements_path'] must use requirements_paths[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['requirements_path'] must use requirements_paths[0] (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['requirements_path'] = requirements_paths[0]"
+        },
+        {
+          "id": "fml/src_resolve_provenance_requirements_files-53cc9454d13d",
+          "binding_text": "[BINDING] | formula=config['requirements_files'] = ','.join(requirements_paths[1:]) | config['requirements_files'] must use ','.join(requirements_paths[1:]) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['requirements_files'] must use ','.join(requirements_paths[1:]) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['requirements_files'] = ','.join(requirements_paths[1:])"
+        },
+        {
+          "id": "fml/src_resolve_provenance_generation_profile-a5ca3f4e1077",
+          "binding_text": "[BINDING] | formula=config['generation_profile'] = _gp | config['generation_profile'] must use _gp (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['generation_profile'] must use _gp (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['generation_profile'] = _gp"
+        },
+        {
+          "id": "fml/src_resolve_provenance_security_contract-084145d1ae39",
+          "binding_text": "[BINDING] | formula=config['security_contract'] = _sc | config['security_contract'] must use _sc (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['security_contract'] must use _sc (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['security_contract'] = _sc"
+        },
+        {
+          "id": "fml/src_resolve_provenance_observability_hints-652b245b1cba",
+          "binding_text": "[BINDING] | formula=config['observability_hints'] = _obs_hints | config['observability_hints'] must use _obs_hints (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['observability_hints'] must use _obs_hints (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['observability_hints'] = _obs_hints"
+        },
+        {
+          "id": "fml/src_resolve_provenance_observability_manifest_path-6d4daad1da55",
+          "binding_text": "[BINDING] | formula=config['observability_manifest_path'] = str(obs_manifest_path) | config['observability_manifest_path'] must use str(obs_manifest_path) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['observability_manifest_path'] must use str(obs_manifest_path) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['observability_manifest_path'] = str(obs_manifest_path)"
+        },
+        {
+          "id": "fml/src_resolve_provenance_context_files-6340bc746914",
+          "binding_text": "[BINDING] | formula=config['context_files'] = ','.join(context_files) | config['context_files'] must use ','.join(context_files) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['context_files'] must use ','.join(context_files) (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['context_files'] = ','.join(context_files)"
+        },
+        {
+          "id": "fml/src_resolve_provenance_scope-79ec128198ed",
+          "binding_text": "[BINDING] | formula=config['scope'] = scope | config['scope'] must use scope (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['scope'] must use scope (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['scope'] = scope"
+        },
+        {
+          "id": "fml/src_resolve_provenance_force_route-e50ef76ec393",
+          "binding_text": "[BINDING] | formula=config['force_route'] = force_route | config['force_route'] must use force_route (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['force_route'] must use force_route (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['force_route'] = force_route"
+        },
+        {
+          "id": "fml/src_resolve_provenance__provenance-95e07c5997be",
+          "binding_text": "[BINDING] | formula=config['_provenance'] = {'derived_from': str(prov_path), 'init_provenance': str(init_prov_path), 'export_run_id': run_prov.get('run_id'), 'init_run_id': init_prov.get('run_id'), 'source_checksum': run_prov.get('quality_summary', {}).get('source_checksum') or next((inp.get('sha256') for inp in run_prov.get('inputs', []) if inp.get('sha256')), None)} | config['_provenance'] must use {'derived_from': str(prov_path), 'init_provenance': str(init_prov_path), 'export_run_id': run_prov.get('run_id'), 'init_run_id': init_prov.get('run_id'), 'source_checksum': run_prov.get('quality_summary', {}).get('source_checksum') or next((inp.get('sha256') for inp in run_prov.get('inputs', []) if inp.get('sha256')), None)} (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "config['_provenance'] must use {'derived_from': str(prov_path), 'init_provenance': str(init_prov_path), 'export_run_id': run_prov.get('run_id'), 'init_run_id': init_prov.get('run_id'), 'source_checksum': run_prov.get('quality_summary', {}).get('source_checksum') or next((inp.get('sha256') for inp in run_prov.get('inputs', []) if inp.get('sha256')), None)} (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "formula": "config['_provenance'] = {'derived_from': str(prov_path), 'init_provenance': str(init_prov_path), 'export_run_id': run_prov.get('run_id'), 'init_run_id': init_prov.get('run_id'), 'source_checksum': run_prov.get('quality_summary', {}).get('source_checksum') or next((inp.get('sha256') for inp in run_prov.get('inputs', []) if inp.get('sha256')), None)}"
+        },
+        {
+          "id": "fml/src_prime_post_run_stderr-0d24f2f0452d",
+          "binding_text": "[BINDING] | formula=kwargs['stderr'] = open(log_path, 'a') | kwargs['stderr'] must use open(log_path, 'a') (from existing source .cap-dev-pipe/prime-post-run.py)",
+          "description": "kwargs['stderr'] must use open(log_path, 'a') (from existing source .cap-dev-pipe/prime-post-run.py)",
+          "formula": "kwargs['stderr'] = open(log_path, 'a')"
+        },
+        {
+          "id": "fml/src_prime_post_run_kaizen_run_id-ca7670ff8f3c",
+          "binding_text": "[BINDING] | formula=os.environ['KAIZEN_RUN_ID'] = run_id | os.environ['KAIZEN_RUN_ID'] must use run_id (from existing source .cap-dev-pipe/prime-post-run.py)",
+          "description": "os.environ['KAIZEN_RUN_ID'] must use run_id (from existing source .cap-dev-pipe/prime-post-run.py)",
+          "formula": "os.environ['KAIZEN_RUN_ID'] = run_id"
+        },
+        {
+          "id": "fml/src_kaizen_trends_last_seen_run-cd6fa4d0184c",
+          "binding_text": "[BINDING] | formula=rec['last_seen_run'] = run_id | rec['last_seen_run'] must use run_id (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "description": "rec['last_seen_run'] must use run_id (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "formula": "rec['last_seen_run'] = run_id"
+        },
+        {
+          "id": "fml/src_kaizen_trends_success_rate_delta-e245c7aa9c10",
+          "binding_text": "[BINDING] | formula=run['success_rate_delta'] = run['success_rate'] - loaded_runs[i - 1]['success_rate'] | run['success_rate_delta'] must use run['success_rate'] - loaded_runs[i - 1]['success_rate'] (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "description": "run['success_rate_delta'] must use run['success_rate'] - loaded_runs[i - 1]['success_rate'] (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "formula": "run['success_rate_delta'] = run['success_rate'] - loaded_runs[i - 1]['success_rate']"
+        },
+        {
+          "id": "fml/src_kaizen_trends_cost_outlier-9243ee47fea9",
+          "binding_text": "[BINDING] | formula=run['cost_outlier'] = run['total_cost_usd'] > avg_cost * 2.0 | run['cost_outlier'] must use run['total_cost_usd'] > avg_cost * 2.0 (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "description": "run['cost_outlier'] must use run['total_cost_usd'] > avg_cost * 2.0 (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "formula": "run['cost_outlier'] = run['total_cost_usd'] > avg_cost * 2.0"
+        },
+        {
+          "id": "fml/src_kaizen_trends_resolved-d774261e637a",
+          "binding_text": "[BINDING] | formula=rec['resolved'] = True | rec['resolved'] must use True (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "description": "rec['resolved'] must use True (from existing source .cap-dev-pipe/kaizen-trends.py)",
+          "formula": "rec['resolved'] = True"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_context_key_count-d898292a3e1e",
+          "binding_text": "[BINDING] | formula=chars['context_key_count'] = len(meta.get('context_keys') or []) | chars['context_key_count'] must use len(meta.get('context_keys') or []) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['context_key_count'] must use len(meta.get('context_keys') or []) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['context_key_count'] = len(meta.get('context_keys') or [])"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_has_existing_files-1a93d2065ef0",
+          "binding_text": "[BINDING] | formula=chars['has_existing_files'] = bool(meta.get('has_existing_files')) | chars['has_existing_files'] must use bool(meta.get('has_existing_files')) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['has_existing_files'] must use bool(meta.get('has_existing_files')) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['has_existing_files'] = bool(meta.get('has_existing_files'))"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_target_file_count-a5716a60c24c",
+          "binding_text": "[BINDING] | formula=chars['target_file_count'] = int(meta.get('target_file_count') or 0) | chars['target_file_count'] must use int(meta.get('target_file_count') or 0) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['target_file_count'] must use int(meta.get('target_file_count') or 0) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['target_file_count'] = int(meta.get('target_file_count') or 0)"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_feature_id-1e80a7b63dfe",
+          "binding_text": "[BINDING] | formula=chars['feature_id'] = meta.get('feature_id', prompt_dir.name) | chars['feature_id'] must use meta.get('feature_id', prompt_dir.name) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['feature_id'] must use meta.get('feature_id', prompt_dir.name) (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['feature_id'] = meta.get('feature_id', prompt_dir.name)"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_total_prompt_words-ee968068e6c9",
+          "binding_text": "[BINDING] | formula=chars['total_prompt_words'] = sum(words) if words else None | chars['total_prompt_words'] must use sum(words) if words else None (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['total_prompt_words'] must use sum(words) if words else None (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['total_prompt_words'] = sum(words) if words else None"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_label_status-27417c2a393d",
+          "binding_text": "[BINDING] | formula=chars['label_status'] = 'not_executed' | chars['label_status'] must use 'not_executed' (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['label_status'] must use 'not_executed' (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['label_status'] = 'not_executed'"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_success-f0e7108efc67",
+          "binding_text": "[BINDING] | formula=chars['success'] = success | chars['success'] must use success (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['success'] must use success (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['success'] = success"
+        },
+        {
+          "id": "fml/src_kaizen_correlation_run_id-c47a31c199de",
+          "binding_text": "[BINDING] | formula=chars['run_id'] = run_id | chars['run_id'] must use run_id (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "description": "chars['run_id'] must use run_id (from existing source .cap-dev-pipe/kaizen-correlation.py)",
+          "formula": "chars['run_id'] = run_id"
+        },
+        {
+          "id": "fml/src_logger_timestamp-e554f7118720",
+          "binding_text": "[BINDING] | formula=log_record['timestamp'] = timestamp_dt.strftime('%Y-%m-%dT%H:%M:%S.%f') | log_record['timestamp'] must use timestamp_dt.strftime('%Y-%m-%dT%H:%M:%S.%f') (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "description": "log_record['timestamp'] must use timestamp_dt.strftime('%Y-%m-%dT%H:%M:%S.%f') (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "formula": "log_record['timestamp'] = timestamp_dt.strftime('%Y-%m-%dT%H:%M:%S.%f')"
+        },
+        {
+          "id": "fml/src_logger_severity-d3fed60e8940",
+          "binding_text": "[BINDING] | formula=log_record['severity'] = record.levelname | log_record['severity'] must use record.levelname (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "description": "log_record['severity'] must use record.levelname (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "formula": "log_record['severity'] = record.levelname"
+        },
+        {
+          "id": "fml/src_logger_name-9d729d7d102a",
+          "binding_text": "[BINDING] | formula=log_record['name'] = record.name | log_record['name'] must use record.name (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "description": "log_record['name'] must use record.name (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "formula": "log_record['name'] = record.name"
+        },
+        {
+          "id": "fml/src_logger_message-e727f3ce9a85",
+          "binding_text": "[BINDING] | formula=log_record['message'] = record.getMessage() | log_record['message'] must use record.getMessage() (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "description": "log_record['message'] must use record.getMessage() (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "formula": "log_record['message'] = record.getMessage()"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_json_sort_keys-1d3c7e5d9577",
+          "binding_text": "[BINDING] | formula=app.config['JSON_SORT_KEYS'] = False | app.config['JSON_SORT_KEYS'] must use False (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "app.config['JSON_SORT_KEYS'] must use False (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "app.config['JSON_SORT_KEYS'] = False"
+        },
+        {
+          "id": "fml/src_logger_level-ce07802c3e87",
+          "binding_text": "[BINDING] | formula=log_record['level'] = record.levelname | log_record['level'] must use record.levelname (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "description": "log_record['level'] must use record.levelname (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "formula": "log_record['level'] = record.levelname"
+        },
+        {
+          "id": "fml/src_logger_module-b98612a131bb",
+          "binding_text": "[BINDING] | formula=log_record['module'] = record.module | log_record['module'] must use record.module (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "description": "log_record['module'] must use record.module (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "formula": "log_record['module'] = record.module"
+        },
+        {
+          "id": "fml/src_logger_funcname-f01f0d10c913",
+          "binding_text": "[BINDING] | formula=log_record['funcName'] = record.funcName | log_record['funcName'] must use record.funcName (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "description": "log_record['funcName'] must use record.funcName (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "formula": "log_record['funcName'] = record.funcName"
+        },
+        {
+          "id": "fml/src_logger_lineno-e1703af6e157",
+          "binding_text": "[BINDING] | formula=log_record['lineno'] = record.lineno | log_record['lineno'] must use record.lineno (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "description": "log_record['lineno'] must use record.lineno (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/recommendationservice/logger.py)",
+          "formula": "log_record['lineno'] = record.lineno"
+        },
+        {
+          "id": "fml/src_logger_exception-d9b0d1bec694",
+          "binding_text": "[BINDING] | formula=log_data['exception'] = self.formatException(record.exc_info) | log_data['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/logger.py)",
+          "description": "log_data['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/logger.py)",
+          "formula": "log_data['exception'] = self.formatException(record.exc_info)"
+        },
+        {
+          "id": "fml/src_email_server_traceid-b79883ca43b3",
+          "binding_text": "[BINDING] | formula=log_record['traceId'] = format(span_context.trace_id, '032x') | log_record['traceId'] must use format(span_context.trace_id, '032x') (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "log_record['traceId'] must use format(span_context.trace_id, '032x') (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "formula": "log_record['traceId'] = format(span_context.trace_id, '032x')"
+        },
+        {
+          "id": "fml/src_email_server_spanid-06599ca8ed8a",
+          "binding_text": "[BINDING] | formula=log_record['spanId'] = format(span_context.span_id, '016x') | log_record['spanId'] must use format(span_context.span_id, '016x') (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "log_record['spanId'] must use format(span_context.span_id, '016x') (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "formula": "log_record['spanId'] = format(span_context.span_id, '016x')"
+        },
+        {
+          "id": "fml/src_email_server_exception-c3afbd66768e",
+          "binding_text": "[BINDING] | formula=log_record['exception'] = self.formatException(record.exc_info) | log_record['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "log_record['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "formula": "log_record['exception'] = self.formatException(record.exc_info)"
+        },
+        {
+          "id": "fml/src_recommendation_server_exception-20b2c320f3c9",
+          "binding_text": "[BINDING] | formula=log_data['exception'] = self.formatException(record.exc_info) | log_data['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "log_data['exception'] must use self.formatException(record.exc_info) (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "formula": "log_data['exception'] = self.formatException(record.exc_info)"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_exception-cd2ccba04280",
+          "binding_text": "[BINDING] | formula=log_obj['exception'] = self.formatException(record.exc_info) | log_obj['exception'] must use self.formatException(record.exc_info) (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "log_obj['exception'] must use self.formatException(record.exc_info) (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "log_obj['exception'] = self.formatException(record.exc_info)"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_db_pool-480bd1c88b2f",
+          "binding_text": "[BINDING] | formula=app.config['DB_POOL'] = db_pool | app.config['DB_POOL'] must use db_pool (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "app.config['DB_POOL'] must use db_pool (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "app.config['DB_POOL'] = db_pool"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_gemini_model-638b04ae93d5",
+          "binding_text": "[BINDING] | formula=app.config['GEMINI_MODEL'] = gemini_model | app.config['GEMINI_MODEL'] must use gemini_model (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "app.config['GEMINI_MODEL'] must use gemini_model (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "app.config['GEMINI_MODEL'] = gemini_model"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_vector_limit-737d390a1ce4",
+          "binding_text": "[BINDING] | formula=app.config['VECTOR_LIMIT'] = vector_limit | app.config['VECTOR_LIMIT'] must use vector_limit (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "app.config['VECTOR_LIMIT'] must use vector_limit (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "app.config['VECTOR_LIMIT'] = vector_limit"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_database-d964c807b2b9",
+          "binding_text": "[BINDING] | formula=health_status['checks']['database'] = 'healthy' | health_status['checks']['database'] must use 'healthy' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "health_status['checks']['database'] must use 'healthy' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "health_status['checks']['database'] = 'healthy'"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_status-e00ef658e274",
+          "binding_text": "[BINDING] | formula=health_status['status'] = 'degraded' | health_status['status'] must use 'degraded' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "health_status['status'] must use 'degraded' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "health_status['status'] = 'degraded'"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_vertex_ai-57509558c2aa",
+          "binding_text": "[BINDING] | formula=health_status['checks']['vertex_ai'] = 'healthy' | health_status['checks']['vertex_ai'] must use 'healthy' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "health_status['checks']['vertex_ai'] must use 'healthy' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "health_status['checks']['vertex_ai'] = 'healthy'"
+        },
+        {
+          "id": "fml/src_shoppingassistantservice_message-c335ea4b2960",
+          "binding_text": "[BINDING] | formula=health_status['message'] = 'Some features may be unavailable' | health_status['message'] must use 'Some features may be unavailable' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "health_status['message'] must use 'Some features may be unavailable' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "formula": "health_status['message'] = 'Some features may be unavailable'"
+        },
+        {
+          "id": "fml/src_logger_context-d5c9a6ddc303",
+          "binding_text": "[BINDING] | formula=log_data['context'] = context | log_data['context'] must use context (from existing source archive/emailservice/logger.py)",
+          "description": "log_data['context'] must use context (from existing source archive/emailservice/logger.py)",
+          "formula": "log_data['context'] = context"
+        },
+        {
+          "id": "fml/src_email_server_email-afdde2d80e7e",
+          "binding_text": "[BINDING] | formula=template_context['email'] = recipient_email | template_context['email'] must use recipient_email (from existing source archive/emailservice/email_server.py)",
+          "description": "template_context['email'] must use recipient_email (from existing source archive/emailservice/email_server.py)",
+          "formula": "template_context['email'] = recipient_email"
+        },
+        {
+          "id": "fml/src_email_server_to-917a004ffada",
+          "binding_text": "[BINDING] | formula=message['to'] = recipient | message['to'] must use recipient (from existing source archive/emailservice/email_server.py)",
+          "description": "message['to'] must use recipient (from existing source archive/emailservice/email_server.py)",
+          "formula": "message['to'] = recipient"
+        },
+        {
+          "id": "fml/src_email_server_subject-60e7b7646a6b",
+          "binding_text": "[BINDING] | formula=message['subject'] = subject | message['subject'] must use subject (from existing source archive/emailservice/email_server.py)",
+          "description": "message['subject'] must use subject (from existing source archive/emailservice/email_server.py)",
+          "formula": "message['subject'] = subject"
+        }
+      ],
+      "render_pattern": [
+        {
+          "id": "pat/src_resolve_provenance_match_1b1-a79a5297e3c1",
+          "binding_text": "[BINDING] | pattern=^req[a-z]{2,}\\d+ | re.match(...) renders with template '^req[a-z]{2,}\\\\d+' (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "description": "re.match(...) renders with template '^req[a-z]{2,}\\\\d+' (from existing source .cap-dev-pipe/resolve-provenance.py)",
+          "pattern": "^req[a-z]{2,}\\d+"
+        },
+        {
+          "id": "pat/src_logger_strftime_393c-2b5bdcaad5de",
+          "binding_text": "[BINDING] | pattern=%Y-%m-%dT%H:%M:%S.%f | timestamp_dt.strftime(...) renders with template '%Y-%m-%dT%H:%M:%S.%f' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "description": "timestamp_dt.strftime(...) renders with template '%Y-%m-%dT%H:%M:%S.%f' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/logger.py)",
+          "pattern": "%Y-%m-%dT%H:%M:%S.%f"
+        },
+        {
+          "id": "pat/src_email_server_error_5ead-d9ec8ffb7881",
+          "binding_text": "[BINDING] | pattern=Template directory not found: %s | logger.error(...) renders with template 'Template directory not found: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'Template directory not found: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "Template directory not found: %s"
+        },
+        {
+          "id": "pat/src_email_server_error_b81e-19bf12523be9",
+          "binding_text": "[BINDING] | pattern=Email template not found: %s | logger.error(...) renders with template 'Email template not found: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'Email template not found: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "Email template not found: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_e8e1-754a7f2478cc",
+          "binding_text": "[BINDING] | pattern=EmailService initialized with template from %s | logger.info(...) renders with template 'EmailService initialized with template from %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'EmailService initialized with template from %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "EmailService initialized with template from %s"
+        },
+        {
+          "id": "pat/src_email_server_error_566-1079c105c4eb",
+          "binding_text": "[BINDING] | pattern=Failed to send order confirmation email: %s | logger.error(...) renders with template 'Failed to send order confirmation email: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'Failed to send order confirmation email: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "Failed to send order confirmation email: %s"
+        },
+        {
+          "id": "pat/src_email_server_error_99dc-de8e3d75175e",
+          "binding_text": "[BINDING] | pattern=SendOrderConfirmation RPC failed: %s | logger.error(...) renders with template 'SendOrderConfirmation RPC failed: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'SendOrderConfirmation RPC failed: %s' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "SendOrderConfirmation RPC failed: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_316a-6ec28ad1544d",
+          "binding_text": "[BINDING] | pattern=EmailService gRPC server started and listening on port %d with %d workers | logger.info(...) renders with template 'EmailService gRPC server started and listening on port %d with %d workers' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'EmailService gRPC server started and listening on port %d with %d workers' (from existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py)",
+          "pattern": "EmailService gRPC server started and listening on port %d with %d workers"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_a0e9-1382b6c932b6",
+          "binding_text": "[BINDING] | pattern=Retrieving products for query: %s | logger.info(...) renders with template 'Retrieving products for query: %s' (from existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Retrieving products for query: %s' (from existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Retrieving products for query: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_6671-4f928412b9c1",
+          "binding_text": "[BINDING] | pattern=Retrieved %d product documents | logger.info(...) renders with template 'Retrieved %d product documents' (from existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Retrieved %d product documents' (from existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Retrieved %d product documents"
+        },
+        {
+          "id": "pat/src_email_server_warning_19db-438838314efa",
+          "binding_text": "[BINDING] | pattern=Invalid LOG_LEVEL '%s', using INFO | logger.warning(...) renders with template \"Invalid LOG_LEVEL '%s', using INFO\" (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.warning(...) renders with template \"Invalid LOG_LEVEL '%s', using INFO\" (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Invalid LOG_LEVEL '%s', using INFO"
+        },
+        {
+          "id": "pat/src_email_server_warning_6663-981894eb10e8",
+          "binding_text": "[BINDING] | pattern=Invalid PORT value '%s': %s. Falling back to 8080. | logger.warning(...) renders with template \"Invalid PORT value '%s': %s. Falling back to 8080.\" (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.warning(...) renders with template \"Invalid PORT value '%s': %s. Falling back to 8080.\" (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Invalid PORT value '%s': %s. Falling back to 8080."
+        },
+        {
+          "id": "pat/src_email_server_info_281f-8dc7a2f111a0",
+          "binding_text": "[BINDING] | pattern=Sending email to %s | logger.info(...) renders with template 'Sending email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Sending email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Sending email to %s"
+        },
+        {
+          "id": "pat/src_email_server_error_ac8e-b8dfdb97f79a",
+          "binding_text": "[BINDING] | pattern=Failed to render email template: %s | logger.error(...) renders with template 'Failed to render email template: %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'Failed to render email template: %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Failed to render email template: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_c750-34cdbab19215",
+          "binding_text": "[BINDING] | pattern=Successfully sent email to %s | logger.info(...) renders with template 'Successfully sent email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Successfully sent email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Successfully sent email to %s"
+        },
+        {
+          "id": "pat/src_email_server_error_6daa-39dfd68f030f",
+          "binding_text": "[BINDING] | pattern=Failed to send email (attempt %d/%d): %s | logger.error(...) renders with template 'Failed to send email (attempt %d/%d): %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.error(...) renders with template 'Failed to send email (attempt %d/%d): %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Failed to send email (attempt %d/%d): %s"
+        },
+        {
+          "id": "pat/src_email_server_info_d0b2-52885c500e55",
+          "binding_text": "[BINDING] | pattern=A request to send order confirmation email to %s | logger.info(...) renders with template 'A request to send order confirmation email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'A request to send order confirmation email to %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "A request to send order confirmation email to %s"
+        },
+        {
+          "id": "pat/src_email_server_info_3237-3596b0529d80",
+          "binding_text": "[BINDING] | pattern=Received signal %s, initiating graceful shutdown... | logger.info(...) renders with template 'Received signal %s, initiating graceful shutdown...' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Received signal %s, initiating graceful shutdown...' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Received signal %s, initiating graceful shutdown..."
+        },
+        {
+          "id": "pat/src_email_server_info_b0d6-d4a63bcaa30b",
+          "binding_text": "[BINDING] | pattern=Server started, listening on %s | logger.info(...) renders with template 'Server started, listening on %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Server started, listening on %s' (from existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py)",
+          "pattern": "Server started, listening on %s"
+        },
+        {
+          "id": "pat/src_client_formatter_edca-21b12e3de00c",
+          "binding_text": "[BINDING] | pattern=%(asctime)s - %(name)s - %(levelname)s - %(message)s | logging.Formatter(...) renders with template '%(asctime)s - %(name)s - %(levelname)s - %(message)s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/client.py)",
+          "description": "logging.Formatter(...) renders with template '%(asctime)s - %(name)s - %(levelname)s - %(message)s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/client.py)",
+          "pattern": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        },
+        {
+          "id": "pat/src_logger_strftime_773b-a800e83b8052",
+          "binding_text": "[BINDING] | pattern=%Y-%m-%dT%H:%M:%S | time.strftime(...) renders with template '%Y-%m-%dT%H:%M:%S' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/logger.py)",
+          "description": "time.strftime(...) renders with template '%Y-%m-%dT%H:%M:%S' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/logger.py)",
+          "pattern": "%Y-%m-%dT%H:%M:%S"
+        },
+        {
+          "id": "pat/src_recommendation_server_error_6c67-23752aa190a9",
+          "binding_text": "[BINDING] | pattern=Failed to fetch product catalog: %s | logger.error(...) renders with template 'Failed to fetch product catalog: %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "description": "logger.error(...) renders with template 'Failed to fetch product catalog: %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "pattern": "Failed to fetch product catalog: %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_64b9-de531c8faff6",
+          "binding_text": "[BINDING] | pattern=Returning %d recommendations for user %s | logger.info(...) renders with template 'Returning %d recommendations for user %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Returning %d recommendations for user %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "pattern": "Returning %d recommendations for user %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_3cf2-548437c8d9ad",
+          "binding_text": "[BINDING] | pattern=Random seed set to %s for deterministic behavior | logger.info(...) renders with template 'Random seed set to %s for deterministic behavior' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Random seed set to %s for deterministic behavior' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "pattern": "Random seed set to %s for deterministic behavior"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_80c7-dc688c33049a",
+          "binding_text": "[BINDING] | pattern=Recommendation service started on port %s | logger.info(...) renders with template 'Recommendation service started on port %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Recommendation service started on port %s' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "pattern": "Recommendation service started on port %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_3237-4b1acb53171b",
+          "binding_text": "[BINDING] | pattern=Received signal %s, initiating graceful shutdown... | logger.info(...) renders with template 'Received signal %s, initiating graceful shutdown...' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Received signal %s, initiating graceful shutdown...' (from existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py)",
+          "pattern": "Received signal %s, initiating graceful shutdown..."
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_7fa9-ad71dde3a494",
+          "binding_text": "[BINDING] | pattern=Stage 2: augmented context with %d products. | logger.info(...) renders with template 'Stage 2: augmented context with %d products.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 2: augmented context with %d products.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2: augmented context with %d products."
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_a644-dbe0ae4d05e7",
+          "binding_text": "[BINDING] | pattern=Failed to parse request: %s | logger.error(...) renders with template 'Failed to parse request: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Failed to parse request: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Failed to parse request: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_5777-025d3bc8061d",
+          "binding_text": "[BINDING] | pattern=Stage 1 failed: %s | logger.error(...) renders with template 'Stage 1 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 1 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 1 failed: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_47ae-3eb04c51ed6d",
+          "binding_text": "[BINDING] | pattern=Stage 2 (retrieval): retrieved %d products. | logger.info(...) renders with template 'Stage 2 (retrieval): retrieved %d products.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 2 (retrieval): retrieved %d products.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2 (retrieval): retrieved %d products."
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_d5c0-fd9764d10b62",
+          "binding_text": "[BINDING] | pattern=Stage 2 failed: %s | logger.error(...) renders with template 'Stage 2 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 2 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2 failed: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_5d8b-2c0fd5057d1b",
+          "binding_text": "[BINDING] | pattern=Stage 3 failed: %s | logger.error(...) renders with template 'Stage 3 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 3 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 3 failed: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_8fa-e57cec0b3aba",
+          "binding_text": "[BINDING] | pattern=Unhandled server error: %s | logger.error(...) renders with template 'Unhandled server error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Unhandled server error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Unhandled server error: %s"
+        },
+        {
+          "id": "pat/src_email_client_info_c0e2-5e53105cb3c8",
+          "binding_text": "[BINDING] | pattern=A confirmation email has been sent to %s. | logger.info(...) renders with template 'A confirmation email has been sent to %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "description": "logger.info(...) renders with template 'A confirmation email has been sent to %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "pattern": "A confirmation email has been sent to %s."
+        },
+        {
+          "id": "pat/src_email_server_info_84e-97f6a23fb67f",
+          "binding_text": "[BINDING] | pattern=Email sent to %s | logger.info(...) renders with template 'Email sent to %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Email sent to %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Email sent to %s"
+        },
+        {
+          "id": "pat/src_email_server_info_a543-b53acc0b2fb5",
+          "binding_text": "[BINDING] | pattern=A request to send order confirmation email to %s has been received. | logger.info(...) renders with template 'A request to send order confirmation email to %s has been received.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'A request to send order confirmation email to %s has been received.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "A request to send order confirmation email to %s has been received."
+        },
+        {
+          "id": "pat/src_email_server_info_71d6-284aea51b6fc",
+          "binding_text": "[BINDING] | pattern=EmailService gRPC server started on port %s. | logger.info(...) renders with template 'EmailService gRPC server started on port %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'EmailService gRPC server started on port %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "EmailService gRPC server started on port %s."
+        },
+        {
+          "id": "pat/src_email_server_info_9f43-015a83d79647",
+          "binding_text": "[BINDING] | pattern=Starting email service in %s mode. | logger.info(...) renders with template 'Starting email service in %s mode.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Starting email service in %s mode.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Starting email service in %s mode."
+        },
+        {
+          "id": "pat/src_recommendation_server_info_f6c8-23dac9449255",
+          "binding_text": "[BINDING] | pattern=[Recv ListRecommendations] user_id=%s product_ids=%s | logger.info(...) renders with template '[Recv ListRecommendations] user_id=%s product_ids=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template '[Recv ListRecommendations] user_id=%s product_ids=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "[Recv ListRecommendations] user_id=%s product_ids=%s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_895c-0f8fdeddef51",
+          "binding_text": "[BINDING] | pattern=productcatalogservice address: %s | logger.info(...) renders with template 'productcatalogservice address: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'productcatalogservice address: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "productcatalogservice address: %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_aeef-9e7878fa7321",
+          "binding_text": "[BINDING] | pattern=RecommendationService listening on port %s | logger.info(...) renders with template 'RecommendationService listening on port %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'RecommendationService listening on port %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "RecommendationService listening on port %s"
+        },
+        {
+          "id": "pat/src_email_server_filesystemloader_6b10-47aeeab2b926",
+          "binding_text": "[BINDING] | pattern=templates | FileSystemLoader(...) renders with template 'templates' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "FileSystemLoader(...) renders with template 'templates' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "templates"
+        },
+        {
+          "id": "pat/src_recommendation_server_strftime_393c-a8c6567cfb71",
+          "binding_text": "[BINDING] | pattern=%Y-%m-%dT%H:%M:%S.%f | datetime.datetime.utcfromtimestamp(created).strftime(...) renders with template '%Y-%m-%dT%H:%M:%S.%f' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "datetime.datetime.utcfromtimestamp(created).strftime(...) renders with template '%Y-%m-%dT%H:%M:%S.%f' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/gemini-python-0141/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "%Y-%m-%dT%H:%M:%S.%f"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_9af1-06dd9548a41e",
+          "binding_text": "[BINDING] | pattern=Initialized Secret Manager client for database credentials (project_id=%s, secret_name=%s) | logger.info(...) renders with template 'Initialized Secret Manager client for database credentials (project_id=%s, secret_name=%s)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Initialized Secret Manager client for database credentials (project_id=%s, secret_name=%s)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Initialized Secret Manager client for database credentials (project_id=%s, secret_name=%s)"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_e1c2-1e943c5d6f35",
+          "binding_text": "[BINDING] | pattern=Initialized AlloyDB engine (project_id=%s, region=%s, cluster=%s, instance=%s, database=%s) | logger.info(...) renders with template 'Initialized AlloyDB engine (project_id=%s, region=%s, cluster=%s, instance=%s, database=%s)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Initialized AlloyDB engine (project_id=%s, region=%s, cluster=%s, instance=%s, database=%s)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Initialized AlloyDB engine (project_id=%s, region=%s, cluster=%s, instance=%s, database=%s)"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_8ffa-1bcabfb93dbb",
+          "binding_text": "[BINDING] | pattern=Initialized AlloyDBVectorStore (table_name=%s, embedding_model=models/embedding-001) | logger.info(...) renders with template 'Initialized AlloyDBVectorStore (table_name=%s, embedding_model=models/embedding-001)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Initialized AlloyDBVectorStore (table_name=%s, embedding_model=models/embedding-001)' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Initialized AlloyDBVectorStore (table_name=%s, embedding_model=models/embedding-001)"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_43cc-8425c6f55b9c",
+          "binding_text": "[BINDING] | pattern=Stage 1 error: %s | logger.error(...) renders with template 'Stage 1 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 1 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 1 error: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_85f1-1fa88ab57be8",
+          "binding_text": "[BINDING] | pattern=Stage 2: Retrieved %d product documents | logger.info(...) renders with template 'Stage 2: Retrieved %d product documents' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 2: Retrieved %d product documents' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2: Retrieved %d product documents"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_3c76-89c67bd62a46",
+          "binding_text": "[BINDING] | pattern=Stage 2 error: %s | logger.error(...) renders with template 'Stage 2 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 2 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2 error: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_error_aec7-ca2c83af5121",
+          "binding_text": "[BINDING] | pattern=Stage 3 error: %s | logger.error(...) renders with template 'Stage 3 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.error(...) renders with template 'Stage 3 error: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 3 error: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_e437-e3003c436af9",
+          "binding_text": "[BINDING] | pattern=Starting Flask server on 0.0.0.0:%d | logger.info(...) renders with template 'Starting Flask server on 0.0.0.0:%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Starting Flask server on 0.0.0.0:%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Starting Flask server on 0.0.0.0:%d"
+        },
+        {
+          "id": "pat/src_email_server_info_3d48-743a725824b5",
+          "binding_text": "[BINDING] | pattern=Message sent to %s, id: %s | logger.info(...) renders with template 'Message sent to %s, id: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Message sent to %s, id: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Message sent to %s, id: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_6293-1a08c47b8de4",
+          "binding_text": "[BINDING] | pattern=A request to send order confirmation email to %s. | logger.info(...) renders with template 'A request to send order confirmation email to %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'A request to send order confirmation email to %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "A request to send order confirmation email to %s."
+        },
+        {
+          "id": "pat/src_email_server_info_7ae2-02c8817c836b",
+          "binding_text": "[BINDING] | pattern=Email service started on port %d | logger.info(...) renders with template 'Email service started on port %d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Email service started on port %d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Email service started on port %d"
+        },
+        {
+          "id": "pat/src_recommendation_server_warning_dcca-f906d50df508",
+          "binding_text": "[BINDING] | pattern=Failed to enable Cloud Profiler: %s | logger.warning(...) renders with template 'Failed to enable Cloud Profiler: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.warning(...) renders with template 'Failed to enable Cloud Profiler: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "Failed to enable Cloud Profiler: %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_error_4b20-c1a8d99d6816",
+          "binding_text": "[BINDING] | pattern=Failed to fetch product catalog: code=%s message=%s | logger.error(...) renders with template 'Failed to fetch product catalog: code=%s message=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.error(...) renders with template 'Failed to fetch product catalog: code=%s message=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "Failed to fetch product catalog: code=%s message=%s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_769c-fd7c2287a127",
+          "binding_text": "[BINDING] | pattern=ListRecommendations: returning %d recommendations | logger.info(...) renders with template 'ListRecommendations: returning %d recommendations' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'ListRecommendations: returning %d recommendations' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "ListRecommendations: returning %d recommendations"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_be74-bb576c6d67e1",
+          "binding_text": "[BINDING] | pattern=Tracer provider configured with endpoint: %s | logger.info(...) renders with template 'Tracer provider configured with endpoint: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Tracer provider configured with endpoint: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "Tracer provider configured with endpoint: %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_7a88-3979832f75fb",
+          "binding_text": "[BINDING] | pattern=Connecting to ProductCatalogService at %s | logger.info(...) renders with template 'Connecting to ProductCatalogService at %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'Connecting to ProductCatalogService at %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "Connecting to ProductCatalogService at %s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_8806-a1521aa20dde",
+          "binding_text": "[BINDING] | pattern=RecommendationService listening on %s | logger.info(...) renders with template 'RecommendationService listening on %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "logger.info(...) renders with template 'RecommendationService listening on %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "RecommendationService listening on %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_49b1-6c6e39ab161a",
+          "binding_text": "[BINDING] | pattern=Initialising Gemini LLM (%s) \u2026 | logger.info(...) renders with template 'Initialising Gemini LLM (%s) \u2026' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Initialising Gemini LLM (%s) \u2026' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Initialising Gemini LLM (%s) \u2026"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_f2fa-8564bc873143",
+          "binding_text": "[BINDING] | pattern=Received request | message_len=%d | has_image=%s | logger.info(...) renders with template 'Received request | message_len=%d | has_image=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Received request | message_len=%d | has_image=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Received request | message_len=%d | has_image=%s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_7084-e5374669dab4",
+          "binding_text": "[BINDING] | pattern=Stage 1 complete | understood_query_len=%d | logger.info(...) renders with template 'Stage 1 complete | understood_query_len=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 1 complete | understood_query_len=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 1 complete | understood_query_len=%d"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_exception_5777-02e6b2636f16",
+          "binding_text": "[BINDING] | pattern=Stage 1 failed: %s | logger.exception(...) renders with template 'Stage 1 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.exception(...) renders with template 'Stage 1 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 1 failed: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_aa14-05606587dca3",
+          "binding_text": "[BINDING] | pattern=Stage 2 complete | docs_retrieved=%d | logger.info(...) renders with template 'Stage 2 complete | docs_retrieved=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 2 complete | docs_retrieved=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2 complete | docs_retrieved=%d"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_exception_d5c0-ad16b0e3736d",
+          "binding_text": "[BINDING] | pattern=Stage 2 failed: %s | logger.exception(...) renders with template 'Stage 2 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.exception(...) renders with template 'Stage 2 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 2 failed: %s"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_info_a29-037e02c67886",
+          "binding_text": "[BINDING] | pattern=Stage 3 complete | response_len=%d | logger.info(...) renders with template 'Stage 3 complete | response_len=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.info(...) renders with template 'Stage 3 complete | response_len=%d' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 3 complete | response_len=%d"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_exception_5d8b-2747067f437f",
+          "binding_text": "[BINDING] | pattern=Stage 3 failed: %s | logger.exception(...) renders with template 'Stage 3 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logger.exception(...) renders with template 'Stage 3 failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "Stage 3 failed: %s"
+        },
+        {
+          "id": "pat/src_email_client_info_9001-78b1eeceb213",
+          "binding_text": "[BINDING] | pattern=SendOrderConfirmation succeeded for %s | logger.info(...) renders with template 'SendOrderConfirmation succeeded for %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "description": "logger.info(...) renders with template 'SendOrderConfirmation succeeded for %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "pattern": "SendOrderConfirmation succeeded for %s"
+        },
+        {
+          "id": "pat/src_email_client_error_4b6a-85977dc8d480",
+          "binding_text": "[BINDING] | pattern=SendOrderConfirmation failed: %s | logger.error(...) renders with template 'SendOrderConfirmation failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "description": "logger.error(...) renders with template 'SendOrderConfirmation failed: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_client.py)",
+          "pattern": "SendOrderConfirmation failed: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_af73-bb91079195ab",
+          "binding_text": "[BINDING] | pattern=Email content: %s | logger.info(...) renders with template 'Email content: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Email content: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Email content: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_73be-8b9f246d2d20",
+          "binding_text": "[BINDING] | pattern=SendOrderConfirmation request received for email: %s | logger.info(...) renders with template 'SendOrderConfirmation request received for email: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'SendOrderConfirmation request received for email: %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "SendOrderConfirmation request received for email: %s"
+        },
+        {
+          "id": "pat/src_email_server_info_2e2d-93f4f2b8b5f1",
+          "binding_text": "[BINDING] | pattern=Tracing enabled \u2014 exporting spans to %s | logger.info(...) renders with template 'Tracing enabled \u2014 exporting spans to %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Tracing enabled \u2014 exporting spans to %s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Tracing enabled \u2014 exporting spans to %s"
+        },
+        {
+          "id": "pat/src_email_server_info_f4c5-ab29970deb00",
+          "binding_text": "[BINDING] | pattern=Starting email service on port %s (dummy_mode=%s). | logger.info(...) renders with template 'Starting email service on port %s (dummy_mode=%s).' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Starting email service on port %s (dummy_mode=%s).' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Starting email service on port %s (dummy_mode=%s)."
+        },
+        {
+          "id": "pat/src_email_server_info_7a80-eb1b97929175",
+          "binding_text": "[BINDING] | pattern=Email service is listening on port %s. | logger.info(...) renders with template 'Email service is listening on port %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Email service is listening on port %s.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Email service is listening on port %s."
+        },
+        {
+          "id": "pat/src_email_server_info_714b-4efad74bb2d4",
+          "binding_text": "[BINDING] | pattern=Received signal %s \u2014 initiating graceful shutdown. | logger.info(...) renders with template 'Received signal %s \u2014 initiating graceful shutdown.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "description": "logger.info(...) renders with template 'Received signal %s \u2014 initiating graceful shutdown.' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py)",
+          "pattern": "Received signal %s \u2014 initiating graceful shutdown."
+        },
+        {
+          "id": "pat/src_recommendation_server_info_3274-7bd2c63a1592",
+          "binding_text": "[BINDING] | pattern=[Recv ListRecommendations] product_ids=%s | log.info(...) renders with template '[Recv ListRecommendations] product_ids=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "log.info(...) renders with template '[Recv ListRecommendations] product_ids=%s' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "[Recv ListRecommendations] product_ids=%s"
+        },
+        {
+          "id": "pat/src_recommendation_server_info_6cb7-5036aa30d3d3",
+          "binding_text": "[BINDING] | pattern=Received signal %s \u2014 shutting down RecommendationService | log.info(...) renders with template 'Received signal %s \u2014 shutting down RecommendationService' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "description": "log.info(...) renders with template 'Received signal %s \u2014 shutting down RecommendationService' (from existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/recommendationservice/recommendation_server.py)",
+          "pattern": "Received signal %s \u2014 shutting down RecommendationService"
+        },
+        {
+          "id": "pat/src_shoppingassistantservice_formatter_9514-3a9e89ba27c7",
+          "binding_text": "[BINDING] | pattern={\"timestamp\": \"%(asctime)s\", \"severity\": \"%(levelname)s\", \"name\": \"%(name)s\", \"message\": %(message)s} | logging.Formatter(...) renders with template '{\"timestamp\": \"%(asctime)s\", \"severity\": \"%(levelname)s\", \"name\": \"%(name)s\", \"message\": %(message)s}' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "description": "logging.Formatter(...) renders with template '{\"timestamp\": \"%(asctime)s\", \"severity\": \"%(levelname)s\", \"name\": \"%(name)s\", \"message\": %(message)s}' (from existing source archive/shoppingassistantservice/shoppingassistantservice.py)",
+          "pattern": "{\"timestamp\": \"%(asctime)s\", \"severity\": \"%(levelname)s\", \"name\": \"%(name)s\", \"message\": %(message)s}"
+        }
+      ],
+      "config_key": [
+        {
+          "id": "cfg/src_prime_post_run_enable_instrumentation-ee27aacac4c8",
+          "binding_text": "[BINDING] | env_var=ENABLE_INSTRUMENTATION | Environment variable ENABLE_INSTRUMENTATION (default: auto) used in existing source .cap-dev-pipe/prime-post-run.py",
+          "description": "Environment variable ENABLE_INSTRUMENTATION (default: auto) used in existing source .cap-dev-pipe/prime-post-run.py",
+          "env_var": "ENABLE_INSTRUMENTATION"
+        },
+        {
+          "id": "cfg/src_prime_post_run_kaizen_run_id-a53f584f0034",
+          "binding_text": "[BINDING] | env_var=KAIZEN_RUN_ID | Environment variable KAIZEN_RUN_ID used in existing source .cap-dev-pipe/prime-post-run.py",
+          "description": "Environment variable KAIZEN_RUN_ID used in existing source .cap-dev-pipe/prime-post-run.py",
+          "env_var": "KAIZEN_RUN_ID"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_google_cloud_project-00d8a4f22a2c",
+          "binding_text": "[BINDING] | env_var=GOOGLE_CLOUD_PROJECT | Environment variable GOOGLE_CLOUD_PROJECT used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable GOOGLE_CLOUD_PROJECT used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "GOOGLE_CLOUD_PROJECT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_instance-54a0a3cbe2b4",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_INSTANCE | Environment variable ALLOYDB_INSTANCE used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_INSTANCE used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_INSTANCE"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_database-ab4036e61925",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_DATABASE | Environment variable ALLOYDB_DATABASE used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_DATABASE used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_DATABASE"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_secret_name-89d701666778",
+          "binding_text": "[BINDING] | env_var=SECRET_NAME | Environment variable SECRET_NAME used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SECRET_NAME used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SECRET_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_port-788286d4cdaa",
+          "binding_text": "[BINDING] | env_var=PORT | Environment variable PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "PORT"
+        },
+        {
+          "id": "cfg/src_email_client_email_service_port-664b5ef7a461",
+          "binding_text": "[BINDING] | env_var=EMAIL_SERVICE_PORT | Environment variable EMAIL_SERVICE_PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_client.py",
+          "description": "Environment variable EMAIL_SERVICE_PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_client.py",
+          "env_var": "EMAIL_SERVICE_PORT"
+        },
+        {
+          "id": "cfg/src_email_server_otel_service_name-ced8e631a2fc",
+          "binding_text": "[BINDING] | env_var=OTEL_SERVICE_NAME | Environment variable OTEL_SERVICE_NAME (default: emailservice) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment variable OTEL_SERVICE_NAME (default: emailservice) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "env_var": "OTEL_SERVICE_NAME"
+        },
+        {
+          "id": "cfg/src_email_server_otel_exporter_otlp_endpoint-0a1e7bb414d0",
+          "binding_text": "[BINDING] | env_var=OTEL_EXPORTER_OTLP_ENDPOINT | Environment variable OTEL_EXPORTER_OTLP_ENDPOINT used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment variable OTEL_EXPORTER_OTLP_ENDPOINT used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "env_var": "OTEL_EXPORTER_OTLP_ENDPOINT"
+        },
+        {
+          "id": "cfg/src_email_server_email_service_port-b8a27b91b774",
+          "binding_text": "[BINDING] | env_var=EMAIL_SERVICE_PORT | Environment variable EMAIL_SERVICE_PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment variable EMAIL_SERVICE_PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "env_var": "EMAIL_SERVICE_PORT"
+        },
+        {
+          "id": "cfg/src_email_server_grpc_max_workers-c78e00234a62",
+          "binding_text": "[BINDING] | env_var=GRPC_MAX_WORKERS | Environment variable GRPC_MAX_WORKERS (default: 10) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment variable GRPC_MAX_WORKERS (default: 10) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "env_var": "GRPC_MAX_WORKERS"
+        },
+        {
+          "id": "cfg/src_email_server_shutdown_grace_period-d6048ecc84f9",
+          "binding_text": "[BINDING] | env_var=SHUTDOWN_GRACE_PERIOD | Environment variable SHUTDOWN_GRACE_PERIOD (default: 5) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment variable SHUTDOWN_GRACE_PERIOD (default: 5) used in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "env_var": "SHUTDOWN_GRACE_PERIOD"
+        },
+        {
+          "id": "cfg/src_recommendation_server_port-0199afd9eef4",
+          "binding_text": "[BINDING] | env_var=PORT | Environment variable PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "Environment variable PORT (default: 8080) used in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "env_var": "PORT"
+        },
+        {
+          "id": "cfg/src_recommendation_server_product_catalog_service_addr-16b19a1d420c",
+          "binding_text": "[BINDING] | env_var=PRODUCT_CATALOG_SERVICE_ADDR | Environment variable PRODUCT_CATALOG_SERVICE_ADDR used in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "Environment variable PRODUCT_CATALOG_SERVICE_ADDR used in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "env_var": "PRODUCT_CATALOG_SERVICE_ADDR"
+        },
+        {
+          "id": "cfg/src_email_server_port-c758edddd015",
+          "binding_text": "[BINDING] | env_var=PORT | Environment variable PORT (default: 8080) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "description": "Environment variable PORT (default: 8080) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "env_var": "PORT"
+        },
+        {
+          "id": "cfg/src_email_server_use_dummy_service-fe1a72b77c43",
+          "binding_text": "[BINDING] | env_var=USE_DUMMY_SERVICE | Environment variable USE_DUMMY_SERVICE (default: true) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "description": "Environment variable USE_DUMMY_SERVICE (default: true) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "env_var": "USE_DUMMY_SERVICE"
+        },
+        {
+          "id": "cfg/src_email_server_enable_tracing-deb4a909e4a9",
+          "binding_text": "[BINDING] | env_var=ENABLE_TRACING | Environment variable ENABLE_TRACING (default: true) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "description": "Environment variable ENABLE_TRACING (default: true) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "env_var": "ENABLE_TRACING"
+        },
+        {
+          "id": "cfg/src_email_server_jaeger_host-ef725b1ce55c",
+          "binding_text": "[BINDING] | env_var=JAEGER_HOST | Environment variable JAEGER_HOST (default: localhost) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "description": "Environment variable JAEGER_HOST (default: localhost) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "env_var": "JAEGER_HOST"
+        },
+        {
+          "id": "cfg/src_email_server_jaeger_port-15dd658f62bb",
+          "binding_text": "[BINDING] | env_var=JAEGER_PORT | Environment variable JAEGER_PORT (default: 6831) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "description": "Environment variable JAEGER_PORT (default: 6831) used in existing source artisan-run-2026-02-26-18-00/emailservice/email_server.py",
+          "env_var": "JAEGER_PORT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_project_id-0264d5d9dbb8",
+          "binding_text": "[BINDING] | env_var=PROJECT_ID | Environment variable PROJECT_ID used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable PROJECT_ID used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "PROJECT_ID"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_region-456d16d6016c",
+          "binding_text": "[BINDING] | env_var=REGION | Environment variable REGION used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable REGION used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "REGION"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_secret_name-7217c7105f8f",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_SECRET_NAME | Environment variable ALLOYDB_SECRET_NAME used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_SECRET_NAME used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_SECRET_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_table-058f36ad9599",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_TABLE | Environment variable ALLOYDB_TABLE used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_TABLE used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_TABLE"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_cluster-b884a011beba",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_CLUSTER | Environment variable ALLOYDB_CLUSTER used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_CLUSTER used in existing source artisan-run-2026-02-26-16-00/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_CLUSTER"
+        },
+        {
+          "id": "cfg/src_email_server_log_level-c23c66be996e",
+          "binding_text": "[BINDING] | env_var=LOG_LEVEL | Environment variable LOG_LEVEL (default: INFO) used in existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py",
+          "description": "Environment variable LOG_LEVEL (default: INFO) used in existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py",
+          "env_var": "LOG_LEVEL"
+        },
+        {
+          "id": "cfg/src_email_server_enable_dummy_email-816e5e05a64c",
+          "binding_text": "[BINDING] | env_var=ENABLE_DUMMY_EMAIL | Environment variable ENABLE_DUMMY_EMAIL used in existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py",
+          "description": "Environment variable ENABLE_DUMMY_EMAIL used in existing source artisan-run-2026-02-26-16-00/emailservice/email_server.py",
+          "env_var": "ENABLE_DUMMY_EMAIL"
+        },
+        {
+          "id": "cfg/src_recommendation_server_random_seed-3c91264c5104",
+          "binding_text": "[BINDING] | env_var=RANDOM_SEED | Environment variable RANDOM_SEED used in existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py",
+          "description": "Environment variable RANDOM_SEED used in existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py",
+          "env_var": "RANDOM_SEED"
+        },
+        {
+          "id": "cfg/src_recommendation_server_shutdown_grace_seconds-b76192af4a24",
+          "binding_text": "[BINDING] | env_var=SHUTDOWN_GRACE_SECONDS | Environment variable SHUTDOWN_GRACE_SECONDS (default: 5) used in existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py",
+          "description": "Environment variable SHUTDOWN_GRACE_SECONDS (default: 5) used in existing source artisan-run-2026-02-26-16-00/recommendationservice/recommendation_server.py",
+          "env_var": "SHUTDOWN_GRACE_SECONDS"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_cluster_name-39992b67b35e",
+          "binding_text": "[BINDING] | env_var=CLUSTER_NAME | Environment variable CLUSTER_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable CLUSTER_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "CLUSTER_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_instance_name-0d4c4eff509d",
+          "binding_text": "[BINDING] | env_var=INSTANCE_NAME | Environment variable INSTANCE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable INSTANCE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "INSTANCE_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_db_name-34fc6dc1d80f",
+          "binding_text": "[BINDING] | env_var=DB_NAME | Environment variable DB_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DB_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DB_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_db_user-2ee7f1ff6e5a",
+          "binding_text": "[BINDING] | env_var=DB_USER | Environment variable DB_USER (default: postgres) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DB_USER (default: postgres) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DB_USER"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_db_password_secret-b4b336a103f9",
+          "binding_text": "[BINDING] | env_var=DB_PASSWORD_SECRET | Environment variable DB_PASSWORD_SECRET (default: alloydb-db-password) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DB_PASSWORD_SECRET (default: alloydb-db-password) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DB_PASSWORD_SECRET"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_table_name-12e2a76de25f",
+          "binding_text": "[BINDING] | env_var=TABLE_NAME | Environment variable TABLE_NAME (default: products) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable TABLE_NAME (default: products) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-002-20260301T2122/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "TABLE_NAME"
+        },
+        {
+          "id": "cfg/src_email_server_collector_service_addr-927a5589924a",
+          "binding_text": "[BINDING] | env_var=COLLECTOR_SERVICE_ADDR | Environment variable COLLECTOR_SERVICE_ADDR (default: localhost:4317) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "description": "Environment variable COLLECTOR_SERVICE_ADDR (default: localhost:4317) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "env_var": "COLLECTOR_SERVICE_ADDR"
+        },
+        {
+          "id": "cfg/src_email_server_gcp_project_id-67525cfe818e",
+          "binding_text": "[BINDING] | env_var=GCP_PROJECT_ID | Environment variable GCP_PROJECT_ID used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "description": "Environment variable GCP_PROJECT_ID used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "env_var": "GCP_PROJECT_ID"
+        },
+        {
+          "id": "cfg/src_email_server_disable_profiler-856424091c48",
+          "binding_text": "[BINDING] | env_var=DISABLE_PROFILER | Environment variable DISABLE_PROFILER (default: false) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "description": "Environment variable DISABLE_PROFILER (default: false) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-003-20260304T1202/plan-ingestion/generated/src/emailservice/email_server.py",
+          "env_var": "DISABLE_PROFILER"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_database_name-6b49f6e0cfa4",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_DATABASE_NAME | Environment variable ALLOYDB_DATABASE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_DATABASE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_DATABASE_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_table_name-9341165017a1",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_TABLE_NAME | Environment variable ALLOYDB_TABLE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_TABLE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_TABLE_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_cluster_name-32144e68dc09",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_CLUSTER_NAME | Environment variable ALLOYDB_CLUSTER_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_CLUSTER_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_CLUSTER_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_instance_name-5555bd42acef",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_INSTANCE_NAME | Environment variable ALLOYDB_INSTANCE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_INSTANCE_NAME used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_INSTANCE_NAME"
+        },
+        {
+          "id": "cfg/src_recommendation_server_enable_tracing-df329c1d61e1",
+          "binding_text": "[BINDING] | env_var=ENABLE_TRACING | Environment variable ENABLE_TRACING used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/recommendationservice/recommendation_server.py",
+          "description": "Environment variable ENABLE_TRACING used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-112-20260323T1438/plan-ingestion/generated/src/recommendationservice/recommendation_server.py",
+          "env_var": "ENABLE_TRACING"
+        },
+        {
+          "id": "cfg/src_recommendation_server_collector_service_addr-d7b2662532c3",
+          "binding_text": "[BINDING] | env_var=COLLECTOR_SERVICE_ADDR | Environment variable COLLECTOR_SERVICE_ADDR (default: otelcollector:4317) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py",
+          "description": "Environment variable COLLECTOR_SERVICE_ADDR (default: otelcollector:4317) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-105-20260322T2140/plan-ingestion/generated/src/recommendationservice/recommendation_server.py",
+          "env_var": "COLLECTOR_SERVICE_ADDR"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_project-c8f54ce2c359",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_PROJECT | Environment variable ALLOYDB_PROJECT used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_PROJECT used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_PROJECT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_region-13b06606019c",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_REGION | Environment variable ALLOYDB_REGION used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_REGION used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_REGION"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_user-c9a3c6006baa",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_USER | Environment variable ALLOYDB_USER used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_USER used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_USER"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_gemini_model-8800125468bb",
+          "binding_text": "[BINDING] | env_var=GEMINI_MODEL | Environment variable GEMINI_MODEL (default: gemini-1.5-flash) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable GEMINI_MODEL (default: gemini-1.5-flash) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "GEMINI_MODEL"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_similarity_search_k-09b4419cd1c4",
+          "binding_text": "[BINDING] | env_var=SIMILARITY_SEARCH_K | Environment variable SIMILARITY_SEARCH_K (default: 5) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SIMILARITY_SEARCH_K (default: 5) used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SIMILARITY_SEARCH_K"
+        },
+        {
+          "id": "cfg/src_email_server_disable_dummy_email_service-9cd21f9814be",
+          "binding_text": "[BINDING] | env_var=DISABLE_DUMMY_EMAIL_SERVICE | Environment variable DISABLE_DUMMY_EMAIL_SERVICE used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py",
+          "description": "Environment variable DISABLE_DUMMY_EMAIL_SERVICE used in existing source .cap-dev-pipe/pipeline-output/online-boutique/run-004-20260306T1620/plan-ingestion/generated/src/emailservice/email_server.py",
+          "env_var": "DISABLE_DUMMY_EMAIL_SERVICE"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_log_level-fc89e781d990",
+          "binding_text": "[BINDING] | env_var=LOG_LEVEL | Environment variable LOG_LEVEL (default: INFO) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable LOG_LEVEL (default: INFO) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "LOG_LEVEL"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_secret_project_id-dbcc1449fa72",
+          "binding_text": "[BINDING] | env_var=SECRET_PROJECT_ID | Environment variable SECRET_PROJECT_ID used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SECRET_PROJECT_ID used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SECRET_PROJECT_ID"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_host-17b14322dd00",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_HOST | Environment variable ALLOYDB_HOST used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_HOST used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_HOST"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_alloydb_port-65f60297bb84",
+          "binding_text": "[BINDING] | env_var=ALLOYDB_PORT | Environment variable ALLOYDB_PORT (default: 5432) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable ALLOYDB_PORT (default: 5432) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "ALLOYDB_PORT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_vector_search_limit-17dbe4baf6a5",
+          "binding_text": "[BINDING] | env_var=VECTOR_SEARCH_LIMIT | Environment variable VECTOR_SEARCH_LIMIT used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable VECTOR_SEARCH_LIMIT used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "VECTOR_SEARCH_LIMIT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_secret_db_password_name-1a6cfe8dfe21",
+          "binding_text": "[BINDING] | env_var=SECRET_DB_PASSWORD_NAME | Environment variable SECRET_DB_PASSWORD_NAME (default: alloydb-password) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SECRET_DB_PASSWORD_NAME (default: alloydb-password) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SECRET_DB_PASSWORD_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_secret_gemini_key_name-45f3d861bd62",
+          "binding_text": "[BINDING] | env_var=SECRET_GEMINI_KEY_NAME | Environment variable SECRET_GEMINI_KEY_NAME (default: gemini-api-key) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SECRET_GEMINI_KEY_NAME (default: gemini-api-key) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SECRET_GEMINI_KEY_NAME"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_database_url-3112981b4bdc",
+          "binding_text": "[BINDING] | env_var=DATABASE_URL | Environment variable DATABASE_URL used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DATABASE_URL used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DATABASE_URL"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_vertex_ai_project-1aedb94f1ad6",
+          "binding_text": "[BINDING] | env_var=VERTEX_AI_PROJECT | Environment variable VERTEX_AI_PROJECT used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable VERTEX_AI_PROJECT used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "VERTEX_AI_PROJECT"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_vertex_ai_location-8694f8dc8d36",
+          "binding_text": "[BINDING] | env_var=VERTEX_AI_LOCATION | Environment variable VERTEX_AI_LOCATION (default: us-central1) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable VERTEX_AI_LOCATION (default: us-central1) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "VERTEX_AI_LOCATION"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_embedding_model-7bd55323e53b",
+          "binding_text": "[BINDING] | env_var=EMBEDDING_MODEL | Environment variable EMBEDDING_MODEL (default: text-embedding-004) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable EMBEDDING_MODEL (default: text-embedding-004) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "EMBEDDING_MODEL"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_llm_model-607cbd7f1729",
+          "binding_text": "[BINDING] | env_var=LLM_MODEL | Environment variable LLM_MODEL (default: gemini-1.5-flash) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable LLM_MODEL (default: gemini-1.5-flash) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "LLM_MODEL"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_top_k_products-c45b30b87782",
+          "binding_text": "[BINDING] | env_var=TOP_K_PRODUCTS | Environment variable TOP_K_PRODUCTS (default: 5) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable TOP_K_PRODUCTS (default: 5) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "TOP_K_PRODUCTS"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_similarity_threshold-999324a29a62",
+          "binding_text": "[BINDING] | env_var=SIMILARITY_THRESHOLD | Environment variable SIMILARITY_THRESHOLD (default: 0.7) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable SIMILARITY_THRESHOLD (default: 0.7) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "SIMILARITY_THRESHOLD"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_max_output_tokens-6eaabf2b037a",
+          "binding_text": "[BINDING] | env_var=MAX_OUTPUT_TOKENS | Environment variable MAX_OUTPUT_TOKENS (default: 512) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable MAX_OUTPUT_TOKENS (default: 512) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "MAX_OUTPUT_TOKENS"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_db_pool_size-531ea2b12337",
+          "binding_text": "[BINDING] | env_var=DB_POOL_SIZE | Environment variable DB_POOL_SIZE (default: 5) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DB_POOL_SIZE (default: 5) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DB_POOL_SIZE"
+        },
+        {
+          "id": "cfg/src_shoppingassistantservice_db_max_overflow-707d17e61805",
+          "binding_text": "[BINDING] | env_var=DB_MAX_OVERFLOW | Environment variable DB_MAX_OVERFLOW (default: 10) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "description": "Environment variable DB_MAX_OVERFLOW (default: 10) used in existing source archive/shoppingassistantservice/shoppingassistantservice.py",
+          "env_var": "DB_MAX_OVERFLOW"
+        },
+        {
+          "id": "cfg/src_locustfile_target_host-802a6671de2c",
+          "binding_text": "[BINDING] | env_var=TARGET_HOST | Environment variable TARGET_HOST used in existing source archive/loadgenerator/locustfile.py",
+          "description": "Environment variable TARGET_HOST used in existing source archive/loadgenerator/locustfile.py",
+          "env_var": "TARGET_HOST"
+        },
+        {
+          "id": "cfg/src_locustfile_frontend_addr-a4729f6488d7",
+          "binding_text": "[BINDING] | env_var=FRONTEND_ADDR | Environment variable FRONTEND_ADDR (default: http://frontend:8080) used in existing source archive/loadgenerator/locustfile.py",
+          "description": "Environment variable FRONTEND_ADDR (default: http://frontend:8080) used in existing source archive/loadgenerator/locustfile.py",
+          "env_var": "FRONTEND_ADDR"
+        },
+        {
+          "id": "cfg/src_locustfile_locust_min_wait-535fa6192190",
+          "binding_text": "[BINDING] | env_var=LOCUST_MIN_WAIT | Environment variable LOCUST_MIN_WAIT (default: 1) used in existing source archive/loadgenerator/locustfile.py",
+          "description": "Environment variable LOCUST_MIN_WAIT (default: 1) used in existing source archive/loadgenerator/locustfile.py",
+          "env_var": "LOCUST_MIN_WAIT"
+        },
+        {
+          "id": "cfg/src_locustfile_locust_max_wait-72b7dda62528",
+          "binding_text": "[BINDING] | env_var=LOCUST_MAX_WAIT | Environment variable LOCUST_MAX_WAIT (default: 10) used in existing source archive/loadgenerator/locustfile.py",
+          "description": "Environment variable LOCUST_MAX_WAIT (default: 10) used in existing source archive/loadgenerator/locustfile.py",
+          "env_var": "LOCUST_MAX_WAIT"
+        },
+        {
+          "id": "cfg/src_locustfile_enable_checkout-41a67c68267d",
+          "binding_text": "[BINDING] | env_var=ENABLE_CHECKOUT | Environment variable ENABLE_CHECKOUT (default: true) used in existing source archive/loadgenerator/locustfile.py",
+          "description": "Environment variable ENABLE_CHECKOUT (default: true) used in existing source archive/loadgenerator/locustfile.py",
+          "env_var": "ENABLE_CHECKOUT"
+        },
+        {
+          "id": "cfg/src_email_server_google_application_credentials-5988139a50ab",
+          "binding_text": "[BINDING] | env_var=GOOGLE_APPLICATION_CREDENTIALS | Environment variable GOOGLE_APPLICATION_CREDENTIALS used in existing source archive/emailservice/email_server.py",
+          "description": "Environment variable GOOGLE_APPLICATION_CREDENTIALS used in existing source archive/emailservice/email_server.py",
+          "env_var": "GOOGLE_APPLICATION_CREDENTIALS"
+        },
+        {
+          "id": "cfg/src_email_server_enable_production_email-163a16a9994d",
+          "binding_text": "[BINDING] | env_var=ENABLE_PRODUCTION_EMAIL | Environment variable ENABLE_PRODUCTION_EMAIL used in existing source archive/emailservice/email_server.py",
+          "description": "Environment variable ENABLE_PRODUCTION_EMAIL used in existing source archive/emailservice/email_server.py",
+          "env_var": "ENABLE_PRODUCTION_EMAIL"
+        },
+        {
+          "id": "cfg/src_client_recommendation_service_addr-36c142109135",
+          "binding_text": "[BINDING] | env_var=RECOMMENDATION_SERVICE_ADDR | Environment variable RECOMMENDATION_SERVICE_ADDR used in existing source archive/recommendationservice/client.py",
+          "description": "Environment variable RECOMMENDATION_SERVICE_ADDR used in existing source archive/recommendationservice/client.py",
+          "env_var": "RECOMMENDATION_SERVICE_ADDR"
+        },
+        {
+          "id": "cfg/src_recommendation_server_otel_exporter_otlp_endpoint-2f0ce2a5ed88",
+          "binding_text": "[BINDING] | env_var=OTEL_EXPORTER_OTLP_ENDPOINT | Environment variable OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4317) used in existing source archive/recommendationservice/recommendation_server.py",
+          "description": "Environment variable OTEL_EXPORTER_OTLP_ENDPOINT (default: http://localhost:4317) used in existing source archive/recommendationservice/recommendation_server.py",
+          "env_var": "OTEL_EXPORTER_OTLP_ENDPOINT"
+        },
+        {
+          "id": "cfg/src_recommendation_server_disable_profiler-85be2e4dbe5c",
+          "binding_text": "[BINDING] | env_var=DISABLE_PROFILER | Environment variable DISABLE_PROFILER (default: 1) used in existing source archive/recommendationservice/recommendation_server.py",
+          "description": "Environment variable DISABLE_PROFILER (default: 1) used in existing source archive/recommendationservice/recommendation_server.py",
+          "env_var": "DISABLE_PROFILER"
+        }
+      ],
+      "infrastructure": [
+        {
+          "id": "inf/src_email_server_environment-e639254ebe1e",
+          "binding_text": "[BINDING] | dependency=Environment | Environment with kwargs=['loader', 'autoescape'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "Environment with kwargs=['loader', 'autoescape'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_filesystemloader-1d196e6f450f",
+          "binding_text": "[BINDING] | dependency=FileSystemLoader | FileSystemLoader in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "FileSystemLoader in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_select_autoescape-1da76e87143a",
+          "binding_text": "[BINDING] | dependency=select_autoescape | select_autoescape in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "select_autoescape in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_tracerprovider-2299e86aef20",
+          "binding_text": "[BINDING] | dependency=TracerProvider | TracerProvider with kwargs=['resource'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "TracerProvider with kwargs=['resource'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_otlpspanexporter-e355d1ddcaf5",
+          "binding_text": "[BINDING] | dependency=OTLPSpanExporter | OTLPSpanExporter with kwargs=['endpoint'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "OTLPSpanExporter with kwargs=['endpoint'] in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_batchspanprocessor-e8b32869c6a8",
+          "binding_text": "[BINDING] | dependency=BatchSpanProcessor | BatchSpanProcessor in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "BatchSpanProcessor in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_email_server_grpcinstrumentorserver-be91179833f7",
+          "binding_text": "[BINDING] | dependency=GrpcInstrumentorServer | GrpcInstrumentorServer in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py",
+          "description": "GrpcInstrumentorServer in existing source prime-contractor-run-2026-02-26-10-00/emailservice/email_server.py"
+        },
+        {
+          "id": "inf/src_recommendation_server_tracerprovider-739a0b8c22f8",
+          "binding_text": "[BINDING] | dependency=TracerProvider | TracerProvider with kwargs=['resource'] in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "TracerProvider with kwargs=['resource'] in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py"
+        },
+        {
+          "id": "inf/src_recommendation_server_otlpspanexporter-a89a5405be91",
+          "binding_text": "[BINDING] | dependency=OTLPSpanExporter | OTLPSpanExporter in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "OTLPSpanExporter in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py"
+        },
+        {
+          "id": "inf/src_recommendation_server_batchspanprocessor-c66d6d63fa72",
+          "binding_text": "[BINDING] | dependency=BatchSpanProcessor | BatchSpanProcessor in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "BatchSpanProcessor in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py"
+        },
+        {
+          "id": "inf/src_recommendation_server_grpcinstrumentorclient-253e52745189",
+          "binding_text": "[BINDING] | dependency=GrpcInstrumentorClient | GrpcInstrumentorClient in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "GrpcInstrumentorClient in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py"
+        },
+        {
+          "id": "inf/src_recommendation_server_grpcinstrumentorserver-d1850e9103e8",
+          "binding_text": "[BINDING] | dependency=GrpcInstrumentorServer | GrpcInstrumentorServer in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py",
+          "description": "GrpcInstrumentorServer in existing source prime-contractor-run-2026-02-26-10-00/recommendationservice/recommendation_server.py"
+        },
+        {
+          "id": "inf/src_email_server_consolespanexporter-5d0f967e68a6",
+          "binding_text": "[BINDING] | dependency=ConsoleSpanExporter | ConsoleSpanExporter in existing source archive/emailservice/email_server.py",
+          "description": "ConsoleSpanExporter in existing source archive/emailservice/email_server.py"
+        }
+      ]
+    }
+  },
+  "layer_3_sre_observability_vocab": {
+    "metrics": [
+      "http_server_duration_bucket",
+      "http_server_duration_count",
+      "http_server_request_body_size_bucket",
+      "http_server_response_body_size_bucket",
+      "rpc_server_duration_bucket",
+      "rpc_server_duration_count",
+      "rpc_server_request_size_bucket",
+      "rpc_server_requests_per_rpc_bucket",
+      "rpc_server_response_size_bucket"
+    ],
+    "slo_targets": {
+      "availability": "99.9",
+      "latency_p99": "500"
+    },
+    "alert_patterns": [
+      "AdserviceAvailabilityLow",
+      "AdserviceErrorRateHigh",
+      "AdserviceLatencyP99High",
+      "AppAvailabilityLow",
+      "AppErrorRateHigh",
+      "AppLatencyP99High",
+      "CartserviceAvailabilityLow",
+      "CartserviceErrorRateHigh",
+      "CartserviceLatencyP99High",
+      "CheckoutserviceAvailabilityLow",
+      "CheckoutserviceErrorRateHigh",
+      "CheckoutserviceLatencyP99High",
+      "CurrencyserviceAvailabilityLow",
+      "CurrencyserviceErrorRateHigh",
+      "CurrencyserviceLatencyP99High",
+      "EmailserviceAvailabilityLow",
+      "EmailserviceErrorRateHigh",
+      "EmailserviceLatencyP99High",
+      "FrontendAvailabilityLow",
+      "FrontendErrorRateHigh",
+      "FrontendLatencyP99High",
+      "LoadgeneratorAvailabilityLow",
+      "LoadgeneratorErrorRateHigh",
+      "LoadgeneratorLatencyP99High",
+      "MainAvailabilityLow",
+      "MainErrorRateHigh",
+      "MainLatencyP99High",
+      "PaymentserviceAvailabilityLow",
+      "PaymentserviceErrorRateHigh",
+      "PaymentserviceLatencyP99High",
+      "ProductcatalogserviceAvailabilityLow",
+      "ProductcatalogserviceErrorRateHigh",
+      "ProductcatalogserviceLatencyP99High",
+      "RecommendationserviceAvailabilityLow",
+      "RecommendationserviceErrorRateHigh",
+      "RecommendationserviceLatencyP99High",
+      "ShippingserviceAvailabilityLow",
+      "ShippingserviceErrorRateHigh",
+      "ShippingserviceLatencyP99High",
+      "ShoppingassistantserviceAvailabilityLow",
+      "ShoppingassistantserviceErrorRateHigh",
+      "ShoppingassistantserviceLatencyP99High"
+    ],
+    "env_vars": []
+  },
+  "layer_4_determinism_evidence": {
+    "source": "scr-labeled-replay-set.json",
+    "anchor_cluster_feature_count": 17,
+    "deterministic_candidates": [
+      "src/emailservice/logger.py",
+      "src/loadgenerator/locustfile.py",
+      "src/emailservice/email_server.py",
+      "src/emailservice/templates/confirmation.html",
+      "src/loadgenerator/requirements.in",
+      "src/recommendationservice/client.py",
+      "src/recommendationservice/recommendation_server.py",
+      "src/shoppingassistantservice/requirements.in",
+      "src/emailservice/requirements.in",
+      "src/recommendationservice/Dockerfile",
+      "src/recommendationservice/requirements.in",
+      "src/recommendationservice/logger.py"
+    ],
+    "residue_corpus_gaps": [
+      "src/emailservice/Dockerfile",
+      "src/loadgenerator/Dockerfile",
+      "src/shoppingassistantservice/Dockerfile",
+      "src/emailservice/email_client.py",
+      "src/shoppingassistantservice/shoppingassistantservice.py"
+    ]
+  }
+}
