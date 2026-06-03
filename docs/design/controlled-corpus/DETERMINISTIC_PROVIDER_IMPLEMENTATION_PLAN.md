@@ -51,14 +51,27 @@
   path touched.
 - **Exit met:** provider serves durable-store content behind the live validation gate (offline).
 
-### I3 — Live wiring: Phase 0.7 `_try_corpus_shortcut` + postmortem write (FR-7/8) — flag default OFF
-- **Postmortem write (moved from I1):** call `populate_from_run` inside `_extract_corpus` (reading the
-  seed's `source_checksum`), gated by a **new default-off** `STARTD8_CORPUS_CONTENT_STORE` so the live
-  postmortem only starts persisting content when explicitly enabled.
-- **Read/serve:** add `_try_corpus_shortcut(feature, ...)` in `prime_contractor.py` after Phase 0.6:
-  load corpus + store (project-scoped), `provider.generate(target_file)`; on hit, write the file, mark
-  feature `GENERATED` at `$0.00`, return shortcut; else `None` (→ existing flow unchanged).
-- Gate read by `STARTD8_CORPUS_DETERMINISTIC` (default **off**) — zero behavior change until flipped.
+### I3a — Postmortem content-store write (FR-9 write) ✅ (shipped — DEFAULT-OFF)
+- `_extract_corpus` now calls `populate_from_run(report, seed_source_checksum(output_dir), store)` into
+  `corpus_content_dir(project_root)`, gated by a **new default-off `STARTD8_CORPUS_CONTENT_STORE`** —
+  so enabling corpus accumulation does NOT start persisting content; non-fatal.
+- Added `extractor.seed_source_checksum(output_dir)`.
+- **Done:** 2 tests (default-off → no content store written / byte-identical; flag-on → content
+  persisted keyed by seed checksum, checksum-keyed miss). 73 corpus + 83 postmortem tests green.
+  The only live edit is a default-off branch at the END of `_extract_corpus` (postmortem, not generation).
+
+### I3b — Live read hook: Phase 0.7 `_try_corpus_shortcut` (FR-7/8) — PAUSED (first generation-loop edit)
+- Add `_try_corpus_shortcut(feature) -> Optional[bool]` in `prime_contractor.py` mirroring
+  `_try_deterministic_file_shortcut` (Optional[bool] contract, marks `GENERATED`/$0): load corpus +
+  store (project-scoped; `source_checksum` from `self._seed_path`), `build_corpus_provider(...)`,
+  `provider.generate(target_file)`; on hit write file(s) + mark + return True; else `None`.
+- Add one call-site line + early-return after Phase 0.6 (~prime_contractor.py:3423), gated by
+  `STARTD8_CORPUS_DETERMINISTIC` (default **off**).
+- **Tests:** flag-off no-op (byte-identical regression); flag-on+hit skips drafter; false_pass never
+  served; multi-target. Optionally fold I4's `_emit_cost_metric(cost_usd=0)` here.
+- **Status:** PAUSED per the no-live-impact boundary — this is the first edit to the live generation
+  loop. Probe confirmed no unknowns: contract is `Optional[bool]`, `self._seed_path`/`self.project_root`
+  available, marking pattern precedented. ~1–2h when ready.
 - **Tests:** eligible+content → shortcut taken (no drafter call, mock asserts); ineligible/flag-off →
   drafter runs; false_pass never shortcut.
 - **Exit:** with flag off, byte-identical pipeline behavior (regression-safe merge).

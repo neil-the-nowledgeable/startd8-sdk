@@ -3007,6 +3007,31 @@ class PrimePostMortemEvaluator:
             run_id, len(observations), before, len(registry),
         )
 
+        # I3a: durable proven-content store (FR-9) — DEFAULT-OFF, additive, non-fatal.
+        # Persists this run's generated content keyed by (term_id, source_checksum) so a
+        # later run can serve it deterministically (the provider's content source). Gated
+        # by its own flag so enabling corpus accumulation does NOT start writing content.
+        if os.getenv("STARTD8_CORPUS_CONTENT_STORE", "0") in ("1", "true", "yes", "on"):
+            try:
+                from startd8.corpus.content_store import ContentStore, populate_from_run
+                from startd8.corpus.extractor import seed_source_checksum
+                from startd8.paths import corpus_content_dir
+                checksum = seed_source_checksum(output_dir)
+                if checksum:
+                    store = ContentStore(
+                        corpus_content_dir(Path(project_root)) if project_root
+                        else corpus_content_dir()
+                    )
+                    n = populate_from_run(report, checksum, store)
+                    logger.info(
+                        "Controlled corpus content store: persisted %d file(s) (checksum=%s)",
+                        n, str(checksum)[:12],
+                    )
+                else:
+                    logger.debug("corpus content store: no source_checksum in seed — skipped")
+            except Exception:
+                logger.warning("Controlled corpus content store write failed", exc_info=True)
+
     def _scan_todos(
         self,
         report: PrimePostMortemReport,
