@@ -1,0 +1,418 @@
+"""AI-layer generator (M-C) — deterministically assemble the AI *glue* from a manifest.
+
+The mechanical-assembly thesis (FR-MA-1..6): the AI-service wrapper, the per-pass harness, the AI
+router, and the composition entrypoint are **fixed-shape given the contract + a small manifest** —
+so they are owned/$0/generated, never LLM-authored. The model authors only the per-pass **prompt**
+file. This kills the run-021..026 glue-bug class (wrong imports, double-prefix routers, decorative
+calls, wrong entities) by construction: the generator emits imports from its own symbol table.
+
+Inputs: the ``.prisma`` schema + ``ai_passes.yaml`` (the passes manifest, FR-MA-5) +
+``human_inputs.yaml`` (the field-authorship policy, C-4 — drives the edge-schema projection).
+
+Generated artifacts (all carry the three-hash AI header):
+- ``app/ai/service.py``      — B2 thin wrapper over the SDK provider abstraction (sync, C-1).
+- ``app/ai/edge_schemas.py`` — AI tool-input schemas = entity scalars minus human-authored fields.
+- ``app/ai/<pass>.py``       — per-pass harness (read → call_ai_service → validate → persist).
+- ``app/ai/routes.py``       — one ``APIRouter(prefix="/ai")``; one route per pass; ``Depends(get_session)``.
+- ``app/server.py``          — composition entrypoint: mounts ``app.main:app`` + the AI router.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import yaml
+
+from ..frontend_codegen.schema_renderer import schema_sha256
+from ..languages.prisma_parser import parse_prisma_schema
+from ._headers import header_ai_layer
+
+# Prisma scalar -> a *builtin* Python type for the edge schema (AI tool input). Non-builtins and
+# unknowns collapse to ``str`` so generated edge schemas stay dependency-free (just pydantic).
+_EDGE_PY = {"String": "str", "Int": "int", "BigInt": "int", "Float": "float", "Boolean": "bool"}
+
+# Provenance fields the *harness* owns (set to source="ai"/confirmed=False) — never AI-authored, so
+# they are kept out of the edge (tool-input) schema regardless of human_inputs.
+_PROVENANCE_OMIT = {"source", "confirmed"}
+
+# AI artifact kinds (registered into drift._AI_KINDS). Per-pass modules share the `ai-pass` kind
+# and carry the pass name in the `startd8-entity` header slot for re-render dispatch.
+AI_KINDS = ("ai-service", "ai-edge-schemas", "ai-pass", "ai-router", "ai-server")
+
+
+# --------------------------------------------------------------------------- #
+# Manifest models + strict parse (FR-MA-5 / C-4)
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class AiPass:
+    name: str
+    output_entities: Tuple[str, ...]
+    route_path: str
+    prompt: str
+    input_entities: Tuple[str, ...] = ()
+    request_field: str = "text"
+
+    @property
+    def module(self) -> str:
+        return _ident(self.name)
+
+
+@dataclass(frozen=True)
+class HumanInputs:
+    human_only_fields: frozenset  # {(Entity, field)}
+
+
+_PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field"}
+_HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
+_HUMAN_TOP_KEYS = {"config", "fields"}
+
+
+def _ident(name: str) -> str:
+    s = re.sub(r"[^0-9a-zA-Z_]", "_", name)
+    return s if s and not s[0].isdigit() else f"p_{s}"
+
+
+def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
+    """Parse + **strictly** validate ``ai_passes.yaml`` (FR-MA-5: malformed → loud failure)."""
+    data = yaml.safe_load(text or "") or {}
+    if not isinstance(data, dict) or "passes" not in data:
+        raise ValueError("ai_passes.yaml must be a mapping with a top-level `passes:` list")
+    passes: List[AiPass] = []
+    for i, entry in enumerate(data["passes"] or []):
+        if not isinstance(entry, dict):
+            raise ValueError(f"ai_passes.yaml: pass #{i} must be a mapping")
+        unknown = set(entry) - _PASS_KEYS
+        if unknown:
+            raise ValueError(f"ai_passes.yaml: pass #{i} has unknown keys {sorted(unknown)}")
+        for req in ("name", "output_entities", "route_path", "prompt"):
+            if not entry.get(req):
+                raise ValueError(f"ai_passes.yaml: pass #{i} missing required `{req}`")
+        route = str(entry["route_path"])
+        if not route.startswith("/"):
+            raise ValueError(f"ai_passes.yaml: route_path must start with '/': {route!r}")
+        passes.append(
+            AiPass(
+                name=str(entry["name"]),
+                output_entities=tuple(entry["output_entities"]),
+                route_path=route,
+                prompt=str(entry["prompt"]),
+                input_entities=tuple(entry.get("input_entities", ())),
+                request_field=str(entry.get("request_field", "text")),
+            )
+        )
+    if not passes:
+        raise ValueError("ai_passes.yaml declares no passes")
+    names = [p.name for p in passes]
+    if len(set(names)) != len(names):
+        raise ValueError(f"ai_passes.yaml has duplicate pass names: {names}")
+    return tuple(passes)
+
+
+def parse_human_inputs(text: Optional[str]) -> HumanInputs:
+    """Parse ``human_inputs.yaml`` (C-4). Absent/empty → no human-only fields. Strict on keys."""
+    if not text:
+        return HumanInputs(human_only_fields=frozenset())
+    data = yaml.safe_load(text) or {}
+    if not isinstance(data, dict):
+        raise ValueError("human_inputs.yaml must be a mapping")
+    unknown = set(data) - _HUMAN_TOP_KEYS
+    if unknown:
+        raise ValueError(f"human_inputs.yaml has unknown top-level keys {sorted(unknown)}")
+    human: set = set()
+    for i, entry in enumerate(data.get("fields") or []):
+        if not isinstance(entry, dict) or "target" not in entry:
+            raise ValueError(f"human_inputs.yaml: fields[{i}] needs a `target` (Entity.field)")
+        bad = set(entry) - _HUMAN_FIELD_KEYS
+        if bad:
+            raise ValueError(f"human_inputs.yaml: fields[{i}] unknown keys {sorted(bad)}")
+        if str(entry.get("authored_by", "human")) != "human":
+            continue
+        target = str(entry["target"])
+        if "." not in target:
+            raise ValueError(f"human_inputs.yaml: target must be `Entity.field`, got {target!r}")
+        ent, _, fld = target.partition(".")
+        human.add((ent, fld))
+    return HumanInputs(human_only_fields=frozenset(human))
+
+
+# --------------------------------------------------------------------------- #
+# Renderers (each emits the three-hash AI header)
+# --------------------------------------------------------------------------- #
+
+def _hashes(schema_text: str, manifest_text: str, human_text: Optional[str]) -> Tuple[str, str, str]:
+    return (
+        schema_sha256(schema_text),
+        schema_sha256(manifest_text),
+        schema_sha256(human_text or ""),
+    )
+
+
+def render_server(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``app/server.py`` — composition entrypoint (FR-MA-4): mount owned app + AI router only."""
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-server")
+    body = (
+        "from __future__ import annotations\n\n"
+        "from app.main import app\n"
+        "from app.ai.routes import ai_router\n\n"
+        "app.include_router(ai_router)\n\n"
+        '__all__ = ["app"]\n'
+    )
+    return header + "\n\n" + body
+
+
+def render_ai_service(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``app/ai/service.py`` — B2 thin wrapper over the SDK provider abstraction (FR-MA-1, C-1/C-2/C-3)."""
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-service")
+    body = '''from __future__ import annotations
+
+import logging
+from typing import Any
+
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from startd8.utils.agent_resolution import resolve_agent_spec
+
+from app.db import get_session  # noqa: F401 — the sync session contract (C-1)
+from app.tables import AiCall  # the SQLModel table (models.py only has AiCallSchema) — C-3
+
+logger = logging.getLogger(__name__)
+
+# Per-provider tool-use ceiling (C-2). 8192 stays under anthropic's >10-min streaming guard.
+PROVIDER_LIMITS = {"anthropic": 8192}
+DEFAULT_AGENT_SPEC = "anthropic:claude-opus-4-8"
+
+
+def call_ai_service(
+    pass_name: str,
+    prompt: str,
+    output_schema: type[BaseModel],
+    session: Session,
+    *,
+    agent_spec: str = DEFAULT_AGENT_SPEC,
+) -> BaseModel:
+    """Single Claude entry point. Delegates tool-use/retry/tokens to the SDK (B2); logs one AiCall."""
+    provider = agent_spec.split(":", 1)[0]
+    max_tokens = PROVIDER_LIMITS.get(provider, 8192)
+    agent = resolve_agent_spec(agent_spec)
+    value, raw = agent.generate_structured(prompt, output_schema, max_tokens=max_tokens)
+    _log_ai_call(session, pass_name, raw)
+    return value
+
+
+def _log_ai_call(session: Session, pass_name: str, raw: Any) -> None:
+    """Persist one AiCall row per call; defensive about which columns the table actually has."""
+    try:
+        usage = getattr(raw, "token_usage", None)
+        candidates = {
+            "purpose": pass_name,
+            "pass_name": pass_name,
+            "input_tokens": getattr(usage, "input", None),
+            "output_tokens": getattr(usage, "output", None),
+            "cost_usd": getattr(usage, "cost_estimate", None) if usage else None,
+        }
+        kwargs = {k: v for k, v in candidates.items() if hasattr(AiCall, k) and v is not None}
+        session.add(AiCall(**kwargs))
+        session.flush()
+    except Exception:  # logging must never break the pass
+        logger.warning("AiCall logging failed for pass=%s", pass_name, exc_info=False)
+
+
+__all__ = ["call_ai_service", "PROVIDER_LIMITS", "DEFAULT_AGENT_SPEC"]
+'''
+    return header + "\n\n" + body
+
+
+def render_edge_schemas(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``app/ai/edge_schemas.py`` — AI tool-input schemas: entity scalars minus human-authored fields (C-4)."""
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    schema = parse_prisma_schema(schema_text)
+    passes = parse_ai_passes(manifest_text)
+    human = parse_human_inputs(human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-edge-schemas")
+
+    entities: List[str] = []
+    for ps in passes:
+        for e in ps.output_entities:
+            if e not in entities:
+                entities.append(e)
+
+    blocks: List[str] = []
+    registry: List[str] = []
+    for ent in entities:
+        fields = []
+        for f in schema.scalar_fields(ent):
+            if (
+                f.is_id
+                or f.name in _PROVENANCE_OMIT
+                or (ent, f.name) in human.human_only_fields
+            ):
+                continue  # drop PKs, provenance, and human-authored fields (FR-6: no Metric.value)
+            py = _EDGE_PY.get(f.type, "str")
+            if f.is_optional:
+                fields.append(f"    {f.name}: Optional[{py}] = None")
+            else:
+                fields.append(f"    {f.name}: {py}")
+        if not fields:
+            fields.append("    pass")
+        omitted = sorted(fld for (e, fld) in human.human_only_fields if e == ent)
+        note = f"  # human-only omitted: {', '.join(omitted)}" if omitted else ""
+        blocks.append(
+            f"class {ent}Edge(BaseModel):\n"
+            f'    """AI tool-input for {ent} — human-authored fields omitted (C-4).{note}"""\n'
+            + "\n".join(fields)
+        )
+        registry.append(f"    {ent!r}: {ent}Edge,")
+
+    body = (
+        "from __future__ import annotations\n\n"
+        "from typing import Optional  # noqa: F401\n\n"
+        "from pydantic import BaseModel\n\n\n"
+        + "\n\n\n".join(blocks)
+        + "\n\n\nEDGE_SCHEMAS = {\n"
+        + "\n".join(registry)
+        + "\n}\n"
+    )
+    return header + "\n\n" + body
+
+
+def render_ai_pass(
+    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma", pass_name: str = ""
+) -> str:
+    """``app/ai/<pass>.py`` — the per-pass harness (FR-MA-2): read → call_ai_service → persist."""
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    passes = {ps.name: ps for ps in parse_ai_passes(manifest_text)}
+    ps = passes.get(pass_name)
+    if ps is None:
+        raise ValueError(f"no such pass in manifest: {pass_name!r}")
+    header = header_ai_layer(source_file, s, p, h, "ai-pass")
+    # the header carries the pass name in the entity slot (for drift re-render dispatch)
+    header = header.replace(
+        "# startd8-artifact: ai-pass",
+        f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
+    )
+    out_entity = ps.output_entities[0]
+    table_imports = ", ".join(sorted(set(ps.output_entities) | set(ps.input_entities)))
+    body = f'''from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.ai.service import call_ai_service
+from app.ai.edge_schemas import {out_entity}Edge
+from app.tables import {table_imports}
+
+# The LLM-authored prompt for this pass (FR-MA-6); the harness around it is owned.
+_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}
+
+
+def {ps.module}({ps.request_field}: str, session: Session) -> dict[str, Any]:
+    """Run the {ps.name} pass: extract a {out_entity} from text and persist it (source=ai)."""
+    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""
+    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()
+    result = call_ai_service({ps.name!r}, full_prompt, {out_entity}Edge, session)
+
+    data = result.model_dump(exclude_none=True)
+    fields = {{k: v for k, v in data.items() if hasattr({out_entity}, k)}}
+    row = {out_entity}(**fields)
+    if hasattr(row, "source"):
+        row.source = "ai"
+    if hasattr(row, "confirmed"):
+        row.confirmed = False
+    session.add(row)
+    session.commit()
+    return {{"created": 1, "entity": {out_entity!r}}}
+
+
+__all__ = [{ps.module!r}]
+'''
+    return header + "\n\n" + body
+
+
+def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``app/ai/routes.py`` — one APIRouter(prefix='/ai'); one route per pass (FR-MA-3)."""
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    passes = parse_ai_passes(manifest_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-router")
+
+    imports = "\n".join(f"from app.ai.{ps.module} import {ps.module}" for ps in passes)
+    routes: List[str] = []
+    for ps in passes:
+        routes.append(
+            f'@ai_router.post({ps.route_path!r})\n'
+            f"def post_{ps.module}(\n"
+            f"    body: _Request,\n"
+            f"    session: Session = Depends(get_session),\n"
+            f") -> dict[str, Any]:\n"
+            f'    """Run the {ps.name} pass."""\n'
+            f"    return {ps.module}(body.{ps.request_field}, session)"
+        )
+    exports = ["ai_router", "_Request"] + [f"post_{ps.module}" for ps in passes]
+    body = (
+        "from __future__ import annotations\n\n"
+        "from typing import Any\n\n"
+        "from fastapi import APIRouter, Depends\n"
+        "from pydantic import BaseModel\n"
+        "from sqlmodel import Session\n\n"
+        "from app.db import get_session\n"
+        + imports
+        + "\n\n"
+        'ai_router = APIRouter(prefix="/ai", tags=["ai"])\n\n\n'
+        "class _Request(BaseModel):\n"
+        '    """Free-text input for an AI pass."""\n\n'
+        '    text: str = ""\n\n\n'
+        + "\n\n\n".join(routes)
+        + "\n\n\n__all__ = "
+        + repr(exports)
+        + "\n"
+    )
+    return header + "\n\n" + body
+
+
+# --------------------------------------------------------------------------- #
+# Layout + assembly
+# --------------------------------------------------------------------------- #
+
+def ai_layout(manifest_text: str) -> Dict[str, str]:
+    """All AI-layer output paths for the given manifest (kind/entity → path is implicit)."""
+    passes = parse_ai_passes(manifest_text)
+    layout = {
+        "app/ai/service.py": "ai-service",
+        "app/ai/edge_schemas.py": "ai-edge-schemas",
+        "app/ai/routes.py": "ai-router",
+        "app/server.py": "ai-server",
+    }
+    for ps in passes:
+        layout[f"app/ai/{ps.module}.py"] = "ai-pass"
+    return layout
+
+
+def render_ai_layer(
+    schema_text: str,
+    manifest_text: str,
+    human_text: Optional[str],
+    source_file: str = "prisma/schema.prisma",
+) -> List[Tuple[str, str]]:
+    """Every AI-layer artifact as ``(path, text)``. Empty ``app/ai/__init__.py`` marker included."""
+    parse_ai_passes(manifest_text)  # fail loud on a malformed manifest before emitting anything
+    passes = parse_ai_passes(manifest_text)
+    out: List[Tuple[str, str]] = [("app/ai/__init__.py", "")]
+    out.append(("app/ai/service.py", render_ai_service(schema_text, manifest_text, human_text, source_file)))
+    out.append(("app/ai/edge_schemas.py", render_edge_schemas(schema_text, manifest_text, human_text, source_file)))
+    for ps in passes:
+        out.append(
+            (
+                f"app/ai/{ps.module}.py",
+                render_ai_pass(schema_text, manifest_text, human_text, source_file, ps.name),
+            )
+        )
+    out.append(("app/ai/routes.py", render_ai_routes(schema_text, manifest_text, human_text, source_file)))
+    out.append(("app/server.py", render_server(schema_text, manifest_text, human_text, source_file)))
+    return out

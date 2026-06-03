@@ -36,7 +36,7 @@ from ..models import (
 )
 from ...agents import BaseAgent
 from ...agents.pool import TimeoutConfig
-from ...model_catalog import Models
+from ...model_catalog import Models, get_latest_model
 from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...utils.file_operations import atomic_write, atomic_write_json
@@ -1382,13 +1382,47 @@ class PlanIngestionWorkflow(WorkflowBase):
     # Agent resolution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _resolve_ingestion_agent_spec(
+        config: Dict[str, Any], role_key: str,
+    ) -> str:
+        """Resolve an ingestion agent spec with first-class precedence.
+
+        Plan-ingestion must honor the run's model choice instead of silently
+        defaulting to Claude (the run-026 leak: an all-Gemini run still ran
+        ingestion on Claude Sonnet). Precedence
+        (MODEL_CONFIG_FIRST_CLASS_REQUIREMENTS FR-3/FR-4):
+
+        1. Explicit per-role override (``assessor_agent`` / ``transformer_agent``).
+        2. Inherit the contractor's **lead** agent — both ingestion roles were
+           historically the balanced/capable Sonnet, so they inherit the capable
+           lead (not the cheap drafter, which would silently downgrade the heavy
+           transform).
+        3. Global ``default_provider`` (or ``provider``) at the balanced tier.
+        4. Catalog default (Claude Sonnet) — last resort only.
+        """
+        spec = config.get(role_key)
+        if spec:
+            return str(spec)
+        # Inherit the capable lead agent when set (assessor←lead, transformer←lead).
+        lead = config.get("lead_agent")
+        if lead:
+            return str(lead)
+        # Global provider override → balanced tier for that provider.
+        provider = config.get("default_provider") or config.get("provider")
+        if provider:
+            resolved = get_latest_model(str(provider), tier="balanced")
+            if resolved:
+                return resolved
+        return Models.CLAUDE_SONNET_LATEST
+
     def _resolve_assessor_agent(
         self,
         config: Dict[str, Any],
         timeout_config: Optional[TimeoutConfig] = None,
         retry_config: Optional[RetryConfig] = None,
     ) -> BaseAgent:
-        spec = config.get("assessor_agent") or Models.CLAUDE_SONNET_LATEST
+        spec = self._resolve_ingestion_agent_spec(config, "assessor_agent")
         return resolve_agent_spec(
             str(spec),
             name="plan-assessor",
@@ -1402,7 +1436,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         timeout_config: Optional[TimeoutConfig] = None,
         retry_config: Optional[RetryConfig] = None,
     ) -> BaseAgent:
-        spec = config.get("transformer_agent") or Models.CLAUDE_SONNET_LATEST
+        spec = self._resolve_ingestion_agent_spec(config, "transformer_agent")
         agent = resolve_agent_spec(
             str(spec),
             name="plan-transformer",

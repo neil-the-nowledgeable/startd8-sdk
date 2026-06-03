@@ -31,9 +31,11 @@ _HEADER_PASSES_SHA_RE = re.compile(r"#\s*passes-sha256:\s*([0-9a-f]{64})")
 _HEADER_HUMAN_SHA_RE = re.compile(r"#\s*human-inputs-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
 
-# Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs).
-# Empty until the AI-layer renderers land (M-C); the three-hash machinery below is ready for them.
-_AI_KINDS: frozenset = frozenset()
+# Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
+# sync with ``ai_layer.AI_KINDS`` (literal here to avoid an import cycle at module load).
+_AI_KINDS: frozenset = frozenset(
+    {"ai-service", "ai-edge-schemas", "ai-pass", "ai-router", "ai-server"}
+)
 
 
 def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
@@ -187,20 +189,80 @@ def owned_file_in_sync(schema_text: str, ondisk_text: str) -> bool:
     )
 
 
+def _ai_renderers():
+    """Map AI artifact-kind → ``(schema, manifest, human, source_file, entity) -> text`` renderer."""
+    from .ai_layer import (
+        render_ai_pass,
+        render_ai_routes,
+        render_ai_service,
+        render_edge_schemas,
+        render_server,
+    )
+
+    return {
+        "ai-service": lambda s, m, h, sf, e: render_ai_service(s, m, h, sf),
+        "ai-edge-schemas": lambda s, m, h, sf, e: render_edge_schemas(s, m, h, sf),
+        "ai-pass": lambda s, m, h, sf, e: render_ai_pass(s, m, h, sf, e),
+        "ai-router": lambda s, m, h, sf, e: render_ai_routes(s, m, h, sf),
+        "ai-server": lambda s, m, h, sf, e: render_server(s, m, h, sf),
+    }
+
+
+def _check_ai_drift(
+    schema_text, manifest_text, human_inputs_text, ondisk_text, source_file, kind
+) -> DriftResult:
+    """Drift for an AI-layer file: stale if any of schema/ai_passes/human_inputs changed (FR-MA-5)."""
+    if manifest_text is None:
+        return DriftResult(
+            "error", ERROR, "AI-layer drift check requires the ai_passes manifest"
+        )
+    reason = ai_layer_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        passes_sha=schema_sha256(manifest_text),
+        human_sha=schema_sha256(human_inputs_text or ""),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    renderer = _ai_renderers().get(kind)
+    if renderer is None:
+        return DriftResult("tampered", DRIFT, f"unknown AI artifact kind ({kind!r})")
+    rendered = renderer(
+        schema_text, manifest_text, human_inputs_text, source_file, embedded_entity(ondisk_text)
+    )
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned AI file was hand-edited (differs from a fresh render of the unchanged inputs)",
+        )
+    return DriftResult("in_sync", IN_SYNC, "owned AI file matches schema + manifest + human-inputs")
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
     *,
     source_file: str = "prisma/schema.prisma",
+    manifest_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
 ) -> DriftResult:
-    """Compare an on-disk owned file against the schema. No writes.
+    """Compare an on-disk owned file against its source contract(s). No writes.
 
     ``ondisk_text is None`` means the file is absent (drift — it should exist). Otherwise: a
     missing/old embedded hash means tampered/stale; matching hash with differing bytes means
-    tampered; matching hash and bytes means in-sync.
+    tampered; matching hash and bytes means in-sync. AI-layer kinds (``_AI_KINDS``) derive from three
+    inputs and are routed to the three-hash check (needs *manifest_text*/*human_inputs_text*).
     """
     if ondisk_text is None:
         return DriftResult("missing", DRIFT, "owned file does not exist on disk")
+
+    kind = embedded_artifact_kind(ondisk_text)
+    if kind in _AI_KINDS:
+        return _check_ai_drift(
+            schema_text, manifest_text, human_inputs_text, ondisk_text, source_file, kind
+        )
 
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)

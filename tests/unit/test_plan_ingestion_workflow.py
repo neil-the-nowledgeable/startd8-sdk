@@ -2821,3 +2821,51 @@ class TestScopeContractToFiles:
         )
         assert "send_request" in result
         assert "ServiceImpl" not in result
+
+
+class TestIngestionAgentResolution:
+    """_resolve_ingestion_agent_spec — first-class model config (run-026 leak).
+
+    Plan-ingestion must honor the run's model choice instead of silently
+    defaulting to Claude. Precedence: explicit role key → inherit lead →
+    default_provider@balanced → catalog default.
+    """
+
+    _resolve = staticmethod(PlanIngestionWorkflow._resolve_ingestion_agent_spec)
+
+    def test_explicit_role_key_wins(self):
+        cfg = {"assessor_agent": "gemini:gemini-2.5-flash", "lead_agent": "x:y"}
+        assert self._resolve(cfg, "assessor_agent") == "gemini:gemini-2.5-flash"
+
+    def test_inherits_lead_when_role_unset(self):
+        cfg = {"lead_agent": "gemini:gemini-2.5-pro"}
+        assert self._resolve(cfg, "assessor_agent") == "gemini:gemini-2.5-pro"
+        # transformer inherits the capable lead too (not the cheap drafter)
+        assert self._resolve(cfg, "transformer_agent") == "gemini:gemini-2.5-pro"
+
+    def test_default_provider_resolves_to_that_provider(self):
+        from startd8.model_catalog import get_latest_model
+        cfg = {"default_provider": "gemini"}
+        spec = self._resolve(cfg, "assessor_agent")
+        assert spec.startswith("gemini:")
+        assert spec == get_latest_model("gemini", tier="balanced")
+
+    def test_provider_alias_key(self):
+        cfg = {"provider": "openai"}
+        assert self._resolve(cfg, "transformer_agent").startswith("openai:")
+
+    def test_empty_config_falls_back_to_catalog_default(self):
+        from startd8.model_catalog import Models
+        assert self._resolve({}, "assessor_agent") == Models.CLAUDE_SONNET_LATEST
+
+    def test_explicit_beats_provider_and_lead(self):
+        cfg = {
+            "assessor_agent": "ollama:custom",
+            "lead_agent": "gemini:gemini-2.5-pro",
+            "default_provider": "openai",
+        }
+        assert self._resolve(cfg, "assessor_agent") == "ollama:custom"
+
+    def test_lead_beats_default_provider(self):
+        cfg = {"lead_agent": "gemini:gemini-2.5-pro", "default_provider": "openai"}
+        assert self._resolve(cfg, "transformer_agent") == "gemini:gemini-2.5-pro"

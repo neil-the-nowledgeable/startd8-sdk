@@ -127,6 +127,18 @@ def backend(
         help="After writing, boot app.main:app in a subprocess and assert it serves "
         "/openapi.json (C-6 runtime gate — catches import errors compileall misses).",
     ),
+    ai_passes: Optional[Path] = typer.Option(
+        None,
+        "--ai-passes",
+        help="Path to ai_passes.yaml. When given, also generate the owned AI layer "
+        "(service/edge-schemas/harnesses/router + app/server.py) from the manifest.",
+    ),
+    human_inputs: Optional[Path] = typer.Option(
+        None,
+        "--human-inputs",
+        help="Path to human_inputs.yaml (field-authorship policy; drives the C-4 edge-schema "
+        "projection so AI-authored schemas omit human-only fields like Metric.value).",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -147,11 +159,31 @@ def backend(
         console.print(f"[red]error:[/red] cannot read schema {schema}: {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
+    manifest_text: Optional[str] = None
+    human_text: Optional[str] = None
+    for label, path, dest in (("ai_passes", ai_passes, "manifest"), ("human_inputs", human_inputs, "human")):
+        if path is None:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        if dest == "manifest":
+            manifest_text = text
+        else:
+            human_text = text
+
     try:
-        artifacts = render_backend(schema_text, source_label)
+        artifacts = render_backend(
+            schema_text,
+            source_label,
+            manifest_text=manifest_text,
+            human_inputs_text=human_text,
+        )
     except (
         ValueError
-    ) as exc:  # e.g. a reserved attribute name in the contract — fail loud
+    ) as exc:  # reserved attr name / malformed ai_passes manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
@@ -162,7 +194,13 @@ def backend(
                 continue  # the empty package marker — nothing to verify
             target = out / rel
             ondisk = target.read_text(encoding="utf-8") if target.exists() else None
-            result = _backend_drift(schema_text, ondisk, source_file=source_label)
+            result = _backend_drift(
+                schema_text,
+                ondisk,
+                source_file=source_label,
+                manifest_text=manifest_text,
+                human_inputs_text=human_text,
+            )
             if result.status != "in_sync":
                 drifted += 1
                 console.print(

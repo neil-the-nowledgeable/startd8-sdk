@@ -298,6 +298,34 @@ class BaseAgent(ABC):
             future = pool.submit(ctx.run, _runner)
             return future.result()
 
+    def generate_structured(
+        self, prompt: str, output_schema: Any, **kwargs: Any
+    ) -> "StructuredResult":
+        """Synchronous wrapper for :meth:`agenerate_structured` (mirrors :meth:`generate`).
+
+        Lets the owned, **sync** AI-service wrapper (C-1) call the structured path without managing
+        an event loop. Unpack as ``value, raw = agent.generate_structured(prompt, MySchema)``.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self._get_event_loop()
+            return loop.run_until_complete(
+                self.agenerate_structured(prompt, output_schema, **kwargs)
+            )
+
+        import concurrent.futures
+        import contextvars
+
+        ctx = contextvars.copy_context()
+
+        def _runner() -> "StructuredResult":
+            return asyncio.run(self.agenerate_structured(prompt, output_schema, **kwargs))
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(ctx.run, _runner)
+            return future.result()
+
     async def _run_with_cost_tracking(
         self,
         prompt: str,

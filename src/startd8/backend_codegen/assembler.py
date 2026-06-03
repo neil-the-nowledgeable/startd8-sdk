@@ -8,7 +8,7 @@ backend`` (Step 7) and the pilot (Step 8).
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .crud_generator import (
     CANONICAL_LAYOUT,
@@ -23,12 +23,20 @@ from .sqlmodel_renderer import render_sqlmodel_tables
 
 
 def render_backend(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    manifest_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
     Includes an **empty ``app/__init__.py``** package marker (not owned/drift-tracked — it carries
     no header). All other files are owned, ``$0.00``-skip-recognized, and build-gateable.
+
+    When *manifest_text* (``ai_passes.yaml``) is provided, the owned **AI layer** (FR-MA-1..6) is
+    assembled too: service wrapper, edge schemas, per-pass harnesses, AI router, and ``app/server.py``
+    — driven by the manifest + *human_inputs_text* (``human_inputs.yaml``, the C-4 field policy).
     """
     out: List[Tuple[str, str]] = [
         ("app/__init__.py", ""),
@@ -49,4 +57,8 @@ def render_backend(
         render_derived(schema_text, source_file)
     )  # export / ai_schemas / completeness
     out.append(("requirements.txt", render_requirements(schema_text, source_file)))
+    if manifest_text:
+        from .ai_layer import render_ai_layer
+
+        out.extend(render_ai_layer(schema_text, manifest_text, human_inputs_text, source_file))
     return tuple(out)
