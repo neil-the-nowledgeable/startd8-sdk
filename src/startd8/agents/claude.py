@@ -530,16 +530,25 @@ class ClaudeAgent(BaseAgent):
         tool_choice = {"type": "tool", "name": tool_name}
 
         async def _call(p: str):
-            if self.retry_config is not None:
-                make_call = with_retry(self.retry_config)(self._make_api_call)
-                return await make_call(
+            from ..exceptions import APIError
+
+            try:
+                if self.retry_config is not None:
+                    make_call = with_retry(self.retry_config)(self._make_api_call)
+                    return await make_call(
+                        p, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                        temperature=temperature, tools=[tool], tool_choice=tool_choice,
+                    )
+                return await self._make_api_call(
                     p, system_prompt=effective_system_prompt, max_tokens=max_tokens,
                     temperature=temperature, tools=[tool], tool_choice=tool_choice,
                 )
-            return await self._make_api_call(
-                p, system_prompt=effective_system_prompt, max_tokens=max_tokens,
-                temperature=temperature, tools=[tool], tool_choice=tool_choice,
-            )
+            except RetryError as exc:  # all transport retries exhausted — wrap like agenerate (L3)
+                raise APIError(
+                    f"API call failed after {exc.attempts} attempts: {exc.last_exception}",
+                    provider=self.name,
+                    original_error=exc.last_exception,
+                ) from exc
 
         start_time = time.time()
         attempts = 2 if retry_on_validation else 1
@@ -607,5 +616,6 @@ class ClaudeAgent(BaseAgent):
             return StructuredResult(value, raw)
 
         # Single retry exhausted — surface the last error for non-destructive handling upstream.
-        assert last_error is not None
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("structured generation produced no result")  # unreachable; not an assert (L1)

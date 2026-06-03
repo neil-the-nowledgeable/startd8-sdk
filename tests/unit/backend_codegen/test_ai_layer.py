@@ -23,12 +23,15 @@ model Profile {
 }
 
 model Metric {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
+  ownerId   String   @default("local")
   name      String
   unit      String?
   value     Float?
   source    String?
-  confirmed Boolean @default(false)
+  confirmed Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 """.strip()
 
@@ -95,8 +98,21 @@ def test_edge_schema_omits_human_only_provenance_and_id():
     assert "source:" not in block         # provenance — harness-owned
     assert "confirmed:" not in block      # provenance — harness-owned
     assert "id:" not in block             # PK — DB-owned
+    assert "ownerId" not in block         # ownership — DB-owned default (str → never AI-authored)
+    assert "createdAt" not in block       # timestamp — DB-owned default; str→datetime would crash commit
+    assert "updatedAt" not in block       # timestamp — DB-owned default
     assert "name: str" in block           # ordinary scalar kept
     assert "unit: Optional[str]" in block
+
+
+def test_persist_helper_drops_server_managed_fields():
+    """The generated _persist must never forward server-managed columns into a row (defense in
+    depth to the edge-schema omission): str timestamps must not reach SQLModel datetime columns."""
+    pass_mod = _files()["app/ai/extract_metrics.py"]
+    assert "_server_managed" in pass_mod
+    for f in ("createdAt", "updatedAt", "ownerId"):
+        assert f in pass_mod.split("_server_managed")[1].split("\n")[0]  # named in the guard set
+    assert "k not in _server_managed" in pass_mod
 
 
 # --------------------------------------------------------------------------- #

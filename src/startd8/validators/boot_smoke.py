@@ -28,13 +28,19 @@ from typing import List, Optional, Tuple
 
 # Runs inside the subprocess. Reports a single JSON line on stdout. Categorizes "deps missing"
 # (unavailable) distinctly from "app failed to boot" (fail) so the gate never green-skips.
+# The subprocess prints exactly one result line, prefixed with this sentinel, so app stdout/logging
+# (which may itself be JSON-shaped) can never be mistaken for our result (M3).
+_SENTINEL = "__BOOT_SMOKE__"
+
 _BOOT_SCRIPT = r'''
 import json, sys, importlib
+SENTINEL = "__BOOT_SMOKE__"
+def emit(d): print(SENTINEL + json.dumps(d))
 spec = sys.argv[1]
 try:
     from fastapi.testclient import TestClient  # noqa: F401
 except Exception as e:  # deps not provisioned in this env
-    print(json.dumps({"status": "unavailable", "reason": "fastapi/TestClient unavailable: %s" % e}))
+    emit({"status": "unavailable", "reason": "fastapi/TestClient unavailable: %s" % e})
     sys.exit(0)
 mod, _, attr = spec.partition(":")
 attr = attr or "app"
@@ -45,13 +51,13 @@ try:
     with TestClient(app) as c:  # context manager triggers lifespan -> init_db
         r = c.get("/openapi.json")
         paths = sorted((r.json().get("paths") or {}).keys()) if r.status_code == 200 else []
-        print(json.dumps({"status": "checked", "ok": r.status_code == 200,
-                          "status_code": r.status_code, "paths": paths}))
+        emit({"status": "checked", "ok": r.status_code == 200,
+              "status_code": r.status_code, "paths": paths})
 except Exception as e:
     import traceback
-    print(json.dumps({"status": "checked", "ok": False,
-                      "error": "%s: %s" % (type(e).__name__, e),
-                      "trace": traceback.format_exc()[-1500:]}))
+    emit({"status": "checked", "ok": False,
+          "error": "%s: %s" % (type(e).__name__, e),
+          "trace": traceback.format_exc()[-1500:]})
 '''
 
 
@@ -128,12 +134,13 @@ def run_boot_smoke(
 
     out = (proc.stdout or "").strip().splitlines()
     payload = None
-    for line in reversed(out):  # last JSON line is ours
-        try:
-            payload = json.loads(line)
-            break
-        except ValueError:
-            continue
+    for line in reversed(out):  # our sentinel-prefixed line — immune to app stdout/logging (M3)
+        if _SENTINEL in line:
+            try:
+                payload = json.loads(line.split(_SENTINEL, 1)[1])
+                break
+            except ValueError:
+                continue
     if payload is None:
         return BootSmokeResult(
             status="error",
