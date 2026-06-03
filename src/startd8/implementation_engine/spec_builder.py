@@ -931,6 +931,43 @@ def _select_template_key(context: Dict[str, Any], override: Optional[str] = None
     return "spec"
 
 
+def _build_corpus_authorities_section(context: Dict[str, Any]) -> str:
+    """Inject mature Controlled Corpus terms as canonical-vocabulary authority (R4-S2).
+
+    Surfaces the accumulated corpus's stable terms ("use these canonical names exactly")
+    into the spec prompt to reduce title/name drift in generation. Gated: off when
+    ``corpus_authorities_enabled`` is False or ``STARTD8_CORPUS_AUTHORITIES`` is falsy;
+    otherwise on when a corpus file exists. Tests may inject ``_corpus_registry`` directly.
+    Pops its own context keys so they don't leak into the JSON general-context dump.
+    """
+    import os
+    from pathlib import Path
+
+    enabled = context.pop("corpus_authorities_enabled", None)
+    corpus_path = context.pop("corpus_path", None)
+    registry = context.pop("_corpus_registry", None)
+    if enabled is False:
+        return ""
+    if os.getenv("STARTD8_CORPUS_AUTHORITIES", "1") not in ("1", "true", "yes", "on"):
+        return ""
+    try:
+        from startd8.corpus.registry import ControlledCorpusRegistry
+        from startd8.corpus.view import render_authorities_md
+        from startd8.paths import controlled_corpus_path
+    except ImportError:
+        return ""
+    if registry is None:
+        if corpus_path:
+            path = Path(corpus_path)
+        else:
+            project_root = context.get("project_root")
+            path = controlled_corpus_path(Path(project_root) if project_root else None)
+        if not path.exists():
+            return ""
+        registry = ControlledCorpusRegistry.load(path)
+    return render_authorities_md(registry, min_maturity=2)
+
+
 def build_spec_prompt(
     task_description: str,
     context: Dict[str, Any],
@@ -1307,6 +1344,11 @@ def build_spec_prompt(
     anti_pattern_section = _build_anti_pattern_section(context, task_description)
     if anti_pattern_section:
         prioritized.append((2, "anti_patterns", anti_pattern_section))
+
+    # P2: Controlled Corpus canonical-vocabulary authorities (R4-S2 / FR-9 wiring)
+    corpus_authorities_section = _build_corpus_authorities_section(context)
+    if corpus_authorities_section:
+        prioritized.append((2, "corpus_authorities", corpus_authorities_section))
 
     # P2: Within-run quality findings from accumulator (REQ-RFL-250)
     run_hints = context.pop("run_quality_hints", None)
