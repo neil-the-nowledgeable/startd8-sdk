@@ -14,7 +14,7 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Tuple
 
-from ..models import TokenUsage, GenerateResult, AgentResponse, ResponseMetadata
+from ..models import TokenUsage, GenerateResult, StructuredResult, AgentResponse, ResponseMetadata
 from ..exceptions import TruncationWarning
 from ..truncation_detection import (
     detect_truncation,
@@ -231,6 +231,33 @@ class BaseAgent(ABC):
             ``text, time_ms, usage = await agent.agenerate(prompt)``
         """
         pass
+
+    async def agenerate_structured(
+        self,
+        prompt: str,
+        output_schema: Any,
+        **kwargs: Any,
+    ) -> "StructuredResult":
+        """
+        Generate a result validated against *output_schema* via provider tool-use.
+
+        Returns a :class:`StructuredResult` (``value, raw``) — a sibling of
+        :class:`GenerateResult` that leaves the latter's 3-tuple arity untouched. Unpack as
+        ``value, raw = await agent.agenerate_structured(prompt, MySchema)``.
+
+        Args:
+            prompt: The prompt text.
+            output_schema: A Pydantic ``BaseModel`` subclass the result must validate against.
+            **kwargs: Per-call overrides (``system_prompt``, ``max_tokens``, ``temperature``,
+                ``retry_on_validation``).
+
+        Raises:
+            NotImplementedError: Providers that do not yet support structured (tool-use) output.
+                A provider counts as structured-output-supported only once its smoke test passes.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support structured (tool-use) output yet"
+        )
 
     def generate(self, prompt: str, **kwargs: Any) -> GenerateResult:
         """
