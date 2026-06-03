@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "status": "complete",
+  "generated_at": "2026-06-03T19:20:11Z",
+  "scr_version": "0.1.0",
+  "run": {
+    "run_id": "run-027",
+    "output_dir": "pipeline-output/strtd8/run-027/plan-ingestion",
+    "language": "python"
+  },
+  "config": {
+    "suspicion_threshold": 0.5,
+    "max_escalations": 10,
+    "reserved_pass_quota": 2,
+    "model_cheap": "anthropic:claude-haiku-4-5",
+    "model_escalation": "anthropic:claude-sonnet-4-6",
+    "theta": 0.7,
+    "max_input_tokens": 12000,
+    "max_output_tokens": 1024,
+    "deterministic": true
+  },
+  "summary": {
+    "total_features": 8,
+    "escalated": 3,
+    "reviewed": 5,
+    "not_reviewed": 0,
+    "pass": 3,
+    "fail": 1,
+    "inconclusive": 1,
+    "semantic_compliance_aggregate": 0.81,
+    "inconclusive_rate": 0.2,
+    "inconclusive_rate_exceeded": false,
+    "cost_usd": 0.0143
+  },
+  "features": [
+    {
+      "feature_id": "metric-ingest",
+      "language": "python",
+      "review_granularity": "feature",
+      "element_fqn": "feature:metric-ingest",
+      "requirement": {
+        "seed_task_id": "PI-004",
+        "text_excerpt": "Ingest metric rows. The AI must NEVER compute Metric.value - it is provided by the caller ...",
+        "join_corroborated": true
+      },
+      "selection": {
+        "suspicion_score": 0.35,
+        "tier": "escalated",
+        "reason": "pass_sample",
+        "not_reviewed_reason": null
+      },
+      "verdict": {
+        "verdict": "fail",
+        "confidence": 0.86,
+        "inconclusive_reason": null
+      },
+      "issues": [
+        {
+          "severity": "critical",
+          "category": "requirement_violation",
+          "description": "Generated code computes Metric.value = sum(samples)/len(samples); the requirement forbids the AI computing this field - it must be passed through from the caller.",
+          "line_hint": 42,
+          "suggested_fix": "Remove the aggregation; assign Metric.value from the input DTO field unchanged."
+        }
+      ],
+      "semantic_compliance_score": 0.1,
+      "reviewed_files": ["src/app/services/metric_ingest.py"],
+      "review_status": "complete"
+    },
+    {
+      "feature_id": "export-router",
+      "language": "python",
+      "review_granularity": "feature",
+      "element_fqn": "feature:export-router",
+      "requirement": {
+        "seed_task_id": "PI-002",
+        "text_excerpt": "Expose CSV + JSON export ...",
+        "join_corroborated": true
+      },
+      "selection": {
+        "suspicion_score": 0.72,
+        "tier": "cheap",
+        "reason": "suspect",
+        "not_reviewed_reason": null
+      },
+      "verdict": {
+        "verdict": "inconclusive",
+        "confidence": 0.4,
+        "inconclusive_reason": "requirement_join_ambiguous"
+      },
+      "issues": [],
+      "semantic_compliance_score": null,
+      "reviewed_files": ["src/app/web/export_router.py"],
+      "review_status": "complete"
+    }
+  ],
+  "cross_feature_patterns": [
+    {
+      "pattern_type": "requirement_authority_violation",
+      "grouping_key": "category:requirement_violation",
+      "description": "2 features compute fields the requirements mark as caller-provided (AI-authored authority fields).",
+      "affected_features": ["metric-ingest", "rollup-job"],
+      "severity": "high"
+    }
+  ],
+  "kaizen_emitted": [
+    "requirement_semantic_gap:metric-ingest",
+    "requirement_semantic_gap:rollup-job"
+  ]
+}
