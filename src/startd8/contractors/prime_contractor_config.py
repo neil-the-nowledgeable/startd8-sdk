@@ -329,18 +329,22 @@ def apply_cli_overrides(
         config.agents.drafter = args.drafter_agent
 
     # Global provider knob: fill any role still UNSET from the provider's tier
-    # defaults, so a single --provider flips the whole contractor (and is
-    # inherited downstream). Explicit --lead/--drafter/--tier3 above take
-    # precedence; a config-file agent also counts as "set" and is preserved.
+    # defaults via the unified resolver (single source of the role→tier map), so
+    # a single --provider flips the whole contractor (and is inherited
+    # downstream). Explicit --lead/--drafter/--tier3 above take precedence; a
+    # config-file agent also counts as "set" and is preserved.
     provider = getattr(args, "provider", None)
     if provider:
-        from startd8.model_catalog import get_latest_model
+        from startd8.model_roles import resolve_role_spec
         config.default_provider = str(provider)
-        for role, tier in (("lead", "flagship"), ("drafter", "balanced"),
-                           ("tier3", "flagship")):
+        for role in ("lead", "drafter", "tier3"):
             if getattr(config.agents, role) is None:
-                resolved = get_latest_model(str(provider), tier=tier)
-                if resolved:
+                resolved = resolve_role_spec(role, provider=str(provider))
+                # Only fill when the provider actually resolved to one of ITS
+                # models (resolve_role_spec falls back to the catalog default for
+                # an unknown provider; preserve the old "leave unset" behavior so
+                # the contractor's own default applies later).
+                if resolved.startswith(f"{provider}:"):
                     setattr(config.agents, role, resolved)
 
     return config
