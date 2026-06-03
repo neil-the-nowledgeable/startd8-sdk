@@ -168,3 +168,86 @@ def test_spine_unaffected_by_manifest_change():
 def test_no_manifest_means_no_ai_layer():
     arts = dict(render_backend(SCHEMA))
     assert not any(r.startswith("app/ai/") or r == "app/server.py" for r in arts)
+
+
+# --------------------------------------------------------------------------- #
+# Harness modes (M-C polish): read-mode (DB-driven, multi-output) vs text-mode
+# --------------------------------------------------------------------------- #
+
+MULTI_MANIFEST = """
+passes:
+  - name: suggest_caps
+    input_entities: [Profile]
+    output_entities: [Capability, Outcome]
+    route_path: /caps
+    prompt: prompts/caps.md
+""".strip()
+
+CAP_SCHEMA = SCHEMA + """
+
+model Capability {
+  id        String  @id @default(cuid())
+  name      String?
+  category  String?
+  source    String?
+  confirmed Boolean @default(false)
+}
+
+model Outcome {
+  id        String  @id @default(cuid())
+  name      String?
+  source    String?
+  confirmed Boolean @default(false)
+}
+"""
+
+TEXT_MANIFEST = """
+passes:
+  - name: extract_one
+    output_entities: [Metric]
+    route_path: /extract
+    prompt: prompts/extract.md
+""".strip()
+
+
+def test_read_mode_harness_is_session_only_and_multi_output():
+    files = dict(render_ai_layer(CAP_SCHEMA, MULTI_MANIFEST, ""))
+    pass_mod = files["app/ai/suggest_caps.py"]
+    assert "def suggest_caps(session: Session) -> dict[str, Any]:" in pass_mod
+    assert "select(model).where(model.confirmed.is_(True))" in pass_mod   # reads confirmed inputs
+    assert "class SuggestCapsResult" in pass_mod                          # combined result schema
+    assert "capabilities: list[CapabilityEdge]" in pass_mod
+    assert "outcomes: list[OutcomeEdge]" in pass_mod                      # multi-output
+    assert 'row.source = "ai"' in pass_mod and "row.confirmed = False" in pass_mod
+    # router route for a read-mode pass is body-less (no _Request)
+    routes = files["app/ai/routes.py"]
+    assert "def post_suggest_caps(session: Session = Depends(get_session))" in routes
+
+
+def test_text_mode_harness_keeps_free_text_signature():
+    files = dict(render_ai_layer(CAP_SCHEMA, TEXT_MANIFEST, ""))
+    pass_mod = files["app/ai/extract_one.py"]
+    assert "def extract_one(text: str, session: Session)" in pass_mod
+    assert "call_ai_service('extract_one', full_prompt, MetricEdge, session)" in pass_mod
+    routes = files["app/ai/routes.py"]
+    assert "class _Request(BaseModel)" in routes      # text mode → request body
+    assert "body: _Request" in routes
+
+
+def test_read_mode_compiles(tmp_path):
+    for rel, content in render_ai_layer(CAP_SCHEMA, MULTI_MANIFEST, ""):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        if rel.endswith(".py"):
+            py_compile.compile(str(p), doraise=True)
+
+
+def test_naming_helpers():
+    from startd8.backend_codegen.ai_layer import _pascal, _plural_field, _snake
+
+    assert _snake("ValueProp") == "value_prop"
+    assert _pascal("suggest_caps") == "SuggestCaps"
+    assert _plural_field("Capability") == "capabilities"
+    assert _plural_field("Outcome") == "outcomes"
+    assert _plural_field("ValueProp") == "value_props"
