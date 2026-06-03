@@ -75,6 +75,23 @@ def _ident(name: str) -> str:
     return s if s and not s[0].isdigit() else f"p_{s}"
 
 
+def _snake(name: str) -> str:
+    """CamelCase/PascalCase → snake_case (``ValueProp`` → ``value_prop``); snake passes through."""
+    s = re.sub(r"(?<!^)(?=[A-Z])", "_", name)
+    return s.lower()
+
+
+def _pascal(name: str) -> str:
+    """snake_case → PascalCase (``suggest_caps`` → ``SuggestCaps``)."""
+    return "".join(part[:1].upper() + part[1:] for part in _ident(name).split("_") if part)
+
+
+def _plural_field(entity: str) -> str:
+    """A stable list-field name for an entity (``Capability`` → ``capabilities``)."""
+    snake = _snake(entity)
+    return snake[:-1] + "ies" if snake.endswith("y") else snake + "s"
+
+
 def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
     """Parse + **strictly** validate ``ai_passes.yaml`` (FR-MA-5: malformed → loud failure)."""
     data = yaml.safe_load(text or "") or {}
@@ -281,59 +298,148 @@ def render_edge_schemas(schema_text, manifest_text, human_text, source_file="pri
     return header + "\n\n" + body
 
 
-def render_ai_pass(
-    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma", pass_name: str = ""
-) -> str:
-    """``app/ai/<pass>.py`` — the per-pass harness (FR-MA-2): read → call_ai_service → persist."""
-    s, p, h = _hashes(schema_text, manifest_text, human_text)
-    passes = {ps.name: ps for ps in parse_ai_passes(manifest_text)}
-    ps = passes.get(pass_name)
-    if ps is None:
-        raise ValueError(f"no such pass in manifest: {pass_name!r}")
-    header = header_ai_layer(source_file, s, p, h, "ai-pass")
-    # the header carries the pass name in the entity slot (for drift re-render dispatch)
-    header = header.replace(
-        "# startd8-artifact: ai-pass",
-        f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
-    )
-    out_entity = ps.output_entities[0]
-    table_imports = ", ".join(sorted(set(ps.output_entities) | set(ps.input_entities)))
-    body = f'''from __future__ import annotations
+# Shared owned helpers emitted into every harness (plain strings — literal braces, no f-escaping).
+_SUMMARY_HELPER = '''def _summary(obj: Any) -> dict[str, Any]:
+    """A row's content columns (drop ids/provenance/timestamps) for the prompt context."""
+    skip = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    cols = obj.__table__.columns.keys()
+    return {c: getattr(obj, c) for c in cols if c not in skip and getattr(obj, c) is not None}
+'''
 
-from pathlib import Path
-from typing import Any
-
-from sqlalchemy.orm import Session
-
-from app.ai.service import call_ai_service
-from app.ai.edge_schemas import {out_entity}Edge
-from app.tables import {table_imports}
-
-# The LLM-authored prompt for this pass (FR-MA-6); the harness around it is owned.
-_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}
-
-
-def {ps.module}({ps.request_field}: str, session: Session) -> dict[str, Any]:
-    """Run the {ps.name} pass: extract a {out_entity} from text and persist it (source=ai)."""
-    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""
-    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()
-    result = call_ai_service({ps.name!r}, full_prompt, {out_entity}Edge, session)
-
-    data = result.model_dump(exclude_none=True)
-    fields = {{k: v for k, v in data.items() if hasattr({out_entity}, k)}}
-    row = {out_entity}(**fields)
+_PERSIST_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -> int:
+    """Persist one edge object as an owned row (source=ai, confirmed=false); dedup by name. 0/1."""
+    data = edge_obj.model_dump(exclude_none=True)
+    fields = {k: v for k, v in data.items() if hasattr(model, k)}
+    name = fields.get("name")
+    if name and hasattr(model, "name"):
+        if session.exec(select(model).where(model.name == name)).first() is not None:
+            return 0
+    row = model(**fields)
     if hasattr(row, "source"):
         row.source = "ai"
     if hasattr(row, "confirmed"):
         row.confirmed = False
     session.add(row)
-    session.commit()
-    return {{"created": 1, "entity": {out_entity!r}}}
-
-
-__all__ = [{ps.module!r}]
+    return 1
 '''
+
+
+def render_ai_pass(
+    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma", pass_name: str = ""
+) -> str:
+    """``app/ai/<pass>.py`` — the per-pass harness (FR-MA-2), in one of two owned shapes:
+
+    - **read mode** (``input_entities`` declared) — ``def <name>(session)``: read confirmed input
+      rows, build the prompt context, call the AI for a multi-output result, persist each output
+      entity's rows ``source:"ai",confirmed:false`` with name-based idempotent dedup.
+    - **text mode** (no ``input_entities``) — ``def <name>(text, session)``: free-text → single output.
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    ps = {q.name: q for q in parse_ai_passes(manifest_text)}.get(pass_name)
+    if ps is None:
+        raise ValueError(f"no such pass in manifest: {pass_name!r}")
+    header = header_ai_layer(source_file, s, p, h, "ai-pass").replace(
+        "# startd8-artifact: ai-pass",
+        f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
+    )
+    body = _render_pass_read(ps) if ps.input_entities else _render_pass_text(ps)
     return header + "\n\n" + body
+
+
+def _render_pass_text(ps: AiPass) -> str:
+    out = ps.output_entities[0]
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "from pathlib import Path",
+        "from typing import Any",
+        "",
+        "from sqlmodel import Session, select",
+        "",
+        "from app.ai.service import call_ai_service",
+        f"from app.ai.edge_schemas import {out}Edge",
+        f"from app.tables import {out}",
+        "",
+        "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
+        f"_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}",
+        "",
+        "",
+        f"def {ps.module}({ps.request_field}: str, session: Session) -> dict[str, Any]:",
+        f'    """Free-text → a {out} (source=ai, confirmed=false), name-deduped."""',
+        '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
+        f'    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()',
+        f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
+        f"    created = _persist(session, {out}, result)",
+        "    session.commit()",
+        f'    return {{"created": {{{out!r}: created}}}}',
+        "",
+        "",
+        _PERSIST_HELPER,
+        "",
+        f"__all__ = [{ps.module!r}]",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _render_pass_read(ps: AiPass) -> str:
+    outputs = list(dict.fromkeys(ps.output_entities))
+    inputs = list(dict.fromkeys(ps.input_entities))
+    result_cls = f"{_pascal(ps.name)}Result"
+    edge_imports = ", ".join(f"{e}Edge" for e in outputs)
+    tables = ", ".join(sorted(set(outputs) | set(inputs)))
+    read_pairs = ", ".join(f"({e}, {e!r})" for e in inputs)
+    persist_pairs = ", ".join(f"({_plural_field(e)!r}, {e})" for e in outputs)
+    result_fields = [f"    {_plural_field(e)}: list[{e}Edge] = []" for e in outputs]
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "import json",
+        "from pathlib import Path",
+        "from typing import Any",
+        "",
+        "from pydantic import BaseModel",
+        "from sqlmodel import Session, select",
+        "",
+        "from app.ai.service import call_ai_service",
+        f"from app.ai.edge_schemas import {edge_imports}",
+        f"from app.tables import {tables}",
+        "",
+        "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
+        f"_PROMPT_PATH = Path(__file__).parent / {ps.prompt!r}",
+        "",
+        "",
+        f"class {result_cls}(BaseModel):",
+        f'    """Structured tool output for the {ps.name} pass."""',
+        *result_fields,
+        "",
+        "",
+        f"def {ps.module}(session: Session) -> dict[str, Any]:",
+        f'    """Read confirmed {", ".join(inputs)} → propose {", ".join(outputs)} '
+        '(source=ai, confirmed=false)."""',
+        "    context: dict[str, Any] = {}",
+        f"    for model, label in [{read_pairs}]:",
+        "        rows = session.exec(select(model).where(model.confirmed.is_(True))).all()",
+        "        context[label] = [_summary(r) for r in rows]",
+        '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
+        '    full_prompt = prompt + "\\n\\n## Input data\\n" + json.dumps(context, default=str, indent=2)',
+        f"    result = call_ai_service({ps.name!r}, full_prompt, {result_cls}, session)",
+        "    created: dict[str, int] = {}",
+        f"    for field, model in [{persist_pairs}]:",
+        "        items = getattr(result, field, None) or []",
+        "        created[model.__name__] = sum(_persist(session, model, it) for it in items)",
+        "    session.commit()",
+        '    return {"created": created}',
+        "",
+        "",
+        _SUMMARY_HELPER,
+        "",
+        _PERSIST_HELPER,
+        "",
+        f"__all__ = [{ps.module!r}]",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
@@ -341,38 +447,49 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
     s, p, h = _hashes(schema_text, manifest_text, human_text)
     passes = parse_ai_passes(manifest_text)
     header = header_ai_layer(source_file, s, p, h, "ai-router")
+    has_text = any(not ps.input_entities for ps in passes)
 
     imports = "\n".join(f"from app.ai.{ps.module} import {ps.module}" for ps in passes)
     routes: List[str] = []
     for ps in passes:
-        routes.append(
-            f'@ai_router.post({ps.route_path!r})\n'
-            f"def post_{ps.module}(\n"
-            f"    body: _Request,\n"
-            f"    session: Session = Depends(get_session),\n"
-            f") -> dict[str, Any]:\n"
-            f'    """Run the {ps.name} pass."""\n'
-            f"    return {ps.module}(body.{ps.request_field}, session)"
-        )
-    exports = ["ai_router", "_Request"] + [f"post_{ps.module}" for ps in passes]
-    body = (
+        if ps.input_entities:  # read mode — body-less POST, reads confirmed inputs
+            routes.append(
+                f"@ai_router.post({ps.route_path!r})\n"
+                f"def post_{ps.module}(session: Session = Depends(get_session)) -> dict[str, Any]:\n"
+                f'    """Run the {ps.name} pass (reads confirmed inputs)."""\n'
+                f"    return {ps.module}(session)"
+            )
+        else:  # text mode — free-text body
+            routes.append(
+                f"@ai_router.post({ps.route_path!r})\n"
+                f"def post_{ps.module}(\n"
+                f"    body: _Request,\n"
+                f"    session: Session = Depends(get_session),\n"
+                f") -> dict[str, Any]:\n"
+                f'    """Run the {ps.name} pass."""\n'
+                f"    return {ps.module}(body.{ps.request_field}, session)"
+            )
+    exports = ["ai_router"] + (["_Request"] if has_text else []) + [
+        f"post_{ps.module}" for ps in passes
+    ]
+    head = (
         "from __future__ import annotations\n\n"
         "from typing import Any\n\n"
         "from fastapi import APIRouter, Depends\n"
-        "from pydantic import BaseModel\n"
-        "from sqlmodel import Session\n\n"
+        + ("from pydantic import BaseModel\n" if has_text else "")
+        + "from sqlmodel import Session\n\n"
         "from app.db import get_session\n"
         + imports
         + "\n\n"
         'ai_router = APIRouter(prefix="/ai", tags=["ai"])\n\n\n'
-        "class _Request(BaseModel):\n"
-        '    """Free-text input for an AI pass."""\n\n'
-        '    text: str = ""\n\n\n'
-        + "\n\n\n".join(routes)
-        + "\n\n\n__all__ = "
-        + repr(exports)
-        + "\n"
     )
+    if has_text:
+        head += (
+            "class _Request(BaseModel):\n"
+            '    """Free-text input for a text-mode AI pass."""\n\n'
+            '    text: str = ""\n\n\n'
+        )
+    body = head + "\n\n\n".join(routes) + "\n\n\n__all__ = " + repr(exports) + "\n"
     return header + "\n\n" + body
 
 
