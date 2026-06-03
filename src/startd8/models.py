@@ -113,6 +113,19 @@ class GenerateResult(NamedTuple):
         return self.text
 
 
+class StructuredResult(NamedTuple):
+    """Result of a structured (tool-use) generation: ``(value, raw)``.
+
+    The validated structured object plus the raw :class:`GenerateResult`. Deliberately a **sibling**
+    return type — NOT a new field on ``GenerateResult``, which is a 3-field NamedTuple unpacked as a
+    3-tuple at ~77 call sites; adding a field there breaks every unpack (arity is strict on unpack,
+    defaults only help construction). Unpack as
+    ``value, raw = await agent.agenerate_structured(prompt, MySchema)``.
+    """
+    value: BaseModel
+    raw: GenerateResult
+
+
 @lru_cache(maxsize=1)
 def _default_pricing_service():
     from .costs.pricing import PricingService

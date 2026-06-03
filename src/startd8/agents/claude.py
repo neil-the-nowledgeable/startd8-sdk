@@ -4,10 +4,13 @@ Anthropic Claude agent implementation.
 
 import asyncio
 import logging
+import re
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
-from ..models import TokenUsage, GenerateResult
+from pydantic import ValidationError
+
+from ..models import TokenUsage, GenerateResult, StructuredResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
 from .pool import TimeoutConfig, get_client_pool
@@ -244,6 +247,8 @@ class ClaudeAgent(BaseAgent):
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        tools: Optional[list] = None,
+        tool_choice: Optional[dict] = None,
     ):
         """
         Make the raw API call to Anthropic.
@@ -282,6 +287,10 @@ class ClaudeAgent(BaseAgent):
                 kwargs["system"] = system_prompt
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if tools is not None:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
         return await self.async_client.messages.create(**kwargs)
 
     async def agenerate(
@@ -462,3 +471,126 @@ class ClaudeAgent(BaseAgent):
             )
 
         return GenerateResult(response_text, response_time_ms, token_usage)
+
+    async def agenerate_structured(
+        self,
+        prompt: str,
+        output_schema: Any,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        retry_on_validation: bool = True,
+    ) -> StructuredResult:
+        """
+        Generate a result validated against *output_schema* via Anthropic tool-use.
+
+        Forces a single tool call whose ``input_schema`` is *output_schema*'s JSON schema, parses
+        the ``tool_use`` block, and validates it. On a Pydantic ``ValidationError`` (or a missing
+        tool call) the request is retried **once**, feeding the error back into the prompt — a
+        *semantic* retry, distinct from the transport retry in ``utils.retry``. Returns
+        ``StructuredResult(value, raw)`` so the 3-tuple ``GenerateResult`` contract is untouched.
+
+        Raises:
+            TypeError: If *output_schema* is not a Pydantic ``BaseModel`` subclass.
+            ValidationError / ValueError: If the model still returns an invalid (or absent) object
+                after the one retry — the caller (e.g. the generated AI wrapper) decides how to fail
+                non-destructively.
+            APIError / AgentError: For transport failures (as in :meth:`agenerate`).
+        """
+        if not (isinstance(output_schema, type) and hasattr(output_schema, "model_json_schema")):
+            raise TypeError("output_schema must be a Pydantic BaseModel subclass")
+
+        effective_system_prompt = (
+            system_prompt if system_prompt is not None else self.system_prompt
+        )
+
+        tool_name = re.sub(
+            r"[^a-zA-Z0-9_-]", "_", getattr(output_schema, "__name__", "extract")
+        )[:64]
+        tool = {
+            "name": tool_name,
+            "description": (output_schema.__doc__ or f"Return a {tool_name} object.").strip(),
+            "input_schema": output_schema.model_json_schema(),
+        }
+        tool_choice = {"type": "tool", "name": tool_name}
+
+        async def _call(p: str):
+            if self.retry_config is not None:
+                make_call = with_retry(self.retry_config)(self._make_api_call)
+                return await make_call(
+                    p, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    temperature=temperature, tools=[tool], tool_choice=tool_choice,
+                )
+            return await self._make_api_call(
+                p, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                temperature=temperature, tools=[tool], tool_choice=tool_choice,
+            )
+
+        start_time = time.time()
+        attempts = 2 if retry_on_validation else 1
+        current_prompt = prompt
+        last_error: Optional[Exception] = None
+
+        for attempt in range(attempts):
+            response = await _call(current_prompt)
+
+            tool_input = None
+            for block in getattr(response, "content", None) or []:
+                if getattr(block, "type", None) == "tool_use":
+                    tool_input = block.input
+                    break
+
+            try:
+                if tool_input is None:
+                    raise ValueError("model returned no tool_use block")
+                value = output_schema.model_validate(tool_input)
+            except ValidationError as e:
+                last_error = e
+                logger.warning(
+                    "Structured output failed validation for %s (attempt %d/%d): %s",
+                    self.name, attempt + 1, attempts, e,
+                )
+                current_prompt = (
+                    f"{prompt}\n\nYour previous `{tool_name}` tool call failed schema validation "
+                    f"with these errors:\n{e}\n\nCall `{tool_name}` again with a corrected object "
+                    f"that satisfies the schema."
+                )
+                continue
+            except ValueError as e:
+                last_error = e
+                logger.warning(
+                    "Structured output missing tool_use block for %s (attempt %d/%d)",
+                    self.name, attempt + 1, attempts,
+                )
+                current_prompt = (
+                    f"{prompt}\n\nYou must call the `{tool_name}` tool to return the result."
+                )
+                continue
+
+            # Success — build the raw GenerateResult, mirroring agenerate's usage extraction.
+            response_time_ms = int((time.time() - start_time) * 1000)
+            stop_reason = getattr(response, "stop_reason", None)
+            usage = getattr(response, "usage", None)
+            token_usage = None
+            if usage is not None:
+                _raw_creation = getattr(usage, "cache_creation_input_tokens", None)
+                _raw_read = getattr(usage, "cache_read_input_tokens", None)
+                token_usage = TokenUsage(
+                    input=usage.input_tokens,
+                    output=usage.output_tokens,
+                    total=usage.input_tokens + usage.output_tokens,
+                    model_name=self.model,
+                    finish_reason=stop_reason,
+                    cache_creation_input_tokens=(
+                        _raw_creation if isinstance(_raw_creation, int) else None
+                    ),
+                    cache_read_input_tokens=(
+                        _raw_read if isinstance(_raw_read, int) else None
+                    ),
+                )
+            raw = GenerateResult(value.model_dump_json(), response_time_ms, token_usage)
+            return StructuredResult(value, raw)
+
+        # Single retry exhausted — surface the last error for non-destructive handling upstream.
+        assert last_error is not None
+        raise last_error
