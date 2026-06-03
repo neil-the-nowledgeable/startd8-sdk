@@ -20,7 +20,6 @@ from urllib.request import urlopen
 from startd8.agents.base import BaseAgent
 from startd8.contractors.protocols import (
     CodeGenerator,
-    DRAFT_MODEL_CLAUDE_HAIKU,
     GenerationResult,
 )
 from startd8.element_id import make_element_id
@@ -2750,26 +2749,32 @@ class MicroPrimeCodeGenerator:
         return self._fallback.generate(task, clean_context, target_files)
 
     def _resolve_cloud_agent_spec(self) -> str:
-        """Resolve the cloud agent spec string for element-level escalation.
+        """Resolve the cloud agent spec for element-level escalation.
 
-        Priority: tier-specific spec from complexity routing →
-        explicit ``cloud_agent_spec`` → fallback's ``drafter_agent``
-        → ``DRAFT_MODEL_CLAUDE_HAIKU.agent_spec``.
+        Delegates to the unified per-role resolver (MODEL_CONFIG) so the
+        last-resort is no longer a bare ``CLAUDE_HAIKU`` literal and honors any
+        provider/config wiring. Precedence preserved: tier-specific spec
+        (complexity routing) / explicit ``cloud_agent_spec`` → fallback's
+        ``drafter_agent`` (inheritance: micro_prime_cloud_retry ← drafter) →
+        catalog default (Haiku, == the former ``DRAFT_MODEL_CLAUDE_HAIKU``).
         """
-        # D3: Tier-specific agent spec from complexity routing
-        if self._tier_agent_spec is not None:
-            return self._tier_agent_spec
-        if self._cloud_agent_spec is not None:
-            return self._cloud_agent_spec
+        from startd8.model_roles import Role, resolve_role_spec
+
+        # D3: tier-specific (complexity routing) or explicit cloud spec = override.
+        override = self._tier_agent_spec or self._cloud_agent_spec
+        # The fallback's drafter feeds inheritance; it may be a str or an agent.
         drafter = getattr(self._fallback, "drafter_agent", None)
-        if drafter is not None:
-            # drafter_agent may be a string spec or an agent object with a spec
-            if isinstance(drafter, str):
-                return drafter
-            spec = getattr(drafter, "agent_spec", None)
-            if isinstance(spec, str):
-                return spec
-        return DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
+        drafter_spec: Optional[str] = None
+        if isinstance(drafter, str):
+            drafter_spec = drafter
+        elif drafter is not None:
+            _s = getattr(drafter, "agent_spec", None)
+            if isinstance(_s, str):
+                drafter_spec = _s
+        run_config = {"drafter_agent": drafter_spec} if drafter_spec else {}
+        return resolve_role_spec(
+            Role.MICRO_PRIME_CLOUD_RETRY, override=override, run_config=run_config,
+        )
 
     @staticmethod
     def _resolve_cloud_agent_max_tokens(spec: str) -> Optional[int]:
