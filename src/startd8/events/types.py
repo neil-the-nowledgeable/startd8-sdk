@@ -71,6 +71,14 @@ class EventType(Enum):
     # Quality Gate events
     QUALITY_GATE_RESULT = auto()
 
+    # Service Assistant events (project<->SDK bridge; see service_assistant/)
+    RUN_DETECTED = auto()
+    POSTMORTEM_AVAILABLE = auto()
+    RUN_FAILED = auto()
+
+    # Semantic Compliance Reviewer (see semantic_compliance/)
+    SEMANTIC_REVIEW_COMPLETE = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()
