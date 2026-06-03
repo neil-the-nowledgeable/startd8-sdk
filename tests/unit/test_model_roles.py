@@ -84,3 +84,31 @@ def test_backend_agnostic_specs_pass_through():
 
 def test_role_enum_and_string_equivalent():
     assert resolve_role_spec(Role.TIER3, provider="gemini") == resolve_role_spec("tier3", provider="gemini")
+
+
+# ---- regression guards (step 8: no silent-provider leak) ------------------
+
+def test_provider_override_leaks_no_anthropic_across_roles():
+    """The run-026 invariant: ONE provider override flips EVERY role — no role
+    silently stays on anthropic. (gemini supports all role tiers.)"""
+    for role in Role:
+        spec = resolve_role_spec(role, provider="gemini")
+        assert not spec.startswith("anthropic:"), f"{role.value} leaked anthropic: {spec}"
+
+
+def test_resolution_sites_delegate_not_call_get_latest_model():
+    """The role→model mapping lives only in model_roles. Resolution sites must
+    delegate (no direct get_latest_model / hardcoded provider-default fallback),
+    so the run-026 leak class can't be reintroduced site-by-site."""
+    import inspect
+
+    import startd8.contractors.prime_contractor_config as pcc
+    import startd8.micro_prime.prime_adapter as pa
+    import startd8.workflows.builtin.plan_ingestion_workflow as piw
+
+    for mod in (piw, pcc, pa):
+        src = inspect.getsource(mod)
+        assert "get_latest_model" not in src, (
+            f"{mod.__name__} should resolve models via model_roles.resolve_role_spec, "
+            "not call get_latest_model directly"
+        )
