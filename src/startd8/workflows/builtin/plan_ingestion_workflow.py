@@ -1404,6 +1404,23 @@ class PlanIngestionWorkflow(WorkflowBase):
             role, override=config.get(role_key), run_config=config,
         )
 
+    def _record_ingestion_model(
+        self, role: str, spec: str, config: Dict[str, Any],
+    ) -> None:
+        """Record the resolved ingestion model for provenance (step 7).
+
+        Closes the run-026 gap where ingestion ran on Claude but nothing recorded
+        it (we had to grep logs). Surfaced into the diagnostic ``totals.models``.
+        """
+        models = getattr(self, "_ingestion_models", None)
+        if models is None:
+            models = {}
+            self._ingestion_models = models
+        models[role] = str(spec)
+        prov = config.get("default_provider") or config.get("provider")
+        if prov:
+            models["default_provider"] = str(prov)
+
     def _resolve_assessor_agent(
         self,
         config: Dict[str, Any],
@@ -1411,6 +1428,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         retry_config: Optional[RetryConfig] = None,
     ) -> BaseAgent:
         spec = self._resolve_ingestion_agent_spec(config, "assessor_agent")
+        self._record_ingestion_model("assessor", spec, config)
         return resolve_agent_spec(
             str(spec),
             name="plan-assessor",
@@ -1425,6 +1443,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         retry_config: Optional[RetryConfig] = None,
     ) -> BaseAgent:
         spec = self._resolve_ingestion_agent_spec(config, "transformer_agent")
+        self._record_ingestion_model("transformer", spec, config)
         agent = resolve_agent_spec(
             str(spec),
             name="plan-transformer",
@@ -4699,6 +4718,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                 task_density=_task_density,
                 enrichment=emit_result.enrichment_diagnostic,
             )
+            # Provenance (step 7): record which model ingestion actually used, so
+            # "what ran where" is answerable from the artifact (run-026 gap).
+            _ing_models = getattr(self, "_ingestion_models", None)
+            if _ing_models:
+                _diag.totals["models"] = dict(_ing_models)
             persist_diagnostic(_diag, output_dir)
 
             completed_at = datetime.now(timezone.utc)

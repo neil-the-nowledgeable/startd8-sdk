@@ -2874,6 +2874,17 @@ class TestIngestionAgentResolution:
         }
         assert self._resolve(cfg, "assessor_agent") == "ollama:custom"
 
+    def test_records_ingestion_model_provenance(self):
+        """Step 7: ingestion records which model it used (the run-026 gap)."""
+        wf = PlanIngestionWorkflow.__new__(PlanIngestionWorkflow)
+        wf._record_ingestion_model("assessor", "gemini:gemini-2.5-pro", {"default_provider": "gemini"})
+        wf._record_ingestion_model("transformer", "gemini:gemini-2.5-flash", {})
+        assert wf._ingestion_models == {
+            "assessor": "gemini:gemini-2.5-pro",
+            "transformer": "gemini:gemini-2.5-flash",
+            "default_provider": "gemini",
+        }
+
     def test_lead_beats_default_provider(self):
         cfg = {"lead_agent": "gemini:gemini-2.5-pro", "default_provider": "openai"}
         assert self._resolve(cfg, "transformer_agent") == "gemini:gemini-2.5-pro"

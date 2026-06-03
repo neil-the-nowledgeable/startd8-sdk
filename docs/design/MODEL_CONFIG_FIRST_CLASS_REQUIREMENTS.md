@@ -180,9 +180,16 @@ model selection.
 > `run-plan-ingestion.sh` injects `default_provider` into the ingestion `--config`
 > (closes the run-026 leak). Unset = today's mixed Sonnet/Opus default (backward
 > compatible). Surface 3 in the pipe is a documented `generate backend
-> --ai-agent-spec` step (not a cap-dev-pipe stage). Remaining: step 2 shared
-> `resolve_role_agent`, step 5 other-site migration, step 7 full per-role
-> provenance, step 8 guard.
+> --ai-agent-spec` step (not a cap-dev-pipe stage).
+> **Phase-1 polish DONE:** step 2 shared backend-agnostic resolver
+> (`src/startd8/model_roles.py` `resolve_role_spec`, +12 tests); step 5 all three
+> sites delegate to it (ingestion, contractor provider-knob, micro-prime
+> cloud-retry — the `CLAUDE_HAIKU` last-resort leak removed); step 8 regression
+> guards (one provider override leaks no anthropic; sites don't call
+> `get_latest_model` directly); step 7 ingestion records its resolved model into
+> the diagnostic `totals.models` (closes the run-026 "what ran where" gap;
+> lead/drafter already recorded via the L3 kaizen-metadata fix). Optional later:
+> record tier3/default_provider at the contractor level too.
 
 **Phase 1 — SDK (smallest correct surface first):**
 
