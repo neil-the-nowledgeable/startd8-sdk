@@ -3424,6 +3424,13 @@ class PrimeContractorWorkflow:
         if det_result is not None:
             return det_result
 
+        # Phase 0.7: Corpus deterministic shortcut (statistical-proof EMISSION) — default-off.
+        # Emits content the Controlled Corpus proved generated-identically across runs; distinct
+        # from Phase 0.6's in-sync verification. Gated by STARTD8_CORPUS_DETERMINISTIC.
+        corpus_result = self._try_corpus_shortcut(feature)
+        if corpus_result is not None:
+            return corpus_result
+
         if self.dry_run:
             logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
             simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
@@ -3744,6 +3751,75 @@ class PrimeContractorWorkflow:
         logger.info(
             "Deterministic file shortcut for '%s': %d file(s), cost=$0.00",
             feature.name, len(resolved),
+        )
+        return True
+
+    def _try_corpus_shortcut(self, feature: "FeatureSpec") -> Optional[bool]:
+        """Phase 0.7: emit Controlled-Corpus-proven content with NO LLM call (DETERMINISTIC_PROVIDER).
+
+        Statistical-proof EMISSION (writes content), distinct from Phase 0.6's in-sync
+        *verification*. Default-OFF (``STARTD8_CORPUS_DETERMINISTIC``). All-or-nothing per
+        feature: every target_file must resolve to proven, validated content (and none may be
+        a ``false_pass_risk``), else the whole feature falls through to the LLM unchanged.
+
+        Returns True (served $0), or None (proceed to LLM).
+        """
+        import os
+        if os.getenv("STARTD8_CORPUS_DETERMINISTIC", "0") not in ("1", "true", "yes", "on"):
+            return None
+        target_files = feature.target_files or []
+        if not target_files:
+            return None
+        try:
+            import json as _json
+            from ..corpus.registry import ControlledCorpusRegistry
+            from ..corpus.content_store import ContentStore
+            from ..corpus.provider import build_corpus_provider
+            from ..paths import controlled_corpus_path, corpus_content_dir
+        except ImportError:
+            return None
+
+        corpus_path = controlled_corpus_path(self.project_root)
+        if not corpus_path.exists():
+            return None
+        # source_checksum from the run's seed (checksum-keyed serving; OQ-2 invalidation)
+        seed_path = getattr(self, "_seed_path", None)
+        checksum = None
+        if seed_path:
+            try:
+                checksum = _json.load(open(seed_path, encoding="utf-8")).get("source_checksum")
+            except (OSError, ValueError):
+                checksum = None
+        if not checksum:
+            return None
+
+        provider = build_corpus_provider(
+            ControlledCorpusRegistry.load(corpus_path),
+            ContentStore(corpus_content_dir(self.project_root)),
+            checksum,
+        )
+        output_dir = self._resolve_output_dir()
+        # All-or-nothing: every target must resolve to proven content first (write none on partial).
+        emissions: list[tuple[Path, str]] = []
+        for tf in target_files:
+            res = provider.generate(tf)
+            if res is None:
+                return None  # any miss/false_pass/invalid → whole feature to LLM
+            dest = Path(tf) if Path(tf).is_absolute() else (output_dir / tf)
+            emissions.append((dest, res.content))
+
+        written: list[str] = []
+        for dest, content in emissions:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+            written.append(str(dest))
+
+        feature.generated_files = written
+        feature.status = FeatureStatus.GENERATED
+        self._save_queue_state_with_mode()
+        logger.info(
+            "Corpus deterministic shortcut for '%s': %d file(s) served $0.00 (no LLM)",
+            feature.name, len(written),
         )
         return True
 

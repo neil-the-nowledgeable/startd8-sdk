@@ -60,18 +60,18 @@
   persisted keyed by seed checksum, checksum-keyed miss). 73 corpus + 83 postmortem tests green.
   The only live edit is a default-off branch at the END of `_extract_corpus` (postmortem, not generation).
 
-### I3b — Live read hook: Phase 0.7 `_try_corpus_shortcut` (FR-7/8) — PAUSED (first generation-loop edit)
-- Add `_try_corpus_shortcut(feature) -> Optional[bool]` in `prime_contractor.py` mirroring
-  `_try_deterministic_file_shortcut` (Optional[bool] contract, marks `GENERATED`/$0): load corpus +
-  store (project-scoped; `source_checksum` from `self._seed_path`), `build_corpus_provider(...)`,
-  `provider.generate(target_file)`; on hit write file(s) + mark + return True; else `None`.
-- Add one call-site line + early-return after Phase 0.6 (~prime_contractor.py:3423), gated by
-  `STARTD8_CORPUS_DETERMINISTIC` (default **off**).
-- **Tests:** flag-off no-op (byte-identical regression); flag-on+hit skips drafter; false_pass never
-  served; multi-target. Optionally fold I4's `_emit_cost_metric(cost_usd=0)` here.
-- **Status:** PAUSED per the no-live-impact boundary — this is the first edit to the live generation
-  loop. Probe confirmed no unknowns: contract is `Optional[bool]`, `self._seed_path`/`self.project_root`
-  available, marking pattern precedented. ~1–2h when ready.
+### I3b — Live read hook: Phase 0.7 `_try_corpus_shortcut` (FR-7/8) ✅ (shipped — DEFAULT-OFF)
+- `_try_corpus_shortcut(feature) -> Optional[bool]` in `prime_contractor.py` (after Phase 0.6, call
+  site + early-return at ~3423): gated by **default-off `STARTD8_CORPUS_DETERMINISTIC`**; loads corpus
+  + content store (project-scoped; `source_checksum` from `self._seed_path`), `build_corpus_provider`,
+  **all-or-nothing** per feature — every target must `generate()` proven content (writes none on a
+  partial miss/false_pass/invalid), then writes files + marks `GENERATED` (mirrors Phase 0.6) + logs
+  `$0.00`; else `None` → LLM unchanged. EMISSION (writes), not Phase 0.6's in-sync verification.
+- **Done:** 5 tests (default-off no-op/byte-identical; flag-on emits; refuses false_pass; checksum
+  mismatch fall-through; no-corpus fall-through). 78 corpus + 17 shortcut + 33 core prime-contractor
+  tests green. Default behavior unchanged (flag off → method returns immediately).
+- **Cost telemetry (I4):** kept as a `$0` log (matching the existing shortcuts); formal
+  `_emit_cost_metric` deferred to I4 to avoid constructing a `GenerationResult` speculatively.
 - **Tests:** eligible+content → shortcut taken (no drafter call, mock asserts); ineligible/flag-off →
   drafter runs; false_pass never shortcut.
 - **Exit:** with flag off, byte-identical pipeline behavior (regression-safe merge).
