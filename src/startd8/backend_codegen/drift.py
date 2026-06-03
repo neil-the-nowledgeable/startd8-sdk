@@ -29,6 +29,7 @@ _HEADER_ENTITY_RE = re.compile(r"#\s*startd8-entity:\s*(\S+)")
 # AI-layer artifacts (FR-MA-5) derive from two extra inputs and carry two extra hashes.
 _HEADER_PASSES_SHA_RE = re.compile(r"#\s*passes-sha256:\s*([0-9a-f]{64})")
 _HEADER_HUMAN_SHA_RE = re.compile(r"#\s*human-inputs-sha256:\s*([0-9a-f]{64})")
+_HEADER_AI_AGENT_RE = re.compile(r"#\s*ai-agent-spec:\s*(\S+)")
 _GENERATED_MARKER = "# GENERATED from"
 
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
@@ -133,6 +134,17 @@ def embedded_human_sha(ondisk_text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def embedded_ai_agent_spec(ondisk_text: str) -> Optional[str]:
+    """The ``ai-agent-spec`` baked into a generated service.py header, or ``None``.
+
+    Self-describing so drift re-renders the file with the same spec it was
+    generated with (a custom provider must not read as drift). Only the
+    ``ai-service`` artifact carries this line.
+    """
+    m = _HEADER_AI_AGENT_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
 def ai_layer_stale_reason(
     ondisk_text: str,
     *,
@@ -199,12 +211,16 @@ def _ai_renderers():
         render_server,
     )
 
+    # Each renderer takes (schema, manifest, human, source_file, entity, ai_agent_spec).
+    # Only ai-service consumes ai_agent_spec — it bakes DEFAULT_AGENT_SPEC, so the
+    # re-render must use the same spec the on-disk file declares (else a custom
+    # provider false-reads as drift).
     return {
-        "ai-service": lambda s, m, h, sf, e: render_ai_service(s, m, h, sf),
-        "ai-edge-schemas": lambda s, m, h, sf, e: render_edge_schemas(s, m, h, sf),
-        "ai-pass": lambda s, m, h, sf, e: render_ai_pass(s, m, h, sf, e),
-        "ai-router": lambda s, m, h, sf, e: render_ai_routes(s, m, h, sf),
-        "ai-server": lambda s, m, h, sf, e: render_server(s, m, h, sf),
+        "ai-service": lambda s, m, h, sf, e, spec: render_ai_service(s, m, h, sf, ai_agent_spec=spec),
+        "ai-edge-schemas": lambda s, m, h, sf, e, spec: render_edge_schemas(s, m, h, sf),
+        "ai-pass": lambda s, m, h, sf, e, spec: render_ai_pass(s, m, h, sf, e),
+        "ai-router": lambda s, m, h, sf, e, spec: render_ai_routes(s, m, h, sf),
+        "ai-server": lambda s, m, h, sf, e, spec: render_server(s, m, h, sf),
     }
 
 
@@ -229,7 +245,8 @@ def _check_ai_drift(
     if renderer is None:
         return DriftResult("tampered", DRIFT, f"unknown AI artifact kind ({kind!r})")
     rendered = renderer(
-        schema_text, manifest_text, human_inputs_text, source_file, embedded_entity(ondisk_text)
+        schema_text, manifest_text, human_inputs_text, source_file,
+        embedded_entity(ondisk_text), embedded_ai_agent_spec(ondisk_text),
     )
     if rendered != ondisk_text:
         return DriftResult(

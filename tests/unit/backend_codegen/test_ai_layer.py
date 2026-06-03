@@ -251,3 +251,54 @@ def test_naming_helpers():
     assert _plural_field("Capability") == "capabilities"
     assert _plural_field("Outcome") == "outcomes"
     assert _plural_field("ValueProp") == "value_props"
+
+
+# ---------------------------------------------------------------------------
+# Surface 3 / MODEL_CONFIG — configurable generated-app agent spec + drift
+# ---------------------------------------------------------------------------
+
+from startd8.backend_codegen.ai_layer import (  # noqa: E402
+    render_ai_service,
+    _DEFAULT_AI_AGENT_SPEC,
+)
+
+
+def test_default_agent_spec_baked_and_self_described():
+    svc = render_ai_service(SCHEMA, MANIFEST, HUMAN)
+    assert f'DEFAULT_AGENT_SPEC = "{_DEFAULT_AI_AGENT_SPEC}"' in svc
+    assert f"# ai-agent-spec: {_DEFAULT_AI_AGENT_SPEC}" in svc
+    assert "__AI_AGENT_SPEC__" not in svc  # placeholder fully substituted
+
+
+def test_custom_agent_spec_baked_and_self_described():
+    svc = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="gemini:gemini-2.5-pro")
+    assert 'DEFAULT_AGENT_SPEC = "gemini:gemini-2.5-pro"' in svc
+    assert "# ai-agent-spec: gemini:gemini-2.5-pro" in svc
+    assert "anthropic:claude-opus-4-8" not in svc  # no leak of the default
+
+
+def test_render_ai_layer_threads_agent_spec():
+    files = dict(render_ai_layer(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="openai:gpt-5.5"))
+    assert 'DEFAULT_AGENT_SPEC = "openai:gpt-5.5"' in files["app/ai/service.py"]
+
+
+def test_custom_spec_service_reads_in_sync():
+    """The drift-hash fix: a service.py baked with a non-default provider must
+    NOT read as drift — drift recovers the embedded spec and re-renders it."""
+    svc = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="gemini:gemini-2.5-pro")
+    result = check_drift(SCHEMA, svc, manifest_text=MANIFEST, human_inputs_text=HUMAN)
+    assert result.status == "in_sync", result.detail
+
+
+def test_tampered_custom_spec_service_detected():
+    svc = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="gemini:gemini-2.5-pro")
+    tampered = svc.replace("def call_ai_service", "def call_ai_service_HANDEDIT")
+    result = check_drift(SCHEMA, tampered, manifest_text=MANIFEST, human_inputs_text=HUMAN)
+    assert result.status != "in_sync"
+
+
+def test_drift_fix_is_load_bearing():
+    """Without spec recovery, the default re-render would differ from a custom-spec file."""
+    gem = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="gemini:gemini-2.5-pro")
+    anth = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="anthropic:claude-opus-4-8")
+    assert gem != anth

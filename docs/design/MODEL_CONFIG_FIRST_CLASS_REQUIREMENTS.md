@@ -164,10 +164,15 @@ model selection.
 ## 5. Implementation Plan (Phase 1 = SDK, Phase 2 = pipe)
 
 > **Status (2026-06-03):** Step 3 + 4(SDK half) **DONE** (`216a6996` — ingestion
-> resolver honors explicit/lead/default_provider). Step 6 `--provider` **DONE** (this
-> commit — contractor fills unset lead/drafter/tier3 from provider tiers). Remaining:
-> step 2 shared `resolve_role_agent`, step 5 other-site migration, step 7 full per-role
-> provenance, step 8 guard, Phase 2 pipe wiring.
+> resolver honors explicit/lead/default_provider). Step 6 `--provider` **DONE**
+> (`d245d1fd` — contractor fills unset lead/drafter/tier3 from provider tiers).
+> **Surface 3 drift-hash fix DONE** (this commit): `render_ai_service`/`render_ai_layer`
+> take `ai_agent_spec`, bake `DEFAULT_AGENT_SPEC`, self-describe it in a
+> `# ai-agent-spec:` header line; `drift._check_ai_drift` recovers + re-renders with
+> that spec so a custom-provider service.py reads `in_sync` (not false drift).
+> Remaining: surface-3 CLI (`generate backend --ai-agent-spec` + assembler thread),
+> step 2 shared `resolve_role_agent`, step 5 other-site migration, step 7 full
+> per-role provenance, step 8 guard, Phase 2 pipe wiring (all 3 surfaces).
 
 **Phase 1 — SDK (smallest correct surface first):**
 

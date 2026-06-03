@@ -159,6 +159,13 @@ def parse_human_inputs(text: Optional[str]) -> HumanInputs:
 # Renderers (each emits the three-hash AI header)
 # --------------------------------------------------------------------------- #
 
+# Default agent spec baked into the generated app's service.py when no
+# ``--ai-agent-spec`` is given (surface 3 / MODEL_CONFIG). The generated file
+# self-describes its spec in the header (``# ai-agent-spec:``) so drift can
+# re-render it byte-identically (see drift._check_ai_drift).
+_DEFAULT_AI_AGENT_SPEC = "anthropic:claude-opus-4-8"
+
+
 def _hashes(schema_text: str, manifest_text: str, human_text: Optional[str]) -> Tuple[str, str, str]:
     return (
         schema_sha256(schema_text),
@@ -181,10 +188,19 @@ def render_server(schema_text, manifest_text, human_text, source_file="prisma/sc
     return header + "\n\n" + body
 
 
-def render_ai_service(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
-    """``app/ai/service.py`` — B2 thin wrapper over the SDK provider abstraction (FR-MA-1, C-1/C-2/C-3)."""
+def render_ai_service(
+    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma",
+    ai_agent_spec: Optional[str] = None,
+) -> str:
+    """``app/ai/service.py`` — B2 thin wrapper over the SDK provider abstraction (FR-MA-1, C-1/C-2/C-3).
+
+    ``ai_agent_spec`` (surface 3 / MODEL_CONFIG) is baked into ``DEFAULT_AGENT_SPEC`` so the
+    generated app calls that provider by default. It is also recorded in the header
+    (``# ai-agent-spec:``) so drift re-renders the file byte-identically with the same spec.
+    """
+    spec = ai_agent_spec or _DEFAULT_AI_AGENT_SPEC
     s, p, h = _hashes(schema_text, manifest_text, human_text)
-    header = header_ai_layer(source_file, s, p, h, "ai-service")
+    header = header_ai_layer(source_file, s, p, h, "ai-service") + f"\n# ai-agent-spec: {spec}"
     body = '''from __future__ import annotations
 
 import logging
@@ -202,7 +218,7 @@ logger = logging.getLogger(__name__)
 
 # Per-provider tool-use ceiling (C-2). 8192 stays under anthropic's >10-min streaming guard.
 PROVIDER_LIMITS = {"anthropic": 8192}
-DEFAULT_AGENT_SPEC = "anthropic:claude-opus-4-8"
+DEFAULT_AGENT_SPEC = "__AI_AGENT_SPEC__"
 
 
 def call_ai_service(
@@ -242,6 +258,7 @@ def _log_ai_call(session: Session, pass_name: str, raw: Any) -> None:
 
 __all__ = ["call_ai_service", "PROVIDER_LIMITS", "DEFAULT_AGENT_SPEC"]
 '''
+    body = body.replace("__AI_AGENT_SPEC__", spec)
     return header + "\n\n" + body
 
 
@@ -516,12 +533,18 @@ def render_ai_layer(
     manifest_text: str,
     human_text: Optional[str],
     source_file: str = "prisma/schema.prisma",
+    ai_agent_spec: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
-    """Every AI-layer artifact as ``(path, text)``. Empty ``app/ai/__init__.py`` marker included."""
+    """Every AI-layer artifact as ``(path, text)``. Empty ``app/ai/__init__.py`` marker included.
+
+    ``ai_agent_spec`` (surface 3 / MODEL_CONFIG) is baked into the generated service's
+    ``DEFAULT_AGENT_SPEC``; ``None`` keeps the catalog default.
+    """
     parse_ai_passes(manifest_text)  # fail loud on a malformed manifest before emitting anything
     passes = parse_ai_passes(manifest_text)
     out: List[Tuple[str, str]] = [("app/ai/__init__.py", "")]
-    out.append(("app/ai/service.py", render_ai_service(schema_text, manifest_text, human_text, source_file)))
+    out.append(("app/ai/service.py", render_ai_service(
+        schema_text, manifest_text, human_text, source_file, ai_agent_spec=ai_agent_spec)))
     out.append(("app/ai/edge_schemas.py", render_edge_schemas(schema_text, manifest_text, human_text, source_file)))
     for ps in passes:
         out.append(
