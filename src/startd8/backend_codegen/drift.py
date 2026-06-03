@@ -26,7 +26,14 @@ _HEADER_SHA_RE = re.compile(r"#\s*schema-sha256:\s*([0-9a-f]{64})")
 _HEADER_SRC_RE = re.compile(r"#\s*GENERATED from\s+(\S+)")
 _HEADER_KIND_RE = re.compile(r"#\s*startd8-artifact:\s*(\S+)")
 _HEADER_ENTITY_RE = re.compile(r"#\s*startd8-entity:\s*(\S+)")
+# AI-layer artifacts (FR-MA-5) derive from two extra inputs and carry two extra hashes.
+_HEADER_PASSES_SHA_RE = re.compile(r"#\s*passes-sha256:\s*([0-9a-f]{64})")
+_HEADER_HUMAN_SHA_RE = re.compile(r"#\s*human-inputs-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
+
+# Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs).
+# Empty until the AI-layer renderers land (M-C); the three-hash machinery below is ready for them.
+_AI_KINDS: frozenset = frozenset()
 
 
 def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
@@ -110,6 +117,47 @@ def embedded_source_file(ondisk_text: str) -> Optional[str]:
     """The ``GENERATED from <source_file>`` label recorded in a generated header, or ``None``."""
     m = _HEADER_SRC_RE.search(ondisk_text or "")
     return m.group(1) if m else None
+
+
+def embedded_passes_sha(ondisk_text: str) -> Optional[str]:
+    """The ``passes-sha256`` recorded in an AI-layer file's header, or ``None``."""
+    m = _HEADER_PASSES_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_human_sha(ondisk_text: str) -> Optional[str]:
+    """The ``human-inputs-sha256`` recorded in an AI-layer file's header, or ``None``."""
+    m = _HEADER_HUMAN_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def ai_layer_stale_reason(
+    ondisk_text: str,
+    *,
+    schema_sha: str,
+    passes_sha: str,
+    human_sha: str,
+) -> Optional[str]:
+    """For an AI-layer file, return why it is **stale**, or ``None`` if all three inputs match.
+
+    An AI-layer artifact derives from three inputs (schema + ai_passes + human_inputs), so it is
+    stale if **any one** of the embedded hashes differs from the current input hash (FR-MA-5). A
+    missing embedded hash counts as stale (header was stripped or predates the AI-layer format).
+    This is the pure three-hash core; :func:`check_drift` (wired in M-C) calls it for ``_AI_KINDS``.
+    """
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("ai_passes", embedded_passes_sha(ondisk_text), passes_sha),
+        ("human_inputs", embedded_human_sha(ondisk_text), human_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
 
 
 def is_owned_generated_file(ondisk_text: str) -> bool:

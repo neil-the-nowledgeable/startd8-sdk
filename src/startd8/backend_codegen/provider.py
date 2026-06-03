@@ -58,3 +58,44 @@ class PydanticSQLModelProvider:
             except OSError:
                 return None
         return None
+
+    @staticmethod
+    def _read_anchored(
+        context: ProviderContext, *, suffix: str, conventional_relpath: str
+    ) -> Optional[str]:
+        """Read the first anchor ending in *suffix*, else the conventional path. Raw text or None.
+
+        The shared finder behind the AI-layer's second/third inputs (``ai_passes.yaml`` /
+        ``human_inputs.yaml``) — same anchor-then-convention discipline as :meth:`_read_schema`.
+        """
+        root = Path(context.project_root)
+        for anchor in context.source_anchors:
+            if not str(anchor).endswith(suffix):
+                continue
+            ap = Path(anchor) if Path(anchor).is_absolute() else root / anchor
+            if ap.is_file():
+                try:
+                    return ap.read_text(encoding="utf-8")
+                except OSError:
+                    return None
+        conventional = root / conventional_relpath
+        if conventional.is_file():
+            try:
+                return conventional.read_text(encoding="utf-8")
+            except OSError:
+                return None
+        return None
+
+    @classmethod
+    def _read_manifest(cls, context: ProviderContext) -> Optional[str]:
+        """The AI-passes manifest (FR-MA-5), raw YAML text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="ai_passes.yaml", conventional_relpath="prisma/ai_passes.yaml"
+        )
+
+    @classmethod
+    def _read_human_inputs(cls, context: ProviderContext) -> Optional[str]:
+        """The human-provided inputs file (C-4), raw YAML text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="human_inputs.yaml", conventional_relpath="prisma/human_inputs.yaml"
+        )
