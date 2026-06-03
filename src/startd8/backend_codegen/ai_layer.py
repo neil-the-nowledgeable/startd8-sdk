@@ -400,7 +400,7 @@ def _render_pass_text(ps: AiPass) -> str:
         f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
         "    created = 0",
         "    try:",
-        f"        with session.begin_nested():  # isolate the row (M1)",
+        "        with session.begin_nested():  # isolate the row (M1)",
         f"            created = _persist(session, {out}, result)",
         "    except Exception as exc:  # noqa: BLE001",
         f'        logger.warning("skipping {out} row: %s", exc)',
