@@ -2956,6 +2956,10 @@ class PrimeContractorWorkflow:
             self._write_prompt_files(prompt_dir, feature, prompts, serializable_context)
             if result is not None:
                 self._capture_response_files(prompt_dir, feature, result)
+            # L3 fix: metadata.json is written at capture time with the
+            # code_generator's agent specs, which may still be "unknown" if the
+            # agents resolve only during generation. Patch them from the result.
+            self._update_kaizen_metadata_agent_specs(feature, result)
             logger.debug(
                 "Kaizen: persisted prompts for '%s' -> %s", feature.name, prompt_dir,
             )
@@ -2963,6 +2967,71 @@ class PrimeContractorWorkflow:
             logger.warning(
                 "Kaizen: prompt persistence failed for '%s' (non-fatal): %s",
                 feature.name, exc,
+            )
+
+    def _update_kaizen_metadata_agent_specs(
+        self,
+        feature: "FeatureSpec",
+        result: Optional[Any],
+    ) -> None:
+        """Patch a captured ``metadata.json`` with resolved agent specs (L3 fix).
+
+        ``_write_prompt_files`` records ``lead_agent_spec``/``drafter_agent_spec``
+        from ``code_generator`` at capture time; these can be ``"unknown"``/``None``
+        when the agents are resolved lazily during generation. Once generation
+        completes, the resolved specs are carried on ``result.metadata`` — copy
+        them onto the on-disk metadata so the Kaizen correlation layer attributes
+        outcomes to the real models.
+
+        No-op (never raises) when Kaizen is disabled, ``result`` carries no
+        metadata, the file is absent, or the on-disk spec is already resolved
+        (so it is idempotent and never clobbers a real value).
+        """
+        if result is None or not self._kaizen.enabled:
+            return
+        resolved = getattr(result, "metadata", None)
+        if not isinstance(resolved, dict):
+            return
+        if self._kaizen.prompt_dir is None:
+            return
+
+        run_id = os.environ.get("KAIZEN_RUN_ID", "standalone")
+        safe_fid = self._sanitize_feature_id(feature.id)
+        meta_path = self._kaizen.prompt_dir / run_id / safe_fid / "metadata.json"
+        if not meta_path.is_file():
+            return
+
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Kaizen: could not read metadata.json for '%s' to patch agent "
+                "specs (non-fatal): %s", feature.id, exc,
+            )
+            return
+        if not isinstance(metadata, dict):
+            return
+
+        def _needs_resolution(value: Any) -> bool:
+            return value is None or value == "unknown"
+
+        changed = False
+        for key in ("lead_agent_spec", "drafter_agent_spec"):
+            new_spec = resolved.get(key)
+            if new_spec and _needs_resolution(metadata.get(key)):
+                metadata[key] = new_spec
+                changed = True
+
+        if not changed:
+            return
+        try:
+            meta_path.write_text(
+                json.dumps(metadata, indent=2, default=str), encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning(
+                "Kaizen: could not write patched metadata.json for '%s' "
+                "(non-fatal): %s", feature.id, exc,
             )
 
     # -----------------------------------------------------------------------
