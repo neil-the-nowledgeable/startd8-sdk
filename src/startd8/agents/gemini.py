@@ -6,9 +6,9 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
-from ..models import TokenUsage, GenerateResult
+from ..models import TokenUsage, GenerateResult, StructuredResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
 from .pool import TimeoutConfig, get_client_pool
@@ -577,3 +577,136 @@ class GeminiAgent(BaseAgent):
             )
 
         return GenerateResult(response_text, response_time_ms, token_usage)
+
+    async def _make_structured_api_call(
+        self,
+        prompt: str,
+        output_schema: Any,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Raw structured call: Gemini controlled generation (JSON + response_schema).
+
+        Sets ``response_mime_type="application/json"`` + ``response_schema`` (the
+        Pydantic class) so the model returns a schema-shaped JSON object. Separated
+        from ``_make_api_call`` so retry logic can wrap it without changing the
+        plain-generate signature.
+        """
+        config_kwargs = {
+            "temperature": self.temperature,
+            "max_output_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "response_mime_type": "application/json",
+            "response_schema": output_schema,
+        }
+        if self.safety_settings:
+            config_kwargs["safety_settings"] = self.safety_settings
+        if system_prompt is not None:
+            config_kwargs["system_instruction"] = system_prompt
+        generation_config = genai_types.GenerateContentConfig(**config_kwargs)
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=generation_config,
+            ),
+        )
+
+    async def agenerate_structured(
+        self,
+        prompt: str,
+        output_schema: Any,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,  # accepted for parity; Gemini uses self.temperature
+        retry_on_validation: bool = True,
+    ) -> StructuredResult:
+        """Structured output via Gemini controlled generation (``response_schema``).
+
+        Mirrors :meth:`ClaudeAgent.agenerate_structured`: forces JSON matching
+        *output_schema*, validates with Pydantic, and retries **once** on a
+        ``ValidationError`` (feeding the error back) — a semantic retry distinct
+        from the transport retry in ``utils.retry``. Returns
+        ``StructuredResult(value, raw)`` so the 3-tuple ``GenerateResult`` contract
+        is untouched. This is what makes ``gemini:`` usable as the app's
+        ``DEFAULT_AGENT_SPEC`` / a structured pipeline role.
+
+        Raises:
+            TypeError: if *output_schema* is not a Pydantic ``BaseModel`` subclass.
+            ValidationError / ValueError: if still invalid after the one retry.
+            APIError: for transport failures (as in :meth:`agenerate`).
+        """
+        from pydantic import ValidationError
+
+        from ..exceptions import APIError
+
+        if not (isinstance(output_schema, type) and hasattr(output_schema, "model_json_schema")):
+            raise TypeError("output_schema must be a Pydantic BaseModel subclass")
+
+        effective_system_prompt = (
+            system_prompt if system_prompt is not None else self.system_prompt
+        )
+
+        async def _call(p: str):
+            try:
+                if self.retry_config is not None:
+                    make_call = with_retry(self.retry_config)(self._make_structured_api_call)
+                    return await make_call(
+                        p, output_schema, system_prompt=effective_system_prompt,
+                        max_tokens=max_tokens,
+                    )
+                return await self._make_structured_api_call(
+                    p, output_schema, system_prompt=effective_system_prompt,
+                    max_tokens=max_tokens,
+                )
+            except RetryError as exc:
+                raise APIError(
+                    f"API call failed after {exc.attempts} attempts: {exc.last_exception}",
+                    provider=self.name, original_error=exc.last_exception,
+                ) from exc
+
+        start_time = time.time()
+        attempts = 2 if retry_on_validation else 1
+        current_prompt = prompt
+        last_error: Optional[Exception] = None
+
+        for attempt in range(attempts):
+            response = await _call(current_prompt)
+            text = getattr(response, "text", None)
+            try:
+                if not text:
+                    raise ValueError("model returned no JSON text")
+                value = output_schema.model_validate_json(text)
+            except (ValidationError, ValueError) as e:
+                last_error = e
+                logger.warning(
+                    "Structured output failed for %s (attempt %d/%d): %s",
+                    self.name, attempt + 1, attempts, e,
+                )
+                current_prompt = (
+                    f"{prompt}\n\nYour previous response did not satisfy the required JSON "
+                    f"schema (error: {e}). Respond again with ONLY a JSON object that validates "
+                    f"against the schema."
+                )
+                continue
+
+            response_time_ms = int((time.time() - start_time) * 1000)
+            token_usage = None
+            usage = getattr(response, "usage_metadata", None)
+            if usage is not None:
+                _in = getattr(usage, "prompt_token_count", 0) or 0
+                _out = getattr(usage, "candidates_token_count", 0) or 0
+                token_usage = TokenUsage(
+                    input=int(_in),
+                    output=int(_out),
+                    total=int(getattr(usage, "total_token_count", _in + _out) or (_in + _out)),
+                    model_name=self.model,
+                )
+            raw = GenerateResult(value.model_dump_json(), response_time_ms, token_usage)
+            return StructuredResult(value, raw)
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("structured generation produced no result")  # unreachable

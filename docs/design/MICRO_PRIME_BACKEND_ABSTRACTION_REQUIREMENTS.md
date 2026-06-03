@@ -4,6 +4,14 @@
 **Date:** 2026-06-03
 **Status:** Draft
 
+> **Update:** **Gemini CLOUD structured output is now implemented**
+> (`GeminiAgent.agenerate_structured` via controlled generation —
+> `response_mime_type="application/json"` + `response_schema`, validate +
+> retry-once). This **lifts the gemini-flash app-default blocker** (#2): a Gemini
+> model can now back the generated app's `call_ai_service`. Distinct from the
+> **edge-brains** FastAPI server (still freeform / no structured output) — that
+> freeform-and-parse fallback (FR-6) remains deferred to the edge phase.
+
 ---
 
 ## 0. Planning Insights (post-exploration update)
