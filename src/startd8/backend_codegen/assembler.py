@@ -28,6 +28,7 @@ def render_backend(
     *,
     manifest_text: Optional[str] = None,
     human_inputs_text: Optional[str] = None,
+    ai_agent_spec: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -60,5 +61,8 @@ def render_backend(
     if manifest_text:
         from .ai_layer import render_ai_layer
 
-        out.extend(render_ai_layer(schema_text, manifest_text, human_inputs_text, source_file))
+        out.extend(render_ai_layer(
+            schema_text, manifest_text, human_inputs_text, source_file,
+            ai_agent_spec=ai_agent_spec,
+        ))
     return tuple(out)

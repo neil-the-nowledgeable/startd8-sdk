@@ -139,6 +139,13 @@ def backend(
         help="Path to human_inputs.yaml (field-authorship policy; drives the C-4 edge-schema "
         "projection so AI-authored schemas omit human-only fields like Metric.value).",
     ),
+    ai_agent_spec: Optional[str] = typer.Option(
+        None,
+        "--ai-agent-spec",
+        help="Agent spec (provider:model) baked into the generated app's "
+        "DEFAULT_AGENT_SPEC (the model the shipped app calls at runtime). "
+        "Default: anthropic:claude-opus-4-8. Only meaningful with --ai-passes.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -174,12 +181,19 @@ def backend(
         else:
             human_text = text
 
+    if ai_agent_spec and manifest_text is None:
+        console.print(
+            "[yellow]warning:[/yellow] --ai-agent-spec is ignored without "
+            "--ai-passes (no AI layer is generated)."
+        )
+
     try:
         artifacts = render_backend(
             schema_text,
             source_label,
             manifest_text=manifest_text,
             human_inputs_text=human_text,
+            ai_agent_spec=ai_agent_spec,
         )
     except (
         ValueError

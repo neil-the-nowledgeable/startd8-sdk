@@ -170,9 +170,12 @@ model selection.
 > take `ai_agent_spec`, bake `DEFAULT_AGENT_SPEC`, self-describe it in a
 > `# ai-agent-spec:` header line; `drift._check_ai_drift` recovers + re-renders with
 > that spec so a custom-provider service.py reads `in_sync` (not false drift).
-> Remaining: surface-3 CLI (`generate backend --ai-agent-spec` + assembler thread),
-> step 2 shared `resolve_role_agent`, step 5 other-site migration, step 7 full
-> per-role provenance, step 8 guard, Phase 2 pipe wiring (all 3 surfaces).
+> **Surface 3 CLI DONE** (this commit): `generate backend --ai-agent-spec
+> <provider:model>` threads through `render_backend → render_ai_layer`; `--check`
+> stays `in_sync` without re-passing the flag (self-describing). **Surface 3
+> complete.** Remaining: step 2 shared `resolve_role_agent`, step 5 other-site
+> migration, step 7 full per-role provenance, step 8 guard, **Phase 2 pipe wiring
+> (all 3 surfaces — the remaining gap to an end-to-end single-provider run).**
 
 **Phase 1 — SDK (smallest correct surface first):**
 
