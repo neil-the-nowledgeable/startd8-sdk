@@ -44,6 +44,7 @@ class InconclusiveReason(str, Enum):
     POSTMORTEM_UNAVAILABLE = "postmortem_unavailable"             # R3-S3
     PARSE_FAILURE = "parse_failure"                               # R1-S7
     INPUT_TRUNCATED = "input_truncated"                          # R3-S1
+    CODE_UNAVAILABLE = "code_unavailable"                         # generated files expected but unreadable
 
 
 # --- contract pieces --------------------------------------------------------

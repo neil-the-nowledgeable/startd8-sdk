@@ -30,6 +30,7 @@ from .models import (
     Tier,
     Verdict,
     VerdictResult,
+    VerificationIssue,
 )
 from .requirement_loader import SeedIndex
 from .reviewer import AgentFactory, SemanticReviewer
@@ -39,6 +40,23 @@ from .triage import TriageCandidate, reviewable, triage
 logger = get_logger(__name__)
 
 POSTMORTEM_REPORT = "prime-postmortem-report.json"
+
+
+def _cache_payload(review: FeatureReview) -> dict:
+    """Full verdict payload for the cache so a re-run reproduces the review exactly (S-R1-2)."""
+    v = review.verdict
+    return {
+        "verdict": v.verdict.value,
+        "confidence": v.confidence,
+        "inconclusive_reason": v.inconclusive_reason.value if v.inconclusive_reason else None,
+        "tier": review.selection.tier.value,
+        "score": review.semantic_compliance_score,
+        "issues": [
+            {"severity": i.severity, "category": i.category, "description": i.description,
+             "line_hint": i.line_hint, "suggested_fix": i.suggested_fix}
+            for i in review.issues
+        ],
+    }
 
 
 class SemanticComplianceOrchestrator:
@@ -120,18 +138,24 @@ class SemanticComplianceOrchestrator:
             return self._from_cached(c, selection, loaded, cached)
 
         code = self._read_code(c.generated_files, project_root)
+        if c.generated_files and not code.strip():
+            # Files were expected but none were readable (e.g. wrong project_root). Reviewing
+            # absent code would yield a confident false-FAIL that poisons Kaizen — so degrade to
+            # inconclusive and do NOT cache it (an environment issue, retry next run).
+            return self._inconclusive(c, selection, InconclusiveReason.CODE_UNAVAILABLE)
+
         outcome = self.reviewer.review(loaded, code, fqn)
         selection.tier = outcome.tier  # reflect final tier (cheap or escalated)
         score = compute_compliance_score(outcome.verdict.verdict, outcome.verdict.confidence, outcome.issues)
-        cache.put(c.feature_id, checksum, {
-            "verdict": outcome.verdict.verdict.value, "confidence": outcome.verdict.confidence,
-        })
-        return FeatureReview(
+        review = FeatureReview(
             feature_id=c.feature_id, language=loaded.language, review_granularity="feature",
             element_fqn=fqn, selection=selection, verdict=outcome.verdict,
             requirement=loaded.to_ref(corroborated=True), issues=outcome.issues,
             semantic_compliance_score=score, reviewed_files=list(c.generated_files),
         )
+        # Cache the FULL outcome so a re-run reproduces the verdict, issues, and score exactly.
+        cache.put(c.feature_id, checksum, _cache_payload(review))
+        return review
 
     def _read_code(self, files: List[str], project_root: Optional[Path]) -> str:
         chunks: List[str] = []
@@ -152,12 +176,19 @@ class SemanticComplianceOrchestrator:
         )
 
     def _from_cached(self, c, selection, loaded, cached: dict) -> FeatureReview:
-        v = VerdictResult(Verdict(cached["verdict"]), float(cached["confidence"]))
+        reason = cached.get("inconclusive_reason")
+        v = VerdictResult(
+            Verdict(cached["verdict"]),
+            float(cached["confidence"]),
+            InconclusiveReason(reason) if reason else None,
+        )
+        issues = [VerificationIssue(**i) for i in cached.get("issues", [])]
+        selection.tier = Tier(cached.get("tier", Tier.CHEAP.value))
         return FeatureReview(
             feature_id=c.feature_id, language=loaded.language, review_granularity="feature",
             element_fqn=f"feature:{c.feature_id}", selection=selection, verdict=v,
-            requirement=loaded.to_ref(corroborated=True),
-            semantic_compliance_score=compute_compliance_score(v.verdict, v.confidence, []),
+            requirement=loaded.to_ref(corroborated=True), issues=issues,
+            semantic_compliance_score=cached.get("score"),
             reviewed_files=list(c.generated_files),
         )
 

@@ -107,3 +107,47 @@ def test_idempotent_second_run_uses_cache(tmp_path):
     SemanticComplianceOrchestrator(cfg, agent_factory=factory_counting).review_run(
         out, run_id="run-027", project_root=project, emit_events=False)
     assert len(calls) == first  # second run hit the verdict cache, zero new agent calls (S-R1-2)
+
+
+def test_cache_hit_preserves_issues_and_score(tmp_path):
+    """A cached FAIL must reload with its issues + score intact (not an empty generic)."""
+    out, project = _build_run(tmp_path)
+    payload = _svr("fail", 0.88, [("critical", "requirement_violation",
+                                   "computes Metric.value", "assign from input unchanged")])
+    factory = lambda spec: _ScriptedAgent(payload)
+    cfg = ReportConfig()
+    from startd8.semantic_compliance.orchestrator import SemanticComplianceOrchestrator
+
+    r1 = SemanticComplianceOrchestrator(cfg, agent_factory=factory).review_run(
+        out, run_id="run-027", project_root=project, emit_events=False)
+    # Second run is fully cached.
+    r2 = SemanticComplianceOrchestrator(cfg, agent_factory=factory).review_run(
+        out, run_id="run-027", project_root=project, emit_events=False)
+
+    f1 = next(f for f in r1.features if f.feature_id == "metric-ingest")
+    f2 = next(f for f in r2.features if f.feature_id == "metric-ingest")
+    assert f2.verdict.verdict == f1.verdict.verdict
+    assert [i.description for i in f2.issues] == [i.description for i in f1.issues]  # issues survive cache
+    assert f2.semantic_compliance_score == f1.semantic_compliance_score
+    # The Kaizen hint on the cached run is still the templated suggested_fix, not the generic.
+    ks = json.loads((out / "kaizen-suggestions.json").read_text())
+    scr = [s for s in ks["suggestions"] if s.get("source") == "semantic_compliance_reviewer"]
+    assert scr and "assign from input unchanged" in scr[0]["suggested_action"]
+
+
+def test_unreadable_code_is_inconclusive_not_false_fail(tmp_path):
+    """Wrong project_root → files unreadable → inconclusive(code_unavailable), never a confident fail."""
+    out, project = _build_run(tmp_path)
+    payload = _svr("fail", 0.95, [("critical", "x", "y", "z")])  # reviewer would say fail on empty code
+    factory = lambda spec: _ScriptedAgent(payload)
+    cfg = ReportConfig()
+
+    # Point project_root at an empty dir so the listed generated_files cannot be read.
+    bad_root = tmp_path / "wrong-root"
+    bad_root.mkdir()
+    report = run_semantic_compliance(out, run_id="run-027", project_root=bad_root,
+                                     config=cfg, emit_events=False)
+    mi = next(f for f in report.features if f.feature_id == "metric-ingest")
+    assert mi.verdict.verdict.value == "inconclusive"
+    assert mi.verdict.inconclusive_reason.value == "code_unavailable"
+    assert report.summary.fail == 0  # no false fails poisoning Kaizen

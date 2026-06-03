@@ -42,7 +42,7 @@ CRP-triaged invariants baked into this schema:
 
 ### `features[].verdict.inconclusive_reason`
 `requirement_text_unavailable` · `requirement_join_ambiguous` · `language_unsupported` ·
-`postmortem_unavailable` · `parse_failure` · `input_truncated`
+`postmortem_unavailable` · `parse_failure` · `input_truncated` · `code_unavailable`
 
 ### `features[].selection.tier`
 `cheap` (Haiku first pass) · `escalated` (Sonnet re-review)
@@ -166,7 +166,8 @@ CRP-triaged invariants baked into this schema:
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
               "inconclusive_reason": {
                 "enum": ["requirement_text_unavailable", "requirement_join_ambiguous",
-                         "language_unsupported", "postmortem_unavailable", "parse_failure", "input_truncated", null]
+                         "language_unsupported", "postmortem_unavailable", "parse_failure",
+                         "input_truncated", "code_unavailable", null]
               }
             }
           },
