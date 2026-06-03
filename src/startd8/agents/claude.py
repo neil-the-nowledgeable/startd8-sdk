@@ -17,6 +17,12 @@ from .pool import TimeoutConfig, get_client_pool
 
 logger = logging.getLogger(__name__)
 
+# Largest verified-safe non-streaming ``max_tokens`` for Anthropic (M4 landmine L12). 32768 completes
+# (it is the SDK's own default, used by the tier3 code-gen path); 49152 tripped the ">10-min streaming
+# required" guard and 500'd (the app's old service.py). Until ClaudeAgent gains streaming support, any
+# request above this is clamped (with a warning) so no caller can re-trigger that failure class.
+NONSTREAMING_MAX_TOKENS_CEILING = 32768
+
 # Optional Anthropic import
 try:
     from anthropic import Anthropic, AsyncAnthropic
@@ -267,9 +273,18 @@ class ClaudeAgent(BaseAgent):
             temperature: Optional sampling temperature (0.0–1.0). When provided,
                 sent as the ``temperature`` parameter to the Anthropic API.
         """
+        effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
+        if effective_max_tokens > NONSTREAMING_MAX_TOKENS_CEILING:
+            logger.warning(
+                "max_tokens=%d exceeds the non-streaming ceiling %d — clamping (L12; "
+                "ClaudeAgent has no streaming yet, and higher values trip Anthropic's "
+                "'>10-min streaming required' guard). agent=%s model=%s",
+                effective_max_tokens, NONSTREAMING_MAX_TOKENS_CEILING, self.name, self.model,
+            )
+            effective_max_tokens = NONSTREAMING_MAX_TOKENS_CEILING
         kwargs = {
             "model": self.model,
-            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "max_tokens": effective_max_tokens,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
