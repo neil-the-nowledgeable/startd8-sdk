@@ -79,6 +79,11 @@ class PrimeContractorConfig:
     complexity_routing_enabled: bool = False
     repair_enabled: bool = True
 
+    # Global provider knob (MODEL_CONFIG FR-4/FR-6): when set, any agent role
+    # left unset is filled from this provider's tier defaults. Recorded for
+    # provenance and so downstream stages (e.g. plan-ingestion) can inherit it.
+    default_provider: Optional[str] = None
+
 
 def load_prime_contractor_config(
     config_path: str | Path | None = None,
@@ -317,10 +322,25 @@ def apply_cli_overrides(
     elif getattr(args, "no_validate", False):
         config.validation.enabled = False
 
-    # Agent overrides
+    # Agent overrides (explicit per-role flags always win)
     if getattr(args, "lead_agent", None):
         config.agents.lead = args.lead_agent
     if getattr(args, "drafter_agent", None):
         config.agents.drafter = args.drafter_agent
+
+    # Global provider knob: fill any role still UNSET from the provider's tier
+    # defaults, so a single --provider flips the whole contractor (and is
+    # inherited downstream). Explicit --lead/--drafter/--tier3 above take
+    # precedence; a config-file agent also counts as "set" and is preserved.
+    provider = getattr(args, "provider", None)
+    if provider:
+        from startd8.model_catalog import get_latest_model
+        config.default_provider = str(provider)
+        for role, tier in (("lead", "flagship"), ("drafter", "balanced"),
+                           ("tier3", "flagship")):
+            if getattr(config.agents, role) is None:
+                resolved = get_latest_model(str(provider), tier=tier)
+                if resolved:
+                    setattr(config.agents, role, resolved)
 
     return config

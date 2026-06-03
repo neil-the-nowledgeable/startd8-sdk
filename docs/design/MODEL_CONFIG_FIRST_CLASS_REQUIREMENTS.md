@@ -163,6 +163,12 @@ model selection.
 
 ## 5. Implementation Plan (Phase 1 = SDK, Phase 2 = pipe)
 
+> **Status (2026-06-03):** Step 3 + 4(SDK half) **DONE** (`216a6996` — ingestion
+> resolver honors explicit/lead/default_provider). Step 6 `--provider` **DONE** (this
+> commit — contractor fills unset lead/drafter/tier3 from provider tiers). Remaining:
+> step 2 shared `resolve_role_agent`, step 5 other-site migration, step 7 full per-role
+> provenance, step 8 guard, Phase 2 pipe wiring.
+
 **Phase 1 — SDK (smallest correct surface first):**
 
 1. **Catalog role-default helper.** Add `model_catalog.role_default(role, provider=None, tier=None)` returning a spec from `get_latest_model(provider or default_provider, role_tier)`. Define the role→tier map (lead/reviewer=balanced-or-flagship, drafter/cloud_retry=fast, ingestion_assessor=balanced, ingestion_transformer=fast/balanced, semantic_verifier=fast).

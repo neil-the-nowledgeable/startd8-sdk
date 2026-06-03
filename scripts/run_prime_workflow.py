@@ -145,8 +145,17 @@ def main() -> int:
         help="Maximum number of features to process (default: all)",
     )
     parser.add_argument(
+        "--provider", default=None,
+        help=(
+            "Global model provider (e.g. gemini, anthropic, openai). Fills any "
+            "agent role not set explicitly: lead/tier3 = flagship tier, drafter "
+            "= balanced tier. --lead-agent/--drafter-agent/--tier3-agent override "
+            "per role."
+        ),
+    )
+    parser.add_argument(
         "--lead-agent", default=None,
-        help="Lead agent spec (default: from model catalog)",
+        help="Lead agent spec (default: --provider tier, else model catalog)",
     )
     parser.add_argument(
         "--drafter-agent", default=None,

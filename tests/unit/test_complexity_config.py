@@ -273,3 +273,45 @@ class TestClassifierUsesConfig:
         cfg = ComplexityRoutingConfig(non_python_trivial_loc_max=50)
         result_custom = classify_tier(signals, config=cfg)
         assert result_custom.tier == "simple"
+
+
+class TestProviderKnob:
+    """Global --provider knob (MODEL_CONFIG FR-4/FR-6)."""
+
+    def test_provider_fills_all_unset_roles(self) -> None:
+        from startd8.model_catalog import get_latest_model
+        config = PrimeContractorConfig()
+        apply_cli_overrides(config, _make_args(provider="gemini"))
+        assert config.default_provider == "gemini"
+        assert config.agents.lead == get_latest_model("gemini", tier="flagship")
+        assert config.agents.drafter == get_latest_model("gemini", tier="balanced")
+        assert config.agents.tier3 == get_latest_model("gemini", tier="flagship")
+        # all gemini, no anthropic leak
+        assert all(
+            a.startswith("gemini:")
+            for a in (config.agents.lead, config.agents.drafter, config.agents.tier3)
+        )
+
+    def test_explicit_agent_beats_provider(self) -> None:
+        config = PrimeContractorConfig()
+        apply_cli_overrides(
+            config,
+            _make_args(provider="gemini", lead_agent="anthropic:claude-opus-4-8"),
+        )
+        assert config.agents.lead == "anthropic:claude-opus-4-8"  # explicit wins
+        assert config.agents.drafter.startswith("gemini:")  # still filled by provider
+
+    def test_config_file_agent_preserved_over_provider(self) -> None:
+        config = PrimeContractorConfig()
+        config.agents.lead = "openai:gpt-5.5"  # as if loaded from config file
+        apply_cli_overrides(config, _make_args(provider="gemini"))
+        assert config.agents.lead == "openai:gpt-5.5"  # not clobbered
+        assert config.agents.tier3.startswith("gemini:")  # unset role filled
+
+    def test_no_provider_leaves_roles_unset(self) -> None:
+        config = PrimeContractorConfig()
+        apply_cli_overrides(config, _make_args())
+        assert config.default_provider is None
+        assert config.agents.lead is None
+        assert config.agents.drafter is None
+        assert config.agents.tier3 is None
