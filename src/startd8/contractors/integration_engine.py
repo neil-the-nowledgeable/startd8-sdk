@@ -2642,12 +2642,26 @@ class IntegrationEngine:
                     CONFIDENCE_HIGH_PROSE,
                     CONFIDENCE_IS_TRUNCATED,
                     MIN_LINES_TRUNCATION_BLOCKING,
+                    detect_multifile_concatenation,
                     detect_truncation,
                     get_expected_sections_for_code,
                     log_truncation_result,
                 )
 
                 source_content = source_path.read_text(encoding="utf-8")
+
+                # Concatenation guard: a single target file that embeds multiple
+                # files (path-header markers) is broken — reject it with a clear
+                # reason instead of letting it fail obscurely in repair and get
+                # silently dropped (M3 run-023 server.py).
+                _concat_reason = detect_multifile_concatenation(source_content)
+                if _concat_reason:
+                    logger.error(
+                        "REJECTED %s: %s — integration blocked",
+                        source_path.name, _concat_reason,
+                        extra={"unit_id": unit.id},
+                    )
+                    continue
                 # Legitimately-tiny files (e.g. a 3-line composition entrypoint,
                 # 1-line __init__.py) trip structural heuristics but cannot be
                 # meaningfully truncated by them — exclude from blocking, matching

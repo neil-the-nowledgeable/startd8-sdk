@@ -311,6 +311,38 @@ class TestDetectSizeRegression:
         code = "line\n" * 19
         assert detect_size_regression(files, code) is True
 
+    def test_sibling_inflation_not_a_regression(self):
+        """A tiny new target beside a large sibling must not be a regression.
+
+        M3 gpt-m3: a 2-line app/ai/__init__.py was compared against a baseline
+        that included its 671-line app/ai/service.py sibling (added for import
+        context), so 2/673 read as a catastrophic regression and hard-failed
+        the batch. With target-scoped baseline, the new __init__.py has no
+        prior content → no baseline → no regression.
+        """
+        existing = {"app/ai/service.py": "line\n" * 671}  # sibling context only
+        code = "from app.ai.service import AiService\n"  # new __init__.py
+        assert (
+            detect_size_regression(
+                existing, code, target_files=["app/ai/__init__.py"],
+            )
+            is False
+        )
+
+    def test_target_scoped_regression_still_detected(self):
+        """Scoping must still catch a real shrink of the actual target file."""
+        existing = {
+            "app/ai/service.py": "line\n" * 100,  # the target, prior content
+            "app/ai/models.py": "line\n" * 300,   # sibling context (ignored)
+        }
+        code = "line\n" * 5  # target shrank 100 → 5
+        assert (
+            detect_size_regression(
+                existing, code, target_files=["app/ai/service.py"],
+            )
+            is True
+        )
+
 
 # ---------------------------------------------------------------------------
 # build_supplementary_sections

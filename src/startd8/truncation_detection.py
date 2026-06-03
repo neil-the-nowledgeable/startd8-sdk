@@ -486,6 +486,50 @@ def detect_truncation(
     )
 
 
+# File-separator markers an LLM emits when it dumps SEVERAL files into one
+# output: ``--- app/routes.py ---``, ``=== file.py ===``, ``# --- app/x.py ---``.
+# The captured group must contain a filename WITH an extension, so markdown/YAML
+# ``---`` rules (which capture nothing) never match.
+_FILE_SEPARATOR_MARKER = re.compile(
+    r'^\s*(?:#|//|/\*|--|<!--)?\s*[-=*]{2,}\s*'      # comment lead-in + rule
+    r'([\w./\\-]+\.[A-Za-z0-9]+)'                     # path WITH extension
+    r'\s*[-=*]{2,}',                                  # closing rule
+    re.MULTILINE,
+)
+
+
+def detect_multifile_concatenation(code: str) -> Optional[str]:
+    """Detect a single file that actually concatenates MULTIPLE files.
+
+    LLMs sometimes answer a single-file task by dumping several files into one
+    output, separated by path-header markers like ``--- app/routes.py ---``.
+    The result is syntactically broken and, if not caught, fails obscurely in
+    the repair stage and gets silently dropped (M3 run-023 ``server.py``: a
+    ~1059-line concatenation → ast_failure → removed).
+
+    Returns a human-readable reason when **2+ distinct file-path markers** are
+    present (a single header is a legitimate section comment, not a concat), or
+    ``None`` otherwise. Conservative by design: the markers must name real-ish
+    paths with extensions, so prose/markdown/YAML separators do not trip it.
+    """
+    if not code:
+        return None
+    paths = []
+    seen = set()
+    for m in _FILE_SEPARATOR_MARKER.finditer(code):
+        p = m.group(1).strip()
+        if p not in seen:
+            seen.add(p)
+            paths.append(p)
+    if len(paths) >= 2:
+        shown = ", ".join(paths[:5])
+        return (
+            f"contains {len(paths)} embedded file-separator markers "
+            f"({shown}) — multiple files concatenated into one"
+        )
+    return None
+
+
 def _check_code_brace_balance(text: str) -> Optional[str]:
     """Check for significant brace/bracket imbalance in source code.
 

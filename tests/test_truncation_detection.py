@@ -9,6 +9,7 @@ subsequent pipeline steps.
 import pytest
 from startd8.truncation_detection import (
     detect_truncation,
+    detect_multifile_concatenation,
     TruncationResult,
     get_truncation_warning_message,
     estimate_document_sections,
@@ -16,6 +17,51 @@ from startd8.truncation_detection import (
     get_expected_sections_for_code,
 )
 from startd8.exceptions import TruncationError
+
+
+class TestDetectMultifileConcatenation:
+    """Tests for detect_multifile_concatenation (M3 run-023 server.py)."""
+
+    def test_concatenated_files_detected(self):
+        code = (
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n\n"
+            "--- app/routers.py ---\n"
+            "from fastapi import APIRouter\n\n"
+            "--- app/db.py ---\n"
+            "def get_session(): ...\n"
+        )
+        reason = detect_multifile_concatenation(code)
+        assert reason is not None
+        assert "app/routers.py" in reason and "app/db.py" in reason
+
+    def test_equals_style_markers_detected(self):
+        code = "x = 1\n=== models.py ===\ny = 2\n=== views.py ===\nz = 3\n"
+        assert detect_multifile_concatenation(code) is not None
+
+    def test_comment_prefixed_markers_detected(self):
+        code = "# --- app/a.py ---\nimport os\n# --- app/b.py ---\nimport sys\n"
+        assert detect_multifile_concatenation(code) is not None
+
+    def test_markdown_horizontal_rule_not_flagged(self):
+        code = "# Heading\n\n---\n\nProse.\n\n---\n\nMore prose.\n"
+        assert detect_multifile_concatenation(code) is None
+
+    def test_yaml_document_separators_not_flagged(self):
+        code = "---\nname: a\n---\nname: b\n"
+        assert detect_multifile_concatenation(code) is None
+
+    def test_single_section_comment_not_flagged(self):
+        code = "import os\n\n# ----- helpers -----\ndef foo():\n    return 1\n"
+        assert detect_multifile_concatenation(code) is None
+
+    def test_single_file_marker_not_flagged(self):
+        # One marker is a legitimate header, not a concatenation.
+        code = "# --- app/only.py ---\nimport os\n"
+        assert detect_multifile_concatenation(code) is None
+
+    def test_empty_returns_none(self):
+        assert detect_multifile_concatenation("") is None
 
 
 class TestDetectTruncation:

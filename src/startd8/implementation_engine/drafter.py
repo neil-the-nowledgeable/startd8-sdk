@@ -4,6 +4,7 @@ Draft generator for the implementation engine.
 Produces code implementations from specs with mode-aware system prompts.
 """
 
+import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -787,13 +788,23 @@ def detect_size_regression(
     # a non-Python target like requirements.in.
     if _all_files_non_python(target_files=target_files, existing_files=existing_files):
         return False
-    # TODO: existing_total includes sibling .py files added for import context,
-    # inflating the baseline. A 50-line target with a 200-line sibling produces
-    # a 250-line baseline, making a correct 50-line output look like 20% ratio.
-    # Scope to target_files only when available. Not yet observed as a false
-    # positive on Python targets — the regression threshold is low enough that
-    # sibling inflation doesn't cross it in practice.
-    existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+    # Scope the baseline to the TARGET file(s) only. existing_files also carries
+    # sibling files added purely for import context; counting them inflates the
+    # baseline so a correct tiny target (e.g. a 2-line __init__.py next to a
+    # 671-line service.py sibling) reads as a catastrophic regression and gets
+    # hard-failed as truncated. (M3 gpt-m3: this aborted the whole batch.)
+    # When no existing target content is found, the target is effectively a new
+    # file — there is no baseline to regress from, so skip the check.
+    if target_files:
+        target_set = set(target_files)
+        target_bases = {os.path.basename(t) for t in target_files}
+        scoped = {
+            k: v for k, v in existing_files.items()
+            if k in target_set or os.path.basename(k) in target_bases
+        }
+        existing_total = sum(len((c or "").splitlines()) for c in scoped.values())
+    else:
+        existing_total = sum(len(c.splitlines()) for c in existing_files.values())
     if existing_total == 0:
         return False
     if existing_total <= DRAFT_SIZE_REGRESSION_MIN_LINES:
