@@ -121,6 +121,12 @@ def backend(
         "--gate",
         help="After writing, run the Python build gate (compileall) over the project.",
     ),
+    boot_smoke: bool = typer.Option(
+        False,
+        "--boot-smoke",
+        help="After writing, boot app.main:app in a subprocess and assert it serves "
+        "/openapi.json (C-6 runtime gate — catches import errors compileall misses).",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -197,4 +203,18 @@ def backend(
                 f"  [red]{d.stage}[/red] {d.file}:{d.line} {d.code}: {d.message}"
             )
         if not result.is_pass:
+            raise typer.Exit(_EXIT_ERROR)
+
+    if boot_smoke:
+        from .validators.boot_smoke import run_boot_smoke
+
+        bs = run_boot_smoke(str(out))
+        color = "green" if bs.is_pass else "red"
+        console.print(
+            f"[{color}]boot smoke: {bs.verdict}[/{color}] "
+            f"({bs.message}; {len(bs.routes)} route(s) served)"
+        )
+        for d in bs.diagnostics:
+            console.print(f"  [red]{d}[/red]")
+        if not bs.is_pass:
             raise typer.Exit(_EXIT_ERROR)
