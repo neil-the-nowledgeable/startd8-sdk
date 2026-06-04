@@ -347,6 +347,48 @@ class DiskComplianceResult:
     error: Optional[str] = None
 
 
+def _is_functionally_empty_python_module(tree: ast.AST) -> bool:
+    """True if a module defines NO functions/classes and every top-level statement is
+    boilerplate (imports, docstring, ``__all__``, ``pass``) or a None-valued assignment
+    (``x = None`` / ``x: T = None`` / ``x: T``). This is the ``router = None``
+    under-generation stub (RUN-036): it declares names but implements nothing. A module
+    with any real def, or any assignment to a non-None value, is NOT functionally empty.
+    """
+    for stmt in getattr(tree, "body", []):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return False
+        if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.Pass)):
+            continue
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue  # docstring / bare literal
+        if isinstance(stmt, ast.AnnAssign):
+            if stmt.value is None or (
+                isinstance(stmt.value, ast.Constant) and stmt.value.value is None
+            ):
+                continue
+            return False
+        if isinstance(stmt, ast.Assign):
+            names = {t.id for t in stmt.targets if isinstance(t, ast.Name)}
+            if names == {"__all__"}:
+                continue  # export list is boilerplate
+            if isinstance(stmt.value, ast.Constant) and stmt.value.value is None:
+                continue  # x = None  ← the stub signal
+            return False
+        return False  # any other top-level statement (if/for/with/call/...) is substantive
+    return True
+
+
+def _lookup_file_spec(manifest: "ForwardManifest", file_path: str):
+    """Find the manifest spec for *file_path* (exact, then path-suffix match). None if absent."""
+    specs = getattr(manifest, "file_specs", None) or {}
+    if file_path in specs:
+        return specs[file_path]
+    for key, spec in specs.items():
+        if key.endswith("/" + file_path) or file_path.endswith("/" + key):
+            return spec
+    return None
+
+
 def validate_disk_compliance(
     file_path: str,
     project_root: str,
@@ -410,6 +452,40 @@ def validate_disk_compliance(
         result.ast_valid = False
         result.error = f"syntax_error: {exc}"
         return result
+
+    # RUN-036 under-generation guard: a module the manifest declares FILLABLE but that
+    # generates only None-assignments / imports / __all__ (e.g. `job_export_router = None`)
+    # is a $0 stub — it otherwise scores 1.0 (no code → no stubs, no convention violations,
+    # nothing to penalize), a measurement-integrity hole that makes "fixed" look fixed when
+    # the feature was avoided by generating nothing. Mirror the non-Python empty-stem guard:
+    # mark it non-valid so it cannot score perfect. Conservative — fires ONLY when the
+    # manifest prescribes fillable elements for THIS file (no manifest / non-fillable spec /
+    # re-export module → no guard, so legitimate __init__.py re-exports are unaffected).
+    if manifest is not None and _is_functionally_empty_python_module(tree):
+        _spec = _lookup_file_spec(manifest, file_path)
+        _elems = getattr(_spec, "elements", None) if _spec is not None else None
+        if _elems:
+            try:
+                from startd8.element_fillability import is_fillable_spec
+
+                _fillable = is_fillable_spec(_elems)
+            except (ImportError, TypeError):
+                _fillable = False
+            if _fillable:
+                result.ast_valid = False
+                result.contract_compliance = 0.0
+                result.error = "under_generation: functionally_empty_module"
+                result.semantic_issues.append({
+                    "category": "under_generated_module",
+                    "severity": "error",
+                    "message": (
+                        "manifest prescribes fillable elements but the generated module is "
+                        "functionally empty (only None-assignments / imports / __all__) — "
+                        "a $0 stub, not an implementation"
+                    ),
+                    "file": file_path,
+                })
+                return result
 
     # Count stubs: raise NotImplementedError / bare pass in function/method bodies
     result.stubs_remaining = _count_stubs(tree)
