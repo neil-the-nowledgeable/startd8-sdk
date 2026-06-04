@@ -216,13 +216,30 @@ def test_safe_fix_query_get_in_generator_owned_file():
     assert "query(" not in res.code
 
 
-def test_safe_fix_skips_hand_written_file_zero_rewrites():
-    # R1-F6 acceptance: a hand-written dual-pattern file (app/ai/*) is NEVER auto-fixed.
+def test_query_rewrite_stays_spine_only_on_hand_written_file():
+    # R1-F6 (preserved under FR-CAR-12): the dual-pattern-risky query→session.get rewrite stays
+    # scoped to the generator spine — a hand-written app/ai/* file's session.query().get() is
+    # NEVER rewritten (byte-identical). (The *unambiguous* module-source repoint has a wider
+    # scope — see test_module_source_repoint_reaches_bespoke_app_file — but no wrong import here.)
     src = "rows = session.query(Profile).get(pid)\n"
     res = _fix(src, "app/ai/extract.py")
     assert res.modified is False
-    assert res.code == src  # byte-identical — detect-and-advise only
-    assert res.metrics.get("reason") == "out_of_governed_scope"
+    assert res.code == src  # byte-identical — query rewrite is spine-only
+
+
+def test_module_source_repoint_reaches_bespoke_app_file():
+    # FR-CAR-12b (RUN-038 #5): the unambiguous app.models->app.tables repoint reaches bespoke app
+    # routers (app/jobs.py) the spine guard excludes — and splits tables from schemas.
+    from startd8.repair.steps.python_convention_fix import _is_app_package_file
+
+    src = "from app.models import TailoredAsset, TailoredMatch, JobSchema\n"
+    res = _fix(src, "generated/app/job_export.py")
+    assert res.modified is True
+    assert "from app.tables import TailoredAsset, TailoredMatch" in res.code
+    assert "from app.models import JobSchema" in res.code  # schema stays put
+    assert "module_source_repoint" in res.metrics.get("rules", [])
+    # test files are excluded — their convention authority is the FR-CAR-12c prompt, not this fixer
+    assert _is_app_package_file(__import__("pathlib").Path("tests/test_jobs.py")) is False
 
 
 def test_safe_fix_skips_bespoke_view():

@@ -45,6 +45,7 @@ from startd8.repair.steps.fence_strip import FenceStripStep
 from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
 from startd8.repair.steps.import_completion import ManifestImportCompletion
 from startd8.repair.steps.indent_normalize import IndentNormalizeStep
+from startd8.repair.steps.python_convention_fix import PythonConventionFixStep
 from startd8.utils.code_extraction import extract_code_from_response
 from startd8.utils.code_manifest import ElementKind
 
@@ -122,6 +123,7 @@ _shared_fence_strip = FenceStripStep()
 _shared_future_import_reorder = FutureImportReorderStep()
 _shared_indent_normalize = IndentNormalizeStep()
 _shared_import_completion = ManifestImportCompletion()
+_shared_python_convention = PythonConventionFixStep()
 _shared_duplicate_removal = DuplicateRemovalStep()
 _shared_definition_order_fix = DefinitionOrderFixStep()
 
@@ -647,6 +649,25 @@ def _step_import_completion(
     return _shared_import_completion(code, ctx, Path("<element>"), ec)
 
 
+def _step_python_convention(
+    code: str,
+    element: ForwardElementSpec,
+    file_spec: Optional[ForwardFileSpec] = None,
+    skeleton_source: Optional[str] = None,
+) -> RepairStepResult:
+    """FR-CAR-12a (RUN-038 #5): apply the convention safe-fixer on the micro-prime file pipeline.
+
+    The module-source repoint (``app.models`` table import → ``app.tables``) is unambiguous and
+    reaches generator-owned app routers. Without this, a ``safe_fixable=true`` convention violation
+    on a micro-prime-generated file was hard-gated on disk yet ``semantic_repairs_applied=0`` — the
+    worst-of-both. The real file path (needed by the scope guard) comes from ``file_spec.file``.
+    """
+    rel = getattr(file_spec, "file", None) if file_spec else None
+    file_path = Path(rel) if rel else Path("<file>")
+    ctx = RepairContext()
+    return _shared_python_convention(code, ctx, file_path)
+
+
 def _step_duplicate_removal(
     code: str,
     element: ForwardElementSpec,
@@ -722,6 +743,7 @@ _STEP_APPLICABILITY: dict[str, frozenset[str]] = {
     "indent_normalize":     frozenset({"element"}),
     "signature_reconcile":  frozenset({"element"}),
     "import_completion":    frozenset({"element"}),
+    "python_convention_fix":   frozenset({"file"}),  # FR-CAR-12a — file-whole app routers
     "duplicate_removal":       frozenset({"element", "file"}),
     "definition_order_fix":    frozenset({"file"}),
     "ast_validate":            frozenset({"element", "file"}),
@@ -737,6 +759,7 @@ _ALL_STEPS = [
     ("indent_normalize", _step_indent_normalize),
     ("signature_reconcile", _step_signature_reconcile),
     ("import_completion", _step_import_completion),
+    ("python_convention_fix", _step_python_convention),
     ("duplicate_removal", _step_duplicate_removal),
     ("definition_order_fix", _step_definition_order_fix),
     ("ast_validate", _step_ast_validate),

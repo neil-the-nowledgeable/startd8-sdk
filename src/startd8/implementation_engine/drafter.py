@@ -969,6 +969,12 @@ def build_supplementary_sections(
     if ui:
         p1_sections.append(ui if isinstance(ui, str) else str(ui))
 
+    # P1: Convention authority (FR-CAR-12c) — house-style module-source/ORM rule for the
+    # lead/cloud path, so tests + 0-element features import tables from app.tables (not app.models).
+    cg = context.get("convention_guidance")
+    if cg:
+        p1_sections.append(cg if isinstance(cg, str) else str(cg))
+
     # P1: Upstream API contracts (Layer 3: within-run manifest accumulation)
     upstream = context.get("upstream_contracts")
     if upstream and isinstance(upstream, list):

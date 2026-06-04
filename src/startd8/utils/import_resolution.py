@@ -45,6 +45,11 @@ _WELL_KNOWN_PACKAGES: frozenset[str] = frozenset({
     "prometheus_client", "opentelemetry",
     # Serialization / parsing
     "pydantic", "marshmallow", "lxml",
+    # Database / ORM (FR-RI-1b — RUN-038 #1: a correct FastAPI/SQLModel app imports these on
+    # every model/table file; their absence flagged correct code as unresolvable and dragged
+    # features to PARTIAL:semantic on a measurement artifact, not a real defect).
+    "sqlmodel", "sqlalchemy", "alembic", "psycopg2", "psycopg", "asyncpg", "aiosqlite",
+    "databases", "greenlet",
     # gRPC ecosystem (where import != PyPI name, handled by alias map,
     # but sub-modules like grpc.aio may still miss)
     "grpc",

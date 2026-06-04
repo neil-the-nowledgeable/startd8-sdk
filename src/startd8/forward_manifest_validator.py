@@ -2738,21 +2738,83 @@ def _validate_import_resolution(
 def _discover_requirements_packages(
     file_path: str, project_root: str,
 ) -> Set[str]:
-    """Find ``requirements.in`` in the same directory and extract package names."""
+    """Discover the project's declared dependency surface (FR-RI-1a, RUN-038 #1).
+
+    Walks UP from the generated file to ``project_root`` (generated files live under e.g.
+    ``generated/app/`` while the dependency manifest sits at the project root), and reads every
+    common Python dependency manifest — ``requirements.in``/``.txt``, ``requirements-*.txt``, and
+    ``pyproject.toml`` ``[project.dependencies]`` — not just ``requirements.in`` in the immediate
+    parent. Returns the union of declared top-level package names.
+    """
     from startd8.utils.import_resolution import parse_requirements_packages
 
-    abs_path = Path(project_root) / file_path
-    parent = abs_path.parent
+    root = Path(project_root)
+    abs_path = root / file_path
+    packages: Set[str] = set()
 
-    for name in ("requirements.in", "requirements.txt"):
-        req_file = parent / name
-        if req_file.is_file():
+    # Directories from the file's parent up to (and including) the project root.
+    search_dirs: List[Path] = []
+    cur = abs_path.parent
+    while True:
+        search_dirs.append(cur)
+        if cur == root or root not in cur.parents:
+            break
+        cur = cur.parent
+    if root not in search_dirs:
+        search_dirs.append(root)
+
+    seen: Set[Path] = set()
+    for d in search_dirs:
+        if d in seen:
+            continue
+        seen.add(d)
+        # requirements*.txt / requirements.in (requirements format)
+        try:
+            for req_file in sorted(d.glob("requirements*.txt")) + sorted(d.glob("requirements*.in")):
+                if req_file.is_file():
+                    try:
+                        packages |= parse_requirements_packages(
+                            req_file.read_text(encoding="utf-8", errors="replace")
+                        )
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        # pyproject.toml [project.dependencies]
+        pyproject = d / "pyproject.toml"
+        if pyproject.is_file():
             try:
-                content = req_file.read_text(encoding="utf-8", errors="replace")
-                return parse_requirements_packages(content)
+                packages |= _parse_pyproject_dependencies(
+                    pyproject.read_text(encoding="utf-8", errors="replace")
+                )
             except OSError:
                 pass
-    return set()
+    return packages
+
+
+def _parse_pyproject_dependencies(content: str) -> Set[str]:
+    """Extract top-level package names from a pyproject.toml ``[project.dependencies]`` array.
+
+    Best-effort + dependency-light: tries ``tomllib`` (3.11+), falls back to the existing
+    requirements parser over the dependency string lines. Never raises.
+    """
+    from startd8.utils.import_resolution import parse_requirements_packages
+
+    try:
+        import tomllib  # py3.11+
+
+        data = tomllib.loads(content)
+        deps = (data.get("project", {}) or {}).get("dependencies", []) or []
+        return parse_requirements_packages("\n".join(str(d) for d in deps))
+    except Exception:
+        # Fallback: scan a `dependencies = [ ... ]` block textually.
+        import re
+
+        m = re.search(r"dependencies\s*=\s*\[(.*?)\]", content, re.DOTALL)
+        if not m:
+            return set()
+        lines = re.findall(r"['\"]([^'\"]+)['\"]", m.group(1))
+        return parse_requirements_packages("\n".join(lines))
 
 
 def _extract_import_modules(tree: ast.AST) -> List[str]:

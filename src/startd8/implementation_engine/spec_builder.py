@@ -1206,6 +1206,10 @@ def build_spec_prompt(
     # `## Context` dump (build_spec_context_section), where the spec ignored it and invented a
     # non-existent `Match`. It is rendered as a dedicated section below — like the drafter does.
     upstream_interfaces = context.pop("upstream_interfaces", None)
+    # FR-CAR-12c: same treatment for the convention authority (house-style module-source rule),
+    # so the lead/cloud spec carries "tables from app.tables, not app.models" — not just the
+    # micro-prime path. Popped so it renders as a dedicated P0 section, not JSON-escaped.
+    convention_guidance = context.pop("convention_guidance", None)
 
     # --- Build prioritized sections (P0=never drop, P3=drop first) ---
     target_files = context.get("target_files")
@@ -1250,6 +1254,11 @@ def build_spec_prompt(
     # referenced-entity-scoped upstream, so it survives budget without crowding the prompt.
     if isinstance(upstream_interfaces, str) and upstream_interfaces.strip():
         prioritized.append((0, "upstream_interfaces", upstream_interfaces))
+
+    # P0: Convention authority (FR-CAR-12c) — the house-style module-source rule, dedicated
+    # section so the spec stops authoring `from app.models import <Table>` examples (RUN-038 §2.1).
+    if isinstance(convention_guidance, str) and convention_guidance.strip():
+        prioritized.append((0, "convention_guidance", convention_guidance))
 
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")

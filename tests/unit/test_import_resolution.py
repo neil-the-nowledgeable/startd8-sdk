@@ -221,3 +221,35 @@ class TestParseRequirementsPackages:
     def test_extras(self):
         result = parse_requirements_packages("uvicorn[standard]\n")
         assert result == {"uvicorn"}
+
+
+# --- FR-RI-1 (RUN-038 #1): resolver dependency-surface honesty ----------------------------
+
+class TestFrRi1DependencySurface:
+    def test_db_orm_floor_packages_resolve_without_requirements(self):
+        # FR-RI-1b: sqlmodel/sqlalchemy resolve even with no declared deps (the floor).
+        from startd8.utils.import_resolution import resolve_import, _WELL_KNOWN_PACKAGES
+
+        for pkg in ("sqlmodel", "sqlalchemy", "alembic"):
+            assert pkg in _WELL_KNOWN_PACKAGES
+            assert resolve_import(
+                pkg, sibling_modules=set(), requirements_packages=set()
+            ) == f"pip:{pkg}"
+        assert resolve_import(
+            "sqlalchemy.pool", sibling_modules=set(), requirements_packages=set()
+        ) == "pip:sqlalchemy"
+
+    def test_discovery_walks_to_project_root_and_reads_app_reqs_and_pyproject(self, tmp_path):
+        # FR-RI-1a: generated files live under generated/app/, manifests at the project root.
+        from startd8.forward_manifest_validator import _discover_requirements_packages
+
+        (tmp_path / "requirements-app.txt").write_text("fastapi\ncustom-pkg==1.2\n")
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\ndependencies = ["typer>=0.9", "rich"]\n'
+        )
+        gen = tmp_path / "generated" / "app"
+        gen.mkdir(parents=True)
+        (gen / "x.py").write_text("x = 1\n")
+
+        pkgs = _discover_requirements_packages("generated/app/x.py", str(tmp_path))
+        assert {"fastapi", "custom-pkg", "typer", "rich"} <= pkgs
