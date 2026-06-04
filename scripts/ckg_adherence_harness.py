@@ -29,8 +29,42 @@ from startd8.contractors.project_knowledge.adherence import (
     RUN011_CASES,
     MockBackend,
     SuiteReport,
+    build_spec_prompt,
+    render_authority_section,
     run_suite,
 )
+
+
+def _build_microprime_prompt(case, *, inject: bool) -> str:
+    """Micro-prime prompt SHAPE: a terse skeleton-style task + (when injected) the SAME
+    authority content rendered the *micro-prime* way — under the
+    ``# Domain constraints (MUST follow these):`` framing the engine uses, capped by
+    ``engine._cap_authority_block`` (FR-MPF-1). Differs from the lead-path shape only in
+    framing/budget, not content — so a baseline-vs-injected delta isolates the prompt
+    SHAPE's effect on the cheap tier. (For these small schemas the cap is a no-op; it is
+    applied for fidelity to the real micro-prime path.)
+    """
+    base = (
+        f"[case:{case.case_id}] # Task: implement '{case.feature_name}'.\n"
+        f"# {case.description}\n"
+        f"# Target files: {', '.join(case.target_files)}\n"
+        f"# Output ONLY the implementation; do not invent field names or import paths."
+    )
+    if not inject:
+        return base
+    section = render_authority_section(case)
+    if not section:
+        return base
+    from startd8.micro_prime.engine import (
+        _AUTHORITY_BUDGET_DIVISOR,
+        _CHARS_PER_TOKEN,
+        _cap_authority_block,
+    )
+
+    cap = (1024 * _CHARS_PER_TOKEN) // _AUTHORITY_BUDGET_DIVISOR  # 1024 = default input_token_budget
+    capped = _cap_authority_block(section, cap)
+    domain = "\n".join("# - " + ln for ln in capped.splitlines() if ln.strip())
+    return base + "\n\n# Domain constraints (MUST follow these):\n" + domain
 
 
 def _mock_backend() -> MockBackend:
@@ -109,23 +143,31 @@ def main(argv=None) -> int:
         help="sampling temperature for the real backend; >0 gives per-seed variance "
              "(0 = greedy = identical output every seed, which fakes the N-seed rate)",
     )
+    ap.add_argument(
+        "--prompt-shape", choices=("leadpath", "microprime"), default="leadpath",
+        help="leadpath = the lead/drafter spec-prompt section; microprime = the terse "
+             "'# Domain constraints' framing + FR-MPF-1 cap (the real cheap-tier path shape)",
+    )
     args = ap.parse_args(argv)
 
     backend = (
         _mock_backend() if args.backend == "mock"
         else _startd8_backend(args.agent, args.temperature)
     )
+    prompt_builder = (
+        _build_microprime_prompt if args.prompt_shape == "microprime" else build_spec_prompt
+    )
 
     # The real gate: baseline (no injection) vs injected, same seeds, per-Gap rate.
     baseline = run_suite(
         RUN011_CASES, backend, inject=False, n_seeds=args.seeds,
-        threshold=args.threshold, scoring=args.scoring,
+        threshold=args.threshold, scoring=args.scoring, prompt_builder=prompt_builder,
     )
     injected = run_suite(
         RUN011_CASES, backend, inject=True, n_seeds=args.seeds,
-        threshold=args.threshold, scoring=args.scoring,
+        threshold=args.threshold, scoring=args.scoring, prompt_builder=prompt_builder,
     )
-    print(f"(scoring={args.scoring}, agent={args.agent})")
+    print(f"(scoring={args.scoring}, shape={args.prompt_shape}, agent={args.agent})")
     _print_report(baseline, inject=False, label="BASELINE")
     _print_report(injected, inject=True, label="INJECTED")
 

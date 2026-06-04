@@ -37,6 +37,7 @@ __all__ = [
     "DEFAULT_THRESHOLD",
     "DEFAULT_SEEDS",
     "build_spec_prompt",
+    "render_authority_section",
     "measure_adherence",
     "measure_adherence_structural",
     "run_case",
@@ -180,12 +181,26 @@ class SuiteReport:
         return all(rate >= self.threshold for rate in self.rate_by_gap().values())
 
 
+def render_authority_section(case: AdherenceCase) -> str:
+    """The provider's scoped authority section for a case (REQ-CKG-524 scoping).
+
+    Shared by the lead-path prompt (:func:`build_spec_prompt`) and the micro-prime-shape
+    harness builder, so both inject identical authority **content** and differ only in
+    framing/budget. Reuses the Phase-2 provider end-to-end (build → scope → render).
+    Returns ``""`` when nothing is referenced.
+    """
+    pk = DraftModeProducer().build({"prisma/schema.prisma": case.prisma_schema}, ".")
+    signal = " ".join([case.feature_name, case.description, *case.target_files])
+    referenced = referenced_entities([signal], pk.entities())
+    scoped = _scope_to_entities(pk, referenced) if referenced else pk
+    return render(scoped, log=False)
+
+
 def build_spec_prompt(case: AdherenceCase, *, inject: bool) -> str:
-    """Construct the drafter prompt; with ``inject`` it appends the provider section.
+    """Construct the lead-path drafter prompt; with ``inject`` it appends the provider section.
 
     The ``[case:<id>]`` marker lets a MockBackend route deterministically; a real
-    backend ignores it. Injection reuses the Phase-2 provider end-to-end: build the
-    artifact, scope to the referenced entities, render.
+    backend ignores it.
     """
     base = (
         f"[case:{case.case_id}] Implement feature '{case.feature_name}'.\n"
@@ -194,11 +209,7 @@ def build_spec_prompt(case: AdherenceCase, *, inject: bool) -> str:
     )
     if not inject:
         return base
-    pk = DraftModeProducer().build({"prisma/schema.prisma": case.prisma_schema}, ".")
-    signal = " ".join([case.feature_name, case.description, *case.target_files])
-    referenced = referenced_entities([signal], pk.entities())
-    scoped = _scope_to_entities(pk, referenced) if referenced else pk
-    section = render(scoped, log=False)
+    section = render_authority_section(case)
     return base + ("\n\n" + section if section else "")
 
 
@@ -266,9 +277,10 @@ def run_case(
     inject: bool,
     n_seeds: int = DEFAULT_SEEDS,
     scoring: str = "denylist",
+    prompt_builder=build_spec_prompt,
 ) -> AdherenceResult:
     score = _SCORERS[scoring]
-    prompt = build_spec_prompt(case, inject=inject)
+    prompt = prompt_builder(case, inject=inject)
     adherent = sum(
         1 for s in range(n_seeds)
         if score(backend.generate(prompt=prompt, seed=s), case)
@@ -284,9 +296,13 @@ def run_suite(
     n_seeds: int = DEFAULT_SEEDS,
     threshold: float = DEFAULT_THRESHOLD,
     scoring: str = "denylist",
+    prompt_builder=build_spec_prompt,
 ) -> SuiteReport:
     results = tuple(
-        run_case(c, backend, inject=inject, n_seeds=n_seeds, scoring=scoring)
+        run_case(
+            c, backend, inject=inject, n_seeds=n_seeds, scoring=scoring,
+            prompt_builder=prompt_builder,
+        )
         for c in cases
     )
     return SuiteReport(results=results, threshold=threshold)
