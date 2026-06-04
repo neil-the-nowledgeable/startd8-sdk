@@ -505,6 +505,11 @@ def test_db_and_main_spine():
     # the HTMX UI must be mounted too (runtime-test fix — web_router was unmounted)
     assert "from .web import web_router" in main
     assert "app.include_router(web_router)" in main
+    # regen-safe composition seam (D2): main.py tolerantly mounts an owned app/user_routers.py
+    # (a `user_routers` list the generator never writes) so owned routers survive regenerate.
+    assert "from .user_routers import user_routers" in main
+    assert "for _user_router in user_routers:" in main
+    assert "app.include_router(_user_router)" in main
     compile(main, "<main>", "exec")
 
 

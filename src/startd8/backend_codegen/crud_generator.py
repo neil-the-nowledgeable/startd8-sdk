@@ -185,7 +185,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
     Content pages are an optional layer: ``app/pages.py`` is emitted only by
     ``generate backend --pages``. The mount below is **tolerant** (present in every app, a no-op when
     ``app/pages.py`` is absent) so ``main.py`` stays a single deterministic, schema-only artifact —
-    no pages-awareness leaks into its drift hash."""
+    no pages-awareness leaks into its drift hash.
+
+    The same tolerant shape gives projects a **regen-safe composition seam** for their own routers:
+    ``main.py`` always imports an optional, project-**owned** ``app/user_routers.py`` (a list named
+    ``user_routers``) that the generator never writes. Owned routers/views mounted via that list
+    therefore survive ``generate backend`` — no hand-edit of this generated file is needed or kept."""
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, "fastapi-main")
     body = (
@@ -203,6 +208,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "for _router in all_routers:\n"
         "    app.include_router(_router)\n"
         "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n\n"
+        "try:  # optional OWNED routers — the regen-safe composition seam (D2).\n"
+        "    from .user_routers import user_routers  # project-authored list; never generated\n"
+        "except ModuleNotFoundError:\n"
+        "    user_routers = []\n"
+        "for _user_router in user_routers:\n"
+        "    app.include_router(_user_router)  # owned routers/views survive regenerate\n\n"
         "try:  # optional content-pages layer (generate backend --pages)\n"
         "    from .pages import pages_router\n"
         "except ModuleNotFoundError:\n"
