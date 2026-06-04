@@ -21,6 +21,7 @@ from ..upstream_interface import UpstreamInterface
 __all__ = [
     "FieldSpec",
     "FieldSetAuthority",
+    "EnumAuthority",
     "Negative",
     "ProjectKnowledge",
 ]
@@ -50,6 +51,20 @@ class FieldSetAuthority:
 
 
 @dataclass(frozen=True)
+class EnumAuthority:
+    """The authoritative value set for one Prisma enum (REQ-CKG-525).
+
+    Retires hand-authored "use exactly these enum values" discipline blocks
+    (e.g. ``subjectType`` ∈ {capability, outcome, …}; a P3 pipeline ``Stage`` enum).
+    Sourced from the contract — the schema's ``enum`` blocks are the single truth.
+    """
+
+    name: str
+    values: Tuple[str, ...]
+    source_file: str
+
+
+@dataclass(frozen=True)
 class Negative:
     """An explicit negative: a recurring invention and its real replacement (D2)."""
 
@@ -71,6 +86,7 @@ class ProjectKnowledge:
     field_sets: Tuple[FieldSetAuthority, ...] = ()
     interfaces: Tuple[UpstreamInterface, ...] = ()
     negatives: Tuple[Negative, ...] = ()
+    enums: Tuple[EnumAuthority, ...] = ()
     omissions: Tuple[str, ...] = ()
 
     @property

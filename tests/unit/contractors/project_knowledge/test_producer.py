@@ -71,3 +71,26 @@ class TestConvergence:
         out = DraftModeProducer().build({}, "/proj")
         assert isinstance(out, ProjectKnowledge)
         assert out.project_root == "/proj"
+
+
+_ENUM_SCHEMA = (
+    "model TailoredMatch {\n id String @id\n subjectType SubjectType\n}\n"
+    "enum SubjectType {\n capability\n outcome\n proofPoint\n differentiator\n valueProp\n}\n"
+    "enum Stage {\n prospect\n contacted\n interview\n offer\n closed\n}\n"
+)
+
+
+class TestEnumAuthority:
+    def test_builds_enum_value_authority(self):
+        # REQ-CKG-525: enum-value authority from the contract's enum blocks
+        pk = DraftModeProducer().build({"prisma/schema.prisma": _ENUM_SCHEMA}, "/proj")
+        by_name = {e.name: e for e in pk.enums}
+        assert set(by_name) == {"SubjectType", "Stage"}
+        assert by_name["SubjectType"].values == (
+            "capability", "outcome", "proofPoint", "differentiator", "valueProp")
+        assert by_name["Stage"].values == ("prospect", "contacted", "interview", "offer", "closed")
+        assert by_name["Stage"].source_file == "prisma/schema.prisma"
+
+    def test_no_enums_when_schema_has_none(self):
+        pk = DraftModeProducer().build({"prisma/schema.prisma": SCHEMA}, "/proj")
+        assert pk.enums == ()

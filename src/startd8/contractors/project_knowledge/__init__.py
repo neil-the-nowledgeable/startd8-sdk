@@ -11,7 +11,13 @@ See `docs/design/CODE_KNOWLEDGE_GRAPH_PHASE2_KNOWLEDGE_PROVIDER_REQUIREMENTS.md`
 
 from __future__ import annotations
 
-from .models import FieldSetAuthority, FieldSpec, Negative, ProjectKnowledge
+from .models import (
+    EnumAuthority,
+    FieldSetAuthority,
+    FieldSpec,
+    Negative,
+    ProjectKnowledge,
+)
 from .negatives import SEEDED_NEGATIVES, relevant_negatives
 from .producer import (
     DraftModeProducer,
@@ -24,6 +30,7 @@ from .scoping import module_closure, referenced_entities
 __all__ = [
     "FieldSpec",
     "FieldSetAuthority",
+    "EnumAuthority",
     "Negative",
     "ProjectKnowledge",
     "ProjectKnowledgeProducer",

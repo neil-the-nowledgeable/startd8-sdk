@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 from ...languages.prisma_parser import parse_prisma_schema
 from ..upstream_interface import build_upstream_interfaces
-from .models import FieldSetAuthority, FieldSpec, ProjectKnowledge
+from .models import EnumAuthority, FieldSetAuthority, FieldSpec, ProjectKnowledge
 from .negatives import relevant_negatives
 
 __all__ = ["ProjectKnowledgeProducer", "DraftModeProducer", "canonical_specifier"]
@@ -91,12 +91,29 @@ class DraftModeProducer:
         canonical_modules = [canonical_specifier(i.module_path) for i in interfaces]
         negatives = tuple(relevant_negatives(canonical_modules))
 
+        # --- Enum-value authority (REQ-525) ---------------------------------
+        enums: Tuple[EnumAuthority, ...] = ()
+        if prisma_text is not None:
+            enums = self._enums(prisma_text, prisma_path or "schema.prisma")
+
         return ProjectKnowledge(
             project_root=project_root,
             field_sets=field_sets,
             interfaces=interfaces,
             negatives=negatives,
+            enums=enums,
             omissions=tuple(omissions),
+        )
+
+    @staticmethod
+    def _enums(prisma_text: str, source_file: str) -> Tuple[EnumAuthority, ...]:
+        """Enum-value authority from the contract (REQ-525). Reuses the shared
+        parser's already-extracted ``enums`` — no new parsing."""
+        schema = parse_prisma_schema(prisma_text or "")
+        return tuple(
+            EnumAuthority(name=name, values=tuple(values), source_file=source_file)
+            for name, values in sorted(schema.enums.items())
+            if values
         )
 
     # -- helpers ------------------------------------------------------------

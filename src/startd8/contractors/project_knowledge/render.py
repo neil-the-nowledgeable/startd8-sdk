@@ -30,6 +30,7 @@ PRISMA_INSTRUCTION = (
     "the model does not declare."
 )
 NEGATIVES_HEADER = "## Do NOT use these invented module paths"
+ENUM_HEADER = "## Enum values — use EXACTLY these (do not invent or rename)"
 OMISSIONS_HEADER = "## Unavailable — state, do not assume"
 
 _DEFAULT_BUDGET_TOKENS = 800
@@ -60,6 +61,13 @@ def _render_negatives(pk: ProjectKnowledge) -> str:
     return "\n".join(lines)
 
 
+def _render_enums(pk: ProjectKnowledge) -> str:
+    if not pk.enums:
+        return ""
+    rows = [f"- `{e.name}`: " + ", ".join(e.values) for e in pk.enums]
+    return "\n".join([ENUM_HEADER, *rows])
+
+
 def _render_omissions(pk: ProjectKnowledge) -> str:
     if not pk.omissions:
         return ""
@@ -82,6 +90,7 @@ def render(
     sections: List[str] = [
         render_upstream_interfaces(list(pk.interfaces)),
         _render_field_sets(pk),
+        _render_enums(pk),
         _render_negatives(pk),
         _render_omissions(pk),
     ]

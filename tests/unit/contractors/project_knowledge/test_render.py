@@ -66,3 +66,21 @@ class TestBudgetAndEmpty:
         with caplog.at_level("WARNING"):
             render(pk, budget_tokens=10, log=True)
         assert any("over budget" in r.message for r in caplog.records)
+
+
+_RENDER_ENUM_SCHEMA = (
+    "model M {\n id String @id\n kind AssetKind\n}\n"
+    "enum AssetKind {\n resume_bullets\n cover_letter\n linkedin_blurb\n outreach_email\n}\n"
+)
+
+
+class TestEnumRender:
+    def test_renders_enum_values_block(self):
+        pk = DraftModeProducer().build({"prisma/schema.prisma": _RENDER_ENUM_SCHEMA}, "/proj")
+        out = render(pk, log=False)
+        assert "## Enum values — use EXACTLY these" in out
+        assert "`AssetKind`: resume_bullets, cover_letter, linkedin_blurb, outreach_email" in out
+
+    def test_no_enum_block_when_absent(self):
+        pk = ProjectKnowledge(project_root="/p")
+        assert "## Enum values" not in render(pk, log=False)
