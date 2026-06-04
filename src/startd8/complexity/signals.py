@@ -236,6 +236,7 @@ def extract_signals_from_feature(
     # no-LLM SIMPLE tier (classify_tier guard). None = unknown (no manifest /
     # no covered specs) → no guard, the Step-2 emission gate stays authoritative.
     has_fillable_elements: Optional[bool] = None
+    manifest_element_count = 0  # FR-MPF-2: forward-manifest surface area
     if manifest is not None and target_files:
         try:
             from startd8.element_fillability import is_fillable_spec
@@ -245,15 +246,18 @@ def extract_signals_from_feature(
             _file_specs = getattr(manifest, "file_specs", None) or {}
             _covered = [tf for tf in target_files if tf in _file_specs]
             if _covered:
-                has_fillable_elements = any(
-                    is_fillable_spec(
-                        getattr(_file_specs[tf], "elements", None) or []
-                    )
-                    or framework_provenance_for_path(tf) is not None
-                    for tf in _covered
-                )
+                # Single pass: the FR-7 fillability guard and the FR-MPF-2 surface
+                # count both read the same `elements` list — do not re-scan file_specs.
+                _fillable = False
+                for tf in _covered:
+                    _elems = getattr(_file_specs[tf], "elements", None) or []
+                    manifest_element_count += len(_elems)
+                    if is_fillable_spec(_elems) or framework_provenance_for_path(tf) is not None:
+                        _fillable = True
+                has_fillable_elements = _fillable
         except (ImportError, AttributeError, TypeError):
             has_fillable_elements = None
+            manifest_element_count = 0
 
     return TaskComplexitySignals(
         blast_radius=blast_radius,
@@ -269,6 +273,7 @@ def extract_signals_from_feature(
         manifest_coverage=manifest_coverage,
         file_extension=file_extension,
         has_fillable_elements=has_fillable_elements,
+        manifest_element_count=manifest_element_count,
     )
 
 

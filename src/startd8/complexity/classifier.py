@@ -258,6 +258,25 @@ def _classify_tier_core(
             signals,
         )
 
+    # --- FR-MPF-3: surface-aware MODERATE floor. A target whose forward-manifest
+    # surface (element count) exceeds the configured max is too rich for the
+    # no-LLM/economy SIMPLE tier (RUN_007: a full schema-mirror routed SIMPLE →
+    # empty stub). Emit an explicit MODERATE floor (standard-LLM) — NOT COMPLEX:
+    # over-specified ≠ under-specified (contrast FR-7 above), and over-provisioning
+    # the premium tier is a cost regression. Evaluated after the COMPLEX triggers
+    # (a real COMPLEX still wins). Disabled when manifest_element_simple_max <= 0
+    # (default) → no-op until calibrated against the FR-MPF-5 measurement. ---
+    if (
+        cfg.manifest_element_simple_max > 0
+        and signals.manifest_element_count > cfg.manifest_element_simple_max
+    ):
+        return _emit(
+            ComplexityTier.MODERATE,
+            f"manifest_element_count {signals.manifest_element_count} > "
+            f"{cfg.manifest_element_simple_max} — rich spec, not SIMPLE (FR-MPF-3)",
+            signals,
+        )
+
     # --- SIMPLE: all must pass ---
     if (
         signals.manifest_coverage == "full"
