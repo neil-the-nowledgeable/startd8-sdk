@@ -42,8 +42,17 @@ _EDGE_PY = {"String": "str", "Int": "int", "BigInt": "int", "Float": "float", "B
 _PROVENANCE_OMIT = {"source", "confirmed", "ownerId", "createdAt", "updatedAt"}
 
 # AI artifact kinds (registered into drift._AI_KINDS). Per-pass modules share the `ai-pass` kind
-# and carry the pass name in the `startd8-entity` header slot for re-render dispatch.
-AI_KINDS = ("ai-service", "ai-edge-schemas", "ai-pass", "ai-router", "ai-server")
+# and carry the pass name in the `startd8-entity` header slot for re-render dispatch. The two
+# `ai-tests-*` kinds are the rung-4 semantic tests over the AI layer (FR-6/NFR-2 + provenance gate).
+AI_KINDS = (
+    "ai-service",
+    "ai-edge-schemas",
+    "ai-pass",
+    "ai-router",
+    "ai-server",
+    "ai-tests-edge",
+    "ai-tests-pass",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -543,6 +552,148 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
 
 
 # --------------------------------------------------------------------------- #
+# AI-layer semantic tests (rung 4 — the deterministic floor under the LLM core)
+# --------------------------------------------------------------------------- #
+
+_TEST_SHIM = (
+    "import sys\n"
+    "from pathlib import Path\n\n"
+    "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"
+)
+# Edge (AI tool-input) scalar -> a valid sample value as Python source. Edge fields are always one of
+# the four builtins (non-builtins/lists collapse to ``str`` in render_edge_schemas), so this is total.
+_EDGE_SAMPLE = {"str": '"sample"', "int": "0", "float": "0.0", "bool": "False"}
+
+
+def _edge_entities(passes: Tuple[AiPass, ...]) -> List[str]:
+    """Output entities that get an edge schema, in first-seen order (mirrors render_edge_schemas)."""
+    out: List[str] = []
+    for ps in passes:
+        for e in ps.output_entities:
+            if e not in out:
+                out.append(e)
+    return out
+
+
+def _edge_field_names(schema, ent: str, human: HumanInputs) -> List[str]:
+    """The entity's edge field names — PK, provenance, and human-authored fields dropped (C-4/FR-6)."""
+    return [
+        f.name
+        for f in schema.scalar_fields(ent)
+        if not (
+            f.is_id or f.name in _PROVENANCE_OMIT or (ent, f.name) in human.human_only_fields
+        )
+    ]
+
+
+def _edge_required_kwargs(schema, ent: str, human: HumanInputs) -> str:
+    """A ``{"f": value, ...}`` literal of the entity's *required* edge fields (valid sample values)."""
+    parts: List[str] = []
+    for f in schema.scalar_fields(ent):
+        if f.is_id or f.name in _PROVENANCE_OMIT or (ent, f.name) in human.human_only_fields:
+            continue
+        if f.is_optional:
+            continue
+        parts.append(f'"{f.name}": {_EDGE_SAMPLE[_EDGE_PY.get(f.type, "str")]}')
+    return "{" + ", ".join(parts) + "}"
+
+
+def render_edge_tests(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``tests/test_edge_privacy.py`` — FR-6 / NFR-2 as executable guarantees.
+
+    For each AI edge schema: a **set-equality** assertion that its field set is exactly the declared
+    edge fields (NFR-2 — no server-managed or extra field can leak into the AI tool input), and an
+    explicit omission assertion for each human-authored field (FR-6 — e.g. the AI literally has no
+    ``Metric.value`` field to populate). Both are projected from the contract + ``human_inputs.yaml``.
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    schema = parse_prisma_schema(schema_text)
+    passes = parse_ai_passes(manifest_text)
+    human = parse_human_inputs(human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-tests-edge")
+
+    entities = _edge_entities(passes)
+    imports = (
+        "from app.ai.edge_schemas import " + ", ".join(f"{e}Edge" for e in entities)
+        if entities
+        else "# (no edge schemas)"
+    )
+    preamble = _TEST_SHIM + "\n" + imports
+
+    blocks: List[str] = []
+    for ent in entities:
+        expected = _edge_field_names(schema, ent, human)
+        expected_set = "{" + ", ".join(f'"{n}"' for n in expected) + "}" if expected else "set()"
+        blocks.append(
+            f"def test_{_snake(ent)}_edge_field_set():\n"
+            f"    assert set({ent}Edge.model_fields) == {expected_set}"
+        )
+        omitted = sorted(fld for (e, fld) in human.human_only_fields if e == ent)
+        if omitted:
+            checks = "\n".join(
+                f"    assert {fld!r} not in {ent}Edge.model_fields" for fld in omitted
+            )
+            blocks.append(
+                f"def test_{_snake(ent)}_edge_omits_human_authored():\n{checks}"
+            )
+
+    body = preamble + ("\n\n\n" + "\n\n\n".join(blocks) if blocks else "\n")
+    return header + "\n\n" + body + "\n"
+
+
+def render_ai_pass_tests(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
+    """``tests/test_ai_passes.py`` — the offline AI-pass *provenance gating* test (rung-5 floor).
+
+    Deterministic, offline (no API key, no live call): drives each pass's owned ``_persist`` helper
+    with a valid edge object and asserts the persisted row carries AI provenance — ``source="ai"``,
+    ``confirmed=False`` (FR-5/FR-12) — and, because the edge schema omits human-authored fields, that
+    no AI-authored ``Metric.value`` can reach the table (FR-6). This is the structural floor beneath
+    the LLM-authored prompt + behavioral output-quality smoke (rung 5), which a live run owns.
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    schema = parse_prisma_schema(schema_text)
+    passes = parse_ai_passes(manifest_text)
+    human = parse_human_inputs(human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-tests-pass")
+
+    preamble = (
+        _TEST_SHIM + "\n"
+        "import pytest\n\n"
+        'pytest.importorskip("sqlmodel")\n\n'
+        "from sqlmodel import Session, SQLModel, create_engine, select  # noqa: E402"
+    )
+
+    blocks: List[str] = []
+    for ps in passes:
+        for out in dict.fromkeys(ps.output_entities):
+            cols = {f.name for f in schema.scalar_fields(out)}
+            has_prov = "source" in cols and "confirmed" in cols
+            kwargs = _edge_required_kwargs(schema, out, human)
+            lines = [
+                f"def test_{ps.module}_{_snake(out)}_persist_is_ai_owned(tmp_path):",
+                f"    import app.tables as t  # noqa: F401 — registers tables on SQLModel.metadata",
+                f"    import app.ai.{ps.module} as mod",
+                f"    from app.ai.edge_schemas import {out}Edge",
+                f'    engine = create_engine(f"sqlite:///{{tmp_path}}/gate.db")',
+                "    SQLModel.metadata.create_all(engine)",
+                "    with Session(engine) as s:",
+                f"        n = mod._persist(s, t.{out}, {out}Edge(**{kwargs}))",
+                "        s.commit()",
+                f"        rows = s.exec(select(t.{out})).all()",
+                "    assert n == 1",
+            ]
+            if has_prov:
+                lines += [
+                    '    assert rows[0].source == "ai"',
+                    "    assert rows[0].confirmed is False",
+                ]
+            blocks.append("\n".join(lines))
+
+    body = preamble + ("\n\n\n" + "\n\n\n".join(blocks) if blocks else "\n")
+    return header + "\n\n" + body + "\n"
+
+
+# --------------------------------------------------------------------------- #
 # Layout + assembly
 # --------------------------------------------------------------------------- #
 
@@ -554,6 +705,8 @@ def ai_layout(manifest_text: str) -> Dict[str, str]:
         "app/ai/edge_schemas.py": "ai-edge-schemas",
         "app/ai/routes.py": "ai-router",
         "app/server.py": "ai-server",
+        "tests/test_edge_privacy.py": "ai-tests-edge",
+        "tests/test_ai_passes.py": "ai-tests-pass",
     }
     for ps in passes:
         layout[f"app/ai/{ps.module}.py"] = "ai-pass"
@@ -586,4 +739,7 @@ def render_ai_layer(
         )
     out.append(("app/ai/routes.py", render_ai_routes(schema_text, manifest_text, human_text, source_file)))
     out.append(("app/server.py", render_server(schema_text, manifest_text, human_text, source_file)))
+    # Rung-4 AI-layer semantic tests: FR-6/NFR-2 edge privacy + the offline provenance gate.
+    out.append(("tests/test_edge_privacy.py", render_edge_tests(schema_text, manifest_text, human_text, source_file)))
+    out.append(("tests/test_ai_passes.py", render_ai_pass_tests(schema_text, manifest_text, human_text, source_file)))
     return out

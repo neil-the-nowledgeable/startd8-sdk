@@ -15,8 +15,11 @@ from pathlib import Path
 import pytest
 
 from startd8.backend_codegen import (
+    COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
     render_backend,
+    render_completeness,
+    render_completeness_tests,
     render_contract_tests,
     render_pydantic_models,
 )
@@ -113,3 +116,38 @@ def test_emitted_tests_run_green_against_generated_app(tmp_path):
     )
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
     assert "5 passed" in result.stdout
+
+
+# --- Iteration 2a: FR-9 completeness formula as an executable invariant ---
+
+
+def test_completeness_tests_byte_identical_and_in_backend():
+    a = render_completeness_tests(PILOT_SCHEMA)
+    assert a == render_completeness_tests(PILOT_SCHEMA)
+    assert "# startd8-artifact: python-tests-completeness" in a
+    assert COMPLETENESS_TESTS_PATH in {rel for rel, _ in render_backend(PILOT_SCHEMA)}
+
+
+def test_completeness_tests_in_sync():
+    a = render_completeness_tests(PILOT_SCHEMA, "prisma/schema.prisma")
+    assert owned_file_in_sync(PILOT_SCHEMA, a) is True
+
+
+def test_completeness_tests_run_green_against_generated_fn(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "app" / "completeness.py").write_text(
+        render_completeness(PILOT_SCHEMA, "prisma/schema.prisma"), encoding="utf-8"
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_completeness.py").write_text(
+        render_completeness_tests(PILOT_SCHEMA, "prisma/schema.prisma"), encoding="utf-8"
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_completeness.py", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"completeness tests failed:\n{result.stdout}\n{result.stderr}"
+    assert "2 passed" in result.stdout

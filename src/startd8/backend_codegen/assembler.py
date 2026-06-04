@@ -17,11 +17,16 @@ from .crud_generator import (
     render_main,
     render_routers,
 )
-from .derived import render_derived, render_requirements
+from .derived import _load_completeness_manifest, render_derived, render_requirements
 from .htmx_generator import render_ui
 from .pydantic_renderer import render_pydantic_models
 from .sqlmodel_renderer import render_sqlmodel_tables
-from .test_emitter import CONTRACT_TESTS_PATH, render_contract_tests
+from .test_emitter import (
+    COMPLETENESS_TESTS_PATH,
+    CONTRACT_TESTS_PATH,
+    render_completeness_tests,
+    render_contract_tests,
+)
 
 
 def render_backend(
@@ -67,6 +72,12 @@ def render_backend(
     # Rung-4 semantic tests over the contract (round-trip / field-presence / enum-domain). Owned,
     # $0, drift-checked; they ARE the gate the Python build runs (pytest).
     out.append((CONTRACT_TESTS_PATH, render_contract_tests(schema_text, source_file)))
+    out.append((
+        COMPLETENESS_TESTS_PATH,
+        render_completeness_tests(
+            schema_text, source_file, manifest=_load_completeness_manifest(completeness_text)
+        ),
+    ))  # FR-9: the completeness formula as an executable, drift-checked invariant
     if pages_text:
         from .pages_generator import render_pages
 

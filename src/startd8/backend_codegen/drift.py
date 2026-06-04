@@ -37,7 +37,15 @@ _GENERATED_MARKER = "# GENERATED from"
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
 # sync with ``ai_layer.AI_KINDS`` (literal here to avoid an import cycle at module load).
 _AI_KINDS: frozenset = frozenset(
-    {"ai-service", "ai-edge-schemas", "ai-pass", "ai-router", "ai-server"}
+    {
+        "ai-service",
+        "ai-edge-schemas",
+        "ai-pass",
+        "ai-router",
+        "ai-server",
+        "ai-tests-edge",
+        "ai-tests-pass",
+    }
 )
 
 # Artifact kinds whose drift derives from two inputs (schema + pages.yaml). Kept in sync with
@@ -78,7 +86,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
     )
     from .pydantic_renderer import render_pydantic_models
     from .sqlmodel_renderer import render_sqlmodel_tables
-    from .test_emitter import render_contract_tests
+    from .test_emitter import render_completeness_tests, render_contract_tests
 
     return {
         "pydantic-models": lambda s, sf, e: render_pydantic_models(
@@ -105,6 +113,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         "pages-admin": lambda s, sf, e: render_pages_admin(s, sf),
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
         "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
+        "python-tests-completeness": lambda s, sf, e: render_completeness_tests(s, sf, manifest=_cmpl),
     }
 
 
@@ -230,9 +239,11 @@ def _ai_renderers():
     """Map AI artifact-kind → ``(schema, manifest, human, source_file, entity) -> text`` renderer."""
     from .ai_layer import (
         render_ai_pass,
+        render_ai_pass_tests,
         render_ai_routes,
         render_ai_service,
         render_edge_schemas,
+        render_edge_tests,
         render_server,
     )
 
@@ -246,6 +257,8 @@ def _ai_renderers():
         "ai-pass": lambda s, m, h, sf, e, spec: render_ai_pass(s, m, h, sf, e),
         "ai-router": lambda s, m, h, sf, e, spec: render_ai_routes(s, m, h, sf),
         "ai-server": lambda s, m, h, sf, e, spec: render_server(s, m, h, sf),
+        "ai-tests-edge": lambda s, m, h, sf, e, spec: render_edge_tests(s, m, h, sf),
+        "ai-tests-pass": lambda s, m, h, sf, e, spec: render_ai_pass_tests(s, m, h, sf),
     }
 
 
