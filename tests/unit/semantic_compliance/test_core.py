@@ -99,6 +99,24 @@ def test_loader_missing_feature_unavailable(tmp_path):
     assert reason == InconclusiveReason.REQUIREMENT_TEXT_UNAVAILABLE
 
 
+def test_loader_joins_when_task_id_and_context_feature_id_diverge(tmp_path):
+    """run-029 regression: post-mortem keys by task_id (PI-001), seed context.feature_id is F-201.
+    Lookup by either id must resolve to the requirement, not requirement_text_unavailable."""
+    out = _seed(tmp_path, [{
+        "task_id": "PI-001",
+        "config": {
+            "task_description": "Jobs dashboard router.",
+            "context": {"feature_id": "F-201", "target_files": ["app/jobs.py"], "language_id": "python"},
+        },
+    }])
+    idx = SeedIndex.load(out)
+    by_taskid, r1 = idx.lookup("PI-001", generated_files=["app/jobs.py"])   # post-mortem's key
+    by_ctxfid, r2 = idx.lookup("F-201", generated_files=["app/jobs.py"])    # design key
+    assert r1 is None and by_taskid.requirement_text.startswith("Jobs dashboard")
+    assert r2 is None and by_ctxfid is by_taskid
+    assert by_taskid.feature_id == "PI-001"  # canonical = task_id (matches the report)
+
+
 def test_loader_id_collision_is_ambiguous(tmp_path):
     out = _seed(tmp_path, [
         {"task_id": "PI-001", "config": {"task_description": "a", "context": {"feature_id": "PI-001"}}},

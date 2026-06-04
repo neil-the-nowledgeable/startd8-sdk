@@ -90,14 +90,17 @@ class SeedIndex:
 
         for task in data.get("tasks", []) or []:
             ctx = (task.get("config", {}) or {}).get("context", {}) or {}
-            fid = ctx.get("feature_id") or task.get("task_id")
-            if not fid:
+            # The post-mortem keys features by ``task_id`` (e.g. "PI-001"); the seed also carries a
+            # *design* ``context.feature_id`` (e.g. "F-201") that can DIVERGE (run-029). Register the
+            # task under BOTH ids so a lookup by either resolves; ``task_id`` is the canonical key
+            # since it is what the post-mortem (and thus the SCR) looks up by.
+            task_id = task.get("task_id")
+            ctx_fid = ctx.get("feature_id")
+            keys = [str(k) for k in (task_id, ctx_fid) if k]
+            if not keys:
                 continue
-            if fid in idx._by_id:
-                idx._collisions.add(fid)  # id collision across tasks → ambiguous (R1-S5)
-                continue
-            idx._by_id[fid] = LoadedRequirement(
-                feature_id=str(fid),
+            loaded = LoadedRequirement(
+                feature_id=keys[0],  # task_id preferred — matches the post-mortem feature_id
                 requirement_text=_requirement_text(task),
                 target_files=list(ctx.get("target_files", []) or []),
                 negative_scope=list(ctx.get("negative_scope", []) or []),
@@ -105,6 +108,12 @@ class SeedIndex:
                 requirement_ids=list(ctx.get("requirement_ids", []) or []),
                 language=str(ctx.get("language_id", "python") or "python"),
             )
+            for key in keys:
+                existing = idx._by_id.get(key)
+                if existing is not None and existing.feature_id != loaded.feature_id:
+                    idx._collisions.add(key)  # two distinct tasks claim one id → ambiguous (R1-S5)
+                else:
+                    idx._by_id[key] = loaded
         return idx
 
     def lookup(
