@@ -47,6 +47,15 @@ class DuplicateRemovalStep:
         seen: dict[str, ast.stmt] = {}
         imports_removed = 0
 
+        # REQ-RPL-104 (cross-kind F811): pre-seed with module-level def/class names so an import
+        # SHADOWED by a local definition (e.g. `from x import resolve_matches` then
+        # `def resolve_matches(...)` — the run-028 F811) is treated as a duplicate import and
+        # removed, keeping the local definition. Safe because F811 fires only when the import
+        # binding is *unused* (no use before the redefinition), so dropping it cannot break a caller.
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                seen.setdefault(node.name, node)
+
         for node in tree.body:
             if not isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue

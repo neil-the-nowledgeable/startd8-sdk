@@ -147,3 +147,38 @@ class TestDuplicateDefRemoval:
         assert result.metrics["defs_removed"] == 2
         assert result.code.count("def foo():") == 1
         assert "return 3" in result.code
+
+    def test_import_shadowed_by_local_def_removed(self):
+        """REQ-RPL-104 cross-kind F811 (run-028): import redefined by a module-level def →
+        the shadowed import is removed, the local def kept."""
+        code = (
+            "from app.matching import resolve_matches\n"
+            "import os\n\n"
+            "def resolve_matches(jd):\n    return []\n"
+        )
+        result = self.step(code, self.ctx, self.path)
+        assert result.modified is True
+        assert "from app.matching import resolve_matches" not in result.code
+        assert "def resolve_matches(jd):" in result.code   # local def kept
+        assert "import os" in result.code                   # unrelated import untouched
+        import ast
+        ast.parse(result.code)                              # still valid
+
+    def test_import_shadowed_by_class_removed(self):
+        code = "from x import Foo\n\nclass Foo:\n    pass\n"
+        result = self.step(code, self.ctx, self.path)
+        assert "from x import Foo" not in result.code
+        assert "class Foo:" in result.code
+
+    def test_partial_import_shadowed_by_def_keeps_siblings(self):
+        code = "from x import A, B\n\ndef A():\n    return 1\n"
+        result = self.step(code, self.ctx, self.path)
+        assert "from x import B" in result.code   # sibling kept
+        assert "def A():" in result.code
+        assert "import A" not in result.code        # A dropped from the import
+
+    def test_non_shadowed_import_not_removed(self):
+        """No false positive: an import with no shadowing def is left alone."""
+        code = "from x import keep\n\ndef other():\n    return keep()\n"
+        result = self.step(code, self.ctx, self.path)
+        assert "from x import keep" in result.code

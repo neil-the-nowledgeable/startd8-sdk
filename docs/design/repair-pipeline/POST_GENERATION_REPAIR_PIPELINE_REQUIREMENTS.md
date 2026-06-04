@@ -460,9 +460,17 @@ Detect and remove duplicate function or class definitions that arise from merge 
 
 - Parse AST to find duplicate `def` / `class` names at the same scope level
 - Keep the last definition (most likely the intended version)
+- Remove duplicate **imports** that bind the same name (keep the first)
+- **Cross-kind F811 (added — run-028):** when a name is bound by **both an import and a
+  module-level `def`/`class`** (e.g. `from app.matching import resolve_matches` then
+  `def resolve_matches(...)`), remove the **shadowed import** and keep the local definition.
+  Safe because `F811 redefinition of *unused* name` fires only when the import binding has no
+  use before the redefinition, so dropping it cannot break a caller. (Implemented by pre-seeding
+  the import-dedup `seen` set with module-level def/class names.)
 - Log removed duplicates in `RepairStepResult.metrics`
 
-**Trigger:** `F811 redefinition of unused name` in lint checkpoint results.
+**Trigger:** `F811 redefinition of unused name` in lint checkpoint results — covers
+import↔import, def↔def, **and import↔def** collisions.
 
 ### REQ-RPL-105: Extended Lint Fix
 
