@@ -1200,6 +1200,12 @@ def build_spec_prompt(
     requirements_context = context.pop("requirements_context", None)
     protocol_guidance = context.pop("protocol_guidance", None)
     scope_boundary = context.pop("scope_boundary", None)
+    # RUN-036: the field-set + entity-name + module-path authority (real entities, their
+    # canonical module, and the "do not invent" negatives) the lead path builds into
+    # `upstream_interfaces`. POP it here so it does NOT get JSON-escaped into the generic
+    # `## Context` dump (build_spec_context_section), where the spec ignored it and invented a
+    # non-existent `Match`. It is rendered as a dedicated section below — like the drafter does.
+    upstream_interfaces = context.pop("upstream_interfaces", None)
 
     # --- Build prioritized sections (P0=never drop, P3=drop first) ---
     target_files = context.get("target_files")
@@ -1236,6 +1242,14 @@ def build_spec_prompt(
                 "reason": _fm_empty_reason,
             },
         )
+
+    # P0: Field-set / entity-name / module-path authority (RUN-036). Surfaced prominently in
+    # the SPEC prompt (not just the draft) so the spec uses the project's REAL entities + their
+    # canonical module instead of inventing one (the `from app.models import Match` boot-cascade).
+    # P0 — same "contract you'll be validated against" class as the forward manifest; small,
+    # referenced-entity-scoped upstream, so it survives budget without crowding the prompt.
+    if isinstance(upstream_interfaces, str) and upstream_interfaces.strip():
+        prioritized.append((0, "upstream_interfaces", upstream_interfaces))
 
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")
