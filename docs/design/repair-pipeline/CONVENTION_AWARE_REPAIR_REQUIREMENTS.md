@@ -1,12 +1,53 @@
 # Convention-Aware Repair — Requirements
 
-**Version:** 0.3 (CRP-reviewed — R1 applied)
-**Date:** 2026-06-03
-**Status:** Draft for review — pairs with `CONVENTION_AWARE_REPAIR_PLAN.md` · CRP R1 triaged (Appendix A)
+**Version:** 0.4 (status sync + RUN-032 baseline)
+**Date:** 2026-06-04
+**Status:** Partially implemented — Phase A + Phase B (B.1/B.2/B.3) landed on `main`; **Phase C (FR-CAR-5)
+remaining**. Pairs with `CONVENTION_AWARE_REPAIR_PLAN.md` · CRP R1 triaged (Appendix A)
 **Aligns with:** `REPAIR_RETRY_ITERATIVE_REQUIREMENTS.md` (the "complete true residual, don't mask" framing),
 `POST_GENERATION_REPAIR_PIPELINE_REQUIREMENTS.md`, `MANIFEST_DRIVEN_NAME_REPAIR_*`
 **Motivating evidence:** `strtd8/docs/P2_RUN_028_POSTMORTEM.md` (micro-prime emitted Flask-not-FastAPI,
 `session.query`, table-from-`app.models`; the build gate caught only the F811 symptom).
+**Confirming evidence (RUN-032, 2026-06-03T2358):** the *identical* class recurred and the now-landed
+machinery behaved exactly as specified — see §0.5.
+
+---
+
+## 0.5 Implementation status & RUN-032 baseline (NEW in v0.4)
+
+**What has landed on `main`** (since v0.3 was written):
+
+| FR | Phase | Status | Code |
+|----|-------|--------|------|
+| FR-CAR-0/1/2/3 | Phase A — authority + detection (advisory) | ✅ landed | `repair/convention.py` (`PythonConventionAuthority`, `detect_conventions`), `ConventionDiagnostic` in `repair/models.py` |
+| FR-CAR-7 | Phase B.1 — verdict hard-gate | ✅ landed | `forward_manifest_validator.py` convention hard-gate |
+| FR-CAR-4 | Phase B.2 — safe fixers + governed-scope guard (**lever 2 "cure"**) | ✅ landed | `repair/steps/python_convention_fix.py` + `repair/routing.py` (`python_convention_error` → `python_convention_fix`) |
+| FR-CAR-6 | Phase B.3 — escalate-don't-silence | ✅ landed | `RepairOutcome.unrepaired_diagnostics` + `EscalationHandoff` residual |
+| **FR-CAR-5** | **Phase C — adherence reaches micro-prime (lever 1 "prevention")** | ⬜ **remaining** | `micro_prime/` still has **zero** `project_knowledge` refs |
+
+**RUN-032 (`.cap-dev-pipe/.../run-032-20260603T2358`) — score 0.51 PARTIAL, 4/7.** This run *predates*
+Phase B.2/B.3, so it is a clean **"before" baseline** for the cure-side work and a **direct demand** for
+the prevention-side (FR-CAR-5):
+
+- **The class recurred unchanged.** Every failure is convention/idiom invention on the **micro-prime
+  (simple) tier**: `from app.models import JobDescription` (should be `app.tables`); `from sqlalchemy.orm
+  import Session` / `session.query(...)` / `import sqlmodel` (should be SQLModel `session.exec(select(...))`).
+  Detected as `convention_violations` with `convention_kind` + `expected` + `safe_fixable` — **empirical
+  proof FR-CAR-1/3 (Phase A) work in the wild.**
+- **The verdict gate fired (FR-CAR-7):** `PI-005` → `FAIL:disk_quality`; the wrong-idiom file cascaded to a
+  boot failure that failed **two** features sharing `app/jobs.py` (`PI-001`/`PI-002` → `FAIL:boot`,
+  `app.server:app` won't import). Cross-feature boot-cascade is new evidence that **one** un-prevented
+  micro-prime file zeroes multiple features — sharpening the FR-CAR-5 priority.
+- **The safe-fixer did NOT apply** (`job_export.py` repair header = `import_completion, duplicate_removal,
+  extended_lint_fix` — no `python_convention_fix`), because the run predates Phase B.2. Once Phase B.2/B.3
+  are exercised on a fresh run, the open question is whether the micro-prime `_run_post_generation_repair`
+  path even *invokes* convention detection (CRP R1-S3) — to verify on the next run.
+- **The F811 fix held** (`duplicate_definitions: 0`) — the RUN-028 symptom did not recur.
+
+**Net for this update:** requirements already cover both levers with **no conflict** (lever 1 = FR-CAR-5 /
+Phase C; lever 2 = FR-CAR-4 / Phase B.2, now landed; both consume FR-CAR-0; OQ-5 + §4 Non-Requirement make
+the composition explicit). **FR-CAR-0 has landed (Phase A), so FR-CAR-5's blocking precondition is now
+satisfied and Phase C is unblocked.**
 
 ---
 
@@ -198,8 +239,13 @@ detector/fixer. Net: micro-prime both *generates* and *self-repairs* toward the 
 **v0.2 (sequenced after FR-CAR-0):** the seam is concrete — add a field to `MicroPrimeContext`
 (`micro_prime/context.py:11`), thread it from `gen_context` in `from_prime` (prime_contractor already holds
 `self._project_knowledge`), and pass it through `process_file_with_context` → `process_file` → the prompt
-builders. Today **nothing project-knowledge-shaped crosses that boundary.** Blocked until FR-CAR-0 yields a
-Python authority to inject.
+builders. Today **nothing project-knowledge-shaped crosses that boundary.**
+**v0.4 (unblocked):** FR-CAR-0 landed (Phase A, `PythonConventionAuthority` in `repair/convention.py`), so
+the blocking precondition is satisfied — Phase C may proceed. Two distinct authorities must reach micro-prime
+and they have different readiness: (a) the **schema-derived field-set + enum authority** (already validated
+on the lead/drafter path, Python-useful today, *independent of FR-CAR-0*); and (b) the **generator-derived
+Python convention authority** (module-source `app.tables` + ORM/framework idiom) from FR-CAR-0. Both render
+into the micro-prime generation prompt via the same `MicroPrimeContext` field.
 
 ### FR-CAR-6 — Escalate, don't silence (the A3 + symptom-fix guard)
 Every diagnostic MUST be classified `repaired` / `safe-unfixable-mechanical` / `convention-or-semantic-unfixable`.
