@@ -87,6 +87,31 @@ def test_comments_are_ignored():
     assert detect_conventions("# from flask import x — a note, not code\n") == []
 
 
+def test_detector_ignores_mentions_in_docstrings_and_strings():
+    # Reliability (code-review fix): a `session.query`/`flask`/`render_template` mention inside a
+    # docstring, string literal, or inline comment must NOT false-fire — else the verdict gate would
+    # falsely FAIL the file (cf. app/ai/extract.py's docstring that describes the SQLAlchemy style).
+    code = (
+        '"""Supports the SQLAlchemy session.query(model).all() style.\n'
+        "Do not use flask or render_template here.\n"
+        '"""\n'
+        "x = 1  # session.query is fine inside a comment\n"
+        's = "from flask import nope"  # and inside a string literal\n'
+    )
+    assert detect_conventions(code) == []
+
+
+def test_detector_still_flags_real_code_beside_prose():
+    code = (
+        "# note: this uses session.query (just a comment)\n"
+        "def f(session):\n"
+        "    return session.query(Model).all()\n"
+    )
+    d = detect_conventions(code)
+    assert len(d) == 1
+    assert d[0].convention_kind == "orm_idiom" and d[0].line == 3  # real code only, correct line
+
+
 def test_orm_query_without_get_is_flagged_unsafe():
     d = detect_conventions("rows = session.query(Profile).all()\n")
     assert len(d) == 1

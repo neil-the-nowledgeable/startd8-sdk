@@ -104,8 +104,35 @@ def build_python_convention_authority() -> PythonConventionAuthority:
     )
 
 
-def _is_comment(line: str) -> bool:
-    return line.lstrip().startswith("#")
+def _mask_strings_and_comments(code: str) -> List[str]:
+    """Return *code*'s lines (1:1) with string/comment token text blanked out.
+
+    Idiom detection runs on this masked view so a `session.query`/`flask`/`render_template` mention
+    **inside a docstring, string literal, or comment** does NOT false-fire (which, via the verdict gate,
+    would falsely FAIL the file). Falls back to the raw lines if the source can't be tokenized.
+    """
+    import io
+    import tokenize
+
+    lines = code.splitlines()
+    masked = list(lines)
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(code).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
+        return lines  # best-effort: detection still works, minus the masking
+    for tok in toks:
+        name = tokenize.tok_name.get(tok.type, "")
+        if tok.type in (tokenize.STRING, tokenize.COMMENT) or name.startswith("FSTRING"):
+            (srow, scol), (erow, ecol) = tok.start, tok.end
+            for row in range(srow, erow + 1):
+                idx = row - 1
+                if idx < 0 or idx >= len(masked):
+                    continue
+                line = masked[idx]
+                a = scol if row == srow else 0
+                b = ecol if row == erow else len(line)
+                masked[idx] = line[:a] + " " * max(0, b - a) + line[b:]
+    return masked
 
 
 def _split_imports(spec: str) -> List[str]:
@@ -125,8 +152,9 @@ def detect_conventions(
     auth = authority or build_python_convention_authority()
     out: List[ConventionDiagnostic] = []
 
-    for i, raw in enumerate(code.splitlines(), 1):
-        if _is_comment(raw):
+    # Match on a view with string/comment text blanked, so prose mentions don't false-fire.
+    for i, raw in enumerate(_mask_strings_and_comments(code), 1):
+        if not raw.strip():
             continue
 
         # framework / orm_idiom / template_idiom — declarative idiom rules

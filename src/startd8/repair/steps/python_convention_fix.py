@@ -22,8 +22,9 @@ from typing import Optional
 
 from ..models import ElementContext, RepairContext, RepairStepResult
 
-# `<s>.query(<Model>).get(<id>)` → `<s>.get(<Model>, <id>)`
-_QUERY_GET_RE = re.compile(r"\b(\w+)\.query\(\s*(\w+)\s*\)\.get\(\s*([^())]+?)\s*\)")
+# `<s>.query(<Model>).get(<id>)` → `<s>.get(<Model>, <id>)`. The id arg excludes parens, so only
+# simple identifiers/literals are rewritten (a nested call is left for escalation, never mis-fixed).
+_QUERY_GET_RE = re.compile(r"\b(\w+)\.query\(\s*(\w+)\s*\)\.get\(\s*([^()]+?)\s*\)")
 
 
 def _governed_scope() -> tuple[str, ...]:
