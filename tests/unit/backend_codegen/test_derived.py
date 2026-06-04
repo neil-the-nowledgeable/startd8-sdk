@@ -114,3 +114,28 @@ def test_derived_tamper_detected():
         owned_file_in_sync(SCHEMA, export.replace("sort_keys=True", "sort_keys=False"))
         is False
     )
+
+
+def test_completeness_no_manifest_unchanged():
+    """OQ-4: absent manifest → the flat presence-rule output (no weighted code emitted)."""
+    src = render_completeness(SCHEMA)
+    assert "Presence rule (OQ-4 v1)" in src
+    assert "_CONFIG" not in src and "_EXCLUDED" not in src
+
+
+def test_completeness_weighted_manifest_exclude_and_threshold():
+    manifest = {"exclude": ["ProofPoint"], "entities": {"Profile": {"min_rows": 2, "weight": 3}}}
+    ns = _exec(render_completeness(SCHEMA, manifest=manifest))
+    # ProofPoint excluded → out of denominator; Profile needs >=2 rows
+    r = ns["compute_completeness"]({"Profile": 1, "ProofPoint": 0})
+    assert r.score == 0.0 and r.nudges == ["Add at least 2 Profile."]
+    full = ns["compute_completeness"]({"Profile": 2})
+    assert full.score == 1.0 and full.nudges == []
+
+
+def test_completeness_weighted_fraction_and_nudge_qty():
+    manifest = {"entities": {"Profile": {"weight": 3}, "ProofPoint": {"min_rows": 2, "weight": 1}}}
+    ns = _exec(render_completeness(SCHEMA, manifest=manifest))
+    r = ns["compute_completeness"]({"Profile": 1, "ProofPoint": 1})
+    assert r.score == 0.75  # weight 3 met / total 4
+    assert r.nudges == ["Add at least 2 ProofPoint."]

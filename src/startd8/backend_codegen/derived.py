@@ -19,7 +19,7 @@ a declared **manifest** — the documented refinement, deferred.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
@@ -106,16 +106,35 @@ def render_ai_schemas(
 
 
 def render_completeness(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    manifest: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Render ``app/completeness.py`` — presence-based score + nudges (FR-6; OQ-4 v1 default)."""
+    """Render ``app/completeness.py`` — score + nudges (FR-6).
+
+    Two modes, by design (OQ-4):
+      - **No manifest (default)** → the v1 *presence rule* (score = fraction of entities with >=1
+        row; one nudge per absent entity). Byte-identical to the prior output — zero change for
+        projects that don't add a manifest.
+      - **Domain-weighted manifest** → per-entity ``min_rows`` + ``weight`` thresholds and an
+        ``exclude`` set (e.g. drop join tables / ``AiCall``; require >=3 ProofPoints). Score is the
+        weighted fraction of *included* entities meeting their threshold; nudges name the threshold.
+
+    The manifest (``completeness.yaml``) shape::
+
+        exclude: [AiCall, ProofPointCapability, ...]
+        entities:
+          ProofPoint: {min_rows: 3, weight: 2}
+          Capability: {min_rows: 2}
+    """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
     entities_lit = _py_list(names)
-
     header = _header(source_file, sha, "python-completeness")
-    body = (
+
+    _preamble = (
         "from __future__ import annotations\n\n"
         "from dataclasses import dataclass\n"
         "from typing import Dict, List\n\n"
@@ -124,15 +143,71 @@ def render_completeness(
         "class CompletenessResult:\n"
         "    score: float  # 0.0 .. 1.0\n"
         "    nudges: List[str]  # priority-ordered, schema order\n\n\n"
+    )
+
+    if not manifest:
+        body = _preamble + (
+            "def compute_completeness(present: Dict[str, int]) -> CompletenessResult:\n"
+            '    """Presence rule (OQ-4 v1): score = fraction of entities with >=1 row; one nudge per\n'
+            "    absent entity. Domain-weighted thresholds (e.g. >=3 ProofPoints) are a manifest\n"
+            '    refinement, deferred."""\n'
+            "    if not ENTITIES:\n"
+            "        return CompletenessResult(score=1.0, nudges=[])\n"
+            "    have = [e for e in ENTITIES if present.get(e, 0) > 0]\n"
+            "    score = round(len(have) / len(ENTITIES), 4)\n"
+            "    nudges = [f'Add at least one {e}.' for e in ENTITIES if present.get(e, 0) == 0]\n"
+            "    return CompletenessResult(score=score, nudges=nudges)\n"
+        )
+        return header + "\n\n" + body
+
+    # --- domain-weighted mode (manifest present) ---
+    excluded = sorted(str(e) for e in (manifest.get("exclude") or []))
+    cfg_in = manifest.get("entities") or {}
+    cfg: Dict[str, Dict[str, float]] = {}
+    for ent in names:  # only known schema models; deterministic schema order
+        spec = cfg_in.get(ent)
+        if not isinstance(spec, dict):
+            continue
+        entry: Dict[str, float] = {}
+        if "min_rows" in spec:
+            entry["min_rows"] = int(spec["min_rows"])
+        if "weight" in spec:
+            entry["weight"] = float(spec["weight"])
+        if entry:
+            cfg[ent] = entry
+
+    excluded_lit = _py_list(excluded)
+    cfg_lit = "{\n" + "".join(
+        f"    {ent!r}: {{" + ", ".join(f"{k!r}: {v}" for k, v in sorted(cfg[ent].items())) + "},\n"
+        for ent in names if ent in cfg
+    ) + "}"
+
+    body = _preamble + (
+        f"_EXCLUDED: List[str] = {excluded_lit}\n"
+        f"_CONFIG: Dict[str, Dict[str, float]] = {cfg_lit}\n"
+        "_DEFAULT_MIN_ROWS = 1\n"
+        "_DEFAULT_WEIGHT = 1.0\n\n\n"
         "def compute_completeness(present: Dict[str, int]) -> CompletenessResult:\n"
-        '    """Presence rule (OQ-4 v1): score = fraction of entities with >=1 row; one nudge per\n'
-        "    absent entity. Domain-weighted thresholds (e.g. >=3 ProofPoints) are a manifest\n"
-        '    refinement, deferred."""\n'
-        "    if not ENTITIES:\n"
+        '    """Domain-weighted (OQ-4): weighted fraction of INCLUDED entities meeting their\n'
+        "    min_rows threshold; one nudge per unmet entity (naming the threshold). Excluded\n"
+        '    entities (join tables, system) are out of the denominator."""\n'
+        "    included = [e for e in ENTITIES if e not in _EXCLUDED]\n"
+        "    if not included:\n"
         "        return CompletenessResult(score=1.0, nudges=[])\n"
-        "    have = [e for e in ENTITIES if present.get(e, 0) > 0]\n"
-        "    score = round(len(have) / len(ENTITIES), 4)\n"
-        "    nudges = [f'Add at least one {e}.' for e in ENTITIES if present.get(e, 0) == 0]\n"
+        "    total = 0.0\n"
+        "    met = 0.0\n"
+        "    nudges: List[str] = []\n"
+        "    for e in included:\n"
+        "        spec = _CONFIG.get(e, {})\n"
+        "        min_rows = int(spec.get('min_rows', _DEFAULT_MIN_ROWS))\n"
+        "        weight = float(spec.get('weight', _DEFAULT_WEIGHT))\n"
+        "        total += weight\n"
+        "        if present.get(e, 0) >= min_rows:\n"
+        "            met += weight\n"
+        "        else:\n"
+        "            qty = 'one' if min_rows == 1 else str(min_rows)\n"
+        "            nudges.append(f'Add at least {qty} {e}.')\n"
+        "    score = round(met / total, 4) if total else 1.0\n"
         "    return CompletenessResult(score=score, nudges=nudges)\n"
     )
     return header + "\n\n" + body
