@@ -33,20 +33,25 @@ def resolve_config_dir(config_dir: Optional[Path]) -> Path:
     return Path(config_dir) if config_dir is not None else default_config_dir()
 
 
-def controlled_corpus_path(data_dir: Optional[Path] = None) -> Path:
+def controlled_corpus_path(project_root: Optional[Path] = None) -> Path:
     """Path to the persistent Controlled Corpus registry (CONTROLLED_CORPUS FR-1).
 
-    Project-scoped, mirroring the exemplar-registry convention.
+    Project-scoped under ``<project_root>/.startd8/`` (or cwd's ``.startd8/`` when no
+    root is given). The arg is the PROJECT ROOT — the ``.startd8`` segment is appended
+    here, so callers pass ``project_root`` (not the data dir). Live-run fix: previously
+    wrote to ``<project_root>/controlled-corpus.json`` (root pollution).
     """
-    return resolve_data_dir(data_dir) / "controlled-corpus.json"
+    base = (Path(project_root) if project_root is not None else Path.cwd()) / ".startd8"
+    return base / "controlled-corpus.json"
 
 
-def corpus_content_dir(data_dir: Optional[Path] = None) -> Path:
+def corpus_content_dir(project_root: Optional[Path] = None) -> Path:
     """Durable proven-content store for the deterministic provider (FR-9).
 
-    Project-scoped, sibling to controlled-corpus.json under .startd8/.
+    Project-scoped, sibling to controlled-corpus.json under ``<project_root>/.startd8/``.
     """
-    return resolve_data_dir(data_dir) / "corpus-content"
+    base = (Path(project_root) if project_root is not None else Path.cwd()) / ".startd8"
+    return base / "corpus-content"
 
 
 def shared_corpus_path() -> Path:

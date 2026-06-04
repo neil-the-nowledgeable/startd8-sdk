@@ -81,3 +81,11 @@ def test_populate_from_run(tmp_path):
     n = populate_from_run(report, "chkA", store)
     assert n == 1
     assert store.get(term_id_for("file", "src/a.py"), "chkA") == "x = 1\n"
+
+
+def test_corpus_paths_nest_under_dotstartd8():
+    """Live-run regression: paths must nest under <project_root>/.startd8/, not the root."""
+    from pathlib import Path
+    from startd8.paths import controlled_corpus_path, corpus_content_dir
+    assert controlled_corpus_path(Path("/proj")) == Path("/proj/.startd8/controlled-corpus.json")
+    assert corpus_content_dir(Path("/proj")) == Path("/proj/.startd8/corpus-content")
