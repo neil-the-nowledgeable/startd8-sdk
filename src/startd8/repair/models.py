@@ -310,6 +310,10 @@ class RepairOutcome:
     steps_applied: List[str] = field(default_factory=list)
     route: Optional[RepairRoute] = None
     any_modified: bool = False
+    # FR-CAR-6 / R1-F2: the honest residual — diagnostics the pipeline could NOT repair, surfaced for
+    # escalation instead of silently dropped. The file-granular instance of the iterative loop's
+    # "complete true residual" (same List[Diagnostic]); defaulted for backward compatibility.
+    unrepaired_diagnostics: List[Diagnostic] = field(default_factory=list)
 
 
 @dataclass

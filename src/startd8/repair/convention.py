@@ -172,9 +172,31 @@ def detect_conventions(
     return out
 
 
+def unrepaired_convention_residual(paths, authority=None) -> List[ConventionDiagnostic]:
+    """Convention violations remaining in the given Python files — the residual to escalate (FR-CAR-6).
+
+    Reads each ``.py`` path's **final** content and re-detects. Used to surface convention residue WHERE
+    the repair pipeline would otherwise drop it (R1-F9: the post-generation path only runs syntax+lint, so
+    a lint-clean wrong-framework file leaves no diagnostic without this).
+    """
+    from pathlib import Path
+
+    auth = authority or build_python_convention_authority()
+    out: List[ConventionDiagnostic] = []
+    for raw in paths:
+        p = Path(raw)
+        if p.suffix == ".py" and p.is_file():
+            try:
+                out.extend(detect_conventions(p.read_text(encoding="utf-8"), auth, file=str(p)))
+            except OSError:
+                continue
+    return out
+
+
 __all__ = [
     "IdiomRule",
     "PythonConventionAuthority",
     "build_python_convention_authority",
     "detect_conventions",
+    "unrepaired_convention_residual",
 ]

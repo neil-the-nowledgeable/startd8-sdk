@@ -1490,6 +1490,24 @@ class MicroPrimeCodeGenerator:
         if not py_paths:
             return 0
 
+        # Surface the convention residual on the ALWAYS-RUN path (R1-F9 / FR-CAR-6): a lint-clean
+        # wrong-framework file (RUN-028's Flask jobs.py) passes check_syntax+check_lint and would return
+        # below with zero diagnostics — so convention violations must be detected HERE, before that
+        # early return, or the micro-prime path stays convention-blind. Surface (log), never silence;
+        # the disk-quality verdict gate (FR-CAR-7) then fails the file.
+        try:
+            from startd8.repair.convention import unrepaired_convention_residual
+
+            self._convention_residual = unrepaired_convention_residual(py_paths)
+        except Exception:  # detection must never break repair
+            self._convention_residual = []
+        if self._convention_residual:
+            kinds = sorted({f"{d.convention_kind}:{d.symbol}" for d in self._convention_residual})
+            logger.warning(
+                "Post-generation: %d unrepaired convention violation(s) (escalated, not silenced): %s",
+                len(self._convention_residual), ", ".join(kinds)[:300],
+            )
+
         try:
             from startd8.contractors.checkpoint import IntegrationCheckpoint
             from startd8.repair.config import RepairConfig

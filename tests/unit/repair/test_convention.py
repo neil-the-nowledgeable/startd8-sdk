@@ -184,3 +184,41 @@ def test_python_convention_route_registered():
         cat == "convention" and lang == "python"
         for (cat, _pat, _steps, _conf, lang) in _ROUTING_TABLE
     )
+
+
+# --------------------------------------------------------------------------- #
+# Phase B.3 — escalate-don't-silence: the convention residual (FR-CAR-6 / R1-F9)
+# --------------------------------------------------------------------------- #
+
+def test_repair_outcome_carries_unrepaired_diagnostics():
+    from startd8.repair.models import RepairOutcome
+
+    # The residual contract exists and defaults empty (backward compatible).
+    assert RepairOutcome().unrepaired_diagnostics == []
+
+
+def test_convention_residual_surfaces_wrong_files_only(tmp_path):
+    # R1-F9: detection on the final files — the surfacing the post-gen path would otherwise skip
+    # (a lint-clean Flask file leaves no syntax/lint diagnostic).
+    from startd8.repair.convention import unrepaired_convention_residual
+
+    (tmp_path / "app").mkdir()
+    wrong = tmp_path / "app" / "jobs.py"
+    wrong.write_text(RUN028_LIKE, encoding="utf-8")
+    clean = tmp_path / "app" / "routers.py"
+    clean.write_text(render_routers(SCHEMA), encoding="utf-8")
+
+    residual = unrepaired_convention_residual([wrong, clean])
+    files = {d.file for d in residual}
+    assert str(wrong) in files          # the Flask file's violations are surfaced
+    assert str(clean) not in files      # the generated-clean file contributes nothing
+    assert all(d.category == "convention" for d in residual)
+
+
+def test_convention_residual_ignores_missing_and_non_python(tmp_path):
+    from startd8.repair.convention import unrepaired_convention_residual
+
+    assert unrepaired_convention_residual([tmp_path / "nope.py"]) == []
+    txt = tmp_path / "readme.txt"
+    txt.write_text("from flask import x\n", encoding="utf-8")
+    assert unrepaired_convention_residual([txt]) == []  # non-.py ignored
