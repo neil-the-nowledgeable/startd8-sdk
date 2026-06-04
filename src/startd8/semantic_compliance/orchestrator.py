@@ -33,13 +33,34 @@ from .models import (
     VerificationIssue,
 )
 from .requirement_loader import SeedIndex
-from .reviewer import AgentFactory, SemanticReviewer
+from .reviewer import AgentFactory, ReviewOutcome, SemanticReviewer
+from .signature_check import missing_required_symbols
 from .scoring import aggregate_score, compute_compliance_score
 from .triage import TriageCandidate, reviewable, triage
 
 logger = get_logger(__name__)
 
 POSTMORTEM_REPORT = "prime-postmortem-report.json"
+
+
+def _force_missing_symbol_fail(outcome: ReviewOutcome, missing: List[str]) -> ReviewOutcome:
+    """FR-17: override to a critical ``fail`` when a required public symbol is absent."""
+    issue = VerificationIssue(
+        severity="critical",
+        category="missing_required_symbol",
+        description=(
+            f"Required public symbol(s) declared in the requirement's api_signatures are absent "
+            f"from the generated code: {', '.join(missing)}. The feature is missing its primary "
+            f"deliverable."
+        ),
+        suggested_fix=f"Define {', '.join(missing)} as specified in the api_signatures.",
+    )
+    return ReviewOutcome(
+        verdict=VerdictResult(Verdict.FAIL, max(outcome.verdict.confidence, 0.95)),
+        issues=[issue, *outcome.issues],
+        tier=outcome.tier,
+        truncated=outcome.truncated,
+    )
 
 
 def _cache_payload(review: FeatureReview) -> dict:
@@ -145,6 +166,12 @@ class SemanticComplianceOrchestrator:
             return self._inconclusive(c, selection, InconclusiveReason.CODE_UNAVAILABLE)
 
         outcome = self.reviewer.review(loaded, code, fqn)
+        # FR-17 deterministic backstop: a required api_signature symbol absent from the FULL code is
+        # a critical fail — override a lenient LLM verdict (run-029: PI-001 missing jobs_dashboard /
+        # job_workspace yet passed as a low issue while app boot crashed).
+        missing = missing_required_symbols(code, loaded.api_signatures)
+        if missing:
+            outcome = _force_missing_symbol_fail(outcome, missing)
         selection.tier = outcome.tier  # reflect final tier (cheap or escalated)
         score = compute_compliance_score(outcome.verdict.verdict, outcome.verdict.confidence, outcome.issues)
         review = FeatureReview(

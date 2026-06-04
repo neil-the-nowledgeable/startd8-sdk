@@ -1,6 +1,6 @@
 # Semantic Compliance Reviewer — Requirements
 
-**Version:** 0.3 (CRP-triaged — rounds R1–R4 applied)
+**Version:** 0.4 (Field-driven — run-029: FR-17 missing-required-symbol backstop)
 **Date:** 2026-06-03
 **Status:** Draft
 **Owner:** neil-the-nowledgable
@@ -188,6 +188,20 @@ re-generating code itself; deep-reviewing every feature; non-Python languages.
   embedded instructions, resisting prompt-injection that would flip a verdict *(R1-S8)*. The rubric
   SHALL be **language-aware**: per-feature `language` selects the rubric variant and the
   `element_fqn` convention (see FR-13/OQ-9). **v1 language scope** is declared in §2 *(R2-F1/R2-S1)*.
+
+- **FR-17 — Missing required public symbol = critical fail (deterministic backstop).** *Field-driven
+  by run-029: PI-001 ("Jobs dashboard router") generated only helper functions — its `jobs.py`
+  omitted the entire router and both required handlers (`jobs_dashboard`, `job_workspace` from the
+  seed `api_signatures`), which crashed app boot (`from app.jobs import jobs_router` → ImportError).
+  The SCR **found** the gap but rated it **low** and **passed** the feature — a calibration miss: the
+  code was missing its primary deliverable.* The rubric SHALL instruct the agent that a **named,
+  required public symbol** declared in the requirement or the seed `api_signatures` that is **absent**
+  from the generated code is a **critical, fail-worthy** violation — never a stylistic low. Because an
+  LLM verdict already under-weighted this once, the SCR SHALL ALSO apply a **deterministic backstop**:
+  it SHALL extract the symbol names from the seed `api_signatures`, AST-check the generated code for
+  each, and if any required symbol is absent **force the verdict to `fail`** with a `critical`
+  `missing_required_symbol` issue — **overriding** a more lenient LLM verdict. The backstop runs on
+  the **full** (untruncated) code to avoid false positives from input truncation (FR-6/R3-S1).
 
 ### Scoring & artifacts
 

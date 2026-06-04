@@ -135,6 +135,53 @@ def test_cache_hit_preserves_issues_and_score(tmp_path):
     assert scr and "assign from input unchanged" in scr[0]["suggested_action"]
 
 
+def test_missing_required_symbol_forces_fail_over_lenient_llm(tmp_path):
+    """FR-17 / run-029: code missing a required api_signature symbol → critical fail, even when
+    the LLM says pass (the calibration miss that let PI-001 through)."""
+    project = tmp_path / "project"
+    out = tmp_path / "pipeline-output" / "proj" / "run-029" / "plan-ingestion"
+    (project / "app").mkdir(parents=True)
+    out.mkdir(parents=True)
+    # Generated jobs.py: only the helper, missing the two required handlers (the run-029 defect).
+    (project / "app" / "jobs.py").write_text(
+        "import logging\nlogger = logging.getLogger(__name__)\n\ndef resolve_matches(session, jd_id):\n    return []\n",
+        encoding="utf-8",
+    )
+    seed = {"tasks": [{
+        "task_id": "PI-001",
+        "config": {
+            "task_description": "Implement the jobs_router APIRouter with GET /jobs and GET /job/{id}.",
+            "context": {
+                "feature_id": "F-201", "target_files": ["app/jobs.py"], "language_id": "python",
+                "api_signatures": [
+                    "def jobs_dashboard(request) -> Response",
+                    "def job_workspace(request, id: int) -> Response",
+                    "def resolve_matches(session, jd_id: int) -> list",
+                ],
+            },
+        },
+    }]}
+    (out / "prime-context-seed.json").write_text(json.dumps(seed), encoding="utf-8")
+    pm = {"aggregate_verdict": "FAIL", "features": [
+        {"feature_id": "PI-001", "success": False, "root_cause": "cross_file_contract",
+         "generated_files": ["app/jobs.py"]},
+    ]}
+    (out / "prime-postmortem-report.json").write_text(json.dumps(pm), encoding="utf-8")
+
+    # The LLM is lenient — it passes the feature (the bug we're backstopping).
+    factory = lambda spec: _ScriptedAgent(_svr("pass", 0.9))
+    report = run_semantic_compliance(out, run_id="run-029", project_root=project,
+                                     config=ReportConfig(), emit_events=False)
+
+    pi = next(f for f in report.features if f.feature_id == "PI-001")
+    assert pi.verdict.verdict == Verdict.FAIL  # deterministic backstop overrode the LLM pass
+    assert any(i.category == "missing_required_symbol" and i.severity == "critical" for i in pi.issues)
+    assert report.summary.fail == 1
+    # And a Kaizen suggestion is now emitted (it's a confident fail).
+    ks = json.loads((out / "kaizen-suggestions.json").read_text())
+    assert any(s.get("source") == "semantic_compliance_reviewer" for s in ks["suggestions"])
+
+
 def test_unreadable_code_is_inconclusive_not_false_fail(tmp_path):
     """Wrong project_root → files unreadable → inconclusive(code_unavailable), never a confident fail."""
     out, project = _build_run(tmp_path)
