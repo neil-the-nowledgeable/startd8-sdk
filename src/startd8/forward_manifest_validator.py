@@ -342,6 +342,7 @@ class DiskComplianceResult:
     contract_compliance: float = 1.0
     contract_violations: List[ContractViolation] = field(default_factory=list)
     semantic_issues: List[Any] = field(default_factory=list)
+    convention_violations: List[Any] = field(default_factory=list)  # FR-CAR-7: house-style (convention) gate
     error: Optional[str] = None
 
 
@@ -414,6 +415,16 @@ def validate_disk_compliance(
 
     # Count duplicate definitions at module level
     result.duplicate_definitions = _count_duplicate_definitions(tree)
+
+    # House-style (convention) detection — FR-CAR-7 / FR-CAR-3. Advisory record here; the hard-gate
+    # lives in compute_disk_quality_score. Kept DISTINCT from semantic_issues (no double-count, R1-F4):
+    # the convention detectors (framework/orm/module-source/template) don't overlap the AST semantic checks.
+    try:
+        from .repair.convention import detect_conventions
+
+        result.convention_violations = detect_conventions(source, file=file_path)
+    except Exception:  # detection must never break disk validation
+        result.convention_violations = []
 
     # --- Semantic validation (REQ-SV-200) ---
     # Only runs when the AST parsed successfully.
@@ -571,6 +582,15 @@ def compute_disk_quality_score(
     if compliance is None:
         return 0.0
     if not getattr(compliance, "ast_valid", True):
+        return 0.0
+    # FR-CAR-7 hard-gate (R1-F8): an error-severity house-style (convention) violation fails the file
+    # outright — additive, exactly like the ast_valid gate — so a structurally-clean-but-semantically-wrong
+    # file (e.g. a lint-clean Flask view) scores 0.0 instead of ~0.8. Chosen over a weighted 5th term, which
+    # would re-normalize the 1.0-sum formula and destabilize every existing threshold + the corpus calibration.
+    if any(
+        getattr(c, "severity", "error") == "error"
+        for c in getattr(compliance, "convention_violations", []) or []
+    ):
         return 0.0
 
     contract_compliance = getattr(compliance, "contract_compliance", 1.0)
