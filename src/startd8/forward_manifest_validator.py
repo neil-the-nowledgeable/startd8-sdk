@@ -8,6 +8,7 @@ function signatures).
 """
 
 import ast
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -561,6 +562,17 @@ def _compute_semantic_penalty(
     return max(0.0, 1.0 - error_count * weights["error"] - warning_count * weights["warning"])
 
 
+def _convention_gating_enabled() -> bool:
+    """FR-CAR-11: is the error-severity convention hard-gate active?
+
+    Default ON — the advisory→gating flip's numeric precondition is satisfied (measured FP 0% over the
+    governed in-architecture corpus, < the X=5% threshold; see ``compute_disk_quality_score``). Set
+    ``STARTD8_CONVENTION_GATING=0`` (or ``false``/``no``/``off``) to revert to advisory: convention
+    violations are still detected and recorded on the compliance result, but do not hard-zero the score.
+    """
+    return os.getenv("STARTD8_CONVENTION_GATING", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
 def compute_disk_quality_score(
     compliance: Any,
     language_id: Optional[str] = None,
@@ -587,7 +599,15 @@ def compute_disk_quality_score(
     # outright — additive, exactly like the ast_valid gate — so a structurally-clean-but-semantically-wrong
     # file (e.g. a lint-clean Flask view) scores 0.0 instead of ~0.8. Chosen over a weighted 5th term, which
     # would re-normalize the 1.0-sum formula and destabilize every existing threshold + the corpus calibration.
-    if any(
+    #
+    # FR-CAR-11 (advisory→gating ramp): the gate fires only when STARTD8_CONVENTION_GATING enables it.
+    # Default is ON because the Exit-A→Phase-B precondition is now MET — the detector's measured
+    # false-positive rate is 0% over N=19 governed in-architecture files (the deployed strtd8 app/, owned
+    # FastAPI/SQLModel kinds) plus the lock-step parity corpus, well under the X=5% threshold. (The single
+    # detector hit on app/ai/extract.py is the FR-CAR-4-carved bespoke dual-pattern file, not a gating FP.)
+    # Set STARTD8_CONVENTION_GATING=0 to revert to advisory (violations still recorded, no hard-zero) —
+    # the off-switch §4 mandates for projects/architectures where the FP rate is not yet measured.
+    if _convention_gating_enabled() and any(
         getattr(c, "severity", "error") == "error"
         for c in getattr(compliance, "convention_violations", []) or []
     ):

@@ -1,9 +1,13 @@
 # Convention-Aware Repair — Requirements
 
-**Version:** 0.4 (status sync + RUN-032 baseline)
+**Version:** 0.6 (FR-CAR-11 precondition measured + gated behind `STARTD8_CONVENTION_GATING`)
 **Date:** 2026-06-04
 **Status:** Partially implemented — Phase A + Phase B (B.1/B.2/B.3) landed on `main`; **Phase C (FR-CAR-5)
-remaining**. Pairs with `CONVENTION_AWARE_REPAIR_PLAN.md` · CRP R1 triaged (Appendix A)
+is now PARTIAL** — sub-step **8b** (static convention authority via `convention_guidance`) landed
+(`24893fcc`); sub-step **8a** (schema-derived field-set/enum authority) **remains** and is tracked to
+completion as **FR-MPF-1** in `../micro-prime/MICRO_PRIME_FIDELITY_REQUIREMENTS.md`. The sibling
+classifier change (route convention-strict work off micro-prime — §4 Non-Requirement, FR-CAR-9 "D3") is
+owned there too (FR-MPF-2/3/4). Pairs with `CONVENTION_AWARE_REPAIR_PLAN.md` · CRP R1 triaged (Appendix A)
 **Aligns with:** `REPAIR_RETRY_ITERATIVE_REQUIREMENTS.md` (the "complete true residual, don't mask" framing),
 `POST_GENERATION_REPAIR_PIPELINE_REQUIREMENTS.md`, `MANIFEST_DRIVEN_NAME_REPAIR_*`
 **Motivating evidence:** `strtd8/docs/P2_RUN_028_POSTMORTEM.md` (micro-prime emitted Flask-not-FastAPI,
@@ -23,7 +27,7 @@ machinery behaved exactly as specified — see §0.5.
 | FR-CAR-7 | Phase B.1 — verdict hard-gate | ✅ landed | `forward_manifest_validator.py` convention hard-gate |
 | FR-CAR-4 | Phase B.2 — safe fixers + governed-scope guard (**lever 2 "cure"**) | ✅ landed | `repair/steps/python_convention_fix.py` + `repair/routing.py` (`python_convention_error` → `python_convention_fix`) |
 | FR-CAR-6 | Phase B.3 — escalate-don't-silence | ✅ landed | `RepairOutcome.unrepaired_diagnostics` + `EscalationHandoff` residual |
-| **FR-CAR-5** | **Phase C — adherence reaches micro-prime (lever 1 "prevention")** | ⬜ **remaining** | `micro_prime/` still has **zero** `project_knowledge` refs |
+| **FR-CAR-5** | **Phase C — adherence reaches micro-prime (lever 1 "prevention")** | 🟡 **partial** | **8b convention authority landed** (`24893fcc`: `convention_guidance` from `repair.convention` threaded via `MicroPrimeContext`/`process_file_with_context`). **8a field-set/enum authority remains** — `micro_prime/` still has **zero** `project_knowledge`/`upstream_interface`/`field_set` refs; the lead-path `gen_context["upstream_interfaces"]` is dropped in `from_prime`. Tracked as **FR-MPF-1**. |
 
 **RUN-032 (`.cap-dev-pipe/.../run-032-20260603T2358`) — score 0.51 PARTIAL, 4/7.** This run *predates*
 Phase B.2/B.3, so it is a clean **"before" baseline** for the cure-side work and a **direct demand** for
@@ -246,6 +250,16 @@ and they have different readiness: (a) the **schema-derived field-set + enum aut
 on the lead/drafter path, Python-useful today, *independent of FR-CAR-0*); and (b) the **generator-derived
 Python convention authority** (module-source `app.tables` + ORM/framework idiom) from FR-CAR-0. Both render
 into the micro-prime generation prompt via the same `MicroPrimeContext` field.
+**v0.5 (status correction):** sub-step **8b landed** (`24893fcc`) — `convention_guidance`
+(`render_convention_guidance()` from `repair.convention`, the FR-CAR-0 `PythonConventionAuthority`) is now
+threaded through `MicroPrimeContext` → `process_file_with_context` (`engine.py:2566-2578`). Sub-step **8a
+(schema-derived field-set + enum authority) did NOT land** — it requires forwarding the lead-path
+`gen_context["upstream_interfaces"]` (produced by `_collect_upstream_interfaces`,
+`prime_contractor.py:4443-4584`), which `from_prime` (`context.py:54-91`) still drops. 8a is specified to
+completion — with corrected status, the exact seam, and **measurable** acceptance (field-set block present
+in the micro-prime prompt **and** the RUN-011 field-invention class not recurring on SIMPLE) — as
+**FR-MPF-1** in `../micro-prime/MICRO_PRIME_FIDELITY_REQUIREMENTS.md`. This avoids re-deriving the seam here
+while keeping the CAR record truthful.
 
 ### FR-CAR-6 — Escalate, don't silence (the A3 + symptom-fix guard)
 Every diagnostic MUST be classified `repaired` / `safe-unfixable-mechanical` / `convention-or-semantic-unfixable`.
@@ -328,8 +342,27 @@ source-of-truth adapter, the safe fixers, and the **escalate-not-drop** wiring. 
 ### FR-CAR-11 — Advisory→gating ramp has a numeric precondition (NEW in v0.3, CRP R1-F7/S7)
 The advisory→gating flip (Phase A advisory → Phase B FAIL) MUST be governed by a **measured false-positive
 threshold**, not a judgment call: an error-severity convention violation may gate the verdict (FR-CAR-7) /
-trigger escalation (FR-CAR-6) **only after** the detector demonstrates **FP < X%** over the Controlled Corpus
-`false_pass_risk` + `deterministic_candidate` sets (N files). State X and N as the Exit-A→Phase-B precondition.
+trigger escalation (FR-CAR-6) **only after** the detector demonstrates **FP < X%** over a known-good
+in-architecture corpus (N files).
+
+**v0.6 — precondition stated and MET (measurement 2026-06-04):**
+- **X = 5%** (the FP ceiling); **N = 19** (the deployed `strtd8/app/` owned FastAPI/SQLModel files —
+  hand-maintained, in-house-style → any error-severity convention hit is a false positive), plus the
+  lock-step parity corpus (every `render_backend` owned kind), which is FP-free by construction
+  (`test_lockstep_all_generated_python_is_convention_clean`).
+- **Measured FP = 0%** (0 of 19 governed files flagged). The detector's only hit on a *correct* file was
+  `app/ai/extract.py` (one `orm_idiom`) — the **FR-CAR-4-carved bespoke dual-pattern file**, out of the
+  gate's governed scope, so not a gating FP. True positives fired correctly on RUN-032's known-wrong
+  `job_export.py` (3 hits: `module_source` + 2 `orm_idiom`).
+  > *Corpus note:* the Controlled Corpus `false_pass_risk`/`deterministic_candidate` sets are
+  > online-boutique (gRPC/Flask/polyglot) — a **different architecture** than the FastAPI/SQLModel
+  > house-style this detector encodes, so running it there would measure architecture mismatch, not
+  > detector FP. The measurement therefore uses the in-architecture deployed app (the correct known-good
+  > set), which is also why the gate ships behind an off-switch for non-canonical projects (generalization
+  > gap, tracked separately).
+- **0% < 5% → precondition satisfied.** Implemented as the `STARTD8_CONVENTION_GATING` env flag
+  (`forward_manifest_validator._convention_gating_enabled`, default **on**); the §4 ramp is the flag —
+  set it to `0` to revert to advisory (detect + record, no hard-zero) on architectures where FP is unmeasured.
 
 ---
 

@@ -165,6 +165,36 @@ def test_verdict_gate_end_to_end_on_flask_file(tmp_path):
     assert compute_disk_quality_score(res) == 0.0
 
 
+def test_convention_gating_flag_reverts_to_advisory(monkeypatch):
+    """FR-CAR-11: STARTD8_CONVENTION_GATING=0 makes the convention gate advisory (no hard-zero).
+
+    Default (precondition met — measured FP 0% over the governed in-architecture corpus) is gating-ON;
+    the off-switch is the §4 ramp control for architectures where the detector's FP rate is unmeasured.
+    """
+    from startd8.forward_manifest_validator import (
+        DiskComplianceResult,
+        compute_disk_quality_score,
+    )
+
+    wrong = DiskComplianceResult(
+        file_path="x.py",
+        convention_violations=[
+            ConventionDiagnostic(
+                category="convention", file="x.py", message="flask",
+                convention_kind="framework", symbol="flask", severity="error",
+            )
+        ],
+    )
+    # Default (flag unset) and explicit "1" → gating ON → hard-zero.
+    monkeypatch.delenv("STARTD8_CONVENTION_GATING", raising=False)
+    assert compute_disk_quality_score(wrong) == 0.0
+    monkeypatch.setenv("STARTD8_CONVENTION_GATING", "1")
+    assert compute_disk_quality_score(wrong) == 0.0
+    # Flag = "0" → advisory: the violation is still recorded on the result, but does not hard-zero.
+    monkeypatch.setenv("STARTD8_CONVENTION_GATING", "0")
+    assert compute_disk_quality_score(wrong) > 0.0
+
+
 # --------------------------------------------------------------------------- #
 # Phase B.2 — safe-fixer + authority-governed-scope guard (FR-CAR-4)
 # --------------------------------------------------------------------------- #

@@ -23,8 +23,12 @@
 
 ## Phases
 
-> **Status (2026-06-04):** Phase A ✅ · Phase B (B.1/B.2/B.3) ✅ — all on `main`. **Phase C remaining**
-> (the only un-built lever; FR-CAR-5 micro-prime injection). RUN-032 is the "before" baseline (requirements §0.5).
+> **Status (2026-06-04, v0.5 sync):** Phase A ✅ · Phase B (B.1/B.2/B.3) ✅ — all on `main`. **Phase C is
+> PARTIAL**: sub-step **8b** (convention authority via `convention_guidance`) ✅ landed (`24893fcc`);
+> sub-step **8a** (schema-derived field-set/enum authority) ⬜ **remains** — `from_prime` still drops
+> `gen_context["upstream_interfaces"]`. 8a is carried to completion (with its own phased plan + the
+> sibling surface-aware-routing work) in `../micro-prime/MICRO_PRIME_FIDELITY_PLAN.md` (FR-MPF-1 = Phase 1
+> there). RUN-032 is the "before" baseline (requirements §0.5).
 
 ### Phase A — Authority + detection (advisory; no behavior change) — FR-CAR-0/1/2/3 — ✅ LANDED
 1. **`PythonConventionAuthority`** (FR-CAR-0): **module-source** rules derived from the declarative
@@ -60,17 +64,20 @@
    *Exit B:* RUN-028 replay → the wrong-framework file FAILS loudly (not lint-clean PASS), with the residual
    escalated.
 
-### Phase C — Reach the cheapest tier — FR-CAR-5 — ⬜ REMAINING (this work)
+### Phase C — Reach the cheapest tier — FR-CAR-5 — 🟡 PARTIAL (8b landed `24893fcc`; 8a → FR-MPF-1)
 8. Thread the authority into micro-prime: add a `MicroPrimeContext` field, populate from `gen_context` in
    `from_prime` (prime_contractor holds `self._project_knowledge`), pass through
    `process_file_with_context` → `process_file` → prompt builders. Measure adherence lift on the micro-prime
    tier against the RUN-028 corpus (structural scoring, per the CKG methodology gate).
    **v0.4 sub-sequence (two authorities, both rendered into one new prompt section):**
-   (8a) **schema-derived field-set + enum authority** — already validated on lead/drafter, Python-useful today,
-   independent of FR-CAR-0; closes the RUN-032 `app.models` field-invention class first.
-   (8b) **generator-derived Python convention authority** (`PythonConventionAuthority`: `app.tables`
-   module-source + SQLModel/FastAPI idiom) — the FR-CAR-0 artifact, prevents the `session.query`/`sqlmodel`
-   class. Render both as a single "house-style — generate to these, do not invent" block; the existing
+   (8a) ⬜ **REMAINS (→ FR-MPF-1)** — **schema-derived field-set + enum authority** — already validated on
+   lead/drafter, Python-useful today, independent of FR-CAR-0; closes the RUN-011 field-invention class.
+   Blocked-by-nothing: the lead path already produces it as `gen_context["upstream_interfaces"]`; `from_prime`
+   just needs to stop dropping it.
+   (8b) ✅ **LANDED (`24893fcc`)** — **generator-derived Python convention authority**
+   (`PythonConventionAuthority`: `app.tables` module-source + SQLModel/FastAPI idiom) — the FR-CAR-0 artifact,
+   prevents the `session.query`/`sqlmodel` class, threaded as `convention_guidance`.
+   Render both as a single "house-style — generate to these, do not invent" block; the existing
    adherence.py "injection ≠ adherence" guardrail still applies (pairs with the now-landed Phase A detection).
 
 ### Phase D — Lock-step + learning — FR-CAR-8/9/10

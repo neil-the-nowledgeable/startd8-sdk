@@ -424,6 +424,32 @@ _RECURSION_DEPTH_LABEL_CAP = 3
 # Max chars for sub-element docstring hint context injection.
 _MAX_DOC_HINT_CHARS = 512
 
+# FR-MPF-1 self-cap constants. The field-set authority block (``upstream_interfaces``) is merged into
+# ``domain_constraints``, which ``prompt_builder._truncate_to_budget`` never trims — so an uncapped block
+# can evict the few-shot/skeleton context and overflow ``input_token_budget``. Bound it to ~1/4 of the
+# char budget. (Referenced-entity scoping is already applied upstream by ``_collect_upstream_interfaces``;
+# this cap is the last-resort size guard, not a re-scoping. Consolidating the wider "two constraint
+# sections / one budget engine" debt is deferred — see MICRO_PRIME_FIDELITY D-1/D-2.)
+_CHARS_PER_TOKEN = 4  # mirrors prompt_builder._CHARS_PER_TOKEN
+_AUTHORITY_BUDGET_DIVISOR = 4  # the field-set block gets at most ~1/this of the char budget
+_AUTHORITY_TRUNCATION_MARKER = "# … (data-model authority truncated to fit the generation budget)"
+
+
+def _cap_authority_block(text: str, max_chars: int) -> str:
+    """Bound an authority block to *max_chars*, truncating at a line boundary.
+
+    Whole lines are kept so a partial field list never dangles mid-token; a marker records the
+    truncation. ``max_chars <= 0`` disables the cap (pass-through). Guarantees ``len(result) <= max_chars``
+    whenever ``max_chars`` exceeds the marker length.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    budget = max(0, max_chars - len(_AUTHORITY_TRUNCATION_MARKER) - 1)
+    kept = text[:budget].rsplit("\n", 1)[0].rstrip()
+    if not kept:
+        kept = text[:budget].rstrip()
+    return f"{kept}\n{_AUTHORITY_TRUNCATION_MARKER}"
+
 
 def _cap_depth_label(depth: int) -> str:
     """Cap depth for metric labels to avoid high-cardinality (REQ-MP-914)."""
@@ -2563,9 +2589,20 @@ class MicroPrimeEngine:
         task_description: Optional[str] = None,
     ) -> FileResult:
         """Process a file using normalized MicroPrimeContext (REQ-MP-509)."""
-        # FR-CAR-5: fold the house-style guidance into the constraints so it renders into the
-        # generation prompt via the existing "Constraints:" path (file-whole + element prompts).
+        # FR-CAR-5 / FR-MPF-1: fold the house-style authorities into the constraints so they render into the
+        # generation prompt via the existing "Constraints:" path (file-whole + element prompts). Order:
+        # field-set authority first (FR-MPF-1, per-project data-model truth — the project's real field
+        # names/enums), then the convention idiom block (FR-CAR-5b, per-language house style). Both land in
+        # the one "generate to these, do not invent" section.
         constraints = list(context.binding_constraints or [])
+        if context.upstream_interfaces:
+            # FR-MPF-1 self-cap: domain_constraints is never trimmed by _truncate_to_budget, so bound the
+            # variable field-set block — it must not evict few-shot/skeleton context or overflow the input
+            # budget. ~1/4 of the char budget; entity scoping is already applied upstream.
+            authority_cap = (
+                self._config.input_token_budget * _CHARS_PER_TOKEN
+            ) // _AUTHORITY_BUDGET_DIVISOR
+            constraints.append(_cap_authority_block(context.upstream_interfaces, authority_cap))
         if context.convention_guidance:
             constraints.append(context.convention_guidance)
         return self.process_file(

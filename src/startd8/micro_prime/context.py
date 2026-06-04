@@ -25,6 +25,12 @@ class MicroPrimeContext:
     # the cheapest tier generates toward the conventions (FastAPI/SQLModel/app.tables) instead of generic
     # Flask/SQLAlchemy. Empty for non-Python targets. Defaulted → backward-compatible (frozen dataclass).
     convention_guidance: str = ""
+    # FR-MPF-1 (completes FR-CAR-5b/8a): the per-feature-scoped Prisma field-set + enum + module-path-
+    # negative block produced by prime_contractor._collect_upstream_interfaces() — the exact authority
+    # whose injection drove the cheap-tier adherence lift (0.05–0.40 → ~1.0) on the lead path. Prevents the
+    # field-invention class (invented field names). Distinct from the static, per-language convention_guidance:
+    # this is dynamic, per-project data-model truth. Defaulted → backward-compatible (frozen dataclass).
+    upstream_interfaces: str = ""
 
     @classmethod
     def from_artisan(
@@ -79,6 +85,11 @@ class MicroPrimeContext:
                 convention_guidance = render_convention_guidance()
             except Exception:
                 convention_guidance = ""
+        # FR-MPF-1: forward the per-feature field-set/enum authority the lead path already built into
+        # gen_context. The lead pipeline produces this string (per-feature-scoped) at
+        # prime_contractor._collect_upstream_interfaces; from_prime previously dropped it, so micro-prime
+        # never saw the project's real field names. Just forward it — no re-derivation, no re-scoping.
+        upstream_interfaces = str(gen_context.get("upstream_interfaces", "") or "")
         return cls(
             manifest=manifest,
             target_files=list(target_files),
@@ -88,4 +99,5 @@ class MicroPrimeContext:
             ollama_model=ollama_model,
             dependency_imports=dep_imports,
             convention_guidance=convention_guidance,
+            upstream_interfaces=upstream_interfaces,
         )
