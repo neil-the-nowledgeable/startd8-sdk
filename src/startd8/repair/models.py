@@ -157,6 +157,28 @@ class WrongImportPathDiagnostic(Diagnostic):
         self.category = "content_contract"
 
 
+@dataclass
+class ConventionDiagnostic(Diagnostic):
+    """A house-style (convention) violation — framework / ORM idiom / module-source / template idiom.
+
+    Category ``convention`` (the routing taxonomy that already serves C#; FR-CAR-1). Detected against the
+    generator-derived ``PythonConventionAuthority`` (``repair.convention``). Phase A is **advisory**
+    (detect-only); Phase B adds safe fixers + escalation. ``safe_fixable`` marks a violation with an
+    unambiguous deterministic rewrite (e.g. ``session.query(X).get(id)`` → ``session.get(X, id)``); the
+    rest (e.g. a wholesale Flask app) escalate.
+    """
+
+    convention_kind: str = ""  # framework | orm_idiom | module_source | template_idiom | response_idiom
+    symbol: str = ""           # the offending token (e.g. "flask", "session.query")
+    expected: str = ""         # the canonical house-style expectation
+    line: int = 0
+    severity: str = "error"
+    safe_fixable: bool = False
+
+    def __post_init__(self) -> None:
+        self.category = "convention"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Step & pipeline results
 # ═══════════════════════════════════════════════════════════════════════════
