@@ -125,6 +125,9 @@ def _enrich_with_fde(findings: List[FrictionFinding], fde: GroundTruthQuery) -> 
             ans = fde.answer(q)
         except GroundTruthTimeout:
             continue
+        except Exception as exc:  # enrichment is advisory — never break the gate on an oracle error
+            logger.debug("oracle enrichment failed for %s: %s", f.id, exc)
+            continue
         if ans.verdict is GroundTruthVerdict.REFUTED and ans.evidence:
             f.suggested_fix = ans.evidence
     return findings

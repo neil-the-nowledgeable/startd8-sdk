@@ -45,7 +45,15 @@ def load_from_ingestion_seed(seed_or_dir: str) -> Tuple[object, Dict[str, str]]:
         logger.warning("ingestion seed not found: %s", seed_path)
         return None, {}
 
-    seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    try:
+        seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        # malformed/unreadable seed → loud input_absent, never a traceback into the CLI
+        logger.warning("ingestion seed %s unreadable (%s)", seed_path, exc)
+        return None, {}
+    if not isinstance(seed, dict):
+        logger.warning("ingestion seed %s is not a JSON object", seed_path)
+        return None, {}
     artifacts = seed.get("artifacts", {}) or {}
     skeleton_sources: Dict[str, str] = dict(artifacts.get("skeleton_sources") or {})
     if not skeleton_sources:

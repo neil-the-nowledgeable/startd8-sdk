@@ -77,6 +77,17 @@ def test_loader_missing_or_empty_returns_none(tmp_path):
     assert load_from_ingestion_seed(str(empty)) == (None, {})
 
 
+def test_loader_malformed_json_is_guarded_not_raised(tmp_path):
+    # A corrupt seed must degrade to (None, {}) — never a traceback into the CLI.
+    bad = tmp_path / "artisan-context-seed.json"
+    bad.write_text("{ not valid json :::")
+    assert load_from_ingestion_seed(str(bad)) == (None, {})
+    # A JSON value that isn't an object is also handled.
+    arr = tmp_path / "arr.json"
+    arr.write_text("[1, 2, 3]")
+    assert load_from_ingestion_seed(str(arr)) == (None, {})
+
+
 @requires_mypy
 def test_cli_survey_end_to_end(tmp_path):
     # Real ground truth: app.tables has JobDescription, not Match.
