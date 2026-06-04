@@ -114,3 +114,34 @@ class TestPerBatchArtifact:
                        _feature(name="enrich-capabilities", target_files=["x.ts"]))
         assert called.get("hit") is True
         assert "`Capability`" in out
+
+
+_ENUM_SCHEMA = (
+    "model Capability {\n id String @id\n name String\n tier Tier\n}\n"
+    "model Outcome {\n id String @id\n label String\n}\n"
+    "enum Tier {\n junior\n mid\n senior\n}\n"
+)
+
+
+def _enum_project(tmp_path):
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "schema.prisma").write_text(_ENUM_SCHEMA)
+    return tmp_path
+
+
+class TestEnumAuthoritySeam:
+    """REQ-CKG-525: enum-value authority rides the per-feature scoping seam (step 2a)."""
+
+    def test_enum_block_injected_alongside_scoped_field_set(self, tmp_path):
+        d = _enum_project(tmp_path)
+        feat = _feature(name="enrich-capabilities", target_files=["app/actions/enrich.ts"])
+        out = _collect(_stub(["prisma/schema.prisma"], d), feat)
+        assert "## Prisma data model" in out and "`Capability`" in out
+        assert "## Enum values" in out
+        assert "`Tier`: junior, mid, senior" in out
+
+    def test_no_enum_block_when_feature_touches_no_data_model(self, tmp_path):
+        d = _enum_project(tmp_path)
+        feat = _feature(name="render footer", target_files=["app/footer.tsx"])
+        out = _collect(_stub(["prisma/schema.prisma"], d), feat)
+        assert "## Enum values" not in out  # no scoped field-set → no enum block either

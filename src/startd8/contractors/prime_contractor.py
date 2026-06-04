@@ -4568,7 +4568,14 @@ class PrimeContractorWorkflow:
                 scoped = ()
             if scoped:
                 prisma_render = _render_field_sets(
-                    ProjectKnowledge(project_root=pk.project_root, field_sets=scoped),
+                    # Carry enum-value authority (REQ-CKG-525) through the per-feature
+                    # scoping seam — enums are global value-sets (not entity-scoped), so
+                    # the whole set rides along whenever the feature touches the data model.
+                    ProjectKnowledge(
+                        project_root=pk.project_root,
+                        field_sets=scoped,
+                        enums=pk.enums,
+                    ),
                     log=False,
                 )
                 if prisma_render:

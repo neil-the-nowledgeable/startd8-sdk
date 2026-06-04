@@ -33,10 +33,13 @@ contract:
   schema declaring `enum SubjectType {…}` / `enum Stage {…}` injects all values. **App-side action to
   benefit:** declare `subjectType`/`kind` (and the P3 `Stage`) as Prisma **enums** in `schema.prisma`
   (today they're `String`) — then the hand-authored enum block retires automatically.
-- ❓ **Injection wiring** — the producer *exists and works*, but it must be confirmed that the app's
-  generation actually calls it and injects `render(pk)` into the spec/draft prompts (P2_BATCH_PLANS
-  §0 lists the Knowledge Provider as "one build away" / pending — likely **not yet wired into their
-  runs**). This is the real remaining work to retire Block A.
+- ✅ **Injection wiring — CONFIRMED already live (step 2a done).** The PK is built once per batch
+  (`_build_project_knowledge`, cached) and injected per feature via
+  `_collect_upstream_interfaces(feature)` → `gen_context["upstream_interfaces"]` → spec/draft prompt;
+  field-set injection is **not** TS-gated, so it already reaches the Python app. **Gap found + fixed:**
+  the per-feature scoped render rebuilt the PK with `field_sets` only, dropping the new `enums` — fixed
+  by carrying `enums=pk.enums` through the scoping seam (`prime_contractor.py` ~4569). So **field + enum
+  authority now both reach the app's prompts.** (8 seam tests + 74 seam/PK tests green.)
 
 **Net:** the loudest ask (auto-inject real field names) is **solved by existing machinery** for the
 field layer; finishing step 2 = (a) confirm/do the injection wiring into their pipeline, (b)
@@ -76,9 +79,12 @@ deterministic ceiling. **Action for the app team:** hand-author the P3 `.prisma`
 
 ## Sequenced plan (one increment at a time)
 1. ✅ **Step 1** — corpus write enabled on the app.
-2. 🟡 **Step 2 finish** — (a) wire/confirm Knowledge-Provider injection into the app's generation;
-   (b) Python-ify or drop negatives; (c) ✅ **enum-value authority shipped** (REQ-CKG-525) — app
-   declares enums in `schema.prisma` to benefit; also unblocks P3's `Stage` enum.
+2. ✅ **Step 2 (a + enum) done** — (a) ✅ injection wiring confirmed live + enums carried through the
+   per-feature scoping seam (field + enum authority now reach the app's prompts); (c) ✅ enum-value
+   authority shipped (REQ-CKG-525). **(b) negatives — deferred to data-driven seeding** (current
+   TS-shaped negatives are inert-not-harmful for the Python app; seed a Python negative only when the
+   accumulating corpus/postmortems surface a real recurring Python invention — not speculatively).
+   App-side: declare `subjectType`/`kind`/`Stage` as Prisma enums to benefit.
 3. ⏳ **Step 3 (I5)** — app team runs one live cap-dev-pipe run with the serve flag; postrun-validate.
 4. ⏳ **Step 4** — completeness signal generator from a domain-manifest.
 5. ⏳ **P3 prep** — app team authors the P3 `.prisma` delta per the decisions above.
