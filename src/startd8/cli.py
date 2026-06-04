@@ -34,6 +34,7 @@ from .cli_dashboard import dashboard_app
 from .cli_element_registry import element_registry_app
 from .cli_generate import generate_app
 from .cli_assist import assist_app
+from .cli_fde import fde_app
 
 
 app = typer.Typer(
@@ -772,6 +773,7 @@ app.add_typer(generate_app, name="generate")
 # Service Assistant (project<->SDK bridge: detect runs, triage, notify)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(assist_app, name="assist")
+app.add_typer(fde_app, name="fde")
 
 
 # =============================================================================

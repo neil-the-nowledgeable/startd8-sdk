@@ -79,6 +79,10 @@ class EventType(Enum):
     # Semantic Compliance Reviewer (see semantic_compliance/)
     SEMANTIC_REVIEW_COMPLETE = auto()
 
+    # Forward Deployed Engineer (see fde/) — composed mechanism authority
+    FDE_EXPLAIN_COMPLETE = auto()
+    FDE_PREFLIGHT_COMPLETE = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()

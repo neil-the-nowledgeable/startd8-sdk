@@ -134,6 +134,22 @@ class SemanticReviewRef:
 
 
 @dataclass
+class FdeRef:
+    """Reference to a Forward Deployed Engineer explanation (FDE FR-17/FR-24).
+
+    SA-local and lightweight (path + checksum only). The ``fde`` package never
+    imports this type and SA never imports ``fde`` — the FDE writes
+    ``fde-explanation.md`` and atomically patches this ref onto the triage via
+    ``fde.assistant_bridge.attach_fde_ref_to_triage``. One-directional, no cycle.
+    """
+
+    report_path: str
+    checksum: str  # sha256 of fde-explanation.md
+    generated_at: Optional[str] = None
+    protocol_version: Optional[str] = None
+
+
+@dataclass
 class Summary:
     headline: str
     top_recommendation: Optional[str] = None
@@ -157,6 +173,7 @@ class TriageReport:
     batch: Optional[BatchInfo] = None
     events_emitted: List[EmittedEvent] = field(default_factory=list)
     semantic_review: Optional[SemanticReviewRef] = None
+    fde_explanation: Optional[FdeRef] = None  # attached post-explain by fde.assistant_bridge (FR-24)
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
