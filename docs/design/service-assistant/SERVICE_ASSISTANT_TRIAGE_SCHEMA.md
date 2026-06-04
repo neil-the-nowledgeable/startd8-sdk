@@ -53,6 +53,7 @@ additions fail loudly instead of falling through silently.
 | `unblock_dependency` | Upstream feature must succeed first. |
 | `regenerate_clean` | Corrupted/duplicated/stub output — force a clean regeneration. |
 | `fix_repair_routing` | Repair pipeline misrouted/exhausted — config/routing fix, not a re-run. |
+| `fix_deterministic_generator` | **$0 deterministic failure (FR-14)** — a plain re-run is idempotent and reproduces the defect; fix the generator/splicer/template or escalate the element off the deterministic path. |
 | `align_types` | Type/contract mismatch — re-run with consumer types pinned. |
 | `manual_review` | No deterministic strategy — human/agent inspects. |
 
@@ -169,12 +170,13 @@ additions fail loudly instead of falling through silently.
               "re_run_strategy": {
                 "enum": ["retry_as_is","reduce_scope","split_element_or_increase_tier","re_run_prior_stage",
                          "from_latest_producer","unblock_dependency","regenerate_clean","fix_repair_routing",
-                         "align_types","manual_review"]
+                         "fix_deterministic_generator","align_types","manual_review"]
               },
               "rationale": { "type": ["string", "null"] },
               "source_classification": { "enum": ["postmortem_report", "fallback_classifier"], "description": "FR-8" }
             }
           },
+          "deterministic": { "type": "boolean", "description": "failed feature had $0 generation cost — a plain re-run is idempotent (FR-14)" },
           "persistent": { "type": "boolean", "description": "failed in >=2 runs (FR-9)" },
           "occurrences": { "type": "integer", "minimum": 1, "description": "runs failed in this batch (FR-9)" },
           "force_regenerated": { "type": "boolean" }

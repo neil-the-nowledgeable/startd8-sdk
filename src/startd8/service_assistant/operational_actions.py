@@ -35,10 +35,13 @@ RE_RUN_STRATEGIES = frozenset(
         "unblock_dependency",
         "regenerate_clean",
         "fix_repair_routing",
+        "fix_deterministic_generator",
         "align_types",
         "manual_review",
     }
 )
+
+DETERMINISTIC_STRATEGY = "fix_deterministic_generator"
 
 SEVERITIES = frozenset({"critical", "high", "medium", "low"})
 
@@ -175,6 +178,33 @@ FALLBACK_ACTION = OperationalAction(
     "manual_review",
     "Manual review — unmapped root cause; update CAUSE_TO_OPERATIONAL_ACTION.",
 )
+
+
+def apply_cost_overlay(
+    op: OperationalAction,
+    root_cause: RootCause | str,
+    cost_usd: float | None,
+) -> tuple[OperationalAction, bool]:
+    """FR-14 — cost-aware remediation. When a failed feature had **zero generation cost**, a plain
+    re-run is idempotent (the $0 deterministic path reproduces the identical defect), so recommend
+    **fixing the deterministic generator/template** instead of regenerating.
+
+    Returns ``(action, deterministic)``. A non-zero / unknown cost returns the action unchanged.
+    """
+    if cost_usd is None or cost_usd > 0:
+        return op, False
+    rc = root_cause.value if isinstance(root_cause, RootCause) else str(root_cause)
+    if rc == RootCause.DUPLICATE_IMPORT.value:
+        action = (
+            "Fix the deterministic generator/splicer — a re-run reproduces the same F811 "
+            "collision; remove EITHER the import OR the local redefinition of the colliding name."
+        )
+    else:
+        action = (
+            f"Fix the deterministic generator/splicer/template (or escalate this element off the "
+            f"$0 deterministic path) — a plain re-run is idempotent and will reproduce '{rc}'."
+        )
+    return OperationalAction(op.severity, DETERMINISTIC_STRATEGY, action, actionable=True), True
 
 
 def resolve_operational_action(root_cause: RootCause | str) -> OperationalAction:

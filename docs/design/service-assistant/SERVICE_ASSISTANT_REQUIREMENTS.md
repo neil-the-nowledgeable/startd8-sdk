@@ -1,6 +1,6 @@
 # Service Assistant Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
+**Version:** 0.3 (Field-driven — run-028: cost-aware remediation, FR-14)
 **Date:** 2026-06-03
 **Status:** Draft
 **Owner:** neil-the-nowledgable
@@ -158,6 +158,27 @@ logic, or generating the post-mortem itself.
   `CAUSE_TO_SUGGESTION` (which produces *prompt hints for the next generation*, not operator
   guidance) and from `repair/routing.py` (deterministic code transforms). SA SHALL NOT
   execute the recommended action (NR-1).
+
+- **FR-14 — Cost-aware remediation (deterministic-failure idempotency).** *Field-driven by
+  run-028: `PI-001` failed with `total_cost_usd == 0.0` on a Ruff **F811** (`resolve_matches`
+  imported at line 8 and redefined at line 30); the default `duplicate_import → regenerate_clean`
+  action told the operator to "regenerate on the next pass" — but a **deterministic** re-run is
+  idempotent and reproduces the identical defect.* The Service Assistant SHALL incorporate the
+  failed feature's **generation cost** into its recommendation. When a failed feature has **zero
+  generation cost** (the `$0` deterministic path — template / MicroPrime / `backend_codegen`,
+  read from the post-mortem feature `cost_usd == 0`, corroborated by `total_cost_usd == 0`), the
+  SA SHALL:
+  1. mark the failure **`deterministic: true`** in the triage artifact so the operator knows a
+     plain re-run is futile;
+  2. **override** the default `re_run_strategy` to **`fix_deterministic_generator`** — recommend
+     fixing the deterministic generator/splicer/template (or escalating the element off the
+     deterministic path), **not** "regenerate next pass";
+  3. for `duplicate_import` specifically, the recommendation SHALL name the real fix — *remove
+     either the import or the local redefinition* (the F811 import-vs-local-definition collision)
+     — rather than the coarse "dedupe imports."
+
+  This is an overlay on FR-10's mapping (cost is the discriminator), not a new `RootCause`
+  (NR-3). Cost is already available to the SA via the post-mortem it consumes (FR-8).
 
 ### Invocation surface
 

@@ -181,6 +181,8 @@ def _build_summary(detection, verdict, failures) -> Summary:
         )
         worst = ordered[0]
         flags = "critical" if worst.severity == "critical" else worst.severity
+        if worst.deterministic:
+            flags += ", deterministic"
         if worst.persistent:
             flags += ", persistent"
         if not worst.actionable:
@@ -205,12 +207,12 @@ def _render_markdown(report: TriageReport) -> str:
         lines += [f"**Top recommendation:** {report.summary.top_recommendation}", ""]
     if report.failures:
         lines += ["## Failures", ""]
-        lines += ["| Feature | Root cause | Stage | Severity | Persistent | Recommended action |",
-                  "|---------|------------|-------|----------|------------|--------------------|"]
+        lines += ["| Feature | Root cause | Stage | Severity | Deterministic | Recommended action |",
+                  "|---------|------------|-------|----------|---------------|--------------------|"]
         for f in report.failures:
             lines.append(
                 f"| `{f.feature_id}` | {f.root_cause} | {f.pipeline_stage} | {f.severity} | "
-                f"{'yes' if f.persistent else 'no'} | {f.recommended_action.action} |"
+                f"{'yes (re-run is futile)' if f.deterministic else 'no'} | {f.recommended_action.action} |"
             )
         lines.append("")
     if report.cross_feature_patterns:

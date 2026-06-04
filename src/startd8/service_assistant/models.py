@@ -84,6 +84,7 @@ class FailureTriage:
     severity: str
     recommended_action: RecommendedAction
     actionable: bool = True
+    deterministic: bool = False  # $0 deterministic failure — re-run is idempotent (FR-14)
     element_id: Optional[str] = None
     file: Optional[str] = None
     persistent: bool = False

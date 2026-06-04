@@ -21,7 +21,7 @@ from .models import (
     RecommendedAction,
     Verdict,
 )
-from .operational_actions import resolve_operational_action
+from .operational_actions import apply_cost_overlay, resolve_operational_action
 
 logger = get_logger(__name__)
 
@@ -102,6 +102,8 @@ def _failures_from_report(report: dict, occurrences: Dict[str, int]) -> List[Fai
         root_cause = feat.get("root_cause", "unknown")
         stage = feat.get("pipeline_stage", "unknown")
         op = resolve_operational_action(root_cause)
+        # FR-14: a $0 deterministic failure can't be fixed by a re-run (idempotent) — override.
+        op, deterministic = apply_cost_overlay(op, root_cause, feat.get("cost_usd"))
         fid = str(feat.get("feature_id", ""))
         occ = occurrences.get(fid, 0)
         target_files = feat.get("target_files") or []
@@ -112,6 +114,7 @@ def _failures_from_report(report: dict, occurrences: Dict[str, int]) -> List[Fai
                 pipeline_stage=str(stage),
                 severity=op.severity,
                 actionable=op.actionable,
+                deterministic=deterministic,
                 recommended_action=RecommendedAction(
                     action=op.action,
                     re_run_strategy=op.re_run_strategy,
@@ -150,6 +153,7 @@ def _failures_from_result_fallback(result: dict, occurrences: Dict[str, int]) ->
             except Exception:
                 pass
         op = resolve_operational_action(root_cause)
+        op, deterministic = apply_cost_overlay(op, root_cause, entry.get("cost_usd"))
         occ = occurrences.get(fid, 0)
         failures.append(
             FailureTriage(
@@ -158,6 +162,7 @@ def _failures_from_result_fallback(result: dict, occurrences: Dict[str, int]) ->
                 pipeline_stage=stage,
                 severity=op.severity,
                 actionable=op.actionable,
+                deterministic=deterministic,
                 recommended_action=RecommendedAction(
                     action=op.action,
                     re_run_strategy=op.re_run_strategy,
