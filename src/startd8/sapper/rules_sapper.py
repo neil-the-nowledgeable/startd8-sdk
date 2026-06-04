@@ -100,6 +100,7 @@ def check_identity_collisions(
                     file=path,
                     expected=f"a non-reserved name (got `{name}`)",
                     found=f"{name} is a {why}",
+                    symbol=name,
                     validator_class=ValidatorClass.DETERMINISTIC,
                 )
             )

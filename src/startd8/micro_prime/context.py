@@ -31,6 +31,12 @@ class MicroPrimeContext:
     # field-invention class (invented field names). Distinct from the static, per-language convention_guidance:
     # this is dynamic, per-project data-model truth. Defaulted → backward-compatible (frozen dataclass).
     upstream_interfaces: str = ""
+    # Sapper FR-SAP-12 (finding injection): the pre-execution friction block for this context's
+    # target files — REFUTED/UNRESOLVED misalignments the survey found against the real codebase
+    # (e.g. "Match absent from app.tables", "Flask not FastAPI"). Injected into the micro-prime
+    # prompt so the cheapest tier is warned *regardless of whether the normal adherence injection
+    # reached it* — the structural RUN-028 backstop (FR-SAP-11). Empty when no survey/findings.
+    sapper_guidance: str = ""
 
     @classmethod
     def from_artisan(
@@ -90,6 +96,9 @@ class MicroPrimeContext:
         # prime_contractor._collect_upstream_interfaces; from_prime previously dropped it, so micro-prime
         # never saw the project's real field names. Just forward it — no re-derivation, no re-scoping.
         upstream_interfaces = str(gen_context.get("upstream_interfaces", "") or "")
+        # Sapper FR-SAP-12: forward the per-feature friction block the contractor stuffed into
+        # gen_context (no re-derivation), so micro-prime is warned about plan↔codebase misalignment.
+        sapper_guidance = str(gen_context.get("sapper_guidance", "") or "")
         return cls(
             manifest=manifest,
             target_files=list(target_files),
@@ -100,4 +109,5 @@ class MicroPrimeContext:
             dependency_imports=dep_imports,
             convention_guidance=convention_guidance,
             upstream_interfaces=upstream_interfaces,
+            sapper_guidance=sapper_guidance,
         )

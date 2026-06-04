@@ -205,6 +205,7 @@ class FrictionFinding:
     line: int = 0
     expected: str = ""
     found: str = ""
+    symbol: str = ""                            # the referenced name/module (for FDE routing + report)
     reason: Optional[UnresolvedReason] = None   # set iff verdict == UNRESOLVED
     suggested_fix: Optional[str] = None         # advisory only (NR-8)
     context_snippet: Optional[str] = None
@@ -230,6 +231,8 @@ class FrictionFinding:
             "expected": self.expected,
             "found": self.found,
         }
+        if self.symbol:
+            d["symbol"] = self.symbol
         if self.reason is not None:
             d["reason"] = self.reason.value
         if self.suggested_fix is not None:

@@ -48,11 +48,13 @@ logger = get_logger(__name__)
 DEFAULT_MAX_SKELETON_BYTES = 256_000
 DEFAULT_TIMEOUT_S = 120
 
-# Excluded from the overlay copy (secrets, VCS, caches, heavy/irrelevant trees).
+# Excluded from the overlay copy (secrets, VCS, caches, heavy/irrelevant build trees).
+# Build-output dirs (.next/build/dist/target) added after a field test on a 1.8 GB repo (OQ-1).
 _IGNORE = shutil.ignore_patterns(
     ".env", ".env.*", "*.env", ".git", ".hg", ".svn", "__pycache__", "*.pyc",
     ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache", "*.key",
     "*.pem", "secrets", ".secrets", ".aws", ".ssh",
+    ".next", "build", "dist", "*.egg-info", ".tox", "target",
 )
 
 # mypy/compileall diagnostic patterns.
@@ -76,10 +78,14 @@ class BoreResult:
     stages_skipped: Tuple[str, ...] = ()
 
 
-def _local_packages(root: Path, skeleton_paths: List[str]) -> Set[str]:
-    """Top-level package names that count as *intra-project* (vs third-party)."""
+def _local_packages(root: Optional[Path], skeleton_paths: List[str]) -> Set[str]:
+    """Top-level package names that count as *intra-project* (vs third-party).
+
+    With no project root, only the skeletons' own top-level segments are local — we must
+    NOT scan the process cwd (it would mis-classify the SDK's own packages as project-local).
+    """
     pkgs: Set[str] = set()
-    if root.is_dir():
+    if root is not None and root.is_dir():
         for child in root.iterdir():
             if child.is_dir() and (child / "__init__.py").exists():
                 pkgs.add(child.name)
@@ -170,7 +176,7 @@ def run_pilot_bore(
         return result
 
     root = Path(project_root) if project_root else None
-    local_pkgs = _local_packages(root or Path("."), list(py_skeletons))
+    local_pkgs = _local_packages(root, list(py_skeletons))
 
     # --- pre-overlay per-skeleton guards: size + syntax ---
     valid: Dict[str, str] = {}
@@ -253,6 +259,7 @@ def run_pilot_bore(
                     line=diag.line,
                     expected=expected,
                     found=found,
+                    symbol=symbol,
                     suggested_fix=fix,
                     context_snippet=_snippet(valid.get(rel, ""), diag.line),
                     validator_class=ValidatorClass.PILOT_BORE,

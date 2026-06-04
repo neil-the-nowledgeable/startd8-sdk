@@ -221,6 +221,7 @@ class PhaseEmitter:
             stub_manifest=stub_manifest,
             skeleton_sources=skeleton_sources,
             element_tiers=element_tiers,
+            forward_manifest_dict=forward_manifest_dict,
         )
 
         # 10. Context files + service metadata
@@ -851,6 +852,7 @@ class PhaseEmitter:
         stub_manifest: Optional[List[Dict[str, Any]]],
         skeleton_sources: Optional[Dict[str, str]],
         element_tiers: Optional[Dict[str, Dict[str, Any]]],
+        forward_manifest_dict: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
         """Build artifacts dict, onboarding_var, and source_checksum.
 
@@ -921,6 +923,10 @@ class PhaseEmitter:
             artifacts_out["skeleton_sources"] = skeleton_sources
         if element_tiers:
             artifacts_out["element_tiers"] = element_tiers
+        # Sapper 3a: persist the full ForwardManifest so the standalone survey can run its
+        # cross-contract (FR-SAP-5) and per-element (FR-SAP-6) lenses, not just bore+convention.
+        if forward_manifest_dict:
+            artifacts_out["forward_manifest"] = forward_manifest_dict
 
         return artifacts_out, ob_var, sc_val
 

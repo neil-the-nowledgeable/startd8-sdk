@@ -62,6 +62,49 @@ from .preflight_rules._helpers import (
 
 logger = logging.getLogger(__name__)
 
+SAPPER_PREFLIGHT_ENV = "STARTD8_SAPPER_PREFLIGHT"
+
+
+def _sapper_preflight_enabled() -> bool:
+    return os.environ.get(SAPPER_PREFLIGHT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def run_sapper_preflight(seed_path: Path, project_root: Path) -> Optional[Dict[str, Any]]:
+    """FR-SAP-9 — run the Sapper survey from the ingestion seed, return a ``_sapper`` summary.
+
+    Opt-in via ``STARTD8_SAPPER_PREFLIGHT`` (needs mypy, adds time). Advisory + fully guarded:
+    returns ``None`` (and never raises) when disabled, when the seed has no skeletons, or on any
+    survey error — so it can never fail the preflight. Writes the friction report to
+    ``<seed-dir>/sapper/`` as the cross-task output channel.
+    """
+    if not _sapper_preflight_enabled():
+        return None
+    try:
+        from startd8.sapper.host import load_from_ingestion_seed, sapper_preflight_hook
+
+        manifest, skeletons = load_from_ingestion_seed(str(seed_path))
+        if not skeletons:
+            logger.info("sapper preflight skipped: seed has no skeleton_sources")
+            return None
+        sap = sapper_preflight_hook(
+            manifest, skeletons,
+            project_root=str(project_root), out_dir=str(seed_path.parent / "sapper"),
+        )
+        logger.info(
+            "sapper preflight survey: %s (report=%s)",
+            sap.result.report.counts(), sap.artifacts.get("json"),
+        )
+        return {
+            "report_path": sap.artifacts.get("json"),
+            "counts": sap.result.report.counts(),
+            "unresolved_rate": sap.result.report.unresolved_rate(),
+            "bore_status": sap.result.report.bore_status,
+            "blocked": sap.blocked,
+        }
+    except Exception as exc:  # advisory — never fail the preflight on survey error
+        logger.warning("sapper preflight survey failed (non-fatal): %s", exc)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible re-exports (existing tests import these names)
@@ -778,6 +821,12 @@ class DomainPreflightWorkflow(WorkflowBase):
                 "domain_summary": domain_summary,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
             }
+
+            # --- SAPPER (FR-SAP-9): pre-execution "meet in the middle" survey as a cross-task
+            # output channel. Opt-in (needs mypy + adds time); advisory, never fails preflight.
+            sap_summary = run_sapper_preflight(seed_path, project_root)
+            if sap_summary is not None:
+                enriched_seed["_sapper"] = sap_summary
 
             # Write enriched seed alongside original
             base_stem = seed_path.stem.removesuffix("-enriched")

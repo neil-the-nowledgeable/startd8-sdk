@@ -1297,6 +1297,14 @@ def build_spec_prompt(
             )
             prioritized.append((1, "kaizen_hints", qual_section))
 
+    # P0: Sapper pre-execution alignment (FR-SAP-12 finding injection) — REFUTED/UNRESOLVED
+    # misalignments the survey found against the real codebase for THIS file. P0 (like
+    # kaizen_security) so they survive budget enforcement: a wrong framework/invented entity
+    # fails the build, so the warning must reach the generator.
+    sapper_alignment = context.get("sapper_alignment")
+    if sapper_alignment and isinstance(sapper_alignment, str) and sapper_alignment.strip():
+        prioritized.append((0, "sapper_alignment", sapper_alignment.strip()))
+
     # P1: Proven exemplar reference (REQ-PEP-101)
     exemplar_section = _build_exemplar_section(context)
     if exemplar_section:
