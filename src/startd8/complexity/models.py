@@ -81,6 +81,11 @@ class TaskComplexitySignals:
     # False = under-specified (empty-fillable) → must NOT route to the no-LLM
     # SIMPLE tier. None = unknown (no manifest) → no guard applied.
     has_fillable_elements: Optional[bool] = None
+    # FR-MPF-2: total contract-bearing element count across the target file specs
+    # (forward-manifest surface area). 0 = no manifest / unknown. Consumed by the
+    # FR-MPF-3 surface-aware routing floor — distinct from has_fillable_elements,
+    # which is the lower guard (empty spec); this is the upper guard (rich spec).
+    manifest_element_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging."""
@@ -162,6 +167,11 @@ class ComplexityRoutingConfig:
     # TRIVIAL/SIMPLE instead of cloud fallback.
     non_python_trivial_loc_max: int = 100
     non_python_simple_loc_max: int = 300
+    # FR-MPF-3: max forward-manifest element count for a target to still be eligible
+    # for the no-LLM/economy SIMPLE tier. A richer spec gets a MODERATE floor
+    # (standard-LLM), never the empty-stub SIMPLE path (RUN_007). 0 = DISABLED
+    # (no-op): the guard ships off until calibrated against the FR-MPF-5 measurement.
+    manifest_element_simple_max: int = 0
 
     @classmethod
     def from_handler_config(cls, config: Any) -> ComplexityRoutingConfig:
