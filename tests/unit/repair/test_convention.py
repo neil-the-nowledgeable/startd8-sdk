@@ -138,3 +138,49 @@ def test_verdict_gate_end_to_end_on_flask_file(tmp_path):
     assert res.ast_valid is True  # Flask is valid Python — structurally clean
     assert res.convention_violations  # ...but convention-dirty
     assert compute_disk_quality_score(res) == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# Phase B.2 — safe-fixer + authority-governed-scope guard (FR-CAR-4)
+# --------------------------------------------------------------------------- #
+
+def _fix(code: str, rel_path: str):
+    from pathlib import Path
+
+    from startd8.repair.models import RepairContext
+    from startd8.repair.steps.python_convention_fix import PythonConventionFixStep
+
+    return PythonConventionFixStep()(code, RepairContext(), Path(rel_path))
+
+
+def test_safe_fix_query_get_in_generator_owned_file():
+    # A generator-owned spine file (in CANONICAL_LAYOUT) IS auto-fixed.
+    res = _fix("obj = session.query(Profile).get(item_id)\n", "app/routers.py")
+    assert res.modified is True
+    assert "session.get(Profile, item_id)" in res.code
+    assert "query(" not in res.code
+
+
+def test_safe_fix_skips_hand_written_file_zero_rewrites():
+    # R1-F6 acceptance: a hand-written dual-pattern file (app/ai/*) is NEVER auto-fixed.
+    src = "rows = session.query(Profile).get(pid)\n"
+    res = _fix(src, "app/ai/extract.py")
+    assert res.modified is False
+    assert res.code == src  # byte-identical — detect-and-advise only
+    assert res.metrics.get("reason") == "out_of_governed_scope"
+
+
+def test_safe_fix_skips_bespoke_view():
+    # app/jobs.py (the RUN-028 file) is not a generator-owned kind → escalate, don't fix.
+    res = _fix("x = session.query(Job).get(j)\n", "app/jobs.py")
+    assert res.modified is False
+
+
+def test_python_convention_route_registered():
+    from startd8.repair.routing import _ROUTING_TABLE, _STEP_FACTORIES
+
+    assert "python_convention_fix" in _STEP_FACTORIES
+    assert any(
+        cat == "convention" and lang == "python"
+        for (cat, _pat, _steps, _conf, lang) in _ROUTING_TABLE
+    )
