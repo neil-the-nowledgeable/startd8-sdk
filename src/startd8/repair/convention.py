@@ -60,6 +60,16 @@ _IDIOM_RULES: Tuple[IdiomRule, ...] = (
         safe_fixable=False,
     ),
     IdiomRule(
+        # Declaration-surface ORM rule (Sapper OQ-6): catch `from sqlalchemy[.orm] import …`
+        # at *import* time, not only via the `.query(` body call below — a skeleton imports
+        # SQLAlchemy before any body exists, so the import is the only signal at plan time.
+        "orm_idiom",
+        re.compile(r"^\s*(?:from\s+sqlalchemy\b|import\s+sqlalchemy\b)"),
+        "sqlalchemy",
+        "SQLModel (Session/select from sqlmodel) — generated apps use SQLModel, not raw SQLAlchemy",
+        safe_fixable=False,  # wholesale ORM swap → escalate
+    ),
+    IdiomRule(
         "orm_idiom",
         re.compile(r"\.query\s*\(\s*\w+\s*\)\s*\.get\s*\("),
         "session.query(...).get(...)",
