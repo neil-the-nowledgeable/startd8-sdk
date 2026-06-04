@@ -14,6 +14,7 @@ from startd8.contractors.prime_contractor import PrimeContractorWorkflow
 
 _collect = PrimeContractorWorkflow._collect_upstream_interfaces
 _mirrors = PrimeContractorWorkflow._feature_mirrors_data_model
+_is_test = PrimeContractorWorkflow._is_test_feature
 
 SCHEMA = (
     "model Capability {\n id String @id\n name String\n score Float?\n}\n"
@@ -24,7 +25,7 @@ SCHEMA = (
 def _stub(anchors, project_root):
     return SimpleNamespace(
         seed_upstream_anchors=anchors, project_root=str(project_root),
-        queue=None, _feature_mirrors_data_model=_mirrors,
+        queue=None, _feature_mirrors_data_model=_mirrors, _is_test_feature=_is_test,
     )
 
 
@@ -92,7 +93,8 @@ class TestPerBatchArtifact:
 
         stub = SimpleNamespace(
             seed_upstream_anchors=[], project_root="/x", queue=None,
-            _feature_mirrors_data_model=_mirrors, _project_knowledge=cached,
+            _feature_mirrors_data_model=_mirrors, _is_test_feature=_is_test,
+            _project_knowledge=cached,
         )
         out = _collect(stub, _feature(name="enrich-capabilities",
                                       target_files=["app/actions/enrich.ts"]))
@@ -145,3 +147,39 @@ class TestEnumAuthoritySeam:
         feat = _feature(name="render footer", target_files=["app/footer.tsx"])
         out = _collect(_stub(["prisma/schema.prisma"], d), feat)
         assert "## Enum values" not in out  # no scoped field-set → no enum block either
+
+
+class TestTestFeatureGetsFullAuthority:
+    """RUN-036 #1: a test imports the project's real entities, so a test feature must receive the
+    full data-model authority — otherwise test generation invents names (`from app.models import
+    Match`). It routes to the cloud/lead path and matches neither referenced_entities nor the
+    mirror heuristic, so before this it got nothing.
+    """
+
+    def test_test_feature_gets_full_field_set(self, tmp_path):
+        d = _project(tmp_path)
+        feat = _feature(
+            name="Tests for job_export",
+            target_files=["tests/test_job_export.py"],
+            description="pytest coverage for the job export router",
+        )
+        # matches neither the entity-reference signal nor the (TS-only) mirror heuristic
+        assert _mirrors(feat) is False
+        out = _collect(_stub(["prisma/schema.prisma"], d), feat)
+        # ...yet gets the FULL set (a test can import any entity) → real names, not invented ones
+        assert "## Prisma data model" in out
+        assert "`Capability`" in out and "`Outcome`" in out
+
+    def test_non_test_feature_unchanged(self, tmp_path):
+        # regression: a normal unrelated feature still injects nothing (scoping unchanged)
+        d = _project(tmp_path)
+        feat = _feature(name="render footer", target_files=["app/footer.tsx"])
+        out = _collect(_stub(["prisma/schema.prisma"], d), feat)
+        assert out == ""
+
+    def test_is_test_feature_detection(self):
+        for tf in ("tests/test_jobs.py", "app/jobs_test.py", "src/foo.test.ts",
+                   "x/bar.spec.tsx", "tests/sub/x.py"):
+            assert _is_test(_feature(target_files=[tf])) is True, tf
+        for tf in ("app/jobs.py", "lib/value-model.ts", "app/tables.py"):
+            assert _is_test(_feature(target_files=[tf])) is False, tf

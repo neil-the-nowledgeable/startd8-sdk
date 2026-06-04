@@ -21,6 +21,7 @@ from startd8.contractors.prime_contractor import PrimeContractorWorkflow
 
 _collect = PrimeContractorWorkflow._collect_upstream_interfaces
 _mirrors = PrimeContractorWorkflow._feature_mirrors_data_model
+_is_test = PrimeContractorWorkflow._is_test_feature
 
 # --- golden output (captured from current behaviour, 2026-06-01) ----------------
 
@@ -65,7 +66,7 @@ _PRISMA_SCHEMA = (
 def _stub(anchors, project_root, queue=None):
     return SimpleNamespace(
         seed_upstream_anchors=anchors, project_root=str(project_root),
-        queue=queue, _feature_mirrors_data_model=_mirrors,
+        queue=queue, _feature_mirrors_data_model=_mirrors, _is_test_feature=_is_test,
     )
 
 
@@ -139,7 +140,7 @@ class TestCharacterizationSnapshot:
         )
         stub = SimpleNamespace(
             seed_upstream_anchors=[], project_root=str(tmp_path), queue=queue,
-            _feature_mirrors_data_model=_mirrors,
+            _feature_mirrors_data_model=_mirrors, _is_test_feature=_is_test,
         )
         out = _collect(stub, _feature(name="consumer", dependencies=["DEP"]))
         assert out == ""

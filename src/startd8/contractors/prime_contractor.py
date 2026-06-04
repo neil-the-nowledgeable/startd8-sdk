@@ -4560,7 +4560,17 @@ class PrimeContractorWorkflow:
                 *[Path(str(t)).stem for t in (feature.target_files or [])],
             ]))
             referenced = referenced_entities([signal], pk.entities())
-            if referenced:
+            # Called via the class (not self) so it does not depend on `self` carrying the
+            # method — the stub-based seam tests pass a SimpleNamespace `self`.
+            if PrimeContractorWorkflow._is_test_feature(feature):
+                # RUN-036 #1: a test imports the project's REAL entities, but its target
+                # (tests/test_*.py) matches neither referenced_entities nor the mirror heuristic,
+                # and 0-element test features route to the cloud/lead path — so they got NO entity
+                # authority and invented names (`from app.models import Match`, a non-existent
+                # entity, which boot-cascaded 3 features). A test can import any entity, so give it
+                # the full set (like a data-model mirror), not just the description-referenced subset.
+                scoped = pk.field_sets
+            elif referenced:
                 scoped = tuple(fs for fs in pk.field_sets if fs.entity in referenced)
             elif self._feature_mirrors_data_model(feature):
                 scoped = pk.field_sets  # whole-model mirror → inherit the full set
@@ -4597,6 +4607,30 @@ class PrimeContractorWorkflow:
                 return True
         desc = (getattr(feature, "description", "") or "").lower()
         return any(k in desc for k in ("zod", "z.object", "prisma model", "value model", "schema mirror"))
+
+    @staticmethod
+    def _is_test_feature(feature: FeatureSpec) -> bool:
+        """True if the feature's target is a test file (RUN-036 #1).
+
+        A test imports the project's REAL entities, so it needs the full data-model authority —
+        without it, test generation invents names (`from app.models import Match`, no such entity).
+        Matches pytest (``test_*.py`` / ``*_test.py``), JS/TS (``*.test.*`` / ``*.spec.*``), and any
+        path under a ``tests/`` directory.
+        """
+        for tf in (getattr(feature, "target_files", None) or []):
+            p = str(tf).lower()
+            name = Path(p).name
+            if (
+                name.startswith("test_")
+                or name.endswith(
+                    ("_test.py", ".test.ts", ".test.tsx", ".test.js",
+                     ".spec.ts", ".spec.tsx", ".spec.js")
+                )
+                or p.startswith("tests/")
+                or "/tests/" in p
+            ):
+                return True
+        return False
 
     def _collect_dependency_imports(
         self, feature: FeatureSpec,
