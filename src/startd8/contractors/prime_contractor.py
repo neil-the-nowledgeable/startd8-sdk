@@ -4440,6 +4440,20 @@ class PrimeContractorWorkflow:
         if upstream_section:
             gen_context["upstream_interfaces"] = upstream_section
 
+        # RUN-036 (convention half): thread the Python house-style authority — FastAPI/SQLModel,
+        # `app.tables` module-source, `session.exec(select())` not `session.query` — into the
+        # lead/cloud path's spec+draft prompts. This is the SAME 8b authority micro-prime already
+        # gets (render_convention_guidance); test features and 0-element features route to the
+        # lead/cloud path and were inventing the wrong module/ORM (`from app.models import JobMatch`,
+        # `from sqlalchemy.orm import Session`). Python targets only; never breaks context build.
+        if any(str(t).endswith(".py") for t in (feature.target_files or [])):
+            try:
+                from startd8.repair.convention import render_convention_guidance
+
+                gen_context["convention_guidance"] = render_convention_guidance()
+            except Exception:
+                pass
+
     def _collect_upstream_interfaces(self, feature: FeatureSpec) -> str:
         """Render upstream producers' real emitted interface (Mode A + Mode B).
 

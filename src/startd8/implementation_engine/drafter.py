@@ -969,6 +969,13 @@ def build_supplementary_sections(
     if ui:
         p1_sections.append(ui if isinstance(ui, str) else str(ui))
 
+    # P1: Python house-style convention authority (RUN-036 convention half) — same 8b authority
+    # micro-prime receives, so the lead/cloud path (test features, 0-element features) generates
+    # FastAPI/SQLModel + `app.tables` instead of inventing Flask/SQLAlchemy/`app.models`.
+    cg = context.get("convention_guidance")
+    if cg:
+        p1_sections.append(cg if isinstance(cg, str) else str(cg))
+
     # P1: Upstream API contracts (Layer 3: within-run manifest accumulation)
     upstream = context.get("upstream_contracts")
     if upstream and isinstance(upstream, list):

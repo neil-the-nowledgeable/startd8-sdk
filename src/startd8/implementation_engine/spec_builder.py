@@ -1206,6 +1206,10 @@ def build_spec_prompt(
     # `## Context` dump (build_spec_context_section), where the spec ignored it and invented a
     # non-existent `Match`. It is rendered as a dedicated section below — like the drafter does.
     upstream_interfaces = context.pop("upstream_interfaces", None)
+    # RUN-036 (convention half): the Python house-style authority (FastAPI/SQLModel idiom +
+    # `app.tables` module-source) the lead path threads for Python targets. Pop so it renders as a
+    # dedicated section, not JSON-escaped into the `## Context` dump.
+    convention_guidance = context.pop("convention_guidance", None)
 
     # --- Build prioritized sections (P0=never drop, P3=drop first) ---
     target_files = context.get("target_files")
@@ -1250,6 +1254,13 @@ def build_spec_prompt(
     # referenced-entity-scoped upstream, so it survives budget without crowding the prompt.
     if isinstance(upstream_interfaces, str) and upstream_interfaces.strip():
         prioritized.append((0, "upstream_interfaces", upstream_interfaces))
+
+    # P0: Python house-style convention authority (RUN-036 convention half) — module-source
+    # (`app.tables`) + ORM idiom (SQLModel `session.exec`, not SQLAlchemy `session.query`) + FastAPI.
+    # The lead/cloud path (test features, 0-element features) was inventing the wrong module/ORM;
+    # this is the 8b authority micro-prime already receives, now surfaced in the spec too.
+    if isinstance(convention_guidance, str) and convention_guidance.strip():
+        prioritized.append((0, "python_conventions", convention_guidance))
 
     # P0: Language-specific project context (REQ-LA-1003)
     lang_profile = context.get("language_profile")
