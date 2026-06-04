@@ -61,10 +61,17 @@ tables/`AiCall`; require e.g. ≥3 ProofPoints). Score = weighted fraction of *i
 meeting threshold; nudges name the threshold. **No-manifest path is byte-identical** to the v1
 presence rule → zero change for projects without a `completeness.yaml`. 3 new tests (incl. a
 no-manifest regression); 41 backend_codegen tests green.
-**Deferred (next sub-step, post-live-run):** wire the assembler **and drift checker** to read an
-optional project `completeness.yaml` and pass it to `render_completeness` — must reach **both** paths
-or drift false-flags the weighted file. Not done now to avoid touching the live generate/drift path
-during the app's in-flight step-3 run.
+**Wiring — DONE (post-run).** A `--completeness <completeness.yaml>` CLI flag threads
+`completeness_text` through **both** the generate path (`render_backend → render_derived →
+render_completeness`) **and** the drift path (`check_drift → _renderers`), so generate-with-manifest
+and drift-with-manifest regen identical bytes → `in_sync`. Proven by a consistency test (same
+manifest → in_sync; manifest dropped on a weighted file → drift, i.e. threading is load-bearing).
+No-manifest path byte-identical → zero change for projects without a `completeness.yaml`. 147
+backend_codegen tests green. (Minor: the skip-hook `owned_file_in_sync` doesn't thread the manifest —
+a weighted completeness.py reads as not-in-sync there → safe regenerate-fallthrough; low-risk since
+completeness.py is a `generate backend` artifact, not a prime-contractor feature target.)
+**App-side to adopt:** add `completeness.yaml` (exclude join tables/`AiCall`; e.g. ProofPoint
+min_rows≥3) and pass `--completeness` to `startd8 generate backend`.
 
 ---
 

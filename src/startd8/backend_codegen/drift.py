@@ -45,7 +45,7 @@ _AI_KINDS: frozenset = frozenset(
 _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
 
 
-def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
+def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
     Imported lazily so this module has no load-order dependency on the renderers. Each backend
@@ -57,10 +57,12 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     from .crud_generator import render_db, render_main, render_routers
     from .derived import (
         render_ai_schemas,
+        _load_completeness_manifest,
         render_completeness,
         render_export,
         render_requirements,
     )
+    _cmpl = _load_completeness_manifest(completeness_text)  # weighted regen must match generate
     from .htmx_generator import (
         render_base_template,
         render_detail_template,
@@ -95,7 +97,7 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
         "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
-        "python-completeness": lambda s, sf, e: render_completeness(s, sf),
+        "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
         "python-requirements": lambda s, sf, e: render_requirements(s, sf),
         "python-requirements-authoring": lambda s, sf, e: render_requirements(s, sf, authoring=True),
         "pages-io": lambda s, sf, e: render_pages_io(s, sf),
@@ -350,6 +352,7 @@ def check_drift(
     manifest_text: Optional[str] = None,
     human_inputs_text: Optional[str] = None,
     pages_text: Optional[str] = None,
+    completeness_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -387,7 +390,9 @@ def check_drift(
         )
 
     kind = embedded_artifact_kind(ondisk_text)
-    renderer = _renderers().get(kind or "")
+    # completeness.py is schema + optional completeness.yaml → regen with the same manifest
+    # the generate path used, or drift would false-flag a weighted file.
+    renderer = _renderers(completeness_text=completeness_text).get(kind or "")
     if renderer is None:
         return DriftResult(
             "tampered",

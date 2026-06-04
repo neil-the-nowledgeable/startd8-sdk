@@ -160,6 +160,13 @@ def backend(
         "DEFAULT_AGENT_SPEC (the model the shipped app calls at runtime). "
         "Default: anthropic:claude-opus-4-8. Only meaningful with --ai-passes.",
     ),
+    completeness: Optional[Path] = typer.Option(
+        None,
+        "--completeness",
+        help="Path to completeness.yaml (domain-weighted thresholds: per-entity min_rows + "
+        "weight + an exclude set). When given, app/completeness.py is weighted; absent → the "
+        "flat presence rule. Threaded to both generate and --check so drift stays consistent.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -183,11 +190,12 @@ def backend(
     manifest_text: Optional[str] = None
     human_text: Optional[str] = None
     pages_text: Optional[str] = None
-    _reads = {"manifest": None, "human": None, "pages": None}
+    _reads = {"manifest": None, "human": None, "pages": None, "completeness": None}
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
         ("human_inputs", human_inputs, "human"),
         ("pages", pages, "pages"),
+        ("completeness", completeness, "completeness"),
     ):
         if path is None:
             continue
@@ -196,10 +204,11 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text = (
+    manifest_text, human_text, pages_text, completeness_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
+        _reads["completeness"],
     )
 
     if ai_agent_spec and manifest_text is None:
@@ -223,6 +232,7 @@ def backend(
             human_inputs_text=human_text,
             ai_agent_spec=ai_agent_spec,
             pages_text=pages_text,
+            completeness_text=completeness_text,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -248,6 +258,7 @@ def backend(
                 manifest_text=manifest_text,
                 human_inputs_text=human_text,
                 pages_text=pages_text,
+                completeness_text=completeness_text,
             )
             if result.status != "in_sync":
                 drifted += 1

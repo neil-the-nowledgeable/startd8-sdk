@@ -247,14 +247,34 @@ def render_requirements(
     return header + "\n\n" + body + "\n"
 
 
+def _load_completeness_manifest(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse a ``completeness.yaml`` text into the manifest dict (tolerant: None on absent/bad)."""
+    if not text:
+        return None
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def render_derived(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    *,
+    completeness_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
-    """All derived artifacts as ``(relative_path, text)`` pairs: export, ai_schemas, completeness."""
+    """All derived artifacts as ``(relative_path, text)`` pairs: export, ai_schemas, completeness.
+
+    *completeness_text* (``completeness.yaml``) — when given, completeness.py is rendered with
+    domain-weighted thresholds; absent → the flat presence rule (byte-identical to prior output).
+    """
     return (
         ("app/export.py", render_export(schema_text, source_file)),
         ("app/ai_schemas.py", render_ai_schemas(schema_text, source_file)),
-        ("app/completeness.py", render_completeness(schema_text, source_file)),
+        ("app/completeness.py", render_completeness(
+            schema_text, source_file, manifest=_load_completeness_manifest(completeness_text))),
     )
 
 

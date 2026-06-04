@@ -33,6 +33,7 @@ def render_backend(
     pages_text: Optional[str] = None,
     pages_app_dir: Optional[Path] = None,
     authoring: bool = False,
+    completeness_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -59,8 +60,8 @@ def render_backend(
     ]
     out.extend(render_ui(schema_text, source_file, pages_text))  # app/web.py + templates (+ nav)
     out.extend(
-        render_derived(schema_text, source_file)
-    )  # export / ai_schemas / completeness
+        render_derived(schema_text, source_file, completeness_text=completeness_text)
+    )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)
     out.append(("requirements.txt", render_requirements(schema_text, source_file, authoring=authoring)))
     if pages_text:
         from .pages_generator import render_pages

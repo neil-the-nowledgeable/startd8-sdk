@@ -139,3 +139,26 @@ def test_completeness_weighted_fraction_and_nudge_qty():
     r = ns["compute_completeness"]({"Profile": 1, "ProofPoint": 1})
     assert r.score == 0.75  # weight 3 met / total 4
     assert r.nudges == ["Add at least 2 ProofPoint."]
+
+
+_CMPL_YAML = "exclude: [ProofPoint]\nentities:\n  Profile: {min_rows: 2, weight: 3}\n"
+
+
+def test_completeness_generate_and_drift_consistent_with_manifest():
+    """Step-4 wiring: generate weighted + drift-check with the SAME manifest → in_sync."""
+    from startd8.backend_codegen import render_backend, check_drift
+    arts = dict(render_backend(SCHEMA, completeness_text=_CMPL_YAML))
+    completeness = arts["app/completeness.py"]
+    assert "_CONFIG" in completeness  # weighted output
+    # same manifest → both paths regen identical bytes → in_sync (the consistency guarantee)
+    assert check_drift(SCHEMA, completeness, completeness_text=_CMPL_YAML).status == "in_sync"
+    # WITHOUT the manifest, drift regens flat → mismatch (threading is load-bearing)
+    assert check_drift(SCHEMA, completeness, completeness_text=None).status != "in_sync"
+
+
+def test_completeness_no_manifest_generate_and_drift_unchanged():
+    """Projects without completeness.yaml: flat output + clean drift (zero behavior change)."""
+    from startd8.backend_codegen import render_backend, check_drift
+    completeness = dict(render_backend(SCHEMA))["app/completeness.py"]
+    assert "_CONFIG" not in completeness
+    assert check_drift(SCHEMA, completeness).status == "in_sync"
