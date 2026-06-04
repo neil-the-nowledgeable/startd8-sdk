@@ -3588,6 +3588,7 @@ class PrimeContractorWorkflow:
                 copy_result = self._handle_file_copy(feature)
                 if copy_result is not None:
                     feature.generated_files = [str(f) for f in copy_result.generated_files]
+                    feature.metadata["generation_path"] = "copy"
                     feature.status = FeatureStatus.GENERATED
                     self._save_queue_state_with_mode()
                     self.total_cost_usd += copy_result.cost_usd  # 0.0
@@ -3651,6 +3652,7 @@ class PrimeContractorWorkflow:
                     feature.name, len(target_files),
                 )
             feature.generated_files = modified_files if modified_files else [str(f) for f in target_files]
+            feature.metadata["generation_path"] = "uncomment"
             feature.status = FeatureStatus.GENERATED
             self._save_queue_state_with_mode()
             logger.info(
@@ -3746,6 +3748,7 @@ class PrimeContractorWorkflow:
             resolved.append(str(found))
 
         feature.generated_files = resolved
+        feature.metadata["generation_path"] = "deterministic_provider"
         feature.status = FeatureStatus.GENERATED
         self._save_queue_state_with_mode()
         logger.info(
@@ -3815,6 +3818,7 @@ class PrimeContractorWorkflow:
             written.append(str(dest))
 
         feature.generated_files = written
+        feature.metadata["generation_path"] = "corpus"
         feature.status = FeatureStatus.GENERATED
         self._save_queue_state_with_mode()
         logger.info(
@@ -4439,6 +4443,19 @@ class PrimeContractorWorkflow:
         upstream_section = self._collect_upstream_interfaces(feature)
         if upstream_section:
             gen_context["upstream_interfaces"] = upstream_section
+
+        # FR-CAR-12c (RUN-038 #4 convention half): convention authority (house-style module-source /
+        # ORM idiom) reaches ONLY the micro-prime path via MicroPrimeContext; the lead/cloud path
+        # (where test features and 0-element features route) got NO convention authority, so tests
+        # carried the `from app.models import <Table>` class. Thread it for Python targets so the
+        # spec/draft prompt carries the "tables live in app.tables, not app.models" rule too.
+        if any(str(t).endswith(".py") for t in (getattr(feature, "target_files", None) or [])):
+            try:
+                from ..repair.convention import render_convention_guidance
+
+                gen_context["convention_guidance"] = render_convention_guidance()
+            except Exception:  # pragma: no cover - guidance is best-effort
+                pass
 
     def _collect_upstream_interfaces(self, feature: FeatureSpec) -> str:
         """Render upstream producers' real emitted interface (Mode A + Mode B).

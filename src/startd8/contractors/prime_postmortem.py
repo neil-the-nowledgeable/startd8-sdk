@@ -412,6 +412,12 @@ class FeaturePostMortem:
     todo_count_a: int = 0
     todo_count_b: int = 0
     todo_count_c: int = 0
+    # Determinism provenance (REQ-DET-METRIC) — how the feature's code was produced.
+    # "llm" (default) means an LLM authored it; any other value is a $0/no-LLM path
+    # stamped by a prime-contractor shortcut: "deterministic_provider" (owned-kind
+    # skip-hook), "corpus", "copy", or "uncomment".
+    generation_path: str = "llm"
+    deterministic: bool = False
 
     @property
     def semantic_issue_summary(self) -> Dict[str, int]:
@@ -481,6 +487,30 @@ class CostSummary:
 
 
 @dataclasses.dataclass
+class DeterminismMetrics:
+    """Deterministic-vs-LLM assembly breakdown for a run (REQ-DET-METRIC).
+
+    Answers "what fraction of this run was assembled deterministically ($0 LLM)?" —
+    the measurement the ~60-75% deterministic-ceiling goal was never able to validate.
+    A feature is deterministic when it was served by a no-LLM shortcut (owned-kind
+    provider skip, corpus, copy, or uncomment); ``by_path`` keeps the per-path split so
+    the owned-kind ($0 schema-derived) contribution is distinguishable from copy/uncomment.
+
+    Ratios are reported two ways: by feature count and by generated-file count, because a
+    single deterministic feature can own many files (e.g. one ``generate backend`` feature
+    owning the whole spine) and the file ratio is the more honest cost lever.
+    """
+
+    deterministic_features: int = 0
+    llm_features: int = 0
+    feature_ratio: float = 0.0  # deterministic_features / total features
+    deterministic_files: int = 0
+    llm_files: int = 0
+    file_ratio: float = 0.0  # deterministic_files / total generated files
+    by_path: Dict[str, int] = dataclasses.field(default_factory=dict)  # path -> feature count
+
+
+@dataclasses.dataclass
 class PrimePostMortemReport:
     """Top-level post-mortem report for a PrimeContractor run."""
 
@@ -501,6 +531,7 @@ class PrimePostMortemReport:
     )
     lessons: List[Lesson] = dataclasses.field(default_factory=list)
     cost_summary: Optional[CostSummary] = None
+    determinism: Optional[DeterminismMetrics] = None
     avg_assembly_delta: Optional[float] = None
 
 
@@ -1583,6 +1614,9 @@ class PrimePostMortemEvaluator:
         # Build cost summary
         report.cost_summary = self._build_cost_summary(report.features)
 
+        # Build determinism metrics (REQ-DET-METRIC) — measures the $0/no-LLM fraction
+        report.determinism = self._build_determinism_metrics(report.features)
+
         # Disk quality evaluation (opt-in when project_root provided)
         if project_root:
             # Aggregate semantic repair data from history entries (DC-3 dual scoring)
@@ -1757,6 +1791,13 @@ class PrimePostMortemEvaluator:
         if history_entry:
             cost_usd = history_entry.get("cost_usd", 0.0) or 0.0
 
+        # Determinism provenance (REQ-DET-METRIC) — stamped on feature.metadata by the
+        # prime-contractor no-LLM shortcuts; absent for normal LLM-authored features.
+        generation_path = (feature_dict.get("metadata") or {}).get(
+            "generation_path", "llm"
+        )
+        deterministic = generation_path != "llm"
+
         # File coverage — generated_files are often absolute paths while
         # target_files are relative, so check suffix match (endswith) to
         # handle the path-prefix mismatch.
@@ -1857,6 +1898,8 @@ class PrimePostMortemEvaluator:
             requirement_score=requirement_score,
             verdict=verdict,
             force_regenerated=force_regenerated,
+            generation_path=generation_path,
+            deterministic=deterministic,
         )
 
     def _score_requirements(
@@ -2809,6 +2852,38 @@ class PrimePostMortemEvaluator:
 
         return summary
 
+    def _build_determinism_metrics(
+        self, features: List[FeaturePostMortem]
+    ) -> DeterminismMetrics:
+        """Build the deterministic-vs-LLM assembly breakdown (REQ-DET-METRIC).
+
+        Counts both features and their generated files so the run can report what
+        fraction was assembled deterministically ($0 LLM) — by feature and, more
+        honestly, by file. ``by_path`` keeps the per-shortcut split (owned-kind
+        provider vs corpus/copy/uncomment).
+        """
+        metrics = DeterminismMetrics()
+        for fpm in features:
+            n_files = len(fpm.generated_files)
+            if fpm.deterministic:
+                metrics.deterministic_features += 1
+                metrics.deterministic_files += n_files
+                metrics.by_path[fpm.generation_path] = (
+                    metrics.by_path.get(fpm.generation_path, 0) + 1
+                )
+            else:
+                metrics.llm_features += 1
+                metrics.llm_files += n_files
+
+        total_features = metrics.deterministic_features + metrics.llm_features
+        if total_features:
+            metrics.feature_ratio = metrics.deterministic_features / total_features
+        total_files = metrics.deterministic_files + metrics.llm_files
+        if total_files:
+            metrics.file_ratio = metrics.deterministic_files / total_files
+
+        return metrics
+
     def _extract_lessons(self, report: PrimePostMortemReport) -> List[Lesson]:
         """Convert patterns and failures into lessons."""
         lessons: List[Lesson] = []
@@ -3311,6 +3386,24 @@ class PrimePostMortemEvaluator:
                     f"- Total: ${cs.total_usd:.4f}",
                     f"- Average per feature: ${cs.avg_per_feature:.4f}",
                     f"- Max: {cs.max_feature} (${cs.max_usd:.4f})",
+                    "",
+                ]
+            )
+
+        # Determinism (REQ-DET-METRIC) — the measured $0/no-LLM assembly fraction
+        if report.determinism:
+            dm = report.determinism
+            by_path = ", ".join(f"{k}={v}" for k, v in sorted(dm.by_path.items())) or "—"
+            lines.extend(
+                [
+                    "## Determinism (deterministic $0 vs LLM)",
+                    "",
+                    f"- Deterministic features: {dm.deterministic_features} / "
+                    f"{dm.deterministic_features + dm.llm_features} "
+                    f"({dm.feature_ratio:.0%})",
+                    f"- Deterministic files: {dm.deterministic_files} / "
+                    f"{dm.deterministic_files + dm.llm_files} ({dm.file_ratio:.0%})",
+                    f"- By path: {by_path}",
                     "",
                 ]
             )
