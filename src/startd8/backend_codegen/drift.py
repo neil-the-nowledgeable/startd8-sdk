@@ -78,6 +78,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
     )
     from .pydantic_renderer import render_pydantic_models
     from .sqlmodel_renderer import render_sqlmodel_tables
+    from .test_emitter import render_contract_tests
 
     return {
         "pydantic-models": lambda s, sf, e: render_pydantic_models(
@@ -103,6 +104,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         "pages-io": lambda s, sf, e: render_pages_io(s, sf),
         "pages-admin": lambda s, sf, e: render_pages_admin(s, sf),
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
+        "python-tests-contract": lambda s, sf, e: render_contract_tests(s, sf),
     }
 
 
