@@ -36,6 +36,10 @@ TRIAGE_FILENAME = "service-assistant-triage.json"
 POSTMORTEM_FILENAME = "prime-postmortem-report.json"
 RUN_RESULT_GLOB = "prime-result*.json"
 
+# Repair steps that synthesize imports and can introduce a fresh boot failure if mis-applied
+# (RUN-038 #2: import_completion added `import <local-var>`).
+_OWN_GOAL_REPAIR_STEPS = {"import_completion"}
+
 # cap-dev-pipe output layout: <project-root>/.cap-dev-pipe/pipeline-output/<project>/run-*/plan-ingestion
 PIPELINE_OUTPUT_REL = ".cap-dev-pipe/pipeline-output"
 RUN_SUBDIR = "plan-ingestion"
@@ -352,6 +356,22 @@ def read_element_mechanism(
                     claim_id=f"{cid}:repair",
                 )
             )
+            # RUN-038 #2: a repairer that synthesizes imports can introduce a fresh boot
+            # failure (e.g. import_completion adding `import <local-var>`). Surface it as a
+            # mechanism-attribution flag on a failed element so the own-goal is never silent.
+            own_goal = [s for s in repair_steps if s in _OWN_GOAL_REPAIR_STEPS]
+            if own_goal:
+                claims.append(
+                    LabeledClaim(
+                        ClaimLabel.MECHANISM,
+                        f"import-synthesizing repair step(s) {', '.join(own_goal)} fired on "
+                        f"`{ename}` — verify they did not synthesize an import for a "
+                        f"locally-bound name (RUN-038 #2 import_completion own-goal class)",
+                        source="ElementPostMortem.repair_steps",
+                        claim_id=f"{cid}:own-goal-risk",
+                        qualifier="conflict",
+                    )
+                )
         esc = el.get("escalation_reason")
         if esc:
             claims.append(
@@ -396,6 +416,63 @@ def read_element_mechanism(
                     claim_id=f"{cid}:strategy",
                 )
             )
+    return claims
+
+
+def read_convention_status(run_output_dir: Path, feature_id: str) -> List[LabeledClaim]:
+    """Surface convention violations + the FR-CAR safe-fix gap (RUN-038 #5 / §2.5).
+
+    Reads ``disk_compliance.convention_violations[]`` and ``semantic_repairs_applied`` from the
+    post-mortem feature. Emits a MECHANISM claim per violation, and — the high-value composition
+    — flags the *worst-of-both* state: a ``safe_fixable`` violation that was hard-gated (disk
+    FAIL) yet ``semantic_repairs_applied == 0``, i.e. the safe-fixer was identified-but-never-run.
+    """
+    try:
+        postmortem = read_postmortem(run_output_dir)
+    except ArtifactTrustError:
+        return []
+    if not postmortem:
+        return []
+    feature = _find_postmortem_feature(postmortem, feature_id)
+    if not feature:
+        return []
+
+    claims: List[LabeledClaim] = []
+    disk = feature.get("disk_compliance")
+    violations = (
+        disk.get("convention_violations") if isinstance(disk, dict) else None
+    ) or []
+    repairs_applied = feature.get("semantic_repairs_applied", 0) or 0
+    safe_fixable = [v for v in violations if v.get("safe_fixable")]
+
+    for v in violations:
+        sf = " (safe_fixable)" if v.get("safe_fixable") else ""
+        claims.append(
+            LabeledClaim(
+                ClaimLabel.MECHANISM,
+                f"convention violation `{v.get('convention_kind')}`: "
+                f"{v.get('symbol')} → expected {v.get('expected')}{sf}",
+                source="prime-postmortem-report.json:disk_compliance.convention_violations[]",
+                claim_id=f"{feature_id}:convention",
+            )
+        )
+
+    if safe_fixable and repairs_applied == 0:
+        claims.append(
+            LabeledClaim(
+                ClaimLabel.MECHANISM,
+                f"{len(safe_fixable)} safe-fixable convention violation(s) hard-gated the "
+                f"feature (disk FAIL) but `semantic_repairs_applied=0` — the FR-CAR safe-fixer "
+                f"was identified-but-never-run: the micro-prime repair pipeline "
+                f"(`micro_prime/repair.py` `_ALL_STEPS`) does not include a convention fixer, and "
+                f"the integration-path `python_convention_fix._is_governed` excludes app routers "
+                f"(non-`CANONICAL_LAYOUT`). Worst-of-both: the feature failed AND the safe fix "
+                f"was left on the table.",
+                source="prime-postmortem-report.json:{convention_violations[].safe_fixable, semantic_repairs_applied}",
+                claim_id=f"{feature_id}:safefix-gap",
+                qualifier="conflict",  # → MECHANISM (sdk, conflict): a self-inconsistent state
+            )
+        )
     return claims
 
 

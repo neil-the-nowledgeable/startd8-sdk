@@ -63,7 +63,8 @@ def test_compose_is_the_only_llm_importer():
 def test_sources_covers_every_section6_mechanism_question():
     # FR-3/§6: each mechanism question must have a reader (analogue of SA's coverage test).
     required = [
-        "read_element_mechanism",  # tier / repair / strategy
+        "read_element_mechanism",  # tier / repair / strategy / import-completion own-goal (#2)
+        "read_convention_status",  # convention violations + FR-CAR safe-fix gap (#5)
         "classify_live",  # why that tier (live)
         "resolve_model_by_tier",  # model by tier
         "resolve_model_by_role",  # model by contractor role
