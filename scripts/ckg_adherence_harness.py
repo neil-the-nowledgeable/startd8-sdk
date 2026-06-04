@@ -55,8 +55,15 @@ def _mock_backend() -> MockBackend:
     return _DemoBackend()  # type: ignore[return-value]
 
 
-def _startd8_backend(agent_spec: str):
-    """Real generation backend (run-later boundary). Requires an API key + budget."""
+def _startd8_backend(agent_spec: str, temperature: float):
+    """Real generation backend. Works for cloud agents (API key + budget) and for the
+    micro-prime cheap *local* tier via ``--agent ollama:startd8-coder`` (no API cost).
+
+    Seed→sampling is wired via ``temperature``: each of the N seeds is a fresh stochastic
+    sample, so the N-seed adherence rate measures real variance (greedy/temperature=0 would
+    return identical output for every seed, faking the rate). This completes the scaffold's
+    "wire seed → temperature/sampling" note (FR-MPF-5).
+    """
     try:
         from startd8.providers import ProviderRegistry
         from startd8.utils.agent_resolution import resolve_agent_spec
@@ -68,8 +75,10 @@ def _startd8_backend(agent_spec: str):
 
     class _StartD8Backend:
         def generate(self, *, prompt: str, seed: int) -> str:
-            # NOTE: wire seed → temperature/sampling per provider when running for real.
-            result = agent.generate(prompt)
+            try:
+                result = agent.generate(prompt, temperature=temperature)
+            except TypeError:
+                result = agent.generate(prompt)  # agent without a temperature kwarg
             return getattr(result, "text", str(result))
 
     return _StartD8Backend()
@@ -95,9 +104,17 @@ def main(argv=None) -> int:
         help="denylist = literal-token check (mechanics); structural = Phase-1 "
              "detectors (uses-only-real-fields/paths, catches novel inventions)",
     )
+    ap.add_argument(
+        "--temperature", type=float, default=0.7,
+        help="sampling temperature for the real backend; >0 gives per-seed variance "
+             "(0 = greedy = identical output every seed, which fakes the N-seed rate)",
+    )
     args = ap.parse_args(argv)
 
-    backend = _mock_backend() if args.backend == "mock" else _startd8_backend(args.agent)
+    backend = (
+        _mock_backend() if args.backend == "mock"
+        else _startd8_backend(args.agent, args.temperature)
+    )
 
     # The real gate: baseline (no injection) vs injected, same seeds, per-Gap rate.
     baseline = run_suite(
