@@ -384,6 +384,138 @@ class OllamaProvider:
     
     def supports_streaming(self) -> bool:
         return True
-    
+
     def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         return ['text-generation', 'local-execution']
+
+
+class OpenAICompatibleProvider:
+    """Generic provider for any OpenAI-compatible API endpoint.
+
+    Registered as ``openai-compatible``. The endpoint has no single default, so ``base_url``
+    MUST be supplied via config or the ``OPENAI_COMPATIBLE_BASE_URL`` env var. Wraps
+    :class:`OpenAICompatibleAgent`. (Mirrors ``MistralProvider`` / ``OllamaProvider``.)
+    """
+
+    @property
+    def name(self) -> str:
+        return "openai-compatible"
+
+    @property
+    def display_name(self) -> str:
+        return "OpenAI-Compatible"
+
+    @property
+    def supported_models(self) -> List[str]:
+        return []  # generic — any model the configured endpoint serves
+
+    def create_agent(
+        self, model: str, name: Optional[str] = None, **config,
+    ) -> OpenAICompatibleAgent:
+        if name is None:
+            name = f"openai-compatible-{model}"
+        api_key = config.get('api_key') or os.getenv('OPENAI_COMPATIBLE_API_KEY')
+        base_url = config.get('base_url') or os.getenv('OPENAI_COMPATIBLE_BASE_URL')
+        return OpenAICompatibleAgent(
+            name=name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            max_tokens=config.get('max_tokens', 16384),
+            cost_tracker=config.get('cost_tracker'),
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
+            system_prompt=config.get('system_prompt'),
+        )
+
+    def validate_config(self, config: Dict[str, Any]) -> bool:
+        base_url = config.get('base_url') or os.getenv('OPENAI_COMPATIBLE_BASE_URL')
+        if not base_url:
+            raise ConfigurationError(
+                "OpenAI-compatible provider requires a base_url. "
+                "Set OPENAI_COMPATIBLE_BASE_URL or pass base_url in config."
+            )
+        return True
+
+    def get_required_env_vars(self) -> List[str]:
+        return []  # base_url may come from config; api_key is endpoint-dependent
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
+        return ['text-generation']
+
+
+class NIMProvider:
+    """NVIDIA NIM (Inference Microservice) — OpenAI-compatible API.
+
+    Registered as ``nim`` (used by ``model_catalog`` for ``nim:nvidia/nemotron-*``). Defaults to
+    the hosted NVIDIA endpoint; override via ``base_url`` / ``NIM_BASE_URL``. Auth via
+    ``NVIDIA_API_KEY`` (or ``NIM_API_KEY``). Wraps :class:`OpenAICompatibleAgent`.
+    """
+
+    DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+    @property
+    def name(self) -> str:
+        return "nim"
+
+    @property
+    def display_name(self) -> str:
+        return "NVIDIA NIM"
+
+    @property
+    def supported_models(self) -> List[str]:
+        return ["nvidia/nemotron-3-nano-30b-a3b"]
+
+    def create_agent(
+        self, model: str, name: Optional[str] = None, **config,
+    ) -> OpenAICompatibleAgent:
+        if name is None:
+            name = f"nim-{model.rsplit('/', 1)[-1]}"
+        api_key = (
+            config.get('api_key')
+            or os.getenv('NVIDIA_API_KEY')
+            or os.getenv('NIM_API_KEY')
+        )
+        base_url = config.get('base_url') or os.getenv('NIM_BASE_URL', self.DEFAULT_BASE_URL)
+        return OpenAICompatibleAgent(
+            name=name,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            max_tokens=config.get('max_tokens', 8192),
+            cost_tracker=config.get('cost_tracker'),
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
+            system_prompt=config.get('system_prompt'),
+        )
+
+    def validate_config(self, config: Dict[str, Any]) -> bool:
+        api_key = (
+            config.get('api_key')
+            or os.getenv('NVIDIA_API_KEY')
+            or os.getenv('NIM_API_KEY')
+        )
+        if not api_key:
+            raise ConfigurationError(
+                "NVIDIA NIM API key required. "
+                "Set NVIDIA_API_KEY (or NIM_API_KEY), or pass api_key in config."
+            )
+        return True
+
+    def get_required_env_vars(self) -> List[str]:
+        return ['NVIDIA_API_KEY']
+
+    def supports_streaming(self) -> bool:
+        return True
+
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
+        return ['text-generation']
