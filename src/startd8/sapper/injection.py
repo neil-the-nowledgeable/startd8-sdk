@@ -72,11 +72,12 @@ def populate_gen_context(
     blocks = _load_blocks(path)
     if not blocks:
         return False
-    selected = [blocks[f] for f in target_files if f in blocks]
+    files = list(target_files)  # materialize once — target_files may be a one-shot iterable
+    selected = [blocks[f] for f in files if f in blocks]
     if not selected:
         return False
     combined = "\n\n".join(selected)
     gen_context["sapper_guidance"] = combined     # → micro-prime (engine appends to constraints)
     gen_context["sapper_alignment"] = combined    # → lead/drafter spec (spec_builder P0 section)
-    logger.debug("sapper: injected findings for %d/%d target file(s)", len(selected), len(list(target_files)))
+    logger.debug("sapper: injected findings for %d/%d target file(s)", len(selected), len(files))
     return True
