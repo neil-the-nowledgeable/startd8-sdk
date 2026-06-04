@@ -52,10 +52,19 @@ the human-gated step. Harness ready: `validate_corpus_integration.py postrun <ru
 + `PIPELINE_VALIDATION_RUNBOOK.md`. Sequence: enable write (done) → accumulate over M4/M5/M6 → one
 run with the serve flag on → postrun checker → decide default-on.
 
-## Step 4 ⏳ — Completeness signal generator (build)
-The app hand-seeds `app/completeness.py` (M5) from a `completeness_signals.yaml`; the SDK should
-generate it from the contract/domain-manifest (this is also the SDK's OQ-4 completeness
-domain-manifest). Next build increment.
+## Step 4 🟡 — Completeness signal generator (generator capability shipped)
+**Reframe (examination):** `app/completeness.py` is **already a generated owned artifact**
+(`# startd8-artifact: python-completeness`, via `startd8 generate backend`) — not hand-seeded. The
+real gap was the deferred **domain-weighted** refinement (OQ-4). **Shipped:** `render_completeness`
+now takes an optional manifest — per-entity `min_rows` + `weight` + an `exclude` set (drop join
+tables/`AiCall`; require e.g. ≥3 ProofPoints). Score = weighted fraction of *included* entities
+meeting threshold; nudges name the threshold. **No-manifest path is byte-identical** to the v1
+presence rule → zero change for projects without a `completeness.yaml`. 3 new tests (incl. a
+no-manifest regression); 41 backend_codegen tests green.
+**Deferred (next sub-step, post-live-run):** wire the assembler **and drift checker** to read an
+optional project `completeness.yaml` and pass it to `render_completeness` — must reach **both** paths
+or drift false-flags the weighted file. Not done now to avoid touching the live generate/drift path
+during the app's in-flight step-3 run.
 
 ---
 
