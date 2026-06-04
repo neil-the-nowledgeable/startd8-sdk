@@ -62,6 +62,23 @@ class TestCollectLocalDefinitions:
         )
         assert _collect_local_definitions(tree) == {"outer", "inner"}
 
+    def test_match_case_captures_collected(self):
+        """FR-RI-2 (review): match/case capture bindings must be collected (py3.10+ scope)."""
+        code = (
+            "def handle(cmd):\n"
+            "    match cmd:\n"
+            "        case ['move', direction]:\n"
+            "            return direction\n"
+            "        case {'speed': spd, **rest}:\n"
+            "            return spd\n"
+            "        case [*items]:\n"
+            "            return items\n"
+            "        case other:\n"
+            "            return other\n"
+        )
+        names = _collect_local_definitions(ast.parse(code))
+        assert {"direction", "spd", "rest", "items", "other"} <= names
+
     def test_function_body_local_excluded_from_import_synthesis(self):
         """The RUN-038 own-goal: a function-body local (`assets`) must never become `import assets`."""
         code = (

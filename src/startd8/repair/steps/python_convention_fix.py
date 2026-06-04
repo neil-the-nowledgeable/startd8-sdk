@@ -130,10 +130,13 @@ class PythonConventionFixStep:
 
         # (1) Module-source repoint — unambiguous, wider scope (FR-CAR-12b): generated app files.
         if _is_app_package_file(file_path):
-            from ..convention import build_python_convention_authority
+            try:
+                from ..convention import build_python_convention_authority
 
-            auth = build_python_convention_authority()
-            repointed, m = _repoint_module_source(fixed, auth)
+                auth = build_python_convention_authority()
+                repointed, m = _repoint_module_source(fixed, auth)
+            except Exception:  # pragma: no cover - authority construction is best-effort
+                repointed, m = fixed, 0
             if m:
                 fixed = repointed
                 fixes += m

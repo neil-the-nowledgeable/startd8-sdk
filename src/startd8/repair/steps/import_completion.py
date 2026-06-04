@@ -147,6 +147,12 @@ def _collect_existing_imports(tree: ast.Module) -> set[str]:
     return names
 
 
+# Match-statement node types (py3.10+). Resolved at import so the collector stays 3.9-safe.
+_MATCH_AS = getattr(ast, "MatchAs", None)
+_MATCH_STAR = getattr(ast, "MatchStar", None)
+_MATCH_MAPPING = getattr(ast, "MatchMapping", None)
+
+
 def _names_bound_by_target(target: ast.expr, names: set[str]) -> None:
     """Add every name an assignment/for/with target binds (handles unpacking)."""
     if isinstance(target, ast.Name):
@@ -211,6 +217,14 @@ def _collect_local_definitions(tree: ast.Module) -> set[str]:
                 names.add((alias.asname or alias.name).split(".")[0])
         elif isinstance(node, (ast.ExceptHandler,)) and node.name:
             names.add(node.name)
+        # match/case captures (py3.10+): `case x:`, `case Foo(a=y):`, `case [*rest]:`,
+        # `case {**rest}:` all bind names. Guarded by getattr so this stays 3.9-safe.
+        elif _MATCH_AS is not None and isinstance(node, _MATCH_AS) and node.name:
+            names.add(node.name)
+        elif _MATCH_STAR is not None and isinstance(node, _MATCH_STAR) and node.name:
+            names.add(node.name)
+        elif _MATCH_MAPPING is not None and isinstance(node, _MATCH_MAPPING) and node.rest:
+            names.add(node.rest)
     return names
 
 
