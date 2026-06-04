@@ -255,3 +255,40 @@ def test_context_guidance_defaults_empty_backward_compatible():
 
     c = MicroPrimeContext(manifest=None, target_files=["x.py"])
     assert c.convention_guidance == ""  # frozen-dataclass field is defaulted
+
+
+# --------------------------------------------------------------------------- #
+# Phase D.9 — lock-step parity meta-test (FR-CAR-8)
+# --------------------------------------------------------------------------- #
+
+def test_lockstep_all_generated_python_is_convention_clean():
+    # FR-CAR-8 lock-step guard: EVERY generator-owned Python artifact must be convention-clean.
+    # The generators and the detector must agree by construction — if a generator ever emits a
+    # house-style violation (Flask/session.query/render_template/app.models table import), or a new
+    # artifact kind regresses, this test fails. This is what keeps repair coverage in step with the
+    # expanding deterministic-generation surface.
+    from startd8.backend_codegen import render_backend
+
+    py_artifacts = [(p, c) for p, c in render_backend(SCHEMA) if p.endswith(".py")]
+    assert len(py_artifacts) >= 5, "expected the full Python spine to be generated"
+    offenders = {
+        p: [f"{d.convention_kind}:{d.symbol}" for d in detect_conventions(c, file=p)]
+        for p, c in py_artifacts
+    }
+    offenders = {p: v for p, v in offenders.items() if v}
+    assert offenders == {}, f"generator emitted convention violations: {offenders}"
+
+
+# --------------------------------------------------------------------------- #
+# Phase D.10 — Kaizen convention feedback (FR-CAR-9)
+# --------------------------------------------------------------------------- #
+
+def test_kaizen_convention_cause_to_suggestion_registered():
+    from startd8.contractors.prime_postmortem import CAUSE_TO_SUGGESTION
+
+    entry = CAUSE_TO_SUGGESTION.get("requirement_convention_gap")
+    assert entry is not None, "convention gap must feed Kaizen (FR-CAR-9)"
+    assert entry["phase"] == "draft"
+    hint = entry["hint"]
+    assert "FastAPI" in hint and "SQLModel" in hint and "app.tables" in hint
+    assert "Flask" in hint and "session.query" in hint  # negatives in the next-run hint

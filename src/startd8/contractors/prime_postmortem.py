@@ -535,6 +535,20 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "('invent X -> use Y')."
         ),
     },
+    # FR-CAR-9 — house-style (convention) violation surfaced by convention-aware repair
+    # (repair.convention). Feeds recurring per-tier convention failures back into generation so the
+    # next run adheres to the deterministic-generator house style (the RUN-028 class). Pairs with the
+    # complexity-classifier signal (postmortem A1 / deterministic-first review D3).
+    "requirement_convention_gap": {
+        "phase": "draft",
+        "hint": (
+            "Follow the generated-app house style exactly: FastAPI (APIRouter/Depends/HTMLResponse), "
+            "SQLModel access (session.exec(select(...)) / session.get(Model, id)), and "
+            "Jinja2Templates/TemplateResponse. Do NOT use Flask, session.query(...), or "
+            "render_template(...); import SQLModel tables from app.tables (app.models is Pydantic "
+            "*Schema only)."
+        ),
+    },
     # RUN-008 FR-10 — cross-feature contract divergence (Prisma↔Zod). The
     # categories below match SymmetryViolation.kind so the Kaizen loop maps
     # them directly.
