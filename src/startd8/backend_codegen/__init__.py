@@ -25,6 +25,13 @@ from .derived import (
 )
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
 from .htmx_generator import render_ui, render_web
+from .pages_generator import (
+    parse_pages,
+    render_pages,
+    render_pages_router,
+    render_page_shell,
+)
+from .pages_authoring import render_authoring
 from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
@@ -41,6 +48,11 @@ __all__ = [
     "render_spine",
     "render_web",
     "render_ui",
+    "parse_pages",
+    "render_pages",
+    "render_pages_router",
+    "render_page_shell",
+    "render_authoring",
     "render_export",
     "render_ai_schemas",
     "render_completeness",

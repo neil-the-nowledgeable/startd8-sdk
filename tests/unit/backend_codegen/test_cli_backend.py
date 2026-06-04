@@ -115,6 +115,68 @@ def test_pilot_regen_is_zero_cost_and_gate_green(tmp_path):
     assert "in_sync" in chk.output
 
 
+PAGES = """\
+pages:
+  - slug: "/"
+    title: "Home"
+    nav_label: "Home"
+    content: pages/home.md
+"""
+
+
+def _with_pages(tmp_path):
+    schema = _schema(tmp_path)
+    (tmp_path / "prisma" / "pages.yaml").write_text(PAGES, encoding="utf-8")
+    (tmp_path / "app" / "pages").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "pages" / "home.md").write_text("# Home\n\nHi.\n", encoding="utf-8")
+    return schema
+
+
+def test_generate_with_pages_then_recheck_in_sync(tmp_path):
+    schema = _with_pages(tmp_path)
+    pages = tmp_path / "prisma" / "pages.yaml"
+    gen = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--pages", str(pages), "--out", str(tmp_path)],
+    )
+    assert gen.exit_code == 0, gen.output
+    assert (tmp_path / "app/pages.py").exists()
+    assert (tmp_path / "app/templates/pages/home.html").exists()
+    assert "<nav" in (tmp_path / "app/templates/base.html").read_text()
+    chk = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--pages", str(pages), "--out", str(tmp_path), "--check"],
+    )
+    assert chk.exit_code == 0, chk.output
+    assert "in_sync" in chk.output
+
+
+def test_pages_authoring_requires_pages(tmp_path):
+    schema = _schema(tmp_path)
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--out", str(tmp_path), "--pages-authoring"],
+    )
+    assert result.exit_code != 0
+    assert "requires --pages" in result.output
+
+
+def test_generate_with_pages_authoring_emits_ui_and_pyyaml(tmp_path):
+    schema = _with_pages(tmp_path)
+    pages = tmp_path / "prisma" / "pages.yaml"
+    gen = runner.invoke(
+        generate_app,
+        [
+            "backend", "--schema", str(schema), "--pages", str(pages),
+            "--pages-authoring", "--out", str(tmp_path),
+        ],
+    )
+    assert gen.exit_code == 0, gen.output
+    assert (tmp_path / "app/pages_admin.py").exists()
+    assert (tmp_path / "app/pages_io.py").exists()
+    assert "pyyaml" in (tmp_path / "requirements.txt").read_text()
+
+
 def test_check_detects_handedit(tmp_path):
     schema = _schema(tmp_path)
     runner.invoke(

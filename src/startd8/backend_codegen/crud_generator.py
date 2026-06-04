@@ -180,7 +180,12 @@ def render_db(schema_text: str, source_file: str = "prisma/schema.prisma") -> st
 
 
 def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
-    """Render ``app/main.py`` — the FastAPI app, init_db on startup, JSON + HTML routers mounted."""
+    """Render ``app/main.py`` — the FastAPI app, init_db on startup, JSON + HTML routers mounted.
+
+    Content pages are an optional layer: ``app/pages.py`` is emitted only by
+    ``generate backend --pages``. The mount below is **tolerant** (present in every app, a no-op when
+    ``app/pages.py`` is absent) so ``main.py`` stays a single deterministic, schema-only artifact —
+    no pages-awareness leaks into its drift hash."""
     sha = schema_sha256(schema_text)
     header = _header(source_file, sha, "fastapi-main")
     body = (
@@ -197,7 +202,19 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         'app = FastAPI(title="StartDate", lifespan=lifespan)\n\n'
         "for _router in all_routers:\n"
         "    app.include_router(_router)\n"
-        "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n"
+        "app.include_router(web_router)  # server-rendered HTMX UI at /ui/*\n\n"
+        "try:  # optional content-pages layer (generate backend --pages)\n"
+        "    from .pages import pages_router\n"
+        "except ModuleNotFoundError:\n"
+        "    pages_router = None\n"
+        "if pages_router is not None:\n"
+        "    app.include_router(pages_router)  # home / and content slugs\n\n"
+        "try:  # optional page-authoring UI (generate backend --pages-authoring)\n"
+        "    from .pages_admin import pages_admin_router\n"
+        "except ModuleNotFoundError:\n"
+        "    pages_admin_router = None\n"
+        "if pages_admin_router is not None:\n"
+        "    app.include_router(pages_admin_router)  # /ui/pages authoring screens\n"
     )
     return header + "\n\n" + body
 

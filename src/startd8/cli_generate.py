@@ -127,6 +127,20 @@ def backend(
         help="After writing, boot app.main:app in a subprocess and assert it serves "
         "/openapi.json (C-6 runtime gate — catches import errors compileall misses).",
     ),
+    pages: Optional[Path] = typer.Option(
+        None,
+        "--pages",
+        help="Path to pages.yaml. When given, also generate owned content pages "
+        "(app/pages.py + page templates) and inject a nav into base.html. Prose lives in "
+        "app/pages/*.md (rendered at generate time; outside the drift hash).",
+    ),
+    pages_authoring: bool = typer.Option(
+        False,
+        "--pages-authoring",
+        help="Also generate the in-app page-authoring UI (/ui/pages) that safely edits "
+        "pages.yaml + app/pages/*.md from a web form. Requires --pages; adds pyyaml to the "
+        "generated app's runtime deps. Pages still publish on the next generate (design-time author).",
+    ),
     ai_passes: Optional[Path] = typer.Option(
         None,
         "--ai-passes",
@@ -168,24 +182,38 @@ def backend(
 
     manifest_text: Optional[str] = None
     human_text: Optional[str] = None
-    for label, path, dest in (("ai_passes", ai_passes, "manifest"), ("human_inputs", human_inputs, "human")):
+    pages_text: Optional[str] = None
+    _reads = {"manifest": None, "human": None, "pages": None}
+    for label, path, dest in (
+        ("ai_passes", ai_passes, "manifest"),
+        ("human_inputs", human_inputs, "human"),
+        ("pages", pages, "pages"),
+    ):
         if path is None:
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            _reads[dest] = path.read_text(encoding="utf-8")
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-        if dest == "manifest":
-            manifest_text = text
-        else:
-            human_text = text
+    manifest_text, human_text, pages_text = (
+        _reads["manifest"],
+        _reads["human"],
+        _reads["pages"],
+    )
 
     if ai_agent_spec and manifest_text is None:
         console.print(
             "[yellow]warning:[/yellow] --ai-agent-spec is ignored without "
             "--ai-passes (no AI layer is generated)."
         )
+
+    if pages_authoring and pages_text is None:
+        console.print(
+            "[red]error:[/red] --pages-authoring requires --pages "
+            "(the authoring UI edits the pages.yaml manifest)."
+        )
+        raise typer.Exit(_EXIT_ERROR)
 
     try:
         artifacts = render_backend(
@@ -194,10 +222,15 @@ def backend(
             manifest_text=manifest_text,
             human_inputs_text=human_text,
             ai_agent_spec=ai_agent_spec,
+            pages_text=pages_text,
+            # On --check we don't render the untracked prose fragments (they need the .md on disk
+            # and never participate in drift); on write we do, reading app/pages/*.md under --out.
+            pages_app_dir=None if check else (out / "app"),
+            authoring=pages_authoring,
         )
     except (
         ValueError
-    ) as exc:  # reserved attr name / malformed ai_passes manifest — fail loud
+    ) as exc:  # reserved attr name / malformed ai_passes/pages manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
@@ -214,6 +247,7 @@ def backend(
                 source_file=source_label,
                 manifest_text=manifest_text,
                 human_inputs_text=human_text,
+                pages_text=pages_text,
             )
             if result.status != "in_sync":
                 drifted += 1

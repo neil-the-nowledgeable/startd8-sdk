@@ -30,6 +30,8 @@ _HEADER_ENTITY_RE = re.compile(r"#\s*startd8-entity:\s*(\S+)")
 _HEADER_PASSES_SHA_RE = re.compile(r"#\s*passes-sha256:\s*([0-9a-f]{64})")
 _HEADER_HUMAN_SHA_RE = re.compile(r"#\s*human-inputs-sha256:\s*([0-9a-f]{64})")
 _HEADER_AI_AGENT_RE = re.compile(r"#\s*ai-agent-spec:\s*(\S+)")
+# Content-page artifacts derive from one extra input (pages.yaml) and carry one extra hash.
+_HEADER_PAGES_SHA_RE = re.compile(r"#\s*pages-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
 
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
@@ -37,6 +39,10 @@ _GENERATED_MARKER = "# GENERATED from"
 _AI_KINDS: frozenset = frozenset(
     {"ai-service", "ai-edge-schemas", "ai-pass", "ai-router", "ai-server"}
 )
+
+# Artifact kinds whose drift derives from two inputs (schema + pages.yaml). Kept in sync with
+# ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load).
+_PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
 
 
 def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
@@ -63,6 +69,11 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
         render_list_template,
         render_web,
     )
+    from .pages_authoring import (
+        render_pages_admin,
+        render_pages_admin_template,
+        render_pages_io,
+    )
     from .pydantic_renderer import render_pydantic_models
     from .sqlmodel_renderer import render_sqlmodel_tables
 
@@ -86,6 +97,10 @@ def _renderers() -> Dict[str, Callable[[str, str, Optional[str]], str]]:
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
         "python-completeness": lambda s, sf, e: render_completeness(s, sf),
         "python-requirements": lambda s, sf, e: render_requirements(s, sf),
+        "python-requirements-authoring": lambda s, sf, e: render_requirements(s, sf, authoring=True),
+        "pages-io": lambda s, sf, e: render_pages_io(s, sf),
+        "pages-admin": lambda s, sf, e: render_pages_admin(s, sf),
+        "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),
     }
 
 
@@ -131,6 +146,12 @@ def embedded_passes_sha(ondisk_text: str) -> Optional[str]:
 def embedded_human_sha(ondisk_text: str) -> Optional[str]:
     """The ``human-inputs-sha256`` recorded in an AI-layer file's header, or ``None``."""
     m = _HEADER_HUMAN_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_pages_sha(ondisk_text: str) -> Optional[str]:
+    """The ``pages-sha256`` recorded in a content-page file's header, or ``None``."""
+    m = _HEADER_PAGES_SHA_RE.search(ondisk_text or "")
     return m.group(1) if m else None
 
 
@@ -257,6 +278,70 @@ def _check_ai_drift(
     return DriftResult("in_sync", IN_SYNC, "owned AI file matches schema + manifest + human-inputs")
 
 
+def pages_stale_reason(
+    ondisk_text: str, *, schema_sha: str, pages_sha: str
+) -> Optional[str]:
+    """For a content-page file, return why it is **stale**, or ``None`` if both inputs match.
+
+    A content-page artifact derives from two inputs (schema + pages.yaml), so it is stale if **either**
+    embedded hash differs from the current input hash. A missing embedded hash counts as stale. The
+    page prose is deliberately not an input, so editing a ``.md`` never reaches here.
+    """
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("pages", embedded_pages_sha(ondisk_text), pages_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
+def _pages_renderers():
+    """Map content-page kind → a ``(schema, pages, source_file, entity) -> text`` renderer."""
+    from .htmx_generator import render_base_template
+    from .pages_generator import render_page_shell, render_pages_router
+
+    return {
+        "pages-base": lambda s, p, sf, e: render_base_template(s, sf, p),
+        "pages-router": lambda s, p, sf, e: render_pages_router(s, p, sf),
+        "pages-content": lambda s, p, sf, e: render_page_shell(s, p, sf, e),
+    }
+
+
+def _check_pages_drift(
+    schema_text, pages_text, ondisk_text, source_file, kind
+) -> DriftResult:
+    """Drift for a content-page file: stale if schema or pages.yaml changed; else byte re-render."""
+    if pages_text is None:
+        return DriftResult(
+            "error", ERROR, "content-page drift check requires the pages manifest"
+        )
+    reason = pages_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        pages_sha=schema_sha256(pages_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    renderer = _pages_renderers().get(kind)
+    if renderer is None:
+        return DriftResult("tampered", DRIFT, f"unknown content-page kind ({kind!r})")
+    rendered = renderer(schema_text, pages_text, source_file, embedded_entity(ondisk_text))
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned content-page file was hand-edited (differs from a fresh render of the unchanged inputs)",
+        )
+    return DriftResult("in_sync", IN_SYNC, "owned content-page file matches schema + pages")
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
@@ -264,13 +349,15 @@ def check_drift(
     source_file: str = "prisma/schema.prisma",
     manifest_text: Optional[str] = None,
     human_inputs_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
     ``ondisk_text is None`` means the file is absent (drift — it should exist). Otherwise: a
     missing/old embedded hash means tampered/stale; matching hash with differing bytes means
     tampered; matching hash and bytes means in-sync. AI-layer kinds (``_AI_KINDS``) derive from three
-    inputs and are routed to the three-hash check (needs *manifest_text*/*human_inputs_text*).
+    inputs and route to the three-hash check (needs *manifest_text*/*human_inputs_text*); content-page
+    kinds (``_PAGES_KINDS``) derive from two inputs and route to the two-hash check (needs *pages_text*).
     """
     if ondisk_text is None:
         return DriftResult("missing", DRIFT, "owned file does not exist on disk")
@@ -280,6 +367,8 @@ def check_drift(
         return _check_ai_drift(
             schema_text, manifest_text, human_inputs_text, ondisk_text, source_file, kind
         )
+    if kind in _PAGES_KINDS:
+        return _check_pages_drift(schema_text, pages_text, ondisk_text, source_file, kind)
 
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)

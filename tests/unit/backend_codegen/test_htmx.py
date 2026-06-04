@@ -106,6 +106,50 @@ def test_number_widget_for_float_field():
     assert '<input type="number" step="any" name="value"' in form
 
 
+# Schema carrying the full provenance/timestamp set, to exercise FR-PG-5 omission.
+PROV_SCHEMA = """\
+model Profile {
+  id        String   @id
+  name      String
+  title     String?
+  ownerId   String
+  source    String
+  confirmed Boolean
+  createdAt DateTime
+  updatedAt DateTime
+}
+"""
+
+_SYSTEM_FIELDS = ("id", "ownerId", "source", "confirmed", "createdAt", "updatedAt")
+
+
+def test_form_omits_system_and_provenance_fields():
+    form = render_form_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
+    # human-authored fields are present...
+    assert '<label for="f-name">name</label>' in form
+    assert '<label for="f-title">title</label>' in form
+    # ...and every system/provenance/timestamp field is gone (FR-PG-5)
+    for sysf in _SYSTEM_FIELDS:
+        assert f'name="{sysf}"' not in form, sysf
+        assert f'id="f-{sysf}"' not in form, sysf
+
+
+def test_web_create_rules_exclude_system_fields():
+    web = render_web(PROV_SCHEMA)
+    compile(web, "<web>", "exec")
+    assert '"name": ("text", True)' in web
+    # the create/update/validate rule map must not carry system fields
+    for sysf in _SYSTEM_FIELDS:
+        assert f'"{sysf}":' not in web, sysf
+
+
+def test_list_still_shows_system_fields_for_readonly_display():
+    # FR-PG-5 is forms-only: read-only list/detail still surface createdAt etc.
+    lst = render_list_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
+    assert "{{ item.createdAt }}" in lst
+    assert "{{ item.id }}" in lst
+
+
 def test_list_template_has_rows_and_delete():
     lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
     assert "{% for item in items %}" in lst

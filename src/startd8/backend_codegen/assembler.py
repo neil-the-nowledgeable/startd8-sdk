@@ -8,6 +8,7 @@ backend`` (Step 7) and the pilot (Step 8).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .crud_generator import (
@@ -29,6 +30,9 @@ def render_backend(
     manifest_text: Optional[str] = None,
     human_inputs_text: Optional[str] = None,
     ai_agent_spec: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    pages_app_dir: Optional[Path] = None,
+    authoring: bool = False,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -53,11 +57,19 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
     ]
-    out.extend(render_ui(schema_text, source_file))  # app/web.py + templates
+    out.extend(render_ui(schema_text, source_file, pages_text))  # app/web.py + templates (+ nav)
     out.extend(
         render_derived(schema_text, source_file)
     )  # export / ai_schemas / completeness
-    out.append(("requirements.txt", render_requirements(schema_text, source_file)))
+    out.append(("requirements.txt", render_requirements(schema_text, source_file, authoring=authoring)))
+    if pages_text:
+        from .pages_generator import render_pages
+
+        out.extend(render_pages(schema_text, pages_text, source_file, app_dir=pages_app_dir))
+        if authoring:
+            from .pages_authoring import render_authoring
+
+            out.extend(render_authoring(schema_text, source_file))
     if manifest_text:
         from .ai_layer import render_ai_layer
 

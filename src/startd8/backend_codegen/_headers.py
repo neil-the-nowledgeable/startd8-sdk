@@ -23,6 +23,56 @@ def header_standard(source_file: str, sha: str, kind: str) -> str:
     )
 
 
+def header_pages(
+    source_file: str,
+    schema_sha: str,
+    pages_sha: str,
+    kind: str,
+) -> str:
+    """Content-pages provenance header — derives from two inputs (schema + pages.yaml), two hashes.
+
+    Drift on a content-page artifact is **stale if either** the schema or ``pages.yaml`` changes (see
+    :func:`startd8.backend_codegen.drift.pages_stale_reason`). The page *prose* (``app/pages/*.md``)
+    is deliberately **not** an input here — it lives only in the untracked rendered body fragment, so
+    editing prose never flags drift (mirrors the ai-passes prompt rule).
+    """
+    return (
+        f"# GENERATED from {source_file} (+ pages.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the pages manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# pages-sha256: {pages_sha}"
+    )
+
+
+def header_pages_tmpl(
+    source_file: str,
+    schema_sha: str,
+    pages_sha: str,
+    kind: str,
+    entity: str = "",
+) -> str:
+    """:func:`header_pages` wrapped in a Jinja ``{# … #}`` comment for ``.html`` page templates.
+
+    Same two-hash provenance as :func:`header_pages`, but invisible at render time. ``entity`` carries
+    the page slug-name in the ``startd8-entity`` slot so drift re-renders the right page template.
+    """
+    lines = [
+        "{#",
+        f"# GENERATED from {source_file} (+ pages.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+    ]
+    if entity:
+        lines.append(f"# startd8-entity: {entity}")
+    lines.append("# Source of truth: the Prisma schema and the pages manifest.")
+    lines.append(f"# schema-sha256: {schema_sha}")
+    lines.append(f"# pages-sha256: {pages_sha}")
+    lines.append("#}")
+    return "\n".join(lines)
+
+
 def header_ai_layer(
     source_file: str,
     schema_sha: str,

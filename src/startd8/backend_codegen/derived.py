@@ -150,16 +150,25 @@ _RUNTIME_REQUIREMENTS: List[str] = [
 
 
 def render_requirements(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str, source_file: str = "prisma/schema.prisma", *, authoring: bool = False
 ) -> str:
     """Render ``requirements.txt`` — the generated app's pinned-by-stack runtime deps.
 
     A ``#``-comment GENERATED header (pip ignores comment lines) keeps it owned/drift-tracked like
-    the rest of the spine, even though the dep set is fixed rather than schema-derived.
+    the rest of the spine, even though the dep set is fixed rather than schema-derived. With
+    *authoring* (``--pages-authoring``) the page-authoring routes read/validate ``pages.yaml`` at
+    runtime, so ``pyyaml`` is added (NFR-UI-4) — only then; the content-page render itself stays
+    dependency-free.
     """
     sha = schema_sha256(schema_text)
-    header = _header(source_file, sha, "python-requirements")
-    body = "\n".join(_RUNTIME_REQUIREMENTS)
+    # A distinct kind when authoring is on, so the (flag-unaware) drift re-render dispatches to the
+    # matching variant instead of false-flagging the extra dep as tampering.
+    kind = "python-requirements-authoring" if authoring else "python-requirements"
+    header = _header(source_file, sha, kind)
+    reqs = list(_RUNTIME_REQUIREMENTS)
+    if authoring:
+        reqs.append("pyyaml  # page-authoring UI reads/validates pages.yaml at runtime")
+    body = "\n".join(reqs)
     return header + "\n\n" + body + "\n"
 
 

@@ -24,10 +24,11 @@ PK get list + create only (no by-id routes), mirroring the CRUD generator.
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
+from .ai_layer import _PROVENANCE_OMIT
 from .crud_generator import _model_names, _pk_field
 
 # ----------------------------------------------------------------------------- #
@@ -84,8 +85,24 @@ def _field_kind(field: PrismaField, schema: PrismaSchema) -> str:
 
 
 def _form_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
-    """Scalar fields shown in the form (all scalars; the PK is included but hidden on edit)."""
+    """All scalar fields — used for read-only display (list/detail), where system fields are fine."""
     return list(schema.scalar_fields(name))
+
+
+def _writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
+    """Scalar fields a *human* authors in a form (FR-PG-5).
+
+    Drops the PK and the server-managed provenance/timestamp columns so users are never asked to
+    hand-type a CUID or ISO timestamps. Reuses the exact omission set the AI edge schema already
+    applies (``ai_layer._PROVENANCE_OMIT`` + ``f.is_id``) — same policy, not a new one. These columns
+    are auto-managed on create (id cuid default, ``ownerId``/``source``/``confirmed``/timestamps via
+    table defaults), exactly as the AI ``_persist`` path relies on.
+    """
+    return [
+        f
+        for f in schema.scalar_fields(name)
+        if not f.is_id and f.name not in _PROVENANCE_OMIT
+    ]
 
 
 def _is_required(field: PrismaField) -> bool:
@@ -99,10 +116,23 @@ def _is_required(field: PrismaField) -> bool:
 
 
 def render_base_template(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    pages_text: Optional[str] = None,
 ) -> str:
+    """The shared base layout. With *pages_text* it carries the manifest ``<nav>`` (kind ``pages-base``,
+    2-hash header) so the nav appears on **every** page (entity + content); without it, the nav-less
+    schema-only base (kind ``htmx-base``)."""
     sha = schema_sha256(schema_text)
-    head = _tmpl_header(source_file, sha, "htmx-base")
+    if pages_text is not None:
+        from ._headers import header_pages_tmpl
+        from .pages_generator import build_nav_html
+
+        head = header_pages_tmpl(source_file, sha, schema_sha256(pages_text), "pages-base")
+        nav = build_nav_html(pages_text)
+    else:
+        head = _tmpl_header(source_file, sha, "htmx-base")
+        nav = ""
     body = (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -111,7 +141,8 @@ def render_base_template(
         "  <title>{% block title %}StartDate{% endblock %}</title>\n"
         '  <script src="https://unpkg.com/htmx.org@2.0.3"></script>\n'
         "</head>\n<body>\n"
-        "  <main>{% block content %}{% endblock %}</main>\n"
+        + nav
+        + "  <main>{% block content %}{% endblock %}</main>\n"
         "</body>\n</html>\n"
     )
     return head + "\n" + body
@@ -245,7 +276,7 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
     sha = schema_sha256(schema_text)
     e = entity.lower()
     pk = _pk_field(schema, entity)
-    fields = _form_fields(schema, entity)
+    fields = _writable_fields(schema, entity)  # forms expose only human-authored fields (FR-PG-5)
     head = _tmpl_header(source_file, sha, "htmx-form", entity)
 
     # One template serves create (item is None) and edit (item set); action differs.
@@ -320,7 +351,7 @@ def _field_error(kind: str, required: bool, raw: str) -> str:
 def _entity_routes(schema: PrismaSchema, name: str) -> str:
     e = name.lower()
     pk = _pk_field(schema, name)
-    fields = _form_fields(schema, name)
+    fields = _writable_fields(schema, name)  # create/update + validation cover human-authored fields only
     # field -> (kind, required) rules; list scalars use the "text-list" coercion kind.
     rule_items = []
     for f in fields:
@@ -454,16 +485,20 @@ def render_web(schema_text: str, source_file: str = "prisma/schema.prisma") -> s
 
 
 def render_ui(
-    schema_text: str, source_file: str = "prisma/schema.prisma"
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    pages_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
-    """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates."""
+    """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
+
+    *pages_text* (when content pages are enabled) makes ``base.html`` carry the manifest nav."""
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
 
     out: List[Tuple[str, str]] = [
         ("app/web.py", render_web(schema_text, source_file)),
-        ("app/templates/base.html", render_base_template(schema_text, source_file)),
+        ("app/templates/base.html", render_base_template(schema_text, source_file, pages_text)),
         (
             "app/templates/_field_error.html",
             render_field_error_template(schema_text, source_file),
