@@ -114,7 +114,15 @@
     measured adherence ≥ `cfg.injection_adherence_min` for that class. *Exit 4:* a convention-strict target
     routes off the cheap tier until injection efficacy is demonstrated, then earns it back.
 
-### Phase 5 — Measurement gate + ramp (FR-MPF-5)
+### Phase 5 — Measurement gate + ramp (FR-MPF-5) — 🟡 FIRST RUN DONE (inconclusive)
+> **Run 1 (2026-06-04, N=10, `ollama:startd8-coder`, lead-path shape) — see
+> `MICRO_PRIME_FIDELITY_ADHERENCE_RESULTS_2026-06-04.md`.** The clean cloud lift does **not** transfer to
+> the fine-tuned local model: injection decisively fixes the field-invention case (PI-004 0.10→**1.00**)
+> but the aggregate is mixed — Gap A 0.50→0.85 (below 0.90), **Gap B 0.90→0.85 (negative)**, two cases
+> regressed (within N=10 noise, not dismissed). **Decision: FR-MPF-3/4 thresholds stay DISABLED** — the
+> data does not justify routing changes, and FR-MPF-4's route-away rationale weakens. **Run 2 (in progress):
+> `--prompt-shape microprime --seeds 30`** — the lead-path verbosity is the prime suspect for the
+> regressions on a small model; the terse micro-prime framing + N=30 resolves it.
 14. Define the structural-adherence metric + class granularity + N (OQ-6). Hold FR-MPF-3/4 thresholds at
     permissive/advisory until Phase 1's lift is measured; tighten on the **residual** failures. State the
     numeric flip precondition (mirror FR-CAR-11). *Exit 5:* thresholds move only behind recorded measurement.

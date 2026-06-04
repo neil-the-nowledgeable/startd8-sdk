@@ -20,6 +20,12 @@
 > now satisfied by `tests/unit/test_forward_manifest_validate_implementation.py` and the
 > real-manifest `test_reviewer.py` case. See REQUIREMENTS FR-3 (rewritten) and Appendix C R2.
 
+> **✅ Fix 1 (the "missing append") SHIPPED — re-verified 2026-06-04.** The append that §1/§2 below call
+> "the structural defect" / "add the missing line" is now present: `spec_builder.py:1217`
+> `prioritized.append((0, "forward_manifest", forward_contracts_section))` (section built `:1210-1238`).
+> The `1113-1139` refs below are pre-growth line numbers; the "wiring is half-built" framing is the
+> planning-time narrative, **not current state** — the wiring is complete.
+
 Grounded in a deep read of `spec_builder.py`, `forward_manifest.py`,
 `forward_manifest_extractor.py`, and `reviewer.py`. The headline finding from planning:
 **the wiring is already half-built.**

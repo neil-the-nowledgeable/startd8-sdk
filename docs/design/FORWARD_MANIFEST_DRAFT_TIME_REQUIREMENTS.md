@@ -9,6 +9,15 @@ is now implemented + tested**
 **Component:** startd8 SDK — `implementation_engine/spec_builder.py` + `forward_manifest_extractor.py`
 **Triggered by:** `RUN_003_FORWARD_MANIFEST_GAP_POSTMORTEM.md`
 
+> **✅ MVP SHIPPED — re-verified 2026-06-04.** All three MVP FRs are live in the code:
+> **FR-1** spec-prompt injection (the P0 `prioritized.append((0, "forward_manifest", …))` at
+> `spec_builder.py:1217`; section built at `:1210-1238`), **FR-2** (`forward_manifest.section.empty`
+> INFO at `spec_builder.py:1231`), **FR-3** (`ForwardManifest.validate_implementation` at
+> `forward_manifest.py:518`). The present-tense "the missing append" / "the structural defect" language
+> retained in §0/§1/§2 below is the **planning-time narrative** (kept per the reflective-loop discipline),
+> **not open work**. Body line numbers (e.g. `1113-1139`) predate later growth of `spec_builder.py` —
+> the canonical current refs are in this banner.
+
 > Convert the Forward Manifest from a **post-hoc validator** into a **draft-time guide**,
 > and make sure the most common framework-config target files have a non-empty contract by
 > default. Two scopes that compose into one capability.
