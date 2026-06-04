@@ -12,8 +12,10 @@ not need to thread the report through ``TaskEnrichment``.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 from startd8.logging_config import get_logger
 
@@ -21,6 +23,53 @@ from .gate import SapperGateResult, run_sapper_gate
 from .report import build_injection_block, emit_metrics, write_report
 
 logger = get_logger(__name__)
+
+SEED_NAME = "artisan-context-seed.json"
+
+
+def load_from_ingestion_seed(seed_or_dir: str) -> Tuple[object, Dict[str, str]]:
+    """Load the ``ForwardManifest`` + ``skeleton_sources`` from a plan-ingestion output.
+
+    Accepts either the ``artisan-context-seed.json`` path or its containing directory. The EMIT
+    step persists ``skeleton_sources`` (and, when present, ``forward_manifest``) under the seed's
+    ``artifacts`` block. If the full manifest was not persisted, a *minimal* manifest is
+    reconstructed from the skeleton paths so the bore + convention route still run (the
+    cross-contract / per-element lenses need the full manifest — see the emitter enhancement).
+
+    Returns ``(manifest, skeleton_sources)``. ``manifest`` is ``None`` and ``skeleton_sources``
+    empty if the seed has no EMIT artifacts — the gate then emits a loud ``input_absent`` report.
+    """
+    p = Path(seed_or_dir)
+    seed_path = p / SEED_NAME if p.is_dir() else p
+    if not seed_path.is_file():
+        logger.warning("ingestion seed not found: %s", seed_path)
+        return None, {}
+
+    seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    artifacts = seed.get("artifacts", {}) or {}
+    skeleton_sources: Dict[str, str] = dict(artifacts.get("skeleton_sources") or {})
+    if not skeleton_sources:
+        logger.warning("seed %s has no skeleton_sources (pre-EMIT or no extractable plan)", seed_path)
+        return None, {}
+
+    manifest = _load_manifest(artifacts, skeleton_sources)
+    return manifest, skeleton_sources
+
+
+def _load_manifest(artifacts: dict, skeleton_sources: Dict[str, str]):
+    from startd8.forward_manifest import ForwardFileSpec, ForwardManifest
+
+    fm = artifacts.get("forward_manifest")
+    if isinstance(fm, dict):
+        try:
+            return ForwardManifest.model_validate(fm)
+        except Exception as exc:  # tolerate schema drift — fall back to minimal
+            logger.info("forward_manifest in seed failed validation (%s); using minimal manifest", exc)
+    # Minimal manifest: enough for the bore + convention route (which read skeleton text),
+    # while cross-contract / per-element lenses simply find nothing on empty file_specs.
+    return ForwardManifest(
+        file_specs={path: ForwardFileSpec(file=path) for path in skeleton_sources}
+    )
 
 
 @dataclass

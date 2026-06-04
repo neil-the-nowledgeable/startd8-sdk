@@ -540,6 +540,15 @@ class MicroPrimeCodeGenerator:
                 "Ollama unavailable — SIMPLE elements will be escalated to fallback",
             )
 
+        # FR-SAP-12: fold any pre-execution Sapper findings for these files into the context so
+        # micro-prime is warned (no-op unless a sapper report is configured; never raises).
+        try:
+            from startd8.sapper.injection import populate_gen_context
+
+            populate_gen_context(context, target_files)
+        except Exception:  # pragma: no cover - defensive; injection must never break generation
+            pass
+
         mp_context = MicroPrimeContext.from_prime(
             context, manifest, target_files, ollama_ok,
         )

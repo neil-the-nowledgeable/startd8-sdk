@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from startd8.sapper.fde import (
-    CachingFde,
-    FdeAnswer,
-    FdeQuestion,
-    FdeVerdict,
-    NullFde,
-    ProjectKnowledgeFde,
+from startd8.sapper.ground_truth import (
+    CachingOracle,
+    GroundTruthAnswer,
+    GroundTruthQuestion,
+    GroundTruthVerdict,
+    NullOracle,
+    ProjectKnowledgeOracle,
 )
 from startd8.sapper.models import AssumptionKind
 
@@ -18,12 +18,12 @@ pytestmark = pytest.mark.unit
 
 
 def _q(kind, module="", symbol=""):
-    return FdeQuestion(assumption_id="a1", kind=kind, claim="c", module=module, symbol=symbol)
+    return GroundTruthQuestion(assumption_id="a1", kind=kind, claim="c", module=module, symbol=symbol)
 
 
 def test_null_fde_always_omits():
-    ans = NullFde().answer(_q(AssumptionKind.FRAMEWORK_IDIOM))
-    assert ans.verdict is FdeVerdict.OMIT
+    ans = NullOracle().answer(_q(AssumptionKind.FRAMEWORK_IDIOM))
+    assert ans.verdict is GroundTruthVerdict.OMIT
 
 
 def test_project_knowledge_fde_refutes_known_negative():
@@ -37,9 +37,9 @@ def test_project_knowledge_fde_refutes_known_negative():
         enums=(),
         omissions=(),
     )
-    fde = ProjectKnowledgeFde(pk)
+    fde = ProjectKnowledgeOracle(pk)
     ans = fde.answer(_q(AssumptionKind.MODULE_SOURCE, module="app.models"))
-    assert ans.verdict is FdeVerdict.REFUTED
+    assert ans.verdict is GroundTruthVerdict.REFUTED
     assert "app.tables" in ans.evidence
 
 
@@ -49,8 +49,8 @@ def test_project_knowledge_fde_omits_unknown_module():
     pk = ProjectKnowledge(
         project_root=".", field_sets=(), interfaces=(), negatives=(), enums=(), omissions=()
     )
-    ans = ProjectKnowledgeFde(pk).answer(_q(AssumptionKind.MODULE_SOURCE, module="whatever"))
-    assert ans.verdict is FdeVerdict.OMIT
+    ans = ProjectKnowledgeOracle(pk).answer(_q(AssumptionKind.MODULE_SOURCE, module="whatever"))
+    assert ans.verdict is GroundTruthVerdict.OMIT
 
 
 def test_framework_idiom_omits_on_python_graph():
@@ -59,8 +59,8 @@ def test_framework_idiom_omits_on_python_graph():
     pk = ProjectKnowledge(
         project_root=".", field_sets=(), interfaces=(), negatives=(), enums=(), omissions=()
     )
-    ans = ProjectKnowledgeFde(pk).answer(_q(AssumptionKind.FRAMEWORK_IDIOM))
-    assert ans.verdict is FdeVerdict.OMIT
+    ans = ProjectKnowledgeOracle(pk).answer(_q(AssumptionKind.FRAMEWORK_IDIOM))
+    assert ans.verdict is GroundTruthVerdict.OMIT
 
 
 def test_caching_fde_queries_inner_once():
@@ -70,10 +70,10 @@ def test_caching_fde_queries_inner_once():
 
         def answer(self, question):
             self.calls += 1
-            return FdeAnswer.omit()
+            return GroundTruthAnswer.omit()
 
     inner = Counting()
-    cached = CachingFde(inner)
+    cached = CachingOracle(inner)
     q = _q(AssumptionKind.MODULE_SOURCE, module="m")
     cached.answer(q)
     cached.answer(q)

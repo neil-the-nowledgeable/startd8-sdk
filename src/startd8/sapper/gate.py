@@ -19,7 +19,7 @@ from startd8.logging_config import get_logger
 from .convention_route import run_convention_route
 from .cross_contract import run_cross_contract
 from .extractor import shared_files as compute_shared_files
-from .fde import FdeQuestion, FdeQuery, FdeTimeout, FdeVerdict, NullFde
+from .ground_truth import GroundTruthQuestion, GroundTruthQuery, GroundTruthTimeout, GroundTruthVerdict, NullOracle
 from .models import (
     AssumptionKind,
     AssumptionVerdict,
@@ -64,7 +64,7 @@ def run_sapper_gate(
     skeleton_sources: Optional[dict],
     project_root: Optional[str] = None,
     *,
-    fde: Optional[FdeQuery] = None,
+    fde: Optional[GroundTruthQuery] = None,
 ) -> SapperGateResult:
     """Run the full pre-execution survey and return the report + (gated-off) block decision."""
     # --- FR-SAP-9: loud degradation on absent EMIT inputs ---
@@ -90,7 +90,7 @@ def run_sapper_gate(
         return SapperGateResult(report=report)
 
     shared = compute_shared_files(manifest)
-    fde = fde or NullFde()
+    fde = fde or NullOracle()
 
     findings: List[FrictionFinding] = []
 
@@ -113,19 +113,19 @@ def run_sapper_gate(
     return SapperGateResult(report=report, blocked=blocked, block_reasons=reasons)
 
 
-def _enrich_with_fde(findings: List[FrictionFinding], fde: FdeQuery) -> List[FrictionFinding]:
+def _enrich_with_fde(findings: List[FrictionFinding], fde: GroundTruthQuery) -> List[FrictionFinding]:
     """Ask the FDE about module-source findings to attach a suggested fix (R4-F5 path)."""
     for f in findings:
-        if f.kind is not AssumptionKind.MODULE_SOURCE or f.suggested_fix:
+        if f.kind is not AssumptionKind.MODULE_SOURCE or f.suggested_fix or not f.symbol:
             continue
-        q = FdeQuestion(
-            assumption_id=f.id, kind=f.kind, claim=f.expected, module="", symbol=f.found or f.expected
+        q = GroundTruthQuestion(
+            assumption_id=f.id, kind=f.kind, claim=f.expected, module=f.symbol, symbol=f.symbol
         )
         try:
             ans = fde.answer(q)
-        except FdeTimeout:
+        except GroundTruthTimeout:
             continue
-        if ans.verdict is FdeVerdict.REFUTED and ans.evidence:
+        if ans.verdict is GroundTruthVerdict.REFUTED and ans.evidence:
             f.suggested_fix = ans.evidence
     return findings
 

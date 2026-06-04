@@ -34,6 +34,11 @@ from .models import (
 )
 
 from .gate import SapperGateResult, run_sapper_gate
+from .ground_truth import (
+    GroundTruthQuery,
+    NullOracle,
+    ProjectKnowledgeOracle,
+)
 from .host import SapperPreflightOutcome, sapper_preflight_hook
 
 __all__ = [
@@ -56,6 +61,10 @@ __all__ = [
     "SapperGateResult",
     "sapper_preflight_hook",
     "SapperPreflightOutcome",
+    # far-side ground-truth oracle (FR-SAP-7; distinct from the SDK-mechanism startd8.fde)
+    "GroundTruthQuery",
+    "ProjectKnowledgeOracle",
+    "NullOracle",
 ]
 
 SAPPER_REPORT_SCHEMA_VERSION = "1.0.0"

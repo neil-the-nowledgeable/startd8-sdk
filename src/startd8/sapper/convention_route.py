@@ -92,6 +92,7 @@ def run_convention_route(
                     line=diag.line,
                     expected=diag.expected,
                     found=diag.symbol,
+                    symbol=diag.symbol,
                     suggested_fix=(diag.expected if diag.safe_fixable else None),
                     context_snippet=_line(src, diag.line),
                     validator_class=ValidatorClass.FDE_QUERY,

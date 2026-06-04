@@ -56,6 +56,61 @@ def build_injection_block(report: FrictionReport, *, limit: int = 12) -> str:
     return "\n".join(lines)
 
 
+def file_blocks(report: FrictionReport) -> Dict[str, str]:
+    """Per-file warning blocks (FR-SAP-12 finding injection).
+
+    Maps ``file path → markdown block`` covering that file's non-VALIDATED findings, ranked.
+    A generation step injects the block for the file it is about to write into that file's
+    spec/draft prompt (lead path) and the micro-prime prompt — so the generator is warned
+    before it reproduces the misalignment. Files with no actionable findings are omitted.
+    """
+    by_file: Dict[str, list] = {}
+    for f in report.ranked:
+        if f.verdict is AssumptionVerdict.VALIDATED:
+            continue
+        by_file.setdefault(f.file, []).append(f)
+    out: Dict[str, str] = {}
+    for path, findings in by_file.items():
+        lines = [
+            "## ⚠️ Pre-execution alignment (Sapper) — heed before implementing this file",
+            "The plan was surveyed against the real codebase. Do NOT reproduce these:",
+        ]
+        for f in findings:
+            tag = f.verdict.value.upper() + (f"/{f.reason.value}" if f.reason else "")
+            fix = f"  → {f.suggested_fix}" if f.suggested_fix else ""
+            lines.append(f"- [{tag}] {f.expected} (found: {f.found}){fix}")
+        out[path] = "\n".join(lines)
+    return out
+
+
+def file_blocks_from_json(report_json: str) -> Dict[str, str]:
+    """Per-file blocks from a persisted ``sapper-friction-report.json`` (no model import needed).
+
+    Lets a generation step inject findings by reading the artifact, without reconstructing the
+    full model — the JSON already carries everything the block needs.
+    """
+    import json
+
+    data = json.loads(report_json)
+    by_file: Dict[str, list] = {}
+    for f in data.get("findings", []):
+        if f.get("verdict") == "validated":
+            continue
+        by_file.setdefault(f.get("file", ""), []).append(f)
+    out: Dict[str, str] = {}
+    for path, findings in by_file.items():
+        lines = [
+            "## ⚠️ Pre-execution alignment (Sapper) — heed before implementing this file",
+            "The plan was surveyed against the real codebase. Do NOT reproduce these:",
+        ]
+        for f in findings:
+            tag = f.get("verdict", "").upper() + (f"/{f['reason']}" if f.get("reason") else "")
+            fix = f"  → {f['suggested_fix']}" if f.get("suggested_fix") else ""
+            lines.append(f"- [{tag}] {f.get('expected', '')} (found: {f.get('found', '')}){fix}")
+        out[path] = "\n".join(lines)
+    return out
+
+
 def emit_metrics(report: FrictionReport, *, meter=None) -> Dict[str, object]:
     """Compute (and best-effort emit) the observability metrics (R2-F4/R1-F6/R5-F5).
 

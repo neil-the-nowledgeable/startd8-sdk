@@ -2606,6 +2606,8 @@ class MicroPrimeEngine:
             constraints.append(_cap_authority_block(context.upstream_interfaces, authority_cap))
         if context.convention_guidance:
             constraints.append(context.convention_guidance)
+        if context.sapper_guidance:  # FR-SAP-12: pre-execution friction warnings (RUN-028 backstop)
+            constraints.append(context.sapper_guidance)
         return self.process_file(
             file_spec,
             context.manifest,

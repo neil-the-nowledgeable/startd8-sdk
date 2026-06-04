@@ -86,6 +86,7 @@ def run_cross_contract(manifest, *, shared_files=None) -> List[FrictionFinding]:
                         fingerprint=finding_fingerprint(kind, str(identity), attr),
                         expected=f"single {attr} for {identity}",
                         found=f"conflict: {a.contract_id}={_short(va)} vs {b.contract_id}={_short(vb)}",
+                        symbol=str(identity),
                         validator_class=ValidatorClass.DETERMINISTIC,
                     )
                 )

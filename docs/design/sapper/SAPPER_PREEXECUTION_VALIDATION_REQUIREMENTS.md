@@ -1,6 +1,6 @@
 # Sapper — Pre-Execution Plan Validation (Tunnel-Alignment Survey) — Requirements
 
-**Version:** 0.6 (Post-plan-pass — companion plan drafted; 4 boundaries tightened; role named **Sapper**)
+**Version:** 0.7 (Post-implementation — FR-SAP-7 reconciled with the shipped `startd8.fde`: ground-truth oracle + compose seam)
 **Date:** 2026-06-04
 **Status:** Draft — no production code yet. v0.1 (pre-planning) corrected against the actual `domain-preflight`,
 `preflight_rules`, `python_toolchain`, `forward_manifest`, `project_knowledge`, and `element_fillability`
@@ -333,7 +333,7 @@ Sapper runs the **alignment survey** at the pseudo-code stage so the miss is cau
   (⇒ `REFUTED` `import_availability`). Per-element findings feed the FR-SAP-3 report. **Valid overrides (R3-F5):**
   the identity/collision check must not `REFUTE` *intentional* shadowing/overrides (a subclass method overriding a
   base, a deliberate built-in shadow) — only true reserved-name / duplicate-definition collisions.
-- **FR-SAP-7 — FDE query interface (defined, not built — NR-1).** Define the FDE as a capability contract:
+- **FR-SAP-7 — Project ground-truth oracle (defined, not built — NR-1).** Define a capability contract:
   `answer(question) → {VALIDATED(evidence) | REFUTED(evidence) | OMIT}`. v1 backs it with `ProjectKnowledge`
   (including its first-class `omissions` list) + a human-escalation channel; `OMIT`/omission ⇒ `UNRESOLVED`.
   Assumptions that are neither deterministically checkable nor pilot-borable (framework/orm idiom on Python,
@@ -341,8 +341,16 @@ Sapper runs the **alignment survey** at the pseudo-code stage so the miss is cau
   contract. **Typed contract (R1-F5):** `question` and `evidence` are typed payloads (assumption `id` + `kind` +
   claim + ground-truth refs), and **`OMIT` is operationally distinct from a timeout** — both yield `UNRESOLVED`
   but with different `reason` (`omit` vs `bore_degraded`). FDE answers are **cached across runs** keyed by
-  question fingerprint, so an unchanged plan does not re-query a possibly human-in-the-loop FDE (R4-F5). OQ-5
-  governs the sync-vs-async escalation channel.
+  question fingerprint, so an unchanged plan does not re-query a possibly human-in-the-loop oracle (R4-F5). OQ-5
+  governs the sync-vs-async escalation channel. **Reconciliation with the shipped FDE (v0.7):** the SDK shipped
+  a `startd8.fde` package whose authority domain is *SDK mechanism* ("which tier runs, what model by role") —
+  **not** project ground truth. Per Tekizai-Tekisho they are the two halves (MECHANISM vs OBSERVED) and
+  **compose** rather than subsume: this contract is implemented as a project **ground-truth oracle**
+  (`sapper.ground_truth`, `GroundTruthQuery`/`ProjectKnowledgeOracle`), and `sapper.fde_bridge` expresses its
+  findings as the FDE's OBSERVED `LabeledClaim`s so the *deployed* FDE fronts the pair. Sapper depends on
+  `startd8.fde`, never the reverse (no cycle). RUN-028 is the proof case: the FDE flags the **mechanism** landmine
+  (routed to micro-prime → convention injection bypassed); Sapper flags the **ground-truth** refutation (Flask,
+  invented `Match`); composed = the whole failure.
 
 ### Enforcement & integration
 
