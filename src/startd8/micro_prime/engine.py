@@ -103,6 +103,7 @@ _SPLICE_VIOLATION_TYPE_MAP = {
 # Backward-compat aliases (read-only; canonical source is LanguageRegistry)
 JAVA_MICROPRIME_ENABLED = True
 CSHARP_MICROPRIME_ENABLED = True
+NODEJS_MICROPRIME_ENABLED = True
 
 # Filenames without a standard extension that are non-Python.
 _NON_PYTHON_FILENAMES = frozenset({

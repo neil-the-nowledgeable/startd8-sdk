@@ -123,8 +123,10 @@ class TestGoMain:
 
 
 class TestGoTemplateRegistration:
-    def test_seven_templates(self):
-        assert len(GO_TEMPLATES) == 7
+    def test_ten_templates(self):
+        # Tripwire on the registered Go template count (was 7; grew to 10 with
+        # go_main / go_test_func / go_http_handler / go_grpc_method).
+        assert len(GO_TEMPLATES) == 10
 
     def test_all_names_unique(self):
         names = [t.name for t in GO_TEMPLATES]
