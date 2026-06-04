@@ -1,6 +1,6 @@
 # Sapper — Pre-Execution Plan Validation (Tunnel-Alignment Survey) — Requirements
 
-**Version:** 0.7 (Post-implementation — FR-SAP-7 reconciled with the shipped `startd8.fde`: ground-truth oracle + compose seam)
+**Version:** 0.8 (FR-SAP-7 oracle gains a Controlled-Corpus backing — online-boutique canonical-term authority, closes the polyglot OMIT gap)
 **Date:** 2026-06-04
 **Status:** Draft — no production code yet. v0.1 (pre-planning) corrected against the actual `domain-preflight`,
 `preflight_rules`, `python_toolchain`, `forward_manifest`, `project_knowledge`, and `element_fillability`
@@ -351,6 +351,19 @@ Sapper runs the **alignment survey** at the pseudo-code stage so the miss is cau
   `startd8.fde`, never the reverse (no cycle). RUN-028 is the proof case: the FDE flags the **mechanism** landmine
   (routed to micro-prime → convention injection bypassed); Sapper flags the **ground-truth** refutation (Flask,
   invented `Match`); composed = the whole failure.
+  **Controlled Corpus authority (v0.8):** the v0.7 reconciliation called the oracle "thin for Python." That
+  understated an available authority: the SDK has a first-class **Controlled Corpus** (`startd8.corpus`,
+  `ControlledCorpusRegistry`) — a store of canonical domain terms (services, RPCs, entities, metrics) **+ per-term
+  determinism**, bootstrapped from the **online-boutique microservices demo** and already trusted by
+  `prime_contractor._try_corpus_shortcut`. It is **language-agnostic** (canonical *terms*, not Python/Prisma
+  specifics), project-resolvable via `controlled_corpus_path(project_root)`, and directly answers the oracle's
+  existence/term questions (`find_by_canonical_key`). The oracle therefore gains a **`ControlledCorpusOracle`**
+  backing, **composed** with `ProjectKnowledgeOracle` (corpus = domain-term authority; ProjectKnowledge = schema/
+  field authority): `VALIDATED` when a referenced entity/term is canonical, `REFUTED` on a near-miss to a
+  canonical term (invented `Match` → suggest the closest), else `OMIT`. **This closes the polyglot/Python OMIT gap
+  for any corpus-backed project** (online-boutique today) **without waiting on the FR-CAR-0/FR-MPF-1 Python-
+  authority track** — for those projects the oracle now answers richly instead of OMITting. Scope boundary
+  (mirrors the bore): the oracle consults the **target project's** corpus, never a foreign one.
 
 ### Enforcement & integration
 

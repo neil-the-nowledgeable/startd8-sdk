@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Dict, Optional, Protocol, runtime_checkable
 
 from .models import AssumptionKind
@@ -157,23 +158,103 @@ _GROUND_TRUTH_GLOBS = ("**/*.prisma", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.js
 _GT_IGNORE_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", ".next", "build", "dist"}
 
 
-def oracle_for_project(project_root: str, *, max_files: int = 500) -> "FdeQueryLike":
-    """Build a project ground-truth oracle from a target project (FR-SAP-7 wiring, Item 4a).
+_CORPUS_KINDS = ("entity", "service", "rpc", "message", "class")
 
-    Scans the project for the sources the ``ProjectKnowledge`` producer reads, builds the graph,
-    and wraps it in a cached ``ProjectKnowledgeOracle``. Falls back to ``NullOracle`` on any
-    failure or when nothing relevant is found.
 
-    NB (honest): the producer is Prisma/TS-only today, so for a pure-Python project this yields a
-    graph of mostly *omissions* and the oracle will ``OMIT`` — the wiring is real, the payoff waits
-    on a Python ground-truth authority (the FR-CAR-0 / FR-MPF-1 track).
+class ControlledCorpusOracle:
+    """Ground-truth backing from the **Controlled Corpus** (FR-SAP-7, v0.8).
+
+    The SDK's first-class store of canonical domain terms (services/RPCs/entities/metrics),
+    bootstrapped from the online-boutique microservices demo. Language-agnostic — it answers
+    "is this entity/term canonical?" for *any* project that has a corpus, closing the oracle's
+    Python/polyglot OMIT gap without waiting on a Python schema authority.
+
+    `VALIDATED` when the referenced symbol is a canonical term; `REFUTED` on a close near-miss
+    (an invented term that resembles a real one — e.g. ``Match`` near ``Matches``); else `OMIT`
+    (conservative — absence alone is not refutation, since the corpus may be incomplete).
     """
-    from pathlib import Path
 
-    root = Path(project_root)
-    if not root.is_dir():
-        return NullOracle()
+    def __init__(self, registry) -> None:
+        self._registry = registry
+        self._surfaces: list = []  # all known canonical surface forms (for near-miss)
+        for t in registry.terms:
+            self._surfaces.extend(t.surface_forms or [t.canonical_key])
+
+    def answer(self, question) -> GroundTruthAnswer:
+        sym = (question.symbol or question.module or "").split(".")[-1].strip()
+        if not sym:
+            return GroundTruthAnswer.omit("no symbol to resolve against the corpus")
+        from startd8.corpus.canonical import canonical_key
+
+        for kind in _CORPUS_KINDS:
+            term = self._registry.find_by_canonical_key(kind, canonical_key(kind, surface_form=sym))
+            if term is not None:
+                return GroundTruthAnswer(
+                    GroundTruthVerdict.VALIDATED,
+                    evidence=f"'{sym}' is a canonical {kind} (maturity L{term.maturity})",
+                    source="controlled_corpus",
+                )
+        near = self._closest(sym)
+        if near is not None:
+            return GroundTruthAnswer(
+                GroundTruthVerdict.REFUTED,
+                evidence=f"'{sym}' is not a canonical corpus term; closest is '{near}'",
+                source="controlled_corpus",
+            )
+        return GroundTruthAnswer.omit(f"'{sym}' not in the controlled corpus")
+
+    def _closest(self, sym: str):
+        import difflib
+
+        m = difflib.get_close_matches(sym, self._surfaces, n=1, cutoff=0.8)
+        return m[0] if (m and m[0] != sym) else None
+
+
+@dataclass
+class CompositeOracle:
+    """Composes ground-truth backings: tried in order, the first non-``OMIT`` answer wins.
+
+    Order matters: the Controlled Corpus (broad domain-term authority) is consulted before
+    ``ProjectKnowledge`` (narrow schema/field authority), so an entity question resolves against
+    the corpus and a field question falls through to the schema. A backing that raises is skipped.
+    """
+
+    oracles: list
+
+    def answer(self, question) -> GroundTruthAnswer:
+        last: Optional[GroundTruthAnswer] = None
+        for o in self.oracles:
+            try:
+                ans = o.answer(question)
+            except GroundTruthTimeout:
+                raise
+            except Exception:
+                continue
+            if ans.verdict is not GroundTruthVerdict.OMIT:
+                return ans
+            last = ans
+        return last or GroundTruthAnswer.omit("no oracle had an answer")
+
+
+def _build_corpus_oracle(project_root: str):
+    """ControlledCorpusOracle for the target project's corpus, or None if absent/empty."""
     try:
+        from startd8.corpus.registry import ControlledCorpusRegistry
+        from startd8.paths import controlled_corpus_path
+
+        corpus_path = controlled_corpus_path(Path(project_root))
+        if not corpus_path.is_file():
+            return None
+        registry = ControlledCorpusRegistry.load(corpus_path)
+        return ControlledCorpusOracle(registry) if len(registry) > 0 else None
+    except Exception:
+        return None
+
+
+def _build_project_knowledge_oracle(project_root: str, max_files: int):
+    """ProjectKnowledgeOracle (Prisma/TS schema authority) for the target project, or None."""
+    try:
+        root = Path(project_root)
         sources: Dict[str, str] = {}
         for pattern in _GROUND_TRUTH_GLOBS:
             for fp in root.glob(pattern):
@@ -188,9 +269,36 @@ def oracle_for_project(project_root: str, *, max_files: int = 500) -> "FdeQueryL
         from startd8.contractors.project_knowledge.producer import DraftModeProducer
 
         pk = DraftModeProducer().build(sources, str(root))
-        return CachingOracle(ProjectKnowledgeOracle(pk))
-    except Exception:  # never let oracle construction break the survey
+        # Gate on *extracted* authority (field-sets / interfaces). The producer always seeds a
+        # baseline negative even for an empty project, so negatives alone is not real authority —
+        # an oracle with neither field-sets nor interfaces can only OMIT, so don't present it.
+        if not (getattr(pk, "field_sets", None) or getattr(pk, "interfaces", None)):
+            return None
+        return ProjectKnowledgeOracle(pk)
+    except Exception:
+        return None
+
+
+def oracle_for_project(project_root: str, *, max_files: int = 500) -> "FdeQueryLike":
+    """Build a composed project ground-truth oracle (FR-SAP-7, Item 4a + v0.8 corpus).
+
+    Composes two backings for the **target** project (never a foreign one): the **Controlled
+    Corpus** (canonical domain-term authority, language-agnostic — closes the Python/polyglot
+    gap) and **ProjectKnowledge** (Prisma/TS schema/field authority). Returns a cached composite;
+    falls back to ``NullOracle`` when neither is available. Never raises into the caller.
+    """
+    if not Path(project_root).is_dir():
         return NullOracle()
+    oracles = [
+        o for o in (
+            _build_corpus_oracle(project_root),                       # domain-term authority (corpus)
+            _build_project_knowledge_oracle(project_root, max_files),  # schema/field authority (Prisma/TS)
+        )
+        if o is not None
+    ]
+    if not oracles:
+        return NullOracle()
+    return CachingOracle(CompositeOracle(oracles))
 
 
 # Structural alias for the protocol (avoids importing Protocol at call sites).
