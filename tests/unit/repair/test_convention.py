@@ -222,3 +222,36 @@ def test_convention_residual_ignores_missing_and_non_python(tmp_path):
     txt = tmp_path / "readme.txt"
     txt.write_text("from flask import x\n", encoding="utf-8")
     assert unrepaired_convention_residual([txt]) == []  # non-.py ignored
+
+
+# --------------------------------------------------------------------------- #
+# Phase C — reach the cheapest tier: micro-prime generation guidance (FR-CAR-5)
+# --------------------------------------------------------------------------- #
+
+def test_render_convention_guidance_states_idioms_and_negatives():
+    from startd8.repair.convention import render_convention_guidance
+
+    g = render_convention_guidance()
+    # positive house style (module names track CANONICAL_LAYOUT)
+    for pos in ("FastAPI", "SQLModel", "Jinja2Templates", "app.tables", "app.models"):
+        assert pos in g, pos
+    # explicit negatives — the RUN-028 fallbacks
+    for neg in ("Flask", "session.query", "render_template"):
+        assert neg in g, neg
+
+
+def test_from_prime_injects_guidance_for_python_targets_only():
+    from startd8.micro_prime.context import MicroPrimeContext
+
+    py = MicroPrimeContext.from_prime({}, None, ["app/jobs.py"], True)
+    assert "FastAPI" in py.convention_guidance  # Python target → guidance injected
+
+    go = MicroPrimeContext.from_prime({}, None, ["src/frontend/main.go"], True)
+    assert go.convention_guidance == ""  # non-Python target → no Python guidance
+
+
+def test_context_guidance_defaults_empty_backward_compatible():
+    from startd8.micro_prime.context import MicroPrimeContext
+
+    c = MicroPrimeContext(manifest=None, target_files=["x.py"])
+    assert c.convention_guidance == ""  # frozen-dataclass field is defaulted

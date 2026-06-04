@@ -172,6 +172,26 @@ def detect_conventions(
     return out
 
 
+def render_convention_guidance(authority: Optional[PythonConventionAuthority] = None) -> str:
+    """A compact house-style prompt block for the generator (FR-CAR-5 — reach the cheapest tier).
+
+    Derived from the authority (module names track ``CANONICAL_LAYOUT``), so micro-prime *generates*
+    toward the house style instead of falling back to generic Flask/SQLAlchemy from its training. This
+    is the proactive twin of :func:`detect_conventions` (which catches violations after the fact).
+    """
+    auth = authority or build_python_convention_authority()
+    return (
+        "House style — the generated app uses these conventions; follow them exactly:\n"
+        "- Web framework: FastAPI (APIRouter, Depends, HTMLResponse). Never Flask "
+        "(no `from flask`, no `@app.route`).\n"
+        "- DB access: SQLModel — `session.exec(select(Model)...)` / `session.get(Model, id)`. "
+        "Never `session.query(...)`.\n"
+        "- HTML: Jinja2Templates + TemplateResponse. Never `render_template(...)`.\n"
+        f"- Imports: SQLModel tables come from `{auth.tables_module}`; `{auth.schemas_module}` is "
+        f"Pydantic *Schema only — never import tables from `{auth.schemas_module}`."
+    )
+
+
 def unrepaired_convention_residual(paths, authority=None) -> List[ConventionDiagnostic]:
     """Convention violations remaining in the given Python files — the residual to escalate (FR-CAR-6).
 
@@ -198,5 +218,6 @@ __all__ = [
     "PythonConventionAuthority",
     "build_python_convention_authority",
     "detect_conventions",
+    "render_convention_guidance",
     "unrepaired_convention_residual",
 ]

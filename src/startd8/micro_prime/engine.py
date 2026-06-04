@@ -2563,6 +2563,11 @@ class MicroPrimeEngine:
         task_description: Optional[str] = None,
     ) -> FileResult:
         """Process a file using normalized MicroPrimeContext (REQ-MP-509)."""
+        # FR-CAR-5: fold the house-style guidance into the constraints so it renders into the
+        # generation prompt via the existing "Constraints:" path (file-whole + element prompts).
+        constraints = list(context.binding_constraints or [])
+        if context.convention_guidance:
+            constraints.append(context.convention_guidance)
         return self.process_file(
             file_spec,
             context.manifest,
@@ -2570,7 +2575,7 @@ class MicroPrimeEngine:
             design_doc_sections=design_doc_sections,
             ollama_available=context.ollama_available,
             task_description=task_description,
-            domain_constraints=context.binding_constraints or None,
+            domain_constraints=constraints or None,
         )
 
     def reset_for_seed(self) -> None:
