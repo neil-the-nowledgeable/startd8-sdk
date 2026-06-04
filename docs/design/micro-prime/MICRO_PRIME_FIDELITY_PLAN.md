@@ -70,7 +70,10 @@
    Controlled-Corpus `false_pass_risk` fixtures. Record baseline (today) vs injected. *Exit 1:* field-set
    block present in the micro-prime prompt **and** measured non-trivial lift on the field-invention class.
 
-### Phase 2 — Surface-area signal (FR-MPF-2)
+### Phase 2 — Surface-area signal (FR-MPF-2) — ✅ DONE (uncommitted)
+> `manifest_element_count` added to `TaskComplexitySignals` (`models.py`) + derived single-pass in
+> `signals.py` (folded into the `has_fillable_elements` loop, no extra scan, not added to the ON-HOLD
+> Artisan chunk extractor). Tests in `tests/unit/complexity/test_fr_mpf_surface_routing.py`.
 8. **`TaskComplexitySignals`** (`models.py`): add `manifest_element_count: int = 0` (safe default → no
    behavior change until Phase 3 reads it).
 9. **`extract_signals_from_feature`** (`signals.py`): compute the sum `len(getattr(spec, "elements", []) or
@@ -80,7 +83,12 @@
    `AttributeError`/`TypeError`; manifest may be `None`. *Exit 2:* signal populated in one pass; serialized
    into the forensic `to_dict`.
 
-### Phase 3 — Surface-aware routing guard (FR-MPF-3)
+### Phase 3 — Surface-aware routing guard (FR-MPF-3) — ✅ DONE (uncommitted, ships DISABLED)
+> `ComplexityRoutingConfig.manifest_element_simple_max` (default **0 = disabled**) + a MODERATE-floor
+> emit in `_classify_tier_core` placed beside the security-sensitive floor (after COMPLEX triggers, before
+> SIMPLE). Emits **MODERATE** (not COMPLEX) per the v0.2 correction; a genuine COMPLEX trigger still wins.
+> Behavior-preserving until the FR-MPF-5 measurement calibrates the threshold (Phase 5). 126/126 complexity
+> tests pass.
 10. **`ComplexityRoutingConfig`** (`models.py`): add `manifest_element_simple_max: int` with an **initially
     permissive** default (calibrated in OQ-2; start high enough to be a no-op, then tighten under Phase 5).
 11. **`_classify_tier_core`** (`classifier.py`): when `signals.manifest_element_count >
