@@ -19,7 +19,7 @@ import ast
 import re
 import sys
 from pathlib import PurePosixPath
-from typing import Optional
+from typing import Iterable, Optional
 
 from startd8.implementation_engine.package_aliases import import_to_pypi
 
@@ -208,6 +208,31 @@ def extract_third_party_imports(source: str) -> set[str]:
                             modules.add(f"{node.module}.{alias.name}")
 
     return modules
+
+
+def external_packages_from_imports(
+    import_modules: Iterable[str],
+    local_prefixes: Iterable[str] = (),
+) -> set[str]:
+    """Third-party PyPI package names from declared import module paths.
+
+    Drops stdlib, relative (``.``-prefixed), and local-package imports (those whose
+    top-level segment is in *local_prefixes*). Maps the rest to PyPI names via
+    ``import_to_pypi``. **Ordering-independent**: it reads a SPEC's *declared* imports
+    rather than generated files on disk, so a dependency is captured even when its
+    importing file was generated *after* the requirements scan ran (RUN-036 fix).
+    """
+    local = set(local_prefixes)
+    out: set[str] = set()
+    for mod in import_modules:
+        mod = (mod or "").strip()
+        if not mod or mod.startswith("."):
+            continue
+        top = mod.split(".")[0]
+        if not top or top in _STDLIB_MODULES or top in local:
+            continue
+        out.add(import_to_pypi(top))
+    return out
 
 
 def generate_requirements_in_from_manifest(

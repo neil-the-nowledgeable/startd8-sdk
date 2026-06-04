@@ -2731,13 +2731,32 @@ class MicroPrimeCodeGenerator:
             ", ".join(sorted(python_files.keys())),
         )
 
-        # Extract manifest-declared external deps as extras (catches deps
-        # that aren't visible through import analysis alone)
+        # Extract manifest-declared external deps as extras (catches deps that aren't
+        # visible through import analysis alone, AND — RUN-036 — deps of files generated
+        # AFTER this scan ran: harvest each spec's DECLARED imports, not just on-disk content,
+        # so e.g. sqlmodel/sqlalchemy land in requirements.in even when app/jobs.py is
+        # produced later in the run. Ordering-independent; local (app.*) imports are filtered.
         extra_packages: list[str] = []
         if self._manifest:
+            from startd8.utils.requirements_generator import (
+                external_packages_from_imports,
+            )
+
+            local_prefixes = {
+                fp.split("/", 1)[0] for fp in self._manifest.file_specs if "/" in fp
+            }
+            declared_modules: list[str] = []
             for fp, fs in self._manifest.file_specs.items():
-                if fp.startswith(req_dir) and fs.dependencies:
+                if not fp.startswith(req_dir):
+                    continue
+                if fs.dependencies:
                     extra_packages.extend(fs.dependencies.external)
+                declared_modules.extend(
+                    getattr(imp, "module", "") for imp in (getattr(fs, "imports", None) or [])
+                )
+            extra_packages.extend(
+                external_packages_from_imports(declared_modules, local_prefixes)
+            )
 
         content = generate_requirements_in(
             python_files,
