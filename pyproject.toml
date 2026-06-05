@@ -150,6 +150,7 @@ simple = "startd8.contractors.adapters.standalone:SimpleMergeStrategy"
 prisma-zod = "startd8.frontend_codegen.provider:PrismaZodFileProvider"
 pydantic-sqlmodel = "startd8.backend_codegen.provider:PydanticSQLModelProvider"
 scaffold = "startd8.scaffold_codegen.provider:ScaffoldFileProvider"
+composite-view = "startd8.view_codegen.provider:CompositeViewProvider"
 
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
