@@ -80,3 +80,53 @@ def test_no_typing_usage_adds_no_typing_import():
     )
     src = DeterministicFileAssembler().render_file(fs)
     assert _typing_line(src) == ""  # no spurious typing import
+
+
+# ── framework import completion (run-040 fix) ─────────────────────────────────
+
+
+def _var(name, value_repr, type_annotation=None):
+    return ForwardElementSpec(
+        kind=ElementKind.VARIABLE, name=name, value_repr=value_repr, type_annotation=type_annotation
+    )
+
+
+def test_framework_value_repr_completes_import():
+    # run-040: `job_export_router = APIRouter()` with empty imports → from fastapi import APIRouter
+    fs = ForwardFileSpec(
+        file="app/job_export.py",
+        imports=[],
+        elements=[_var("job_export_router", "APIRouter()")],
+    )
+    src = DeterministicFileAssembler().render_file(fs)
+    assert "from fastapi import APIRouter" in src
+
+
+def test_sqlmodel_param_annotation_completed():
+    fs = ForwardFileSpec(
+        file="app/x.py", imports=[],
+        elements=[_func("q", params=[Param(name="session", annotation="Session")])],
+    )
+    assert "from sqlmodel import Session" in DeterministicFileAssembler().render_file(fs)
+
+
+def test_unknown_name_left_unimported_for_sapper_to_flag():
+    # A name in neither typing nor the framework stack is NOT guessed — Sapper surfaces it.
+    fs = ForwardFileSpec(
+        file="app/x.py", imports=[], elements=[_var("svc", "MyCustomThing()")],
+    )
+    src = DeterministicFileAssembler().render_file(fs)
+    assert "MyCustomThing" not in "".join(
+        l for l in src.splitlines() if l.startswith(("from ", "import "))
+    )
+
+
+def test_existing_framework_import_not_duplicated():
+    fs = ForwardFileSpec(
+        file="app/jobs.py",
+        imports=[ForwardImportSpec(kind="from", module="fastapi", names=["APIRouter", "Depends"])],
+        elements=[_var("r", "APIRouter()")],
+    )
+    src = DeterministicFileAssembler().render_file(fs)
+    assert len(re.findall(r"^from fastapi import", src, re.M)) == 1
+    assert "APIRouter" in src and "Depends" in src
