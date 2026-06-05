@@ -493,6 +493,12 @@ Sapper runs the **alignment survey** at the pseudo-code stage so the miss is cau
   *Owner: plan-ingestion / Mottainai pre-assembly. Action: extend `render_specs` (or the forward-manifest
   extractor) to complete the typing-import set from signature annotations; then re-run run-039's survey to
   confirm the two findings clear.*
+  **RESOLVED — import-completeness sub-gap (2026-06-04).** `DeterministicFileAssembler.render_file` now
+  completes the `from typing import …` line from element-signature annotations (`_complete_typing_imports` +
+  `_typing_names_in_signatures`), with a guard that never shadows a domain name already imported from another
+  module (strtd8's `Match` from `app.tables`). Verified on run-039's real `app/jobs.py` spec: re-render now emits
+  `from typing import Any, Dict, List` → the two `import_availability` findings clear. 4 new tests; 86 existing
+  file-assembler tests green. *The decorator-fidelity half of OQ-8 remains open (no real-world trigger yet).*
 
 ---
 

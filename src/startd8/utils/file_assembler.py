@@ -25,11 +25,25 @@ from __future__ import annotations
 import ast
 import hashlib
 import keyword
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Set
 
 from startd8.logging_config import get_logger
+
+# Identifier scanner + the typing exports a skeleton may reference in annotations. Used to
+# complete the `from typing import …` line from signatures so `-> List[Dict]` doesn't render
+# with undefined names (which fails type-check and breaks FastAPI/SQLModel get_type_hints).
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_TYPING_EXPORTS: frozenset = frozenset({
+    "Any", "Dict", "List", "Optional", "Tuple", "Set", "FrozenSet", "Union", "Callable",
+    "Iterable", "Iterator", "Mapping", "MutableMapping", "Sequence", "MutableSequence",
+    "Type", "Deque", "DefaultDict", "Counter", "OrderedDict", "Awaitable", "Coroutine",
+    "AsyncIterator", "AsyncIterable", "AsyncGenerator", "Generator", "ClassVar", "Final",
+    "Literal", "Annotated", "TypedDict", "Protocol", "NamedTuple", "NewType", "TypeVar",
+    "NoReturn", "Hashable", "Text", "IO", "BinaryIO", "TextIO", "Pattern", "Match",
+})
 from startd8.utils.code_manifest import (
     ElementKind,
     ParamKind,
@@ -278,8 +292,13 @@ class DeterministicFileAssembler:
         lines.append("")
         lines.append("from __future__ import annotations")
 
-        # 3. Imports
-        import_block = self._render_imports(file_spec.imports, file_spec.dependencies)
+        # 3. Imports — completed with the typing names the signatures reference (see
+        # _complete_typing_imports): a skeleton declaring `-> List[Dict]` must import List/Dict,
+        # else the file fails type-check AND breaks FastAPI/SQLModel at runtime (they evaluate
+        # annotations via get_type_hints despite `from __future__ import annotations`).
+        import_block = self._render_imports(
+            self._complete_typing_imports(file_spec), file_spec.dependencies
+        )
         if import_block:
             lines.append("")
             lines.append(import_block)
@@ -316,6 +335,65 @@ class DeterministicFileAssembler:
         return "\n".join(lines)
 
     # ── Import rendering ──────────────────────────────────────────────────
+
+    def _typing_names_in_signatures(self, elements: list) -> Set[str]:
+        """Collect ``typing`` names referenced in element annotations (params/return/assign).
+
+        Conservative: only matches identifiers in the known ``typing`` export set, so a local
+        class is never mistaken for ``typing.List``. Subscripts/qualified names are ignored
+        (``app.tables.Job`` won't match; ``List`` and ``Dict`` in ``List[Dict]`` will).
+        """
+        names: Set[str] = set()
+        for elem in elements:
+            anns: list[str] = []
+            sig = getattr(elem, "signature", None)
+            if sig is not None:
+                for p in getattr(sig, "params", []) or []:
+                    if getattr(p, "annotation", None):
+                        anns.append(str(p.annotation))
+                if getattr(sig, "return_annotation", None):
+                    anns.append(str(sig.return_annotation))
+            if getattr(elem, "type_annotation", None):
+                anns.append(str(elem.type_annotation))
+            for ann in anns:
+                for tok in _IDENT_RE.findall(ann):
+                    if tok in _TYPING_EXPORTS:
+                        names.add(tok)
+        return names
+
+    def _complete_typing_imports(self, file_spec: "ForwardFileSpec") -> list:
+        """Return ``file_spec.imports`` with the ``typing`` import completed from signatures.
+
+        Merges any existing ``from typing import …`` with the names the signatures use, so the
+        rendered skeleton is self-consistent (no undefined ``Dict``/``List``). Non-typing imports
+        are preserved verbatim and ordering is otherwise unchanged. Never mutates the frozen spec.
+        """
+        used = self._typing_names_in_signatures(file_spec.elements)
+        if not used:
+            return list(file_spec.imports)
+
+        # Never shadow a name already imported from another module: a domain `Match` from
+        # `app.tables` must NOT become `from typing import Match`. Only complete the genuinely
+        # missing typing names.
+        imported_elsewhere: Set[str] = set()
+        for imp in file_spec.imports:
+            if not (getattr(imp, "kind", None) == "from" and getattr(imp, "module", None) == "typing"):
+                imported_elsewhere.update(getattr(imp, "names", None) or [])
+        used = used - imported_elsewhere
+        if not used:
+            return list(file_spec.imports)
+
+        from startd8.forward_manifest import ForwardImportSpec
+
+        out: list = []
+        existing: Set[str] = set()
+        for imp in file_spec.imports:
+            if getattr(imp, "kind", None) == "from" and getattr(imp, "module", None) == "typing":
+                existing.update(imp.names or [])
+                continue  # collapse all typing-from imports into one merged spec below
+            out.append(imp)
+        out.append(ForwardImportSpec(kind="from", module="typing", names=sorted(existing | used)))
+        return out
 
     def _render_imports(
         self,
