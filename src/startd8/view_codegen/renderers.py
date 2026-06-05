@@ -206,11 +206,42 @@ def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
     return head + block
 
 
-def render_view_tests(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str) -> str:
+# Prisma scalar -> a valid seed value (table-column level) for the rung-4 view-test fixtures. A field
+# needs a seed value only if it is required AND has no @default (id/owner/source/confirmed/timestamps
+# all default), so the seeds fill the contract's *genuinely* required content fields (e.g. a JD's
+# required rawText) — the gap the all-optional unit fixture masked until the real-contract dry-run.
+_SEED_SAMPLE = {
+    "String": '"sample"', "Int": "0", "BigInt": "0", "Float": "0.0", "Boolean": "False",
+    "Decimal": '"0"', "DateTime": '"2020-01-01T00:00:00"', "Json": "None", "Bytes": 'b"x"',
+}
+
+
+def _field_has_default(field) -> bool:
+    attrs = " ".join(field.attributes).lower()
+    return "@default" in attrs or "@updatedat" in attrs or "@id" in attrs
+
+
+def _seed_sample(field, schema) -> str:
+    if field.type in schema.enums:
+        vals = schema.enums[field.type]
+        return f'"{vals[0]}"' if vals else '""'
+    return _SEED_SAMPLE.get(field.type, '"sample"')
+
+
+def _seed(schema, var: str, entity: str, explicit: dict) -> str:
+    """A seed line filling *explicit* fields + every required, non-defaulted, non-list scalar of *entity*."""
+    parts = dict(explicit)
+    for f in schema.scalar_fields(entity):
+        if f.name in parts or f.is_optional or f.is_list or _field_has_default(f):
+            continue
+        parts[f.name] = _seed_sample(f, schema)
+    kw = ", ".join(f"{k}={v}" for k, v in parts.items())
+    return f"        {var} = t.{entity}({kw}); s.add({var}); s.commit(); s.refresh({var})"
+
+
+def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, views_sha: str) -> str:
     """Rung-4 view tests — exercise each data function against a fixtured DB (the D1 gate)."""
-    blocks: List[str] = []
-    for v in views:
-        blocks.append(_render_view_test(v))
+    blocks = [_render_view_test(schema, v) for v in views]
     preamble = (
         _TEST_SHIM + "\n"
         "import pytest\n\n"
@@ -222,11 +253,7 @@ def render_view_tests(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: s
     return header + "\n\n" + body + "\n"
 
 
-def _seed(var: str, entity: str, kwargs: str) -> str:
-    return f"        {var} = t.{entity}({kwargs}); s.add({var}); s.commit(); s.refresh({var})"
-
-
-def _render_view_test(v: ViewSpec) -> str:
+def _render_view_test(schema, v: ViewSpec) -> str:
     setup = [
         f"def test_{v.module}_data(tmp_path):",
         "    import app.tables as t",
@@ -236,13 +263,10 @@ def _render_view_test(v: ViewSpec) -> str:
         "    with Session(engine) as s:",
     ]
     if v.kind == "dashboard":
-        setup += [_seed("root", v.root, "")]
-        for a in v.aggregates:
-            setup.append(_seed("_x", a.of, f"{a.fk}=root.id"))
-        setup += [
-            f"        rows = {v.module}_data(s)",
-            "    assert len(rows) == 1",
-        ]
+        setup.append(_seed(schema, "root", v.root, {}))
+        for i, a in enumerate(v.aggregates):
+            setup.append(_seed(schema, f"_x{i}", a.of, {a.fk: "root.id"}))
+        setup += [f"        rows = {v.module}_data(s)", "    assert len(rows) == 1"]
         for a in v.aggregates:
             setup.append(f"    assert rows[0][{a.name!r}] == 1")
         if v.signal:
@@ -250,8 +274,8 @@ def _render_view_test(v: ViewSpec) -> str:
     elif v.kind == "board":
         a, b = v.order[0], (v.order[1] if len(v.order) > 1 else v.order[0])
         setup += [
-            _seed("_r1", v.root, f"{v.group_by}={a!r}"),
-            _seed("_r2", v.root, f"{v.group_by}={b!r}"),
+            _seed(schema, "_r1", v.root, {v.group_by: repr(a)}),
+            _seed(schema, "_r2", v.root, {v.group_by: repr(b)}),
             f"        board = {v.module}_data(s)",
             "    cols = dict(board)",
             f"    assert len(cols.get({a!r}, [])) >= 1",
@@ -261,10 +285,10 @@ def _render_view_test(v: ViewSpec) -> str:
         p = v.polymorphic
         first_type, first_entity = p.type_map[0]
         setup += [
-            _seed("root", v.root, ""),
-            _seed("ent", first_entity, ""),
-            _seed("_good", p.of, f"{p.fk}=root.id, {p.type_field}={first_type!r}, {p.id_field}=ent.id"),
-            _seed("_dangling", p.of, f"{p.fk}=root.id, {p.type_field}={first_type!r}, {p.id_field}='nope'"),
+            _seed(schema, "root", v.root, {}),
+            _seed(schema, "ent", first_entity, {}),
+            _seed(schema, "_good", p.of, {p.fk: "root.id", p.type_field: repr(first_type), p.id_field: "ent.id"}),
+            _seed(schema, "_dangling", p.of, {p.fk: "root.id", p.type_field: repr(first_type), p.id_field: "'nope'"}),
             f"        data = {v.module}_data(s, root.id)",
             "    resolved = data['resolved']",
             "    assert any(not r['dangling'] for r in resolved)  # the real ref resolves",
@@ -295,5 +319,5 @@ def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ..
         out.append((_module_path(v), render_view_module(v, s_sha, v_sha)))
         out.append((f"app/templates/views/{v.module}.html", render_view_template(v, s_sha, v_sha)))
     out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
-    out.append(("tests/test_views.py", render_view_tests(views, s_sha, v_sha)))
+    out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
     return tuple(out)
