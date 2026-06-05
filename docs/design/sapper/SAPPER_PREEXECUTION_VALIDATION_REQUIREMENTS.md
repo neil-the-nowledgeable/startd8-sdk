@@ -481,6 +481,18 @@ Sapper runs the **alignment survey** at the pseudo-code stage so the miss is cau
   preserves **imports + signatures + decorators** (the `@app.route` catch depends on decorators surviving into
   the skeleton). If decorators are dropped, FR-SAP-10 loses decorator-level framework detection. *Lean:* require
   full declaration-surface fidelity in the skeleton contract; verify against `ForwardElementSpec.decorators`.
+  **GAP (real-world evidence, run-039 2026-06-04 — first live survey on strtd8):** the survey REFUTED two
+  `import_availability` assumptions — `Dict` and `List` undefined at `app/jobs.py:19`. The rendered skeleton
+  declares `def resolve_matches(session: Session, jd_id: int) -> List[Dict]:` but its imports include only
+  `from typing import Any` — `Dict`/`List` are used in the signature yet never imported, so the skeleton does not
+  typecheck. **This is a true positive AND an upstream emitter defect: import completeness.** The skeleton
+  renderer (`DeterministicFileAssembler.render_specs`, fed by `ForwardFileSpec.imports`) must emit the typing
+  imports the declared signatures reference — derive them from `ForwardElementSpec.signature` annotations, not
+  only from a static import list. Until fixed, Sapper will (correctly) flag this class on every plan whose
+  signatures use unimported `typing` names — useful as a *finding*, but the real fix belongs in the emitter.
+  *Owner: plan-ingestion / Mottainai pre-assembly. Action: extend `render_specs` (or the forward-manifest
+  extractor) to complete the typing-import set from signature annotations; then re-run run-039's survey to
+  confirm the two findings clear.*
 
 ---
 
