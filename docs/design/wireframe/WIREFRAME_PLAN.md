@@ -1,8 +1,10 @@
 # Basic Wireframing Capability — Implementation Plan
 
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-06-05
-**Status:** Draft (post-CRP R1–R6 triage, aligned to requirements v0.3)
+**Status:** Draft (post-CRP R1–R6 triage; v1.2 consumer-agnostic naming, aligned to
+requirements v0.4 §1.0 — the wireframe is SDK-owned; strtd8 is the reference consumer, first
+of many)
 **Requirements:** [`WIREFRAME_REQUIREMENTS.md`](WIREFRAME_REQUIREMENTS.md)
 
 ---
@@ -184,14 +186,15 @@ use the cascade), writing `wireframe-plan.json` + `wireframe-summary.md` into
 - inputs: merge order, last-wins + `merge_warnings`, flag override, convention defaults
   (per-key filename mapping; stray `prisma/extra.yaml` ignored), strict unknown keys, status
   override precedence, path-escape rejection, UTF-8 failures
-- plan: fixture manifests (strtd8-shaped mini schema) → snapshot JSON; per-manifest absence
+- plan: fixture manifests (mini schema shaped like the reference consumer's contract) →
+  snapshot JSON; per-manifest absence
   semantics table above as parametrized cases; invalid-manifest degradation; **schema
   recoverability** (garbled model block ⇒ `invalid` with dropped-block count — R6-S1);
   **composition matrix** (schema status × secondary status ⇒ documented section status — R6-S4)
 - determinism: two runs ⇒ byte-identical canonical JSON; `_meta` may differ; fingerprint
   stable (R1-F5/R5-S1)
 - **golden cross-check (FR-W14):** on the **named fixture** `tests/fixtures/wireframe/`
-  (strtd8-shaped schema + full manifest set — R3-S3), every artifact path in the plan appears
+  (reference-consumer-shaped schema + full manifest set — R3-S3), every artifact path in the plan appears
   in actual `render_backend()`/`render_views()`/`render_scaffold()` output and vice versa.
   The fixture MUST enable **every conditional generator surface** (R6-S3): `ai_passes.yaml` +
   `human_inputs.yaml` (AI layer incl. `app/server.py`), `authoring=True`, `completeness_text`
@@ -207,8 +210,9 @@ pointer to the wireframe as the machine-readable consumer of the inventory, **in
 worked `assembly-inputs.yaml` example** from Step 1 (R1-S5); CLAUDE.md one-liner under
 Commands. Add a **"When to use wireframe vs sapper vs kickoff FR-X1"** comparison table
 (inputs scope, output shape, gating, cost — R2-S5). Register the command in
-`docs/capability-index/` via the `/capability-index` workflow and add a strtd8-pilot one-liner
-for first real use / OQ-8 feedback (R4-S5).
+`docs/capability-index/` via the `/capability-index` workflow and add a reference-consumer
+pilot one-liner (strtd8, the first of the expected many SDK consumers) for first real use /
+OQ-8 feedback (R4-S5).
 
 ## 3. Risks
 

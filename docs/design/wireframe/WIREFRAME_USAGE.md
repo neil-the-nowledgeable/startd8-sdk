@@ -1,8 +1,8 @@
 # Wireframe — Usage
 
 **Date:** 2026-06-05
-**Spec:** [`WIREFRAME_REQUIREMENTS.md`](WIREFRAME_REQUIREMENTS.md) (v0.3) /
-[`WIREFRAME_PLAN.md`](WIREFRAME_PLAN.md) (v1.1)
+**Spec:** [`WIREFRAME_REQUIREMENTS.md`](WIREFRAME_REQUIREMENTS.md) (v0.4) /
+[`WIREFRAME_PLAN.md`](WIREFRAME_PLAN.md) (v1.2)
 
 `startd8 wireframe` is the $0, read-only, advisory pre-generation summary of the deterministic
 cascade: it shows what `generate scaffold` / `generate backend` / `generate views` WILL build
@@ -51,11 +51,18 @@ STARTD8_WIREFRAME=1 ./run-prime-contractor.sh ...
 Runs early (pre-workflow), never blocks (always exit 0; crashes leave `wireframe-error.json`).
 The pipeline never *runs* the cascade — this is visibility only (Group F boundary).
 
-## strtd8 pilot (first real use — OQ-8)
+## Running against a consumer project
+
+The wireframe is an SDK capability serving **any** project on the contract-first cascade
+(requirements §1.0) — point it at the consumer's root:
 
 ```bash
-cd ~/Documents/dev/strtd8 && startd8 wireframe --project .
+startd8 wireframe --project /path/to/consumer-project
 ```
+
+First real use (OQ-8 pilot, 2026-06-05) was the reference consumer — strtd8, the first of the
+expected many — where it surfaced 3 invalid manifests pre-cascade (see that repo's
+`docs/SDK_WIREFRAME_CAPABILITY_2026-06-05.md`).
 
 ## When to use wireframe vs sapper vs kickoff FR-X1 (R2-S5)
 

@@ -1,4 +1,5 @@
-# Owned-field policy: the AI edge must never write Metric.value (the app FR-6 case).
+# Owned-field policy: the AI edge must never write Metric.value — the canonical owned-field
+# example (the reference consumer numbers this requirement FR-6; the policy is SDK-generic).
 fields:
   - target: Metric.value
     authored_by: human

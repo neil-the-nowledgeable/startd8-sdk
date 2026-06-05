@@ -1,6 +1,6 @@
 # Basic Wireframing Capability — Requirements
 
-**Version:** 0.3 (Post-CRP — rounds R1–R6 triaged; see Appendix A/B)
+**Version:** 0.4 (Positioning update — SDK capability serving many consumer projects; §1.0)
 **Date:** 2026-06-05
 **Status:** Draft
 **Plan:** [`WIREFRAME_PLAN.md`](WIREFRAME_PLAN.md)
@@ -38,6 +38,17 @@ pre-flight, FR-X5 inventory), [`../kickoff/KICKOFF_ASSEMBLY_INPUTS.md`](../kicko
 ---
 
 ## 1. Problem Statement
+
+### 1.0 Positioning (load-bearing)
+
+The wireframe is an **SDK capability**, not an application feature: it belongs to
+**startd8-sdk** and serves **any project** that adopts the contract-first deterministic
+cascade. Every input is resolved from a caller-supplied `project_root` + the cascade's
+manifest convention; nothing in the capability may reference, assume, or special-case a
+particular consumer project. The StartDate app (repo `strtd8`) is the **reference consumer**
+— deliberately the *first of an expected many* — and appears in these documents only as pilot
+evidence and fixture shape, never as the target. (Name collision note: the SDK's CLI/package
+is `startd8`; the consumer app is `strtd8`/StartDate — distinct things.)
 
 The $0 deterministic cascade (`startd8 generate scaffold` / `generate backend` /
 `generate views`) assembles ~89% of an application from seven hand-authored input manifests.
@@ -248,8 +259,12 @@ shared review artifact for the kickoff conversation.
   gate flag either — CI that wants to gate parses the FR-W10 JSON (`schema_version`'d) and
   decides itself (R5-F3 rejected; see Appendix B).
 - **No mechanism/friction analysis.** Sapper/FDE preflight own routing/invention landmines.
-- **No OTel emission in v1.** Deferred until after the strtd8 pilot (R3-S5 rejected; see plan
-  Appendix B).
+- **No OTel emission in v1.** Deferred until after the reference-consumer pilot (R3-S5
+  rejected; see plan Appendix B).
+- **No consumer-project coupling (§1.0).** No path, name, schema shape, or requirement
+  numbering from any consumer project (incl. the reference consumer strtd8) may appear in the
+  capability's code or CLI surface; consumer references are confined to pilot evidence and
+  fixture-shape attribution in docs/tests.
 
 ## 4. Open Questions
 
@@ -260,7 +275,8 @@ OQ-1 through OQ-6 from v0.1 were all resolved by the planning pass — see §0. 
   adopts it as canonical is a kickoff-docset decision, tracked there, not blocking here.
 - **OQ-8 — Planned-vs-built diff.** FR-W12's persisted plan enables a later `wireframe --diff`
   comparing plan against disk; deliberately deferred (Non-Requirements: no drift detection in
-  v1). Revisit after first real use at the strtd8 pilot.
+  v1). Revisit after first real use at the reference-consumer pilot (strtd8 — the first of the
+  expected many SDK consumers; ran 2026-06-05, found 3 invalid manifests).
 
 ---
 
@@ -271,6 +287,10 @@ forms scoped to field level, FR-W9/FR-W11 made concrete, 6 open questions resolv
 *v0.3 — Post-CRP triage of review rounds R1–R6 (28 F-suggestions applied, 2 rejected — see
 Appendix A/B). Headline fix: lenient-Prisma-parser recoverability check (R6-F1). Added
 FR-W15 (content inputs), FR-W16 (public API); hardened FR-W2/W4/W6–W13.*
+
+*v0.4 — Positioning: §1.0 states the capability is SDK-owned and consumer-agnostic; strtd8 =
+reference consumer (first of many), confined to pilot evidence + fixture attribution. New
+Non-Requirement: no consumer-project coupling. No FR semantics changed.*
 
 ---
 

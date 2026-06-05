@@ -1,5 +1,6 @@
-// Golden wireframe fixture (FR-W14 / R3-S3) — strtd8-shaped mini contract.
-// Three concrete models + one enum + a relation; enables every entity surface.
+// Golden wireframe fixture (FR-W14 / R3-S3) — a mini contract shaped like a typical
+// consumer project's (reference consumer: strtd8; the wireframe itself is consumer-agnostic,
+// requirements §1.0). Three concrete models + one enum + a relation; every entity surface.
 
 model Profile {
   id        String   @id @default(cuid())
