@@ -315,3 +315,66 @@ def backend(
             console.print(f"  [red]{d}[/red]")
         if not bs.is_pass:
             raise typer.Exit(_EXIT_ERROR)
+
+
+@generate_app.command("scaffold")
+def scaffold(
+    manifest: Optional[Path] = typer.Option(
+        None, "--manifest", help="Path to app.yaml (project plumbing manifest). Absent → defaults."
+    ),
+    out: Path = typer.Option(
+        Path("."), "--out", help="Project root to write the plumbing into."
+    ),
+    check: bool = typer.Option(
+        False, "--check", help="Drift-check owned scaffold files instead of writing (exit 1 on drift)."
+    ),
+):
+    """Deterministically emit project plumbing (pyproject/logging/alembic/Dockerfile) from app.yaml.
+
+    Class-2 determinism — $0 LLM, owned, drift-checked. Non-overlapping with `generate backend`
+    (which owns ``app/``); this owns the project *around* it.
+    """
+    from .scaffold_codegen import render_scaffold, scaffold_in_sync
+
+    manifest_text = ""
+    if manifest is not None:
+        try:
+            manifest_text = manifest.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read manifest {manifest}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    try:
+        artifacts = render_scaffold(manifest_text)
+    except ValueError as exc:  # malformed app.yaml — fail loud
+        console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    if check:
+        drifted = 0
+        for rel, content in artifacts:
+            target = out / rel
+            ondisk = target.read_text(encoding="utf-8") if target.exists() else None
+            if ondisk is None:
+                drifted += 1
+                console.print(f"[yellow]missing[/yellow]: {rel}")
+            elif not scaffold_in_sync(manifest_text, ondisk):
+                drifted += 1
+                console.print(f"[yellow]drift[/yellow]: {rel} — stale or hand-edited")
+        if drifted:
+            console.print(f"[yellow]{drifted} scaffold artifact(s) drifted[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[green]in_sync[/green]: all {len(artifacts)} scaffold artifact(s) match app.yaml")
+        raise typer.Exit(0)
+
+    written = 0
+    for rel, content in artifacts:
+        target = out / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written += 1
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot write {target}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+    console.print(f"[green]wrote[/green] {written} scaffold file(s) under {out}")
