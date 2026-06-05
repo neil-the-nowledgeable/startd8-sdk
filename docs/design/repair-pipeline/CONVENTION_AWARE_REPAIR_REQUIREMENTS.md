@@ -1,6 +1,6 @@
 # Convention-Aware Repair — Requirements
 
-**Version:** 0.6 (FR-CAR-11 precondition measured + gated behind `STARTD8_CONVENTION_GATING`)
+**Version:** 0.7 (FR-CAR-12 — cure must reach micro-prime + test-gen paths; RUN-038 #5/#4-convention)
 **Date:** 2026-06-04
 **Status:** Partially implemented — Phase A + Phase B (B.1/B.2/B.3) landed on `main`; **Phase C (FR-CAR-5)
 is now PARTIAL** — sub-step **8b** (static convention authority via `convention_guidance`) landed
@@ -363,6 +363,46 @@ in-architecture corpus (N files).
 - **0% < 5% → precondition satisfied.** Implemented as the `STARTD8_CONVENTION_GATING` env flag
   (`forward_manifest_validator._convention_gating_enabled`, default **on**); the §4 ramp is the flag —
   set it to `0` to revert to advisory (detect + record, no hard-zero) on architectures where FP is unmeasured.
+
+---
+
+### FR-CAR-12 — The cure must reach micro-prime-generated and test-generated files (NEW in v0.7, RUN-038 #5 + #4-convention)
+
+RUN-038 exposed two coverage holes where prevention (FR-CAR-5) and cure (FR-CAR-4) are *present
+but never reach the files that actually fail* — the worst-of-both the postmortem (§2.5) named.
+
+**FR-CAR-12a — Convention cure/escalation reaches the micro-prime repair pipeline.** The routers
+`PI-001/002/003` were generated on the micro-prime path (`simple` tier), hard-gated on disk
+(`module_source` `from app.models import …`, `safe_fixable=true`), yet `semantic_repairs_applied=0`
+— the FR-CAR-4 `python_convention_fix` never ran. Root cause (home-verified): `micro_prime/repair.py`
+`_ALL_STEPS` contains `fence_strip`/`import_completion`/… but **no convention step**. This contradicts
+**OQ-3** ("convention-repair lives in *both* the micro-prime in-run path and the post-run path"). The
+convention safe-fixer **or** the FR-CAR-6 escalate-the-residual path MUST be reachable on the
+micro-prime repair pipeline, so a `safe_fixable=true` violation on a micro-prime-generated file is
+**either auto-fixed or escalated — never hard-gated *and* silently left unfixed**.
+
+**FR-CAR-12b — Governed scope includes generator-owned app files.** The integration-path
+`python_convention_fix._is_governed` restricts the fixer to `backend_codegen` `CANONICAL_LAYOUT`
+spine files, **excluding generated app routers** (`app/jobs.py`, `app/job_export.py`) — which the
+deterministic generators also own. A `safe_fixable` violation that is hard-gated but
+*out-of-governed-scope* is a **requirement gap**, not just a missing fix: the governed scope MUST
+cover generator-owned app files, not only the `CANONICAL_LAYOUT` spine.
+
+**FR-CAR-12c — Convention authority reaches the test-generation path.** `convention_guidance`
+(FR-CAR-5b/8b) is threaded into the main micro-prime path but **not** into the test-generation path
+(`LLMTestGenerator` receives only `semantic_conventions`), so test files carry the same
+`module_source`/`orm_idiom` class (RUN-038 §2.2). The field-set/entity-name half of the test gap is
+closed by **FR-MPF-7** (`2095457f`); this is the **convention half** — `convention_guidance` MUST
+reach the test-generation prompt with the same coverage as the main generation path.
+
+**Acceptance.** (a) A micro-prime-generated file with a `safe_fixable=true module_source` violation
+is auto-fixed or escalated — never `semantic_repairs_applied=0` alongside a hard-gate. (b) A generated
+test file imports tables from the correct module under the convention authority.
+
+> **RUN-038 diagnostic now standing:** the Forward Deployed Engineer surfaces this exact state on
+> every run — a `MECHANISM (sdk, conflict)` claim flags any `safe_fixable=true` violation with
+> `semantic_repairs_applied=0` (`fde/sources.py:read_convention_status`). FR-CAR-12 is the fix; the
+> FDE claim is the regression tripwire.
 
 ---
 

@@ -1,6 +1,6 @@
 # Micro-Prime Fidelity — Requirements
 
-**Version:** 0.3 (distillation pass — essential-complexity review against the live code)
+**Version:** 0.4 (FR-MPF-7 — field-set authority reaches the test-generation path; RUN-038 #4)
 **Date:** 2026-06-04
 **Status:** Draft (planning-corrected + distilled). Pairs with `MICRO_PRIME_FIDELITY_PLAN.md` (v0.3).
 **Owns:** the two *remaining* fidelity gaps on the cheapest generation tier (micro-prime), after
@@ -245,6 +245,24 @@ No new LLM calls; the classifier stays deterministic. FR-MPF-1 reuses `_collect_
 the `MicroPrimeContext` threading seam (the FR-CAR-5 path). FR-MPF-2/3 reuse `TaskComplexitySignals` /
 `extract_signals_from_feature` / `ComplexityRoutingConfig`. Same tree → same routing decision + same
 prompt.
+
+### FR-MPF-7 — Field-set/entity authority reaches the test-generation path (RUN-038 #4 field-set half; landed `2095457f`)
+
+Test features (`tests/test_*.py`) import the project's **real** entities, but RUN-036/038 showed they
+received **no** entity authority and invented names (`from app.models import Match` — a non-existent
+entity that boot-cascaded 3 features): a test target matches neither `referenced_entities` nor the
+(TS-only) data-model-mirror heuristic, and 0-element test features route to the cloud/lead path.
+
+**FR-MPF-7 (landed `2095457f`):** test features — detected via `_is_test_feature` — MUST receive the
+**full field-set authority** (a test may import *any* entity), the direct analog of FR-MPF-1 for the
+test-generation path, so the test prompt sees real entity names instead of inventing them. Combined
+with the spec rendering of that authority (RUN-036 #2 / `dd95bbcb`), the **invented-entity** class is
+closed for tests.
+
+**Scope boundary (not this FR):** FR-MPF-7 fixes *which entities exist*; it does **not** fix *which
+module / ORM idiom* to import them from. The module-source/`orm_idiom` convention authority for the
+test path is **FR-CAR-12c** (the convention half). The two compose: FR-MPF-7 (field-set) +
+FR-CAR-12c (convention) together close the test-generation hole (RUN-038 §2.2).
 
 ---
 

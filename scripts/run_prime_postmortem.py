@@ -700,6 +700,19 @@ def _emit_kaizen_metrics(report: object, output_dir: Path, run_id: str | None = 
         if micro.total_elements > 0:
             metrics["escalation_rate"] = micro.escalated_elements / micro.total_elements
 
+    # Determinism (REQ-DET-METRIC) — the measured $0/no-LLM assembly fraction
+    det = getattr(report, "determinism", None)
+    if det is not None:
+        metrics["determinism"] = {
+            "deterministic_features": det.deterministic_features,
+            "llm_features": det.llm_features,
+            "feature_ratio": det.feature_ratio,
+            "deterministic_files": det.deterministic_files,
+            "llm_files": det.llm_files,
+            "file_ratio": det.file_ratio,
+            "by_path": det.by_path,
+        }
+
     # Disk quality (Phase E)
     avg_delta = getattr(report, "avg_assembly_delta", None)
     if avg_delta is not None:

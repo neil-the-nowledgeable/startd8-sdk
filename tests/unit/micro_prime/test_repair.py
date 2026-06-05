@@ -475,7 +475,8 @@ class TestRunRepairPipeline:
         code = "def get_name(self, key: str) -> str:\n    return key"
         result = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         assert result.code == code  # Already valid, no changes needed
-        assert len(result.step_results) == 11  # All ordered steps from _ALL_STEPS
+        # 12 ordered steps from _ALL_STEPS (FR-CAR-12a added python_convention_fix).
+        assert len(result.step_results) == 12
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
@@ -500,7 +501,8 @@ class TestRunRepairPipeline:
         assert "fence_strip" in step_names
         assert "octal_literal_fix" in step_names
         assert "ast_validate" in step_names
-        assert len(step_names) == 11
+        assert "python_convention_fix" in step_names  # FR-CAR-12a
+        assert len(step_names) == 12
 
 
 class TestBuildDefLine:

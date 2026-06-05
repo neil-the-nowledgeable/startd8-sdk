@@ -164,6 +164,8 @@ def explain_run(
         fexp = FailureExplanation(feature_id=fid, element_id=eid)
         fexp.claims.extend(_observed_claims(failure))
         fexp.claims.extend(sources.read_element_mechanism(run_output_dir, fid, eid))
+        # RUN-038 #5/#2: convention violations + the safe-fix gap, composed at feature altitude.
+        fexp.claims.extend(sources.read_convention_status(run_output_dir, fid))
         fexp.correction = _correction_for(failure)
         exp.failures.append(fexp)
 

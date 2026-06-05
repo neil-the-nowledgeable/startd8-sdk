@@ -147,27 +147,84 @@ def _collect_existing_imports(tree: ast.Module) -> set[str]:
     return names
 
 
-def _collect_local_definitions(tree: ast.Module) -> set[str]:
-    """Collect names defined at module level (functions, classes, assignments).
+# Match-statement node types (py3.10+). Resolved at import so the collector stays 3.9-safe.
+_MATCH_AS = getattr(ast, "MatchAs", None)
+_MATCH_STAR = getattr(ast, "MatchStar", None)
+_MATCH_MAPPING = getattr(ast, "MatchMapping", None)
 
-    Used to prevent the import_completion step from adding ``import foo``
-    when ``foo`` is actually a function/class/variable defined in the same
-    file — a common hallucination from LLM-generated code that the repair
-    pipeline previously amplified (e.g. ``import setCurrency`` when
-    ``setCurrency`` is a function in the same locustfile).
+
+def _names_bound_by_target(target: ast.expr, names: set[str]) -> None:
+    """Add every name an assignment/for/with target binds (handles unpacking)."""
+    if isinstance(target, ast.Name):
+        names.add(target.id)
+    elif isinstance(target, ast.Starred):
+        _names_bound_by_target(target.value, names)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            _names_bound_by_target(elt, names)
+
+
+def _collect_local_definitions(tree: ast.Module) -> set[str]:
+    """Collect names bound **anywhere in the file**, across ALL scopes (FR-RI-2a, RUN-038 #2).
+
+    Used to prevent the import_completion step from synthesizing ``import foo`` when ``foo`` is
+    a name already bound in the file — a function/class, a module-level variable, an import, or
+    — the RUN-038 own-goal — a name bound **inside a function body** (``assets = session.exec(
+    ...)`` produced a bogus top-level ``import assets`` → ModuleNotFoundError on boot). The
+    previous collector walked only module-level children (``ast.iter_child_nodes``), so any
+    locally-bound name was invisible. This walks the whole tree (conservative: a name bound in
+    *any* scope is never a missing import).
     """
     names: set[str] = set()
-    for node in ast.iter_child_nodes(tree):
+    for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             names.add(node.name)
+            # parameters bind names in the function's scope
+            a = node.args
+            for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs):
+                names.add(arg.arg)
+            if a.vararg:
+                names.add(a.vararg.arg)
+            if a.kwarg:
+                names.add(a.kwarg.arg)
         elif isinstance(node, ast.ClassDef):
             names.add(node.name)
+        elif isinstance(node, ast.Lambda):
+            a = node.args
+            for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs):
+                names.add(arg.arg)
+            if a.vararg:
+                names.add(a.vararg.arg)
+            if a.kwarg:
+                names.add(a.kwarg.arg)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name):
-                    names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
+                _names_bound_by_target(target, names)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            _names_bound_by_target(node.target, names)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            _names_bound_by_target(node.target, names)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    _names_bound_by_target(item.optional_vars, names)
+        elif isinstance(node, ast.comprehension):
+            _names_bound_by_target(node.target, names)
+        elif isinstance(node, ast.NamedExpr):  # walrus :=
+            _names_bound_by_target(node.target, names)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, (ast.ExceptHandler,)) and node.name:
+            names.add(node.name)
+        # match/case captures (py3.10+): `case x:`, `case Foo(a=y):`, `case [*rest]:`,
+        # `case {**rest}:` all bind names. Guarded by getattr so this stays 3.9-safe.
+        elif _MATCH_AS is not None and isinstance(node, _MATCH_AS) and node.name:
+            names.add(node.name)
+        elif _MATCH_STAR is not None and isinstance(node, _MATCH_STAR) and node.name:
+            names.add(node.name)
+        elif _MATCH_MAPPING is not None and isinstance(node, _MATCH_MAPPING) and node.rest:
+            names.add(node.rest)
     return names
 
 

@@ -51,12 +51,48 @@ class TestCollectLocalDefinitions:
         )
         assert _collect_local_definitions(tree) == {"GLOBAL", "helper", "Svc"}
 
-    def test_nested_not_included(self):
-        """Only module-level definitions should be collected."""
+    def test_nested_names_now_included(self):
+        """FR-RI-2 (RUN-038 #2): names bound in ANY scope are collected, not just module-level.
+
+        Was ``test_nested_not_included`` — the old narrow module-level scope is exactly what let
+        ``import_completion`` synthesize ``import <local-var>`` and cause a boot ModuleNotFoundError.
+        """
         tree = ast.parse(
             "def outer():\n    def inner():\n        pass\n    inner()\n"
         )
-        assert _collect_local_definitions(tree) == {"outer"}
+        assert _collect_local_definitions(tree) == {"outer", "inner"}
+
+    def test_match_case_captures_collected(self):
+        """FR-RI-2 (review): match/case capture bindings must be collected (py3.10+ scope)."""
+        code = (
+            "def handle(cmd):\n"
+            "    match cmd:\n"
+            "        case ['move', direction]:\n"
+            "            return direction\n"
+            "        case {'speed': spd, **rest}:\n"
+            "            return spd\n"
+            "        case [*items]:\n"
+            "            return items\n"
+            "        case other:\n"
+            "            return other\n"
+        )
+        names = _collect_local_definitions(ast.parse(code))
+        assert {"direction", "spd", "rest", "items", "other"} <= names
+
+    def test_function_body_local_excluded_from_import_synthesis(self):
+        """The RUN-038 own-goal: a function-body local (`assets`) must never become `import assets`."""
+        code = (
+            "from sqlmodel import Session, select\n"
+            "def export(session: Session):\n"
+            "    assets = session.exec(select(X)).all()\n"
+            "    for row in assets:\n"
+            "        pass\n"
+            "    with open('x') as fh:\n"
+            "        data = fh.read()\n"
+            "    return [a for a in assets if (total := a.value)]\n"
+        )
+        names = _collect_local_definitions(ast.parse(code))
+        assert {"assets", "session", "row", "fh", "data", "a", "total", "export"} <= names
 
     def test_async_functions(self):
         tree = ast.parse("async def handler():\n    pass\n")

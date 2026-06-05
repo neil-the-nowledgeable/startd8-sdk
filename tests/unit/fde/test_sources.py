@@ -81,3 +81,95 @@ def test_language_capability_unsupported_is_unavailable():
     cap = sources.language_capability("rust")
     assert cap.label == ClaimLabel.PREDICTION
     assert cap.qualifier == "unavailable"
+
+
+# --- RUN-038 surfaces: convention violations + FR-CAR safe-fix gap (#5) -----------------
+
+
+def _write_pm_with_convention(run, feature_id, *, safe_fixable, repairs_applied):
+    import json
+
+    (run / "prime-postmortem-report.json").write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "feature_id": feature_id,
+                        "semantic_repairs_applied": repairs_applied,
+                        "disk_compliance": {
+                            "convention_violations": [
+                                {
+                                    "convention_kind": "module_source",
+                                    "symbol": "from app.models import TailoredAsset",
+                                    "expected": "import tables from app.tables",
+                                    "safe_fixable": safe_fixable,
+                                }
+                            ],
+                        },
+                        "elements": [],
+                    }
+                ]
+            }
+        )
+    )
+
+
+def test_convention_violation_surfaced_as_mechanism(tmp_path):
+    run = tmp_path / "r"
+    run.mkdir()
+    _write_pm_with_convention(run, "PI-003", safe_fixable=True, repairs_applied=0)
+    claims = sources.read_convention_status(run, "PI-003")
+    assert any(
+        "module_source" in c.text and c.label == ClaimLabel.MECHANISM for c in claims
+    )
+
+
+def test_safefix_gap_flagged_when_hard_gated_but_no_repair(tmp_path):
+    # RUN-038 #5: safe_fixable violation + semantic_repairs_applied=0 → worst-of-both flag.
+    run = tmp_path / "r"
+    run.mkdir()
+    _write_pm_with_convention(run, "PI-003", safe_fixable=True, repairs_applied=0)
+    claims = sources.read_convention_status(run, "PI-003")
+    gap = [c for c in claims if c.claim_id == "PI-003:safefix-gap"]
+    assert gap and "left on the table" in gap[0].text
+    assert gap[0].tag() == "MECHANISM (sdk, conflict)"
+
+
+def test_no_safefix_gap_when_repair_applied(tmp_path):
+    run = tmp_path / "r"
+    run.mkdir()
+    _write_pm_with_convention(run, "PI-003", safe_fixable=True, repairs_applied=1)
+    claims = sources.read_convention_status(run, "PI-003")
+    assert not any(c.claim_id == "PI-003:safefix-gap" for c in claims)
+
+
+def test_import_completion_own_goal_flagged(tmp_path):
+    # RUN-038 #2: import_completion in repair_steps → own-goal-risk flag on the element.
+    import json
+
+    run = tmp_path / "r"
+    run.mkdir()
+    (run / "prime-postmortem-report.json").write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "feature_id": "PI-001",
+                        "elements": [
+                            {
+                                "element_name": "job_router",
+                                "tier": "simple",
+                                "repair_steps": [
+                                    "import_completion",
+                                    "extended_lint_fix",
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    claims = sources.read_element_mechanism(run, "PI-001", "job_router")
+    own = [c for c in claims if c.claim_id == "PI-001:job_router:own-goal-risk"]
+    assert own and "import_completion" in own[0].text and "locally-bound" in own[0].text

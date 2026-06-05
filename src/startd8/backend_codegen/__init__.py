@@ -36,6 +36,12 @@ from .gates import verify_pydantic_fidelity, verify_sqlmodel_fidelity
 from .provider import PydanticSQLModelProvider
 from .pydantic_renderer import PydanticRenderResult, render_pydantic_models
 from .sqlmodel_renderer import SQLModelRenderResult, render_sqlmodel_tables
+from .test_emitter import (
+    COMPLETENESS_TESTS_PATH,
+    CONTRACT_TESTS_PATH,
+    render_completeness_tests,
+    render_contract_tests,
+)
 
 __all__ = [
     "render_pydantic_models",
@@ -58,6 +64,10 @@ __all__ = [
     "render_completeness",
     "render_derived",
     "render_requirements",
+    "render_contract_tests",
+    "render_completeness_tests",
+    "CONTRACT_TESTS_PATH",
+    "COMPLETENESS_TESTS_PATH",
     "render_backend",
     "CANONICAL_LAYOUT",
     "check_drift",
