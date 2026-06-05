@@ -27,6 +27,8 @@ model JobDescription {
   source    String  @default("user")
   confirmed Boolean @default(true)
   rawText   String?
+  requiredCapabilities String?
+  targetOutcomes       String?
 }
 
 model TailoredMatch {
@@ -54,6 +56,8 @@ model Opportunity {
   source    String  @default("user")
   confirmed Boolean @default(true)
   stage     String?
+  metrics       String?
+  economicBuyer String?
 }
 
 model Capability {
@@ -62,6 +66,22 @@ model Capability {
   source    String  @default("user")
   confirmed Boolean @default(true)
   name      String?
+}
+
+model Contact {
+  id            String  @id @default(cuid())
+  ownerId       String  @default("local")
+  source        String  @default("user")
+  confirmed     Boolean @default(true)
+  opportunityId String?
+}
+
+model Activity {
+  id            String  @id @default(cuid())
+  ownerId       String  @default("local")
+  source        String  @default("user")
+  confirmed     Boolean @default(true)
+  opportunityId String?
 }
 """.strip()
 
@@ -91,13 +111,65 @@ views:
       type_field: subjectType
       id_field: subjectId
       type_map: { capability: Capability }
+    gap:
+      needs_from: [requiredCapabilities, targetOutcomes]
+  - name: opportunity_detail
+    kind: detail-compose
+    route: /opportunity/{id}
+    root: Opportunity
+    relations:
+      - { name: contacts, from: Contact, fk: opportunityId }
+      - { name: activities, from: Activity, fk: opportunityId }
+    panels:
+      - { name: qualification, fields: [metrics, economicBuyer], show_when: any_set }
+  - name: job_export
+    kind: export-package
+    route: /job/{id}/export
+    root: JobDescription
+    relations:
+      - { name: matches, from: TailoredMatch, fk: jobDescriptionId }
+      - { name: assets, from: TailoredAsset, fk: jobDescriptionId }
 """.strip()
 
 
 def test_strict_validation_rejects_unknown_entity():
     bad = VIEWS.replace("root: Opportunity", "root: Nonexistent")
     with pytest.raises(ValueError):
-        parse_views(bad, known_entities=frozenset({"JobDescription", "TailoredMatch", "TailoredAsset", "Capability"}))
+        parse_views(bad, known_entities=frozenset({
+            "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
+            "Opportunity", "Contact", "Activity",
+        }))
+
+
+_KNOWN = frozenset({
+    "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
+    "Opportunity", "Contact", "Activity",
+})
+
+
+def test_strict_validation_rejects_unknown_relation_panel_gap_keys():
+    # unknown relation key
+    bad = VIEWS.replace("{ name: contacts, from: Contact, fk: opportunityId }",
+                        "{ name: contacts, from: Contact, fk: opportunityId, bogus: x }")
+    with pytest.raises(ValueError):
+        parse_views(bad, known_entities=_KNOWN)
+    # unknown panel key
+    bad = VIEWS.replace("show_when: any_set }", "show_when: any_set, bogus: x }")
+    with pytest.raises(ValueError):
+        parse_views(bad, known_entities=_KNOWN)
+    # unknown gap key
+    bad = VIEWS.replace("needs_from: [requiredCapabilities, targetOutcomes]",
+                        "needs_from: [requiredCapabilities]\n      bogus: x")
+    with pytest.raises(ValueError):
+        parse_views(bad, known_entities=_KNOWN)
+    # unknown show_when grammar
+    bad = VIEWS.replace("show_when: any_set", "show_when: all_set")
+    with pytest.raises(ValueError):
+        parse_views(bad, known_entities=_KNOWN)
+    # relation to unknown entity is gated
+    bad = VIEWS.replace("from: Contact", "from: Ghost")
+    with pytest.raises(ValueError):
+        parse_views(bad, known_entities=_KNOWN)
 
 
 def test_render_byte_identical_and_paths():
@@ -106,8 +178,10 @@ def test_render_byte_identical_and_paths():
     paths = {rel for rel, _ in a}
     for expected in (
         "app/views/jobs_dashboard.py", "app/views/pipeline_board.py", "app/views/job_workspace.py",
+        "app/views/opportunity_detail.py", "app/views/job_export.py",
         "app/views/routes.py", "tests/test_views.py",
         "app/templates/views/job_workspace.html",
+        "app/templates/views/opportunity_detail.html", "app/templates/views/job_export.html",
     ):
         assert expected in paths
 
@@ -133,4 +207,4 @@ def test_emitted_view_tests_run_green(tmp_path):
         cwd=tmp_path, capture_output=True, text=True,
     )
     assert result.returncode == 0, f"emitted view tests failed:\n{result.stdout}\n{result.stderr}"
-    assert "3 passed" in result.stdout
+    assert "5 passed" in result.stdout

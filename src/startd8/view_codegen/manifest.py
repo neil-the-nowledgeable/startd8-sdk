@@ -6,8 +6,9 @@ a declared manifest. ``views.yaml`` declares each view over a **closed archetype
 manifest supplies only entities/fields, never logic. Unknown keys / unknown ``kind`` fail loud.
 
 v1 archetypes: ``dashboard`` (aggregates + signal), ``board`` (group-by an ordered allow-list),
-``workspace`` (polymorphic resolution + gap-flag). ``detail-compose`` / ``export-package`` are a
-fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
+``workspace`` (polymorphic resolution + gap-flag). ``detail-compose`` (root + resolved relations as
+panels + conditional panels) and ``export-package`` (root + relations -> lossless package + named MD
+layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
 """
 
 from __future__ import annotations
@@ -17,12 +18,17 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-_KINDS = {"dashboard", "board", "workspace"}
+_KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package"}
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
+    "relations", "panels", "gap",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
+_REL_KEYS = {"name", "from", "fk"}
+_PANEL_KEYS = {"name", "fields", "show_when"}
+_GAP_KEYS = {"needs_from"}
+_SHOW_WHEN = {"any_set"}
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,25 @@ class Aggregate:
     name: str
     of: str   # the related entity
     fk: str   # the FK field on *of* pointing at root.id
+
+
+@dataclass(frozen=True)
+class Relation:
+    name: str   # the key under which resolved rows are returned
+    frm: str    # the related entity (manifest key: ``from``)
+    fk: str     # the FK field on *frm* pointing at root.id
+
+
+@dataclass(frozen=True)
+class Panel:
+    name: str
+    fields: Tuple[str, ...]
+    show_when: str  # currently only ``any_set``
+
+
+@dataclass(frozen=True)
+class Gap:
+    needs_from: Tuple[str, ...]  # root text fields, newline-split into needs
 
 
 @dataclass(frozen=True)
@@ -52,6 +77,9 @@ class ViewSpec:
     group_by: str = ""
     order: Tuple[str, ...] = ()
     polymorphic: Polymorphic | None = None
+    relations: Tuple[Relation, ...] = ()
+    panels: Tuple[Panel, ...] = ()
+    gap: Gap | None = None
 
     @property
     def module(self) -> str:
@@ -118,6 +146,45 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
                 type_field=str(p["type_field"]), id_field=str(p["id_field"]), type_map=tmap,
             )
 
+        relations: List[Relation] = []
+        for r in entry.get("relations") or []:
+            bad = set(r) - _REL_KEYS
+            if bad:
+                raise ValueError(f"views.yaml: relation in {entry['name']!r} unknown keys {sorted(bad)}")
+            for req in ("name", "from", "fk"):
+                if not r.get(req):
+                    raise ValueError(f"views.yaml: relation in {entry['name']!r} missing `{req}`")
+            _check_entity(str(r["from"]), f"relation {r.get('name')!r} in {entry['name']!r}")
+            relations.append(Relation(name=str(r["name"]), frm=str(r["from"]), fk=str(r["fk"])))
+
+        panels: List[Panel] = []
+        for pn in entry.get("panels") or []:
+            bad = set(pn) - _PANEL_KEYS
+            if bad:
+                raise ValueError(f"views.yaml: panel in {entry['name']!r} unknown keys {sorted(bad)}")
+            for req in ("name", "fields", "show_when"):
+                if not pn.get(req):
+                    raise ValueError(f"views.yaml: panel in {entry['name']!r} missing `{req}`")
+            sw = str(pn["show_when"])
+            if sw not in _SHOW_WHEN:
+                raise ValueError(
+                    f"views.yaml: panel {pn['name']!r} in {entry['name']!r} unknown show_when {sw!r} "
+                    f"(allowed: {sorted(_SHOW_WHEN)})"
+                )
+            panels.append(Panel(
+                name=str(pn["name"]), fields=tuple(str(f) for f in pn["fields"]), show_when=sw,
+            ))
+
+        gap = None
+        if "gap" in entry:
+            g = entry["gap"]
+            bad = set(g) - _GAP_KEYS
+            if bad:
+                raise ValueError(f"views.yaml: gap in {entry['name']!r} unknown keys {sorted(bad)}")
+            if not g.get("needs_from"):
+                raise ValueError(f"views.yaml: gap in {entry['name']!r} missing `needs_from`")
+            gap = Gap(needs_from=tuple(str(s) for s in g["needs_from"]))
+
         if entry.get("signal"):
             agg_names = {a.name for a in aggregates}
             sig_name, _ = _signal_parts(str(entry["signal"]))
@@ -132,6 +199,7 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),
             polymorphic=poly,
+            relations=tuple(relations), panels=tuple(panels), gap=gap,
         ))
     if not out:
         raise ValueError("views.yaml declares no views")

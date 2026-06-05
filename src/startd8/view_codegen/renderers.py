@@ -100,7 +100,7 @@ def _render_workspace(v: ViewSpec) -> str:
     entities = sorted({v.root, p.of} | {ent for _, ent in p.type_map})
     imports = ", ".join(entities)
     map_lit = "{" + ", ".join(f'"{k}": {ent}' for k, ent in p.type_map) + "}"
-    return "\n".join([
+    lines = [
         "from __future__ import annotations", "",
         "from typing import Any", "",
         "from sqlmodel import Session, select", "",
@@ -115,16 +115,120 @@ def _render_workspace(v: ViewSpec) -> str:
         f"        model = _TYPE_MAP.get(getattr(m, {p.type_field!r}))",
         f"        entity = session.get(model, getattr(m, {p.id_field!r})) if model is not None else None",
         '        resolved.append({"match": m, "entity": entity, "dangling": entity is None})',
-        '    return {"root": root, "resolved": resolved}', "",
+    ]
+    if v.gap is not None:
+        needs_lit = "[" + ", ".join(repr(f) for f in v.gap.needs_from) + "]"
+        lines += [
+            "    needs: list[str] = []",
+            f"    for _field in {needs_lit}:",
+            "        _raw = getattr(root, _field, None) or \"\"",
+            "        needs += [n.strip() for n in str(_raw).split(chr(10)) if n.strip()]",
+            "    # union of declared needs MINUS covered (a need is covered when >=1 match resolved)",
+            "    _covered = sum(1 for r in resolved if not r['dangling'])",
+            "    _uniq: list[str] = []",
+            "    for n in needs:",
+            "        if n not in _uniq:",
+            "            _uniq.append(n)",
+            "    gaps = _uniq[_covered:] if _covered < len(_uniq) else []",
+            '    return {"root": root, "resolved": resolved, "gaps": gaps}',
+        ]
+    else:
+        lines.append('    return {"root": root, "resolved": resolved}')
+    lines += ["", f"__all__ = [{(v.module + '_data')!r}]", ""]
+    return "\n".join(lines)
+
+
+def _render_detail_compose(v: ViewSpec) -> str:
+    entities = sorted({v.root} | {r.frm for r in v.relations})
+    imports = ", ".join(entities)
+    lines = [
+        "from __future__ import annotations", "",
+        "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        f"from app.tables import {imports}", "", "",
+        f"def {v.module}_data(session: Session, root_id: str) -> dict[str, Any]:",
+        f'    """Detail-compose: one {v.root} root + resolved relations as panels + conditional panels'
+        ' (any_set -> shown only when >=1 declared field is non-empty)."""',
+        f"    root = session.get({v.root}, root_id)",
+        '    out: dict[str, Any] = {"root": root}',
+    ]
+    for r in v.relations:
+        lines.append(
+            f"    out[{r.name!r}] = session.exec("
+            f"select({r.frm}).where({r.frm}.{r.fk} == root_id)).all()"
+        )
+    lines.append("    panels: dict[str, bool] = {}")
+    for pn in v.panels:
+        fields_lit = "(" + ", ".join(repr(f) for f in pn.fields) + (",)" if len(pn.fields) == 1 else ")")
+        # show_when == any_set: shown only if >=1 field is non-empty
+        lines.append(
+            f"    panels[{pn.name!r}] = "
+            f"any(getattr(root, _f, None) not in (None, \"\") for _f in {fields_lit})"
+        )
+    lines += [
+        '    out["panels"] = panels',
+        "    return out",
+        "",
         f"__all__ = [{(v.module + '_data')!r}]", "",
-    ])
+    ]
+    return "\n".join(lines)
+
+
+def _render_export_package(v: ViewSpec) -> str:
+    entities = sorted({v.root} | {r.frm for r in v.relations})
+    imports = ", ".join(entities)
+    lines = [
+        "from __future__ import annotations", "",
+        "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        f"from app.tables import {imports}", "", "",
+        "def _row_to_dict(row: Any) -> dict[str, Any]:",
+        '    """Lossless dump of a SQLModel row to a plain dict."""',
+        "    return {k: getattr(row, k) for k in row.__class__.model_fields}", "", "",
+        f"def {v.module}_package(session: Session, root_id: str) -> dict[str, Any]:",
+        f'    """Export-package: assemble {v.root} + resolved relations into a lossless package dict."""',
+        f"    root = session.get({v.root}, root_id)",
+        '    pkg: dict[str, Any] = {"root": _row_to_dict(root) if root is not None else None}',
+    ]
+    for r in v.relations:
+        lines.append(
+            f"    pkg[{r.name!r}] = [_row_to_dict(x) for x in session.exec("
+            f"select({r.frm}).where({r.frm}.{r.fk} == root_id)).all()]"
+        )
+    lines += [
+        "    return pkg", "", "",
+        f"def {v.module}_to_markdown(pkg: dict[str, Any]) -> str:",
+        f'    """Named layout: a `# {v.root}` section then a `## <relation>` section per relation."""',
+        "    lines: list[str] = []",
+        f'    lines.append("# {v.root}")',
+        '    root = pkg.get("root") or {}',
+        "    for k in sorted(root):",
+        '        lines.append(f"- {k}: {root[k]}")',
+    ]
+    for r in v.relations:
+        lines += [
+            f'    lines.append("")',
+            f'    lines.append("## {r.name}")',
+            f"    for item in pkg.get({r.name!r}, []):",
+            '        lines.append(f"- {item}")',
+        ]
+    lines += [
+        '    return chr(10).join(lines)', "",
+        f"__all__ = [{(v.module + '_package')!r}, {(v.module + '_to_markdown')!r}]", "",
+    ]
+    return "\n".join(lines)
 
 
 _MODULE_RENDERERS = {
     "dashboard": _render_dashboard,
     "board": _render_board,
     "workspace": _render_workspace,
+    "detail-compose": _render_detail_compose,
+    "export-package": _render_export_package,
 }
+
+# Kinds that take a ``/{id}`` route -> their data/package fn is called with the path id.
+_ID_ROUTED = {"workspace", "detail-compose", "export-package"}
 
 
 def render_view_module(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
@@ -137,11 +241,23 @@ def render_view_module(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str) -> str:
-    imports = "\n".join(f"from app.views.{v.module} import {v.module}_data" for v in views)
+    import_lines: List[str] = []
+    for v in views:
+        if v.kind == "export-package":
+            import_lines.append(f"from app.views.{v.module} import {v.module}_package")
+        else:
+            import_lines.append(f"from app.views.{v.module} import {v.module}_data")
+    imports = "\n".join(import_lines)
     routes: List[str] = []
     for v in views:
         tmpl = f"views/{v.module}.html"
-        if v.kind == "workspace":
+        if v.kind == "export-package":
+            routes.append(
+                f"@views_router.get({v.route!r})\n"
+                f"def {v.module}(id: str, session: Session = Depends(get_session)):\n"
+                f"    return {v.module}_package(session, id)"
+            )
+        elif v.kind in _ID_ROUTED:  # workspace / detail-compose -> HTML, /{id}
             routes.append(
                 f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
                 f"def {v.module}(id: str, request: Request, session: Session = Depends(get_session)):\n"
@@ -194,6 +310,20 @@ def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
             '{% extends "base.html" %}\n{% block content %}\n'
             f"<h1>{v.module}</h1>\n"
             "<ul>{% for r in data.resolved %}<li>{% if r.dangling %}⚠ dangling{% else %}{{ r.entity.id }}{% endif %}</li>{% endfor %}</ul>\n"
+            "{% endblock %}\n"
+        )
+    elif v.kind == "detail-compose":
+        block = (
+            '{% extends "base.html" %}\n{% block content %}\n'
+            f"<h1>{v.module}</h1>\n"
+            "<p>{{ data.root.id }}</p>\n"
+            "{% for name, shown in data.panels.items() %}{% if shown %}<section><h2>{{ name }}</h2></section>{% endif %}{% endfor %}\n"
+            "{% endblock %}\n"
+        )
+    elif v.kind == "export-package":  # served as JSON; template is a minimal placeholder
+        block = (
+            '{% extends "base.html" %}\n{% block content %}\n'
+            f"<h1>{v.module}</h1>\n"
             "{% endblock %}\n"
         )
     else:  # dashboard
@@ -254,10 +384,16 @@ def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, view
 
 
 def _render_view_test(schema, v: ViewSpec) -> str:
+    if v.kind == "export-package":
+        import_line = (
+            f"    from app.views.{v.module} import {v.module}_package, {v.module}_to_markdown"
+        )
+    else:
+        import_line = f"    from app.views.{v.module} import {v.module}_data"
     setup = [
         f"def test_{v.module}_data(tmp_path):",
         "    import app.tables as t",
-        f"    from app.views.{v.module} import {v.module}_data",
+        import_line,
         '    engine = create_engine(f"sqlite:///{tmp_path}/v.db")',
         "    SQLModel.metadata.create_all(engine)",
         "    with Session(engine) as s:",
@@ -281,11 +417,15 @@ def _render_view_test(schema, v: ViewSpec) -> str:
             f"    assert len(cols.get({a!r}, [])) >= 1",
             f"    assert [s for s, _ in board][:{len(v.order)}] == {list(v.order)!r}",
         ]
-    else:  # workspace — the key test: resolution + dangling flag
+    elif v.kind == "workspace":  # the key test: resolution + dangling flag (+ gap if declared)
         p = v.polymorphic
         first_type, first_entity = p.type_map[0]
+        root_explicit: dict = {}
+        if v.gap is not None:
+            # seed the first needs field with two newline-split needs so `gaps` is non-trivial
+            root_explicit[v.gap.needs_from[0]] = repr("need-a\nneed-b")
         setup += [
-            _seed(schema, "root", v.root, {}),
+            _seed(schema, "root", v.root, root_explicit),
             _seed(schema, "ent", first_entity, {}),
             _seed(schema, "_good", p.of, {p.fk: "root.id", p.type_field: repr(first_type), p.id_field: "ent.id"}),
             _seed(schema, "_dangling", p.of, {p.fk: "root.id", p.type_field: repr(first_type), p.id_field: "'nope'"}),
@@ -294,6 +434,37 @@ def _render_view_test(schema, v: ViewSpec) -> str:
             "    assert any(not r['dangling'] for r in resolved)  # the real ref resolves",
             "    assert any(r['dangling'] for r in resolved)       # the bad ref is flagged, not crashed",
         ]
+        if v.gap is not None:
+            setup += [
+                "    assert 'gaps' in data       # gap set-difference computed (non-crashing)",
+                "    assert isinstance(data['gaps'], list)",
+            ]
+    elif v.kind == "detail-compose":
+        setup.append(_seed(schema, "root", v.root, {}))
+        for i, r in enumerate(v.relations):
+            setup.append(_seed(schema, f"_rel{i}", r.frm, {r.fk: "root.id"}))
+        setup += [
+            f"        data = {v.module}_data(s, root.id)",
+            "    assert data['root'] is not None",
+        ]
+        for r in v.relations:
+            setup.append(f"    assert len(data[{r.name!r}]) >= 1  # relation {r.name} resolved")
+        for pn in v.panels:
+            setup.append(f"    assert {pn.name!r} in data['panels']  # panel bool computed")
+    else:  # export-package — package losslessness + named MD layout
+        setup.append(_seed(schema, "root", v.root, {}))
+        for i, r in enumerate(v.relations):
+            setup.append(_seed(schema, f"_rel{i}", r.frm, {r.fk: "root.id"}))
+        setup += [
+            f"        pkg = {v.module}_package(s, root.id)",
+            f"        md = {v.module}_to_markdown(pkg)",
+            "    assert pkg['root']['id'] == root.id  # root present + lossless",
+        ]
+        for r in v.relations:
+            setup.append(f"    assert len(pkg[{r.name!r}]) >= 1  # relation {r.name} in package")
+        setup.append(f"    assert '# {v.root}' in md  # root section header")
+        for r in v.relations:
+            setup.append(f"    assert '## {r.name}' in md  # {r.name} section header")
     return "\n".join(setup)
 
 
