@@ -177,12 +177,25 @@ def render_alembic_env(manifest_text: str) -> str:
     return _header("scaffold-alembic-env", sha) + "\n\n" + body
 
 
+def render_env_example(manifest_text: str) -> str:
+    """``.env.example`` — the local-config template (API key, DB url, cost budget). Bucket-1 plumbing."""
+    m = parse_app_manifest(manifest_text)
+    sha = schema_sha256(manifest_text)
+    body = (
+        "ANTHROPIC_API_KEY=\n"
+        f"DATABASE_URL=sqlite:///{m.db_path}\n"
+        "COST_BUDGET_USD=10\n"
+    )
+    return _header("scaffold-env", sha) + "\n\n" + body
+
+
 def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
     """Every plumbing artifact as ``(relative_path, text)`` pairs, gated by the manifest's flags."""
     m = parse_app_manifest(manifest_text)
     out: List[Tuple[str, str]] = [
         ("pyproject.toml", render_pyproject(manifest_text)),
         (f"{m.package}/logging_config.py", render_logging(manifest_text)),
+        (".env.example", render_env_example(manifest_text)),
     ]
     if m.dockerfile:
         out.append(("Dockerfile", render_dockerfile(manifest_text)))
@@ -199,4 +212,5 @@ SCAFFOLD_RENDERERS = {
     "scaffold-dockerfile": render_dockerfile,
     "scaffold-alembic-ini": render_alembic_ini,
     "scaffold-alembic-env": render_alembic_env,
+    "scaffold-env": render_env_example,
 }

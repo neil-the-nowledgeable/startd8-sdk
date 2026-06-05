@@ -56,6 +56,7 @@ def test_render_is_byte_identical_and_full_set():
     assert paths == {
         "pyproject.toml",
         "app/logging_config.py",
+        ".env.example",
         "Dockerfile",
         "alembic.ini",
         "alembic/env.py",
@@ -63,6 +64,19 @@ def test_render_is_byte_identical_and_full_set():
     for _, content in a:
         assert "# startd8-artifact: scaffold-" in content
         assert "# manifest-sha256:" in content
+
+
+def test_env_example_is_byte_identical_and_carries_db_url():
+    files = dict(render_scaffold(MANIFEST))
+    assert ".env.example" in files
+    env = files[".env.example"]
+    assert env == dict(render_scaffold(MANIFEST))[".env.example"]  # byte-identical
+    assert "# startd8-artifact: scaffold-env" in env
+    assert "ANTHROPIC_API_KEY=" in env
+    assert "DATABASE_URL=sqlite:///./data/startd8.db" in env  # db_path from the manifest
+    assert "COST_BUDGET_USD=10" in env
+    assert scaffold_in_sync(MANIFEST, env) is True
+    assert scaffold_in_sync(MANIFEST, env.replace("10", "99", 1)) is False  # tampered
 
 
 def test_pyproject_parses_and_has_deps():
