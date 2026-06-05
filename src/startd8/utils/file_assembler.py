@@ -44,6 +44,28 @@ _TYPING_EXPORTS: frozenset = frozenset({
     "Literal", "Annotated", "TypedDict", "Protocol", "NamedTuple", "NewType", "TypeVar",
     "NoReturn", "Hashable", "Text", "IO", "BinaryIO", "TextIO", "Pattern", "Match",
 })
+# The generated-app framework stack (what backend_codegen emits / the convention authority
+# governs): name → module. Used to complete imports for framework symbols a plan-declared element
+# references but does not import (e.g. `job_export_router = APIRouter()` with empty imports). Bounded
+# on purpose — unknown names stay unimported so Sapper surfaces them rather than masking a real gap.
+_FRAMEWORK_IMPORTS: Dict[str, str] = {
+    # fastapi core
+    "APIRouter": "fastapi", "FastAPI": "fastapi", "Depends": "fastapi", "Request": "fastapi",
+    "Response": "fastapi", "HTTPException": "fastapi", "Query": "fastapi", "Path": "fastapi",
+    "Body": "fastapi", "Form": "fastapi", "Header": "fastapi", "Cookie": "fastapi",
+    "status": "fastapi", "BackgroundTasks": "fastapi", "UploadFile": "fastapi", "File": "fastapi",
+    # fastapi responses / templating
+    "HTMLResponse": "fastapi.responses", "JSONResponse": "fastapi.responses",
+    "RedirectResponse": "fastapi.responses", "PlainTextResponse": "fastapi.responses",
+    "StreamingResponse": "fastapi.responses", "FileResponse": "fastapi.responses",
+    "Jinja2Templates": "fastapi.templating",
+    # sqlmodel (the generated ORM — never sqlalchemy, per the convention authority)
+    "SQLModel": "sqlmodel", "Field": "sqlmodel", "Relationship": "sqlmodel",
+    "Session": "sqlmodel", "select": "sqlmodel", "create_engine": "sqlmodel", "col": "sqlmodel",
+    # pydantic
+    "BaseModel": "pydantic", "field_validator": "pydantic", "model_validator": "pydantic",
+    "ConfigDict": "pydantic",
+}
 from startd8.utils.code_manifest import (
     ElementKind,
     ParamKind,
@@ -297,7 +319,7 @@ class DeterministicFileAssembler:
         # else the file fails type-check AND breaks FastAPI/SQLModel at runtime (they evaluate
         # annotations via get_type_hints despite `from __future__ import annotations`).
         import_block = self._render_imports(
-            self._complete_typing_imports(file_spec), file_spec.dependencies
+            self._complete_imports(file_spec), file_spec.dependencies
         )
         if import_block:
             lines.append("")
@@ -336,63 +358,72 @@ class DeterministicFileAssembler:
 
     # ── Import rendering ──────────────────────────────────────────────────
 
-    def _typing_names_in_signatures(self, elements: list) -> Set[str]:
-        """Collect ``typing`` names referenced in element annotations (params/return/assign).
+    def _referenced_names(self, elements: list) -> Set[str]:
+        """Identifiers referenced in element annotations (params/return/assign) and ``value_repr``.
 
-        Conservative: only matches identifiers in the known ``typing`` export set, so a local
-        class is never mistaken for ``typing.List``. Subscripts/qualified names are ignored
-        (``app.tables.Job`` won't match; ``List`` and ``Dict`` in ``List[Dict]`` will).
+        Conservative resolution happens in :meth:`_complete_imports` (only ``typing`` + framework
+        names are completed), so collecting a broad identifier set here is safe — a local class is
+        never mistaken for a library symbol.
         """
         names: Set[str] = set()
         for elem in elements:
-            anns: list[str] = []
+            texts: list[str] = []
             sig = getattr(elem, "signature", None)
             if sig is not None:
                 for p in getattr(sig, "params", []) or []:
                     if getattr(p, "annotation", None):
-                        anns.append(str(p.annotation))
+                        texts.append(str(p.annotation))
                 if getattr(sig, "return_annotation", None):
-                    anns.append(str(sig.return_annotation))
+                    texts.append(str(sig.return_annotation))
             if getattr(elem, "type_annotation", None):
-                anns.append(str(elem.type_annotation))
-            for ann in anns:
-                for tok in _IDENT_RE.findall(ann):
-                    if tok in _TYPING_EXPORTS:
-                        names.add(tok)
+                texts.append(str(elem.type_annotation))
+            if getattr(elem, "value_repr", None):
+                texts.append(str(elem.value_repr))  # e.g. "APIRouter()" → APIRouter
+            for text in texts:
+                names.update(_IDENT_RE.findall(text))
         return names
 
-    def _complete_typing_imports(self, file_spec: "ForwardFileSpec") -> list:
-        """Return ``file_spec.imports`` with the ``typing`` import completed from signatures.
+    def _complete_imports(self, file_spec: "ForwardFileSpec") -> list:
+        """Return ``file_spec.imports`` completed so every referenced name is importable.
 
-        Merges any existing ``from typing import …`` with the names the signatures use, so the
-        rendered skeleton is self-consistent (no undefined ``Dict``/``List``). Non-typing imports
-        are preserved verbatim and ordering is otherwise unchanged. Never mutates the frozen spec.
+        Resolves referenced names against ``typing`` (a fixed export set) and the generated-app
+        framework stack (``_FRAMEWORK_IMPORTS``: FastAPI/SQLModel/Jinja2/Pydantic — what
+        ``backend_codegen`` emits). Names already imported from another module are never shadowed
+        (a domain ``Match`` from ``app.tables`` is left alone); names that resolve to neither table
+        are left unimported **by design** — Sapper then surfaces them rather than masking a real
+        gap. Never mutates the frozen spec.
         """
-        used = self._typing_names_in_signatures(file_spec.elements)
-        if not used:
+        refs = self._referenced_names(file_spec.elements)
+        if not refs:
             return list(file_spec.imports)
 
-        # Never shadow a name already imported from another module: a domain `Match` from
-        # `app.tables` must NOT become `from typing import Match`. Only complete the genuinely
-        # missing typing names.
-        imported_elsewhere: Set[str] = set()
+        already: Set[str] = set()
         for imp in file_spec.imports:
-            if not (getattr(imp, "kind", None) == "from" and getattr(imp, "module", None) == "typing"):
-                imported_elsewhere.update(getattr(imp, "names", None) or [])
-        used = used - imported_elsewhere
-        if not used:
+            already.update(getattr(imp, "names", None) or [])
+
+        # missing referenced name → resolved module (typing wins; then framework table)
+        add_by_module: Dict[str, Set[str]] = {}
+        for name in refs - already:
+            module = "typing" if name in _TYPING_EXPORTS else _FRAMEWORK_IMPORTS.get(name)
+            if module:
+                add_by_module.setdefault(module, set()).add(name)
+        if not add_by_module:
             return list(file_spec.imports)
 
         from startd8.forward_manifest import ForwardImportSpec
 
+        # Merge completions into existing same-module from-imports (one clean line per module).
+        existing_by_module: Dict[str, Set[str]] = {}
         out: list = []
-        existing: Set[str] = set()
         for imp in file_spec.imports:
-            if getattr(imp, "kind", None) == "from" and getattr(imp, "module", None) == "typing":
-                existing.update(imp.names or [])
-                continue  # collapse all typing-from imports into one merged spec below
+            mod = getattr(imp, "module", None)
+            if getattr(imp, "kind", None) == "from" and mod in add_by_module:
+                existing_by_module.setdefault(mod, set()).update(imp.names or [])
+                continue
             out.append(imp)
-        out.append(ForwardImportSpec(kind="from", module="typing", names=sorted(existing | used)))
+        for module, names in add_by_module.items():
+            merged = sorted(existing_by_module.get(module, set()) | names)
+            out.append(ForwardImportSpec(kind="from", module=module, names=merged))
         return out
 
     def _render_imports(
