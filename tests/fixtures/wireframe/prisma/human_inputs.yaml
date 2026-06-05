@@ -1,0 +1,4 @@
+# Owned-field policy: the AI edge must never write Metric.value (the app FR-6 case).
+fields:
+  - target: Metric.value
+    authored_by: human

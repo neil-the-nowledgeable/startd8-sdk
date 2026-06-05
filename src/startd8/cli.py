@@ -36,6 +36,7 @@ from .cli_generate import generate_app
 from .cli_assist import assist_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
+from .cli_wireframe import wireframe as _wireframe_command
 
 
 app = typer.Typer(
@@ -768,6 +769,12 @@ app.add_typer(manifest_app, name="manifest")
 # Deterministic frontend code generation (no LLM)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(generate_app, name="generate")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Wireframe (pre-generation assembly summary — read-only, $0, advisory)
+# ──────────────────────────────────────────────────────────────────────────
+app.command("wireframe")(_wireframe_command)
 
 
 # ──────────────────────────────────────────────────────────────────────────

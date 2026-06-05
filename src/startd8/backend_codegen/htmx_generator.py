@@ -84,12 +84,16 @@ def _field_kind(field: PrismaField, schema: PrismaSchema) -> str:
     return "text"
 
 
-def _form_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
-    """All scalar fields — used for read-only display (list/detail), where system fields are fine."""
+def form_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
+    """All scalar fields — used for read-only display (list/detail), where system fields are fine.
+
+    Public (wireframe FR-W1/R6-S2): consumed by ``startd8.wireframe`` for field-level form
+    planning. The ``_form_fields`` alias is retained for existing internal callers (R4-S3).
+    """
     return list(schema.scalar_fields(name))
 
 
-def _writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
+def writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
     """Scalar fields a *human* authors in a form (FR-PG-5).
 
     Drops the PK and the server-managed provenance/timestamp columns so users are never asked to
@@ -103,6 +107,12 @@ def _writable_fields(schema: PrismaSchema, name: str) -> List[PrismaField]:
         for f in schema.scalar_fields(name)
         if not f.is_id and f.name not in _PROVENANCE_OMIT
     ]
+
+
+# Back-compat private aliases (R4-S3): existing internal call sites keep working; new external
+# consumers (wireframe) use the public names.
+_form_fields = form_fields
+_writable_fields = writable_fields
 
 
 def _is_required(field: PrismaField) -> bool:

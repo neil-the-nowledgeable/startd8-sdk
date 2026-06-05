@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.2.0"
+version: "1.4.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -608,22 +608,105 @@ capabilities:
         description: "Open gaps R1-F1..F4/R1-S5; iteration plan + pipeline fix list track closure"
     confidence: 0.7
 
+  - capability_id: startd8.codegen.deterministic_backend
+    category: generate
+    maturity: beta
+    summary: "Deterministically (no LLM) project one .prisma contract into a full runnable all-Python app — Pydantic models, SQLModel tables (compound @@id PKs, FK constraints, Relationship() pairing, @default translation, Create/Read/Update DTOs), FastAPI CRUD, server-rendered HTMX, export/AI-schemas/completeness, requirements.txt — all owned/$0.00-skippable + drift-checked + build-gated"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 generate backend --schema prisma/schema.prisma --out . [--check] [--gate]`
+        (backend_codegen.render_backend) emits the whole app/ package from the .prisma neutral
+        contract IDL with NO LLM ($0 cost): pure-Pydantic models.py; SQLModel tables.py (field +
+        compound @@id primary keys, FK constraints from @relation, Relationship() ORM-nav with
+        cross-model back_populates pairing, @default/@updatedAt → Field defaults, Create/Read/Update
+        DTOs); FastAPI routers.py + db.py + main.py; server-rendered HTMX web.py + Jinja templates
+        with inline validation; export/ai_schemas/completeness; requirements.txt. Every artifact
+        carries a `# startd8-artifact` header recognized by the DeterministicFileProvider skip-hook
+        (GENERATED $0.00) + drift --check; the Python build gate (validators/python_toolchain) and
+        prime_postmortem._evaluate_python_toolchain enforce it. Runtime-verified end-to-end (FastAPI
+        TestClient boot + CRUD + configure_mappers) on a real 15-model schema. Deferred: completeness
+        domain-manifest, polyglot.
+      agent: |
+        from startd8.backend_codegen import render_backend
+        for rel, content in render_backend(open("prisma/schema.prisma").read()):
+            ...  # write rel -> content; each owned/$0.00-skip + build-gateable
+    triggers: ["generate backend", "prisma to python", "sqlmodel generation", "fastapi crud generation", "htmx generation", "schema to app", "deterministic codegen", "contract codegen"]
+    evidence:
+      - type: code
+        ref: src/startd8/backend_codegen/
+        description: "render_backend + per-layer renderers (pydantic/sqlmodel/crud/htmx/derived/assembler) + DeterministicFileProvider"
+      - type: code
+        ref: src/startd8/cli_generate.py
+        description: "startd8 generate backend --schema/--out/--check/--gate (backend command)"
+      - type: test
+        ref: tests/unit/backend_codegen/
+        description: "~75 tests incl. test_runtime_smoke.py (importorskip-guarded TestClient boot + CRUD + FK/relationships)"
+      - type: docs
+        ref: docs/design/python-contract-codegen/
+        description: "REQUIREMENTS v0.2 + PLAN v1.0 + NEXT_STEPS — all FRs shipped; runtime-verified on the real 15-model schema"
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.wireframe_summary
+    category: query
+    maturity: beta
+    summary: "Pre-generation wireframe of the $0 deterministic cascade: read-only summary of what generate scaffold/backend/views WILL build (containers, services, entities/CRUD, pages, forms, views, content inputs, completeness) with planned/defaults/placeholder/not_defined/invalid statuses + cascade readiness"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 wireframe [--project ROOT] [--inputs assembly-inputs.yaml ...] [--json]
+        [--only-issues] [--pages-authoring]` derives a WireframePlan from the assembly input
+        manifests via the generators' OWN parsers — no generation, no LLM, no app-file writes.
+        Per-manifest absence semantics (app.yaml/human_inputs/completeness absent → `defaults`,
+        not "missing"), lenient-Prisma recoverability check (dropped model/enum blocks ⇒
+        `invalid`), worst-wins multi-manifest composition, FR-W5 consequence lines ("views.yaml
+        absent → no composite views"). Footer: status counts + shape summary + cascade readiness
+        (scaffold|backend|views: ready|blocked(reason)). JSON contract: schema_version 1,
+        inputs_fingerprint, input_provenance, `_meta`-excluded canonical body (byte-identical
+        across runs). Persists .startd8/wireframe/wireframe-plan.json atomically. Opt-in
+        cap-dev-pipe shim: STARTD8_WIREFRAME=1 (scripts/run_wireframe.py — early, never blocks,
+        crash → wireframe-error.json). Anti-divergence: FR-W14 golden cross-check asserts plan
+        paths == render_backend/render_scaffold/render_views output, both directions.
+      agent: |
+        from startd8.wireframe import load_assembly_inputs, build_wireframe_plan
+        plan = build_wireframe_plan(load_assembly_inputs(project_root=root))
+        plan.readiness  # {"scaffold": "ready", "backend": "...", "views": "blocked(...)"}
+        plan.sections   # statuses: planned|defaults|placeholder|not_defined|invalid
+    triggers: ["wireframe", "assembly summary", "what will be built", "planned vs not defined", "pre-generation preview", "cascade readiness", "assembly inputs", "wireframe-plan.json"]
+    evidence:
+      - type: code
+        ref: src/startd8/wireframe/
+        description: "inputs.py (assembly-inputs YAML loader, FR-W6..W8) + plan.py (WireframePlan, FR-W1..W5/W13/W15) + render.py (Rich tree, JSON, atomic persist)"
+      - type: code
+        ref: src/startd8/cli_wireframe.py
+        description: "top-level `startd8 wireframe` command (FR-W9; advisory exit 0, exit 2 only on fatal inputs)"
+      - type: code
+        ref: scripts/run_wireframe.py
+        description: "cap-dev-pipe shim (FR-W11; STARTD8_WIREFRAME=1 opt-in, never blocks)"
+      - type: test
+        ref: tests/unit/wireframe/
+        description: "41 tests: inputs merge/confinement, statuses incl. schema recoverability + composition, determinism byte-test, FR-W14 golden cross-check (all conditional surfaces), CLI"
+      - type: docs
+        ref: docs/design/wireframe/
+        description: "WIREFRAME_REQUIREMENTS v0.3 (post-CRP R1-R6) + WIREFRAME_PLAN v1.1 + WIREFRAME_USAGE"
+    confidence: 0.85
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_capabilities: 20
+  total_capabilities: 22
   by_maturity:
     stable: 16
-    beta: 4
+    beta: 6
   by_category:
     action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
     observe: 3     # session_tracking, cost_tracking, otel_logging
     validate: 4    # truncation_detection, diagnostics, mock_provider, multilang_manifest_validation
-    generate: 2    # forward_manifest_draft_time_injection, observability_artifact_generation
+    generate: 3    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend
     integration: 4 # provider_registry, contextcore, mcp, capdevpipe_install
-    query: 1       # model_catalog
+    query: 2       # model_catalog, wireframe_summary
     transform: 1   # code_extraction
 
 # ==============================================================================
@@ -631,6 +714,16 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.4.0"
+    date: "2026-06-05"
+    changes:
+      - "Added startd8.codegen.wireframe_summary (query, beta, confidence 0.85) — `startd8 wireframe`: $0 read-only pre-generation summary of the deterministic cascade with five-status model (incl. lenient-Prisma recoverability check), cascade readiness, schema_version-1 JSON + inputs_fingerprint, machine-readable assembly-inputs.yaml (first FR-X5 companion), opt-in STARTD8_WIREFRAME=1 cap-dev-pipe shim (WIREFRAME_REQUIREMENTS v0.3, post-CRP R1-R6, 41 tests incl. FR-W14 anti-divergence cross-check)"
+      - "22 capabilities: 16 stable, 6 beta; query 1→2"
+  - version: "1.3.0"
+    date: "2026-06-03"
+    changes:
+      - "Added startd8.codegen.deterministic_backend (generate, beta, confidence 0.85) — no-LLM .prisma→all-Python app (Pydantic/SQLModel/FastAPI/HTMX + export/ai-schemas/completeness + requirements.txt), 11+ owned $0.00-skippable artifact kinds, drift --check + Python build gate, runtime-verified on the real 15-model schema (python-contract-codegen REQUIREMENTS v0.2)"
+      - "21 capabilities: 16 stable, 5 beta; generate 2→3"
   - version: "1.2.0"
     date: "2026-05-30"
     changes:

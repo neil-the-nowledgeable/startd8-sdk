@@ -1,0 +1,7 @@
+app:
+  name: wfdemo
+  package: app
+persistence:
+  path: ./data/wfdemo.db
+container:
+  dockerfile: true
