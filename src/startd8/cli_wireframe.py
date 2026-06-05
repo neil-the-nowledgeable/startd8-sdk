@@ -86,6 +86,16 @@ def wireframe(
         console.print(f"[red]wireframe:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
 
+    # FR-W7/R5-F6: same contract as `generate backend` — the authoring UI is meaningless
+    # without a pages manifest (here, resolved via flag, inputs YAML, or convention).
+    if pages_authoring and not resolved.entry("pages").resolved_path.is_file():
+        console.print(
+            "[red]error:[/red] --pages-authoring requires --pages "
+            "(the authoring UI edits the pages.yaml manifest; no pages.yaml was "
+            "resolved via flag, --inputs, or the prisma/pages.yaml convention)."
+        )
+        raise typer.Exit(_EXIT_FATAL_INPUTS)
+
     plan = build_wireframe_plan(resolved, authoring=pages_authoring)
 
     if json_out:

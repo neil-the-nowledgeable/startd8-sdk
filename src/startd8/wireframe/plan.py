@@ -235,26 +235,33 @@ def _completeness_state(text: Optional[str], read_error: Optional[str]) -> _Mani
     return _ManifestState("completeness", Status.PLANNED, text, parsed=manifest)
 
 
-def _apply_override(state: _ManifestState, override: Optional[str]) -> _ManifestState:
+def _apply_override(
+    state: _ManifestState, override: Optional[str]
+) -> Tuple[_ManifestState, Optional[Dict[str, str]]]:
     """FR-W6/R2-F1: parser-derived status wins when the file exists; an override applies when the
-    file is absent (inventory declared ahead of authoring). Conflicts warn, never silently."""
+    file is absent (inventory declared ahead of authoring).
+
+    Returns ``(state, conflict_warning)`` — a conflict between the override and disk reality is
+    surfaced as a warning dict (rendered + JSON via ``merge_warnings``), never only logged.
+    """
     if not override:
-        return state
+        return state, None
     file_absent = state.text is None and not state.error
     if not file_absent:
         if override == "absent":
-            logger.warning(
-                "wireframe: inputs declare `%s` absent but the file exists — parser result wins",
-                state.key,
+            message = (
+                f"inputs declare `{state.key}` absent but the file exists — parser result wins"
             )
-        return state
+            logger.warning("wireframe: %s", message)
+            return state, {"key": state.key, "message": message}
+        return state, None
     if override == "placeholder":
-        return _ManifestState(state.key, Status.PLACEHOLDER)
+        return _ManifestState(state.key, Status.PLACEHOLDER), None
     if override == "authored":
-        logger.warning(
-            "wireframe: inputs declare `%s` authored but the file is missing", state.key
-        )
-    return state  # `absent` (and the warned `authored` case) keep the absence semantics
+        message = f"inputs declare `{state.key}` authored but the file is missing"
+        logger.warning("wireframe: %s", message)
+        return state, {"key": state.key, "message": message}
+    return state, None  # `absent` keeps the absence semantics
 
 
 # --------------------------------------------------------------------------- #
@@ -763,9 +770,13 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         "views", *texts["views"], lambda t: parse_views(t, known_entities=known)
     )
 
-    # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1).
+    # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1). Conflicts between an
+    # override and disk reality join merge_warnings — visible in tree + JSON, never only logged.
+    warnings: List[Dict[str, str]] = list(inputs.merge_warnings)
     for key, state in list(states.items()):
-        states[key] = _apply_override(state, inputs.entry(key).status_override)
+        states[key], conflict = _apply_override(state, inputs.entry(key).status_override)
+        if conflict:
+            warnings.append(conflict)
     schema_state = states["schema"]
 
     sections = (
@@ -829,7 +840,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         project_root=str(root),
         sections=sections,
         input_provenance=provenance,
-        merge_warnings=inputs.merge_warnings,
+        merge_warnings=tuple(warnings),
         shape=shape,
         readiness=_readiness(states),
         status_counts=counts,

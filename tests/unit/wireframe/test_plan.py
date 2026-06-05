@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from startd8.wireframe import Status, build_wireframe_plan, load_assembly_inputs
 

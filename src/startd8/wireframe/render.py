@@ -175,10 +175,14 @@ def render_plan(
     console.print(f"[bold]Shape:[/bold]   {shape}")
     console.print(f"[bold]Cascade:[/bold] {readiness}")
     for w in plan.merge_warnings:
-        console.print(
-            f"[yellow]merge warning:[/yellow] `{w['key']}` {w['previous_path']} → "
-            f"{w['new_path']} ({w['source_file']})",
-        )
+        console.print(f"[yellow]warning:[/yellow] {_warning_text(w)}")
+
+
+def _warning_text(w: Dict[str, str]) -> str:
+    """One line for either warning shape: inputs-merge overwrite or override/disk conflict."""
+    if "message" in w:
+        return w["message"]
+    return f"`{w['key']}` {w['previous_path']} → {w['new_path']} ({w['source_file']})"
 
 
 def plan_to_markdown(plan: WireframePlan) -> str:
@@ -195,7 +199,10 @@ def plan_to_markdown(plan: WireframePlan) -> str:
             lines.append(f"- {item.label} `[{_STATUS_LABEL[item.status]}]`{detail}")
         lines.append("")
     counts, shape, readiness = footer_lines(plan)
-    lines.extend([f"**Status:** {counts}", f"**Shape:** {shape}", f"**Cascade:** {readiness}", ""])
+    lines.extend([f"**Status:** {counts}", f"**Shape:** {shape}", f"**Cascade:** {readiness}"])
+    for w in plan.merge_warnings:
+        lines.append(f"- WARNING: {_warning_text(w)}")
+    lines.append("")
     return "\n".join(lines)
 
 

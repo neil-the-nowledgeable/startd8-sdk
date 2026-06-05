@@ -58,3 +58,34 @@ def test_only_issues_hides_planned_sections(golden_root: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "Entities & CRUD" not in result.output  # planned on the golden fixture
     assert "Content Inputs" in result.output       # not_defined (home.md missing)
+
+
+def test_pages_authoring_requires_pages_manifest(tmp_path: Path) -> None:
+    """FR-W7/R5-F6 (gap 1): --pages-authoring without any resolvable pages.yaml ⇒ exit 2,
+    mirroring `generate backend`'s enforcement."""
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "schema.prisma").write_text(
+        "model A {\n  id String @id\n}\n", encoding="utf-8"
+    )
+    result = runner.invoke(
+        app, ["--project", str(tmp_path), "--pages-authoring", "--no-write"]
+    )
+    assert result.exit_code == 2
+    assert "--pages-authoring requires --pages" in result.output
+
+
+def test_override_conflict_warning_rendered(tmp_path: Path) -> None:
+    """FR-W6 (gap 3): override/disk conflicts surface in the rendered output, not only logs."""
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "schema.prisma").write_text(
+        "model A {\n  id String @id\n}\n", encoding="utf-8"
+    )
+    inv = tmp_path / "inputs.yaml"
+    inv.write_text(
+        "inputs:\n  schema: {path: prisma/schema.prisma, status: absent}\n", encoding="utf-8"
+    )
+    result = runner.invoke(
+        app, ["--project", str(tmp_path), "--inputs", str(inv), "--no-write"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "parser result wins" in result.output
