@@ -752,6 +752,7 @@ from .plan_ingestion_parsing import (  # noqa: F401
     _safe_int,
     _HEURISTIC_FALLBACK_DESCRIPTION,
     count_plan_feature_tokens,
+    looks_like_v01_plan_format,
     _heuristic_parse_plan,
     _heuristic_assess_complexity,
     _heuristic_transform_content,
@@ -3970,11 +3971,39 @@ class PlanIngestionWorkflow(WorkflowBase):
             except Exception as exc:
                 logger.debug("Failed to save ingestion state: %s", exc)
 
+        # Failure forensics ledger (strtd8 kickoff note 1d): phases append
+        # evidence as they complete; _fail persists it so gate-failed runs
+        # leave diagnosable artifacts instead of just an exit code. (Run 2-3
+        # of the kickoff pilot tripped the quality gate and emitted NOTHING —
+        # whether the LLM parse extracted any features was unobservable.)
+        _forensics: Dict[str, Any] = {}
+
         def _fail(error_msg: str) -> WorkflowResult:
-            """Record failure in state and return error result."""
+            """Record failure in state, persist forensics, return error result."""
             state.current_phase = IngestionPhase.FAILED
             state.error = error_msg
             _save_state()
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                _forensics_payload = {
+                    "overall_success": False,
+                    "error": error_msg,
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                    "plan_source": str(plan_path),
+                    **_forensics,
+                }
+                (output_dir / "plan-ingestion-failure-forensics.json").write_text(
+                    json.dumps(_forensics_payload, indent=2, default=str),
+                    encoding="utf-8",
+                )
+                logger.info(
+                    "Failure forensics persisted to %s",
+                    output_dir / "plan-ingestion-failure-forensics.json",
+                )
+            except Exception as _forensics_err:  # never mask the original error
+                logger.warning(
+                    "Could not persist failure forensics: %s", _forensics_err,
+                )
             return WorkflowResult.from_error(
                 self.metadata.workflow_id, error_msg, steps=steps,
             )
@@ -4083,15 +4112,50 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             progress("Parse")
             state.current_phase = IngestionPhase.PARSE
-            assessor = self._resolve_assessor_agent(
-                config,
-                timeout_config=timeout_config,
-                retry_config=retry_config,
-            )
 
-            parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
             _used_heuristic_parse = False
             _llm_parse_error: Optional[str] = None
+            _deterministic_parse = (
+                not cfg.force_llm_parse
+                and looks_like_v01_plan_format(plan_text)
+            )
+            if _deterministic_parse:
+                # Deterministic-first PARSE for req-and-plan-format v0.1
+                # (extends the FR-1/FR-2 deterministic defaults to PARSE for
+                # format-detected plans). The table extractor preserves
+                # authored feature IDs exactly; the LLM parse is known to
+                # sub-split and invent IDs on this format (strtd8 kickoff r3:
+                # 14 → 36 features, F-101a…), destroying the exact-ID
+                # requirements-coverage join. $0, no agent resolved.
+                parsed_plan = _heuristic_parse_plan(plan_text)
+                parse_step = StepResult(
+                    step_name="parse",
+                    agent_name="deterministic",
+                    input="",
+                    output=(
+                        f"Parsed {len(parsed_plan.features)} feature(s) "
+                        f"deterministically (req-and-plan-format v0.1 detected, "
+                        f"zero LLM cost)"
+                    ),
+                    time_ms=0,
+                    cost=0.0,
+                    metadata={
+                        "deterministic": True,
+                        "format": "req-and-plan-v0.1",
+                    },
+                )
+                if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
+                    _parse_span.add_event("decision.deterministic_default", {
+                        "phase": "parse",
+                        "reason": "req-and-plan-format v0.1 feature tables detected",
+                    })
+            else:
+                assessor = self._resolve_assessor_agent(
+                    config,
+                    timeout_config=timeout_config,
+                    retry_config=retry_config,
+                )
+                parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
             if parse_step.error and enable_heuristic_parse_fallback:
                 # Preserve the original LLM error BEFORE clearing it — it is
                 # the only evidence of why the fallback fired (sapper survey
@@ -4182,6 +4246,21 @@ class PlanIngestionWorkflow(WorkflowBase):
                 _used_heuristic_parse, _enriched_count,
             )
 
+            # Forensics (note 1d): the parse evidence a failed run must leave
+            # behind — feature IDs answer "did the parse extract anything?"
+            _forensics["parse"] = {
+                "deterministic": _deterministic_parse,
+                "heuristic_fallback": _used_heuristic_parse,
+                "llm_parse_error": _llm_parse_error,
+                "feature_count": len(parsed_plan.features),
+                "feature_ids": [f.feature_id for f in parsed_plan.features],
+                "dependency_edges": sum(
+                    len(v) for v in parsed_plan.dependency_graph.values()
+                ),
+                "mentioned_files_count": len(parsed_plan.mentioned_files),
+            }
+            _forensics["parsed_plan"] = parsed_plan.to_seed_dict()
+
             # When heuristic parse collapses all features into a single
             # fallback entry, translation quality metrics are unreliable
             # (everything maps to the one feature → inflated coverage).
@@ -4230,6 +4309,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             # Mark quality as degraded so traceability report is honest
             if _heuristic_degraded:
                 translation_quality["_heuristic_degraded"] = True
+            _forensics["translation_quality"] = translation_quality
 
             cost_err = _check_cost("parse")
 
@@ -4309,6 +4389,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
+            _forensics["complexity"] = complexity.to_seed_dict()
+            _forensics["route"] = (
+                complexity.route.value if complexity.route else None
+            )
 
             # Low-translation-quality handling (advisory only). Routing is
             # always "prime" (REQ-SU-102; Artisan ON HOLD) — there is NO
@@ -4338,6 +4422,15 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             if low_quality_reasons:
                 details = ", ".join(low_quality_reasons)
+                _forensics["quality_gate"] = {
+                    "policy": low_quality_policy,
+                    "reasons": low_quality_reasons,
+                    "thresholds": {
+                        "min_requirements_coverage": min_requirements_coverage,
+                        "min_artifact_mapping_coverage": min_artifact_mapping_coverage,
+                        "max_contract_conflicts": max_contract_conflicts,
+                    },
+                }
                 if low_quality_policy == "fail":
                     if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
                         _assess_span.add_event("decision.quality_gate_failed", {

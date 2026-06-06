@@ -120,6 +120,10 @@ class PlanIngestionConfig:
     llm_max_attempts: int = 3
     enable_prompt_caching: bool = True
     enable_heuristic_parse_fallback: bool = True
+    # PARSE goes deterministic-first when the plan carries v0.1 feature
+    # tables (the LLM parse sub-splits and invents IDs on that format).
+    # Set True to force the LLM parse path regardless of format.
+    force_llm_parse: bool = False
     # Degenerate-parse tripwire: fail the run when the heuristic fallback
     # collapses a plan containing many distinct F-xxx feature tokens into the
     # single F-001 fallback feature (a concealed parse failure, NOT a
@@ -228,6 +232,7 @@ class PlanIngestionConfig:
             enable_heuristic_parse_fallback=_as_bool_cfg(
                 config.get("enable_heuristic_parse_fallback"), True,
             ),
+            force_llm_parse=_as_bool_cfg(config.get("force_llm_parse"), False),
             fail_on_degenerate_parse=_as_bool_cfg(
                 config.get("fail_on_degenerate_parse"), True,
             ),

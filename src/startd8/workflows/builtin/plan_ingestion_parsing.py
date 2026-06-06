@@ -176,6 +176,20 @@ _KNOWN_EXTENSIONLESS = frozenset({
 })
 
 
+def looks_like_v01_plan_format(plan_text: str) -> bool:
+    """True when the plan carries v0.1 feature tables the deterministic parser reads exactly.
+
+    Detection runs the actual table extractor rather than a looser regex, so a
+    positive sniff GUARANTEES the deterministic parse yields those features
+    with their authored IDs intact. The LLM parse path is known to sub-split
+    features and invent IDs on this format (strtd8 kickoff r3: 14 authored
+    features → 36 with invented ``F-101a…`` IDs, defeating the exact-ID
+    requirements-coverage join), so format-detected plans should parse
+    deterministically — $0 and byte-faithful — not probabilistically.
+    """
+    return len(_extract_table_features(plan_text)) > 0
+
+
 def count_plan_feature_tokens(plan_text: str) -> int:
     """Count distinct ``F-xxx`` feature tokens anywhere in the plan text.
 
