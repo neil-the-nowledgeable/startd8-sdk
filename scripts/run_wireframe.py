@@ -50,6 +50,12 @@ def main() -> int:
         help="Project root (defaults to $PROJECT_ROOT from pipeline.env).",
     )
     parser.add_argument("--sdk-root", default=None, help="SDK root, prepended to sys.path if given.")
+    parser.add_argument(
+        "--from-run",
+        default=None,
+        help="Plan-ingestion run dir (FR-WPI-6): consume its manifests/ + add run_linkage. "
+        "Defaults to --output-dir when that dir contains a manifests/ family.",
+    )
     args = parser.parse_args()
 
     wf_dir = Path(args.output_dir) / "wireframe"
@@ -58,16 +64,24 @@ def main() -> int:
             sys.path.insert(0, str(Path(args.sdk_root) / "src"))
 
         from startd8.wireframe import build_wireframe_plan, load_assembly_inputs
-        from startd8.wireframe.render import persist_plan
+        from startd8.wireframe.render import persist_plan, run_linkage
 
         inputs_env = os.environ.get("STARTD8_WIREFRAME_INPUTS", "")
         yaml_paths = [Path(p) for p in inputs_env.split(os.pathsep) if p.strip()]
 
+        # FR-WPI-6/10: post-ingestion invocations consume the run's extracted manifests.
+        from_run = Path(args.from_run) if args.from_run else None
+        if from_run is None and (Path(args.output_dir) / "manifests").is_dir():
+            from_run = Path(args.output_dir)
+
         resolved = load_assembly_inputs(
-            yaml_paths=yaml_paths, project_root=Path(args.project_root)
+            yaml_paths=yaml_paths, project_root=Path(args.project_root), from_run=from_run
         )
         plan = build_wireframe_plan(resolved)
-        written = persist_plan(plan, wf_dir, emit_context="pipeline", with_markdown=True)
+        linkage = run_linkage(from_run) if from_run is not None else None
+        written = persist_plan(
+            plan, wf_dir, emit_context="pipeline", with_markdown=True, linkage=linkage
+        )
         print(f"wireframe: plan written to {written.get('json') or wf_dir} (advisory, read-only)")
     except BaseException as exc:  # noqa: BLE001 — never block the pipeline (FR-W11)
         _write_error(wf_dir, exc)

@@ -44,6 +44,7 @@ _OVERRIDE_STATUSES = {"authored", "placeholder", "absent"}
 _SOURCE_CONVENTION = "convention"
 _SOURCE_YAML = "yaml"
 _SOURCE_FLAG = "flag"
+_SOURCE_RUN = "run"
 
 
 class AssemblyInputsError(ValueError):
@@ -75,18 +76,34 @@ class AssemblyInputs:
         return self.entries[key]
 
 
-def _confine(path: Path, project_root: Path, *, origin: str) -> Path:
-    """Resolve *path* against *project_root* and reject escapes (R3-F4) before any read."""
+def _confine(
+    path: Path,
+    project_root: Path,
+    *,
+    origin: str,
+    extra_root: Optional[Path] = None,
+) -> Path:
+    """Resolve *path* against *project_root* and reject escapes (R3-F4) before any read.
+
+    *extra_root* (FR-WPI-6 sweep-2 amendment): the explicit ``--from-run`` directory is a
+    **second permitted root** — canonical cap-dev-pipe run dirs live outside the consumer
+    project (embedded runs inside). Same trust basis as any explicit flag path; flag paths and
+    ``--inputs`` files keep single-root semantics (they never pass an extra_root).
+    """
     resolved = (project_root / path).resolve() if not path.is_absolute() else path.resolve()
-    root = project_root.resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        raise AssemblyInputsError(
-            f"{origin}: manifest path {str(path)!r} resolves outside the project root "
-            f"({resolved} not under {root})"
-        )
-    return resolved
+    roots = [project_root.resolve()]
+    if extra_root is not None:
+        roots.append(extra_root.resolve())
+    for root in roots:
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+    raise AssemblyInputsError(
+        f"{origin}: manifest path {str(path)!r} resolves outside the permitted root(s) "
+        f"({resolved} not under {' or '.join(str(r) for r in roots)})"
+    )
 
 
 def _read_inputs_yaml(yaml_path: Path) -> dict:
@@ -144,12 +161,17 @@ def load_assembly_inputs(
     yaml_paths: Sequence[Path] = (),
     overrides: Optional[Mapping[str, Path]] = None,
     project_root: Optional[Path] = None,
+    from_run: Optional[Path] = None,
 ) -> AssemblyInputs:
-    """Resolve the assembly input set (FR-W6..W8).
+    """Resolve the assembly input set (FR-W6..W8, FR-WPI-6).
 
     *yaml_paths* — zero or more assembly-inputs YAML files, merged in order (last wins per key).
     *overrides* — direct CLI flag values per catalog key (highest precedence).
     *project_root* — defaults to the current working directory.
+    *from_run* — a plan-ingestion run dir (FR-WPI-6): each catalog key whose manifest exists in
+    ``<from_run>/manifests/`` is resolved there (``source: "run"``); the rest (notably the live
+    contract — DIFF mode never emits ``schema.prisma``) keep convention/flag resolution. The
+    run dir is a second permitted confinement root. Direct flags still win over run manifests.
     """
     root = (project_root or Path.cwd()).resolve()
     overrides = overrides or {}
@@ -207,7 +229,24 @@ def load_assembly_inputs(
                 status_override=status,
             )
 
-    # 3. Direct CLI flags win last (FR-W7).
+    # 2.5 Run-dir manifests (FR-WPI-6): each catalog key whose manifest the ingestion run
+    # emitted resolves there; the rest keep convention resolution (notably the live contract —
+    # DIFF mode never emits schema.prisma). The run dir is the second permitted root.
+    if from_run is not None:
+        manifests_dir = Path(from_run).resolve() / "manifests"
+        for key, rel in CONVENTION_PATHS.items():
+            candidate = manifests_dir / Path(rel).name
+            if candidate.is_file():
+                entries[key] = ResolvedInput(
+                    key=key,
+                    path=candidate,
+                    resolved_path=_confine(
+                        candidate, root, origin="--from-run", extra_root=Path(from_run)
+                    ),
+                    source=_SOURCE_RUN,
+                )
+
+    # 3. Direct CLI flags win last (FR-W7) — also over run manifests.
     for key, flag_path in overrides.items():
         if flag_path is None:
             continue
