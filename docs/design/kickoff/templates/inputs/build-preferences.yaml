@@ -1,0 +1,45 @@
+# <Project> — Kickoff inputs: BUILD PREFERENCES                                [TEMPLATE]
+# How the build factory itself runs: spend, model routing, profile.
+# See ../KICKOFF_INPUTS_EXPLAINED.md §4.
+# Instantiate: budgets get reasonable starters (provenance `estimate`) — never blank, never
+# silently the system default; an explicitly passed value counts as `authored` even at the
+# same number. NEVER pin model version strings (tiers resolve via model_catalog).
+#
+# PROTOTYPE / PROOF-OF-CONCEPT DEFAULTS (non-production deployment) — keyed to the declared
+# traffic profile (how-to §3b). If your requirements doc declares `test` or `internal`, you
+# may take the matching column wholesale and skip every budget decision:
+#
+#   value              test (demo/PoC)        internal (team prototype)
+#   per_pipeline_run   "$5.00"                "$10.00"
+#   llm_monthly        "$25"                  "$50"
+#   infra_monthly      "$0 (local-only)"      "$100"
+#   deployment         local, no registry,    local/team-reachable,
+#                      no public exposure     no public exposure
+#   contacts           fictional OK           real owner required
+#
+# These stay provenance `config-default` until you deliberately change one (then `authored`).
+
+domain: build-preferences
+provenance_default: estimate
+
+budgets:
+  per_pipeline_run: "$<5.00>"        # non-prod defaults: test $5.00 / internal $10.00
+  llm_monthly: "$<N>"                # non-prod defaults: test $25 / internal $50; pair with the cost alert in observability.yaml
+  infra_monthly: "$<N>"              # non-prod defaults: test $0 (local-only) / internal $100
+
+model_routing:
+  lead_tier: <provider>-flagship
+  drafter_tier: <provider>-balanced
+  complexity_routing: <enabled|disabled>
+  note: >
+    Convention-strict work must not route to a tier that cannot receive the conventions sheet —
+    prefer re-route over invention.
+
+generation:
+  profile: <full | observability | …>     # GENERATION_PROFILE
+  language: <python | …>                  # must match conventions.yaml; mismatch = preflight flag
+  instrumentation: <auto|true|false>
+
+unattended:
+  question_answers: .cap-dev-pipe/design/question-answers.yaml
+  non_interactive: <true|false>      # overrides on unattended runs are recorded, not hidden
