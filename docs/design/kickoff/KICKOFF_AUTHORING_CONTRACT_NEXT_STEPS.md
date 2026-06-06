@@ -1,8 +1,15 @@
 # Kickoff Authoring Contract — Implementation Next Steps
 
-**Version:** 0.1
+**Version:** 0.2
 **Date:** 2026-06-05
-**Status:** Active tracker
+**Status:** Active tracker — **lane A (the build) is DONE** (`f4457d43`/`6791ecca` on main:
+`src/startd8/manifest_extraction/` + EMIT wiring + `wireframe --from-run`, piloted on the real
+strtd8 docs). Remaining lanes sequenced into phases K1–K6 by
+[`KICKOFF_AUTHORING_CONTRACT_IMPLEMENTATION_PLAN.md`](KICKOFF_AUTHORING_CONTRACT_IMPLEMENTATION_PLAN.md)
+(v1.0) — including two **conformance gaps the build audit found** (collision pre-flight +
+reserved-name guard, §2.0/R1-G4, not in the shipped extractor) and a **correction**: step 8's
+"the env-keys ↔ `build-preferences.yaml` agreement check works today" was optimistic — the
+shipped extractor flags `env keys` without parsing entries; now plan K2-3.
 **Subject:** [`KICKOFF_AUTHORING_CONTRACT.md`](KICKOFF_AUTHORING_CONTRACT.md) v0.2 (grammar v0.2)
 **Where the contract stands:** CRP'd (11 grammar suggestions applied, 2 rounds), and
 **empirically de-risked** — the 2026-06-05 spike parsed the REAL strtd8 requirements draft with
