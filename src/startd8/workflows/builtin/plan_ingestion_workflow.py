@@ -751,6 +751,7 @@ from .plan_ingestion_parsing import (  # noqa: F401
     _as_bool,
     _safe_int,
     _HEURISTIC_FALLBACK_DESCRIPTION,
+    count_plan_feature_tokens,
     _heuristic_parse_plan,
     _heuristic_assess_complexity,
     _heuristic_transform_content,
@@ -3754,6 +3755,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         project_metadata: Optional[Dict[str, Any]] = None,
         project_root: Optional[Path] = None,
         force_regenerate: bool = False,
+        kickoff_docs: Optional[Dict[str, str]] = None,
     ) -> EmitResult:
         """Compat wrapper — delegates to PhaseEmitter (AC-R4)."""
         from .plan_ingestion_emitter import PhaseEmitter
@@ -3792,6 +3794,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             project_metadata=project_metadata,
             project_root=project_root,
             tracking_config=tracking_config,
+            kickoff_docs=kickoff_docs,
         )
 
     # ------------------------------------------------------------------
@@ -4088,7 +4091,17 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
             _used_heuristic_parse = False
+            _llm_parse_error: Optional[str] = None
             if parse_step.error and enable_heuristic_parse_fallback:
+                # Preserve the original LLM error BEFORE clearing it — it is
+                # the only evidence of why the fallback fired (sapper survey
+                # 2026-06-05: a 423 ms/0-token failure was unrecoverable from
+                # artifacts because this line used to destroy it).
+                _llm_parse_error = parse_step.error
+                logger.warning(
+                    "LLM parse failed (%s) — falling back to heuristic parser",
+                    _llm_parse_error,
+                )
                 parsed_plan = _heuristic_parse_plan(plan_text)
                 _used_heuristic_parse = True
                 parse_step.error = None
@@ -4096,10 +4109,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                     parse_step.output + "\n[heuristic fallback] parse succeeded without LLM JSON"
                 )[:_OUTPUT_TRUNCATION]
                 parse_step.metadata["heuristic_fallback"] = True
+                parse_step.metadata["llm_parse_error"] = _llm_parse_error
                 if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
                     _parse_span.add_event("decision.heuristic_fallback", {
                         "phase": "parse",
                         "reason": "LLM parse failed, heuristic enabled",
+                        "llm_parse_error": _llm_parse_error[:500],
                     })
             steps.append(parse_step)
             state.total_cost += parse_step.cost
@@ -4180,6 +4195,27 @@ class PlanIngestionWorkflow(WorkflowBase):
                 == _HEURISTIC_FALLBACK_DESCRIPTION
             )
             if _heuristic_degraded:
+                # Degenerate-seed tripwire: a plan whose text carries many
+                # distinct F-xxx feature tokens but parsed to the single
+                # fallback feature is a CONCEALED PARSE FAILURE, not a
+                # one-feature plan. Fail loudly instead of handing Prime
+                # Contractor a 1-task seed for an N-feature plan (sapper
+                # survey 2026-06-05: 14-feature plan → 1-task seed reported
+                # as overall_success: true).
+                _plan_token_count = count_plan_feature_tokens(plan_text)
+                if _plan_token_count >= 3 and cfg.fail_on_degenerate_parse:
+                    _active_phase_ctx.__exit__(None, None, None)
+                    _active_phase_ctx = None
+                    return _fail(
+                        f"Degenerate parse: plan text contains "
+                        f"{_plan_token_count} distinct F-xxx feature tokens "
+                        f"but parsing collapsed to a single fallback feature. "
+                        f"The plan format is unreadable by both the LLM parse "
+                        f"and the heuristic parser. "
+                        f"Original LLM parse error: "
+                        f"{_llm_parse_error or '(none captured)'}. "
+                        f"Set fail_on_degenerate_parse=false to override."
+                    )
                 logger.warning(
                     "Heuristic parse collapsed plan to single fallback feature — "
                     "translation quality metrics are unreliable; biasing toward artisan"
@@ -4576,6 +4612,11 @@ class PlanIngestionWorkflow(WorkflowBase):
             if design_snapshot and parsed_plan is not None:
                 parsed_plan.design_snapshot = design_snapshot
 
+            # FR-WPI-1: the kickoff docs (plan + requirements corpus) feed the deterministic
+            # manifest-extraction sub-step inside EMIT (the plan's one signature extension).
+            _kickoff_docs: Dict[str, str] = {str(doc_path): plan_text}
+            _kickoff_docs.update(requirements_docs)
+
             emit_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
@@ -4591,6 +4632,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 project_metadata=project_metadata,
                 project_root=_emit_project_root,
                 force_regenerate=cfg.force_regenerate,
+                kickoff_docs=_kickoff_docs,
             )
 
             # Emit deterministic traceability report for downstream auditing.
@@ -4706,12 +4748,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             _task_density = compute_task_density(emit_result.tasks)
 
             _plan_checksum = sha256(plan_text.encode()).hexdigest()[:16]
+            # Honest top-level signal: a run that completed on a degenerate
+            # single-fallback-feature parse (tripwire opted out) must not
+            # report overall_success — phase-level degeneracy reflects up.
             _diag = build_diagnostic(
                 run_timestamp=started_at.isoformat(),
                 plan_source=str(plan_path),
                 plan_checksum=_plan_checksum,
                 route=route.value,
-                overall_success=True,
+                overall_success=not _heuristic_degraded,
                 phase_diagnostics=_diag_phase_map,
                 seed_quality_score=_seed_score,
                 quality_warnings=_seed_warnings,

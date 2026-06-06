@@ -116,6 +116,11 @@ class PlanIngestionConfig:
     llm_max_attempts: int = 3
     enable_prompt_caching: bool = True
     enable_heuristic_parse_fallback: bool = True
+    # Degenerate-parse tripwire: fail the run when the heuristic fallback
+    # collapses a plan containing many distinct F-xxx feature tokens into the
+    # single F-001 fallback feature (a concealed parse failure, NOT a
+    # one-feature plan). Opt out only for genuinely free-form plans.
+    fail_on_degenerate_parse: bool = True
 
     # Scope & files
     scope: Optional[str] = None
@@ -209,6 +214,9 @@ class PlanIngestionConfig:
             llm_max_attempts=int(config.get("llm_max_attempts", 1)),
             enable_heuristic_parse_fallback=_as_bool_cfg(
                 config.get("enable_heuristic_parse_fallback"), True,
+            ),
+            fail_on_degenerate_parse=_as_bool_cfg(
+                config.get("fail_on_degenerate_parse"), True,
             ),
             scope=config.get("scope"),
             context_files=context_files,
