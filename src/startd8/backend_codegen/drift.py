@@ -109,6 +109,10 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         "python-completeness": lambda s, sf, e: render_completeness(s, sf, manifest=_cmpl),
         "python-requirements": lambda s, sf, e: render_requirements(s, sf),
         "python-requirements-authoring": lambda s, sf, e: render_requirements(s, sf, authoring=True),
+        "python-requirements-ai": lambda s, sf, e: render_requirements(s, sf, ai=True),
+        "python-requirements-authoring-ai": lambda s, sf, e: render_requirements(
+            s, sf, authoring=True, ai=True
+        ),
         "pages-io": lambda s, sf, e: render_pages_io(s, sf),
         "pages-admin": lambda s, sf, e: render_pages_admin(s, sf),
         "pages-admin-tmpl": lambda s, sf, e: render_pages_admin_template(s, sf),

@@ -68,7 +68,10 @@ def render_backend(
     out.extend(
         render_derived(schema_text, source_file, completeness_text=completeness_text)
     )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)
-    out.append(("requirements.txt", render_requirements(schema_text, source_file, authoring=authoring)))
+    out.append((
+        "requirements.txt",
+        render_requirements(schema_text, source_file, authoring=authoring, ai=bool(manifest_text)),
+    ))
     # Rung-4 semantic tests over the contract (round-trip / field-presence / enum-domain). Owned,
     # $0, drift-checked; they ARE the gate the Python build runs (pytest).
     out.append((CONTRACT_TESTS_PATH, render_contract_tests(schema_text, source_file)))

@@ -225,7 +225,8 @@ _RUNTIME_REQUIREMENTS: List[str] = [
 
 
 def render_requirements(
-    schema_text: str, source_file: str = "prisma/schema.prisma", *, authoring: bool = False
+    schema_text: str, source_file: str = "prisma/schema.prisma", *, authoring: bool = False,
+    ai: bool = False,
 ) -> str:
     """Render ``requirements.txt`` — the generated app's pinned-by-stack runtime deps.
 
@@ -233,16 +234,23 @@ def render_requirements(
     the rest of the spine, even though the dep set is fixed rather than schema-derived. With
     *authoring* (``--pages-authoring``) the page-authoring routes read/validate ``pages.yaml`` at
     runtime, so ``pyyaml`` is added (NFR-UI-4) — only then; the content-page render itself stays
-    dependency-free.
+    dependency-free. With *ai* (``--ai-passes``) the generated ``app/ai/service.py`` resolves LLM
+    providers through the SDK at runtime, so ``startd8`` is added — found live on the strtd8
+    pilot: the AI layer import-crashed in any venv without it.
     """
     sha = schema_sha256(schema_text)
-    # A distinct kind when authoring is on, so the (flag-unaware) drift re-render dispatches to the
-    # matching variant instead of false-flagging the extra dep as tampering.
-    kind = "python-requirements-authoring" if authoring else "python-requirements"
+    # A distinct kind per dep-set, so the (flag-unaware) drift re-render dispatches to the
+    # matching variant instead of false-flagging the extra deps as tampering.
+    kind = "python-requirements" + ("-authoring" if authoring else "") + ("-ai" if ai else "")
     header = _header(source_file, sha, kind)
     reqs = list(_RUNTIME_REQUIREMENTS)
     if authoring:
         reqs.append("pyyaml  # page-authoring UI reads/validates pages.yaml at runtime")
+    if ai:
+        reqs.append(
+            "startd8  # AI-layer runtime: app/ai/service.py resolves providers via the SDK; "
+            "install the provider extra matching DEFAULT_AGENT_SPEC (e.g. startd8[gemini])"
+        )
     body = "\n".join(reqs)
     return header + "\n\n" + body + "\n"
 
