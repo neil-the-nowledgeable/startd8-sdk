@@ -104,9 +104,9 @@ def test_path_escape_rejected(tmp_path: Path) -> None:
     """R3-F4: confinement to project_root, checked before any read."""
     inv = tmp_path / "inputs.yaml"
     inv.write_text("inputs:\n  schema: {path: ../../../../etc/passwd}\n", encoding="utf-8")
-    with pytest.raises(AssemblyInputsError, match="outside the project root"):
+    with pytest.raises(AssemblyInputsError, match="outside the permitted root"):
         load_assembly_inputs(yaml_paths=[inv], project_root=tmp_path)
-    with pytest.raises(AssemblyInputsError, match="outside the project root"):
+    with pytest.raises(AssemblyInputsError, match="outside the permitted root"):
         load_assembly_inputs(
             overrides={"schema": Path("/etc/passwd")}, project_root=tmp_path
         )

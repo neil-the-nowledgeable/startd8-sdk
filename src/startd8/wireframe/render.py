@@ -82,12 +82,54 @@ def plan_body(plan: WireframePlan) -> dict:
         "status_counts": plan.status_counts,
         "claimed_paths": list(plan.claimed_paths),
         "inputs_fingerprint": _inputs_fingerprint(plan),
+        "delivery_inventory": delivery_inventory(plan),
     }
 
 
-def plan_to_json(plan: WireframePlan, *, emit_context: str = "cli") -> str:
-    """Full JSON: canonical body + ``_meta`` audit object (excluded from determinism)."""
+def run_linkage(run_dir: Path) -> Optional[Dict[str, object]]:
+    """FR-WPI-7 linkage block for ``--from-run`` mode: prose → extraction → manifest →
+    wireframe, traceable end to end. Reads the extraction REPORT (which carries the kickoff-doc
+    checksums) — never the seed's JSON body; the seed is hashed as an opaque file (the
+    no-seed-coupling non-requirement stands)."""
+    run_dir = Path(run_dir)
+    report_path = run_dir / "manifest-extraction-report.json"
+    if not report_path.is_file():
+        return None
+    report_bytes = report_path.read_bytes()
+    out: Dict[str, object] = {
+        "run_dir": str(run_dir),
+        "extraction_report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+    }
+    try:
+        out["source_doc_checksums"] = json.loads(report_bytes).get("source_docs", {})
+    except json.JSONDecodeError:
+        out["source_doc_checksums"] = {}
+    manifests_dir = run_dir / "manifests"
+    if manifests_dir.is_dir():
+        out["manifest_sha256s"] = {
+            p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(manifests_dir.iterdir()) if p.is_file()
+        }
+    seed = run_dir / "prime-context-seed.json"
+    if seed.is_file():
+        out["seed_sha256"] = hashlib.sha256(seed.read_bytes()).hexdigest()
+    return out
+
+
+def plan_to_json(
+    plan: WireframePlan,
+    *,
+    emit_context: str = "cli",
+    linkage: Optional[Dict[str, object]] = None,
+) -> str:
+    """Full JSON: canonical body + ``_meta`` audit object (excluded from determinism).
+
+    *linkage* (FR-WPI-7, ``--from-run`` mode) joins the canonical body — it is deterministic
+    for identical run inputs, so it participates in byte-identity; additive, ``schema_version``
+    stays 1."""
     body = plan_body(plan)
+    if linkage:
+        body["run_linkage"] = linkage
     body["_meta"] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "startd8_version": _sdk_version(),
@@ -135,6 +177,59 @@ def _section_node(tree: Tree, section: WireframeSection, *, max_items: int) -> N
         node.add(line)
     if max_items > 0 and len(items) > max_items:
         node.add(f"[dim]… and {len(items) - max_items} more[/dim]")
+
+
+# FR-WPI-9: static section→iteration map (planning finding: manifests carry no phase tags and
+# don't need them). AI-layer items within Services belong to iteration ③ (integration+content).
+_ITERATION_BY_SECTION = {
+    "scaffold": 1, "services": 1, "entities": 1,          # ① framework + persistence
+    "forms": 2, "pages": 2, "views": 2, "completeness": 2,  # ② display + business logic
+    "content": 3,                                           # ③ integration + content
+}
+_ITERATION_TITLES = {
+    1: "① framework + persistence",
+    2: "② display + business logic",
+    3: "③ integration + content",
+}
+
+
+def _item_iteration(section_key: str, item_label: str) -> int:
+    if section_key == "services" and item_label.startswith("AI "):
+        return 3
+    return _ITERATION_BY_SECTION.get(section_key, 2)
+
+
+def delivery_inventory(plan: WireframePlan) -> List[dict]:
+    """FR-WPI-9: the walkthrough artifact — what will be delivered, per iteration phase."""
+    groups: Dict[int, List[dict]] = {1: [], 2: [], 3: []}
+    for section in plan.sections:
+        for item in section.items:
+            groups[_item_iteration(section.key, item.label)].append({
+                "label": item.label,
+                "status": item.status,
+                "section": section.key,
+                "detail": item.detail,
+            })
+    return [
+        {"iteration": i, "title": _ITERATION_TITLES[i], "items": groups[i]}
+        for i in (1, 2, 3)
+    ]
+
+
+def render_delivery_inventory(plan: WireframePlan, console: Console, *, max_items: int = 25) -> None:
+    tree = Tree("[bold]Delivery inventory[/bold] (walk per iteration — FR-WPI-9)")
+    for group in delivery_inventory(plan):
+        node = tree.add(f"[bold]{group['title']}[/bold]")
+        items = group["items"]
+        shown = items if max_items <= 0 else items[:max_items]
+        for item in shown:
+            line = f"{item['label']} {_status_tag(item['status'])}"
+            if item["detail"]:
+                line += f" — {item['detail']}"
+            node.add(line)
+        if max_items > 0 and len(items) > max_items:
+            node.add(f"[dim]… and {len(items) - max_items} more[/dim]")
+    console.print(tree)
 
 
 def footer_lines(plan: WireframePlan) -> Tuple[str, str, str]:
@@ -188,6 +283,16 @@ def _warning_text(w: Dict[str, str]) -> str:
 def plan_to_markdown(plan: WireframePlan) -> str:
     """Human-readable summary for pipeline output (R1-S3)."""
     lines: List[str] = [f"# Wireframe — {plan.project_root}", ""]
+    lines.append("## Delivery inventory (per iteration — the walkthrough)")
+    lines.append("")
+    for group in delivery_inventory(plan):
+        lines.append(f"### {group['title']}")
+        for item in group["items"]:
+            detail = f" — {item['detail']}" if item["detail"] else ""
+            lines.append(f"- {item['label']} `[{_STATUS_LABEL[item['status']]}]`{detail}")
+        lines.append("")
+    lines.append("## Sections")
+    lines.append("")
     for section in plan.sections:
         lines.append(f"## {section.title} `[{_STATUS_LABEL[section.status]}]`")
         if section.consequence:
@@ -232,6 +337,7 @@ def persist_plan(
     *,
     emit_context: str = "cli",
     with_markdown: bool = False,
+    linkage: Optional[Dict[str, object]] = None,
 ) -> Dict[str, Optional[Path]]:
     """Persist ``wireframe-plan.json`` (+ optional ``wireframe-summary.md``) atomically.
 
@@ -241,7 +347,7 @@ def persist_plan(
     out: Dict[str, Optional[Path]] = {"json": None, "markdown": None}
     json_path = target_dir / "wireframe-plan.json"
     try:
-        _atomic_write(json_path, plan_to_json(plan, emit_context=emit_context))
+        _atomic_write(json_path, plan_to_json(plan, emit_context=emit_context, linkage=linkage))
         out["json"] = json_path
     except OSError as exc:
         logger.warning("wireframe: could not persist %s (%s) — continuing", json_path, exc)

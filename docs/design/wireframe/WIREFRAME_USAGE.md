@@ -41,6 +41,35 @@ lenient-parsed `schema.prisma`, its recoverability check).
 Footer: status counts, shape summary (entities/routes/pages/views/passes), and **cascade
 readiness** — `scaffold|backend|views: ready | blocked(<reason>)`.
 
+## From a plan-ingestion run (`--from-run`, FR-WPI-6)
+
+Plan ingestion now emits the assembly manifests it can deterministically extract from
+authoring-contract-conformant kickoff docs (`<run>/manifests/` + `manifest-extraction-report
+.{json,md}` — every value traced to its source section). Consume them directly:
+
+```bash
+startd8 wireframe --from-run <run-dir> --project /path/to/consumer-project
+```
+
+- Keys the run emitted resolve from `manifests/` (`source: "run"` in provenance); the rest —
+  notably the live contract, which DIFF mode never emits — keep convention resolution.
+- The JSON gains the **`run_linkage`** block (FR-WPI-7): kickoff-doc checksums (from the
+  extraction report — the wireframe never reads the seed body), extraction-report hash,
+  per-manifest hashes, seed file hash. Prose → extraction → manifest → wireframe, traceable.
+- The **delivery inventory** (① framework+persistence ② display+logic ③ integration+content)
+  renders by default — it is the Customer/PO walkthrough artifact (FR-WPI-9/10). Elsewhere:
+  `--inventory`.
+
+## Promotion (FR-WPI-5 — manual, recorded, authored-wins)
+
+Extracted manifests live in the run dir, never the project tree. To promote after the
+walkthrough: **copy** `manifests/*` to the project's conventional paths and **flip the
+inventory Status rows** (`extracted` → `authored`) in the project's `ASSEMBLY_INPUTS` doc —
+the explicit human act FR-WPI-10's gate binds to. If a conventional path already has an
+authored file, **diff first; authored edits win** — the diff is review input for the next
+co-work pass, never an overwrite. The `startd8 assist` drift check owns divergence afterward.
+(A `promote-manifests` subcommand is a recorded follow-up, not v1.)
+
 ## cap-dev-pipe (opt-in)
 
 ```bash

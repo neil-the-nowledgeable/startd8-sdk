@@ -1,0 +1,242 @@
+[
+  {
+    "manifest": "pages.yaml",
+    "field": "page:/",
+    "status": "extracted",
+    "value": "Home -> home.md",
+    "source": "## Pages table row"
+  },
+  {
+    "manifest": "pages.yaml",
+    "field": "page:/how-it-works",
+    "status": "extracted",
+    "value": "How it works -> how_it_works.md",
+    "source": "## Pages table row"
+  },
+  {
+    "manifest": "pages.yaml",
+    "field": "page:/jobs",
+    "status": "extracted",
+    "value": "Jobs -> jobs.md",
+    "source": "## Pages table row"
+  },
+  {
+    "manifest": "pages.yaml",
+    "field": "nav",
+    "status": "extracted",
+    "value": "17 nav items",
+    "source": "Navigation table"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "app.package",
+    "status": "extracted",
+    "value": "startd8",
+    "source": "Scaffold & runtime row 'package name'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "app.name",
+    "status": "extracted",
+    "value": "StartDate",
+    "source": "Scaffold & runtime row 'display name'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "app.python_version",
+    "status": "extracted",
+    "value": "3.14",
+    "source": "Scaffold & runtime row 'python version'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "port",
+    "status": "not_extracted",
+    "reason": "generator-gap: no AppManifest field (scaffold-codegen backlog)"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "persistence.path",
+    "status": "extracted",
+    "value": "./app.db",
+    "source": "Scaffold & runtime row 'database'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "sqlite mode",
+    "status": "not_extracted",
+    "reason": "generator-gap: no AppManifest field (scaffold-codegen backlog)"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "migrations.enabled",
+    "status": "extracted",
+    "value": "True",
+    "source": "Scaffold & runtime row 'migrations'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "logging.file",
+    "status": "extracted",
+    "value": "logs/app.log",
+    "source": "Scaffold & runtime row 'logging'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "container.dockerfile",
+    "status": "extracted",
+    "value": "True",
+    "source": "Scaffold & runtime row 'container'"
+  },
+  {
+    "manifest": "app.yaml",
+    "field": "env keys",
+    "status": "not_extracted",
+    "reason": "generator-gap: no AppManifest field (scaffold-codegen backlog)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "value_map.route",
+    "status": "extracted",
+    "value": "/value-map",
+    "source": "Navigation table"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "value_map.shows",
+    "status": "not_extracted",
+    "reason": "'Capability\u2192Outcome, Capability\u2192ProofPoint, Outcome\u2192ProofPoin\u2026' \u2014 relation/panel resolution beyond spike scope (detail-compose)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "value_map.also_shows",
+    "status": "not_extracted",
+    "reason": "'Also shows:' line \u2014 no grammar rule yet"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "value_map.empty_state",
+    "status": "not_extracted",
+    "reason": "'Empty state:' line \u2014 no grammar rule yet"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "jobs_dashboard.route",
+    "status": "defaulted",
+    "value": "/views/jobs-dashboard",
+    "source": "kind-aware derivation (kebab)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "jobs_dashboard.aggregate:TailoredMatch",
+    "status": "extracted",
+    "value": "fk=jobDescriptionId (schema-resolved)",
+    "source": "Shows: 'tailored matches'"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "jobs_dashboard.aggregate:TailoredAsset",
+    "status": "extracted",
+    "value": "fk=jobDescriptionId (schema-resolved)",
+    "source": "Shows: 'tailored assets'"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_workspace.route",
+    "status": "defaulted",
+    "value": "/views/job-workspace",
+    "source": "kind-aware derivation (kebab)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_workspace.shows",
+    "status": "not_extracted",
+    "reason": "'the job's TailoredMatches (resolved to whichever value-model\u2026' \u2014 relation/panel resolution beyond spike scope (workspace)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_workspace.gap_callout",
+    "status": "not_extracted",
+    "reason": "'Gap callout:' line \u2014 no grammar rule yet"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_export.root",
+    "status": "extracted",
+    "value": "JobDescription",
+    "source": "Of: Job Workspace (resolved via referenced view)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_export.route",
+    "status": "defaulted",
+    "value": "/views/job-export",
+    "source": "kind-aware derivation (kebab)"
+  },
+  {
+    "manifest": "views.yaml",
+    "field": "job_export.formats",
+    "status": "not_extracted",
+    "reason": "'Formats:' line \u2014 no grammar rule yet"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.Profile",
+    "status": "extracted",
+    "value": "{'min_rows': 1}",
+    "source": "'at least 1 Profile'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.ProofPoint",
+    "status": "extracted",
+    "value": "{'min_rows': 3}",
+    "source": "'at least 3 ProofPoint'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.Outcome",
+    "status": "extracted",
+    "value": "{'min_rows': 1}",
+    "source": "'at least 1 Outcome'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.Metric",
+    "status": "extracted",
+    "value": "{'min_rows': 1}",
+    "source": "'at least 1 Metric'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.Differentiator",
+    "status": "extracted",
+    "value": "{'min_rows': 1}",
+    "source": "'at least 1 Differentiator'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "entities.TargetRole",
+    "status": "extracted",
+    "value": "{'min_rows': 1}",
+    "source": "'at least 1 TargetRole'"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "nudges",
+    "status": "not_extracted",
+    "reason": "generator-gap: SDK completeness manifest has no nudge-text field"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "exclude:connection records",
+    "status": "not_extracted",
+    "reason": "'connection records' is a category/unknown, not an entity name \u2014 needs contract-vocabulary tightening or category expansion rule"
+  },
+  {
+    "manifest": "completeness.yaml",
+    "field": "exclude:AiCall",
+    "status": "extracted",
+    "source": "Don't count line"
+  }
+]

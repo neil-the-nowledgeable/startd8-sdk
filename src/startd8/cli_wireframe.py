@@ -20,7 +20,7 @@ from .wireframe import (
     build_wireframe_plan,
     load_assembly_inputs,
 )
-from .wireframe.render import persist_plan, plan_to_json, render_plan
+from .wireframe.render import persist_plan, plan_to_json, render_plan, run_linkage
 
 console = Console()
 
@@ -33,6 +33,13 @@ def wireframe(
     ),
     project: Path = typer.Option(
         Path("."), "--project", help="Project root (read root — the wireframe never writes app files)."
+    ),
+    from_run: Optional[Path] = typer.Option(
+        None,
+        "--from-run",
+        help="Plan-ingestion run dir (FR-WPI-6): consume its manifests/ (extracted, parser-"
+        "clean) instead of project paths; keys the run didn't emit (e.g. the live contract) "
+        "fall back to convention. Adds the FR-WPI-7 run_linkage block to the JSON.",
     ),
     schema: Optional[Path] = typer.Option(None, "--schema", help="Path to prisma/schema.prisma."),
     manifest: Optional[Path] = typer.Option(
@@ -65,6 +72,12 @@ def wireframe(
     no_write: bool = typer.Option(
         False, "--no-write", help="Skip persisting .startd8/wireframe/wireframe-plan.json."
     ),
+    inventory: bool = typer.Option(
+        False,
+        "--inventory",
+        help="Render the per-iteration delivery inventory (FR-WPI-9). Default in --from-run "
+        "mode — it is the business walkthrough artifact.",
+    ),
 ) -> None:
     """Show what the $0 deterministic cascade WILL build — and what is not yet defined."""
     overrides = {
@@ -81,10 +94,14 @@ def wireframe(
             yaml_paths=list(inputs),
             overrides={k: v for k, v in overrides.items() if v is not None},
             project_root=project,
+            from_run=from_run,
         )
     except AssemblyInputsError as exc:
         console.print(f"[red]wireframe:[/red] {exc}")
         raise typer.Exit(_EXIT_FATAL_INPUTS)
+
+    # FR-WPI-7: end-to-end fingerprint linkage (prose → extraction → manifest → wireframe).
+    linkage = run_linkage(from_run) if from_run is not None else None
 
     # FR-W7/R5-F6: same contract as `generate backend` — the authoring UI is meaningless
     # without a pages manifest (here, resolved via flag, inputs YAML, or convention).
@@ -100,15 +117,22 @@ def wireframe(
 
     if json_out:
         # Machine contract (R4-F1): stdout is parseable JSON only; tree only with --verbose.
-        sys.stdout.write(plan_to_json(plan, emit_context="cli"))
+        sys.stdout.write(plan_to_json(plan, emit_context="cli", linkage=linkage))
         if verbose:
             render_plan(plan, console, only_issues=only_issues, max_items=max_items)
     else:
         render_plan(plan, console, only_issues=only_issues, max_items=max_items)
+
+    # FR-WPI-9: the walkthrough artifact — default-on when consuming a run.
+    if (inventory or from_run is not None) and not json_out:
+        from .wireframe.render import render_delivery_inventory
+
+        render_delivery_inventory(plan, console, max_items=max_items)
 
     if not no_write:
         persist_plan(
             plan,
             Path(project) / ".startd8" / "wireframe",
             emit_context="cli",
+            linkage=linkage,
         )

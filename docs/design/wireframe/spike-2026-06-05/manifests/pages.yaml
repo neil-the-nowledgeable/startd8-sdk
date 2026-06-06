@@ -1,0 +1,45 @@
+pages:
+- slug: /
+  title: Home
+  content: pages/home.md
+- slug: /how-it-works
+  title: How it works
+  content: pages/how_it_works.md
+- slug: /jobs
+  title: Jobs
+  content: pages/jobs.md
+nav:
+- label: Home
+  href: /
+- label: Profile
+  href: /ui/profile
+- label: Target Roles
+  href: /ui/targetrole
+- label: Proof Points
+  href: /ui/proofpoint
+- label: Capabilities
+  href: /ui/capability
+- label: Outcomes
+  href: /ui/outcome
+- label: Metrics
+  href: /ui/metric
+- label: Differentiators
+  href: /ui/differentiator
+- label: Value Props
+  href: /ui/valueprop
+- label: Value Map
+  href: /value-map
+- label: Completeness
+  href: /completeness
+- label: Résumé
+  href: /export/resume
+- label: Export MD
+  href: /export/markdown
+- label: Export JSON
+  href: /export/json
+- label: Import
+  href: /import
+- label: How it works
+  href: /how-it-works
+- label: Jobs
+  href: /jobs
