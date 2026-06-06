@@ -22,7 +22,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 import yaml
@@ -1442,6 +1442,47 @@ def _build_behavioral_contracts(
 # Source Reconciler
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Directories that are never project source — vendored deps, VCS state, and
+# the pipeline's own outputs. Without this filter the reconciler walks
+# .venv/lib and prior run outputs: the 2026-06-05 kickoff-ingestion pilot
+# extracted 46,290 contracts of which 91% came from site-packages (88 MB
+# seed), and library internals entered the selection pool as if they were
+# project conventions. Same bug class as Run-027/045 blast-radius inflation
+# (see complexity/signals.py:_BLAST_RADIUS_EXCLUDED_DIRS).
+_EXCLUDED_SCAN_DIRS: frozenset = frozenset({
+    ".git",
+    ".hg",
+    ".venv",
+    "venv",
+    ".env",
+    "env",
+    "site-packages",
+    "node_modules",
+    "__pycache__",
+    ".startd8",
+    ".startd8-bench",
+    ".cap-dev-pipe",
+    "pipeline-output",
+    ".claude",
+    "archive",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".eggs",
+})
+
+
+def is_excluded_source_path(relpath: str) -> bool:
+    """True when any directory component of *relpath* is a non-source dir.
+
+    Shared by the source reconciler and reference-file collection so every
+    AST walk respects the same ignore rules.
+    """
+    return any(part in _EXCLUDED_SCAN_DIRS for part in PurePosixPath(relpath).parts[:-1])
+
 
 @dataclass
 class SourceReconcileConfig:
@@ -1505,11 +1546,18 @@ class SourceReconciler:
             pass
 
         # Scan source files
+        excluded_count = 0
         for glob_pattern in scan_globs:
             for src_file in self.project_root.glob(glob_pattern):
                 try:
                     relpath = src_file.relative_to(self.project_root).as_posix()
                 except ValueError:
+                    continue
+
+                # Never extract contracts from vendored deps, VCS state, or
+                # pipeline outputs (88 MB-seed bug, kickoff pilot 2026-06-05)
+                if is_excluded_source_path(relpath):
+                    excluded_count += 1
                     continue
 
                 matching_features = feature_by_file.get(relpath, [])
@@ -1532,6 +1580,12 @@ class SourceReconciler:
                         src_file, relpath, feature_ids, seen_ids
                     ))
 
+        if excluded_count:
+            logger.debug(
+                "Source reconcile: skipped %d file(s) in excluded dirs "
+                "(.venv/, pipeline outputs, VCS state, …)",
+                excluded_count,
+            )
         return contracts
 
     def _reconcile_file(

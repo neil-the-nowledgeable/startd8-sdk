@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ...logging_config import get_logger
 from ...seeds.utils import is_omitted
-from ...utils.file_operations import atomic_write_json
+from ...utils.file_operations import atomic_write, atomic_write_json
 from .plan_ingestion_diagnostics import (
     EnrichmentDiagnostic,
     PlanIngestionKaizenConfig,
@@ -76,6 +76,47 @@ class DerivedContext:
 
 
 # ---------------------------------------------------------------------------
+# Seed size budget
+# ---------------------------------------------------------------------------
+
+
+def _check_seed_size_budget(
+    seed_path: Path,
+    *,
+    warn_mb: float,
+    fail_mb: float,
+    fm_contract_count: int = 0,
+) -> float:
+    """Enforce the context-seed size budget; returns the size in MB.
+
+    A healthy seed is well under a few MB. Oversize means a walker or
+    serialization regression (88 MB kickoff pilot seed, 2026-06-05: 46k
+    site-packages contracts + double-serialized forward manifest), and an
+    oversized contract pool feeds generators library internals as project
+    conventions. Fail loud rather than hand it downstream. Thresholds ≤ 0
+    disable the respective check.
+    """
+    size_mb = seed_path.stat().st_size / 1_000_000
+    if fail_mb > 0 and size_mb >= fail_mb:
+        raise ValueError(
+            f"Context seed {seed_path.name} is {size_mb:.1f} MB (budget: fail "
+            f"at {fail_mb:g} MB) — forward_manifest carries "
+            f"{fm_contract_count} contracts. This indicates the AST walker "
+            f"ingested non-project sources (vendored deps, pipeline outputs) "
+            f"or a serialization regression. Inspect forward_manifest.contracts "
+            f"file paths; raise seed_size_fail_mb only if the size is genuinely "
+            f"expected."
+        )
+    if warn_mb > 0 and size_mb >= warn_mb:
+        logger.warning(
+            "Context seed %s is %.1f MB (warn threshold %g MB; %d "
+            "forward-manifest contracts) — unusually large for a plan seed",
+            seed_path.name, size_mb, warn_mb, fm_contract_count,
+        )
+    return size_mb
+
+
+# ---------------------------------------------------------------------------
 # PhaseEmitter
 # ---------------------------------------------------------------------------
 
@@ -124,6 +165,7 @@ class PhaseEmitter:
         project_metadata: Optional[Dict[str, Any]] = None,
         project_root: Optional[Path] = None,
         tracking_config: Optional[TaskTrackingConfig] = None,
+        kickoff_docs: Optional[Dict[str, str]] = None,
     ):
         """Top-level orchestrator — replaces ``_phase_emit``.
 
@@ -221,7 +263,6 @@ class PhaseEmitter:
             stub_manifest=stub_manifest,
             skeleton_sources=skeleton_sources,
             element_tiers=element_tiers,
-            forward_manifest_dict=forward_manifest_dict,
         )
 
         # 10. Context files + service metadata
@@ -323,6 +364,17 @@ class PhaseEmitter:
                     _enriched, len(tasks),
                 )
 
+        # 10.6 Deterministic manifest emission (FR-WPI-1..4) — the SECOND projection of the
+        # kickoff docs, beside the seed: extraction → <output_dir>/manifests/* + the
+        # traceability report. Runs BEFORE seed construction so the seed's artifacts section
+        # carries the linkage (FR-WPI-7). Additive and non-blocking: an extraction failure is
+        # logged loudly and the seed path proceeds (manifest emission never holds the seed
+        # hostage — RoundTripError is an extraction BUG to fix, not a run-stopper).
+        if kickoff_docs:
+            manifest_linkage = self._emit_manifests(kickoff_docs, project_root)
+            if manifest_linkage:
+                artifacts.update(manifest_linkage)
+
         # 11. Seed construction (unified for both routes)
         context_seed_path: Optional[Path] = None
         if parsed_plan is not None:
@@ -396,7 +448,13 @@ class PhaseEmitter:
             if project_metadata and project_metadata.get("reference_root"):
                 ref_candidate = Path(str(project_metadata["reference_root"]))
                 if ref_candidate.is_dir():
-                    reference_files = sorted(ref_candidate.rglob("*.py"))
+                    from startd8.forward_manifest_extractor import is_excluded_source_path
+                    reference_files = sorted(
+                        p for p in ref_candidate.rglob("*.py")
+                        if not is_excluded_source_path(
+                            p.relative_to(ref_candidate).as_posix()
+                        )
+                    )
 
             contracts, file_elements = extract_forward_contracts(
                 features,
@@ -852,7 +910,6 @@ class PhaseEmitter:
         stub_manifest: Optional[List[Dict[str, Any]]],
         skeleton_sources: Optional[Dict[str, str]],
         element_tiers: Optional[Dict[str, Dict[str, Any]]],
-        forward_manifest_dict: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
         """Build artifacts dict, onboarding_var, and source_checksum.
 
@@ -923,12 +980,84 @@ class PhaseEmitter:
             artifacts_out["skeleton_sources"] = skeleton_sources
         if element_tiers:
             artifacts_out["element_tiers"] = element_tiers
-        # Sapper 3a: persist the full ForwardManifest so the standalone survey can run its
-        # cross-contract (FR-SAP-5) and per-element (FR-SAP-6) lenses, not just bore+convention.
-        if forward_manifest_dict:
-            artifacts_out["forward_manifest"] = forward_manifest_dict
+        # Sapper 3a consumers read the ForwardManifest from the seed's
+        # TOP-LEVEL `forward_manifest` field (sapper/host.py falls back to an
+        # artifacts copy only for pre-2026-06 seeds). Do NOT also serialize it
+        # here — the duplicate doubled an already-bloated 88 MB seed
+        # (kickoff-ingestion pilot, 2026-06-05).
 
         return artifacts_out, ob_var, sc_val
+
+    # ------------------------------------------------------------------ #
+    # 10.6 Deterministic manifest emission (FR-WPI-1..4)
+    # ------------------------------------------------------------------ #
+
+    def _emit_manifests(
+        self,
+        kickoff_docs: Dict[str, str],
+        project_root: Optional[Path],
+    ) -> Dict[str, Any]:
+        """Extract the assembly manifests from the kickoff docs and write them as run
+        artifacts: ``<output_dir>/manifests/*`` + ``manifest-extraction-report.{json,md}``.
+
+        Deterministic, zero LLM (FR-WPI-2); round-trip-validated through the generators' own
+        parsers (FR-WPI-4 — a failure there is an extraction bug, surfaced loudly). Returns
+        the FR-WPI-7 linkage entries for the seed's ``artifacts`` section; ``{}`` on failure
+        (the seed path never blocks on manifest emission).
+        """
+        import hashlib
+
+        from ...manifest_extraction import (
+            extract_manifests,
+            report_to_json,
+            report_to_markdown,
+        )
+
+        output_dir = self._output_dir
+        try:
+            live_schema_text: Optional[str] = None
+            if project_root is not None:
+                live = Path(project_root) / "prisma" / "schema.prisma"
+                if live.is_file():
+                    live_schema_text = live.read_text(encoding="utf-8")
+            result = extract_manifests(kickoff_docs, live_schema_text=live_schema_text)
+
+            manifests_dir = output_dir / "manifests"
+            manifest_shas: Dict[str, str] = {}
+            for filename, text in sorted(result.manifests.items()):
+                atomic_write(manifests_dir / filename, text, mode="w")
+                manifest_shas[filename] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+            report_json = report_to_json(result)
+            report_path = output_dir / "manifest-extraction-report.json"
+            atomic_write(report_path, report_json, mode="w")
+            atomic_write(
+                output_dir / "manifest-extraction-report.md",
+                report_to_markdown(result),
+                mode="w",
+            )
+            logger.info(
+                "Manifest extraction: %d emitted (%s), %d not_extracted, contract diff %s",
+                len(result.manifests), ", ".join(sorted(result.manifests)) or "none",
+                len([r for r in result.records if r.status == "not_extracted"]),
+                "clean" if not result.contract_diff else f"{len(result.contract_diff)} lines",
+            )
+            return {
+                "manifests_dir": str(manifests_dir),
+                "manifest_sha256s": manifest_shas,
+                "extraction_report_path": str(report_path),
+                "extraction_report_sha256": hashlib.sha256(
+                    report_json.encode("utf-8")
+                ).hexdigest(),
+            }
+        except Exception:
+            # Never hold the seed hostage — the manifest projection is additive (FR-WPI-1).
+            logger.error(
+                "Manifest extraction failed — seed emission continues without the "
+                "manifests/ artifact family (this is an extraction bug to fix)",
+                exc_info=True,
+            )
+            return {}
 
     # ------------------------------------------------------------------ #
     # 11. Unified seed construction + quality
@@ -1074,6 +1203,13 @@ class PhaseEmitter:
                 _io_span.set_attribute("io.path", str(context_seed_path))
                 _io_span.set_attribute("io.route", route_label)
                 _io_span.set_attribute("io.task_count", len(tasks))
+
+        _check_seed_size_budget(
+            context_seed_path,
+            warn_mb=getattr(self._cfg, "seed_size_warn_mb", 5.0),
+            fail_mb=getattr(self._cfg, "seed_size_fail_mb", 50.0),
+            fm_contract_count=len((forward_manifest_dict or {}).get("contracts", [])),
+        )
 
         # Mottainai Rule 6: log propagation chain status
         _triage = review_output.get("triage", {}) if review_output else {}
