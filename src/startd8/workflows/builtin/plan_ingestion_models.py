@@ -108,6 +108,10 @@ class PlanIngestionConfig:
     # Review
     review_rounds: int = 2
     skip_arc_review: bool = False
+    # Refine spend gate: skip REFINE rounds (LLM spend) when the parse
+    # degraded to the fallback feature or requirements coverage is 0% —
+    # there is nothing of value to refine (strtd8 kickoff note 3).
+    gate_refine_on_parse_quality: bool = True
     review_quality_tier: str = "flagship"
     review_providers: Optional[List[str]] = None
 
@@ -214,6 +218,9 @@ class PlanIngestionConfig:
             enable_llm_transform=_as_bool_cfg(config.get("enable_llm_transform"), False),
             review_rounds=int(config.get("review_rounds", 2)),
             skip_arc_review=_as_bool_cfg(config.get("skip_arc_review"), False),
+            gate_refine_on_parse_quality=_as_bool_cfg(
+                config.get("gate_refine_on_parse_quality"), True,
+            ),
             review_quality_tier=str(config.get("review_quality_tier", "flagship")),
             review_providers=config.get("providers"),
             llm_read_timeout_seconds=float(config.get("llm_read_timeout_seconds", 300)),

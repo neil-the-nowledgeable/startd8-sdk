@@ -4347,7 +4347,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                     return _fail(
                         "Translation quality gate failed: "
                         + details
-                        + ". Improve mappings or set low_quality_policy to 'warn'."
+                        + ". Remedies: improve plan↔requirements mappings, "
+                        "lower the thresholds (min_requirements_coverage / "
+                        "min_artifact_mapping_coverage / max_contract_conflicts) "
+                        "with documented justification, or set "
+                        "low_quality_policy to 'bias_artisan' (advisory-only; "
+                        "valid values: bias_artisan, fail)."
                     )
                 logger.warning(
                     "Low translation quality detected (advisory): %s", details,
@@ -4455,7 +4460,36 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
-            if skip_arc_review:
+            # Refine spend gate (strtd8 kickoff note 3, Zero-Value Precision):
+            # never spend review rounds polishing a degraded parse. Run 1's
+            # only LLM spend ($0.0317, two full Gemini rounds) went into
+            # refining a one-task fallback blob. The quality gate belongs
+            # BEFORE the spend, not after.
+            _refine_quality_block: Optional[str] = None
+            if cfg.gate_refine_on_parse_quality and not skip_arc_review:
+                if _heuristic_degraded:
+                    _refine_quality_block = (
+                        "parse collapsed to the single fallback feature"
+                    )
+                elif (
+                    translation_quality.get("requirements_coverage_percent", 100.0)
+                    == 0.0
+                ):
+                    _refine_quality_block = "requirements coverage is 0%"
+            if _refine_quality_block:
+                logger.warning(
+                    "Skipping REFINE (%s) — not spending review rounds on a "
+                    "degraded parse. Set gate_refine_on_parse_quality=false "
+                    "to override.",
+                    _refine_quality_block,
+                )
+                if _HAS_OTEL and not isinstance(_refine_span, _NoOpSpan):
+                    _refine_span.add_event("decision.refine_spend_gated", {
+                        "phase": "refine",
+                        "reason": _refine_quality_block,
+                    })
+
+            if skip_arc_review or _refine_quality_block:
                 rounds_completed, refine_steps, refine_cost, review_output = (
                     0, [], 0.0, {},
                 )
@@ -4530,8 +4564,29 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if _kz.refine_review_profile:
                         _refine_profile = _kz.refine_review_profile
 
+                # OQ-6 resolved (DETERMINISTIC_INGESTION; strtd8 kickoff
+                # note 3): REFINE reviews a markdown COMPANION, never the
+                # schema-valid tasks YAML. The review-log workflow appends
+                # markdown appendices — into the YAML, that corrupted the
+                # FR-1 machine artifact (kickoff run 1: YAML + markdown no
+                # longer parsed). Task content here is non-authoritative
+                # anyway (the prime seed derives tasks from PARSE features);
+                # the companion is purely the review surface, and accepted
+                # suggestions reach the seed via review_output forwarding.
+                review_doc_path = output_dir / "plan-ingestion-tasks-review.md"
+                atomic_write(
+                    review_doc_path,
+                    "# Plan Ingestion Tasks — Review Document\n\n"
+                    f"Review surface for the REFINE phase, generated from "
+                    f"`{doc_path.name}` (which stays schema-valid for machine "
+                    "consumers). Review appendices belong here.\n\n"
+                    "```yaml\n"
+                    f"{doc_path.read_text(encoding='utf-8')}"
+                    "```\n",
+                )
+
                 rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
-                    doc_path,
+                    review_doc_path,
                     review_rounds,
                     review_quality_tier,
                     _refine_scope,

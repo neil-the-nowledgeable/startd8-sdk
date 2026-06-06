@@ -115,6 +115,10 @@ from .architectural_review_log_helpers import (  # noqa: F401 — re-exports
 
 _logger = get_logger(__name__)
 
+# The review protocol is markdown-native (appends Appendix A/B/C + review
+# rounds). Reviewing machine files corrupts them — see validate_config.
+_MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
+
 
 class ArchitecturalReviewLogWorkflow(WorkflowBase):
     @property
@@ -320,6 +324,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             p = Path(str(doc_path)).expanduser()
             if not p.exists() or not p.is_file():
                 errors.append(f"document_path does not exist or is not a file: {p}")
+            elif p.suffix.lower() not in _MARKDOWN_SUFFIXES:
+                # The review protocol appends markdown appendices (Appendix
+                # A/B/C, review rounds) to the document. On machine files
+                # (YAML/JSON) that corrupts the artifact — the strtd8 kickoff
+                # pilot left plan-ingestion-tasks.yaml unparseable (YAML +
+                # markdown appendix), colliding with DETERMINISTIC_INGESTION
+                # FR-1's schema-valid guarantee. Review markdown only.
+                errors.append(
+                    f"document_path must be a markdown document "
+                    f"({'/'.join(sorted(_MARKDOWN_SUFFIXES))}); got "
+                    f"'{p.suffix or '(no extension)'}'. The review log appends "
+                    f"markdown appendices, which would corrupt machine-readable "
+                    f"files. Wrap the content in a .md review document instead."
+                )
 
         reviewer_count = config.get("reviewer_count", 2)
         if reviewer_count is not None and (not isinstance(reviewer_count, int) or reviewer_count < 1 or reviewer_count > 5):
@@ -352,6 +370,15 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         started_at = datetime.now(timezone.utc)
 
         doc_path = Path(str(config["document_path"])).expanduser().resolve()
+        if doc_path.suffix.lower() not in _MARKDOWN_SUFFIXES:
+            # Hard guard mirroring validate_config: never append the review
+            # appendix into a machine file (strtd8 note 3 — corrupted YAML).
+            return WorkflowResult.from_error(
+                self.metadata.workflow_id,
+                f"Refusing to review non-markdown document {doc_path.name}: the "
+                f"review log appends markdown appendices, which would corrupt "
+                f"machine-readable files. Provide a .md review document.",
+            )
         init_if_missing = bool(config.get("init_if_missing", True))
         max_suggestions = int(config.get("max_suggestions", 10))
         scope = str(config.get("scope") or "").strip() or "Architecture-focused review"
