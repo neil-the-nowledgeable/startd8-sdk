@@ -59,7 +59,11 @@ def _compound_pk_cols(schema: PrismaSchema, model_name: str) -> Set[str]:
 
 _DEFAULT_RE = re.compile(r"@default\((.*)\)")
 # Attribute names SQLAlchemy's Declarative API reserves on a mapped class.
-_RESERVED_ATTRS = frozenset({"metadata", "registry"})
+# Public (kickoff contract K2/R1-G4-iv): manifest_extraction's reserved-name guard cites this
+# exact set so authors hit the flag at extraction, not the generate-time crash. The private
+# alias is retained for existing internal callers (R4-S3 pattern).
+RESERVED_ATTRS = frozenset({"metadata", "registry"})
+_RESERVED_ATTRS = RESERVED_ATTRS
 
 
 def _default_field_arg(field: PrismaField, needs: Set[str]) -> str:

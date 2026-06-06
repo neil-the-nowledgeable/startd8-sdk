@@ -1016,11 +1016,20 @@ class PhaseEmitter:
         output_dir = self._output_dir
         try:
             live_schema_text: Optional[str] = None
+            build_preferences_text: Optional[str] = None
             if project_root is not None:
                 live = Path(project_root) / "prisma" / "schema.prisma"
                 if live.is_file():
                     live_schema_text = live.read_text(encoding="utf-8")
-            result = extract_manifests(kickoff_docs, live_schema_text=live_schema_text)
+                prefs = Path(project_root) / "inputs" / "build-preferences.yaml"
+                if prefs.is_file():
+                    # §2.7 env-keys agreement check (K2-3) — one value, two surfaces.
+                    build_preferences_text = prefs.read_text(encoding="utf-8")
+            result = extract_manifests(
+                kickoff_docs,
+                live_schema_text=live_schema_text,
+                build_preferences_text=build_preferences_text,
+            )
 
             manifests_dir = output_dir / "manifests"
             manifest_shas: Dict[str, str] = {}

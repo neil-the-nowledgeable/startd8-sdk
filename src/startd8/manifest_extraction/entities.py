@@ -17,10 +17,12 @@ Closed grammar implemented (contract v0.2):
 
 from __future__ import annotations
 
+import keyword
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from ..backend_codegen.sqlmodel_renderer import RESERVED_ATTRS
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from .grammar import Section, md_tables, plural_candidates, strip_annotations
 from .models import ExtractionRecord, SourceRef, Status
@@ -144,6 +146,17 @@ def extract_entities(
                     "schema.prisma", f"/models/{name}/fields/{fname}", Status.NOT_EXTRACTED,
                     source=SourceRef(doc_label, sec.heading_path, row_index=i),
                     reason="one-field-per-row: slash-row is never split-parsed",
+                ))
+                continue
+            # K2/R1-G4-iv: reserved-name guard — hit the flag at extraction, not the
+            # generate-time crash (the `metadata` defect class). Cites the backend's own set.
+            if fname in RESERVED_ATTRS or keyword.iskeyword(fname):
+                records.append(ExtractionRecord(
+                    "schema.prisma", f"/models/{name}/fields/{fname}", Status.NOT_EXTRACTED,
+                    source=SourceRef(doc_label, sec.heading_path, row_index=i),
+                    reason=f"reserved name: {fname!r} collides with the generators' reserved "
+                           "set (sqlmodel_renderer.RESERVED_ATTRS / Python keywords) — rename "
+                           "the field in the doc",
                 ))
                 continue
             prisma_type: Optional[str] = PLAIN_TYPES.get(ftype)

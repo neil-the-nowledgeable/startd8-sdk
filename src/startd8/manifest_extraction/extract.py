@@ -40,11 +40,14 @@ def extract_manifests(
     docs: Mapping[str, str],
     *,
     live_schema_text: Optional[str] = None,
+    build_preferences_text: Optional[str] = None,
 ) -> ExtractionResult:
     """Extract the assembly manifests from *docs* (label/path → markdown text).
 
     *live_schema_text* — when the project already has an authored contract, the entities pass
     runs in DIFF mode (FR-WPI-8): the doc-derived graph is compared, never emitted.
+    *build_preferences_text* — ``inputs/build-preferences.yaml`` when the kickoff package has
+    one: enables the §2.7 env-keys agreement check (K2-3; disagreement flags, never blocks).
     """
     import hashlib
 
@@ -91,7 +94,9 @@ def extract_manifests(
         if "pages.yaml" not in candidates or candidates["pages.yaml"] is None:
             candidates["pages.yaml"] = extract_pages(label, sections, records)
         if "app.yaml" not in candidates or candidates["app.yaml"] is None:
-            candidates["app.yaml"] = extract_app(label, sections, records)
+            candidates["app.yaml"] = extract_app(
+                label, sections, records, build_preferences_text=build_preferences_text
+            )
         if "ai_passes.yaml" not in candidates or candidates["ai_passes.yaml"] is None:
             candidates["ai_passes.yaml"] = extract_ai_passes(label, sections, graph, records)
         if "human_inputs.yaml" not in candidates or candidates["human_inputs.yaml"] is None:

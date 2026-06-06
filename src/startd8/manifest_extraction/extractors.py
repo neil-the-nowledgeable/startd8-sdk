@@ -39,7 +39,11 @@ def extract_pages(
             reason="Pages section has no table",
         ))
         return None
-    pages: List[dict] = []
+    # Pass 1: derive slugs for every row. Pass 2 (K2/R1-G4-i collision pre-flight): rows whose
+    # derived slugs collide are ALL flagged `not_extracted(collision)` and excluded — never an
+    # emitted manifest that dies in its own FR-WPI-4 round-trip (parse_pages loud-fails on
+    # duplicate slugs; an author collision is a conformance failure, not an extraction bug).
+    parsed_rows: List[tuple] = []  # (row_index, name, content, slug)
     for i, row in enumerate(tables[0].dicts()):
         name = strip_annotations(row.get("page", ""))
         content = strip_annotations(row.get("content file", ""))
@@ -52,6 +56,24 @@ def extract_pages(
             continue
         # Routes are DERIVED, never authored (contract §2.2): kebab(name); Home → "/".
         slug = "/" if name.lower() == "home" else "/" + nfkd_kebab(name)
+        parsed_rows.append((i, name, content, slug))
+
+    slug_owners: Dict[str, List[tuple]] = {}
+    for entry in parsed_rows:
+        slug_owners.setdefault(entry[3], []).append(entry)
+
+    pages: List[dict] = []
+    for i, name, content, slug in parsed_rows:
+        colliders = slug_owners[slug]
+        if len(colliders) > 1:
+            others = ", ".join(repr(n) for j, n, _, _ in colliders if j != i)
+            records.append(ExtractionRecord(
+                "pages.yaml", f"/pages/{slug}", Status.NOT_EXTRACTED,
+                source=SourceRef(doc_label, sec.heading_path, row_index=i),
+                reason=f"collision: {name!r} and {others} derive the same slug {slug!r} — "
+                       "rename one page in the doc",
+            ))
+            continue
         pages.append({"slug": slug, "title": name, "content": f"pages/{content}"})
         records.append(ExtractionRecord(
             "pages.yaml", f"/pages/{len(pages) - 1}/slug", Status.EXTRACTED,
@@ -101,9 +123,30 @@ def extract_views(
     views: List[dict] = []
     routes_by_name: Dict[str, str] = {}
 
+    # K2/R1-G4-i collision pre-flight: two views deriving the same identifier are BOTH flagged
+    # `not_extracted(collision)` and skipped — parse_views loud-fails on duplicate names, and
+    # an author collision must never surface as an extraction RoundTripError.
+    ident_owners: Dict[str, List[str]] = {}
+    for sec in blocks:
+        block_name = strip_annotations(sec.title.split(":", 1)[1]).strip()
+        ident_owners.setdefault(
+            nfkd_kebab(block_name).replace("-", "_"), []
+        ).append(block_name)
+    colliding_idents = {k for k, v in ident_owners.items() if len(v) > 1}
+    for ident in sorted(colliding_idents):
+        names = ", ".join(repr(n) for n in ident_owners[ident])
+        records.append(ExtractionRecord(
+            "views.yaml", f"/views/{ident}", Status.NOT_EXTRACTED,
+            source=SourceRef(doc_label, blocks[0].heading_path[:-1] or ("Views",)),
+            reason=f"collision: {names} derive the same view name {ident!r} — rename one "
+                   "view in the doc",
+        ))
+
     for sec in blocks:
         name = strip_annotations(sec.title.split(":", 1)[1]).strip()
         ident = nfkd_kebab(name).replace("-", "_")
+        if ident in colliding_idents:
+            continue  # flagged above; both parties excluded
         src = SourceRef(doc_label, sec.heading_path)
         keys, order = key_lines(sec.body)
         kind = keys.get("Kind", "").strip()
@@ -175,6 +218,17 @@ def extract_views(
                 "views.yaml", f"/views/{vi}/route", Status.DEFAULTED,
                 value=view["route"], reason=f"kind-aware derivation ({kind})", source=src,
             ))
+
+        # K2 route-collision check: a route already claimed by an earlier view (possible via an
+        # explicit `Route:` override) excludes THIS view — the report names both parties.
+        if view["route"] in routes_by_name.values():
+            other = next(n for n, r in routes_by_name.items() if r == view["route"])
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{ident}", Status.NOT_EXTRACTED, source=src,
+                reason=f"collision: route {view['route']!r} already claimed by view "
+                       f"{other!r} — adjust the `Route:` override",
+            ))
+            continue
 
         # Shows: A→B arrows → relations via the derived join models; counts → aggregates.
         for key in ("Shows", "Also shows"):
@@ -463,9 +517,68 @@ def extract_human_inputs(
 # Settings with no AppManifest home (sweep 2): flagged, never emitted as unknown keys.
 _NO_MANIFEST_HOME = {"port", "sqlite mode", "env keys"}
 
+# §2.7 agreement check (K2-3): env-key defaults that mirror a build-preferences value — "one
+# value, two surfaces; extraction flags disagreement". Closed mapping, no guessing.
+_ENV_KEY_TO_BUILD_PREF = {
+    "COST_BUDGET_USD": ("budgets", "per_pipeline_run"),
+}
+_ENV_ENTRY_RE = re.compile(r"([A-Z][A-Z0-9_]+)\s*(\(([^)]*)\))?")
+_ENV_DEFAULT_RE = re.compile(r"default\s+\$?([\d.]+)")
+
+
+def _check_env_agreement(
+    doc_label: str,
+    value: str,
+    build_preferences_text: Optional[str],
+    records: List[ExtractionRecord],
+    src: SourceRef,
+) -> None:
+    """Compare env-key declared defaults against ``inputs/build-preferences.yaml`` (§2.7)."""
+    if not build_preferences_text:
+        return
+    import yaml as _yaml
+
+    try:
+        prefs = _yaml.safe_load(build_preferences_text) or {}
+    except _yaml.YAMLError:
+        records.append(ExtractionRecord(
+            "app.yaml", "/env_keys/agreement", Status.NOT_EXTRACTED, source=src,
+            reason="build-preferences.yaml is not valid YAML — agreement unverifiable",
+        ))
+        return
+    for key, _, qualifiers in _ENV_ENTRY_RE.findall(value):
+        mapping = _ENV_KEY_TO_BUILD_PREF.get(key)
+        if mapping is None or not qualifiers:
+            continue
+        default_m = _ENV_DEFAULT_RE.search(qualifiers)
+        if not default_m:
+            continue
+        declared = default_m.group(1)
+        section, pref_key = mapping
+        pref_raw = str((prefs.get(section) or {}).get(pref_key, ""))
+        if not pref_raw or "<" in pref_raw:
+            continue  # absent or an uninstantiated template placeholder ("$<5.00>") — skip
+        pref_num = re.sub(r"[^\d.]", "", pref_raw)  # "$10.00" → "10.00"
+        if not pref_num:
+            continue
+        try:
+            agree = float(declared) == float(pref_num)
+        except ValueError:
+            continue
+        if not agree:
+            records.append(ExtractionRecord(
+                "app.yaml", f"/env_keys/{key}", Status.NOT_EXTRACTED, source=src,
+                reason=f"two-surfaces-disagree: doc declares default {declared}, "
+                       f"build-preferences {section}.{pref_key} = {pref_raw!r} — one value, "
+                       "two surfaces (§2.7)",
+            ))
+
 
 def extract_app(
-    doc_label: str, sections: List[Section], records: List[ExtractionRecord]
+    doc_label: str,
+    sections: List[Section],
+    records: List[ExtractionRecord],
+    build_preferences_text: Optional[str] = None,
 ) -> Optional[dict]:
     sec = find_section(sections, "Scaffold & runtime")
     if sec is None:
@@ -490,6 +603,9 @@ def extract_app(
                 "app.yaml", f"/{setting.replace(' ', '_')}", Status.NOT_EXTRACTED, source=src,
                 reason="generator-gap: no AppManifest field (scaffold-codegen backlog)",
             ))
+            if setting == "env keys":
+                # Still parsed for the agreement check (contract R1-G5 note).
+                _check_env_agreement(doc_label, value, build_preferences_text, records, src)
             continue
         if setting == "package name":
             put("app", "package", value, src)
