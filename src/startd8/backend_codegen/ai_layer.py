@@ -247,20 +247,33 @@ def call_ai_service(
     max_tokens = PROVIDER_LIMITS.get(provider, 8192)
     agent = resolve_agent_spec(agent_spec)
     value, raw = agent.generate_structured(prompt, output_schema, max_tokens=max_tokens)
-    _log_ai_call(session, pass_name, raw)
+    _log_ai_call(session, pass_name, raw, agent_spec)
     return value
 
 
-def _log_ai_call(session: Session, pass_name: str, raw: Any) -> None:
-    """Persist one AiCall row per call; defensive about which columns the table actually has."""
+def _log_ai_call(session: Session, pass_name: str, raw: Any, agent_spec: str = "") -> None:
+    """Persist one AiCall row per call; defensive about which columns the table actually has.
+
+    Candidates carry BOTH snake_case and camelCase names — Prisma-derived contracts use
+    camelCase (promptTokens/costUsd), hand-rolled ones may not. The hasattr filter keeps
+    whichever exist, but offering only one convention silently logged purpose-and-nothing-else
+    on camelCase contracts (found live: cost/tokens/model all dropped).
+    """
     try:
         usage = getattr(raw, "token_usage", None)
+        _in = getattr(usage, "input", None)
+        _out = getattr(usage, "output", None)
+        _cost = getattr(usage, "cost_estimate", None) if usage else None
         candidates = {
             "purpose": pass_name,
             "pass_name": pass_name,
-            "input_tokens": getattr(usage, "input", None),
-            "output_tokens": getattr(usage, "output", None),
-            "cost_usd": getattr(usage, "cost_estimate", None) if usage else None,
+            "model": agent_spec or None,
+            "input_tokens": _in,
+            "promptTokens": _in,
+            "output_tokens": _out,
+            "responseTokens": _out,
+            "cost_usd": _cost,
+            "costUsd": _cost,
         }
         kwargs = {k: v for k, v in candidates.items() if hasattr(AiCall, k) and v is not None}
         session.add(AiCall(**kwargs))
