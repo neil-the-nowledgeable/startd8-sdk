@@ -1,0 +1,5 @@
+passes:
+  - name: suggest_notes
+    output_entities: [Note]
+    route_path: /ai/suggest-notes
+    prompt: prompts/suggest_notes.md

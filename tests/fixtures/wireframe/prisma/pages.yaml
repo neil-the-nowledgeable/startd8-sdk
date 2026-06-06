@@ -1,0 +1,9 @@
+pages:
+  - slug: /
+    title: Home
+    content: pages/home.md
+    nav_label: Home
+  - slug: /about
+    title: About
+    content: pages/about.md
+    nav_label: About

@@ -1,0 +1,31 @@
+// Golden wireframe fixture (FR-W14 / R3-S3) — a mini contract shaped like a typical
+// consumer project's (reference consumer: strtd8; the wireframe itself is consumer-agnostic,
+// requirements §1.0). Three concrete models + one enum + a relation; every entity surface.
+
+model Profile {
+  id        String   @id @default(cuid())
+  name      String
+  bio       String?
+  metrics   Metric[]
+  createdAt DateTime @default(now())
+}
+
+model Metric {
+  id        String     @id @default(cuid())
+  label     String
+  value     Float
+  kind      MetricKind @default(COUNT)
+  profileId String
+  profile   Profile    @relation(fields: [profileId], references: [id])
+}
+
+model Note {
+  id    String @id @default(cuid())
+  title String
+  body  String
+}
+
+enum MetricKind {
+  COUNT
+  GAUGE
+}

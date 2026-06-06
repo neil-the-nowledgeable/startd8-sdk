@@ -247,8 +247,12 @@ def render_requirements(
     return header + "\n\n" + body + "\n"
 
 
-def _load_completeness_manifest(text: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Parse a ``completeness.yaml`` text into the manifest dict (tolerant: None on absent/bad)."""
+def load_completeness_manifest(text: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Parse a ``completeness.yaml`` text into the manifest dict (tolerant: None on absent/bad).
+
+    Public (wireframe R6-S2): consumed cross-module by ``startd8.wireframe``. The
+    ``_load_completeness_manifest`` alias is retained for existing callers (R4-S3).
+    """
     if not text:
         return None
     try:
@@ -257,6 +261,10 @@ def _load_completeness_manifest(text: Optional[str]) -> Optional[Dict[str, Any]]
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+# Back-compat private alias (R4-S3).
+_load_completeness_manifest = load_completeness_manifest
 
 
 def render_derived(

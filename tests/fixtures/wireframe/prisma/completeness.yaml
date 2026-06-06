@@ -1,0 +1,4 @@
+exclude: [Note]
+entities:
+  Profile: {min_rows: 1}
+  Metric: {min_rows: 3, weight: 2}

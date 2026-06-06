@@ -1,0 +1,8 @@
+views:
+  - name: profile_dashboard
+    kind: dashboard
+    route: /views/profiles
+    root: Profile
+    aggregates:
+      - {name: metric_count, of: Metric, fk: profileId}
+    signal: "metric_count >= 1"
