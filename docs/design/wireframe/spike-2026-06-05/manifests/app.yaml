@@ -1,0 +1,12 @@
+app:
+  package: startd8
+  name: StartDate
+  python_version: '3.14'
+persistence:
+  path: ./app.db
+migrations:
+  enabled: true
+logging:
+  file: logs/app.log
+container:
+  dockerfile: true

@@ -1,0 +1,24 @@
+views:
+- name: value_map
+  kind: detail-compose
+  root: Capability
+  route: /value-map
+- name: jobs_dashboard
+  kind: dashboard
+  root: JobDescription
+  route: /views/jobs-dashboard
+  aggregates:
+  - name: tailored_matches_count
+    of: TailoredMatch
+    fk: jobDescriptionId
+  - name: tailored_assets_count
+    of: TailoredAsset
+    fk: jobDescriptionId
+- name: job_workspace
+  kind: workspace
+  root: JobDescription
+  route: /views/job-workspace
+- name: job_export
+  kind: export-package
+  root: JobDescription
+  route: /views/job-export

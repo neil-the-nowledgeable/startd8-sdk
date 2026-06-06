@@ -1,0 +1,15 @@
+entities:
+  Profile:
+    min_rows: 1
+  ProofPoint:
+    min_rows: 3
+  Outcome:
+    min_rows: 1
+  Metric:
+    min_rows: 1
+  Differentiator:
+    min_rows: 1
+  TargetRole:
+    min_rows: 1
+exclude:
+- AiCall
