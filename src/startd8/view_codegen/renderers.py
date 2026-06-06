@@ -262,14 +262,14 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
                 f"def {v.module}(id: str, request: Request, session: Session = Depends(get_session)):\n"
                 f"    data = {v.module}_data(session, id)\n"
-                f"    return _templates.TemplateResponse({tmpl!r}, {{'request': request, 'data': data}})"
+                f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'data': data}})"
             )
         else:
             routes.append(
                 f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
                 f"def {v.module}(request: Request, session: Session = Depends(get_session)):\n"
                 f"    rows = {v.module}_data(session)\n"
-                f"    return _templates.TemplateResponse({tmpl!r}, {{'request': request, 'rows': rows}})"
+                f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'rows': rows}})"
             )
     body = (
         "from __future__ import annotations\n\n"
