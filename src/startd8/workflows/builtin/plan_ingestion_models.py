@@ -116,6 +116,11 @@ class PlanIngestionConfig:
     llm_max_attempts: int = 3
     enable_prompt_caching: bool = True
     enable_heuristic_parse_fallback: bool = True
+    # Degenerate-parse tripwire: fail the run when the heuristic fallback
+    # collapses a plan containing many distinct F-xxx feature tokens into the
+    # single F-001 fallback feature (a concealed parse failure, NOT a
+    # one-feature plan). Opt out only for genuinely free-form plans.
+    fail_on_degenerate_parse: bool = True
 
     # Scope & files
     scope: Optional[str] = None
@@ -128,6 +133,12 @@ class PlanIngestionConfig:
     max_cost_usd: Optional[float] = None
 
     # Quality gates
+    # Seed size budget: a healthy seed is well under a few MB; the 88 MB
+    # kickoff pilot seed (46k site-packages contracts, double-serialized
+    # manifest) is the regression this guards. Warn at low MBs, fail an
+    # order of magnitude up so both bug classes fail loud if they return.
+    seed_size_warn_mb: float = 5.0
+    seed_size_fail_mb: float = 50.0
     min_export_coverage: float = 0.0
     low_quality_policy: str = "bias_artisan"
     min_requirements_coverage: float = 70.0
@@ -210,12 +221,17 @@ class PlanIngestionConfig:
             enable_heuristic_parse_fallback=_as_bool_cfg(
                 config.get("enable_heuristic_parse_fallback"), True,
             ),
+            fail_on_degenerate_parse=_as_bool_cfg(
+                config.get("fail_on_degenerate_parse"), True,
+            ),
             scope=config.get("scope"),
             context_files=context_files,
             contextcore_export_dir=config.get("contextcore_export_dir"),
             requirements_files=requirements_files,
             warn_cost_usd=warn_cost_usd,
             max_cost_usd=max_cost_usd,
+            seed_size_warn_mb=float(config.get("seed_size_warn_mb", 5.0)),
+            seed_size_fail_mb=float(config.get("seed_size_fail_mb", 50.0)),
             min_export_coverage=float(config.get("min_export_coverage", 0)),
             low_quality_policy=low_quality_policy,
             min_requirements_coverage=float(config.get("min_requirements_coverage", 70)),

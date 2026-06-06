@@ -396,11 +396,27 @@ def _ensure_appendix_exists(doc: str) -> str:
     return doc.rstrip() + "\n\n" + APPENDIX_TEMPLATE
 
 
+# Lenient match for the CRP appendix heading: tolerates a missing/variant
+# parenthetical suffix and 2-4 leading hashes, so embedded scaffolds in
+# companion docs (requirements, context files) are also fenced out of
+# prompts. The exact-string APPENDIX_HEADING remains the write-side anchor.
+_APPENDIX_HEADING_RE = re.compile(
+    r"^#{2,4}\s*Appendix:\s*Iterative Review Log\b.*$", flags=re.MULTILINE
+)
+
+
 def _strip_appendix_for_prompt(doc: str) -> str:
-    idx = doc.find(APPENDIX_HEADING)
-    if idx == -1:
+    """Strip the CRP review-log appendix (and everything after it) from doc text.
+
+    The appendix is orchestrator protocol — reviewer instructions ("append
+    suggestions to Appendix C…") that steer models into CRP mode when fed
+    verbatim into review/refine prompts (sapper survey 2026-06-05: gemini
+    returned a '#### Review Round R2' block instead of refine suggestions).
+    """
+    m = _APPENDIX_HEADING_RE.search(doc)
+    if m is None:
         return doc
-    return doc[:idx].rstrip() + "\n"
+    return doc[:m.start()].rstrip() + "\n"
 
 
 # ---------------------------------------------------------------------------

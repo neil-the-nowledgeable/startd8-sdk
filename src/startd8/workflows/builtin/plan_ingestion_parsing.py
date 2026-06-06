@@ -156,6 +156,160 @@ def _extract_file_paths_from_block(block: str) -> List[str]:
     return result
 
 
+# --- requirements-and-plan-format v0.1 support -----------------------------
+# The standardized format carries features as markdown table rows under a
+# "| Feature | FRs | Target files | Est. LOC |" header (not "### F-xxx: name"
+# headings) and dependencies as "- F-102 after F-101" list lines.
+
+_FEATURE_ROW_ID_RE = re.compile(r"^([A-Za-z]+-\d+)\s+(.+)$", flags=re.DOTALL)
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+_DEPENDENCY_LINE_RE = re.compile(
+    r"^\s*[-*]\s+([A-Za-z]+-\d+)\s+after\s+(.+)$", flags=re.MULTILINE
+)
+_FEATURE_TOKEN_RE = re.compile(r"\bF-\d+\b")
+
+# Extensionless filenames accepted in 'Target files' cells (mirrors
+# _EXTENSIONLESS_FILENAMES, which requires backticks and so misses table cells)
+_KNOWN_EXTENSIONLESS = frozenset({
+    "Dockerfile", "Makefile", "Procfile", "Vagrantfile", "Jenkinsfile",
+    "Gemfile", "Rakefile", "Brewfile",
+})
+
+
+def count_plan_feature_tokens(plan_text: str) -> int:
+    """Count distinct ``F-xxx`` feature tokens anywhere in the plan text.
+
+    Used as the degenerate-parse tripwire signal: a plan whose prose contains
+    many distinct feature IDs but parses to a single fallback feature is a
+    concealed parse failure, not a one-feature plan.  (``\\bF-\\d+\\b`` does
+    not match inside ``FR-10`` / ``REQ-7`` style requirement tokens.)
+    """
+    return len(set(_FEATURE_TOKEN_RE.findall(plan_text)))
+
+
+def _split_table_row(line: str) -> Optional[List[str]]:
+    """Split a markdown table row into stripped cells, or None if not a row."""
+    stripped = line.strip()
+    if not stripped.startswith("|") or not stripped.endswith("|") or stripped.count("|") < 3:
+        return None
+    return [cell.strip() for cell in stripped[1:-1].split("|")]
+
+
+def _parse_target_files_cell(cell: str) -> List[str]:
+    """Parse a 'Target files' table cell into path tokens.
+
+    Cells look like ``app/routers/, app/web_router.py, app/templates/`` or
+    ``app/jobs.py (generated home)``.  Keeps the first whitespace-delimited
+    token of each comma-separated chunk when it looks path-like.
+    """
+    files: List[str] = []
+    for chunk in cell.split(","):
+        chunk = chunk.strip()
+        if not chunk or chunk in {"—", "-"}:
+            continue
+        token = chunk.split()[0].strip("`")
+        # Path-like: has a directory separator, a file extension, or is a
+        # known extensionless filename (Dockerfile, Makefile, …)
+        if "/" in token or "." in token or token in _KNOWN_EXTENSIONLESS:
+            if token not in files:
+                files.append(token)
+    return files
+
+
+def _extract_table_features(plan_text: str) -> List[ParsedFeature]:
+    """Extract features from v0.1-format markdown feature tables.
+
+    Recognizes any table whose first header cell is ``Feature``; maps the
+    remaining columns by name (FRs / Target files / Est. LOC).  Rows whose
+    first cell starts with a feature ID (``F-101 project scaffold …``)
+    become :class:`ParsedFeature` entries.  An ``Est. LOC`` cell of
+    ``0 (deterministic)`` marks the feature with a ``deterministic`` label
+    so routing can keep $0 CLI-cascade features out of LLM task seeds.
+    """
+    features: List[ParsedFeature] = []
+    seen: set = set()
+    lines = plan_text.splitlines()
+    i = 0
+    while i < len(lines):
+        header = _split_table_row(lines[i])
+        if not header or header[0].lower() != "feature":
+            i += 1
+            continue
+        col_names = [c.lower() for c in header]
+        target_idx = next((k for k, c in enumerate(col_names) if "target" in c), None)
+        loc_idx = next((k for k, c in enumerate(col_names) if "loc" in c), None)
+        fr_idx = next(
+            (k for k, c in enumerate(col_names) if c.startswith("fr") or "requirement" in c),
+            None,
+        )
+        i += 1
+        if i < len(lines) and _TABLE_SEPARATOR_RE.match(lines[i]):
+            i += 1
+        while i < len(lines):
+            cells = _split_table_row(lines[i])
+            if cells is None:
+                break
+            i += 1
+            row_match = _FEATURE_ROW_ID_RE.match(cells[0])
+            if not row_match:
+                continue
+            fid = row_match.group(1).upper()
+            if fid in seen:
+                continue
+            seen.add(fid)
+            name = row_match.group(2).strip()
+
+            target_files: List[str] = []
+            if target_idx is not None and target_idx < len(cells):
+                target_files = _parse_target_files_cell(cells[target_idx])
+
+            estimated_loc = 120
+            labels: List[str] = []
+            if loc_idx is not None and loc_idx < len(cells):
+                loc_cell = cells[loc_idx]
+                loc_num = re.match(r"(\d+)", loc_cell)
+                if loc_num:
+                    estimated_loc = int(loc_num.group(1))
+                if "deterministic" in loc_cell.lower():
+                    labels.append("deterministic")
+
+            description = name
+            if fr_idx is not None and fr_idx < len(cells):
+                fr_cell = cells[fr_idx]
+                if fr_cell and fr_cell not in {"—", "-"}:
+                    description = f"{name} — requirements: {fr_cell}"
+
+            features.append(
+                ParsedFeature(
+                    feature_id=fid,
+                    name=name,
+                    description=description,
+                    target_files=target_files,
+                    dependencies=[],
+                    estimated_loc=estimated_loc,
+                    labels=labels,
+                )
+            )
+    return features
+
+
+def _extract_dependency_lines(plan_text: str) -> Dict[str, List[str]]:
+    """Extract ``- F-102 after F-101`` dependency declarations.
+
+    Returns ``{feature_id: [prerequisite_ids]}``.  Multiple prerequisites on
+    one line (``- F-305 after F-301, F-302``) are all captured.
+    """
+    deps: Dict[str, List[str]] = {}
+    for m in _DEPENDENCY_LINE_RE.finditer(plan_text):
+        fid = m.group(1).upper()
+        prereqs = [t.upper() for t in re.findall(r"\b[A-Za-z]+-\d+\b", m.group(2))]
+        bucket = deps.setdefault(fid, [])
+        for p in prereqs:
+            if p != fid and p not in bucket:
+                bucket.append(p)
+    return deps
+
+
 def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
     """Deterministic fallback parser when LLM parse fails."""
     title_match = re.search(r"^\s*#\s+(.+)$", plan_text, flags=re.MULTILINE)
@@ -210,6 +364,25 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
                 labels=[],
             )
         )
+
+    # v0.1 format: features as table rows + "- F-xxx after F-yyy" dep lines
+    # (the standardized requirements-and-plan-format carries no ### headings).
+    table_features = _extract_table_features(plan_text)
+    if table_features:
+        existing_fids = {f.feature_id for f in features}
+        features.extend(f for f in table_features if f.feature_id not in existing_fids)
+        known_fids.update(f.feature_id for f in table_features)
+
+    dependency_lines = _extract_dependency_lines(plan_text)
+    if dependency_lines:
+        by_id = {f.feature_id: f for f in features}
+        for fid, prereqs in dependency_lines.items():
+            feat = by_id.get(fid)
+            if feat is None:
+                continue
+            for prereq in prereqs:
+                if prereq in known_fids and prereq not in feat.dependencies:
+                    feat.dependencies.append(prereq)
 
     if not features:
         features = [

@@ -427,7 +427,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             requirements_content = ""
             if feature_doc_path:
                 try:
-                    requirements_content = feature_doc_path.read_text(encoding="utf-8")
+                    # Fence the CRP appendix out of the prompt: requirements
+                    # docs carry their own review-log scaffold whose reviewer
+                    # instructions derail reviewers into CRP mode if injected.
+                    requirements_content = _strip_appendix_for_prompt(
+                        feature_doc_path.read_text(encoding="utf-8")
+                    )
                 except (OSError, UnicodeDecodeError) as e:
                     _logger.warning("Failed to read feature requirements doc: %s", e, exc_info=True)
 
@@ -463,7 +468,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     p = Path(str(cf)).expanduser().resolve()
                     if p.is_file():
                         try:
-                            parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
+                            # Strip embedded CRP appendices (see requirements
+                            # fencing above) — context docs may carry them too.
+                            parts.append(
+                                f"### {p.name}\n\n"
+                                f"{_strip_appendix_for_prompt(p.read_text(encoding='utf-8'))}"
+                            )
                         except (OSError, UnicodeDecodeError) as e:
                             _logger.warning("Failed to read context file %s: %s", p, e, exc_info=True)
                     elif p.is_dir():
@@ -471,7 +481,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             try:
                                 parts.append(
                                     f"### {md_file.relative_to(p)}\n\n"
-                                    f"{md_file.read_text(encoding='utf-8')}"
+                                    f"{_strip_appendix_for_prompt(md_file.read_text(encoding='utf-8'))}"
                                 )
                             except (OSError, UnicodeDecodeError) as e:
                                 _logger.warning("Failed to read context file %s: %s", md_file, e, exc_info=True)
