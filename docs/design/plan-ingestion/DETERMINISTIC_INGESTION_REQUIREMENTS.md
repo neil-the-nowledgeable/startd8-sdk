@@ -115,9 +115,11 @@ Stale routing config fields (`complexity_threshold`, `force_route`, `low_quality
 
 - **OQ-4:** Should `enable_llm_assess`/`enable_llm_transform` be surfaced as CLI flags and `.cap-dev-pipe/pipeline.env` knobs, or config-only? (Leaning config-only for v1; CLI later.)
 - **OQ-5:** Do any existing tests assert that ASSESS/TRANSFORM make an LLM call (e.g. mock `agent.generate`)? Those tests will need updating to the deterministic default. (Planning pass flagged `tests/unit/test_plan_ingestion_workflow.py` for audit.)
-- **OQ-6:** Should REFINE remain pointed at the (now deterministic) YAML, or be re-pointed at the richer enriched seed? Out of scope here, but worth a follow-up — REFINE currently reviews a document whose task content is non-authoritative.
+- **OQ-6: RESOLVED (2026-06-06, commit `ce8765bf`)** — REFINE no longer points at the YAML. It reviews a markdown companion (`plan-ingestion-tasks-review.md`, a fenced copy of the YAML) so the review log's append-only markdown appendices never touch the schema-valid machine artifact (FR-1). Forcing function: the strtd8 kickoff pilot's refine rounds appended a CRP appendix into `plan-ingestion-tasks.yaml`, leaving it unparseable (strtd8 `VALIDATION_AND_MANIFEST_DERIVATION.md` §6 note 3). The review-log workflow now also refuses non-markdown document targets outright, and a refine spend gate (`gate_refine_on_parse_quality`, default on) skips review rounds when the parse degraded to fallback or requirements coverage is 0%. The "richer enriched seed" alternative was not taken — suggestion forwarding already flows through `review_output`, so the companion preserves all existing seed behavior.
 - **OQ-7:** Rename `low_quality_policy="bias_artisan"` to a non-misleading value (e.g. `"warn"`)? Deferred — it's a public config key with backward-compat implications; for now document it as advisory-warn and clarify log wording (FR-4).
 
 ---
 
 *v0.2 — Post-planning self-reflective update. 3 requirements narrowed (FR-1, FR-2), 1 added from a discovered latent bug (FR-4), 1 broadened (FR-5), 3 open questions resolved (OQ-1/2/3).*
+
+*v0.3 (2026-06-06) — OQ-6 resolved (REFINE → markdown companion; YAML never reviewed; commit `ce8765bf`), driven by the strtd8 kickoff pilot's tasks-YAML corruption. OQ-4/5/7 remain open.*
