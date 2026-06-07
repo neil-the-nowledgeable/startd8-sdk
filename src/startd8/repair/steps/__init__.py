@@ -8,6 +8,7 @@ from .bracket_balance import BracketBalanceStep
 from .credential_sanitize import CredentialSanitizeStep
 from .csharp_convention_fix import CSharpConventionFixStep
 from .python_convention_fix import PythonConventionFixStep
+from .starlette_response_fix import StarletteResponseFixStep
 from .csharp_syntax_validate import CSharpSyntaxValidateStep
 from .go_contamination_strip import GoPythonContaminationStripStep
 from .go_dot_import_cleanup import GoDotImportCleanupStep
@@ -57,6 +58,7 @@ __all__ = [
     "CredentialSanitizeStep",
     "CSharpConventionFixStep",
     "PythonConventionFixStep",
+    "StarletteResponseFixStep",
     "CSharpSyntaxValidateStep",
     "GoPythonContaminationStripStep",
     "GoDotImportCleanupStep",
