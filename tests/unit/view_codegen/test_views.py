@@ -129,6 +129,9 @@ views:
     relations:
       - { name: matches, from: TailoredMatch, fk: jobDescriptionId }
       - { name: assets, from: TailoredAsset, fk: jobDescriptionId }
+  - name: model_export
+    kind: export-package
+    scope: model
 """.strip()
 
 
@@ -172,18 +175,90 @@ def test_strict_validation_rejects_unknown_relation_panel_gap_keys():
         parse_views(bad, known_entities=_KNOWN)
 
 
+def test_model_scope_strict_validation():
+    # unknown scope value is loud (no LLM fallback)
+    bad = VIEWS.replace("scope: model", "scope: app")
+    with pytest.raises(ValueError, match="unknown scope"):
+        parse_views(bad, known_entities=_KNOWN)
+    # scope is export-package-only
+    bad = VIEWS.replace("kind: board\n    route: /pipeline", "kind: board\n    scope: model\n    route: /pipeline")
+    with pytest.raises(ValueError, match="only valid on kind 'export-package'"):
+        parse_views(bad, known_entities=_KNOWN)
+    # root is forbidden on a model-scoped export (the whole model has no root row)
+    bad = VIEWS.replace("scope: model", "scope: model\n    root: JobDescription")
+    with pytest.raises(ValueError, match="not allowed with `scope: model`"):
+        parse_views(bad, known_entities=_KNOWN)
+    # relations are forbidden too
+    bad = VIEWS.replace(
+        "scope: model",
+        "scope: model\n    relations:\n      - { name: m, from: TailoredMatch, fk: jobDescriptionId }",
+    )
+    with pytest.raises(ValueError, match="not allowed with `scope: model`"):
+        parse_views(bad, known_entities=_KNOWN)
+
+
+def test_model_scope_route_derivation_and_override():
+    specs = {v.name: v for v in parse_views(VIEWS, known_entities=_KNOWN)}
+    me = specs["model_export"]
+    assert me.scope == "model" and me.route == "/export" and me.root == ""
+    # per-row export is untouched
+    assert specs["job_export"].scope == "row"
+    # explicit Route: override (authoring contract §2.3) is honored
+    overridden = VIEWS.replace("scope: model", "scope: model\n    route: /backup")
+    specs = {v.name: v for v in parse_views(overridden, known_entities=_KNOWN)}
+    assert specs["model_export"].route == "/backup"
+    rendered = dict(render_views(SCHEMA, overridden))
+    assert '@views_router.get(\'/backup/markdown\')' in rendered["app/views/routes.py"]
+    assert '@views_router.get(\'/backup/json\')' in rendered["app/views/routes.py"]
+
+
+def test_model_export_reuses_export_layer_and_routes():
+    rendered = dict(render_views(SCHEMA, VIEWS))
+    mod = rendered["app/views/model_export.py"]
+    # serialization is the generated app/export.py layer — imported, never duplicated
+    assert "from app.export import ENTITY_ORDER, FIELDS, to_json, to_markdown" in mod
+    assert "json.dumps" not in mod
+    assert is_owned_view_file(mod)  # two-hash header carried
+    routes = rendered["app/views/routes.py"]
+    assert "@views_router.get('/export/markdown')" in routes
+    assert "@views_router.get('/export/json')" in routes
+    assert "media_type='text/markdown; charset=utf-8'" in routes
+    assert "media_type='application/json'" in routes
+    assert "from fastapi.responses import HTMLResponse, Response" in routes
+    # the views mount through the owned user_routers seam (D2) — the router never self-mounts
+    assert "include_router" not in routes
+
+
+def test_router_without_model_export_keeps_minimal_imports():
+    no_model = "\n".join(VIEWS.splitlines()[:-3])  # drop the model_export block
+    rendered = dict(render_views(SCHEMA, no_model))
+    routes = rendered["app/views/routes.py"]
+    assert "from fastapi.responses import HTMLResponse\n" in routes
+    assert "return Response(" not in routes
+
+
 def test_render_byte_identical_and_paths():
     a = render_views(SCHEMA, VIEWS)
     assert a == render_views(SCHEMA, VIEWS)
     paths = {rel for rel, _ in a}
     for expected in (
         "app/views/jobs_dashboard.py", "app/views/pipeline_board.py", "app/views/job_workspace.py",
-        "app/views/opportunity_detail.py", "app/views/job_export.py",
+        "app/views/opportunity_detail.py", "app/views/job_export.py", "app/views/model_export.py",
         "app/views/routes.py", "tests/test_views.py",
         "app/templates/views/job_workspace.html",
         "app/templates/views/opportunity_detail.html", "app/templates/views/job_export.html",
     ):
         assert expected in paths
+    # AR-3: a model-scoped export serves raw Markdown/JSON — no template is emitted for it
+    assert "app/templates/views/model_export.html" not in paths
+
+
+def test_rendered_python_is_ast_valid():
+    import ast
+
+    for rel, content in render_views(SCHEMA, VIEWS):
+        if rel.endswith(".py"):
+            ast.parse(content, filename=rel)
 
 
 def test_drift_in_sync_and_tamper():
@@ -207,4 +282,4 @@ def test_emitted_view_tests_run_green(tmp_path):
         cwd=tmp_path, capture_output=True, text=True,
     )
     assert result.returncode == 0, f"emitted view tests failed:\n{result.stdout}\n{result.stderr}"
-    assert "5 passed" in result.stdout
+    assert "6 passed" in result.stdout

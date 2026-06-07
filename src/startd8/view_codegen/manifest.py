@@ -9,6 +9,11 @@ v1 archetypes: ``dashboard`` (aggregates + signal), ``board`` (group-by an order
 ``workspace`` (polymorphic resolution + gap-flag). ``detail-compose`` (root + resolved relations as
 panels + conditional panels) and ``export-package`` (root + relations -> lossless package + named MD
 layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
+
+``export-package`` additionally takes ``scope: row | model`` (default ``row`` — the existing per-row
+package). ``scope: model`` (AR-3, FR-10 whole-model export) serves the WHOLE model through the
+generated ``app/export.py`` serialization layer: ``route`` becomes the optional base path (default
+``/export`` -> ``/export/markdown`` + ``/export/json``), and ``root``/``relations`` are forbidden.
 """
 
 from __future__ import annotations
@@ -19,9 +24,10 @@ from typing import Dict, List, Tuple
 import yaml
 
 _KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package"}
+_SCOPES = {"row", "model"}  # export-package only; `model` = whole-model export (AR-3)
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
-    "relations", "panels", "gap",
+    "relations", "panels", "gap", "scope",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
@@ -71,7 +77,8 @@ class ViewSpec:
     name: str
     kind: str
     route: str
-    root: str
+    root: str   # "" for a model-scoped export-package (no root row — the whole model)
+    scope: str = "row"                    # export-package only: "row" (per-row) | "model" (AR-3)
     aggregates: Tuple[Aggregate, ...] = ()
     signal: str = ""                      # "<aggname> >= <int>"
     group_by: str = ""
@@ -114,14 +121,41 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
         unknown = set(entry) - _VIEW_KEYS
         if unknown:
             raise ValueError(f"views.yaml: view #{i} has unknown keys {sorted(unknown)}")
-        for req in ("name", "kind", "route", "root"):
+        for req in ("name", "kind"):
             if not entry.get(req):
                 raise ValueError(f"views.yaml: view #{i} missing required `{req}`")
         kind = str(entry["kind"])
         if kind not in _KINDS:
             raise ValueError(f"views.yaml: view #{i} unknown kind {kind!r} (allowed: {sorted(_KINDS)})")
-        root = str(entry["root"])
-        _check_entity(root, f"view {entry['name']!r} root")
+
+        scope = str(entry.get("scope", "row"))
+        if scope not in _SCOPES:
+            raise ValueError(
+                f"views.yaml: view #{i} unknown scope {scope!r} (allowed: {sorted(_SCOPES)})"
+            )
+        if "scope" in entry and kind != "export-package":
+            raise ValueError(
+                f"views.yaml: view #{i} `scope` is only valid on kind 'export-package', not {kind!r}"
+            )
+        model_scoped = kind == "export-package" and scope == "model"
+        if model_scoped:
+            # Whole-model export (AR-3): no root row — root/relations are meaningless and forbidden;
+            # route is the optional base path (authoring-contract default: /export).
+            for forbidden in ("root", "relations"):
+                if entry.get(forbidden):
+                    raise ValueError(
+                        f"views.yaml: view #{i} `{forbidden}` is not allowed with `scope: model` "
+                        "(a model-scoped export-package serves the WHOLE model)"
+                    )
+            root = ""
+            route = str(entry.get("route") or "/export")
+        else:
+            for req in ("route", "root"):
+                if not entry.get(req):
+                    raise ValueError(f"views.yaml: view #{i} missing required `{req}`")
+            root = str(entry["root"])
+            route = str(entry["route"])
+            _check_entity(root, f"view {entry['name']!r} root")
 
         aggregates: List[Aggregate] = []
         for a in entry.get("aggregates") or []:
@@ -194,7 +228,7 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
                 )
 
         out.append(ViewSpec(
-            name=str(entry["name"]), kind=kind, route=str(entry["route"]), root=root,
+            name=str(entry["name"]), kind=kind, route=route, root=root, scope=scope,
             aggregates=tuple(aggregates), signal=str(entry.get("signal", "")),
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),
