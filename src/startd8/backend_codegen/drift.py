@@ -44,6 +44,8 @@ _AI_KINDS: frozenset = frozenset(
         "ai-router",
         "ai-server",
         "ai-tests-edge",
+        "ai-tests-keyless",
+        "ai-tests-cost",
         "ai-tests-pass",
     }
 )
@@ -244,6 +246,8 @@ def _ai_renderers():
     from .ai_layer import (
         render_ai_pass,
         render_ai_pass_tests,
+        render_keyless_boot_tests,
+        render_cost_logging_tests,
         render_ai_routes,
         render_ai_service,
         render_edge_schemas,
@@ -263,6 +267,8 @@ def _ai_renderers():
         "ai-server": lambda s, m, h, sf, e, spec: render_server(s, m, h, sf),
         "ai-tests-edge": lambda s, m, h, sf, e, spec: render_edge_tests(s, m, h, sf),
         "ai-tests-pass": lambda s, m, h, sf, e, spec: render_ai_pass_tests(s, m, h, sf),
+        "ai-tests-keyless": lambda s, m, h, sf, e, spec: render_keyless_boot_tests(s, m, h, sf),
+        "ai-tests-cost": lambda s, m, h, sf, e, spec: render_cost_logging_tests(s, m, h, sf),
     }
 
 

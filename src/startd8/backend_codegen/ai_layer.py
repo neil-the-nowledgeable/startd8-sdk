@@ -52,6 +52,8 @@ AI_KINDS = (
     "ai-server",
     "ai-tests-edge",
     "ai-tests-pass",
+    "ai-tests-keyless",
+    "ai-tests-cost",
 )
 
 
@@ -217,6 +219,7 @@ def render_ai_service(
     body = '''from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel
@@ -233,6 +236,23 @@ logger = logging.getLogger(__name__)
 PROVIDER_LIMITS = {"anthropic": 8192}
 DEFAULT_AGENT_SPEC = "__AI_AGENT_SPEC__"
 
+# Providers that need an env key before any call can succeed (local/mock providers do not).
+# Checked BEFORE agent resolution: some SDKs defer auth to call time, which would surface
+# keylessness as a provider-specific crash instead of the polite 503 the rungs demand.
+PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
+
+class AIUnavailableError(RuntimeError):
+    """Rung-2 is unavailable (no key / provider not configured) — a polite no, never a crash.
+
+    The app boots and runs fully keyless (FR-40 / O-4); routes map this to HTTP 503.
+    """
+
 
 def call_ai_service(
     pass_name: str,
@@ -245,7 +265,19 @@ def call_ai_service(
     """Single Claude entry point. Delegates tool-use/retry/tokens to the SDK (B2); logs one AiCall."""
     provider = agent_spec.split(":", 1)[0]
     max_tokens = PROVIDER_LIMITS.get(provider, 8192)
-    agent = resolve_agent_spec(agent_spec)
+    key_env = PROVIDER_KEY_ENV.get(provider)
+    if key_env and not os.environ.get(key_env):
+        raise AIUnavailableError(
+            f"AI assist unavailable: {key_env} is not set for provider {provider!r}. "
+            "The app works fully without it; configure the key to enable drafts."
+        )
+    try:
+        agent = resolve_agent_spec(agent_spec)
+    except Exception as exc:  # missing key / unknown provider → rung-2 politely unavailable
+        raise AIUnavailableError(
+            f"AI assist unavailable: could not resolve {agent_spec!r} ({exc}). "
+            "The app works fully without it; configure a provider key to enable drafts."
+        ) from exc
     value, raw = agent.generate_structured(prompt, output_schema, max_tokens=max_tokens)
     _log_ai_call(session, pass_name, raw, agent_spec)
     return value
@@ -532,7 +564,10 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
                 f"@ai_router.post({ps.route_path!r})\n"
                 f"def post_{ps.module}(session: Session = Depends(get_session)) -> dict[str, Any]:\n"
                 f'    """Run the {ps.name} pass (reads confirmed inputs)."""\n'
-                f"    return {ps.module}(session)"
+                f"    try:\n"
+                f"        return {ps.module}(session)\n"
+                f"    except AIUnavailableError as exc:  # keyless = polite 503, app stays up\n"
+                f"        raise HTTPException(status_code=503, detail=str(exc))"
             )
         else:  # text mode — free-text body
             routes.append(
@@ -542,7 +577,10 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
                 f"    session: Session = Depends(get_session),\n"
                 f") -> dict[str, Any]:\n"
                 f'    """Run the {ps.name} pass."""\n'
-                f"    return {ps.module}(body.{ps.request_field}, session)"
+                f"    try:\n"
+                f"        return {ps.module}(body.{ps.request_field}, session)\n"
+                f"    except AIUnavailableError as exc:  # keyless = polite 503, app stays up\n"
+                f"        raise HTTPException(status_code=503, detail=str(exc))"
             )
     exports = ["ai_router"] + (["_Request"] if has_text else []) + [
         f"post_{ps.module}" for ps in passes
@@ -550,10 +588,11 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
     head = (
         "from __future__ import annotations\n\n"
         "from typing import Any\n\n"
-        "from fastapi import APIRouter, Depends\n"
+        "from fastapi import APIRouter, Depends, HTTPException\n"
         + ("from pydantic import BaseModel\n" if has_text else "")
         + "from sqlmodel import Session\n\n"
         "from app.db import get_session\n"
+        "from app.ai.service import AIUnavailableError\n"
         + imports
         + "\n\n"
         'ai_router = APIRouter(prefix="/ai", tags=["ai"])\n\n\n'
@@ -730,6 +769,110 @@ def ai_layout(manifest_text: str) -> Dict[str, str]:
     return layout
 
 
+def render_keyless_boot_tests(
+    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma"
+) -> str:
+    """``tests/test_keyless_boot.py`` — FR-40 / O-4 as executable guarantees (rung discipline).
+
+    Fixed-shape given the manifest: the app boots and serves fully keyless; every AI route
+    answers a polite 503 (never a crash) and the app survives it. $0, owned, drift-checked —
+    the F-305 class moved off the LLM path entirely (Class-3 determinism).
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    passes = parse_ai_passes(manifest_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-tests-keyless")
+    first_text = next((ps for ps in passes if not ps.input_entities), None)
+    first_read = next((ps for ps in passes if ps.input_entities), None)
+    calls: List[str] = []
+    if first_text is not None:
+        calls.append(
+            f"    r = client.post('/ai{first_text.route_path}', "
+            f"json={{{first_text.request_field!r}: 'keyless smoke'}})"
+        )
+    if first_read is not None:
+        calls.append(f"    r2 = client.post('/ai{first_read.route_path}')")
+    body = (
+        "from __future__ import annotations\n\n"
+        "import pytest\n\n"
+        "_KEY_VARS = ('ANTHROPIC_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY', "
+        "'OPENAI_API_KEY', 'MISTRAL_API_KEY')\n\n\n"
+        "@pytest.fixture()\n"
+        "def keyless_client(monkeypatch):\n"
+        "    for var in _KEY_VARS:\n"
+        "        monkeypatch.delenv(var, raising=False)\n"
+        "    from fastapi.testclient import TestClient\n"
+        "    from app.server import app\n"
+        "    return TestClient(app)\n\n\n"
+        "def test_app_boots_and_serves_keyless(keyless_client):\n"
+        '    \"\"\"O-4: no account, no cloud, no AI key — the app boots fully usable.\"\"\"\n'
+        "    assert keyless_client.get('/openapi.json').status_code == 200\n\n\n"
+        "def test_ai_routes_degrade_politely_keyless(keyless_client):\n"
+        '    \"\"\"Rung 2 unavailable is a polite 503 with a clear message — never a crash.\"\"\"\n'
+        "    client = keyless_client\n"
+        + ("\n".join(calls) + "\n" if calls else "")
+        + (
+            "    assert r.status_code == 503\n"
+            "    assert 'unavailable' in r.json()['detail'].lower()\n"
+            if first_text is not None else ""
+        )
+        + ("    assert r2.status_code == 503\n" if first_read is not None else "")
+        + "    assert client.get('/openapi.json').status_code == 200  # the app survived the polite no\n"
+    )
+    return header + "\n\n" + body
+
+
+def render_cost_logging_tests(
+    schema_text, manifest_text, human_text, source_file="prisma/schema.prisma"
+) -> str:
+    """``tests/test_cost_logging.py`` — FR-40's per-call cost trail as an executable invariant.
+
+    Assertions are derived from the CONTRACT at generate time: only columns the AiCall entity
+    actually declares are asserted (the camelCase-mapping regression this encodes was found
+    live and fixed in 12d85d64 — this test keeps it fixed). Offline, deterministic, $0.
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    header = header_ai_layer(source_file, s, p, h, "ai-tests-cost")
+    models = parse_prisma_schema(schema_text).models
+    aicall = models.get("AiCall")
+    if aicall is None:
+        return header + (
+            "\n\nimport pytest\n\n"
+            "pytest.skip('contract declares no AiCall entity — cost logging not applicable', "
+            "allow_module_level=True)\n"
+        )
+    fields = {f.name for f in aicall.fields}
+    asserts: List[str] = []
+    if "purpose" in fields:
+        asserts.append("    assert row.purpose == 'extract_smoke'")
+    if "model" in fields:
+        asserts.append("    assert row.model == 'mock:mock-model'")
+    if "promptTokens" in fields:
+        asserts.append("    assert row.promptTokens == 371")
+    if "responseTokens" in fields:
+        asserts.append("    assert row.responseTokens == 96")
+    if "costUsd" in fields:
+        asserts.append("    assert row.costUsd is not None and abs(row.costUsd - 0.000113) < 1e-9")
+    body = (
+        "from __future__ import annotations\n\n"
+        "from types import SimpleNamespace\n\n"
+        "from sqlmodel import Session, SQLModel, create_engine, select\n\n"
+        "import app.tables as t\n"
+        "from app.ai.service import _log_ai_call\n\n\n"
+        "def test_ai_call_log_populates_contract_columns(tmp_path):\n"
+        '    \"\"\"One AiCall row per call, with every contract column the logger can fill.\"\"\"\n'
+        "    engine = create_engine(f'sqlite:///{tmp_path}/cost.db')\n"
+        "    SQLModel.metadata.create_all(engine)\n"
+        "    usage = SimpleNamespace(input=371, output=96, cost_estimate=0.000113)\n"
+        "    raw = SimpleNamespace(token_usage=usage)\n"
+        "    with Session(engine) as session:\n"
+        "        _log_ai_call(session, 'extract_smoke', raw, 'mock:mock-model')\n"
+        "        session.commit()\n"
+        "        row = session.exec(select(t.AiCall)).one()\n"
+        + "\n".join(asserts) + "\n"
+    )
+    return header + "\n\n" + body
+
+
 def render_ai_layer(
     schema_text: str,
     manifest_text: str,
@@ -759,4 +902,8 @@ def render_ai_layer(
     # Rung-4 AI-layer semantic tests: FR-6/NFR-2 edge privacy + the offline provenance gate.
     out.append(("tests/test_edge_privacy.py", render_edge_tests(schema_text, manifest_text, human_text, source_file)))
     out.append(("tests/test_ai_passes.py", render_ai_pass_tests(schema_text, manifest_text, human_text, source_file)))
+    # F-305 moved off the LLM path: keyless-boot + cost-logging tests are fixed-shape given
+    # the manifest + contract (Class-3), so they are owned/$0/generated like the rest.
+    out.append(("tests/test_keyless_boot.py", render_keyless_boot_tests(schema_text, manifest_text, human_text, source_file)))
+    out.append(("tests/test_cost_logging.py", render_cost_logging_tests(schema_text, manifest_text, human_text, source_file)))
     return out
