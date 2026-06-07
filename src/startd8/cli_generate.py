@@ -362,7 +362,10 @@ def scaffold(
                 console.print(f"[yellow]missing[/yellow]: {rel}")
             elif not scaffold_in_sync(manifest_text, ondisk):
                 drifted += 1
-                console.print(f"[yellow]drift[/yellow]: {rel} — stale or hand-edited")
+                console.print(
+                    f"[yellow]drift[/yellow]: {rel} — differs from a fresh render "
+                    "(stale, hand-edited, or generated with different flags/manifests)"
+                )
         if drifted:
             console.print(f"[yellow]{drifted} scaffold artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
@@ -420,11 +423,14 @@ def views(
             ondisk = target.read_text(encoding="utf-8") if target.exists() else None
             if ondisk is None or not views_in_sync(schema_text, views_text, target, ondisk):
                 drifted += 1
-                console.print(f"[yellow]drift[/yellow]: {rel} — missing, stale, or hand-edited")
+                console.print(
+                    f"[yellow]drift[/yellow]: {rel} — missing or differs from a fresh render "
+                    "(stale, hand-edited, or generated with different flags/manifests)"
+                )
         if drifted:
             console.print(f"[yellow]{drifted} view artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
-        console.print(f"[green]in_sync[/green]: all view artifact(s) match schema + views.yaml")
+        console.print("[green]in_sync[/green]: all view artifact(s) match schema + views.yaml")
         raise typer.Exit(0)
 
     written = 0
