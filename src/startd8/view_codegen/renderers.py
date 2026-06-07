@@ -174,7 +174,42 @@ def _render_detail_compose(v: ViewSpec) -> str:
     return "\n".join(lines)
 
 
+def _render_export_package_model(v: ViewSpec) -> str:
+    """Model-scoped export-package (AR-3 / FR-10): the WHOLE model, serialized by ``app/export.py``.
+
+    The data module REUSES the generated serialization layer (``ENTITY_ORDER``/``FIELDS`` +
+    ``to_json``/``to_markdown``) — no duplicated serialization logic. The payload shape
+    (entity name -> list of field-faithful row dicts) is the round-trippable JSON the AR-4
+    import flow will consume.
+    """
+    return "\n".join([
+        "from __future__ import annotations", "",
+        "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        "import app.tables as _tables",
+        "from app.export import ENTITY_ORDER, FIELDS, to_json, to_markdown", "", "",
+        f"def {v.module}_payload(session: Session) -> dict[str, list[dict[str, Any]]]:",
+        '    """Whole-model payload: entity name -> field-faithful row dicts (the import-flow shape)."""',
+        "    payload: dict[str, list[dict[str, Any]]] = {}",
+        "    for entity in ENTITY_ORDER:",
+        "        model = getattr(_tables, entity)",
+        "        rows = session.exec(select(model)).all()",
+        "        payload[entity] = [{f: getattr(row, f) for f in FIELDS[entity]} for row in rows]",
+        "    return payload", "", "",
+        f"def {v.module}_json(session: Session) -> str:",
+        '    """Complete, round-trippable JSON of all entities (app/export.py `to_json`)."""',
+        f"    return to_json({v.module}_payload(session))", "", "",
+        f"def {v.module}_markdown(session: Session) -> str:",
+        '    """Human-readable Markdown of the full model (app/export.py `to_markdown`)."""',
+        f"    return to_markdown({v.module}_payload(session))", "",
+        f"__all__ = [{(v.module + '_payload')!r}, {(v.module + '_json')!r}, "
+        f"{(v.module + '_markdown')!r}]", "",
+    ])
+
+
 def _render_export_package(v: ViewSpec) -> str:
+    if v.scope == "model":
+        return _render_export_package_model(v)
     entities = sorted({v.root} | {r.frm for r in v.relations})
     imports = ", ".join(entities)
     lines = [
@@ -240,18 +275,46 @@ def render_view_module(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
 # Router + templates + tests
 # --------------------------------------------------------------------------- #
 
+def _is_model_export(v: ViewSpec) -> bool:
+    return v.kind == "export-package" and v.scope == "model"
+
+
 def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str) -> str:
     import_lines: List[str] = []
     for v in views:
-        if v.kind == "export-package":
+        if _is_model_export(v):
+            import_lines.append(
+                f"from app.views.{v.module} import {v.module}_json, {v.module}_markdown"
+            )
+        elif v.kind == "export-package":
             import_lines.append(f"from app.views.{v.module} import {v.module}_package")
         else:
             import_lines.append(f"from app.views.{v.module} import {v.module}_data")
     imports = "\n".join(import_lines)
+    # `Response` (raw-body JSON/Markdown) is only imported when a model-scoped export needs it,
+    # keeping the router byte-identical for manifests without one.
+    responses = (
+        "from fastapi.responses import HTMLResponse, Response\n"
+        if any(_is_model_export(v) for v in views)
+        else "from fastapi.responses import HTMLResponse\n"
+    )
     routes: List[str] = []
     for v in views:
         tmpl = f"views/{v.module}.html"
-        if v.kind == "export-package":
+        if _is_model_export(v):  # AR-3: literal <base>/markdown + <base>/json routes
+            base = v.route.rstrip("/")
+            routes.append(
+                f"@views_router.get({(base + '/markdown')!r})\n"
+                f"def {v.module}_markdown_route(session: Session = Depends(get_session)):\n"
+                f"    return Response({v.module}_markdown(session), "
+                "media_type='text/markdown; charset=utf-8')"
+            )
+            routes.append(
+                f"@views_router.get({(base + '/json')!r})\n"
+                f"def {v.module}_json_route(session: Session = Depends(get_session)):\n"
+                f"    return Response({v.module}_json(session), media_type='application/json')"
+            )
+        elif v.kind == "export-package":
             routes.append(
                 f"@views_router.get({v.route!r})\n"
                 f"def {v.module}(id: str, session: Session = Depends(get_session)):\n"
@@ -274,7 +337,7 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
     body = (
         "from __future__ import annotations\n\n"
         "from fastapi import APIRouter, Depends, Request\n"
-        "from fastapi.responses import HTMLResponse\n"
+        f"{responses}"
         "from fastapi.templating import Jinja2Templates\n"
         "from sqlmodel import Session\n\n"
         "from app.db import get_session\n"
@@ -384,6 +447,8 @@ def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, view
 
 
 def _render_view_test(schema, v: ViewSpec) -> str:
+    if _is_model_export(v):
+        return _render_model_export_test(schema, v)
     if v.kind == "export-package":
         import_line = (
             f"    from app.views.{v.module} import {v.module}_package, {v.module}_to_markdown"
@@ -468,6 +533,33 @@ def _render_view_test(schema, v: ViewSpec) -> str:
     return "\n".join(setup)
 
 
+def _render_model_export_test(schema, v: ViewSpec) -> str:
+    """Model-export test: whole-model coverage + JSON round-trip through app/export.py's shape."""
+    first = next(iter(schema.models))
+    return "\n".join([
+        f"def test_{v.module}_data(tmp_path):",
+        "    import json",
+        "",
+        "    import app.tables as t",
+        "    from app.export import ENTITY_ORDER",
+        f"    from app.views.{v.module} import "
+        f"{v.module}_json, {v.module}_markdown, {v.module}_payload",
+        '    engine = create_engine(f"sqlite:///{tmp_path}/v.db")',
+        "    SQLModel.metadata.create_all(engine)",
+        "    with Session(engine) as s:",
+        _seed(schema, "root", first, {}),
+        f"        payload = {v.module}_payload(s)",
+        f"        exported_json = {v.module}_json(s)",
+        f"        exported_md = {v.module}_markdown(s)",
+        "    assert set(payload) == set(ENTITY_ORDER)  # whole model: every entity present",
+        f"    assert len(payload[{first!r}]) == 1",
+        "    restored = json.loads(exported_json)  # round-trip: entity name -> list of row dicts",
+        "    assert set(restored) == set(payload)",
+        f"    assert restored[{first!r}][0]['id'] == root.id  # field-faithful, restorable (AR-4)",
+        f"    assert '# ' + {first!r} in exported_md  # a markdown section per entity",
+    ])
+
+
 # --------------------------------------------------------------------------- #
 # Assembly
 # --------------------------------------------------------------------------- #
@@ -488,6 +580,8 @@ def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ..
     out: List[Tuple[str, str]] = [("app/views/__init__.py", "")]
     for v in views:
         out.append((_module_path(v), render_view_module(v, s_sha, v_sha)))
+        if _is_model_export(v):
+            continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
         out.append((f"app/templates/views/{v.module}.html", render_view_template(v, s_sha, v_sha)))
     out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))

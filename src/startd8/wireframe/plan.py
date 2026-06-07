@@ -581,17 +581,20 @@ def _views_section(
         )
     ]
     for v in specs:
-        items.append(
-            WireframeItem(
-                f"{v.name} ({v.kind})", status,
-                detail=f"{v.route} root={v.root}"
-                + (f", {len(v.panels)} panel(s)" if v.panels else ""),
-                paths=(
-                    f"app/views/{v.module}.py",
-                    f"app/templates/views/{v.module}.html",
-                ),
+        # AR-3: a model-scoped export serves raw Markdown/JSON of the whole model — no template.
+        model_export = v.kind == "export-package" and v.scope == "model"
+        if model_export:
+            detail = f"{v.route}/markdown + {v.route}/json (whole model)"
+            paths: Tuple[str, ...] = (f"app/views/{v.module}.py",)
+        else:
+            detail = f"{v.route} root={v.root}" + (
+                f", {len(v.panels)} panel(s)" if v.panels else ""
             )
-        )
+            paths = (
+                f"app/views/{v.module}.py",
+                f"app/templates/views/{v.module}.html",
+            )
+        items.append(WireframeItem(f"{v.name} ({v.kind})", status, detail=detail, paths=paths))
     return WireframeSection(
         "views", "Composite Views", status, tuple(items), consequence=_consequence(worst_state)
     )
