@@ -207,6 +207,26 @@ def test_golden_fixture_full_shape(golden_root: Path) -> None:
     assert "owned: value" in metric.detail
 
 
+def test_forms_section_surfaces_on_create(golden_copy: Path) -> None:
+    """OQ-3: views.yaml's `forms:` section reaches the Forms detail + plans created.html."""
+    views = golden_copy / "prisma" / "views.yaml"
+    views.write_text(
+        views.read_text(encoding="utf-8")
+        + "forms:\n  Profile: { on_create: confirmation }\n",
+        encoding="utf-8",
+    )
+    plan = _plan(golden_copy, authoring=True)
+    forms = plan.section("forms")
+    profile = next(i for i in forms.items if i.label.startswith("Profile"))
+    assert "on_create: confirmation" in profile.detail
+    assert "app/templates/profile/created.html" in profile.paths
+    # undeclared entities stay at the default — no noise in their detail
+    metric = next(i for i in forms.items if i.label.startswith("Metric"))
+    assert "on_create" not in metric.detail
+    # the views section itself is untouched by the sibling section
+    assert plan.section("views").status == Status.PLANNED
+
+
 def test_merge_warnings_surface_in_plan(mini_root: Path) -> None:
     a = mini_root / "a.yaml"
     b = mini_root / "b.yaml"

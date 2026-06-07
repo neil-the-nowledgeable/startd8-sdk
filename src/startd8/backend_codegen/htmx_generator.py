@@ -133,6 +133,26 @@ def _is_required(field: PrismaField) -> bool:
 # ----------------------------------------------------------------------------- #
 
 
+# Minimal owned styling, inlined in base.html (bucket-2 placeholder; real design is bucket-4).
+# Inline <style> deliberately — no static mount in main.py, no extra artifact/kind to drift-track.
+_BASE_STYLE = """\
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
+    main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
+    nav { background: #f4f4f4; padding: .5rem 1rem; }
+    nav a { margin-right: .75rem; }
+    table { border-collapse: collapse; width: 100%; margin-top: .75rem; }
+    th, td { border: 1px solid #ddd; padding: .4rem .6rem; text-align: left; }
+    tr.new-row td { background: #eaf7ea; }
+    .flash { background: #eaf7ea; border: 1px solid #b7e0b7; padding: .5rem .75rem; }
+    .field { margin-bottom: .75rem; }
+    .field label { display: block; font-weight: 600; margin-bottom: .2rem; }
+    .field-error { color: #b00020; }
+    button { padding: .3rem .8rem; }
+  </style>
+"""
+
+
 def render_base_template(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",
@@ -158,7 +178,8 @@ def render_base_template(
         '  <meta name="viewport" content="width=device-width, initial-scale=1">\n'
         "  <title>{% block title %}StartDate{% endblock %}</title>\n"
         '  <script src="https://unpkg.com/htmx.org@2.0.3"></script>\n'
-        "</head>\n<body>\n"
+        + _BASE_STYLE
+        + "</head>\n<body>\n"
         + nav
         + "  <main>{% block content %}{% endblock %}</main>\n"
         "</body>\n</html>\n"
@@ -201,8 +222,10 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
     ]
     if pk is not None:
         rid = "{{ item." + pk.name + " }}"
+        # ?created=<pk> (list mode) highlights the just-stored row (OQ-6 follow-through).
+        hl = "{% if created == item." + pk.name + '|string %} class="new-row"{% endif %}'
         lines += [
-            f'  <tr id="row-{rid}">{cells}<td>',
+            f'  <tr id="row-{rid}"{hl}>{cells}<td>',
             f'    <a href="/ui/{e}/{rid}">view</a>',
             f'    <a href="/ui/{e}/{rid}/edit">edit</a>',
             f'    <button hx-post="/ui/{e}/{rid}/delete" hx-target="#row-{rid}" '
@@ -312,12 +335,16 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
         action = "/ui/" + e
     inputs = "\n".join(_form_input_html(e, f, schema) for f in fields)
 
+    # ?created=<pk> (form mode) gets a "view it" link; no-PK entities echo created=1 — no link.
+    view_link = (
+        f' <a href="/ui/{e}/{{{{ created }}}}">view it</a>' if pk is not None else ""
+    )
     body = (
         '{% extends "base.html" %}\n'
         "{% block title %}" + entity + " form{% endblock %}\n"
         "{% block content %}\n"
         # Post-create flash (FR-FS-3): on_create: form lands back here with ?created=<pk>.
-        '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}\n"
+        '{% if created %}<p class="flash">✓ ' + entity + f" stored.{view_link}</p>{{% endif %}}\n"
         f"<h1>{entity}</h1>\n"
         f'<form method="post" action="{action}">\n'
         f"{inputs}\n"
@@ -556,7 +583,12 @@ def _entity_routes(
             "    if obj is not None:",
             "        session.delete(obj)",
             "        session.commit()",
-            '    return HTMLResponse("")',
+            # The hx-swap="outerHTML" replaces the row with this flash row (visible until reload),
+            # so deletion gets the same confirmation feedback as create/update (FR-FS-3 family).
+            "    return HTMLResponse(",
+            f'        \'<tr><td colspan="{len(_form_fields(schema, name)) + 1}">\'',
+            f"        '<p class=\"flash\">✓ {name} deleted.</p></td></tr>'",
+            "    )",
         ]
         if on_create == "confirmation":
             # The dedicated confirmation page (FR-FS-5) — the create handler 303s here.

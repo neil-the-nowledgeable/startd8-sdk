@@ -223,12 +223,39 @@ def test_templates_carry_flash_banners():
     lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
     assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in lst
     form = render_form_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
-    assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in form
+    # form-mode banner carries the "view it" link (the echoed ?created=<pk>)
+    assert (
+        '{% if created %}<p class="flash">✓ ProofPoint stored.'
+        ' <a href="/ui/proofpoint/{{ created }}">view it</a></p>{% endif %}'
+    ) in form
     from startd8.backend_codegen.htmx_generator import render_detail_template
 
     detail = render_detail_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
     assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in detail
     assert '{% if updated %}<p class="flash">✓ ProofPoint updated.</p>{% endif %}' in detail
+
+
+def test_list_highlights_new_row_and_base_has_styles():
+    lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    # ?created=<pk> (list mode) highlights the just-stored row
+    assert '{% if created == item.id|string %} class="new-row"{% endif %}' in lst
+    from startd8.backend_codegen.htmx_generator import render_base_template
+
+    base = render_base_template(SCHEMA)
+    assert "<style>" in base and "tr.new-row td" in base and ".flash" in base
+
+
+def test_delete_swaps_in_a_flash_row():
+    web = render_web(SCHEMA)
+    # outerHTML swap replaces the row with a visible deleted confirmation (not an empty body)
+    assert "✓ ProofPoint deleted." in web
+    assert 'colspan="6"' in web  # ProofPoint: 5 display columns + 1 action column
+    assert 'return HTMLResponse("")' not in web
+
+
+def test_no_pk_form_has_no_view_link():
+    form = render_form_template(NO_PK_SCHEMA, "prisma/schema.prisma", "Pair")
+    assert "view it" not in form  # no-PK form mode echoes created=1, not a pk — no link
 
 
 def test_on_create_modes_route_the_redirect():

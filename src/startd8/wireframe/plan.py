@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 from ..backend_codegen.ai_layer import AiPass, parse_ai_passes, parse_human_inputs
 from ..backend_codegen.crud_generator import CANONICAL_LAYOUT
 from ..backend_codegen.derived import load_completeness_manifest
+from ..backend_codegen.forms_manifest import parse_forms
 from ..backend_codegen.htmx_generator import form_fields, writable_fields
 from ..backend_codegen.pages_generator import ContentPage, parse_pages
 from ..backend_codegen.test_emitter import COMPLETENESS_TESTS_PATH, CONTRACT_TESTS_PATH
@@ -503,7 +504,9 @@ def _pages_section(state: _ManifestState, *, authoring: bool) -> WireframeSectio
 
 
 def _forms_section(
-    schema_state: _ManifestState, human_state: _ManifestState
+    schema_state: _ManifestState,
+    human_state: _ManifestState,
+    views_text: Optional[str] = None,
 ) -> WireframeSection:
     status = worst(schema_state.status, human_state.status)
     worst_state = (
@@ -525,6 +528,12 @@ def _forms_section(
         if human_state.status == Status.PLANNED and human_state.parsed is not None
         else frozenset()
     )
+    # Per-entity post-create behavior from views.yaml `forms:` (OQ-3). Advisory only — a
+    # malformed manifest degrades to defaults here; the Views section reports the invalidity.
+    try:
+        on_create = parse_forms(views_text)
+    except ValueError:
+        on_create = {}
     items: List[WireframeItem] = []
     for n in _entity_names(schema, schema_state.text or ""):
         e = n.lower()
@@ -541,10 +550,15 @@ def _forms_section(
             omitted_bits.append(f"owned: {', '.join(owned)}")
         if omitted_bits:
             detail += f" | omitted — {'; '.join(omitted_bits)}"
+        if n in on_create:
+            detail += f" | on_create: {on_create[n]}"
+        paths = [f"app/templates/{e}/form.html"]
+        if on_create.get(n) == "confirmation":
+            paths.append(f"app/templates/{e}/created.html")
         items.append(
             WireframeItem(
                 f"{n} create/edit form", status, detail=detail,
-                paths=(f"app/templates/{e}/form.html",),
+                paths=tuple(paths),
             )
         )
     return WireframeSection(
@@ -784,7 +798,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _services_section(schema_state, states["ai_passes"]),
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
-        _forms_section(schema_state, states["human_inputs"]),
+        _forms_section(schema_state, states["human_inputs"], texts["views"][0]),
         _views_section(schema_state, states["views"]),
         _content_section(inputs, states["pages"], states["ai_passes"]),
         _completeness_section(states["completeness"], schema_state),

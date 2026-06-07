@@ -169,6 +169,15 @@ def test_ui_create_prg_flow(tmp_path, monkeypatch):
             assert r.headers["location"] == f"/ui/note/{note_id}?updated=1"
             r = c.get(r.headers["location"])
             assert "✓ Note updated." in r.text and "revised" in r.text
+
+            # list mode highlights the new row when ?created=<pk> is echoed
+            r = c.get(f"/ui/note?created={note_id}")
+            assert 'class="new-row"' in r.text
+
+            # HTMX delete swaps the row for a visible deleted-confirmation row
+            r = c.post(f"/ui/note/{note_id}/delete")
+            assert r.status_code == 200 and "✓ Note deleted." in r.text
+            assert c.get("/note").json() == []
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))

@@ -16,6 +16,7 @@ from ..backend_codegen.derived import load_completeness_manifest
 from ..backend_codegen.pages_generator import parse_pages
 from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import parse_app_manifest
+from ..backend_codegen.forms_manifest import parse_forms
 from ..view_codegen.manifest import parse_views
 from .entities import EntityGraph, diff_against_live, extract_entities
 from .extractors import (
@@ -108,7 +109,13 @@ def extract_manifests(
         "app.yaml": lambda t: parse_app_manifest(t),
         "ai_passes.yaml": lambda t: parse_ai_passes(t),
         "human_inputs.yaml": lambda t: parse_human_inputs(t),
-        "views.yaml": lambda t: parse_views(t, known_entities=known),
+        # Both strict parsers over views.yaml's disjoint sections: composite views (`views:`)
+        # AND per-entity post-create behavior (`forms:`, FORM_SUBMIT_BEHAVIOR FR-4) — a bad
+        # forms: section fails the gate at ingestion, not at `generate backend` time.
+        "views.yaml": lambda t: (
+            parse_views(t, known_entities=known),
+            parse_forms(t, known_entities=known),
+        ),
         "completeness.yaml": lambda t: _check_completeness(t),
     }
     for filename, data in candidates.items():

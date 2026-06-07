@@ -153,6 +153,18 @@ the redirect and assert the banner appears in the destination HTML.
 
 All six v0.1 open questions were resolved by the planning pass — see §0. None remain.
 
+**Post-ship follow-through (2026-06-07, same increment):** the two §0 deferrals landed, plus a
+template-only polish pass:
+- **OQ-3 shipped** — `startd8 wireframe` Forms section surfaces per-entity `on_create` and plans
+  `created.html` for `confirmation` entities (`wireframe/plan.py:_forms_section`).
+- **OQ-4 shipped (gate half)** — the manifest-extraction round-trip now runs **both** strict
+  parsers over an emitted `views.yaml` (`parse_views` + `parse_forms`), so a bad `forms:` section
+  fails at ingestion, not at generate time. *Deriving* `on_create` from prose remains future work.
+- **Polish (bucket-2, template-only):** inline `<style>` block in `base.html` (no static mount, no
+  new artifact kind); list-mode row highlight via the echoed `?created=<pk>` (OQ-6
+  follow-through); "view it" link in the form-mode banner (PK entities only); HTMX delete swaps
+  the row for a visible `✓ {Entity} deleted.` flash row instead of an empty body.
+
 ---
 
 *v0.2 — Post-planning self-reflective update. 2 requirements corrected (FR-7, FR-8), 2 made more
