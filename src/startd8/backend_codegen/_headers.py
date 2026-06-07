@@ -73,6 +73,56 @@ def header_pages_tmpl(
     return "\n".join(lines)
 
 
+def header_forms(
+    source_file: str,
+    schema_sha: str,
+    forms_sha: str,
+    kind: str,
+) -> str:
+    """Form-behavior provenance header — derives from two inputs (schema + views.yaml), two hashes.
+
+    Drift on a forms-configured artifact is **stale if either** the schema or ``views.yaml``
+    changes (see :func:`startd8.backend_codegen.drift.forms_stale_reason`). The hash covers the
+    whole ``views.yaml`` text (matching the pages precedent of hashing the whole manifest), so a
+    composite-view edit conservatively re-stamps the web routes — a cheap regenerate, never a miss.
+    """
+    return (
+        f"# GENERATED from {source_file} (+ views.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.\n"
+        f"# startd8-artifact: {kind}\n"
+        f"# Source of truth: the Prisma schema and the forms manifest.\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# forms-sha256: {forms_sha}"
+    )
+
+
+def header_forms_tmpl(
+    source_file: str,
+    schema_sha: str,
+    forms_sha: str,
+    kind: str,
+    entity: str = "",
+) -> str:
+    """:func:`header_forms` wrapped in a Jinja ``{# … #}`` comment for ``.html`` templates.
+
+    Same two-hash provenance as :func:`header_forms`, but invisible at render time. ``entity``
+    carries the entity name in the ``startd8-entity`` slot so drift re-renders the right template.
+    """
+    lines = [
+        "{#",
+        f"# GENERATED from {source_file} (+ views.yaml) — do not edit by hand; "
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+    ]
+    if entity:
+        lines.append(f"# startd8-entity: {entity}")
+    lines.append("# Source of truth: the Prisma schema and the forms manifest.")
+    lines.append(f"# schema-sha256: {schema_sha}")
+    lines.append(f"# forms-sha256: {forms_sha}")
+    lines.append("#}")
+    return "\n".join(lines)
+
+
 def header_ai_layer(
     source_file: str,
     schema_sha: str,

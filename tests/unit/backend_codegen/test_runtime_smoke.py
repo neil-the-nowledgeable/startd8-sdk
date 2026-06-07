@@ -115,3 +115,61 @@ def test_generated_app_serves_full_cycle(tmp_path, monkeypatch):
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
         _purge_app_modules()
+
+
+# Python-side cuid default on the PK — the UI create form omits the id (FR-PG-5), so the
+# default_factory must fill it and the PRG redirect must recover it (FR-FS-2).
+PRG = """\
+model Note {
+  id    String @id @default(cuid())
+  title String
+}
+"""
+
+
+def test_ui_create_prg_flow(tmp_path, monkeypatch):
+    """FORM_SUBMIT_BEHAVIOR FR-FS-1..3/6: plain form POST → 303 → detail with the flash banner."""
+    for rel, content in render_backend(PRG):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+
+    sys.path.insert(0, str(tmp_path))
+    _purge_app_modules()
+    try:
+        main = importlib.import_module("app.main")
+        from fastapi.testclient import TestClient
+
+        with TestClient(main.app) as c:
+            # the defect this exists to prevent: a plain form POST must 303, never a blank 200
+            r = c.post("/ui/note", data={"title": "hello"}, follow_redirects=False)
+            assert r.status_code == 303, r.text
+            loc = r.headers["location"]
+            assert loc.startswith("/ui/note/") and loc.endswith("?created=1")
+
+            # following the redirect lands on the detail page with the confirmation flash
+            r = c.get(loc)
+            assert r.status_code == 200
+            assert "✓ Note stored." in r.text and "hello" in r.text
+
+            # a browser refresh re-GETs the destination — no re-submit (PRG), record count stays 1
+            assert len(c.get("/note").json()) == 1
+            assert "✓ Note stored." in c.get(loc).text
+            assert len(c.get("/note").json()) == 1
+
+            # without the query param the banner is absent
+            assert "stored." not in c.get(loc.split("?")[0]).text
+
+            # edit PRGs back to detail with the updated flash
+            note_id = loc.split("/")[-1].split("?")[0]
+            r = c.post(f"/ui/note/{note_id}", data={"title": "revised"}, follow_redirects=False)
+            assert r.status_code == 303
+            assert r.headers["location"] == f"/ui/note/{note_id}?updated=1"
+            r = c.get(r.headers["location"])
+            assert "✓ Note updated." in r.text and "revised" in r.text
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        _purge_app_modules()

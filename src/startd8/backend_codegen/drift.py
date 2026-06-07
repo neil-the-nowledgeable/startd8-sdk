@@ -32,6 +32,8 @@ _HEADER_HUMAN_SHA_RE = re.compile(r"#\s*human-inputs-sha256:\s*([0-9a-f]{64})")
 _HEADER_AI_AGENT_RE = re.compile(r"#\s*ai-agent-spec:\s*(\S+)")
 # Content-page artifacts derive from one extra input (pages.yaml) and carry one extra hash.
 _HEADER_PAGES_SHA_RE = re.compile(r"#\s*pages-sha256:\s*([0-9a-f]{64})")
+# Form-behavior artifacts derive from one extra input (views.yaml `forms:`) and carry one extra hash.
+_HEADER_FORMS_SHA_RE = re.compile(r"#\s*forms-sha256:\s*([0-9a-f]{64})")
 _GENERATED_MARKER = "# GENERATED from"
 
 # Artifact kinds whose drift derives from three inputs (schema + ai_passes + human_inputs). Kept in
@@ -53,6 +55,11 @@ _AI_KINDS: frozenset = frozenset(
 # Artifact kinds whose drift derives from two inputs (schema + pages.yaml). Kept in sync with
 # ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load).
 _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
+
+# Artifact kinds whose drift derives from two inputs (schema + views.yaml `forms:` section).
+# web.py only carries this kind when generated WITH a forms manifest (else plain ``fastapi-web``)
+# — the htmx-base/pages-base precedent: a distinct kind per dep-set.
+_FORMS_KINDS: frozenset = frozenset({"fastapi-web-forms", "htmx-created"})
 
 
 def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
@@ -171,6 +178,12 @@ def embedded_human_sha(ondisk_text: str) -> Optional[str]:
 def embedded_pages_sha(ondisk_text: str) -> Optional[str]:
     """The ``pages-sha256`` recorded in a content-page file's header, or ``None``."""
     m = _HEADER_PAGES_SHA_RE.search(ondisk_text or "")
+    return m.group(1) if m else None
+
+
+def embedded_forms_sha(ondisk_text: str) -> Optional[str]:
+    """The ``forms-sha256`` recorded in a forms-configured file's header, or ``None``."""
+    m = _HEADER_FORMS_SHA_RE.search(ondisk_text or "")
     return m.group(1) if m else None
 
 
@@ -369,6 +382,69 @@ def _check_pages_drift(
     return DriftResult("in_sync", IN_SYNC, "owned content-page file matches schema + pages")
 
 
+def forms_stale_reason(
+    ondisk_text: str, *, schema_sha: str, forms_sha: str
+) -> Optional[str]:
+    """For a forms-configured file, return why it is **stale**, or ``None`` if both inputs match.
+
+    A forms-configured artifact derives from two inputs (schema + views.yaml), so it is stale if
+    **either** embedded hash differs from the current input hash. A missing embedded hash counts
+    as stale. The hash covers the whole ``views.yaml`` (pages precedent), so composite-view edits
+    conservatively re-stamp these files.
+    """
+    checks = (
+        ("schema", embedded_schema_sha(ondisk_text), schema_sha),
+        ("forms", embedded_forms_sha(ondisk_text), forms_sha),
+    )
+    for label, embedded, current in checks:
+        if embedded is None:
+            return f"missing {label}-sha256 header"
+        if embedded != current:
+            return (
+                f"{label} changed (header {embedded[:12]}… != current {current[:12]}…) — regenerate"
+            )
+    return None
+
+
+def _forms_renderers():
+    """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer."""
+    from .htmx_generator import render_created_template, render_web
+
+    return {
+        "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f),
+        "htmx-created": lambda s, f, sf, e: render_created_template(s, sf, e, f),
+    }
+
+
+def _check_forms_drift(
+    schema_text, forms_text, ondisk_text, source_file, kind
+) -> DriftResult:
+    """Drift for a forms-configured file: stale if schema or views.yaml changed; else byte re-render."""
+    if forms_text is None:
+        return DriftResult(
+            "error", ERROR, "forms drift check requires the views manifest (`forms:` section)"
+        )
+    reason = forms_stale_reason(
+        ondisk_text,
+        schema_sha=schema_sha256(schema_text),
+        forms_sha=schema_sha256(forms_text),
+    )
+    if reason is not None:
+        status = "tampered" if "missing" in reason else "stale"
+        return DriftResult(status, DRIFT, reason)
+    renderer = _forms_renderers().get(kind)
+    if renderer is None:
+        return DriftResult("tampered", DRIFT, f"unknown forms-configured kind ({kind!r})")
+    rendered = renderer(schema_text, forms_text, source_file, embedded_entity(ondisk_text))
+    if rendered != ondisk_text:
+        return DriftResult(
+            "tampered",
+            DRIFT,
+            "owned forms-configured file was hand-edited (differs from a fresh render of the unchanged inputs)",
+        )
+    return DriftResult("in_sync", IN_SYNC, "owned forms-configured file matches schema + forms")
+
+
 def check_drift(
     schema_text: str,
     ondisk_text: Optional[str],
@@ -378,6 +454,7 @@ def check_drift(
     human_inputs_text: Optional[str] = None,
     pages_text: Optional[str] = None,
     completeness_text: Optional[str] = None,
+    forms_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -385,7 +462,8 @@ def check_drift(
     missing/old embedded hash means tampered/stale; matching hash with differing bytes means
     tampered; matching hash and bytes means in-sync. AI-layer kinds (``_AI_KINDS``) derive from three
     inputs and route to the three-hash check (needs *manifest_text*/*human_inputs_text*); content-page
-    kinds (``_PAGES_KINDS``) derive from two inputs and route to the two-hash check (needs *pages_text*).
+    kinds (``_PAGES_KINDS``) derive from two inputs and route to the two-hash check (needs *pages_text*);
+    forms-configured kinds (``_FORMS_KINDS``) likewise (needs *forms_text* — the full ``views.yaml``).
     """
     if ondisk_text is None:
         return DriftResult("missing", DRIFT, "owned file does not exist on disk")
@@ -397,6 +475,8 @@ def check_drift(
         )
     if kind in _PAGES_KINDS:
         return _check_pages_drift(schema_text, pages_text, ondisk_text, source_file, kind)
+    if kind in _FORMS_KINDS:
+        return _check_forms_drift(schema_text, forms_text, ondisk_text, source_file, kind)
 
     current_sha = schema_sha256(schema_text)
     embedded = embedded_schema_sha(ondisk_text)

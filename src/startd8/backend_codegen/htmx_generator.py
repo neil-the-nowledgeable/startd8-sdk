@@ -10,12 +10,19 @@ cannot occur.
 Artifacts (all owned, all $0.00-skippable via the shared drift path):
 - ``app/web.py`` — HTML-serving routes per entity (list / new / create / detail / edit / update /
   delete) + a ``/validate`` endpoint for inline field validation. Plain ``#`` header (kind
-  ``fastapi-web``).
+  ``fastapi-web``; with a forms manifest, ``fastapi-web-forms`` carrying a 2-hash header).
 - ``app/templates/base.html`` (``htmx-base``), ``_field_error.html`` (``htmx-field-error``), and
   per-entity ``<e>/list.html`` / ``<e>/detail.html`` / ``<e>/form.html`` (``htmx-list`` /
   ``htmx-detail`` / ``htmx-form``, each tagged ``# startd8-entity: <Name>``). Template headers wrap
   the same ``#`` provenance lines inside a Jinja ``{# … #}`` comment so the existing drift regexes
   recognize them with no new machinery.
+
+Post-submit behavior (FORM_SUBMIT_BEHAVIOR_REQUIREMENTS.md): the form is a plain browser POST, so
+create/update answer with a real **303 See Other** (Post/Redirect/Get — the old ``HX-Redirect``
+header is browser-ignored and produced a blank page). The default destination is the new record's
+detail page with a stateless ``?created=1`` query-param flash; ``views.yaml``'s top-level
+``forms:`` section overrides per entity (``on_create: detail|list|form|confirmation``).
+``confirmation`` adds a per-entity ``<e>/created.html`` (kind ``htmx-created``, 2-hash header).
 
 Field→widget map (FR-4): enum→``<select>``, Boolean→checkbox, Int/BigInt + Float/Decimal→number,
 DateTime→datetime-local, everything else (String/Bytes/list)→text. Entities without a single-column
@@ -30,6 +37,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha2
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from .ai_layer import _PROVENANCE_OMIT
 from .crud_generator import _model_names, _pk_field
+from .forms_manifest import ON_CREATE_DEFAULT, parse_forms
 
 # ----------------------------------------------------------------------------- #
 # Headers
@@ -183,6 +191,8 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
         '{% extends "base.html" %}',
         "{% block title %}" + entity + "{% endblock %}",
         "{% block content %}",
+        # Post-create flash (FR-FS-3): set when the route passes the ?created query param through.
+        '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}",
         f"<h1>{entity}</h1>",
         f'<a href="/ui/{e}/new">New {entity}</a>',
         f"<table>\n  <thead><tr>{cols}<th></th></tr></thead>",
@@ -221,6 +231,9 @@ def render_detail_template(schema_text: str, source_file: str, entity: str) -> s
         '{% extends "base.html" %}\n'
         "{% block title %}" + entity + " detail{% endblock %}\n"
         "{% block content %}\n"
+        # Post-submit flash (FR-FS-3/FR-FS-6): the create/update PRG redirects land here.
+        '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}\n"
+        '{% if updated %}<p class="flash">✓ ' + entity + " updated.</p>{% endif %}\n"
         f"<h1>{entity}</h1>\n<dl>\n{rows}\n</dl>\n"
         "{% endblock %}\n"
     )
@@ -303,11 +316,50 @@ def render_form_template(schema_text: str, source_file: str, entity: str) -> str
         '{% extends "base.html" %}\n'
         "{% block title %}" + entity + " form{% endblock %}\n"
         "{% block content %}\n"
+        # Post-create flash (FR-FS-3): on_create: form lands back here with ?created=<pk>.
+        '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}\n"
         f"<h1>{entity}</h1>\n"
         f'<form method="post" action="{action}">\n'
         f"{inputs}\n"
         '  <button type="submit">Save</button>\n'
         "</form>\n"
+        "{% endblock %}\n"
+    )
+    return head + "\n" + body
+
+
+def render_created_template(
+    schema_text: str, source_file: str, entity: str, forms_text: str
+) -> str:
+    """``<e>/created.html`` — the dedicated confirmation page (``on_create: confirmation``).
+
+    Kind ``htmx-created``, 2-hash header (schema + views.yaml): the template only *exists* because
+    the forms manifest selected the confirmation archetype, so its provenance carries the manifest.
+    Shows the stored values + the three onward links (view / add another / back to list).
+    """
+    from ._headers import header_forms_tmpl
+
+    schema = parse_prisma_schema(schema_text)
+    e = entity.lower()
+    pk = _pk_field(schema, entity)
+    fields = _form_fields(schema, entity)
+    head = header_forms_tmpl(
+        source_file, schema_sha256(schema_text), schema_sha256(forms_text),
+        "htmx-created", entity,
+    )
+    rows = "\n".join(
+        f"  <dt>{f.name}</dt><dd>{{{{ item.{f.name} }}}}</dd>" for f in fields
+    )
+    pkref = "{{ item." + (pk.name if pk is not None else "id") + " }}"
+    body = (
+        '{% extends "base.html" %}\n'
+        "{% block title %}" + entity + " stored{% endblock %}\n"
+        "{% block content %}\n"
+        '<p class="flash">✓ ' + entity + " stored.</p>\n"
+        f"<dl>\n{rows}\n</dl>\n"
+        f'<a href="/ui/{e}/{pkref}">view</a>\n'
+        f'<a href="/ui/{e}/new">add another</a>\n'
+        f'<a href="/ui/{e}">back to list</a>\n'
         "{% endblock %}\n"
     )
     return head + "\n" + body
@@ -358,7 +410,40 @@ def _field_error(kind: str, required: bool, raw: str) -> str:
 '''
 
 
-def _entity_routes(schema: PrismaSchema, name: str) -> str:
+def _create_redirect(e: str, pkname: str, has_pk: bool, on_create: str) -> List[str]:
+    """The post-create PRG tail (FR-FS-1/2/4): 303 to the configured destination.
+
+    Plain browser form POSTs ignore the old ``HX-Redirect`` header (the blank-page defect), so the
+    handler answers with a real ``303 See Other``. ``detail`` carries ``?created=1`` (pk is in the
+    path); ``list``/``form`` echo ``?created=<pk>`` so the destination can later highlight/link the
+    new row (OQ-6). Entities without a single-column PK have no detail/confirmation page — those
+    modes fall back to ``list`` at generation time (FR-FS-8).
+    """
+    if not has_pk and on_create in ("detail", "confirmation"):
+        return [
+            f"    # no single-column PK -> no detail page; '{on_create}' falls back to list (FR-FS-8)",
+            f'    return RedirectResponse("/ui/{e}?created=1", status_code=303)',
+        ]
+    if on_create == "detail":
+        target = f'f"/ui/{e}/{{obj.{pkname}}}?created=1"'
+    elif on_create == "confirmation":
+        target = f'f"/ui/{e}/{{obj.{pkname}}}/created"'
+    elif on_create == "form":
+        target = (
+            f'f"/ui/{e}/new?created={{obj.{pkname}}}"' if has_pk
+            else f'"/ui/{e}/new?created=1"'
+        )
+    else:  # list
+        target = (
+            f'f"/ui/{e}?created={{obj.{pkname}}}"' if has_pk
+            else f'"/ui/{e}?created=1"'
+        )
+    return [f"    return RedirectResponse({target}, status_code=303)"]
+
+
+def _entity_routes(
+    schema: PrismaSchema, name: str, on_create: str = ON_CREATE_DEFAULT
+) -> str:
     e = name.lower()
     pk = _pk_field(schema, name)
     fields = _writable_fields(schema, name)  # create/update + validation cover human-authored fields only
@@ -379,15 +464,17 @@ def _entity_routes(schema: PrismaSchema, name: str) -> str:
         f'@web_router.get("/ui/{e}", response_class=HTMLResponse)',
         f"def list_{e}(request: Request, session: Session = Depends(get_session)):",
         f"    items = list(session.exec(select({name})).all())",
+        '    ctx = {"items": items, "created": request.query_params.get("created")}',
         "    return templates.TemplateResponse(",
-        f'        request, "{e}/list.html", {{"items": items}}',
+        f'        request, "{e}/list.html", ctx',
         "    )",
         "",
         "",
         f'@web_router.get("/ui/{e}/new", response_class=HTMLResponse)',
         f"def new_{e}(request: Request):",
+        '    ctx = {"item": None, "created": request.query_params.get("created")}',
         "    return templates.TemplateResponse(",
-        f'        request, "{e}/form.html", {{"item": None}}',
+        f'        request, "{e}/form.html", ctx',
         "    )",
         "",
         "",
@@ -413,7 +500,8 @@ def _entity_routes(schema: PrismaSchema, name: str) -> str:
         f"    obj = {name}(**data)",
         "    session.add(obj)",
         "    session.commit()",
-        f'    return HTMLResponse(headers={{"HX-Redirect": "/ui/{e}"}})',
+        "    session.refresh(obj)",  # uniform PK recovery: default_factory AND DB-side autoincrement
+        *_create_redirect(e, pkname, pk is not None, on_create),
     ]
 
     if pk is not None:
@@ -427,8 +515,10 @@ def _entity_routes(schema: PrismaSchema, name: str) -> str:
             f"    item = session.get({name}, {pkname})",
             "    if item is None:",
             f'        raise HTTPException(status_code=404, detail="{name} not found")',
+            '    ctx = {"item": item, "created": request.query_params.get("created"),',
+            '           "updated": request.query_params.get("updated")}',
             "    return templates.TemplateResponse(",
-            f'        request, "{e}/detail.html", {{"item": item}}',
+            f'        request, "{e}/detail.html", ctx',
             "    )",
             "",
             "",
@@ -455,7 +545,8 @@ def _entity_routes(schema: PrismaSchema, name: str) -> str:
             f"            setattr(obj, k, _coerce(_{e}_rules[k][0], form.get(k)))",
             "    session.add(obj)",
             "    session.commit()",
-            f'    return HTMLResponse(headers={{"HX-Redirect": "/ui/{e}"}})',
+            # PRG on edit too (FR-FS-6): back to the detail page with the updated flash.
+            f'    return RedirectResponse(f"/ui/{e}/{{{pkname}}}?updated=1", status_code=303)',
             "",
             "",
             f'@web_router.post("/ui/{e}/{pkref}/delete", response_class=HTMLResponse)',
@@ -467,21 +558,54 @@ def _entity_routes(schema: PrismaSchema, name: str) -> str:
             "        session.commit()",
             '    return HTMLResponse("")',
         ]
+        if on_create == "confirmation":
+            # The dedicated confirmation page (FR-FS-5) — the create handler 303s here.
+            lines += [
+                "",
+                "",
+                f'@web_router.get("/ui/{e}/{pkref}/created", response_class=HTMLResponse)',
+                f"def created_{e}({pkname}: {pkkind}, request: Request, "
+                f"session: Session = Depends(get_session)):",
+                f"    item = session.get({name}, {pkname})",
+                "    if item is None:",
+                f'        raise HTTPException(status_code=404, detail="{name} not found")',
+                "    return templates.TemplateResponse(",
+                f'        request, "{e}/created.html", {{"item": item}}',
+                "    )",
+            ]
     return "\n".join(lines)
 
 
-def render_web(schema_text: str, source_file: str = "prisma/schema.prisma") -> str:
-    """Render ``app/web.py`` — HTML-serving routes + the inline-validation endpoint."""
+def render_web(
+    schema_text: str,
+    source_file: str = "prisma/schema.prisma",
+    forms_text: Optional[str] = None,
+) -> str:
+    """Render ``app/web.py`` — HTML-serving routes + the inline-validation endpoint.
+
+    *forms_text* (the full ``views.yaml``; only its ``forms:`` section is read) selects each
+    entity's post-create destination (FR-FS-4). With it, the artifact derives from two inputs —
+    kind ``fastapi-web-forms``, 2-hash header; without it, the schema-only ``fastapi-web``
+    (the ``htmx-base``/``pages-base`` precedent: a distinct kind per dep-set).
+    """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
+    forms = parse_forms(forms_text, known_entities=frozenset(names))
 
-    header = _py_header(source_file, sha, "fastapi-web")
+    if forms_text is not None:
+        from ._headers import header_forms
+
+        header = header_forms(
+            source_file, sha, schema_sha256(forms_text), "fastapi-web-forms"
+        )
+    else:
+        header = _py_header(source_file, sha, "fastapi-web")
     imports = (
         "from __future__ import annotations\n\n"
         "from pathlib import Path\n\n"
         "from fastapi import APIRouter, Depends, HTTPException, Request\n"
-        "from fastapi.responses import HTMLResponse\n"
+        "from fastapi.responses import HTMLResponse, RedirectResponse\n"
         "from fastapi.templating import Jinja2Templates\n"
         "from sqlmodel import Session, select\n\n"
         "from .db import get_session\n"
@@ -489,7 +613,9 @@ def render_web(schema_text: str, source_file: str = "prisma/schema.prisma") -> s
     if names:
         imports += "from .tables import " + ", ".join(sorted(names)) + "\n"
 
-    blocks = [_entity_routes(schema, n) for n in names]
+    blocks = [
+        _entity_routes(schema, n, forms.get(n, ON_CREATE_DEFAULT)) for n in names
+    ]
     body = _WEB_HELPERS + ("\n\n" + "\n\n\n".join(blocks) if blocks else "")
     return header + "\n\n" + imports + "\n\n" + body + "\n"
 
@@ -498,16 +624,20 @@ def render_ui(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",
     pages_text: Optional[str] = None,
+    forms_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
 
-    *pages_text* (when content pages are enabled) makes ``base.html`` carry the manifest nav."""
+    *pages_text* (when content pages are enabled) makes ``base.html`` carry the manifest nav.
+    *forms_text* (``views.yaml``) selects per-entity post-create behavior; entities declaring
+    ``on_create: confirmation`` additionally get a ``<e>/created.html`` template (FR-FS-5)."""
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
+    forms = parse_forms(forms_text, known_entities=frozenset(names))
 
     out: List[Tuple[str, str]] = [
-        ("app/web.py", render_web(schema_text, source_file)),
+        ("app/web.py", render_web(schema_text, source_file, forms_text)),
         ("app/templates/base.html", render_base_template(schema_text, source_file, pages_text)),
         (
             "app/templates/_field_error.html",
@@ -534,4 +664,11 @@ def render_ui(
                 render_form_template(schema_text, source_file, n),
             )
         )
+        if forms.get(n) == "confirmation" and _pk_field(schema, n) is not None:
+            out.append(
+                (
+                    f"app/templates/{e}/created.html",
+                    render_created_template(schema_text, source_file, n, forms_text or ""),
+                )
+            )
     return tuple(out)

@@ -177,6 +177,51 @@ def test_generate_with_pages_authoring_emits_ui_and_pyyaml(tmp_path):
     assert "pyyaml" in (tmp_path / "requirements.txt").read_text()
 
 
+def test_generate_with_views_forms_then_recheck_in_sync(tmp_path):
+    """--views feeds views.yaml's `forms:` section (per-entity on_create) into the web routes."""
+    schema = _schema(tmp_path)
+    views = tmp_path / "prisma" / "views.yaml"
+    views.write_text(
+        "views: []\nforms:\n  ProofPoint: { on_create: confirmation }\n", encoding="utf-8"
+    )
+    gen = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--views", str(views), "--out", str(tmp_path)],
+    )
+    assert gen.exit_code == 0, gen.output
+    web = (tmp_path / "app/web.py").read_text()
+    assert "fastapi-web-forms" in web and "forms-sha256:" in web
+    assert 'RedirectResponse(f"/ui/proofpoint/{obj.id}/created", status_code=303)' in web
+    assert (tmp_path / "app/templates/proofpoint/created.html").exists()
+    assert not (tmp_path / "app/templates/metric/created.html").exists()
+    chk = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--views", str(views), "--out", str(tmp_path), "--check"],
+    )
+    assert chk.exit_code == 0, chk.output
+    # editing the manifest flags the forms-configured artifacts stale
+    views.write_text(
+        "views: []\nforms:\n  ProofPoint: { on_create: list }\n", encoding="utf-8"
+    )
+    chk = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--views", str(views), "--out", str(tmp_path), "--check"],
+    )
+    assert chk.exit_code == 1, chk.output
+
+
+def test_views_with_bad_on_create_fails_loud(tmp_path):
+    schema = _schema(tmp_path)
+    views = tmp_path / "prisma" / "views.yaml"
+    views.write_text("forms:\n  ProofPoint: { on_create: nope }\n", encoding="utf-8")
+    result = runner.invoke(
+        generate_app,
+        ["backend", "--schema", str(schema), "--views", str(views), "--out", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "unknown on_create" in result.output
+
+
 def test_check_detects_handedit(tmp_path):
     schema = _schema(tmp_path)
     runner.invoke(

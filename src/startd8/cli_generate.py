@@ -167,6 +167,14 @@ def backend(
         "weight + an exclude set). When given, app/completeness.py is weighted; absent → the "
         "flat presence rule. Threaded to both generate and --check so drift stays consistent.",
     ),
+    views: Optional[Path] = typer.Option(
+        None,
+        "--views",
+        help="Path to views.yaml (the same file `generate views` consumes). Only its top-level "
+        "`forms:` section is read here: per-entity post-create behavior "
+        "(on_create: detail|list|form|confirmation; default detail). Threaded to both generate "
+        "and --check so drift stays consistent.",
+    ),
     source_label: str = typer.Option(
         "prisma/schema.prisma",
         "--source-label",
@@ -190,12 +198,15 @@ def backend(
     manifest_text: Optional[str] = None
     human_text: Optional[str] = None
     pages_text: Optional[str] = None
-    _reads = {"manifest": None, "human": None, "pages": None, "completeness": None}
+    _reads = {
+        "manifest": None, "human": None, "pages": None, "completeness": None, "views": None,
+    }
     for label, path, dest in (
         ("ai_passes", ai_passes, "manifest"),
         ("human_inputs", human_inputs, "human"),
         ("pages", pages, "pages"),
         ("completeness", completeness, "completeness"),
+        ("views", views, "views"),
     ):
         if path is None:
             continue
@@ -204,11 +215,12 @@ def backend(
         except OSError as exc:
             console.print(f"[red]error:[/red] cannot read {label} {path}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
-    manifest_text, human_text, pages_text, completeness_text = (
+    manifest_text, human_text, pages_text, completeness_text, views_text = (
         _reads["manifest"],
         _reads["human"],
         _reads["pages"],
         _reads["completeness"],
+        _reads["views"],
     )
 
     if ai_agent_spec and manifest_text is None:
@@ -233,6 +245,7 @@ def backend(
             ai_agent_spec=ai_agent_spec,
             pages_text=pages_text,
             completeness_text=completeness_text,
+            views_text=views_text,
             # On --check we don't render the untracked prose fragments (they need the .md on disk
             # and never participate in drift); on write we do, reading app/pages/*.md under --out.
             pages_app_dir=None if check else (out / "app"),
@@ -240,7 +253,7 @@ def backend(
         )
     except (
         ValueError
-    ) as exc:  # reserved attr name / malformed ai_passes/pages manifest — fail loud
+    ) as exc:  # reserved attr name / malformed ai_passes/pages/views manifest — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
@@ -259,6 +272,7 @@ def backend(
                 human_inputs_text=human_text,
                 pages_text=pages_text,
                 completeness_text=completeness_text,
+                forms_text=views_text,
             )
             if result.status != "in_sync":
                 drifted += 1
@@ -422,7 +436,7 @@ def views(
         if drifted:
             console.print(f"[yellow]{drifted} view artifact(s) drifted[/yellow]")
             raise typer.Exit(1)
-        console.print(f"[green]in_sync[/green]: all view artifact(s) match schema + views.yaml")
+        console.print("[green]in_sync[/green]: all view artifact(s) match schema + views.yaml")
         raise typer.Exit(0)
 
     written = 0

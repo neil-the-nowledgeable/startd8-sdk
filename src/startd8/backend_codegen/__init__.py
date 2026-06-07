@@ -24,6 +24,7 @@ from .derived import (
     render_requirements,
 )
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
+from .forms_manifest import parse_forms
 from .htmx_generator import render_ui, render_web
 from .pages_generator import (
     parse_pages,
@@ -55,6 +56,7 @@ __all__ = [
     "render_web",
     "render_ui",
     "parse_pages",
+    "parse_forms",
     "render_pages",
     "render_pages_router",
     "render_page_shell",

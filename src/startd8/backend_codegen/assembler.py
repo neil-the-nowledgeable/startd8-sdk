@@ -40,6 +40,7 @@ def render_backend(
     pages_app_dir: Optional[Path] = None,
     authoring: bool = False,
     completeness_text: Optional[str] = None,
+    views_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -49,6 +50,10 @@ def render_backend(
     When *manifest_text* (``ai_passes.yaml``) is provided, the owned **AI layer** (FR-MA-1..6) is
     assembled too: service wrapper, edge schemas, per-pass harnesses, AI router, and ``app/server.py``
     — driven by the manifest + *human_inputs_text* (``human_inputs.yaml``, the C-4 field policy).
+
+    *views_text* (``views.yaml``) feeds only its top-level ``forms:`` section here — per-entity
+    post-create behavior (FORM_SUBMIT_BEHAVIOR_REQUIREMENTS.md FR-4); the ``views:`` section
+    belongs to ``generate views`` (view_codegen).
     """
     out: List[Tuple[str, str]] = [
         ("app/__init__.py", ""),
@@ -64,7 +69,8 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-db"], render_db(schema_text, source_file)),
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
     ]
-    out.extend(render_ui(schema_text, source_file, pages_text))  # app/web.py + templates (+ nav)
+    # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
+    out.extend(render_ui(schema_text, source_file, pages_text, views_text))
     out.extend(
         render_derived(schema_text, source_file, completeness_text=completeness_text)
     )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)

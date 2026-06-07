@@ -62,7 +62,7 @@ def test_web_py_routes_compile_and_cover_crud_and_validation():
     assert 'Jinja2Templates(directory=str(Path(__file__).parent / "templates"))' in web
     # modern Starlette signature: request FIRST (runtime-test fix; old (name, ctx) form crashed)
     assert (
-        'templates.TemplateResponse(\n        request, "proofpoint/list.html", {"items": items}'
+        'templates.TemplateResponse(\n        request, "proofpoint/list.html", ctx'
         in web
     )
     assert '"request":' not in web  # request must NOT be passed inside the context dict
@@ -186,6 +186,142 @@ def test_jinja_templates_parse_if_available():
     for path, content in render_ui(SCHEMA):
         if path.endswith(".html"):
             env.parse(content)  # raises TemplateSyntaxError on malformed Jinja
+
+
+# --------------------------------------------------------------------------- #
+# Post-submit behavior (FORM_SUBMIT_BEHAVIOR_REQUIREMENTS.md FR-FS-1..10)
+# --------------------------------------------------------------------------- #
+
+FORMS = """\
+views: []
+forms:
+  ProofPoint: { on_create: confirmation }
+  Metric:     { on_create: form }
+"""
+
+
+def test_create_is_prg_303_to_detail_by_default():
+    web = render_web(SCHEMA)
+    # FR-FS-1/2: a real 303 (browsers ignore HX-Redirect on a plain form POST — blank page)
+    assert "HX-Redirect" not in web
+    assert "session.refresh(obj)" in web  # uniform PK recovery before the redirect
+    assert (
+        'return RedirectResponse(f"/ui/proofpoint/{obj.id}?created=1", status_code=303)'
+        in web
+    )
+    # FR-FS-6: update PRGs back to detail with the updated flash
+    assert (
+        'return RedirectResponse(f"/ui/proofpoint/{id}?updated=1", status_code=303)'
+        in web
+    )
+    # routes pass the flash params through to the templates
+    assert '"created": request.query_params.get("created")' in web
+    assert '"updated": request.query_params.get("updated")' in web
+
+
+def test_templates_carry_flash_banners():
+    lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in lst
+    form = render_form_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in form
+    from startd8.backend_codegen.htmx_generator import render_detail_template
+
+    detail = render_detail_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert '{% if created %}<p class="flash">✓ ProofPoint stored.</p>{% endif %}' in detail
+    assert '{% if updated %}<p class="flash">✓ ProofPoint updated.</p>{% endif %}' in detail
+
+
+def test_on_create_modes_route_the_redirect():
+    web = render_web(SCHEMA, forms_text=FORMS)
+    compile(web, "<web>", "exec")
+    # confirmation: 303 to the dedicated page + the extra GET route
+    assert (
+        'return RedirectResponse(f"/ui/proofpoint/{obj.id}/created", status_code=303)'
+        in web
+    )
+    assert '@web_router.get("/ui/proofpoint/{id}/created"' in web
+    # form: back to a fresh form, echoing the new pk (OQ-6)
+    assert (
+        'return RedirectResponse(f"/ui/metric/new?created={obj.id}", status_code=303)'
+        in web
+    )
+    # 2-hash header: kind switches per dep-set (htmx-base/pages-base precedent)
+    assert "# startd8-artifact: fastapi-web-forms" in web
+    assert "# forms-sha256:" in web
+
+
+def test_on_create_list_mode():
+    forms = "forms:\n  ProofPoint: { on_create: list }\n"
+    web = render_web(SCHEMA, forms_text=forms)
+    assert (
+        'return RedirectResponse(f"/ui/proofpoint?created={obj.id}", status_code=303)'
+        in web
+    )
+
+
+def test_confirmation_emits_created_template_only_for_declared_entities():
+    arts = dict(render_ui(SCHEMA, forms_text=FORMS))
+    assert "app/templates/proofpoint/created.html" in arts
+    assert "app/templates/metric/created.html" not in arts  # on_create: form — no page
+    created = arts["app/templates/proofpoint/created.html"]
+    assert embedded_artifact_kind(created) == "htmx-created"
+    assert embedded_entity(created) == "ProofPoint"
+    assert "✓ ProofPoint stored." in created
+    for link in ("view</a>", "add another</a>", "back to list</a>"):
+        assert link in created
+    # without a manifest, no created.html anywhere
+    assert "app/templates/proofpoint/created.html" not in dict(render_ui(SCHEMA))
+
+
+def test_forms_artifacts_drift_in_sync_with_manifest():
+    from startd8.backend_codegen import check_drift
+
+    for _path, content in render_ui(SCHEMA, forms_text=FORMS):
+        kind = embedded_artifact_kind(content)
+        if kind in ("fastapi-web-forms", "htmx-created"):
+            r = check_drift(SCHEMA, content, forms_text=FORMS)
+            assert r.status == "in_sync", (kind, r.detail)
+            # without the manifest the check degrades loudly, never to a false in-sync
+            assert check_drift(SCHEMA, content).status == "error"
+        else:
+            assert owned_file_in_sync(SCHEMA, content) is True
+
+
+def test_forms_manifest_fails_loud():
+    from startd8.backend_codegen import parse_forms
+
+    with pytest.raises(ValueError, match="unknown on_create"):
+        parse_forms("forms:\n  ProofPoint: { on_create: detial }\n")
+    with pytest.raises(ValueError, match="unknown keys"):
+        parse_forms("forms:\n  ProofPoint: { on_creat: detail }\n")
+    with pytest.raises(ValueError, match="unknown entity"):
+        render_web(SCHEMA, forms_text="forms:\n  Nope: { on_create: list }\n")
+    # tolerates a views-less manifest (parse_views requires >=1 view; this parser must not)
+    assert parse_forms("forms:\n  ProofPoint: { on_create: list }\n") == {
+        "ProofPoint": "list"
+    }
+    # absent section / absent manifest => defaults
+    assert parse_forms("views: []\n") == {}
+    assert parse_forms(None) == {}
+
+
+NO_PK_SCHEMA = """\
+model Pair {
+  leftId  String
+  rightId String
+
+  @@id([leftId, rightId])
+}
+"""
+
+
+def test_no_pk_falls_back_to_list():
+    # FR-FS-8: no single-column PK -> no detail page; detail/confirmation fall back to list
+    web = render_web(NO_PK_SCHEMA, forms_text="forms:\n  Pair: { on_create: confirmation }\n")
+    compile(web, "<web>", "exec")
+    assert "falls back to list (FR-FS-8)" in web
+    assert 'return RedirectResponse("/ui/pair?created=1", status_code=303)' in web
+    assert "/created" not in web  # no confirmation route without a by-id page
 
 
 def test_template_provided_via_registry(tmp_path):
