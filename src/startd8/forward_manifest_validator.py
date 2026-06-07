@@ -562,6 +562,49 @@ def validate_disk_compliance(
     except ImportError:
         pass
 
+    # L12: Symbol-level import resolution (F-6.1 — RUN-009/010 phantom-import
+    # class).  L1 resolves the *module*; this resolves the *symbol* — `from
+    # starlette.responses import TemplateResponse` passes L1 (module exists)
+    # but can never import.  Static AST of the resolved module; no execution.
+    # L13: Referenced-asset contracts (F-6.2) — templates named in
+    # TemplateResponse/get_template calls must exist on disk post-merge.
+    try:
+        from startd8.validators.import_symbol_checks import (
+            check_import_symbols,
+            check_template_references,
+        )
+
+        result.semantic_issues.extend(
+            check_import_symbols(tree, file_path, project_root)
+        )
+        result.semantic_issues.extend(
+            check_template_references(tree, file_path, project_root)
+        )
+    except Exception:  # the gate must never break disk validation
+        pass
+
+    # L14: Provenance-vocabulary validation (F-7 — RUN-010 D2). String
+    # literals written to contract-owned enum/provenance fields must come
+    # from the Prisma schema's declared domains (enums + provenance
+    # @default values); invented vocabulary (`ownerId='default_owner'`,
+    # `source='wizard'`) makes rows silently invisible to every filter.
+    # No-op when no .prisma contract is discoverable.
+    try:
+        from startd8.validators.contract_vocabulary import (
+            check_contract_vocabulary,
+            discover_prisma_schema,
+        )
+
+        _prisma_schema = discover_prisma_schema(file_path, project_root)
+        if _prisma_schema is not None and _prisma_schema.models:
+            result.semantic_issues.extend(
+                check_contract_vocabulary(
+                    tree, _prisma_schema, file_path=file_path,
+                )
+            )
+    except Exception:  # the gate must never break disk validation
+        pass
+
     # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
     _emit_semantic_observability(result, file_path, import_map)
 
