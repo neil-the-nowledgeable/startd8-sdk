@@ -168,8 +168,12 @@ def _render_detail_compose(v: ViewSpec) -> str:
     lines += [
         '    out["panels"] = panels',
         "    return out",
+        "", "",
+        f"def {v.module}_roots(session: Session) -> list[Any]:",
+        f'    """All {v.root} rows — the bare-route pick-an-item index (AR-1)."""',
+        f"    return session.exec(select({v.root})).all()",
         "",
-        f"__all__ = [{(v.module + '_data')!r}]", "",
+        f"__all__ = [{(v.module + '_data')!r}, {(v.module + '_roots')!r}]", "",
     ]
     return "\n".join(lines)
 
@@ -288,6 +292,10 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
             )
         elif v.kind == "export-package":
             import_lines.append(f"from app.views.{v.module} import {v.module}_package")
+        elif v.kind == "detail-compose" and "{" not in v.route:
+            import_lines.append(
+                f"from app.views.{v.module} import {v.module}_data, {v.module}_roots"
+            )
         else:
             import_lines.append(f"from app.views.{v.module} import {v.module}_data")
     imports = "\n".join(import_lines)
@@ -320,7 +328,20 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"def {v.module}(id: str, session: Session = Depends(get_session)):\n"
                 f"    return {v.module}_package(session, id)"
             )
-        elif v.kind in _ID_ROUTED:  # workspace / detail-compose -> HTML, /{id}
+        elif v.kind == "detail-compose" and "{" not in v.route:
+            # Query-id form: the nav links this bare as a page (AR-1) — a bare GET renders a
+            # pick-an-item index of roots; ?id=<root> renders the composed detail.
+            idx_tmpl = f"views/{v.module}_index.html"
+            routes.append(
+                f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
+                f"def {v.module}(request: Request, id: Optional[str] = None, session: Session = Depends(get_session)):\n"
+                f"    if id is None:\n"
+                f"        roots = {v.module}_roots(session)\n"
+                f"        return _templates.TemplateResponse(request, {idx_tmpl!r}, {{'roots': roots, 'detail_route': {v.route!r}}})\n"
+                f"    data = {v.module}_data(session, id)\n"
+                f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'data': data}})"
+            )
+        elif v.kind in _ID_ROUTED:  # workspace / export-package / path-param detail -> HTML, /{id}
             routes.append(
                 f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
                 f"def {v.module}(id: str, request: Request, session: Session = Depends(get_session)):\n"
@@ -334,9 +355,14 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"    rows = {v.module}_data(session)\n"
                 f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'rows': rows}})"
             )
+    needs_optional = any(
+        v.kind == "detail-compose" and "{" not in v.route and not _is_model_export(v)
+        for v in views
+    )
     body = (
         "from __future__ import annotations\n\n"
-        "from fastapi import APIRouter, Depends, Request\n"
+        + ("from typing import Optional\n\n" if needs_optional else "")
+        + "from fastapi import APIRouter, Depends, Request\n"
         f"{responses}"
         "from fastapi.templating import Jinja2Templates\n"
         "from sqlmodel import Session\n\n"
@@ -348,6 +374,33 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
         + "\n\n\n__all__ = ['views_router']\n"
     )
     return _header(schema_sha, views_sha, "view-router") + "\n\n" + body
+
+
+def render_view_index_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
+    """The bare-route pick-an-item index for a query-id detail-compose view (AR-1)."""
+    head = (
+        "{#\n"
+        "# GENERATED from prisma/schema.prisma (+ views.yaml) — do not edit by hand.\n"
+        "# startd8-artifact: view-template\n"
+        f"# startd8-entity: {v.module}_index\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# views-sha256: {views_sha}\n"
+        "#}\n"
+    )
+    return head + (
+        '{% extends "base.html" %}\n'
+        "{% block content %}\n"
+        f"<h1>{v.module}</h1>\n"
+        "{% if not roots %}<p>Nothing here yet — add and confirm a "
+        f"{v.root} first.</p>{{% endif %}}\n"
+        "<ul>\n"
+        "{% for r in roots %}"
+        '<li><a href="{{ detail_route }}?id={{ r.id }}">'
+        "{{ r.name or r.title or r.headline or r.id }}</a></li>\n"
+        "{% endfor %}\n"
+        "</ul>\n"
+        "{% endblock %}\n"
+    )
 
 
 def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
@@ -583,6 +636,11 @@ def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ..
         if _is_model_export(v):
             continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
         out.append((f"app/templates/views/{v.module}.html", render_view_template(v, s_sha, v_sha)))
+        if v.kind == "detail-compose" and "{" not in v.route:
+            out.append((
+                f"app/templates/views/{v.module}_index.html",
+                render_view_index_template(v, s_sha, v_sha),
+            ))
     out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
     return tuple(out)
