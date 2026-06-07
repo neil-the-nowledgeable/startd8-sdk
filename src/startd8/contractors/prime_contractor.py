@@ -2251,6 +2251,29 @@ class PrimeContractorWorkflow:
         logger.info('Restored %s from %s', file_path, backup_path.name)
         return True
 
+    def _seam_marked_targets(self, feature: FeatureSpec) -> List[str]:
+        """Targets whose EXISTING on-disk content carries the seam marker (write-protected).
+
+        A seam file declares itself in its own header/docstring — 'OWNED' together with
+        'never generated' within the first ~600 bytes (e.g. the strtd8 composition seam:
+        "OWNED — project-authored router list; never generated, survives regenerate").
+        Its correctness is defined by invariants-of-convention, so it must never be an
+        LLM rewrite target; generators respect it by construction, the guard makes the
+        contractor respect it by enforcement.
+        """
+        hits: List[str] = []
+        for rel in feature.target_files or []:
+            try:
+                path = (self.project_root / rel) if self.project_root else Path(rel)
+                if not path.is_file():
+                    continue
+                head = path.read_text(encoding="utf-8", errors="ignore")[:600]
+                if "OWNED" in head and "never generated" in head:
+                    hits.append(str(rel))
+            except OSError:
+                continue
+        return hits
+
     def pre_flight_validation(self, feature: FeatureSpec) -> Tuple[bool, Optional[Dict]]:
         """
         Perform pre-flight size estimation BEFORE code generation.
@@ -2286,6 +2309,24 @@ class PrimeContractorWorkflow:
             True if the feature was fully processed, False otherwise
         """
         self.instrumentor.emit_insight(insight_type='feature_selected', summary=f'Processing feature: {feature.name}', confidence=1.0, feature_id=feature.id, feature_name=feature.name, current_status=feature.status.value if hasattr(feature.status, 'value') else str(feature.status))
+        # Seam write-guard (pre-spend): a target whose existing content carries the
+        # OWNED/never-generated seam marker must never be an LLM target — observed 2/2
+        # whole-file mangles of a composition seam on the strtd8 pilot (runs 008/009;
+        # see the project's SEAM_CONCERN_USER_ROUTERS note). Fail loud BEFORE any LLM
+        # call: the legitimate change to a seam is a human one-liner, not a rewrite.
+        seam_hits = self._seam_marked_targets(feature)
+        if seam_hits:
+            msg = (
+                f"Seam write-guard: target file(s) {seam_hits} carry the "
+                "'OWNED ... never generated' seam marker and are write-protected from LLM "
+                "tasks. Remove them from target_files; seam wiring is a human one-line "
+                "edit recorded in the task's acceptance notes."
+            )
+            logger.error(msg, extra={'feature_name': feature.name})
+            self.instrumentor.emit_event('seam_write_guard_rejected', {'feature_id': feature.id, 'files': ','.join(seam_hits)})
+            self.queue.fail_feature(feature.id, msg)
+            self._save_queue_state_with_mode()
+            return False
         if len(feature.target_files) > 1 and feature.status == FeatureStatus.PENDING:
             return self._process_decomposed_feature(feature)
         if feature.status == FeatureStatus.PENDING:
