@@ -562,6 +562,27 @@ def validate_disk_compliance(
     except ImportError:
         pass
 
+    # L12: Symbol-level import resolution (F-6.1 — RUN-009/010 phantom-import
+    # class).  L1 resolves the *module*; this resolves the *symbol* — `from
+    # starlette.responses import TemplateResponse` passes L1 (module exists)
+    # but can never import.  Static AST of the resolved module; no execution.
+    # L13: Referenced-asset contracts (F-6.2) — templates named in
+    # TemplateResponse/get_template calls must exist on disk post-merge.
+    try:
+        from startd8.validators.import_symbol_checks import (
+            check_import_symbols,
+            check_template_references,
+        )
+
+        result.semantic_issues.extend(
+            check_import_symbols(tree, file_path, project_root)
+        )
+        result.semantic_issues.extend(
+            check_template_references(tree, file_path, project_root)
+        )
+    except Exception:  # the gate must never break disk validation
+        pass
+
     # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
     _emit_semantic_observability(result, file_path, import_map)
 

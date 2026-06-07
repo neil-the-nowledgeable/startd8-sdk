@@ -51,7 +51,13 @@ _PARTIAL_THRESHOLD = 0.4
 # Semantic issue categories that individually disqualify a feature from
 # "complete" — a single occurrence means the feature is non-functional,
 # regardless of requirement_score or error count (M3 run-021).
-_CRITICAL_SEMANTIC_CATEGORIES = frozenset({"fake_work_stub"})
+_CRITICAL_SEMANTIC_CATEGORIES = frozenset({
+    "fake_work_stub",
+    # F-6 (RUN-009/010): a phantom from-import means the module raises
+    # ImportError at load time — it can never be wired, so a PASS on it is
+    # unfalsifiable. One occurrence is disqualifying, same as fake_work_stub.
+    "phantom_symbol",
+})
 
 # Extracts the unresolved module from a mypy import diagnostic, e.g.
 # `Cannot find implementation or library stub for module named "app.ai.extract"`.
@@ -883,6 +889,27 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "non-functional even though it compiles."
         ),
     },
+    # --- F-6 (RUN-009/010): phantom symbols + referenced template assets ---
+    "phantom_symbol_detected": {
+        "phase": "draft",
+        "hint": (
+            "Every `from X import Y` must name a symbol that actually exists in "
+            "module X — verify against the real package API instead of inventing "
+            "names (e.g. `TemplateResponse` is NOT importable from "
+            "`starlette.responses`; follow the project's established import style "
+            "such as `from fastapi.templating import Jinja2Templates`). A phantom "
+            "from-import makes the whole module fail at load time."
+        ),
+    },
+    "missing_template_asset_detected": {
+        "phase": "draft",
+        "hint": (
+            "Every template name passed to TemplateResponse(...)/get_template(...) "
+            "must exist on disk under the project's templates directory. Emit the "
+            "template files alongside the code that references them, or render "
+            "only templates that already exist."
+        ),
+    },
     # --- Python L1-L10 disk compliance check hints (P3-4) ---
     "import_resolution_detected": {
         "phase": "draft",
@@ -1348,6 +1375,9 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "bare_except_pass": "bare_except_pass_detected",
     "phantom_dependency": "phantom_dependency_detected",
     "fake_work_stub": "fake_work_stub_detected",
+    # F-6: symbol-level import + referenced-asset checks (L12/L13)
+    "phantom_symbol": "phantom_symbol_detected",
+    "missing_template_asset": "missing_template_asset_detected",
     # Python L1-L10 disk compliance categories (P3-4 terminology alignment)
     "import_resolution": "import_resolution_detected",
     "cross_scope_duplicate": "cross_scope_duplicate_detected",
