@@ -910,6 +910,19 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "only templates that already exist."
         ),
     },
+    # --- F-7 (RUN-010 D2): provenance-vocabulary validation ---
+    "provenance_vocabulary_detected": {
+        "phase": "draft",
+        "hint": (
+            "String values written to contract-owned enum/provenance fields "
+            "must come from the schema's DECLARED domain — copy the literal "
+            "values from the Prisma contract (e.g. `ownerId='local'`, "
+            "`source` ∈ {user, ai}); never invent vocabulary like "
+            "`ownerId='default_owner'` or `source='wizard'`. Rows written "
+            "with invented values are silently invisible to every filter on "
+            "the declared values (silent data loss)."
+        ),
+    },
     # --- Python L1-L10 disk compliance check hints (P3-4) ---
     "import_resolution_detected": {
         "phase": "draft",
@@ -1378,6 +1391,8 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     # F-6: symbol-level import + referenced-asset checks (L12/L13)
     "phantom_symbol": "phantom_symbol_detected",
     "missing_template_asset": "missing_template_asset_detected",
+    # F-7: provenance-vocabulary validation (L14)
+    "provenance_vocabulary": "provenance_vocabulary_detected",
     # Python L1-L10 disk compliance categories (P3-4 terminology alignment)
     "import_resolution": "import_resolution_detected",
     "cross_scope_duplicate": "cross_scope_duplicate_detected",
