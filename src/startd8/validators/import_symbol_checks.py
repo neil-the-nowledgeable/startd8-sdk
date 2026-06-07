@@ -121,7 +121,26 @@ def _collect_binding_names(tree: ast.Module) -> Optional[Set[str]]:
                         _add_target(item.optional_vars)
                 if not _walk(stmt.body):
                     return False
+            elif isinstance(stmt, ast.Match):
+                # Module-level match: case bodies bind like any block, and
+                # capture patterns (`case X() as name:` / `case name:`) bind
+                # names too — count both (conservative direction).
+                for case in stmt.cases:
+                    _add_pattern_names(case.pattern)
+                    if not _walk(case.body):
+                        return False
         return True
+
+    def _add_pattern_names(pattern) -> None:
+        if isinstance(pattern, ast.MatchAs) and pattern.name:
+            names.add(pattern.name)
+        if isinstance(pattern, ast.MatchStar) and pattern.name:
+            names.add(pattern.name)
+        if isinstance(pattern, ast.MatchMapping) and pattern.rest:
+            names.add(pattern.rest)
+        for child in ast.iter_child_nodes(pattern):
+            if isinstance(child, ast.pattern):
+                _add_pattern_names(child)
 
     def _add_target(target: ast.expr) -> None:
         if isinstance(target, ast.Name):
@@ -142,6 +161,12 @@ def _collect_binding_names(tree: ast.Module) -> Optional[Set[str]]:
 
     if not _walk(getattr(tree, "body", [])):
         return None
+    # Walrus bindings (`(x := ...)`) anywhere in the module. Deliberately
+    # over-collects (function-local walruses too) — adding names is the
+    # conservative direction: it can only suppress false positives.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
     return names
 
 

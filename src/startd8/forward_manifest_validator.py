@@ -580,8 +580,14 @@ def validate_disk_compliance(
         result.semantic_issues.extend(
             check_template_references(tree, file_path, project_root)
         )
-    except Exception:  # the gate must never break disk validation
-        pass
+    except Exception as exc:  # the gate must never break disk validation —
+        # but a crashing gate must never disappear silently either (the
+        # Looks-Like-Success class these very checks exist to kill).
+        logger.warning(
+            "L12/L13 import-symbol/template checks crashed on %s (%s) — "
+            "phantom-symbol coverage LOST for this file",
+            file_path, exc,
+        )
 
     # L14: Provenance-vocabulary validation (F-7 — RUN-010 D2). String
     # literals written to contract-owned enum/provenance fields must come
@@ -602,8 +608,13 @@ def validate_disk_compliance(
                     tree, _prisma_schema, file_path=file_path,
                 )
             )
-    except Exception:  # the gate must never break disk validation
-        pass
+    except Exception as exc:  # the gate must never break disk validation —
+        # but log loudly: silently losing the check is the RUN-010 class.
+        logger.warning(
+            "L14 provenance-vocabulary check crashed on %s (%s) — "
+            "contract-vocabulary coverage LOST for this file",
+            file_path, exc,
+        )
 
     # --- Semantic issue logging and OTel (REQ-SV-901/902) ---
     _emit_semantic_observability(result, file_path, import_map)
