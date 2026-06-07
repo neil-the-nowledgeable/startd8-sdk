@@ -345,6 +345,33 @@ def extract_completeness(
 # §2.5 AI assists → ai_passes.yaml
 # --------------------------------------------------------------------------- #
 
+# Multi-value cell splitting (F-1, strtd8 fidelity note 2026-06-06): REQUIREMENTS authors pack
+# several entities into one Reads/Writes cell using any human separator — comma, "·", "+",
+# " and ". The deriver must split on ALL of them, or every entity past the first is silently
+# lost (4 of 5 strtd8 passes lost a Reads entity; see prisma/ai_passes.yaml corrections).
+_MULTI_VALUE_SEP_RE = re.compile(r",|·|\+|\s+and\s+", re.IGNORECASE)
+
+
+def _split_multi_value(cell: str) -> List[str]:
+    """Split a multi-value manifest cell into trimmed, non-empty parts."""
+    return [part.strip() for part in _MULTI_VALUE_SEP_RE.split(cell or "") if part.strip()]
+
+
+def _resolve_entity_phrase(graph: EntityGraph, phrase: str) -> Optional[str]:
+    """Resolve *phrase* to a declared entity, tolerating leading qualifier words.
+
+    Reads cells qualify their entities ("confirmed ProofPoints"): try the whole phrase
+    first, then drop leading words one at a time so the head noun still resolves. Pure
+    prose ("pasted free text") resolves to nothing — the text-mode posture is unchanged.
+    """
+    words = phrase.split()
+    for start in range(len(words)):
+        hit = graph.resolve_entity(" ".join(words[start:]))
+        if hit:
+            return hit
+    return None
+
+
 def extract_ai_passes(
     doc_label: str,
     sections: List[Section],
@@ -365,18 +392,25 @@ def extract_ai_passes(
         src = SourceRef(doc_label, sec.heading_path, row_index=i)
         vi = len(passes)
         writes_raw = re.sub(r"\([^)]*\)", "", row.get("writes", ""))  # "(except value)" = policy, lives in human_inputs
-        outputs = [e for e in
-                   (graph.resolve_entity(w.strip()) for w in writes_raw.split(",") if w.strip())
-                   if e]
+        outputs: List[str] = []
+        for part in _split_multi_value(writes_raw):
+            ent = graph.resolve_entity(part)
+            if ent and ent not in outputs:
+                outputs.append(ent)
         if not outputs:
             records.append(ExtractionRecord(
                 "ai_passes.yaml", f"/passes/{name}", Status.NOT_EXTRACTED, source=src,
                 reason=f"Writes column resolves to no declared entity: {row.get('writes', '')!r}",
             ))
             continue
-        inputs = [e for e in
-                  (graph.resolve_entity(r.strip()) for r in row.get("reads", "").split(",") if r.strip())
-                  if e]  # non-entity prose ("uploaded resume") ⇒ text-mode pass, no input_entities
+        # F-1: split multi-value Reads cells on every separator, resolve each part with
+        # qualifier tolerance ("confirmed ProofPoints, Outcomes" → [ProofPoint, Outcome]).
+        inputs: List[str] = []
+        for part in _split_multi_value(row.get("reads", "")):
+            ent = _resolve_entity_phrase(graph, part)
+            if ent and ent not in inputs:
+                inputs.append(ent)
+        # non-entity prose ("uploaded resume") ⇒ text-mode pass, no input_entities
         route = f"/{nfkd_kebab(name)}"
         entry: dict = {
             "name": name,
