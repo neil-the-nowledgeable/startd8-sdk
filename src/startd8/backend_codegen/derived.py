@@ -221,6 +221,7 @@ _RUNTIME_REQUIREMENTS: List[str] = [
     "jinja2",
     "python-multipart",  # form parsing for the HTMX routes (request.form())
     "uvicorn[standard]",  # ASGI server
+    "httpx",  # TestClient transport for the generated route-smoke suite (F-8)
 ]
 
 

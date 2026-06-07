@@ -121,5 +121,5 @@ def test_emitted_ai_tests_run_green(tmp_path):
         text=True,
     )
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
-    # contract(6) + completeness(2) + edge(3) + gate(2) = 13
-    assert "16 passed" in result.stdout
+    # contract + completeness + edge + gate + route-smoke (1 unseeded case — F-8)
+    assert "17 passed" in result.stdout

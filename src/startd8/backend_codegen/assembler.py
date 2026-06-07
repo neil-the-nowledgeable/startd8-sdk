@@ -24,8 +24,10 @@ from .sqlmodel_renderer import render_sqlmodel_tables
 from .test_emitter import (
     COMPLETENESS_TESTS_PATH,
     CONTRACT_TESTS_PATH,
+    ROUTE_SMOKE_TESTS_PATH,
     render_completeness_tests,
     render_contract_tests,
+    render_route_smoke_tests,
 )
 
 
@@ -81,6 +83,11 @@ def render_backend(
             schema_text, source_file, manifest=_load_completeness_manifest(completeness_text)
         ),
     ))  # FR-9: the completeness formula as an executable, drift-checked invariant
+    # Rung-5 floor (strtd8 §8 F-8): generated HTTP smoke — every mounted GET
+    # route (incl. user_routers/views) × every seeds/test-user-* fixture.
+    out.append((
+        ROUTE_SMOKE_TESTS_PATH, render_route_smoke_tests(schema_text, source_file),
+    ))
     if pages_text:
         from .pages_generator import render_pages
 
