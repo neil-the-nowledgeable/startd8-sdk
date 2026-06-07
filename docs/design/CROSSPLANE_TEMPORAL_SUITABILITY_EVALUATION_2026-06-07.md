@@ -21,6 +21,13 @@ and (C) deployment/provisioning of generated apps — under the governing lens o
 decision gate's decision-by date; Axis B — first commissioned app with durable-process
 requirements (§5); Axis C — the §6 trigger table. The gate outcome lands as an ADR (R7-S5).*
 
+> **Gate outcome (2026-06-07):** the R1-S2 gate was opened same-day and ruled **NO-GO +
+> harden-in-place** — the "unwritten code" premise no longer held (cross-batch resume had
+> already shipped as two additive cap-dev-pipe scripts reusing `BatchLedger`; remaining
+> Increment-1 durability ≈750–900 LOC of which only ~150–250 is engine-replaceable; waves
+> deferred indefinitely). **Axis A resolves to NOT NOW.** ADR + re-open triggers:
+> `TEMPORAL_SPIKE_GATE_R1S2_2026-06-07.md`.
+
 **License gate (assumed compatible — confirmed):** Temporal server and all official SDKs
 (including Python) are **MIT**. Crossplane is **Apache-2.0** and reached **CNCF Graduated**
 status (Oct 2025). Both are permissive and compatible with this SDK; neither has a
@@ -451,7 +458,7 @@ This appendix is intentionally **append-only**. New reviewers (human or model) a
 | ID | Suggestion | Source | Implementation / Validation Notes | Date |
 |----|------------|--------|-----------------------------------|------|
 | R1-S1 | `RunDriver` protocol extraction as Step 0 | claude-opus-4-8 R1 | Caveat added to §4 "The fit" (seam doesn't exist yet; extraction falsifies premise at $0); Step 0 added to §8.1 | 2026-06-07 |
-| R1-S2 | Decision gate coupling spike to Plan Batch Orchestration increments | claude-opus-4-8 R1 | Gate added to §8.1 (BatchLedger durability extension held while gate open; decision-by date set at increment scheduling). Cross-ref to `CRP_PLAN_BATCH_ORCHESTRATION_*` noted as pending — to be added there when the increment is planned | 2026-06-07 |
+| R1-S2 | Decision gate coupling spike to Plan Batch Orchestration increments | claude-opus-4-8 R1 | Gate added to §8.1; **gate executed and ruled NO-GO 2026-06-07** — ADR: `TEMPORAL_SPIKE_GATE_R1S2_2026-06-07.md` (supersedes the pending cross-ref; re-open triggers live in the ADR) | 2026-06-07 |
 | R1-S3 | Typed JSON contracts per activity boundary (Keiyaku/REQ-MP-1010) | claude-opus-4-8 R1 | Added to §8.1 spike deliverables | 2026-06-07 |
 | R1-S4 | Integrity-check by-reference dereference from history | claude-opus-4-8 R1 | OQ-2 extended with the constraint + silent-poison rationale; mutated-staging-artifact kill case added to the §8.1 scorecard | 2026-06-07 |
 | R1-S5 | Numeric spike scorecard replacing directional exit criterion | claude-opus-4-8 R1 | §8.1 exit criterion rewritten as a 5-item scorecard (kills/resume, LOC-retired, setup failure rate, overhead budget, secret scan); template committed before spike starts | 2026-06-07 |
