@@ -765,21 +765,6 @@ class PrimeContractorWorkflow:
         self._complexity_routing_enabled = True
         self._complexity_config = config or ComplexityRoutingConfig()
 
-        complex_generator = None
-        if tier3_agent is not None:
-            from startd8.contractors.generators import (
-                PrimaryContractorCodeGenerator,
-            )
-
-            complex_generator = PrimaryContractorCodeGenerator(
-                lead_agent=tier3_agent,
-                output_dir=(
-                    self.code_generator.output_dir
-                    if hasattr(self.code_generator, "output_dir")
-                    else Path("generated")
-                ),
-            )
-
         # When Micro Prime is enabled, self.code_generator is the MicroPrime
         # wrapper.  Use the original (unwrapped) generator for MODERATE/COMPLEX
         # tiers to avoid a redundant MicroPrime → fallback delegation hop.
@@ -788,6 +773,38 @@ class PrimeContractorWorkflow:
             if self._micro_prime_enabled and self._original_code_generator is not None
             else self.code_generator
         )
+
+        complex_generator = None
+        if tier3_agent is not None:
+            from startd8.contractors.generators import (
+                PrimaryContractorCodeGenerator,
+            )
+
+            gen_kwargs: Dict[str, Any] = {
+                "lead_agent": tier3_agent,
+                "output_dir": (
+                    self.code_generator.output_dir
+                    if hasattr(self.code_generator, "output_dir")
+                    else Path("generated")
+                ),
+            }
+            # Provider-leak guard (strtd8 P3 run-006 postmortem §2 / F-4):
+            # tier3_agent escalates only the LEAD role.  The COMPLEX-tier
+            # generator must inherit the run's configured DRAFTER — omitting
+            # it silently falls back to the Anthropic catalog constructor
+            # default, leaking a foreign-provider call into single-provider
+            # runs (run-010 PI-001c drafted on claude-haiku inside a
+            # --provider gemini run).
+            base_drafter = getattr(unwrapped, "drafter_agent", None)
+            drafter_spec = (
+                base_drafter
+                if isinstance(base_drafter, str)
+                else getattr(base_drafter, "agent_spec", None)
+            )
+            if isinstance(drafter_spec, str) and drafter_spec:
+                gen_kwargs["drafter_agent"] = drafter_spec
+
+            complex_generator = PrimaryContractorCodeGenerator(**gen_kwargs)
 
         self._complexity_router = ComplexityRouter(
             trivial_generator=trivial_generator,
