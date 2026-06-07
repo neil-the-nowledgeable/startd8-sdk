@@ -3,8 +3,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from startd8.complexity import ComplexityRoutingConfig, ComplexityTier, TaskComplexitySignals
 from startd8.contractors.protocols import GenerationResult
 
@@ -136,6 +134,93 @@ class TestEnableComplexityRouting:
         assert router.select(ComplexityTier.SIMPLE) is micro_prime_gen
         assert router.select(ComplexityTier.MODERATE) is default_gen
         assert router.select(ComplexityTier.COMPLEX) is default_gen
+
+
+# ── tier3 provider inheritance (provider-leak regression) ────────────
+
+
+class TestTier3ProviderInheritance:
+    """The COMPLEX-tier generator must honor the configured provider.
+
+    Regression for the strtd8 P3 run-006 postmortem §2 / F-4 provider
+    leak: ``enable_complexity_routing(tier3_agent=...)`` constructed the
+    COMPLEX-tier ``PrimaryContractorCodeGenerator`` with only the lead,
+    so its drafter silently fell back to the Anthropic catalog default —
+    a real Anthropic generation call inside a ``--provider gemini`` run
+    (observed live: run-010 PI-001c drafted on claude-haiku).
+    """
+
+    @staticmethod
+    def _real_gen(lead, drafter):
+        from startd8.contractors.generators import PrimaryContractorCodeGenerator
+
+        return PrimaryContractorCodeGenerator(
+            lead_agent=lead,
+            drafter_agent=drafter,
+            output_dir=Path("/tmp/generated"),
+        )
+
+    def test_complex_tier_inherits_base_drafter(self):
+        """tier3_agent escalates only the LEAD; the drafter follows the run."""
+        base = self._real_gen("gemini:gemini-2.5-pro", "gemini:gemini-2.5-flash")
+        wf, _ = _make_workflow(code_generator=base)
+        wf.enable_complexity_routing(tier3_agent="gemini:gemini-2.5-pro")
+
+        complex_gen = wf._complexity_router.select(ComplexityTier.COMPLEX)
+        assert complex_gen.lead_agent == "gemini:gemini-2.5-pro"
+        assert complex_gen.drafter_agent == "gemini:gemini-2.5-flash"
+
+    def test_provider_gemini_yields_no_anthropic_on_any_tier(self):
+        """Full --provider chain: no role on any tier resolves to anthropic."""
+        from types import SimpleNamespace
+
+        from startd8.contractors.prime_contractor_config import (
+            PrimeContractorConfig,
+            apply_cli_overrides,
+        )
+
+        args = SimpleNamespace(provider="gemini")
+        pc = apply_cli_overrides(PrimeContractorConfig(), args)
+        # Sanity: the fill produced provider-prefixed specs for every role
+        assert pc.agents.lead and pc.agents.lead.startswith("gemini:")
+        assert pc.agents.drafter and pc.agents.drafter.startswith("gemini:")
+        assert pc.agents.tier3 and pc.agents.tier3.startswith("gemini:")
+
+        base = self._real_gen(pc.agents.lead, pc.agents.drafter)
+        wf, _ = _make_workflow(code_generator=base)
+        wf.enable_complexity_routing(tier3_agent=pc.agents.tier3)
+
+        for tier in ComplexityTier:
+            gen = wf._complexity_router.select(tier)
+            for role in ("lead_agent", "drafter_agent"):
+                spec = getattr(gen, role, None)
+                if isinstance(spec, str):
+                    assert not spec.startswith("anthropic:"), (
+                        f"provider leak: {tier.value} {role} resolved to {spec} "
+                        f"in a provider=gemini run"
+                    )
+                    assert spec.startswith("gemini:")
+
+    def test_no_usable_base_drafter_keeps_catalog_default(self):
+        """Mixed default preserved: a base without a drafter spec changes nothing."""
+        from startd8.contractors.protocols import DRAFT_MODEL_CLAUDE_HAIKU
+
+        wf, _ = _make_workflow()  # MagicMock generator → drafter_agent not a str
+        wf.enable_complexity_routing(tier3_agent="anthropic:claude-opus-4-8")
+
+        complex_gen = wf._complexity_router.select(ComplexityTier.COMPLEX)
+        assert complex_gen.drafter_agent == DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
+
+    def test_micro_prime_wrapper_unwraps_for_drafter_inheritance(self):
+        """With Micro Prime enabled, the drafter inherits from the ORIGINAL generator."""
+        wf, _ = _make_workflow()
+        original = self._real_gen("gemini:gemini-2.5-pro", "gemini:gemini-2.5-flash")
+        wf._micro_prime_enabled = True
+        wf._original_code_generator = original
+        wf.enable_complexity_routing(tier3_agent="gemini:gemini-2.5-pro")
+
+        complex_gen = wf._complexity_router.select(ComplexityTier.COMPLEX)
+        assert complex_gen.drafter_agent == "gemini:gemini-2.5-flash"
 
 
 # ── develop_feature with complexity routing ──────────────────────────

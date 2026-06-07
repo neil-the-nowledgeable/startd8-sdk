@@ -166,15 +166,21 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
         self._emit_progress(on_progress, 1, 5, "Initializing Prime Contractor")
 
         try:
-            # Build code generator if agent specs provided
+            # Build code generator if agent specs provided.
+            # Only forward the roles that are actually set — passing an
+            # explicit None would override the constructor default (and a
+            # partially-specified pair must not silently mix providers; see
+            # enable_complexity_routing's provider-leak guard).
             code_generator = None
             if lead_agent or drafter_agent:
-                output_dir = project_root / "generated"
-                code_generator = PrimaryContractorCodeGenerator(
-                    output_dir=output_dir,
-                    lead_agent=lead_agent,
-                    drafter_agent=drafter_agent,
-                )
+                gen_kwargs: Dict[str, Any] = {
+                    "output_dir": project_root / "generated",
+                }
+                if lead_agent:
+                    gen_kwargs["lead_agent"] = lead_agent
+                if drafter_agent:
+                    gen_kwargs["drafter_agent"] = drafter_agent
+                code_generator = PrimaryContractorCodeGenerator(**gen_kwargs)
 
             workflow = PrimeContractorWorkflow(
                 project_root=project_root,
