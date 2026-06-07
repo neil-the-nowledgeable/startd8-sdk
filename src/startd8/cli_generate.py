@@ -124,8 +124,10 @@ def backend(
     boot_smoke: bool = typer.Option(
         False,
         "--boot-smoke",
-        help="After writing, boot app.main:app in a subprocess and assert it serves "
-        "/openapi.json (C-6 runtime gate — catches import errors compileall misses).",
+        help="After writing, boot the generated app in a subprocess and assert it serves "
+        "/openapi.json (C-6 runtime gate — catches import errors compileall misses). The "
+        "target is resolved from the scaffold manifest + on-disk entrypoints "
+        "({package}.server:app when --ai-passes emitted server.py, else {package}.main:app).",
     ),
     pages: Optional[Path] = typer.Option(
         None,

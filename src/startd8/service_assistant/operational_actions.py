@@ -11,7 +11,7 @@ This layer is intentionally distinct from two existing mappings:
 what should I do about it?"* Each entry maps a :class:`RootCause` to a severity, a
 controlled ``re_run_strategy`` token, and a human-readable action sentence.
 
-Coverage is **exhaustive** over the 19 ``RootCause`` members (OQ-9); any future enum
+Coverage is **exhaustive** over the 21 ``RootCause`` members (OQ-9); any future enum
 addition that is not mapped falls through to :data:`FALLBACK_ACTION` and is caught by
 ``test_operational_action_coverage`` so it can never ship silently.
 """
@@ -70,7 +70,7 @@ class OperationalAction:
         }
 
 
-# Exhaustive mapping over all RootCause members (18 concrete + UNKNOWN).
+# Exhaustive mapping over all RootCause members (20 concrete + UNKNOWN).
 CAUSE_TO_OPERATIONAL_ACTION: Dict[RootCause, OperationalAction] = {
     RootCause.SKELETON_MISSING: OperationalAction(
         "critical",
@@ -164,6 +164,19 @@ CAUSE_TO_OPERATIONAL_ACTION: Dict[RootCause, OperationalAction] = {
         "retry_as_is",
         "Re-run — a transient generation error occurred; escalate to manual review if it persists.",
         actionable=False,  # transient, resolves on retry
+    ),
+    RootCause.PROVIDER_ERROR: OperationalAction(
+        "high",
+        "retry_as_is",
+        "Fix the provider account/config (credits, API key, model access, rate limits) and "
+        "verify the intended provider/model routing, then re-run — the call never produced code.",
+        # actionable: the operator must act (fund/fix the account or routing); not a retry-only blip
+    ),
+    RootCause.TRUNCATION: OperationalAction(
+        "medium",
+        "reduce_scope",
+        "Decompose the task into separable deliverables — the draft exceeded the output-token "
+        "ceiling; raising max_tokens only moves the cliff.",
     ),
     RootCause.UNKNOWN: OperationalAction(
         "low",

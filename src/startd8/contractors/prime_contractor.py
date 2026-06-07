@@ -83,6 +83,22 @@ def _provider_from_model(model: Optional[str]) -> str:
             return provider
     return "unknown"
 
+
+def _attribution_from_spec(spec: Optional[str]) -> Dict[str, Optional[str]]:
+    """F-3 (RUN-006 §3.2): agent/model/provider triple from an agent spec string.
+
+    ``"anthropic:claude-sonnet-4-6"`` → agent=the full spec, model=``claude-sonnet-4-6``,
+    provider=``anthropic``. All-None when no spec is known — never fabricated.
+    """
+    spec = str(spec or "") or None
+    if spec is None:
+        return {"agent": None, "model": None, "provider": None}
+    return {
+        "agent": spec,
+        "model": spec.split(":", 1)[1] if ":" in spec else spec,
+        "provider": _provider_from_model(spec),
+    }
+
 # AC-R7: Generator-native OTel observability for prime contractor
 try:
     from opentelemetry import trace as _trace
@@ -2162,7 +2178,10 @@ class PrimeContractorWorkflow:
                     "name": entry.get("feature_name", ""),
                     "success": entry.get("success", False),
                     "cost_usd": entry.get("cost_usd", 0.0),
-                    "model": entry.get("model", "unknown"),
+                    # F-3: entries now carry attribution for failures too.
+                    "model": entry.get("model") or "unknown",
+                    "agent": entry.get("agent"),
+                    "provider": entry.get("provider"),
                 }
 
         path = self._manifest_path()
@@ -3411,6 +3430,26 @@ class PrimeContractorWorkflow:
             feature.name, wt_dir,
         )
 
+    def _stamp_failure_attribution(
+        self, feature: FeatureSpec, *, stage: str, model: Optional[str] = None,
+    ) -> None:
+        """F-3 (RUN-006 §3.2): record who failed and where, AT the failure site.
+
+        A failed LLM call used to surface in the postmortem as
+        ``pipeline_stage/root_cause: unknown`` with ``agent/model/provider: null`` even
+        for a legible provider-400 — the attribution existed at the failure site
+        (``GenerationResult.model`` / the configured lead agent) and was dropped on the
+        floor. Stamped onto ``feature.metadata`` so it survives queue-state
+        serialization into the postmortem's ``feature_dict``.
+        """
+        spec = model or str(getattr(self.code_generator, "lead_agent", "") or "")
+        if feature.metadata is None:
+            feature.metadata = {}
+        feature.metadata["failure_attribution"] = {
+            "stage": stage,
+            **_attribution_from_spec(spec),
+        }
+
     def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str]=None) -> bool:
         """
         Develop a feature using the configured CodeGenerator.
@@ -3585,6 +3624,10 @@ class PrimeContractorWorkflow:
             else:
                 error_msg = result.error or 'Code generation failed'
                 logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
+                # F-3: the result knows which agent made the failed call — keep it.
+                self._stamp_failure_attribution(
+                    feature, stage="generation", model=result.model,
+                )
                 # Populate generated_files from the result so
                 # _clean_failed_feature can find and delete them.
                 if result.generated_files:
@@ -3595,6 +3638,9 @@ class PrimeContractorWorkflow:
         except Exception as e:
             error_msg = f'Exception during code generation: {e}'
             logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
+            # F-3: best-effort attribution — no GenerationResult here, so fall back to
+            # the configured generator's lead agent spec.
+            self._stamp_failure_attribution(feature, stage="generation")
             self._clean_failed_feature(feature)
             self.queue.fail_feature(feature.id, error_msg)
             return False
@@ -4885,6 +4931,10 @@ class PrimeContractorWorkflow:
         )
         if quality_feedback:
             error_msg += f" Review feedback: {quality_feedback[:500]}"
+        # F-3: keep agent attribution on quality-gate rejections too.
+        self._stamp_failure_attribution(
+            feature, stage="quality_gate", model=result.model,
+        )
         self._clean_failed_feature(feature)
         self.queue.fail_feature(feature.id, error_msg)
         self.total_cost_usd += result.cost_usd
@@ -5034,6 +5084,7 @@ class PrimeContractorWorkflow:
         feature.status = FeatureStatus.GENERATED
         self._save_queue_state_with_mode()
         feature._cost_usd = result.cost_usd  # stash for history
+        feature._gen_model = result.model  # stash for history attribution (F-3)
         if result.metadata:
             if feature.metadata is None:
                 feature.metadata = {}
@@ -5315,6 +5366,8 @@ class PrimeContractorWorkflow:
                 'files': [str(f) for f in result.integrated_files],
                 'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}),
                 'timestamp': datetime.now().isoformat(),
+                # F-3 attribution: which agent generated this feature.
+                **_attribution_from_spec(getattr(feature, '_gen_model', None)),
             }
             # Thread semantic repair data for postmortem dual scoring (DC-3)
             sem_repair = result.metadata.get("semantic_repair")
@@ -5566,7 +5619,12 @@ class PrimeContractorWorkflow:
                 features_succeeded += 1
             else:
                 features_failed += 1
-                self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': False, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'error': feature.error_message, 'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}), 'timestamp': datetime.now().isoformat()})
+                # F-3 (RUN-006 §3.2): failed entries must carry attribution — the failure
+                # site stamps feature.metadata["failure_attribution"]; mirror it here so
+                # the generation manifest and postmortem never report null/unknown when
+                # the agent/stage were known.
+                _fail_attr = (feature.metadata or {}).get('failure_attribution') or {}
+                self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': False, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'error': feature.error_message, 'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}), 'timestamp': datetime.now().isoformat(), 'pipeline_stage': _fail_attr.get('stage'), 'agent': _fail_attr.get('agent'), 'model': _fail_attr.get('model'), 'provider': _fail_attr.get('provider')})
                 if stop_on_failure:
                     logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
