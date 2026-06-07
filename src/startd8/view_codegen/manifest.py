@@ -14,6 +14,26 @@ layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
 package). ``scope: model`` (AR-3, FR-10 whole-model export) serves the WHOLE model through the
 generated ``app/export.py`` serialization layer: ``route`` becomes the optional base path (default
 ``/export`` -> ``/export/markdown`` + ``/export/json``), and ``root``/``relations`` are forbidden.
+
+``detail-compose`` takes the same ``scope`` grammar (AR-1, FR-8 whole-model compose — the Value
+Map): ``scope: model`` iterates ALL roots (every root + resolved relations on ONE page, unlinked
+roots flagged, never dropped), so the route takes no ``{id}`` — it derives ``/<kebab(view name)>``
+per authoring contract §2.3 (optional explicit ``route:`` override; ``{id}`` in it fails loud).
+
+``computed-panel`` (AR-2, FR-9 — the completeness page) binds a **generated compute function** to
+a score+nudges panel at a declared route. ``compute`` names the binding from a closed vocabulary
+(v1: ``completeness`` — ``app/completeness.py``'s ``compute_completeness``, fed live per-entity row
+counts); the table is deliberately a vocabulary so future generated compute functions slot in.
+Route derives ``/<kebab(view name)>``. Entity-shaped keys (``root``/``relations``/``aggregates``/…)
+are wrong-kind on a computed-panel and fail loud.
+
+``import-flow`` (AR-4, FR-10 restore — "local-only isn't a dead end") is the round-trip partner of
+the model-scoped export-package, consuming its JSON payload (entity -> field-faithful row dicts):
+GET ``<route>`` (upload form) -> POST ``<route>/validate`` (parse + check entity names and field
+shapes against the contract; reports errors WITHOUT mutating) -> POST ``<route>/restore`` (the
+destructive step — refused without an explicit ``confirm`` field; UPSERT by primary key with the
+retired ``import_routes.py`` merge semantics: idempotent, never deletes). ``route`` is the optional
+base path (default ``/import``). It takes no entity keys at all — those fail loud.
 """
 
 from __future__ import annotations
@@ -23,11 +43,24 @@ from typing import Dict, List, Tuple
 
 import yaml
 
-_KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package"}
-_SCOPES = {"row", "model"}  # export-package only; `model` = whole-model export (AR-3)
+_KINDS = {
+    "dashboard", "board", "workspace", "detail-compose", "export-package", "computed-panel",
+    "import-flow",
+}
+# `scope` is valid on export-package (AR-3: whole-model export) and detail-compose (AR-1:
+# whole-model compose — the Value Map). `model` = iterate/serve the WHOLE model, not one row.
+_SCOPES = {"row", "model"}
+_SCOPED_KINDS = {"export-package", "detail-compose"}
+# computed-panel compute bindings (AR-2): a closed vocabulary of GENERATED compute functions.
+# v1: only `completeness` exists (app/completeness.py); the set is the extension point.
+_COMPUTE_BINDINGS = {"completeness"}
+# Keys a computed-panel may carry — entity-shaped keys are wrong-kind there and fail loud.
+_COMPUTED_PANEL_KEYS = {"name", "kind", "route", "compute"}
+# Keys an import-flow may carry — it is contract-driven (app/export.py), so no entity keys at all.
+_IMPORT_FLOW_KEYS = {"name", "kind", "route"}
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
-    "relations", "panels", "gap", "scope",
+    "relations", "panels", "gap", "scope", "compute",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
@@ -77,8 +110,9 @@ class ViewSpec:
     name: str
     kind: str
     route: str
-    root: str   # "" for a model-scoped export-package (no root row — the whole model)
-    scope: str = "row"                    # export-package only: "row" (per-row) | "model" (AR-3)
+    root: str   # "" for model-scoped export-packages / computed-panels (no single root row)
+    scope: str = "row"                    # export-package/detail-compose: "row" | "model" (AR-3/AR-1)
+    compute: str = ""                     # computed-panel only: the compute binding (AR-2)
     aggregates: Tuple[Aggregate, ...] = ()
     signal: str = ""                      # "<aggname> >= <int>"
     group_by: str = ""
@@ -133,12 +167,49 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             raise ValueError(
                 f"views.yaml: view #{i} unknown scope {scope!r} (allowed: {sorted(_SCOPES)})"
             )
-        if "scope" in entry and kind != "export-package":
+        if "scope" in entry and kind not in _SCOPED_KINDS:
             raise ValueError(
-                f"views.yaml: view #{i} `scope` is only valid on kind 'export-package', not {kind!r}"
+                f"views.yaml: view #{i} `scope` is only valid on kinds "
+                f"{sorted(_SCOPED_KINDS)}, not {kind!r}"
             )
-        model_scoped = kind == "export-package" and scope == "model"
-        if model_scoped:
+        if "compute" in entry and kind != "computed-panel":
+            raise ValueError(
+                f"views.yaml: view #{i} `compute` is only valid on kind 'computed-panel', not {kind!r}"
+            )
+        compute = ""
+        model_export = kind == "export-package" and scope == "model"
+        model_compose = kind == "detail-compose" and scope == "model"
+        if kind == "import-flow":
+            # AR-4 (FR-10 restore): contract-driven (app/export.py's ENTITY_ORDER/FIELDS), so it
+            # declares no entities — route is the optional base path for form/validate/restore.
+            wrong_kind = set(entry) - _IMPORT_FLOW_KEYS
+            if wrong_kind:
+                raise ValueError(
+                    f"views.yaml: view #{i} keys {sorted(wrong_kind)} are not valid on kind "
+                    "'import-flow' (the flow is driven by the export contract, not declared entities)"
+                )
+            root = ""
+            route = str(entry.get("route") or "/import")
+        elif kind == "computed-panel":
+            # AR-2 (FR-9): a compute binding -> score+nudges panel. No entity keys at all —
+            # the data shape is the compute function's contract, not a root + relations.
+            wrong_kind = set(entry) - _COMPUTED_PANEL_KEYS
+            if wrong_kind:
+                raise ValueError(
+                    f"views.yaml: view #{i} keys {sorted(wrong_kind)} are not valid on kind "
+                    "'computed-panel' (it binds a compute function, not entities)"
+                )
+            compute = str(entry.get("compute") or "")
+            if not compute:
+                raise ValueError(f"views.yaml: view #{i} missing required `compute`")
+            if compute not in _COMPUTE_BINDINGS:
+                raise ValueError(
+                    f"views.yaml: view #{i} unknown compute binding {compute!r} "
+                    f"(allowed: {sorted(_COMPUTE_BINDINGS)})"
+                )
+            root = ""
+            route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+        elif model_export:
             # Whole-model export (AR-3): no root row — root/relations are meaningless and forbidden;
             # route is the optional base path (authoring-contract default: /export).
             for forbidden in ("root", "relations"):
@@ -149,6 +220,20 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
                     )
             root = ""
             route = str(entry.get("route") or "/export")
+        elif model_compose:
+            # Whole-model compose (AR-1, FR-8): EVERY root + resolved relations on one page, so the
+            # route takes no {id} — it derives /<kebab(view name)> (authoring contract §2.3), with
+            # an optional explicit `route:` override. `root` (the iterated entity) stays required.
+            if not entry.get("root"):
+                raise ValueError(f"views.yaml: view #{i} missing required `root`")
+            root = str(entry["root"])
+            _check_entity(root, f"view {entry['name']!r} root")
+            route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+            if "{" in route:
+                raise ValueError(
+                    f"views.yaml: view #{i} route {route!r} must not take path params with "
+                    "`scope: model` (a model-scoped detail-compose iterates ALL roots)"
+                )
         else:
             for req in ("route", "root"):
                 if not entry.get(req):
@@ -229,6 +314,7 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
 
         out.append(ViewSpec(
             name=str(entry["name"]), kind=kind, route=route, root=root, scope=scope,
+            compute=compute,
             aggregates=tuple(aggregates), signal=str(entry.get("signal", "")),
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),
