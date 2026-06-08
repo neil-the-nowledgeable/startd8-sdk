@@ -1,51 +1,63 @@
-# Startd8 SDK Architecture
+# startd8 SDK Architecture
 
 **Version:** 0.4.0
-**Document Version:** v1.1
-**Last Updated:** 2026-02-11
+**Document Version:** v1.2
+**Last Updated:** 2026-06-08
 
 ## Overview
 
-The Startd8 SDK is a comprehensive Python framework for managing multi-LLM agent workflows, benchmarking, and prompt version control. It provides a unified interface for working with multiple AI providers (Anthropic, OpenAI, OpenAI-compatible endpoints) and includes tools for comparing, tracking, and managing AI-generated outputs.
+startd8-SDK is a software-engineering harness and toolkit for LLM-assisted development. It has
+two complementary halves:
+
+1. **Deterministic-first code generation** — a Requirements→Capabilities delivery pipeline whose
+   centerpiece is the `backend_codegen` cascade: project one Prisma data-model contract into a
+   working all-Python application (Pydantic + SQLModel + FastAPI + HTMX) at **$0 LLM cost**,
+   using language models only for integration glue.
+2. **Multi-LLM agent framework** — provider-abstracted agents, benchmarking, prompt versioning,
+   multi-step pipelines, cost tracking, and cloud/edge model evaluation.
+
+It supports 8 providers (Anthropic, OpenAI, Gemini, Mistral, Ollama, NIM, OpenAI-compatible,
+Mock) and 7 language profiles (Python — strongest — Go, Node.js, Java, C#, Vue, Prisma).
 
 ## Core Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Startd8 SDK                                     │
+│                              startd8 SDK                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐     │
-│  │     CLI     │   │     TUI     │   │   Python    │   │  Job Queue  │     │
-│  │  (typer)    │   │(questionary)│   │     API     │   │  (File-     │     │
-│  │             │   │             │   │             │   │   based)    │     │
+│  │     CLI     │   │     TUI     │   │   Python    │   │  HTTP Server│     │
+│  │  (typer)    │   │(questionary)│   │     API     │   │  (serve)    │     │
 │  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘     │
-│         │                 │                 │                 │             │
 │         └─────────────────┴────────┬────────┴─────────────────┘             │
 │                                    │                                         │
-│                          ┌─────────▼─────────┐                              │
-│                          │  AgentFramework   │                              │
-│                          │  (Core Engine)    │                              │
-│                          └─────────┬─────────┘                              │
-│                                    │                                         │
-│         ┌──────────────────────────┼──────────────────────────┐             │
-│         │                          │                          │             │
-│  ┌──────▼──────┐  ┌───────▼───────┐  ┌──────▼──────┐  ┌──────▼──────┐   │
-│  │   Agents    │  │ Orchestration │  │ Contractors │  │   Storage   │   │
-│  │             │  │               │  │             │  │             │   │
-│  │ • Claude    │  │ • Pipeline    │  │ • Prime     │  │ • File-     │   │
-│  │ • GPT-4     │  │ • Workflows   │  │   Contractor│  │   based     │   │
-│  │ • Gemini    │  │ • Multi-step  │  │ • Artisan   │  │ • JSON      │   │
-│  │ • Ollama    │  │   chains      │  │   Contractor│  │   format    │   │
-│  │ • Mock      │  │               │  │ • Handoff   │  │ • Paginated │   │
-│  └─────────────┘  └───────────────┘  └─────────────┘  └─────────────┘   │
-│                                                                              │
+│   ┌────────────────────────────────┴────────────────────────────────┐      │
+│   │                  Deterministic codegen ($0, no LLM)               │      │
+│   │   backend_codegen: .prisma → Pydantic + SQLModel + FastAPI +     │      │
+│   │   HTMX + views + export + AI-schemas + completeness               │      │
+│   │   CLI: wireframe · generate (frontend/backend/scaffold/views) ·  │      │
+│   │        polish · repair · manifest                                 │      │
+│   └──────────────────────────────────┬────────────────────────────────┘    │
+│                                       │                                       │
+│   ┌───────────────────────────────────┴───────────────────────────────┐    │
+│   │              LLM-assisted construction (integration)               │    │
+│   │  Prime Contractor (active) · Artisan Contractor (ON HOLD) ·        │    │
+│   │  Micro Prime · Repair · Kaizen · Security/Query Prime             │    │
+│   └───────────────────────────────────┬───────────────────────────────┘    │
+│                                        │                                      │
+│                          ┌─────────────▼─────────────┐                       │
+│                          │  AgentFramework (agents,   │                       │
+│                          │  benchmarking, pipelines)  │                       │
+│                          └─────────────┬─────────────┘                       │
+│         ┌──────────────────────────────┼──────────────────────────┐         │
+│  ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐       │
+│  │  Providers  │  │  Languages  │  │   Storage   │  │  Job Queue  │       │
+│  │  (8, entry  │  │  (7, entry  │  │ (file/JSON) │  │ (file-based)│       │
+│  │   points)   │  │   points)   │  │             │  │             │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘       │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                            Support Modules                                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │   Models    │  │   Config    │  │  Document   │  │   Prompt    │        │
-│  │  (Pydantic) │  │  Manager    │  │ Enhancement │  │   Builder   │        │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
+│  Support: Models (Pydantic) · Config · Cost Tracking · OTel/Loki · Prompt    │
+│           Builder · Forward Manifest · Complexity routing · Exemplars        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,9 +100,13 @@ Abstract base class and implementations for LLM providers:
 | `ComposerAgent` | Cursor | Cursor's Composer model |
 | `MockAgent` | Testing | Simulated responses for testing |
 
-**Agent Status Types:**
-- **Built-in**: Provider-backed agents via `ProviderRegistry` (Anthropic, OpenAI, Gemini, Ollama, Mock)
-- **User added**: Custom-configured agents created by users
+**Providers** are discovered via entry points (`ProviderRegistry.discover()`). 8 are registered:
+`anthropic`, `openai`, `gemini`, `mistral`, `ollama`, `nim`, `openai-compatible`, `mock`.
+Edge/local and self-hosted models run through `ollama`, `nim`, and any OpenAI-compatible endpoint.
+
+**Languages** are likewise entry-point discovered (`LanguageRegistry.discover()`). 7 profiles:
+`python` (strongest — AST repair/splicing; the deterministic backend target), `go`, `nodejs`,
+`java`, `csharp`, `vue`, `prisma`.
 
 ### 3. Orchestration (`orchestration.py`)
 
@@ -158,28 +174,61 @@ File-based job queue for batch processing:
 - Agent registry
 - Progress tracking
 
-### 9. Contractors (`contractors/`)
+### 9. Deterministic Code Generation (`backend_codegen/`)
 
-Multi-phase workflow orchestration for code generation:
+The $0 cascade — the headline capability. Projects **one Prisma data-model contract** into a
+working all-Python application with **no LLM calls**. Output is byte-identical/idempotent and
+drift-checkable; ~12 owned file kinds, all deterministic-skip.
 
-- **PrimeContractor**: Per-feature `generate -> integrate -> validate` loop with protocol-based design (CodeGenerator, Instrumentor, SizeEstimator, MergeStrategy)
-- **ArtisanContractor**: 8-phase workflow (PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE) with phase handlers, checkpoints, cost budget enforcement, and OTel tracing
-- **Design Handoff**: Serializable context state (`design-handoff.json`) enabling two-half split execution where design and implementation run as separate processes
-- **Context Seed Handlers**: Bridges enriched context seeds to the orchestrator via `ContextSeedHandlers.create_all()`
+Public API (`from startd8.backend_codegen import ...`):
+
+```python
+render_backend            # full backend assembler (the cascade entry point)
+render_pydantic_models    # .prisma → Pydantic models
+render_sqlmodel_tables    # .prisma → SQLModel tables
+render_routers, render_db, render_main, render_spine   # FastAPI CRUD + wiring
+render_web, render_ui, render_pages, render_authoring   # HTMX UI + page authoring
+render_export, render_ai_schemas, render_completeness   # export / LLM-facing / completeness
+render_requirements       # generated requirements.txt
+render_contract_tests, render_completeness_tests        # generated test suites
+check_drift, owned_file_in_sync, is_owned_generated_file # drift detection (`generate --check`)
+verify_pydantic_fidelity, verify_sqlmodel_fidelity      # contract-fidelity gates
+PydanticSQLModelProvider, CANONICAL_LAYOUT
+```
+
+CLI: `startd8 wireframe` (preview), `startd8 generate {frontend|backend|scaffold|views}`,
+`startd8 polish`. The deterministic toolchain gate lives in `validators/python_toolchain.py`.
+
+### 10. Contractors (`contractors/`) — LLM-assisted integration
+
+Multi-phase workflow orchestration for the integration passes (bucket 3):
+
+- **Prime Contractor** (active path): per-feature `generate → integrate → validate` loop with
+  protocol-based design (CodeGenerator, Instrumentor, SizeEstimator, MergeStrategy), tier
+  routing (template → Haiku → Sonnet), checkpoint/resume, and Kaizen cross-run quality feedback.
+- **Artisan Contractor** (**ON HOLD since 2026-03-12** — kept for reference, not deleted): the
+  legacy 8-phase workflow (PLAN→SCAFFOLD→DESIGN→IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE).
+  Prime-vs-Artisan routing is vestigial.
+- **Micro Prime** (`micro_prime/`): element-level local generation for SIMPLE/MODERATE tasks.
+- **Repair** (`repair/`): ~45 post-generation repair steps organized by language.
+- **Design Handoff** (`handoff.py`): serializable context state (`design-handoff.json`) for
+  two-half split execution.
 
 ```
 contractors/
-├── artisan_contractor.py     # ArtisanContractorWorkflow orchestrator
-├── context_seed_handlers.py  # Phase handler implementations
-├── handoff.py                # Design handoff persistence
-├── prime_contractor.py       # PrimeContractorWorkflow
-├── protocols.py              # Protocol interfaces
-├── generators/               # Code generators (LeadContractor)
-├── adapters/                 # Instrumentation adapters
-└── artisan_phases/           # Phase implementations (design, testing, etc.)
+├── prime_contractor.py       # PrimeContractorWorkflow (active)
+├── integration_engine.py     # generate→merge→checkpoint→repair engine
+├── queue.py                  # feature queue + cycle detection + resume
+├── checkpoint.py             # per-phase checkpoint/crash recovery
+├── batch_postmortem.py       # BatchLedger cross-run progression
+├── artisan_contractor.py     # ArtisanContractorWorkflow (ON HOLD)
+├── context_seed/             # phase handlers (+ context_seed_handlers.py wrapper)
+├── handoff.py                # design handoff persistence
+└── protocols.py              # protocol interfaces
 ```
 
-See [Artisan Workflow Guide](ARTISAN_WORKFLOW_GUIDE.md) and [Contractors README](../src/startd8/contractors/README.md) for details.
+See [Prime Contractor Workflow Guide](PRIME_CONTRACTOR_WORKFLOW_GUIDE.md). The Capability
+Delivery Pipeline (`.cap-dev-pipe/`) drives requirements → app end to end.
 
 ## Data Models
 
@@ -295,13 +344,22 @@ setup_logging(level="DEBUG")
 - `anthropic>=0.18.0` - Claude API
 - `openai>=1.0.0` - OpenAI API
 
+## Observability
+
+OpenTelemetry traces/metrics/logs flow to a Loki/Grafana stack; per-provider cost tracking lives
+in `costs/`. Use `from startd8.logging_config import get_logger` (not `logging.getLogger()`) so
+logs reach the OTel→Loki bridge. CLI: `startd8 otel-status`, `startd8 otel-configure`. See
+[LOKI_SETUP_GUIDE](LOKI_SETUP_GUIDE.md).
+
 ## Future Considerations
 
-1. **Database Storage**: Support for SQLite/PostgreSQL backends
-2. **Async Support**: Async agent implementations
-3. **Web Interface**: REST API and web UI
-4. **Plugin System**: Third-party agent plugins
-5. **Streaming**: Streaming response support
+1. **Polyglot deterministic codegen**: extend the `backend_codegen` cascade beyond Python
+2. **Completeness domain manifest**: enforce "AI never writes derived/value fields"
+3. **Streaming**: streaming response support
+4. **Database Storage**: optional SQLite/PostgreSQL storage backends
+
+> Already shipped (previously listed as future): async agent variants, the HTTP server
+> (`startd8 serve`), and the entry-point plugin system for providers/languages/workflows.
 
 
 
