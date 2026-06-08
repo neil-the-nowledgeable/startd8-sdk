@@ -6,6 +6,31 @@ This file provides guidance to Claude Code for the StartDate (startd8) SDK repos
 
 StartD8 is a Python SDK and CLI tool for managing multi-LLM agent workflows, benchmarking different models (Anthropic, OpenAI, Gemini, Mistral, Ollama), and prompt version control. It provides a unified interface for comparing LLM responses, tracking costs, and orchestrating multi-phase code generation (Artisan Contractor 8-phase pipeline, PrimeContractor batch workflows). Includes ContextCore integration for project observability and OTel-based telemetry.
 
+## Generation Scope & Priority — READ FIRST (the bucket separation)
+
+> **The recurring failure mode this prevents:** conflating *building the application* with
+> *generating the real content that fills it*. They are different jobs with different owners. Keep
+> these four buckets separate, and prioritize strictly in this order. The SDK's job ends at bucket 3.
+
+| # | Bucket | What it is | Owner / cost | Priority |
+|---|--------|-----------|--------------|----------|
+| **1** | **APPLICATION** ("applicational completion") | the data model (`schema.prisma` contract), pages, forms, fields, CRUD, composite views — the structural skeleton | **SDK, deterministic, $0 LLM** (`backend_codegen` shipped; scaffold gen `REQ-SCAF`; view gen `REQ-VIEW`). ~89% of an app. | **FIRST — always** |
+| **2** | **PLACEHOLDER CONTENT + STATIC TEST DATA** | basic placeholder user-facing copy + static integration-test fixtures/seed data | **SDK, minimal/throwaway** | second |
+| **3** | **INTEGRATION** | the LLM-generated glue/wiring that integrates the deterministic pieces into a working whole, proven end-to-end | **SDK, the ONE in-scope LLM-generation aspect** | third |
+| **4** | **END-USER / COMPANY CONTENT** | the *real* value content (StartDate: real value summaries/pitches/tailored assets; any app: the company's real copy + data) | **USER / COMMISSIONING COMPANY — NOT the SDK** | out of scope |
+
+**Rules going forward:**
+- **Prioritize applicational completion first.** Build the working application skeleton before any content.
+- **Bucket 2 is ~zero importance** except to prove the application works. Generate minimal placeholders + static test data; do **not** invest in making this content good.
+- **The SDK's LLM-generation scope ends at INTEGRATION (bucket 3).** Everything past integration — the real user-facing value content — is **provided by the user or the company requesting the app.** The SDK builds the application that *produces/holds* content; it does not author the real content.
+- **Determinism story = the APPLICATION bucket only.** The "~60–75%→~89% deterministic" / "two (now three) classes of determinism" framing describes bucket 1. Never cite it as if the SDK generates content (bucket 4).
+- **cap-dev-pipe passes** for a full app ≈ **~4 LLM passes**, and even those are **integration-focused** (bucket 3), not real-content generation. The deterministic cascade (`generate backend` + `generate scaffold` + `generate views`) is **$0 CLI calls, not pipeline passes**.
+
+**The two human design bookends** (`docs/design-princples/DATA_MODEL_AND_RETROSPECTIVE.md`): as
+implementation automates, human leverage concentrates at **DATA MODEL** (front — designing the
+contract bucket-1 derives from) and **RETROSPECTIVE** (back — reflecting after each increment and
+feeding lessons back to the data model/requirements/plan). Bracket every cap-dev-pipe pass with both.
+
 ## Tech Stack
 
 - **Language:** Python 3.9+ (venv uses 3.14)
@@ -49,295 +74,65 @@ startd8 --help
 startd8 tui          # Launch interactive TUI
 startd8 init         # Initialize framework in current dir
 startd8 run-benchmark --help
+startd8 wireframe    # Pre-generation summary of what the $0 cascade will build ($0, read-only,
+                     #   advisory; --inputs <assembly-inputs.yaml> repeatable; --json for CI)
+
+# Deterministic $0 generation cascade (bucket 1 — no LLM)
+startd8 generate frontend   # Render Prisma→Zod schema file deterministically
+startd8 generate backend    # Full all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + derived)
+startd8 generate scaffold   # Project plumbing (pyproject/logging/alembic/Dockerfile) from app.yaml
+startd8 generate views      # Composite/relational views (dashboard/board/workspace) from views.yaml
+
+# Presentation polish (Tier 1 — deterministic $0 design system)
+startd8 polish apply        # Apply accessible design theme (writes stylesheet + static mount)
+startd8 polish check        # Audit polish drift (exit 0=in-sync, 1=drift, 2=error)
+startd8 polish themes       # List curated themes
 ```
 
 ## Project Structure
 
+Top-level layout (`src/startd8/`). Use `ls`/`grep` for the full file listing — only key files are called out below.
+
 ```
-src/startd8/              # Main package
-├── __init__.py           # Public API exports
-├── cli.py                # Typer CLI commands
-├── framework.py          # Core AgentFramework class
-├── benchmark.py          # BenchmarkRunner and ComparisonReport
-├── models.py             # Pydantic data models
-├── orchestration.py      # Pipeline and workflow orchestration
-├── config.py / config_models.py  # Configuration management
-├── model_catalog.py      # Model discovery and centralized defaults
-├── truncation_detection.py  # Code-aware truncation detection
-├── security.py           # Security utilities
-├── logging_config.py     # Logging configuration
-├── logging_otel.py       # OpenTelemetry log bridge
-├── otel.py               # OpenTelemetry integration
-├── document_enhancement.py  # Document enhancement chains
+src/startd8/
+├── cli.py, framework.py, benchmark.py, orchestration.py   # CLI + core AgentFramework/BenchmarkRunner/Pipeline
+├── models.py, config*.py, model_catalog.py                # Pydantic models, config, centralized model defaults
+├── truncation_detection.py, security.py, otel.py          # Code-aware truncation, security utils, OTel
+├── logging_config.py (get_logger), logging_otel.py        # Logging + OTel log bridge (see Must Do)
+├── forward_manifest*.py                                   # Design-time contract forwarding + disk validation
 │
-├── agents/               # Agent implementations
-│   ├── base.py           # BaseAgent protocol
-│   ├── claude.py         # Anthropic/Claude agent
-│   ├── openai.py         # OpenAI/GPT agent
-│   ├── gemini.py         # Google Gemini agent
-│   ├── mock.py           # Mock agent for testing
-│   ├── pool.py           # Agent pool management
-│   └── tracked.py        # Tracked agent wrapper
+├── frontend_codegen/     # $0 Prisma→Zod schema render (PrismaZodFileProvider)
+├── backend_codegen/      # $0 deterministic all-Python app gen (bucket 1): pydantic/sqlmodel renderers,
+│                   #   crud/htmx/pages/test emitters, assembler, drift, gates; ai_layer.py = source-bound AI passes
+├── scaffold_codegen/     # $0 project plumbing gen (pyproject/logging/alembic/Dockerfile) — ScaffoldFileProvider
+├── view_codegen/         # $0 composite/relational views (dashboard/board/workspace) — CompositeViewProvider
+├── presentation_polish/  # $0 deterministic Tier-1 design system (CSS restyle): css, themes, tokens, engine, provider
+├── agents/         # Per-provider agents (claude/openai/gemini/mock) + pool, tracked wrapper; base.py = BaseAgent
+├── providers/      # Provider abstraction: protocol.py, registry.py (ProviderRegistry), 1 file per provider
+├── costs/          # Cost tracking: tracker, pricing, budget, analytics, otel_metrics, usage_limits
+├── contractors/    # Multi-phase orchestration — see Architecture. Key: prime_contractor.py, integration_engine.py,
+│                   #   context_seed/ (phase handlers + compat wrapper context_seed_handlers.py), prime_postmortem.py,
+│                   #   queue.py (cycle detection), gate_contracts.py, checkpoint.py; artisan_*/ (ON HOLD)
+├── security_prime/ # Security gate orchestration (~550 lines): contract, enrichment, scorer, gate_models
+├── query_prime/    # Secure DB query gen by tier: engine, classifier, generator; security/ (verify_file), patterns/
+├── exemplars/      # Proven Exemplar Pipeline: extractor, registry, structural_extractor, template_promoter
+├── complexity/     # Tier routing: classifier (classify_tier), router, signals
+├── micro_prime/    # Element-level local generation: engine, decomposer, splicer, prime_adapter, repair
+├── repair/         # ~45 post-gen repair steps (orchestrator, diagnostics, routing, staging) — steps/ by language
+├── languages/      # 5 LanguageProfiles (python/go/nodejs/java/csharp) + registry, resolution; go_/csharp_ parser+splicer
+├── validators/     # Per-language *_semantic_checks.py, todo_scanner, observability_artifact_*
+├── implementation_engine/  # spec→draft→review prompt construction: spec_builder, drafter, budget, prompts/ (YAML)
+├── workflows/      # WorkflowBase + registry + builtin/ (lead/primary contractor, plan_ingestion, *_review, etc.)
+├── dashboard_creator/      # Grafana dashboard gen: workflow, compiler, generator, models
+├── seeds/, project/        # Seed task builder/derivation; project scaffolding
+├── observability/  # OTel manifest/collector + artifact_generator (Dashboard/Alert/SLO)
+├── integrations/   # ContextCore workflow adapter + task runner
+├── diagnostics/, evaluation/, storage/, events/, mcp/, skills/, prompt_builder/,
+├── ratelimit/, resilience/, server/ (Starlette REST), testing/, help_content/
 │
-├── providers/            # Provider abstraction layer
-│   ├── protocol.py       # Provider protocol (interface)
-│   ├── registry.py       # ProviderRegistry for discovery
-│   ├── anthropic.py      # Anthropic/Claude provider
-│   ├── openai.py         # OpenAI/GPT provider (+ Ollama)
-│   ├── gemini.py         # Google Gemini provider
-│   ├── mistral.py        # Mistral AI provider
-│   └── mock.py           # Mock provider for testing
-│
-├── costs/                # Cost tracking system
-│   ├── tracker.py        # CostTracker
-│   ├── pricing.py        # PricingService
-│   ├── budget.py         # BudgetManager
-│   ├── analytics.py      # CostAnalytics
-│   ├── otel_metrics.py   # OTel cost metrics export
-│   └── usage_limits.py   # Usage limit management
-│
-├── contractors/          # Multi-phase workflow orchestration
-│   ├── artisan_contractor.py     # ArtisanContractorWorkflow (8-phase orchestrator)
-│   ├── artisan_models.py         # Artisan phase data models
-│   ├── artisan_prompts.py        # Artisan phase prompt templates
-│   ├── context_seed_handlers.py  # Compat wrapper — re-exports from context_seed/ subpackage
-│   ├── context_seed/             # Phase handler implementations (refactored from context_seed_handlers.py)
-│   │   ├── core.py               # Main handler classes (Design/Implement/Integrate/Review/Finalize/Test)
-│   │   ├── design_support.py     # Design-phase helpers, CCD span attrs, complexity classification
-│   │   ├── shared.py             # Shared utilities (PCA context fields, logging helpers)
-│   │   ├── tracing.py            # OTel tracing integration
-│   │   └── phases/               # Individual phase implementations (design, plan, scaffold)
-│   ├── context_schema.py         # Pydantic output models (DesignPhaseOutput, ImplementPhaseOutput, ValidationPhaseOutput)
-│   ├── context_resolution.py     # Context resolution strategies
-│   ├── context_formatters.py     # JSON→Markdown context formatters with prompt injection mitigation
-│   ├── copy_detection.py         # Identifies copy/copy-modify tasks to bypass LLM generation
-│   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec, GateEmitter)
-│   ├── integration_engine.py     # INTEGRATE phase merge engine with pre/post-merge repair + semantic checks
-│   ├── handoff.py                # Design↔Implementation handoff (two-half split)
-│   ├── checkpoint.py             # Checkpoint/crash recovery
-│   ├── prime_contractor.py       # PrimeContractorWorkflow
-│   ├── prime_postmortem.py       # Post-mortem evaluation (16 RootCauses, disk quality scoring, Kaizen suggestions)
-│   ├── batch_postmortem.py       # Cross-run batch analysis (accumulates results across runs sharing same seed)
-│   ├── protocols.py              # Protocol interfaces
-│   ├── registry.py               # Contractor registry
-│   ├── queue.py                  # Task queueing (with cycle detection/breaking)
-│   ├── cli_helpers.py            # CLI helper functions
-│   ├── generators/               # Code generators (LeadContractor)
-│   ├── adapters/                 # Instrumentation adapters (ContextCore, Standalone)
-│   ├── contracts/                # Pipeline contract YAML specs
-│   │   └── artisan-pipeline.contract.yaml  # Phase entry/exit requirements + quality gates
-│   └── artisan_phases/           # 12 individual phase implementations
-│       ├── context.py            # Shared phase context
-│       ├── plan_deconstruction.py  # PLAN phase
-│       ├── design_documentation.py # DESIGN phase (dual-review orchestration)
-│       ├── development.py          # IMPLEMENT phase (LLMChunkExecutor)
-│       ├── test_construction.py    # TEST phase (LLMTestGenerator)
-│       ├── final_testing.py        # TEST validation
-│       ├── final_assembly.py       # FINALIZE phase
-│       ├── preflight.py            # Preflight checks
-│       ├── domain_checklist.py     # Domain-aware constraints
-│       ├── lessons_discovery.py    # Lessons discovery
-│       ├── retrospective.py        # Retrospective phase
-│       └── runner.py               # Phase runner
-│
-├── security_prime/       # Security validation orchestration (~550 lines)
-│   ├── contract.py       # derive_security_contract() — security context from seed
-│   ├── enrichment.py     # enrich_security_fields() — inject security context into specs
-│   ├── scorer.py         # compute_security_score() — SecurityScoreResult
-│   ├── gate_models.py    # GateVerdictReport — Anzen gate pass/fail
-│   ├── kaizen.py         # update_query_security_metrics() — kaizen-metrics.json security section
-│   ├── allowlist.py      # False positive suppression
-│   └── otel.py           # OTel tracing for security gate
-│
-├── query_prime/          # Secure database query generation
-│   ├── engine.py         # QueryPrimeEngine — orchestrates query generation
-│   ├── classifier.py     # classify_query_tier() — routes to T1/T2/T3 models
-│   ├── generator.py      # generate_query() — parameterized query output
-│   ├── decomposer.py     # decompose_feature() — multi-query features
-│   ├── router.py         # Query routing by tier
-│   ├── models.py         # QueryResult, QuerySpec, QueryTier
-│   ├── security/         # Injection/credential/lifecycle checks (verify_file)
-│   ├── patterns/         # DB-specific patterns (Redis, MySQL, SQLite, Spanner, PostgreSQL)
-│   └── templates/        # Health check, CRUD query templates
-│
-├── exemplars/            # Proven Exemplar Pipeline (PEP)
-│   ├── models.py         # ConfigFingerprint, ExemplarEntry
-│   ├── registry.py       # ExemplarRegistry — load/save/lookup by fingerprint
-│   ├── extractor.py      # extract_exemplars_from_run() — mine perfect-score features
-│   ├── structural_extractor.py  # AST-based structural fingerprinting
-│   └── template_promoter.py     # Promote exemplars to MicroPrime templates
-│
-├── utils/                # Shared utilities
-│   ├── agent_resolution.py       # Agent spec resolution
-│   ├── code_extraction.py        # Code extraction from LLM responses
-│   ├── file_operations.py        # File I/O operations
-│   ├── import_resolution.py      # Cross-file import resolution (stdlib, proto, pip, well-known packages)
-│   ├── prime_task_enrichment.py  # Prime task enrichment
-│   ├── retry.py                  # Retry logic
-│   ├── token_usage.py            # Token usage tracking
-│   ├── requirements_generator.py # Python requirements.in/requirements.txt generation
-│   ├── *_file_assembler.py       # Per-language file assembly (python, go, java, csharp, nodejs)
-│   ├── *_signature_parser.py     # Per-language signature parsing (go, java, csharp, nodejs)
-│   └── search_replace.py         # Search/replace utilities for edit-mode generation
-│
-├── workflows/            # Workflow orchestration
-│   ├── base.py           # WorkflowBase class
-│   ├── registry.py       # Workflow registry
-│   ├── models.py         # Workflow data models
-│   └── builtin/          # Built-in workflows
-│       ├── lead_contractor_workflow.py  # Primary Contractor (aliased as PrimaryContractorWorkflow)
-│       ├── plan_ingestion_workflow.py
-│       ├── domain_preflight_workflow.py
-│       ├── critical_review_workflow.py
-│       ├── convergent_review_workflow.py  # Multi-round convergent review
-│       ├── design_polish_workflow.py
-│       ├── architectural_review_log_workflow.py
-│       ├── doc_review_log_workflow.py
-│       ├── iterative_dev_workflow.py
-│       ├── task_tracking_emitter.py       # ContextCore SpanState v2 task emission
-│       ├── schema_versions.py             # Schema version constants
-│       └── preflight_rules/  # Domain-specific preflight rule system
-│
-├── complexity/           # Complexity classification and tier routing
-│   ├── classifier.py     # classify_tier() — TRIVIAL/SIMPLE/MODERATE/COMPLEX
-│   ├── models.py         # TaskComplexitySignals dataclass
-│   ├── router.py         # Routes tasks to appropriate generator by tier
-│   └── signals.py        # Signal extraction from task metadata
-│
-├── micro_prime/          # Local code generation engine (element-level)
-│   ├── engine.py         # MicroPrimeEngine — orchestrates element generation
-│   ├── decomposer.py     # Moderate decomposer (Class/Function strategies)
-│   ├── splicer.py        # Code splicing into existing files
-│   ├── models.py         # GenerationPlan, SubElement, etc.
-│   ├── templates.py      # Template registry for code generation
-│   ├── prime_adapter.py  # PrimeContractor ↔ MicroPrime bridge
-│   ├── repair.py         # Element-level repair
-│   ├── metrics.py        # OTel metrics for generation
-│   └── config_loader.py  # Configuration loading
-│
-├── repair/               # Post-generation repair pipeline (~45 repair steps)
-│   ├── orchestrator.py   # run_file_repair(), run_element_repair()
-│   ├── diagnostics.py    # Checkpoint diagnostic parsing and classification
-│   ├── routing.py        # Failure routing to repair steps
-│   ├── semantic_bridge.py  # Semantic check → repair step routing
-│   ├── staging.py        # Atomic staging for repair operations
-│   ├── models.py         # RepairOutcome, RepairRoute, RepairStepResult
-│   ├── config.py         # RepairConfig (repairable_categories, timeouts)
-│   └── steps/            # ~45 repair steps by category:
-│       ├── fence_strip, ast_validate, lint_fix, import_fix  # Core (Python)
-│       ├── go_*.py (5)    # Go: unchecked error, dot import, contamination, syntax, tool runner
-│       ├── java_*.py (5)  # Java: import sort, sql parameterize, missing override, raw type, duplicate method
-│       ├── csharp_*.py (4)  # C#: nullable, access modifier, namespace, convention
-│       ├── *_js.py (3)    # Node.js: contamination strip, dedup require, var→const
-│       ├── sql_parameterize.py, credential_sanitize.py  # Cross-language security
-│       ├── semantic_*.py (5)  # Semantic: method fix, duplicate main, discarded return, import, method resolution
-│       └── todo_uncomment.py  # TODO completion: uncomment placeholder stubs
-│
-├── languages/            # Multi-language support (Protocol-based, 5 languages)
-│   ├── protocol.py       # LanguageProfile protocol (15 properties/methods)
-│   ├── registry.py       # LanguageRegistry singleton with entry point discovery
-│   ├── resolution.py     # resolve_language() — dominant language from target files
-│   ├── _validation_utils.py  # Shared validation helpers (contamination fingerprints)
-│   ├── python.py         # PythonLanguageProfile (AST repair, Ruff lint, pytest)
-│   ├── go.py             # GoLanguageProfile (goimports, text-based splicer, go.mod gen)
-│   ├── go_parser.py      # Regex-based Go structure extraction (functions, types, methods)
-│   ├── go_splicer.py     # Text-based Go body splicing with brace matching
-│   ├── nodejs.py         # NodeLanguageProfile (CommonJS+ESM, package.json gen)
-│   ├── java.py           # JavaLanguageProfile (Gradle, build.gradle gen)
-│   ├── csharp.py         # CSharpLanguageProfile (.NET, csproj gen, namespace validation)
-│   ├── csharp_parser.py  # C# syntax parsing and structure extraction
-│   └── csharp_splicer.py # C# code splicing into existing files
-│
-├── validators/           # Code quality validators (per-language semantic checks)
-│   ├── semantic_checks.py            # Python: 4-check AST validator (dupe main guards, dupe defs, bare except, phantom imports)
-│   ├── csharp_semantic_checks.py     # C#: namespace alignment, sql injection, credential leakage, console output
-│   ├── go_semantic_checks.py         # Go: unchecked errors, dot imports, Python contamination, package dir mismatch
-│   ├── java_semantic_checks.py       # Java: empty catch, wildcard import, raw types, missing @Override, contamination
-│   ├── nodejs_semantic_checks.py     # Node.js: require/import style, var usage, console.log in services
-│   ├── todo_scanner.py               # TODO/FIXME detection with A/B/C classification
-│   ├── observability_artifact_checks.py   # Dashboard/Alert/SLO structural + semantic validation (REQ-KZ-OBS)
-│   └── observability_artifact_validators.py  # Cross-artifact consistency + postmortem evaluation
-│
-├── implementation_engine/  # Code generation engine for contractors
-│   ├── spec_builder.py   # Spec prompt construction (with enforce_prompt_budget)
-│   ├── drafter.py        # Draft prompt construction (with budget check)
-│   ├── budget.py         # Budget constants, enforce_prompt_budget(), truncation utils
-│   └── prompts/          # YAML prompt templates
-│       ├── __init__.py   # get_template(), format_prompt() with fallback strings
-│       └── contractor_prompts.yaml  # Consolidated spec/draft/review templates
-│
-├── dashboard_creator/    # Grafana dashboard generation pipeline
-│   ├── workflow.py       # DashboardCreatorWorkflow
-│   ├── compiler.py       # Dashboard JSON compilation
-│   ├── generator.py      # Panel/dashboard generation
-│   └── models.py         # DashboardSpec, PanelSpec
-│
-├── seeds/                # Seed task builder and derivation
-│   ├── builder.py        # SeedBuilder
-│   ├── derivation.py     # Task derivation from plans
-│   └── models.py         # Seed data models
-│
-├── project/              # Project scaffolding
-│   ├── scaffolder.py     # Project structure generation
-│   └── manifest.py       # Project manifest
-│
-├── forward_manifest.py           # ForwardManifest, InterfaceContract models
-├── forward_manifest_validator.py # Contract violation detection + DiskComplianceResult disk validation
-├── forward_manifest_extractor.py # Extract contracts from source code
-│
-├── diagnostics/          # Diagnostic/validation system with auto-fix
-├── observability/        # OTel manifest, collector, and artifact generation
-│   ├── artifact_generator.py   # Dashboard/Alert/SLO generation from onboarding metadata
-│   ├── portal_spec_builder.py  # Grafana portal specs from pipeline data
-│   ├── manifest.py             # OTel manifest model
-│   └── collector.py            # Collector orchestration
-├── evaluation/           # Evaluation corpus and pipeline
-├── storage/              # Storage backends
-├── events/               # Event bus system
-├── mcp/                  # MCP (Model Context Protocol) integration
-├── skills/               # Skill agents and factories
-├── prompt_builder/       # Prompt templating system
-├── ratelimit/            # Rate limiting
-├── resilience/           # Resilience patterns
-├── server/               # REST API server (Starlette: /workflows, /workflows/{id}/run)
-├── integrations/         # ContextCore workflow adapter and task runner
-├── testing/              # Test assertion utilities
-└── help_content/         # TUI help YAML files (topics, contextual, workflow, advanced)
-
-scripts/                  # Runner and utility scripts (~52 files)
-├── run_artisan_workflow.py       # Full 8-phase artisan workflow
-├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
-├── run_artisan_implement_only.py # Impl half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
-├── run_artisan_contractor.py     # Main artisan contractor runner
-├── run_prime_workflow.py         # PrimeContractor batch workflow runner
-├── run_contextcore_workflow.py   # ContextCore integration workflow
-├── run_iterative_plan_ingestion.py  # Plan ingestion pipeline
-├── emit_task_tracking.py         # ContextCore task tracking emission
-├── enrich_prime_tasks.py         # Prime task enrichment
-├── generate_observability_manifest.py  # OTel manifest generation
-└── ...                           # OTel, evaluation, decompose scripts
-
-tests/                    # Test suite (~523 files)
-├── unit/                 # Unit tests
-│   ├── contractors/      # Contractor-specific unit tests (~2744 tests)
-│   ├── micro_prime/      # Micro Prime engine tests (~355 tests)
-│   ├── complexity/       # Complexity classifier tests
-│   ├── repair/           # Repair pipeline tests
-│   ├── seeds/            # Seed builder tests
-│   ├── dashboard_creator/  # Dashboard creator tests
-│   ├── implementation_engine/  # Implementation engine tests
-│   ├── languages/        # Multi-language profile tests
-│   ├── validators/       # Semantic checks + disk compliance tests
-│   └── workflows/        # Workflow tests
-├── contract_validation/  # Pipeline contract validation tests
-├── contractors/          # Contractor integration tests
-├── integration/          # Integration tests
-├── e2e/                  # End-to-end tests
-├── plan_validation/      # Plan ingestion validation tests
-└── costs/                # Cost tracking tests
-
-docs/                     # Documentation (~40 files)
-examples/                 # Usage examples
+scripts/   # ~52 runner/utility scripts (run_prime_workflow.py, run_contextcore_workflow.py, run_artisan_* [ON HOLD], …)
+tests/     # ~523 files — unit/ (contractors ~2744, micro_prime ~355, …), integration/, e2e/, contract_validation/
+docs/, examples/
 ```
 
 ## Architecture
@@ -356,28 +151,46 @@ provider.validate_config({})
 agent = provider.create_agent("claude-sonnet-4-20250514")
 ```
 
-### Artisan Contractor (8-Phase Orchestrator)
+### Deterministic App Generation (`backend_codegen`) — bucket 1, $0 LLM
 
-The primary code generation pipeline, split into a design half and implementation half:
+The active **applicational-completion** path: projects one `schema.prisma` contract into a working
+all-Python app (FastAPI + Pydantic + SQLModel + HTMX + Jinja2) with **zero LLM cost**. Drives the
+`startd8 generate {frontend,backend,scaffold,views}` cascade.
+- `pydantic_renderer.py` / `sqlmodel_renderer.py` — models + tables (FK, `Relationship()` back_populates,
+  `@default` translation, reserved-name guard, compound `@@id` PKs)
+- `crud_generator.py`, `htmx_generator.py`, `pages_generator.py`, `pages_authoring.py` — CRUD + HTMX UI + pages
+- `assembler.py`, `derived.py`, `forms_manifest.py` — assembly, derived artifacts, form manifests
+- `drift.py`, `gates.py`, `test_emitter.py` — `--check` idempotency drift, quality gates, generated test suites
+- `provider.py` — `PydanticSQLModelProvider`, registered under the `startd8.contractors.deterministic_providers`
+  entry-point group the prime-contractor skip-hook consults (~12 owned `$0.00-skip` kinds). Sibling $0 codegen
+  modules register the same way: `frontend_codegen` (`PrismaZodFileProvider`), `scaffold_codegen`
+  (`ScaffoldFileProvider`), `view_codegen` (`CompositeViewProvider`).
+- `ai_layer.py` — the ONE in-scope LLM aspect (bucket 3 integration): **source-bound extraction** passes
+  (FR-SBE-1..6 / FR-IMP-4/5) where the harness threads `source_id` and server-stamps a provenance
+  `binding`, so an AI pass cannot silently invent values not traceable to source.
 
-1. **PLAN** - Plan deconstruction into implementable chunks
-2. **SCAFFOLD** - Project structure scaffolding
-3. **DESIGN** - Design documentation with dual-review orchestration (`AgentLLMBackend`)
-4. **IMPLEMENT** - Code generation via `LLMChunkExecutor` with cost tracking (writes to staging)
-5. **INTEGRATE** - Merge staged files into project root with validation and rollback (no LLM calls)
-6. **TEST** - Test generation via `LLMTestGenerator` with retry
-7. **REVIEW** - LLM-powered quality review
-8. **FINALIZE** - Final assembly and validation
+### Presentation Polish (`presentation_polish`) — bucket 1, $0 LLM, Tier 1
 
-Key patterns:
-- **Handoff**: Design half (PLAN→SCAFFOLD→DESIGN) produces a handoff file consumed by implementation half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
-- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `IntegratePhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed/core.py` (re-exported via `context_seed_handlers.py` compat wrapper)
-- **HandlerConfig.from_config()**: Loads handler configuration from artisan YAML config
-- **Checkpoint/Recovery**: Per-phase crash recovery via `checkpoint.py`; generation results saved for resume
-- **Resume Caching**: IMPLEMENT, TEST, and REVIEW phases persist results to `.startd8/state/` with 3-layer validation (schema version → source checksum → per-task file hash)
-- **Contract Validation**: `artisan-pipeline.contract.yaml` defines entry/exit requirements per phase with QualitySpec and EvaluationSpec; validated by `gate_contracts.py`
-- **Per-task Error Guards**: Each phase wraps per-task work in try/except to prevent single-task failures from aborting the entire phase
-- **Per-phase timeouts**: Configurable via CLI args
+Post-build presentation-layer capability: CSS-only restyle of an already-generated bare all-Python app
+into an accessible, themed UI — **deterministic, $0**. Drives `startd8 polish {apply,check,themes}`.
+- `css.py`, `tokens.py`, `themes.py` — design-system stylesheet, design tokens, curated accessible themes
+- `engine.py` — apply/check orchestration (idempotent; `check` exits 0=in-sync/1=drift/2=error)
+- `provider.py` — `PresentationPolishFileProvider` (coexists with backend_codegen's provider)
+- FR-25 integration: small static-mount hook in generated `main.py` + base.html `<link>` (additive)
+- Tier 2 (LLM bespoke design) is **deferred**; Tier 1 ships CSS restyle only.
+
+### Artisan Contractor (8-Phase Orchestrator) — ON HOLD
+
+> **ON HOLD (2026-03-12).** Prime Contractor is the only active construction path. Artisan code
+> remains for reference and is not deleted, but don't invest new work here. Routing between Prime
+> and Artisan is vestigial. See `docs/ARTISAN_WORKFLOW_GUIDE.md` for full details.
+
+8 phases, split into a design half (PLAN→SCAFFOLD→DESIGN) and implementation half
+(IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE) joined by a handoff file. Phase handlers live in
+`context_seed/core.py` (re-exported via `context_seed_handlers.py` compat wrapper). Patterns reused
+by Prime: per-phase checkpoint/crash recovery (`checkpoint.py`), resume caching to `.startd8/state/`
+with 3-layer validation (schema version → source checksum → per-task file hash), contract validation
+(`artisan-pipeline.contract.yaml` + `gate_contracts.py`), and per-task error guards.
 
 ### Key Classes
 
@@ -561,6 +374,11 @@ domain-preflight, dashboard-create
 # Language profiles (5 registered)
 [project.entry-points."startd8.languages"]
 python, go, nodejs, java, csharp
+
+# Deterministic-file providers (5 registered) — the prime-contractor skip-hook consults these
+# to decide a file is $0 deterministically-owned (no LLM)
+[project.entry-points."startd8.contractors.deterministic_providers"]
+prisma-zod, pydantic-sqlmodel, scaffold, composite-view, presentation-polish
 
 # Contractor plugins
 [project.entry-points."startd8.contractors.instrumentors"]
