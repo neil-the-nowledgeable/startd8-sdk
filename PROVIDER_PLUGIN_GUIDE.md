@@ -1,20 +1,20 @@
-## StartD8 SDK - Provider Plugin System Guide
+## startd8 SDK - Provider Plugin System Guide
 
-**Date:** December 9, 2025  
-**Phase:** Week 2 - Plugin Architecture  
-**Version:** 0.2.0
+**Last Updated:** 2026-06-08  
+**Version:** 0.4.0
 
 ---
 
 ## Overview
 
-The StartD8 SDK provider plugin system allows you to add new LLM providers without modifying core SDK code. Providers are discovered automatically via Python entry points, making it easy to create and distribute custom provider packages.
+The startd8 SDK provider plugin system allows you to add new LLM providers without modifying core SDK code. Providers are discovered automatically via Python entry points, making it easy to create and distribute custom provider packages.
 
 ### Key Features
 
 - ✅ **Plugin Architecture** - Add providers without touching core code
 - ✅ **Auto-Discovery** - Providers registered via entry points
-- ✅ **Built-in Providers** - Anthropic, OpenAI, Gemini, Ollama, Mock
+- ✅ **8 Built-in Providers** - Anthropic, OpenAI, Gemini, Mistral, Ollama, NIM, OpenAI-compatible, Mock
+- ✅ **Cloud, edge/local & self-hosted** - via Ollama, NIM, and any OpenAI-compatible endpoint
 - ✅ **Easy Custom Providers** - Simple protocol to implement
 - ✅ **Model Metadata** - Cost tracking, context windows, capabilities
 - ✅ **Backward Compatible** - Existing code works unchanged
@@ -33,14 +33,14 @@ ProviderRegistry.discover()
 
 # List available providers
 providers = ProviderRegistry.list_providers()
-# ['anthropic', 'openai', 'gemini', 'ollama', 'mock']
+# ['anthropic', 'openai', 'gemini', 'mistral', 'ollama', 'nim', 'openai-compatible', 'mock']
 
 # Create an agent from a provider
 provider = ProviderRegistry.get_provider("anthropic")
 provider.validate_config({"api_key": "your-api-key"})  # or set ANTHROPIC_API_KEY
 agent = provider.create_agent(
-    model="claude-3-opus-20240229",
-    name="anthropic:claude-3-opus-20240229",
+    model="claude-sonnet-4-20250514",
+    name="anthropic:claude-sonnet-4-20250514",
     api_key="your-api-key",
 )
 
@@ -56,7 +56,7 @@ from startd8.job_queue import AgentRegistry
 registry = AgentRegistry()
 
 # Get agent by explicit provider:model
-agent = registry.get_agent("openai:gpt-4-turbo-preview")
+agent = registry.get_agent("openai:gpt-4o")
 
 # List all available
 available = registry.list_available()
@@ -73,29 +73,21 @@ from startd8.providers import AnthropicProvider
 
 provider = AnthropicProvider()
 
-# Supported models
-models = provider.supported_models
-# ['claude-3-opus-20240229', 'claude-3-sonnet-20240229', 
-#  'claude-3-haiku-20240307', 'claude-3-5-sonnet-20241022',
-#  'claude-3-5-haiku-20241022']
-
 # Create agent
 agent = provider.create_agent(
-    model="claude-3-opus-20240229",
+    model="claude-sonnet-4-20250514",
     api_key="your-key",  # or use ANTHROPIC_API_KEY env var
     max_tokens=4096
 )
 
-# Get model metadata
-info = provider.get_model_info("claude-3-opus-20240229")
-# {
-#     'name': 'Claude 3 Opus',
-#     'context_window': 200000,
-#     'max_output_tokens': 4096,
-#     'cost_per_1m_input': 15.00,
-#     'cost_per_1m_output': 75.00
-# }
+# Get model metadata (used by cost tracking)
+info = provider.get_model_info("claude-sonnet-4-20250514")
+# { 'name': ..., 'context_window': 200000, 'max_output_tokens': ...,
+#   'cost_per_1m_input': ..., 'cost_per_1m_output': ... }
 ```
+
+> Don't hardcode model strings across your code — use `model_catalog.py` centralized defaults
+> (`ModelCatalogEntry.agent_spec`).
 
 ### 2. OpenAI GPT
 
@@ -103,14 +95,8 @@ info = provider.get_model_info("claude-3-opus-20240229")
 from startd8.providers import OpenAIProvider
 
 provider = OpenAIProvider()
-
-# Supported models
-models = provider.supported_models
-# ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', ...]
-
-# Create agent
 agent = provider.create_agent(
-    model="gpt-4",
+    model="gpt-4o",
     api_key="your-key",  # or use OPENAI_API_KEY env var
     max_tokens=4096
 )
@@ -122,46 +108,60 @@ agent = provider.create_agent(
 from startd8.providers import GeminiProvider
 
 provider = GeminiProvider()
-
-# Supported models
-models = provider.supported_models
-# ['gemini-pro', 'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash']
-
-# Create agent
 agent = provider.create_agent(
-    model="gemini-1.5-pro",
+    model="gemini-2.0-flash",
     api_key="your-key"  # or use GOOGLE_API_KEY env var
 )
-
-# Gemini 1.5 Pro has 1M token context!
-info = provider.get_model_info("gemini-1.5-pro")
-# context_window: 1000000
 ```
 
-### 4. Ollama (Local LLMs)
+> Gemini requires the separate `google-genai` package to be installed.
+
+### 4. Mistral
+
+```python
+from startd8.providers import MistralProvider
+
+provider = MistralProvider()
+agent = provider.create_agent(
+    model="mistral-large-latest",
+    api_key="your-key"  # or use MISTRAL_API_KEY env var
+)
+```
+
+### 5. Ollama (edge / local LLMs)
 
 ```python
 from startd8.providers import OllamaProvider
 
 provider = OllamaProvider()
-
-# Create agent (no API key needed for local)
 agent = provider.create_agent(
-    model="llama2",
-    base_url="http://localhost:11434/v1"  # default
+    model="llama3",
+    base_url="http://localhost:11434/v1"  # default; or set OLLAMA_HOST
 )
-
-# Common models: llama2, mistral, mixtral, codellama, phi
+# Common models: llama3, mistral, mixtral, codellama, phi
 ```
 
-### 5. Mock Provider (Testing)
+### 6. NVIDIA NIM & OpenAI-compatible (self-hosted / any endpoint)
+
+```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+
+# NVIDIA NIM (self-hosted inference)
+nim = ProviderRegistry.get_provider("nim")
+
+# Any OpenAI-compatible endpoint (vLLM, LM Studio, gateways, etc.)
+compat = ProviderRegistry.get_provider("openai-compatible")
+agent = compat.create_agent(model="my-model", base_url="https://my-endpoint/v1")
+```
+
+### 7. Mock Provider (Testing)
 
 ```python
 from startd8.providers import MockProvider
 
 provider = MockProvider()
-
-# Create mock agent for testing
 agent = provider.create_agent(model="mock-model")
 ```
 
@@ -338,8 +338,8 @@ print(provider.name)  # 'openai'
 # Get all models from all providers
 all_models = ProviderRegistry.list_all_models()
 # {
-#     'anthropic': ['claude-3-opus-20240229', ...],
-#     'openai': ['gpt-4', 'gpt-3.5-turbo', ...],
+#     'anthropic': ['claude-sonnet-4-20250514', ...],
+#     'openai': ['gpt-4o', 'gpt-4', ...],
 #     ...
 # }
 ```
@@ -371,7 +371,7 @@ budget_manager = BudgetManager()
 # Create agent with cost tracking
 agent = ProviderRegistry.create_agent(
     provider_name="anthropic",
-    model="claude-3-opus-20240229",
+    model="claude-sonnet-4-20250514",
     cost_tracker=cost_tracker,
     budget_manager=budget_manager
 )
@@ -421,7 +421,7 @@ if provider.supports_streaming():
 Providers can supply model metadata:
 
 ```python
-info = provider.get_model_info("claude-3-opus-20240229")
+info = provider.get_model_info("claude-sonnet-4-20250514")
 
 # Common fields:
 # - name: Human-readable model name
@@ -444,7 +444,7 @@ tracker = CostTracker()
 # Create agent with cost tracking
 agent = ProviderRegistry.create_agent(
     provider_name="anthropic",
-    model="claude-3-opus-20240229",
+    model="claude-sonnet-4-20250514",
     cost_tracker=tracker
 )
 
@@ -452,6 +452,19 @@ agent = ProviderRegistry.create_agent(
 response = await agent.agenerate("Hello!")
 print(f"Cost: ${tracker.get_total_cost():.4f}")
 ```
+
+### Metadata Drives Generation Tiering & Budgets
+
+The `cost_per_1m_input` / `cost_per_1m_output` metadata isn't just for reporting — it feeds the
+deterministic-codegen side of the SDK:
+
+- **Tier routing**: the complexity classifier/router and Prime Contractor use per-model cost to
+  route work to the cheapest capable tier (template → Haiku → Sonnet), keeping the LLM
+  integration passes cheap while the deterministic cascade stays $0.
+- **Budget gates**: a run's remaining `$` budget is threaded into the generation context, so
+  under-specified targets are refused (not endlessly escalated) once a cap is reached.
+
+A custom provider that supplies accurate cost metadata participates in this routing automatically.
 
 ---
 
@@ -462,11 +475,11 @@ print(f"Cost: ${tracker.get_total_cost():.4f}")
 ```python
 # ✅ Good - Uses plugin system
 from startd8.providers import ProviderRegistry
-agent = ProviderRegistry.create_agent("anthropic", "claude-3-opus-20240229")
+agent = ProviderRegistry.create_agent("anthropic", "claude-sonnet-4-20250514")
 
 # ❌ Avoid - hardcoding provider wiring in your code
 from startd8.providers.anthropic import AnthropicProvider
-agent = AnthropicProvider().create_agent("claude-3-opus-20240229")
+agent = AnthropicProvider().create_agent("claude-sonnet-4-20250514")
 ```
 
 ### 2. Handle Provider Availability
@@ -486,7 +499,7 @@ if provider is None:
 try:
     agent = ProviderRegistry.create_agent(
         provider_name="anthropic",
-        model="claude-3-opus-20240229"
+        model="claude-sonnet-4-20250514"
     )
 except ConfigurationError as e:
     print(f"Configuration error: {e}")
@@ -582,7 +595,7 @@ my-startd8-provider/
 name = "my-startd8-provider"
 version = "0.1.0"
 dependencies = [
-    "startd8>=0.2.0",
+    "startd8>=0.4.0",
 ]
 
 [project.entry-points."startd8.providers"]
@@ -656,9 +669,10 @@ See `examples/provider_examples.py` for complete working examples.
 
 ## Further Reading
 
-- [Week 2 Completion Summary](WEEK2_COMPLETION_SUMMARY.md)
+- [SDK Architecture](docs/SDK_ARCHITECTURE_v1.md)
+- [API Reference](docs/API_REFERENCE_v1.md)
+- [Cost Tracking User Guide](docs/COST_TRACKING_USER_GUIDE.md)
 - [Provider System Tests](tests/unit/test_providers.py)
-- [Architecture Review](startd8-architecture-review.md)
 
 ---
 
