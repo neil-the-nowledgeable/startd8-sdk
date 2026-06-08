@@ -2,7 +2,8 @@
 
 **Version:** 0.2 (Post-planning — self-reflective update; pre-CRP)
 **Date:** 2026-06-07
-**Status:** Draft for review
+**Status:** Implemented (FR-1..10 + OQ-3/OQ-4 gate-half + polish; 2026-06-07). One written item
+unbuilt — deriving `on_create` from prose (OQ-4 derivation half) remains future work.
 **Plan:** `FORM_SUBMIT_BEHAVIOR_PLAN.md`
 **Companion:** `PYTHON_CONTRACT_CODEGEN_REQUIREMENTS.md` (the shipped single-entity generator this
 amends), `VIEW_GENERATOR_REQUIREMENTS.md` (the `views.yaml` manifest this proposes to extend),
