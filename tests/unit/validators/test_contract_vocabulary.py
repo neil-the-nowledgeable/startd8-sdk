@@ -104,17 +104,23 @@ class TestConstructorKeywords:
         assert len(issues) == 2
         by_field = {i["field"]: i for i in issues}
 
+        # enum-derived domain → provably-illegal → error severity.
         src = by_field["source"]
         assert src["category"] == "provenance_vocabulary"
         assert src["severity"] == "error"
         assert src["literal"] == "wizard"
         assert src["allowed"] == ["ai", "user"]
+        assert src["domain_source"] == "enum:Source"
         assert "wizard" in src["message"]
         assert "source" in src["message"]
 
+        # @default-derived domain → heuristic suspicion → warning severity,
+        # still surfaced in the issue list.
         owner = by_field["ownerId"]
+        assert owner["severity"] == "warning"
         assert owner["literal"] == "default_owner"
         assert owner["allowed"] == ["local"]
+        assert owner["domain_source"] == "@default"
 
     def test_declared_literals_pass(self):
         issues = _check(
@@ -153,6 +159,8 @@ class TestAttributeAssignments:
         assert len(issues) == 1
         assert issues[0]["field"] == "source"
         assert issues[0]["literal"] == "wizard"
+        # `source` is enum-derived → error severity.
+        assert issues[0]["severity"] == "error"
 
     def test_attribute_assignment_in_union_passes(self):
         issues = _check("cap.source = 'ai'\ncap.ownerId = 'local'\n")
@@ -171,10 +179,101 @@ class TestAttributeAssignments:
         issues = _check("cap.ownerId: str = 'default_owner'\n")
         assert len(issues) == 1
         assert issues[0]["field"] == "ownerId"
+        # `ownerId` is @default-derived → warning severity.
+        assert issues[0]["severity"] == "warning"
 
     def test_unknown_attribute_not_flagged(self):
         issues = _check("cap.status = 'whatever'\n")
         assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# Axis-1 — severity by epistemic confidence (enum=error, @default=warning)
+# ---------------------------------------------------------------------------
+
+
+# Mirrors the real strtd8-v2-cascade contract: `source` is a provenance String
+# with a literal @default("user") and NO enum. AI passes legitimately mark
+# proposals source='ai' — the @default only names the fallback, so a closed
+# domain would false-flag every such write.
+STRTD8_SCHEMA = """\
+enum Status {
+  draft
+  published
+}
+
+model Capability {
+  id      String @id @default(cuid())
+  source  String @default("user")
+  status  Status @default(draft)
+}
+"""
+
+
+def _strtd8_schema():
+    return parse_prisma_schema(STRTD8_SCHEMA)
+
+
+class TestAxis1SeveritySplit:
+    def test_enum_violation_is_error(self):
+        # `status` is enum-typed (closed set) — a bad literal is provably
+        # illegal → error.
+        issues = _check(
+            "cap = Capability(status='archived')\n", schema=_strtd8_schema()
+        )
+        assert len(issues) == 1
+        assert issues[0]["field"] == "status"
+        assert issues[0]["severity"] == "error"
+        assert issues[0]["domain_source"] == "enum:Status"
+
+    def test_default_violation_is_warning(self):
+        # `source String @default("user")` — `source='ai'` is a legitimate
+        # second value the contract under-declared → warning, NOT error.
+        issues = _check(
+            "cap = Capability(source='ai')\n", schema=_strtd8_schema()
+        )
+        assert len(issues) == 1
+        assert issues[0]["field"] == "source"
+        assert issues[0]["severity"] == "warning"
+        assert issues[0]["domain_source"] == "@default"
+
+    def test_default_violation_stays_visible_in_issue_list(self):
+        # Both an enum error and a @default warning appear in the same scan.
+        issues = _check(
+            "cap = Capability(source='ai', status='archived')\n",
+            schema=_strtd8_schema(),
+        )
+        by_field = {i["field"]: i for i in issues}
+        assert set(by_field) == {"source", "status"}
+        assert by_field["source"]["severity"] == "warning"
+        assert by_field["status"]["severity"] == "error"
+
+    def test_default_warning_message_recommends_enum(self):
+        issues = _check(
+            "cap = Capability(source='ai')\n", schema=_strtd8_schema()
+        )
+        msg = issues[0]["message"]
+        assert "enum" in msg.lower()
+        assert "suspicious" in msg.lower()
+        assert "ai" in msg
+
+    def test_enum_error_message_keeps_invisibility_framing(self):
+        issues = _check(
+            "cap = Capability(status='archived')\n", schema=_strtd8_schema()
+        )
+        msg = issues[0]["message"]
+        assert "invisible" in msg.lower()
+
+    def test_strtd8_source_ai_does_not_hard_fail(self):
+        # The proven false-positive: 5 legitimate `row.source = 'ai'` writes.
+        # As an attribute assignment against the @default union → warning, so
+        # it leaves the err_count that drives PARTIAL/FAIL.
+        issues = _check("row.source = 'ai'\n", schema=_strtd8_schema())
+        assert len(issues) == 1
+        assert issues[0]["field"] == "source"
+        assert issues[0]["severity"] == "warning"
+        error_issues = [i for i in issues if i["severity"] == "error"]
+        assert error_issues == []
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +335,11 @@ class TestDiskComplianceWiring:
             and i.get("category") == "provenance_vocabulary"
         ]
         assert len(vocab) == 2
-        assert all(i["severity"] == "error" for i in vocab)
         assert {i["field"] for i in vocab} == {"source", "ownerId"}
+        by_field = {i["field"]: i for i in vocab}
+        # Axis-1 severity split survives the disk-compliance wiring.
+        assert by_field["source"]["severity"] == "error"  # enum-derived
+        assert by_field["ownerId"]["severity"] == "warning"  # @default-derived
 
     def test_no_prisma_contract_is_noop(self, tmp_path):
         _write(tmp_path, "app/tables.py", "class Capability:\n    pass\n")

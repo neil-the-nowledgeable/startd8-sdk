@@ -29,8 +29,22 @@ Bare-name assignments (``source = 'wizard'`` — a local variable), dict keys,
 and non-literal values are never flagged.
 
 Emitted issues use the standard semantic-issue dict shape with category
-``provenance_vocabulary`` (severity ``error``) and name the field, the
-literal, and the allowed set.
+``provenance_vocabulary``, naming the field, the literal, and the allowed set.
+
+**Axis-1 — severity by epistemic confidence.**  The two domain sources carry
+different proof strength, so they get different severities:
+
+- An **enum**-derived domain (``domain_source`` starts with ``"enum:"``) is a
+  closed, ground-truth set: a literal outside it is *provably* illegal, so the
+  issue is severity ``"error"`` (it counts toward the hard-FAIL ``err_count``).
+- A **``@default``**-derived domain (``domain_source == "@default"``) is only a
+  *heuristic suspicion*: ``@default("user")`` declares the fallback, not the
+  sole legal value.  A field like ``source String @default("user")`` that
+  legitimately also holds ``"ai"`` would be false-flagged as a closed domain.
+  So the issue is severity ``"warning"`` — it stays fully visible (appended to
+  ``semantic_issues``, logged, and feeding the same Kaizen suggestion mapping)
+  but leaves the hard-FAIL error count, and its message recommends declaring
+  the field as an enum if the literal is a legitimate second value.
 """
 
 from __future__ import annotations
@@ -41,6 +55,9 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from startd8.languages.prisma_parser import PrismaSchema, parse_prisma_schema
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 __all__ = [
     "build_field_domains",
@@ -216,22 +233,48 @@ def check_contract_vocabulary(
 
     def _emit(field: str, literal: str, allowed: FrozenSet[str],
               source: str, context: str, line: int) -> None:
-        issues.append({
-            "category": "provenance_vocabulary",
-            "severity": "error",
-            "message": (
+        # Axis-1: severity by epistemic confidence of the domain source.
+        # An enum is a closed, ground-truth set (provably illegal literal →
+        # `error`).  A literal `@default` only names the fallback, not the sole
+        # legal value, so an out-of-set literal is a heuristic suspicion that
+        # may simply mean the contract under-declared the field (→ `warning`).
+        enum_derived = source.startswith("enum:")
+        severity = "error" if enum_derived else "warning"
+        if enum_derived:
+            message = (
                 f"{context}: field '{field}' assigned literal '{literal}' "
                 f"outside the contract's declared domain "
                 f"{sorted(allowed)} (from {source}) — rows written with "
                 f"invented vocabulary are silently invisible to every "
                 f"filter on the declared values"
-            ),
+            )
+        else:
+            message = (
+                f"{context}: field '{field}' assigned literal '{literal}' "
+                f"which is suspicious — it is outside the value named by the "
+                f"contract's {sorted(allowed)} {source}; the @default declares "
+                f"a fallback, not a closed domain. If '{literal}' is a "
+                f"legitimate value, declare '{field}' as an enum in the "
+                f"contract so its domain is explicit; otherwise this row may "
+                f"be silently invisible to filters on the declared value"
+            )
+        issue: Dict[str, object] = {
+            "category": "provenance_vocabulary",
+            "severity": severity,
+            "message": message,
             "line": line,
             "symbol": f"{field}={literal!r}",
             "field": field,
             "literal": literal,
             "allowed": sorted(allowed),
-        })
+            "domain_source": source,
+        }
+        issues.append(issue)
+        logger.debug(
+            "provenance_vocabulary %s: %s",
+            severity,
+            issue["message"],
+        )
 
     for node in ast.walk(tree):
         # 1. Model constructor keyword arguments — per-model domains.
