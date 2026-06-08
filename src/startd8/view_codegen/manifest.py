@@ -21,9 +21,11 @@ roots flagged, never dropped), so the route takes no ``{id}`` — it derives ``/
 per authoring contract §2.3 (optional explicit ``route:`` override; ``{id}`` in it fails loud).
 
 ``computed-panel`` (AR-2, FR-9 — the completeness page) binds a **generated compute function** to
-a score+nudges panel at a declared route. ``compute`` names the binding from a closed vocabulary
-(v1: ``completeness`` — ``app/completeness.py``'s ``compute_completeness``, fed live per-entity row
-counts); the table is deliberately a vocabulary so future generated compute functions slot in.
+a score+nudges panel at a declared route. ``compute`` names the binding from an OPEN, registrable
+vocabulary (v1: ``completeness`` — ``app/completeness.py``'s ``compute_completeness``, fed live
+per-entity row counts). The vocabulary's single source of truth is ``renderers._COMPUTE_RENDERERS``
+(name -> renderer fn); adding a binding there (e.g. a ``funnel`` metrics binding) automatically
+opens it here, with no duplicate allow-list to keep in sync.
 Route derives ``/<kebab(view name)>``. Entity-shaped keys (``root``/``relations``/``aggregates``/…)
 are wrong-kind on a computed-panel and fail loud.
 
@@ -51,9 +53,12 @@ _KINDS = {
 # whole-model compose — the Value Map). `model` = iterate/serve the WHOLE model, not one row.
 _SCOPES = {"row", "model"}
 _SCOPED_KINDS = {"export-package", "detail-compose"}
-# computed-panel compute bindings (AR-2): a closed vocabulary of GENERATED compute functions.
-# v1: only `completeness` exists (app/completeness.py); the set is the extension point.
-_COMPUTE_BINDINGS = {"completeness"}
+# computed-panel compute bindings (AR-2): an OPEN, registrable vocabulary of GENERATED compute
+# functions. The canonical registry is `renderers._COMPUTE_RENDERERS` (name -> renderer fn) — the
+# single source of truth for BOTH what parses here and what renders. We read it via a deferred
+# import (`renderers` depends on `manifest`, so a module-level import would cycle), guaranteeing the
+# parse-time allow-list and the render dispatch can never drift. To add a binding, register one
+# entry in that dict — no edit here. v1 ships only `completeness` (app/completeness.py).
 # Keys a computed-panel may carry — entity-shaped keys are wrong-kind there and fail loud.
 _COMPUTED_PANEL_KEYS = {"name", "kind", "route", "compute"}
 # Keys an import-flow may carry — it is contract-driven (app/export.py), so no entity keys at all.
@@ -125,6 +130,17 @@ class ViewSpec:
     @property
     def module(self) -> str:
         return self.name
+
+
+def _compute_bindings() -> frozenset:
+    """The registered compute-binding vocabulary, read from the canonical renderer registry.
+
+    Deferred import (``renderers`` imports ``manifest``) so the allow-list this validator enforces
+    is literally the set of renderers that exist — the single source of truth, never a duplicate.
+    """
+    from .renderers import compute_binding_names
+
+    return compute_binding_names()
 
 
 def _signal_parts(expr: str) -> Tuple[str, int]:
@@ -202,10 +218,10 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             compute = str(entry.get("compute") or "")
             if not compute:
                 raise ValueError(f"views.yaml: view #{i} missing required `compute`")
-            if compute not in _COMPUTE_BINDINGS:
+            if compute not in _compute_bindings():
                 raise ValueError(
                     f"views.yaml: view #{i} unknown compute binding {compute!r} "
-                    f"(allowed: {sorted(_COMPUTE_BINDINGS)})"
+                    f"(allowed: {sorted(_compute_bindings())})"
                 )
             root = ""
             route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
