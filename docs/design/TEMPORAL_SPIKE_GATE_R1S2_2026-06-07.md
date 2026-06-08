@@ -93,6 +93,11 @@ surface is too small to justify the platform cost.
 
 **Action item in lieu of the spike:** execute the harden-in-place baseline (~180 LOC, three
 fixes, recommended order: circuit breaker → deque → resume hardening).
+**✓ EXECUTED same day** (`9c930644`): `RepairSession` per-run breaker scope (wired into
+`IntegrationEngine`), `deque(maxlen=)` event history, `FeatureQueue` state-hash integrity +
+loud refusal on corrupt/invalid resume state; 22 new tests. Bonus: fixed the latent
+`forward_manifest=` TypeError (swallowed since `439c615d`) that had silently disabled
+post-integrate contract-violation repair.
 
 ## Re-open triggers (this gate, not the whole evaluation)
 
