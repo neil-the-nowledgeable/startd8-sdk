@@ -11,6 +11,7 @@ Two-hash drift: a view file is stale if **either** the schema or ``views.yaml`` 
 
 from __future__ import annotations
 
+import json
 from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
@@ -581,12 +582,23 @@ def _render_export_package_model(v: ViewSpec, prose_specs: Tuple[ViewSpec, ...] 
         '    """Complete, round-trippable JSON of all entities (app/export.py `to_json`)."""',
         f"    return to_json({v.module}_payload(session))", "", "",
         f"def {v.module}_markdown(session: Session) -> str:",
-        '    """Human-readable Markdown of the full model (app/export.py `to_markdown`), then the',
-        '    rendered-content prose VERBATIM in a declared, named layout (FR-10) — not a JSON dump."""',
-        f"    md = to_markdown({v.module}_payload(session))",
+        '    """Human-readable Markdown of the full model: the generic per-entity dump with each',
+        "    rendered-content entity's JSON content field REDACTED (so no raw JSON / trace ids leak),",
+        '    then that prose rendered VERBATIM in a declared, named layout (FR-10) — not a JSON dump."""',
+        f"    payload = {v.module}_payload(session)",
     ]
     if prose_specs:
-        lines.append("    sections: list[str] = [md]")
+        prose_map = "{" + ", ".join(
+            f"{pv.root!r}: {pv.content_field!r}" for pv in prose_specs
+        ) + "}"
+        lines += [
+            f"    _redact = {prose_map}  # entity -> JSON content field rendered as prose below",
+            "    _dump = {",
+            "        _e: [{_k: _v for _k, _v in _row.items() if _k != _redact.get(_e)} for _row in _rows]",
+            "        for _e, _rows in payload.items()",
+            "    }",
+            "    sections: list[str] = [to_markdown(_dump)]",
+        ]
         for pv in prose_specs:
             heading = pv.module.replace("_", " ").title()
             lines += [
@@ -604,7 +616,7 @@ def _render_export_package_model(v: ViewSpec, prose_specs: Tuple[ViewSpec, ...] 
             ]
         lines.append("    return chr(10).join(sections)")
     else:
-        lines.append("    return md")
+        lines.append("    return to_markdown(payload)")
     lines += [
         "",
         f"__all__ = [{(v.module + '_payload')!r}, {(v.module + '_json')!r}, "
@@ -1213,7 +1225,9 @@ def _render_rendered_content_test(schema, v: ViewSpec) -> str:
     # A known prose body + a trace id that MUST NOT leak into the rendered prose.
     body_text = "Lead with the win. Then the proof.\n\nClose with the ask."
     trace_id = "cap-trace-xyz"
-    payload = '{{"{pk}": {body!r}, "traces": ["{tid}"]}}'.format(pk=pk, body=body_text, tid=trace_id)
+    # Valid JSON (json.dumps — NOT repr, which emits single-quoted non-JSON the
+    # prose renderer can't parse): this is the shape generate_artifacts emits.
+    payload = json.dumps({pk: body_text, "traces": [trace_id]})
     return "\n".join([
         f"def test_{v.module}_renders_prose_not_json(tmp_path):",
         "    import app.tables as t",
@@ -1458,9 +1472,7 @@ def _render_model_export_test(schema, v: ViewSpec, prose_specs: Tuple[ViewSpec, 
     if pin is not None:
         prose_body = "Our edge in one line. The proof in the next."
         trace = "trace-deadbeef"
-        payload_json = '{{"{pk}": {b!r}, "traces": ["{t}"]}}'.format(
-            pk=pin.prose_key, b=prose_body, t=trace
-        )
+        payload_json = json.dumps({pin.prose_key: prose_body, "traces": [trace]})
         lines.append(
             _seed(schema, "_art", pin.root, {pin.content_field: repr(payload_json)})
         )

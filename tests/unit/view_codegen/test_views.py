@@ -609,7 +609,7 @@ def test_fr10_model_export_renders_artifact_prose_verbatim():
         line for line in VIEWS.splitlines() if line not in _artifact_lines
     )
     plain = dict(render_views(SCHEMA, no_artifact))["app/views/model_export.py"]
-    assert "prose_body" not in plain and "return md" in plain
+    assert "prose_body" not in plain and "return to_markdown(payload)" in plain
     assert "app/views/_prose.py" not in dict(render_views(SCHEMA, no_artifact))
 
 
