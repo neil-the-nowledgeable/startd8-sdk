@@ -151,8 +151,9 @@ def _confirm_field(schema: PrismaSchema, name: str) -> Optional[PrismaField]:
 # ----------------------------------------------------------------------------- #
 
 
-# Minimal owned styling, inlined in base.html (bucket-2 placeholder; real design is bucket-4).
-# Inline <style> deliberately — no static mount in main.py, no extra artifact/kind to drift-track.
+# Minimal owned styling, inlined in base.html as a always-present *fallback*. `startd8 polish`
+# overrides it with a mounted /static/css/app.css (linked below, after this block, so the external
+# sheet wins the cascade). When polish hasn't run, the link 404s harmlessly and this fallback applies.
 _BASE_STYLE = """\
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
@@ -197,6 +198,7 @@ def render_base_template(
         "  <title>{% block title %}StartDate{% endblock %}</title>\n"
         '  <script src="https://unpkg.com/htmx.org@2.0.3"></script>\n'
         + _BASE_STYLE
+        + '  <link rel="stylesheet" href="/static/css/app.css">\n'
         + "</head>\n<body>\n"
         + nav
         + "  <main>{% block content %}{% endblock %}</main>\n"
