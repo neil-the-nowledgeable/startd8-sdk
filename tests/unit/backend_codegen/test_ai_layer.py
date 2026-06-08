@@ -318,3 +318,116 @@ def test_drift_fix_is_load_bearing():
     gem = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="gemini:gemini-2.5-pro")
     anth = render_ai_service(SCHEMA, MANIFEST, HUMAN, ai_agent_spec="anthropic:claude-opus-4-8")
     assert gem != anth
+
+
+# --------------------------------------------------------------------------- #
+# Source-binding opt-out (`source_binding: none`) — the §7 convention-over-     #
+# configuration escape hatch. Derivation auto-binds when a text-mode pass's     #
+# single output entity carries a server-managed loose-ref field; `none` lets an #
+# app whose entity matches that shape by coincidence stay unbound.              #
+# --------------------------------------------------------------------------- #
+
+from startd8.backend_codegen.ai_layer import effective_source_binding  # noqa: E402
+
+# A schema whose ProofPoint entity carries a server-managed loose-ref field
+# (optional String, not PK, human-owned) — the exact derivation shape.
+_BIND_SCHEMA = """
+model ProofPoint {
+  id               String  @id @default(cuid())
+  ownerId          String  @default("local")
+  source           String  @default("user")
+  confirmed        Boolean @default(false)
+  title            String?
+  sourceDocumentId String?
+}
+""".strip()
+
+_BIND_HUMAN = (
+    "fields:\n"
+    "  - target: ProofPoint.sourceDocumentId\n"
+    "    authored_by: human\n"
+)
+
+
+def _bind_manifest(extra: str = "") -> str:
+    return (
+        "passes:\n"
+        "  - name: extract_points\n"
+        "    output_entities: [ProofPoint]\n"
+        "    route_path: /extract-points\n"
+        "    prompt: prompts/extract_points.md\n"
+        + extra
+    )
+
+
+def test_derivation_binds_without_opt_out():
+    """Baseline: the loose-ref field is auto-derived as the provenance binding (zero config)."""
+    ps = parse_ai_passes(_bind_manifest())[0]
+    human = parse_human_inputs(_BIND_HUMAN)
+    assert effective_source_binding(_BIND_SCHEMA, ps, human) == "sourceDocumentId"
+
+
+def test_source_binding_none_disables_derivation():
+    """`source_binding: none` returns None even though a loose-ref candidate exists (opt-out)."""
+    ps = parse_ai_passes(_bind_manifest("    source_binding: none\n"))[0]
+    human = parse_human_inputs(_BIND_HUMAN)
+    assert effective_source_binding(_BIND_SCHEMA, ps, human) is None
+
+
+@pytest.mark.parametrize("sentinel", ["none", "None", "NONE", "  none  "])
+def test_source_binding_none_is_case_and_space_insensitive(sentinel):
+    ps = parse_ai_passes(_bind_manifest(f"    source_binding: {sentinel!r}\n"))[0]
+    human = parse_human_inputs(_BIND_HUMAN)
+    assert effective_source_binding(_BIND_SCHEMA, ps, human) is None
+
+
+def test_explicit_field_binding_still_wins():
+    """A real field value still overrides derivation (the non-`none` override path is intact)."""
+    ps = parse_ai_passes(_bind_manifest("    source_binding: sourceDocumentId\n"))[0]
+    human = parse_human_inputs(_BIND_HUMAN)
+    assert effective_source_binding(_BIND_SCHEMA, ps, human) == "sourceDocumentId"
+
+
+def test_parse_accepts_none_on_read_mode_pass():
+    """`none` is allowed regardless of the text-mode/single-output strictness (it only disables)."""
+    manifest = (
+        "passes:\n"
+        "  - name: suggest\n"
+        "    input_entities: [ProofPoint]\n"
+        "    output_entities: [ProofPoint, Capability]\n"
+        "    route_path: /suggest\n"
+        "    prompt: prompts/suggest.md\n"
+        "    source_binding: none\n"
+    )
+    passes = parse_ai_passes(manifest)
+    assert passes[0].source_binding == "none"
+
+
+def test_parse_still_rejects_real_binding_on_read_mode_pass():
+    """A real `source_binding` field on a read-mode pass is still a loud failure (strictness kept)."""
+    manifest = (
+        "passes:\n"
+        "  - name: suggest\n"
+        "    input_entities: [ProofPoint]\n"
+        "    output_entities: [ProofPoint]\n"
+        "    route_path: /suggest\n"
+        "    prompt: prompts/suggest.md\n"
+        "    source_binding: sourceDocumentId\n"
+    )
+    with pytest.raises(ValueError):
+        parse_ai_passes(manifest)
+
+
+def test_opt_out_renders_byte_identical_to_unbound():
+    """Opting out yields the exact unbound harness/router — the field is dropped from the emitted code."""
+    bound_files = dict(render_ai_layer(_BIND_SCHEMA, _bind_manifest("    source_binding: none\n"), _BIND_HUMAN))
+    # The same app with NO loose-ref field at all (genuinely unbound by absence).
+    plain_schema = _BIND_SCHEMA.replace("  sourceDocumentId String?\n", "")
+    plain_human = ""
+    plain_files = dict(render_ai_layer(plain_schema, _bind_manifest(), plain_human))
+    # Harness + router bodies (below the input-dependent three-hash header) must match exactly.
+    for rel in ("app/ai/extract_points.py", "app/ai/routes.py"):
+        bound_body = bound_files[rel].split("\n\n", 1)[1]
+        plain_body = plain_files[rel].split("\n\n", 1)[1]
+        assert bound_body == plain_body
+        assert "source_id" not in bound_body  # no 3rd-arg / _Request.source_id leaked in
