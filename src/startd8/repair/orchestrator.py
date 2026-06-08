@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -96,12 +97,31 @@ def record_cost_avoided(amount: float) -> None:
 # Circuit breaker (REQ-RPL-502)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# category -> consecutive failure count
-_circuit_breaker_state: dict[str, int] = {}
+@dataclass
+class RepairSession:
+    """Scopes repair circuit-breaker state to a single orchestration run.
+
+    Hardening per the R1-S2 gate ADR (2026-06-07): the breaker was previously
+    process-global, so consecutive failures in one run could trip the breaker
+    for an unrelated run in the same process (and tests poisoned each other
+    without explicit resets). Pass a fresh session per orchestration run to
+    isolate state; omitting it falls back to the process-default session
+    (legacy behavior, still cleared by ``reset_circuit_breaker()``).
+    """
+
+    # category -> consecutive failure count
+    circuit_breaker_state: dict[str, int] = field(default_factory=dict)
+
+
+_default_session = RepairSession()
+
+# Legacy alias — reset_circuit_breaker() and existing tests manipulate this
+# dict directly; it IS the default session's storage (same object).
+_circuit_breaker_state: dict[str, int] = _default_session.circuit_breaker_state
 
 
 def reset_circuit_breaker() -> None:
-    """Reset all circuit breaker state. Primarily for testing."""
+    """Reset the default session's circuit breaker state. Primarily for testing."""
     _circuit_breaker_state.clear()
 
 
@@ -501,6 +521,7 @@ def run_file_repair(
     diagnostics: List[Diagnostic],
     config: RepairConfig,
     project_root: Path,
+    session: Optional[RepairSession] = None,
 ) -> RepairOutcome:
     """Run repair on multiple files based on diagnostics.
 
@@ -514,11 +535,14 @@ def run_file_repair(
         diagnostics: Parsed checkpoint diagnostics.
         config: Repair pipeline configuration.
         project_root: Project root for context.
+        session: Optional per-run state scope for the circuit breaker.
+            Defaults to the process-wide default session (legacy behavior).
 
     Returns:
         RepairOutcome with repaired files, attribution, and step results.
     """
     repair_start = time.monotonic()
+    breaker = (session or _default_session).circuit_breaker_state
 
     _metric_language_id = infer_language_from_diagnostics(diagnostics) or "unset"
 
@@ -533,11 +557,11 @@ def run_file_repair(
     # has exceeded the threshold.
     tripped_categories = [
         cat for cat in error_categories
-        if _circuit_breaker_state.get(cat, 0) >= config.circuit_breaker_threshold
+        if breaker.get(cat, 0) >= config.circuit_breaker_threshold
     ]
     if tripped_categories:
         tripped_detail = ", ".join(
-            f"{cat}({_circuit_breaker_state.get(cat, 0)})"
+            f"{cat}({breaker.get(cat, 0)})"
             for cat in tripped_categories
         )
         logger.info(
@@ -655,10 +679,10 @@ def run_file_repair(
         for cat in error_categories:
             if any_modified:
                 # Success — reset counter for this category
-                _circuit_breaker_state[cat] = 0
+                breaker[cat] = 0
             else:
                 # Failure — increment
-                _circuit_breaker_state[cat] = _circuit_breaker_state.get(cat, 0) + 1
+                breaker[cat] = breaker.get(cat, 0) + 1
 
         duration_ms = (time.monotonic() - repair_start) * 1000
         outcome_label = "success" if any_modified else "failure"

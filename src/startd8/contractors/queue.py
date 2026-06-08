@@ -10,6 +10,7 @@ The feature queue ensures:
 This module is now part of startd8-sdk and works without ContextCore.
 """
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -669,6 +670,24 @@ class FeatureQueue:
             )
             return (completed / len(self.features)) * 100
 
+    @staticmethod
+    def _compute_state_hash(state: Dict) -> str:
+        """SHA-256 over the canonical features+order payload.
+
+        Excludes ``saved_at`` and ``state_hash`` itself so the hash is
+        stable across re-serialization. Used to detect parse-clean
+        corruption of the state file (content that loads as valid JSON
+        but was truncated/mutated) — R1-S2 gate ADR hardening (2026-06-07).
+        """
+        payload = json.dumps(
+            {
+                "features": state.get("features", {}),
+                "order": state.get("order", []),
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def save_state(self):
         """Save queue state to file (atomic write to prevent corruption)."""
         state = {
@@ -676,6 +695,7 @@ class FeatureQueue:
             "order": self.order,
             "saved_at": datetime.now().isoformat(),
         }
+        state["state_hash"] = self._compute_state_hash(state)
 
         try:
             atomic_write_json(Path(self.state_file), state, indent=2)
@@ -689,20 +709,71 @@ class FeatureQueue:
                 json.dump(state, f, indent=2)
 
     def load_state(self) -> bool:
-        """Load queue state from file."""
+        """Load queue state from file.
+
+        Returns ``False`` (clean no-resume) on missing, unreadable, or
+        corrupted state. Corruption is detected loudly rather than crashing
+        the run or silently resuming from bad data (R1-S2 gate ADR
+        hardening, 2026-06-07):
+
+        - unparseable JSON → error log + ``False``
+        - integrity-hash mismatch (parse-clean truncation/mutation) →
+          error log + ``False``; state files written before the
+          ``state_hash`` field existed skip this check
+        - invalid feature records (bad status enum, missing/unknown
+          fields) → error log + ``False`` (previously an uncaught crash)
+        - ``order`` referencing unknown feature ids → error log + ``False``
+        """
+        state_path = Path(self.state_file)
         try:
             with open(self.state_file, "r") as f:
                 state = json.load(f)
+        except (json.JSONDecodeError, IOError) as exc:
+            if state_path.exists():
+                logger.error(
+                    "Queue state file %s is unreadable or corrupt (%s) — "
+                    "not resuming from it",
+                    self.state_file, exc,
+                )
+            return False
 
-            self.features = {
+        stored_hash = state.get("state_hash")
+        if stored_hash is not None:
+            computed = self._compute_state_hash(state)
+            if computed != stored_hash:
+                logger.error(
+                    "Queue state file %s failed integrity check "
+                    "(stored %s…, computed %s…) — refusing to resume from it",
+                    self.state_file, str(stored_hash)[:8], computed[:8],
+                )
+                return False
+
+        try:
+            features = {
                 fid: FeatureSpec.from_dict(fd)
                 for fid, fd in state.get("features", {}).items()
             }
-            self.order = state.get("order", [])
-
-            return True
-        except (json.JSONDecodeError, IOError):
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.error(
+                "Queue state file %s contains invalid feature records (%s) — "
+                "refusing to resume from it",
+                self.state_file, exc,
+            )
             return False
+
+        order = state.get("order", [])
+        unknown = [fid for fid in order if fid not in features]
+        if unknown:
+            logger.error(
+                "Queue state file %s order references unknown feature ids %s — "
+                "refusing to resume from it",
+                self.state_file, unknown,
+            )
+            return False
+
+        self.features = features
+        self.order = order
+        return True
 
     def reset(self):
         """Reset the queue to initial state."""

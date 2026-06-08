@@ -172,6 +172,11 @@ class IntegrationEngine:
         self._min_lines: int = min_lines
         # Repair pipeline (REQ-RPL-200)
         self._repair_config = repair_config
+        # Per-engine circuit-breaker scope (R1-S2 gate ADR hardening, 2026-06-07):
+        # repair failures in this run never trip the breaker for other runs
+        # sharing the process.
+        from ..repair.orchestrator import RepairSession
+        self._repair_session = RepairSession()
         # Element registry (ER-008)
         self._element_registry = element_registry
         # Forward manifest for contract violation repair
@@ -874,6 +879,7 @@ class IntegrationEngine:
                 diagnostics,
                 self._repair_config,
                 self.project_root,
+                session=self._repair_session,
             )
 
             if outcome.any_modified:
@@ -1023,6 +1029,7 @@ class IntegrationEngine:
 
             outcome = run_file_repair(
                 dict(preimages), diagnostics, self._repair_config, self.project_root,
+                session=self._repair_session,
             )
 
             kept: List[Path] = []
@@ -1192,6 +1199,7 @@ class IntegrationEngine:
                         diagnostics,
                         self._repair_config,
                         self.project_root,
+                        session=self._repair_session,
                     )
                     repair_attempted = True
 
@@ -2265,12 +2273,17 @@ class IntegrationEngine:
             if not files_to_repair:
                 return False
 
+            # NOTE: a stale ``forward_manifest=`` kwarg passed here since 439c615d
+            # made this call raise TypeError (swallowed by the broad except below),
+            # so contract-violation repair never actually ran. Removed 2026-06-07
+            # (R1-S2 gate ADR hardening) — run_file_repair takes no such parameter;
+            # the manifest-derived diagnostics above already carry the context.
             outcome = run_file_repair(
                 files_to_repair,
                 diagnostics,
                 self._repair_config,
                 self.project_root,
-                forward_manifest=self._forward_manifest,
+                session=self._repair_session,
             )
 
             if outcome.any_modified:
