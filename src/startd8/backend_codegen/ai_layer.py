@@ -74,6 +74,10 @@ class AiPass:
     # re-runs idempotent by source (clears prior *unconfirmed* rows of that source before insert).
     # None (the default) => today's unbound `def <pass>(text, session)` — byte-identical.
     source_binding: Optional[str] = None
+    # F-11: the dedup key the generated `_persist` uses for re-generation safety when the output
+    # entity has no `name` column (e.g. `Artifact` → `dedup_by: kind`). None (the default) keeps
+    # today's name-based dedup — byte-identical for passes whose outputs carry a `name`.
+    dedup_by: Optional[str] = None
 
     @property
     def module(self) -> str:
@@ -86,7 +90,7 @@ class HumanInputs:
 
 
 _PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field",
-              "source_binding"}
+              "source_binding", "dedup_by"}
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -131,6 +135,13 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
         route = str(entry["route_path"])
         if not route.startswith("/"):
             raise ValueError(f"ai_passes.yaml: route_path must start with '/': {route!r}")
+        dedup_by = entry.get("dedup_by")
+        if dedup_by is not None:
+            dedup_by = str(dedup_by).strip()
+            if not dedup_by:
+                raise ValueError(
+                    f"ai_passes.yaml: pass #{i} `dedup_by` must be a non-empty field name"
+                )
         binding = entry.get("source_binding")
         if binding is not None:
             binding = str(binding)
@@ -156,6 +167,7 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 input_entities=tuple(entry.get("input_entities", ())),
                 request_field=str(entry.get("request_field", "text")),
                 source_binding=binding,
+                dedup_by=dedup_by,
             )
         )
     if not passes:
@@ -483,6 +495,46 @@ _PERSIST_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -
     return 1
 '''
 
+# F-11: the confirmed-aware dedup-by-key variant. Emitted into a harness ONLY when its pass declares
+# `dedup_by` in ai_passes.yaml (e.g. `Artifact` → `dedup_by: kind`, which has no `name` column). The
+# unbound `_PERSIST_HELPER` above (name-based) is untouched, so name-bearing passes stay byte-identical.
+# Re-synthesis semantics (FR-8, applied generally): for the dedup key, supersede an existing
+# *unconfirmed* row (delete it so the fresh proposal replaces it), but NEVER touch a `confirmed:true`
+# row — add the new proposal alongside it instead. A re-run therefore leaves a confirmed row
+# byte-identical and never duplicates an unconfirmed one.
+_PERSIST_DEDUP_HELPER = '''def _persist(session: Session, model: Any, edge_obj: Any) -> int:
+    """Persist one edge object (source=ai, confirmed=false); dedup by `_DEDUP_FIELD` (F-11). 0/1.
+
+    Confirmed-aware re-synthesis (FR-8): a stale *unconfirmed* row of this key is superseded
+    (deleted) so the fresh proposal replaces it; a `confirmed:true` row of this key is never
+    touched — the fresh proposal is added alongside it.
+    """
+    data = edge_obj.model_dump(exclude_none=True)
+    # Server-managed columns are never AI-authored: the harness sets source/confirmed and the table
+    # defaults supply id/ownerId/timestamps. Dropping them here keeps str timestamps out of datetime
+    # columns even if an edge schema ever carries them (belt-and-suspenders to _PROVENANCE_OMIT).
+    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
+    key = fields.get(_DEDUP_FIELD)
+    if key is not None and hasattr(model, _DEDUP_FIELD):
+        existing = session.exec(
+            select(model).where(getattr(model, _DEDUP_FIELD) == key)
+        ).all()
+        if any(getattr(r, "confirmed", False) for r in existing):
+            pass  # a user-confirmed row owns this key — never clobber it; add the proposal alongside
+        else:
+            for stale in existing:  # supersede stale *unconfirmed* proposals of this key
+                session.delete(stale)
+    row = model(**fields)
+    if hasattr(row, "source"):
+        row.source = "ai"
+    if hasattr(row, "confirmed"):
+        row.confirmed = False
+    session.add(row)
+    session.flush()  # surface constraint errors here so the caller's savepoint can isolate them
+    return 1
+'''
+
 
 def render_ai_pass(
     schema_text, manifest_text, human_text, source_file="prisma/schema.prisma", pass_name: str = ""
@@ -589,6 +641,16 @@ def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
     if source_binding:  # SPIKE (FR-IMP-4/5): source-bound variant (derived or explicit)
         return _render_pass_text_bound(ps, source_binding)
     out = ps.output_entities[0]
+    # F-11: a `dedup_by` pass emits a `_DEDUP_FIELD` constant + the confirmed-aware persist helper;
+    # without it the name-based helper is emitted unchanged (byte-identical for existing passes).
+    dedup_const = [f"_DEDUP_FIELD = {ps.dedup_by!r}  # F-11: re-generation dedup key (FR-8)", ""] \
+        if ps.dedup_by else []
+    persist_helper = _PERSIST_DEDUP_HELPER if ps.dedup_by else _PERSIST_HELPER
+    docstring = (
+        f'    """Free-text → a {out} (source=ai, confirmed=false), deduped by {ps.dedup_by!r}."""'
+        if ps.dedup_by
+        else f'    """Free-text → a {out} (source=ai, confirmed=false), name-deduped."""'
+    )
     lines = [
         "from __future__ import annotations",
         "",
@@ -604,6 +666,7 @@ def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
         "",
         "logger = logging.getLogger(__name__)",
         "",
+        *dedup_const,
         "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
         "# Manifest prompt paths are PROJECT-ROOT-relative (the wireframe/REQUIREMENTS",
         "# convention) — resolve from app/ai/<pass>.py up to the project root.",
@@ -611,7 +674,7 @@ def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
         "",
         "",
         f"def {ps.module}({ps.request_field}: str, session: Session) -> dict[str, Any]:",
-        f'    """Free-text → a {out} (source=ai, confirmed=false), name-deduped."""',
+        docstring,
         '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
         f'    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()',
         f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
@@ -625,7 +688,7 @@ def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
         f'    return {{"created": {{{out!r}: created}}}}',
         "",
         "",
-        _PERSIST_HELPER,
+        persist_helper,
         "",
         f"__all__ = [{ps.module!r}]",
         "",
@@ -644,6 +707,10 @@ def _render_pass_read(ps: AiPass) -> str:
     result_fields = [
         f"    {_plural_field(e)}: list[{e}Edge] = Field(default_factory=list)" for e in outputs
     ]
+    # F-11: a `dedup_by` pass emits a `_DEDUP_FIELD` constant + the confirmed-aware persist helper
+    # (applied to every output entity that carries the field). Absent → name-based, byte-identical.
+    dedup_const = [f"_DEDUP_FIELD = {ps.dedup_by!r}  # F-11: re-generation dedup key (FR-8)", ""] \
+        if ps.dedup_by else []
     lines = [
         "from __future__ import annotations",
         "",
@@ -661,6 +728,7 @@ def _render_pass_read(ps: AiPass) -> str:
         "",
         "logger = logging.getLogger(__name__)",
         "",
+        *dedup_const,
         "# The LLM-authored prompt (FR-MA-6); the harness around it is owned.",
         "# Manifest prompt paths are PROJECT-ROOT-relative (the wireframe/REQUIREMENTS",
         "# convention) — resolve from app/ai/<pass>.py up to the project root.",
@@ -702,7 +770,7 @@ def _render_pass_read(ps: AiPass) -> str:
         "",
         _SUMMARY_HELPER,
         "",
-        _PERSIST_HELPER,
+        _PERSIST_DEDUP_HELPER if ps.dedup_by else _PERSIST_HELPER,
         "",
         f"__all__ = [{ps.module!r}]",
         "",
