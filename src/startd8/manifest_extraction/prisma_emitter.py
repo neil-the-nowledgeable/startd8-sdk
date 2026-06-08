@@ -22,7 +22,8 @@ never emitted wrong (the FR-WPI ``not_extracted`` discipline).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import re
 
@@ -230,3 +231,75 @@ def semantic_diff(emitted_text: str, live_text: str) -> List[str]:
 def parity_against_live(graph: EntityGraph, live_text: str) -> List[str]:
     """Emit *graph* and report its semantic-parity drift against the live contract (FR-PE-6 gate)."""
     return semantic_diff(render_prisma_schema(graph).text, live_text)
+
+
+# --------------------------------------------------------------------------- #
+# FR-PE-6 — round-trip-before-write + whole-schema parity gate.                 #
+# FR-PE-7 — run-dir emission + human-gated promotion ratchet.                   #
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class EmitGateResult:
+    """Outcome of the emit gate. ``ok`` ⇒ safe to promote."""
+
+    ok: bool
+    round_trips: bool                 # FR-PE-6: emitted text parses back to the same model set
+    parity_drift: Tuple[str, ...]     # FR-PE-4 drift vs live (empty ⇒ parity); () when no live given
+    models: int
+    unrenderable: Tuple[UnrenderableField, ...]
+    draft_path: Optional[str]         # where the draft was written (run dir), or None if gate failed
+
+
+def emit_schema_draft(
+    graph: EntityGraph,
+    run_dir: str,
+    *,
+    live_text: Optional[str] = None,
+    source_file: str = "prisma/schema.prisma",
+) -> EmitGateResult:
+    """Emit to the RUN DIR only (never the project tree — FR-PE-7), behind the FR-PE-6 gate.
+
+    Round-trip-before-write: the draft is written only if it parses back to the full model set.
+    When *live_text* is given, parity drift is computed (the cutover gate); ``ok`` additionally
+    requires zero drift. The promoted contract path is reached only via :func:`promote_schema`.
+    """
+    res = render_prisma_schema(graph, source_file)
+    parsed = parse_prisma_schema(res.text)
+    expected = set(graph.entities) | {j.name for j in graph.joins}
+    round_trips = set(parsed.models) == expected
+    drift = tuple(semantic_diff(res.text, live_text)) if live_text is not None else ()
+
+    draft_path: Optional[str] = None
+    if round_trips:  # FR-PE-6: do not write a draft that doesn't round-trip
+        draft = Path(run_dir) / "schema.prisma"
+        draft.parent.mkdir(parents=True, exist_ok=True)
+        draft.write_text(res.text, encoding="utf-8")
+        draft_path = str(draft)
+
+    ok = round_trips and (live_text is None or not drift)
+    return EmitGateResult(
+        ok=ok, round_trips=round_trips, parity_drift=drift, models=res.models_rendered,
+        unrenderable=res.unrenderable, draft_path=draft_path,
+    )
+
+
+def promote_schema(run_dir: str, project_path: str, *, archive: bool = True) -> str:
+    """Promote a gated draft to the project contract path (FR-PE-7 — the human-triggered flip).
+
+    Separate, explicit, logged copy: no pipeline stage writes the promoted path. If *archive* and a
+    hand-authored contract already exists, it is preserved under ``_superseded-handauthored/`` (the
+    precedent the app uses for the YAML manifests) before being overwritten — OQ-PE-4 cutover marker:
+    the promoted file carries the ``startd8-artifact: prisma-schema`` header; a hand-authored one does
+    not, so "derived vs hand-authored" is decidable from the file itself.
+    """
+    draft = Path(run_dir) / "schema.prisma"
+    if not draft.is_file():
+        raise FileNotFoundError(f"no gated draft at {draft} — run emit_schema_draft first")
+    target = Path(project_path)
+    if archive and target.is_file():
+        archive_dir = target.parent / "_superseded-handauthored"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        (archive_dir / target.name).write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
+    return str(target)

@@ -19,7 +19,9 @@ from startd8.manifest_extraction.entities import (
 )
 from startd8.manifest_extraction.grammar import find_section, parse_sections
 from startd8.manifest_extraction.prisma_emitter import (
+    emit_schema_draft,
     parity_against_live,
+    promote_schema,
     render_prisma_schema,
     semantic_diff,
 )
@@ -264,3 +266,42 @@ def test_grammar_end_to_end_drives_fr_pe_5():
     assert ("jobDescriptionId", "subjectId") in tm.compound_unique_keys          # Unique:
     norm = {x.replace(" ", "") for x in tm.block_attributes}
     assert "@@index([jobDescriptionId])" in norm                                 # Indexes:
+
+
+# --------------------------------------------------------------------------- #
+# FR-PE-6 (round-trip + parity gate) / FR-PE-7 (run-dir emission + promotion)
+# --------------------------------------------------------------------------- #
+
+def test_emit_gate_round_trips_and_writes_run_dir_draft(tmp_path):
+    run = tmp_path / "run"
+    res = emit_schema_draft(_graph(), str(run))
+    assert res.round_trips and res.ok and res.models == 4
+    assert res.draft_path == str(run / "schema.prisma")
+    assert (run / "schema.prisma").is_file()                       # run dir only (FR-PE-7)
+
+
+def test_emit_gate_parity_pass_and_fail(tmp_path):
+    emitted = render_prisma_schema(_graph()).text
+    ok = emit_schema_draft(_graph(), str(tmp_path / "a"), live_text=emitted)
+    assert ok.ok and ok.parity_drift == ()                          # zero drift ⇒ gate passes
+    bad_live = emitted.replace("model Capability", "model CapabilityX")
+    fail = emit_schema_draft(_graph(), str(tmp_path / "b"), live_text=bad_live)
+    assert not fail.ok and fail.parity_drift                        # drift ⇒ gate fails
+    assert fail.round_trips                                         # but the emit itself is valid
+
+
+def test_promote_copies_draft_and_archives_handauthored(tmp_path):
+    run, proj = tmp_path / "run", tmp_path / "prisma"
+    emit_schema_draft(_graph(), str(run))
+    proj.mkdir()
+    (proj / "schema.prisma").write_text("// hand-authored, no provenance header\n")
+    promoted = promote_schema(str(run), str(proj / "schema.prisma"))
+    assert "startd8-artifact: prisma-schema" in (proj / "schema.prisma").read_text()  # now derived
+    archived = proj / "_superseded-handauthored" / "schema.prisma"
+    assert archived.is_file() and "hand-authored" in archived.read_text()             # old preserved
+    assert promoted == str(proj / "schema.prisma")
+
+
+def test_promote_without_gated_draft_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        promote_schema(str(tmp_path / "empty"), str(tmp_path / "prisma" / "schema.prisma"))
