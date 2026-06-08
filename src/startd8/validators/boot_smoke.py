@@ -26,6 +26,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # Runs inside the subprocess. Reports a single JSON line on stdout. Categorizes "deps missing"
 # (unavailable) distinctly from "app failed to boot" (fail) so the gate never green-skips.
 # The subprocess prints exactly one result line, prefixed with this sentinel, so app stdout/logging
@@ -91,23 +95,80 @@ class BootSmokeResult:
         return self.verdict == "pass"
 
 
+def resolve_app_target(project_root: str, *, package: Optional[str] = None) -> Optional[str]:
+    """Resolve the ASGI ``module:attr`` target for a generated app (F-5, RUN-008 1a-iii).
+
+    The gate must never hardcode one variant: the deterministic cascade emits
+    ``{package}.main:app``, while ``--ai-passes`` additionally emits ``{package}/server.py``
+    (the AI composition entrypoint, which wraps ``main`` and mounts the AI router). A healthy
+    app must be able to pass the gate regardless of which variant was generated.
+
+    Resolution order:
+
+    1. *package* — when not given, read ``app.yaml`` (the scaffold manifest,
+       :class:`~startd8.scaffold_codegen.manifest.AppManifest.package`) from the project root
+       or ``prisma/app.yaml``; default ``"app"``.
+    2. ``{package}/server.py`` on disk → ``{package}.server:app`` (superset entrypoint).
+    3. ``{package}/main.py`` on disk → ``{package}.main:app``.
+    4. Neither exists → ``None`` (nothing bootable to gate).
+    """
+    root = Path(project_root)
+    if package is None:
+        package = "app"
+        for manifest_path in (root / "app.yaml", root / "prisma" / "app.yaml"):
+            if manifest_path.is_file():
+                try:
+                    from startd8.scaffold_codegen.manifest import parse_app_manifest
+
+                    package = parse_app_manifest(
+                        manifest_path.read_text(encoding="utf-8")
+                    ).package
+                except Exception as exc:  # malformed manifest → conventional default
+                    logger.debug(
+                        "boot-smoke: could not read package from %s (%s); using 'app'",
+                        manifest_path,
+                        exc,
+                    )
+                break
+    pkg_dir = root.joinpath(*package.split("."))
+    if (pkg_dir / "server.py").is_file():
+        return f"{package}.server:app"
+    if (pkg_dir / "main.py").is_file():
+        return f"{package}.main:app"
+    return None
+
+
 def run_boot_smoke(
     project_root: str,
     *,
-    app: str = "app.main:app",
+    app: Optional[str] = None,
     expected_routes: Optional[List[str]] = None,
     timeout: int = 60,
 ) -> BootSmokeResult:
     """Boot *app* from *project_root* in a subprocess; confirm it serves ``/openapi.json``.
 
-    *app* is a ``module:attr`` spec (default ``app.main:app``; pass ``app.server:app`` for the AI
-    composition entrypoint). *expected_routes* (optional) are OpenAPI paths that MUST be present —
-    e.g. each declared AI pass route. Returns a :class:`BootSmokeResult`; ``unavailable`` (deps
-    missing) is a **non-pass**, never silently green.
+    *app* is a ``module:attr`` spec. When ``None`` (the default) the target is resolved via
+    :func:`resolve_app_target` — scaffold-manifest package, then ``{package}.server:app`` if
+    ``server.py`` exists on disk, else ``{package}.main:app`` — so the gate matches whichever
+    variant was actually generated instead of hardcoding one (F-5). *expected_routes*
+    (optional) are OpenAPI paths that MUST be present — e.g. each declared AI pass route.
+    Returns a :class:`BootSmokeResult`; ``unavailable`` (deps missing) is a **non-pass**,
+    never silently green.
     """
     root = Path(project_root)
     if not root.exists():
         return BootSmokeResult(status="error", message=f"path not found: {root}")
+
+    if app is None:
+        app = resolve_app_target(project_root)
+        if app is None:
+            return BootSmokeResult(
+                status="error",
+                message=(
+                    f"no app entrypoint found under {root} "
+                    "(looked for {package}/server.py and {package}/main.py)"
+                ),
+            )
 
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "_boot_smoke.py"

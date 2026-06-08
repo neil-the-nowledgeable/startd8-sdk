@@ -2,8 +2,8 @@
 Event bus implementation for framework-wide event handling
 """
 
-from typing import Callable, Dict, List, Union, Optional, Set
-from collections import defaultdict
+from typing import Callable, Deque, Dict, List, Union, Optional, Set
+from collections import defaultdict, deque
 import threading
 import asyncio
 import logging
@@ -54,8 +54,10 @@ class EventBus:
     _async_listeners: Dict[EventType, List[AsyncEventHandler]] = defaultdict(list)
     _global_listeners: List[EventHandler] = []
     _wildcard_handlers: Set[EventHandler] = set()
-    _event_history: List[Event] = []
     _max_history: int = 1000
+    # deque(maxlen=...) trims atomically on append — avoids the rebind-under-lock
+    # race the manual list slice had (harden-in-place, R1-S2 gate ADR 2026-06-07)
+    _event_history: Deque[Event] = deque(maxlen=_max_history)
     _lock = threading.RLock()
     _enabled: bool = True
     _persistence_enabled: bool = False
@@ -139,11 +141,9 @@ class EventBus:
         with cls._lock:
             # Add to history if it should be persisted
             if event.should_persist():
+                # deque(maxlen=_max_history) trims oldest entries automatically
                 cls._event_history.append(event)
-                # Trim history if needed
-                if len(cls._event_history) > cls._max_history:
-                    cls._event_history = cls._event_history[-cls._max_history:]
-                
+
                 # Call persistence callback if enabled
                 if cls._persistence_enabled and cls._persistence_callback:
                     try:
@@ -240,8 +240,8 @@ class EventBus:
             List of events, most recent first
         """
         with cls._lock:
-            events = cls._event_history.copy()
-        
+            events = list(cls._event_history)
+
         # Filter by type if specified
         if event_type:
             events = [e for e in events if e.type == event_type]

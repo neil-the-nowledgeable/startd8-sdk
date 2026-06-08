@@ -22,7 +22,11 @@ from ..backend_codegen.derived import load_completeness_manifest
 from ..backend_codegen.forms_manifest import parse_forms
 from ..backend_codegen.htmx_generator import form_fields, writable_fields
 from ..backend_codegen.pages_generator import ContentPage, parse_pages
-from ..backend_codegen.test_emitter import COMPLETENESS_TESTS_PATH, CONTRACT_TESTS_PATH
+from ..backend_codegen.test_emitter import (
+    COMPLETENESS_TESTS_PATH,
+    CONTRACT_TESTS_PATH,
+    ROUTE_SMOKE_TESTS_PATH,
+)
 from ..frontend_codegen.schema_renderer import composite_type_names
 from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ..logging_config import get_logger
@@ -384,6 +388,7 @@ def _services_section(
                     CANONICAL_LAYOUT["python-ai-schemas"],
                     CANONICAL_LAYOUT["python-requirements"],
                     CONTRACT_TESTS_PATH,
+                    ROUTE_SMOKE_TESTS_PATH,  # rung-5 floor: generated HTTP smoke (F-8)
                 ),
             )
         )
@@ -399,6 +404,8 @@ def _services_section(
                     "app/ai/__init__.py", "app/ai/service.py", "app/ai/edge_schemas.py",
                     "app/ai/routes.py", "app/server.py",
                     "tests/test_edge_privacy.py", "tests/test_ai_passes.py",
+                    # FR-40 executable guarantees (F-305 moved off the LLM path)
+                    "tests/test_keyless_boot.py", "tests/test_cost_logging.py",
                 ),
             )
         )
@@ -595,17 +602,27 @@ def _views_section(
         )
     ]
     for v in specs:
-        items.append(
-            WireframeItem(
-                f"{v.name} ({v.kind})", status,
-                detail=f"{v.route} root={v.root}"
-                + (f", {len(v.panels)} panel(s)" if v.panels else ""),
-                paths=(
-                    f"app/views/{v.module}.py",
-                    f"app/templates/views/{v.module}.html",
-                ),
+        # AR-3: a model-scoped export serves raw Markdown/JSON of the whole model — no template.
+        model_export = v.kind == "export-package" and v.scope == "model"
+        if model_export:
+            detail = f"{v.route}/markdown + {v.route}/json (whole model)"
+            paths: Tuple[str, ...] = (f"app/views/{v.module}.py",)
+        elif not v.root:
+            # Route-bound kinds without an entity root (AR-2 computed-panel, AR-4 import-flow).
+            detail = v.route + (f" compute={v.compute}" if v.compute else "")
+            paths = (
+                f"app/views/{v.module}.py",
+                f"app/templates/views/{v.module}.html",
             )
-        )
+        else:
+            detail = f"{v.route} root={v.root}" + (
+                f", {len(v.panels)} panel(s)" if v.panels else ""
+            )
+            paths = (
+                f"app/views/{v.module}.py",
+                f"app/templates/views/{v.module}.html",
+            )
+        items.append(WireframeItem(f"{v.name} ({v.kind})", status, detail=detail, paths=paths))
     return WireframeSection(
         "views", "Composite Views", status, tuple(items), consequence=_consequence(worst_state)
     )

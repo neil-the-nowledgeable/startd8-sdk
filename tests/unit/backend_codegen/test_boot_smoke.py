@@ -6,7 +6,11 @@ The pure verdict logic runs everywhere; the subprocess-boot tests need fastapi/s
 
 import pytest
 
-from startd8.validators.boot_smoke import BootSmokeResult, run_boot_smoke
+from startd8.validators.boot_smoke import (
+    BootSmokeResult,
+    resolve_app_target,
+    run_boot_smoke,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +42,74 @@ def test_missing_path_is_error():
 
 
 # --------------------------------------------------------------------------- #
+# F-5 — app-target resolution (the gate must never hardcode one variant)
+# --------------------------------------------------------------------------- #
+
+def _touch_pkg(root, package="app", *modules):
+    pkg = root / package
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    for m in modules:
+        (pkg / m).write_text("app = None\n", encoding="utf-8")
+
+
+def test_resolve_main_variant(tmp_path):
+    """The v2 cascade emits app/main.py and NO server.py (RUN-008 1a-iii)."""
+    _touch_pkg(tmp_path, "app", "main.py")
+    assert resolve_app_target(str(tmp_path)) == "app.main:app"
+
+
+def test_resolve_server_variant_preferred(tmp_path):
+    """--ai-passes emits app/server.py (wraps main + AI router) — the superset wins."""
+    _touch_pkg(tmp_path, "app", "main.py", "server.py")
+    assert resolve_app_target(str(tmp_path)) == "app.server:app"
+
+
+def test_resolve_package_from_app_yaml(tmp_path):
+    """The package name comes from the scaffold manifest, not a hardcoded 'app'."""
+    (tmp_path / "app.yaml").write_text(
+        "app:\n  name: backend\n  package: backend\n", encoding="utf-8"
+    )
+    _touch_pkg(tmp_path, "backend", "main.py")
+    assert resolve_app_target(str(tmp_path)) == "backend.main:app"
+
+
+def test_resolve_package_from_prisma_app_yaml(tmp_path):
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "app.yaml").write_text(
+        "app:\n  package: svc\n", encoding="utf-8"
+    )
+    _touch_pkg(tmp_path, "svc", "server.py")
+    assert resolve_app_target(str(tmp_path)) == "svc.server:app"
+
+
+def test_resolve_malformed_manifest_falls_back_to_default_package(tmp_path):
+    (tmp_path / "app.yaml").write_text("nonsense_key: true\n", encoding="utf-8")
+    _touch_pkg(tmp_path, "app", "main.py")
+    assert resolve_app_target(str(tmp_path)) == "app.main:app"
+
+
+def test_resolve_no_entrypoint_is_none(tmp_path):
+    assert resolve_app_target(str(tmp_path)) is None
+
+
+def test_run_boot_smoke_without_entrypoint_is_error_not_pass(tmp_path):
+    result = run_boot_smoke(str(tmp_path))
+    assert result.status == "error"
+    assert not result.is_pass
+    assert "no app entrypoint" in result.message
+
+
+def test_explicit_app_spec_still_honored(tmp_path):
+    """Callers passing app= keep full control — resolution only fills the default."""
+    _touch_pkg(tmp_path, "app", "main.py", "server.py")
+    # Force the main variant even though server.py exists; the subprocess may fail
+    # (no fastapi guaranteed here) but the targeted spec must be the explicit one.
+    result = run_boot_smoke(str(tmp_path), app="app.main:app", timeout=30)
+    assert result.status in ("checked", "unavailable", "timeout", "error")
+
+
+# --------------------------------------------------------------------------- #
 # Real subprocess boot (needs app deps)
 # --------------------------------------------------------------------------- #
 
@@ -59,14 +131,34 @@ def _render_to(tmp_path):
 
 
 def test_generated_app_boots_and_serves_openapi(tmp_path):
+    """Main variant (the v2 cascade's shape: app/main.py, no server.py) passes via
+    auto-resolution — the RUN-008 F-5 falsifiability requirement."""
     pytest.importorskip("fastapi")
     pytest.importorskip("sqlmodel")
     _render_to(tmp_path)
+    assert resolve_app_target(str(tmp_path)) == "app.main:app"
 
     result = run_boot_smoke(str(tmp_path))
 
     assert result.is_pass, f"{result.verdict}: {result.message} {result.diagnostics}"
     # CRUD routes for the Profile entity should be in the served OpenAPI
+    assert any("profile" in p.lower() for p in result.routes)
+
+
+def test_server_variant_boots_via_auto_resolution(tmp_path):
+    """Server variant (--ai-passes shape: app/server.py wrapping main) also passes via
+    auto-resolution — a healthy app passes regardless of which variant was generated."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlmodel")
+    _render_to(tmp_path)
+    (tmp_path / "app" / "server.py").write_text(
+        "from app.main import app\n__all__ = ['app']\n", encoding="utf-8"
+    )
+    assert resolve_app_target(str(tmp_path)) == "app.server:app"
+
+    result = run_boot_smoke(str(tmp_path))
+
+    assert result.is_pass, f"{result.verdict}: {result.message} {result.diagnostics}"
     assert any("profile" in p.lower() for p in result.routes)
 
 

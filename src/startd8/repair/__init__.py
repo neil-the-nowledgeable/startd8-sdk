@@ -30,6 +30,7 @@ from .models import (
     SyntaxDiagnostic,
 )
 from .orchestrator import (
+    RepairSession,
     get_repair_frequency,
     get_step_effectiveness,
     reset_circuit_breaker,
@@ -56,6 +57,7 @@ __all__ = [
     "RepairOutcome",
     "RepairPipelineResult",
     "RepairRoute",
+    "RepairSession",
     "RepairStep",
     "RepairStepResult",
     "StagingError",

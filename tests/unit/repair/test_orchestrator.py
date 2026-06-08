@@ -15,6 +15,7 @@ from startd8.repair.orchestrator import (
     _circuit_breaker_state,
     _inject_traceability_comment,
     _TRACEABILITY_PREFIX,
+    RepairSession,
     reset_circuit_breaker,
     run_file_repair,
 )
@@ -102,6 +103,55 @@ class TestCircuitBreaker:
         outcome = run_file_repair(files, diags, config, project_root)
         if not outcome.any_modified:
             assert _circuit_breaker_state["syntax"] == 1
+
+
+class TestRepairSessionIsolation:
+    """R1-S2 gate ADR hardening: per-run circuit-breaker scope via RepairSession."""
+
+    def test_session_isolated_from_default(self):
+        """A tripped default session must not trip an explicit session."""
+        config = RepairConfig(circuit_breaker_threshold=2)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")
+        project_root = Path("/tmp")
+
+        # Trip the default (process-global) breaker
+        _circuit_breaker_state["syntax"] = 99
+
+        session = RepairSession()
+        outcome = run_file_repair(files, diags, config, project_root, session=session)
+        # The explicit session starts clean — repair was attempted, not skipped,
+        # so the session's counter moved (0 on success / 1 on failure).
+        assert "syntax" in session.circuit_breaker_state
+        assert session.circuit_breaker_state["syntax"] <= 1
+        # And the default state is untouched by the session run
+        assert _circuit_breaker_state["syntax"] == 99
+        assert isinstance(outcome.any_modified, bool)
+
+    def test_session_trips_independently(self):
+        """A tripped explicit session skips repair without touching the default."""
+        config = RepairConfig(circuit_breaker_threshold=2)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")
+        project_root = Path("/tmp")
+
+        session = RepairSession()
+        session.circuit_breaker_state["syntax"] = 2
+
+        outcome = run_file_repair(files, diags, config, project_root, session=session)
+        assert outcome.any_modified is False
+        assert session.circuit_breaker_state["syntax"] == 2  # skipped, not incremented
+        assert _circuit_breaker_state.get("syntax", 0) == 0  # default untouched
+
+    def test_default_session_backs_legacy_global(self):
+        """Omitting session preserves legacy behavior backed by the module dict."""
+        config = RepairConfig(circuit_breaker_threshold=2)
+        diags = [_make_syntax_diag()]
+        files = _make_files("x = 1\n")
+
+        _circuit_breaker_state["syntax"] = 2
+        outcome = run_file_repair(files, diags, config, Path("/tmp"))
+        assert outcome.any_modified is False  # default path still trips
 
 
 class TestTraceabilityComment:

@@ -27,8 +27,10 @@ from ._headers import header_standard as _header
 
 CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
+ROUTE_SMOKE_TESTS_PATH = "tests/test_route_smoke.py"
 _KIND = "python-tests-contract"
 _COMPLETENESS_KIND = "python-tests-completeness"
+_ROUTE_SMOKE_KIND = "python-tests-routes"
 
 _SHIM = (
     "import sys\n"
@@ -200,3 +202,197 @@ def render_completeness_tests(
         ),
     ]
     return header + "\n\n" + preamble + "\n\n\n" + "\n\n\n".join(blocks) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Route-smoke suite (rung 5 floor — generated HTTP smoke over every GET route)
+# ---------------------------------------------------------------------------
+
+_INT_PK_TYPES = frozenset({"Int", "BigInt"})
+
+# The suite body is a fixed template; only the baked schema maps vary. Kept as
+# one literal so the emitted module reads as a coherent program, not codegen
+# confetti. Placeholders: {tables} {pk_map}.
+_ROUTE_SMOKE_BODY = '''\
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import pytest
+
+_testclient = pytest.importorskip("fastapi.testclient")
+pytest.importorskip("sqlmodel")
+pytest.importorskip("httpx")
+
+# Isolate the DB BEFORE the app binds its engine. No-op when another test
+# module already imported app.db (then this suite shares that engine and
+# resets rows around itself — the documented test-user lifecycle).
+if "app.db" not in sys.modules and "DATABASE_URL" not in os.environ:
+    os.environ["DATABASE_URL"] = (
+        "sqlite:///" + str(Path(tempfile.mkdtemp(prefix="route-smoke-")) / "app.db")
+    )
+
+from fastapi.routing import APIRoute  # noqa: E402
+from sqlmodel import Session, delete, select  # noqa: E402
+
+from app import tables  # noqa: E402
+from app.db import engine, init_db  # noqa: E402
+from app.main import app  # noqa: E402
+
+# Baked from the contract: every entity table (reset/seed surface) and the
+# single-column-PK entities (route param filling + PK synthesis on seed rows).
+_TABLES = {tables}
+_PK = {pk_map}
+_FILL = {{name.lower(): name for name in _PK}}
+
+_OK_STATUSES = frozenset({{200, 303, 307, 308}})
+_SEEDS_DIR = Path(__file__).resolve().parents[1] / "seeds"
+_PARAM_RE = re.compile(r"{{([^}}:]+)[^}}]*}}")
+
+
+def _seed_cases():
+    """(case_id, seed_path|None) per discovered fixture; always includes unseeded."""
+    cases = [("unseeded", None)]
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        return cases  # no yaml -> still smoke every no-param route, unseeded
+    if _SEEDS_DIR.is_dir():
+        for p in sorted(_SEEDS_DIR.glob("test-user-*.yaml")):
+            cases.append((p.stem, p))
+    return cases
+
+
+_CASES = _seed_cases()
+
+
+def _reset(session):
+    for name in _TABLES:
+        session.exec(delete(getattr(tables, name)))
+    session.commit()
+
+
+def _load_rows(session, seed_path):
+    import yaml
+
+    data = yaml.safe_load(seed_path.read_text(encoding="utf-8")) or {{}}
+    for entity, rows in (data.get("rows") or {{}}).items():
+        cls = getattr(tables, entity, None)
+        if cls is None:
+            continue
+        pk = _PK.get(entity)
+        for n, row in enumerate(rows or (), start=1):
+            row = dict(row)
+            if pk is not None and pk[0] not in row:
+                row[pk[0]] = n if pk[1] == "int" else f"{{entity.lower()}}-{{n}}"
+            session.add(cls(**row))
+    session.commit()
+
+
+def _get_paths():
+    return sorted({{
+        r.path for r in app.routes
+        if isinstance(r, APIRoute) and "GET" in (r.methods or ())
+    }})
+
+
+def _fill_path(path, session):
+    """Resolve {{param}} placeholders from seeded rows; None when unfillable."""
+    params = _PARAM_RE.findall(path)
+    if not params:
+        return path
+    if len(params) > 1:
+        return None  # multi-param routes are out of v1 smoke scope
+    segments = [s for s in path.split("/") if s and not s.startswith("{{")]
+    prefix = segments[1] if len(segments) > 1 and segments[0] == "ui" else (
+        segments[0] if segments else ""
+    )
+    entity = _FILL.get(prefix)
+    if entity is None:
+        return None
+    row = session.exec(select(getattr(tables, entity))).first()
+    if row is None:
+        return None  # empty fixture -> by-id routes have nothing to point at
+    return _PARAM_RE.sub(str(getattr(row, _PK[entity][0])), path, count=1)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "seed_path"), _CASES, ids=[c[0] for c in _CASES],
+)
+def test_every_get_route_smokes(case_id, seed_path):
+    """GET every mounted route (incl. user_routers/views) against this fixture.
+
+    A route answering outside {{200, 3xx-redirect}} — 404, 422, 500 — fails the
+    suite: the empty fixture proves empty states render; populated fixtures
+    prove rows render. Unfillable parameterized routes are skipped, not failed.
+    """
+    init_db()
+    with Session(engine) as session:
+        _reset(session)
+        if seed_path is not None:
+            _load_rows(session, seed_path)
+
+    failures, checked = [], 0
+    try:
+        with _testclient.TestClient(app) as client, Session(engine) as session:
+            for path in _get_paths():
+                target = _fill_path(path, session)
+                if target is None:
+                    continue
+                resp = client.get(target, follow_redirects=False)
+                checked += 1
+                if resp.status_code not in _OK_STATUSES:
+                    failures.append(f"GET {{target}} -> {{resp.status_code}}")
+                elif resp.status_code == 200:
+                    body = resp.text
+                    if not body.strip():
+                        failures.append(f"GET {{target}} -> 200 with empty body")
+                    elif "Traceback (most recent call last)" in body:
+                        failures.append(f"GET {{target}} -> 200 with a traceback body")
+    finally:
+        with Session(engine) as session:
+            _reset(session)
+
+    assert checked > 0, "route walk found no smokable GET routes"
+    assert not failures, (
+        f"[{{case_id}}] {{len(failures)}} route(s) failed smoke:\\n  "
+        + "\\n  ".join(failures)
+    )
+'''
+
+
+def render_route_smoke_tests(
+    schema_text: str, source_file: str = "prisma/schema.prisma"
+) -> str:
+    """Render ``tests/test_route_smoke.py`` — generated HTTP smoke over every GET route.
+
+    The rung-5 floor (strtd8 §8 F-8): the rung-4 tests are data/function-level only, so an
+    app can ship hundreds of live routes with zero tests that make an HTTP request — which
+    is exactly the layer where the campaign defects lived (bare ``/value-map`` 422,
+    provenance rows invisible in every list view). This suite walks ``app.routes`` at run
+    time — so view/user routers mounted through the ``user_routers`` seam are covered, not
+    just the backend's own — and GETs each route per seed fixture (``seeds/test-user-*``:
+    the empty user proves empty states render; populated users prove rows render). $0 LLM,
+    in-process ``TestClient``, no browser. Deterministic: only the baked entity maps vary
+    with the contract.
+    """
+    schema = parse_prisma_schema(schema_text)
+    sha = schema_sha256(schema_text)
+    names = _model_names(schema, schema_text)
+    header = _header(source_file, sha, _ROUTE_SMOKE_KIND)
+
+    pk_entries: List[str] = []
+    for name in names:
+        pk = next((f for f in schema.scalar_fields(name) if f.is_id), None)
+        if pk is not None:
+            py_type = "int" if pk.type in _INT_PK_TYPES else "str"
+            pk_entries.append(f'"{name}": ("{pk.name}", "{py_type}")')
+
+    tables_literal = "[" + ", ".join(f'"{n}"' for n in names) + "]"
+    pk_literal = "{" + ", ".join(pk_entries) + "}"
+    body = _ROUTE_SMOKE_BODY.format(tables=tables_literal, pk_map=pk_literal)
+    return header + "\n\n" + body

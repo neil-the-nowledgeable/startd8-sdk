@@ -81,7 +81,10 @@ class TestValidation:
 
 
 _PCW_PATH = "startd8.contractors.prime_contractor.PrimeContractorWorkflow"
-_GEN_PATH = "startd8.contractors.generators.primary_contractor.LeadContractorCodeGenerator"
+# NOTE: must patch the real class name — the adapter imports
+# ``PrimaryContractorCodeGenerator``; patching the ``LeadContractorCodeGenerator``
+# alias rebinds only the alias and never intercepts the construction.
+_GEN_PATH = "startd8.contractors.generators.primary_contractor.PrimaryContractorCodeGenerator"
 
 
 def _make_mock_wf(run_return=None):
@@ -235,6 +238,31 @@ class TestExecute:
         call_kwargs = MockGen.call_args
         assert call_kwargs.kwargs.get("lead_agent") == "anthropic:claude-sonnet-4-6"
         assert call_kwargs.kwargs.get("drafter_agent") == "openai:gpt-4.1-nano"
+
+    @patch(_GEN_PATH)
+    @patch(_PCW_PATH)
+    def test_lead_agent_only_omits_drafter_kwarg(self, MockPCW, MockGen, adapter, seed_file):
+        """An unset role must be OMITTED, not passed as an explicit None.
+
+        Passing ``drafter_agent=None`` overrides the constructor default and
+        later breaks agent resolution; omitting keeps the documented default
+        (sibling of the enable_complexity_routing provider-leak guard).
+        """
+        mock_wf = _make_mock_wf()
+        MockPCW.return_value = mock_wf
+
+        adapter._execute(
+            {
+                "seed_path": str(seed_file),
+                "lead_agent": "gemini:gemini-2.5-pro",
+            },
+            None, None,
+        )
+
+        MockGen.assert_called_once()
+        call_kwargs = MockGen.call_args
+        assert call_kwargs.kwargs.get("lead_agent") == "gemini:gemini-2.5-pro"
+        assert "drafter_agent" not in call_kwargs.kwargs
 
 
 class TestRegistration:

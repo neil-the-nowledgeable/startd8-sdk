@@ -51,7 +51,13 @@ _PARTIAL_THRESHOLD = 0.4
 # Semantic issue categories that individually disqualify a feature from
 # "complete" — a single occurrence means the feature is non-functional,
 # regardless of requirement_score or error count (M3 run-021).
-_CRITICAL_SEMANTIC_CATEGORIES = frozenset({"fake_work_stub"})
+_CRITICAL_SEMANTIC_CATEGORIES = frozenset({
+    "fake_work_stub",
+    # F-6 (RUN-009/010): a phantom from-import means the module raises
+    # ImportError at load time — it can never be wired, so a PASS on it is
+    # unfalsifiable. One occurrence is disqualifying, same as fake_work_stub.
+    "phantom_symbol",
+})
 
 # Extracts the unresolved module from a mypy import diagnostic, e.g.
 # `Cannot find implementation or library stub for module named "app.ai.extract"`.
@@ -134,6 +140,8 @@ class RootCause(str, Enum):
         "cross_file_contract"  # RUN-008 FR-10: Prisma↔Zod / import seam divergence
     )
     TYPE_CLASS_MISMATCH = "type_class_mismatch"  # RUN-011 Gap C: TS231x/232x/234x assignment/overload/binding errors
+    PROVIDER_ERROR = "provider_error"  # F-3 (RUN-006): provider API 4xx/5xx (credit, auth, rate limit) — the call never produced code
+    TRUNCATION = "truncation"  # F-3 (RUN-008 §4): draft exceeded the output-token ceiling
     UNKNOWN = "unknown"
 
 
@@ -152,6 +160,7 @@ class PipelineStage(str, Enum):
         "cross_feature_contract"  # RUN-008 FR-10: divergence between sibling features
     )
     TYPECHECK = "typecheck"  # RUN-011 Gap C: surfaced by tsc --noEmit, survives per-file isolation
+    GENERATION = "generation"  # F-3: the LLM call itself (provider-agnostic — not Ollama-specific)
     UNKNOWN = "unknown"
 
 
@@ -231,6 +240,26 @@ _ERROR_PATTERNS: List[Tuple[re.Pattern, RootCause, PipelineStage]] = [
         re.compile(r"error TS23[124]\d\b"),
         RootCause.TYPE_CLASS_MISMATCH,
         PipelineStage.TYPECHECK,
+    ),
+    # F-3 (RUN-006 §3.2): provider API errors — the most legible failure class in the
+    # catalog (an HTTP 4xx/5xx with a request id) used to classify unknown/unknown.
+    # Covers Anthropic/OpenAI-style error envelopes: invalid_request_error (incl. the
+    # credit-balance 400), auth/permission, rate limit, and overloaded responses.
+    (
+        re.compile(
+            r"Error code: [45]\d\d|invalid_request_error|credit balance|"
+            r"authentication_error|permission_error|rate.?limit_error|"
+            r"overloaded_error|insufficient[_ ]quota|invalid.?api.?key",
+            re.IGNORECASE,
+        ),
+        RootCause.PROVIDER_ERROR,
+        PipelineStage.GENERATION,
+    ),
+    # F-3 (RUN-008 §4): output-token truncation ("Draft was truncated at iteration N").
+    (
+        re.compile(r"truncat", re.IGNORECASE),
+        RootCause.TRUNCATION,
+        PipelineStage.GENERATION,
     ),
     (
         re.compile(r"blocked by.*dependency|dependency.*failed", re.IGNORECASE),
@@ -418,6 +447,12 @@ class FeaturePostMortem:
     # skip-hook), "corpus", "copy", or "uncomment".
     generation_path: str = "llm"
     deterministic: bool = False
+    # F-3 attribution (RUN-006 §3.2): who made the call that succeeded/failed. Stamped at
+    # the failure site by the prime contractor (feature.metadata["failure_attribution"])
+    # and on history entries; None only when genuinely unavailable (e.g. no LLM was called).
+    agent: Optional[str] = None  # full agent spec, e.g. "anthropic:claude-sonnet-4-6"
+    model: Optional[str] = None  # bare model id, e.g. "claude-sonnet-4-6"
+    provider: Optional[str] = None  # e.g. "anthropic"
 
     @property
     def semantic_issue_summary(self) -> Dict[str, int]:
@@ -564,6 +599,27 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "behavior, honor named field authorities (do not compute/invent fields the "
             "requirement marks as caller-provided), and respect the negative scope "
             "('invent X -> use Y')."
+        ),
+    },
+    # F-3 (RUN-006): provider API error — operational, not a prompt defect. No prompt
+    # change fixes an account/config-level 4xx; the hint exists so the suggestion
+    # pipeline stays exhaustive over RootCause.
+    "provider_error": {
+        "phase": "draft",
+        "hint": (
+            "The provider API call itself failed (4xx/5xx: credit balance, auth, rate "
+            "limit, or overload) — no code was generated. Fix the provider account/"
+            "configuration (and verify the intended provider/model routing) before "
+            "re-running; prompt changes cannot fix an account-level failure."
+        ),
+    },
+    # F-3 (RUN-008 §4): output-token truncation — the single-file emission is too large.
+    "truncation": {
+        "phase": "draft",
+        "hint": (
+            "The draft exceeded the output-token ceiling and was truncated. Decompose the "
+            "task into separable deliverables (e.g. module skeleton vs. templates) rather "
+            "than raising max_tokens — a larger ceiling only moves the cliff."
         ),
     },
     # FR-CAR-9 — house-style (convention) violation surfaced by convention-aware repair
@@ -831,6 +887,40 @@ CAUSE_TO_SUGGESTION: Dict[str, Dict[str, str]] = {
             "extract`) — never re-implement them as local placeholder stubs. A "
             "feature that returns fabricated data without invoking real logic is "
             "non-functional even though it compiles."
+        ),
+    },
+    # --- F-6 (RUN-009/010): phantom symbols + referenced template assets ---
+    "phantom_symbol_detected": {
+        "phase": "draft",
+        "hint": (
+            "Every `from X import Y` must name a symbol that actually exists in "
+            "module X — verify against the real package API instead of inventing "
+            "names (e.g. `TemplateResponse` is NOT importable from "
+            "`starlette.responses`; follow the project's established import style "
+            "such as `from fastapi.templating import Jinja2Templates`). A phantom "
+            "from-import makes the whole module fail at load time."
+        ),
+    },
+    "missing_template_asset_detected": {
+        "phase": "draft",
+        "hint": (
+            "Every template name passed to TemplateResponse(...)/get_template(...) "
+            "must exist on disk under the project's templates directory. Emit the "
+            "template files alongside the code that references them, or render "
+            "only templates that already exist."
+        ),
+    },
+    # --- F-7 (RUN-010 D2): provenance-vocabulary validation ---
+    "provenance_vocabulary_detected": {
+        "phase": "draft",
+        "hint": (
+            "String values written to contract-owned enum/provenance fields "
+            "must come from the schema's DECLARED domain — copy the literal "
+            "values from the Prisma contract (e.g. `ownerId='local'`, "
+            "`source` ∈ {user, ai}); never invent vocabulary like "
+            "`ownerId='default_owner'` or `source='wizard'`. Rows written "
+            "with invented values are silently invisible to every filter on "
+            "the declared values (silent data loss)."
         ),
     },
     # --- Python L1-L10 disk compliance check hints (P3-4) ---
@@ -1298,6 +1388,11 @@ _SEMANTIC_CATEGORY_TO_SUGGESTION: Dict[str, str] = {
     "bare_except_pass": "bare_except_pass_detected",
     "phantom_dependency": "phantom_dependency_detected",
     "fake_work_stub": "fake_work_stub_detected",
+    # F-6: symbol-level import + referenced-asset checks (L12/L13)
+    "phantom_symbol": "phantom_symbol_detected",
+    "missing_template_asset": "missing_template_asset_detected",
+    # F-7: provenance-vocabulary validation (L14)
+    "provenance_vocabulary": "provenance_vocabulary_detected",
     # Python L1-L10 disk compliance categories (P3-4 terminology alignment)
     "import_resolution": "import_resolution_detected",
     "cross_scope_duplicate": "cross_scope_duplicate_detected",
@@ -1658,8 +1753,9 @@ class PrimePostMortemEvaluator:
             # all-Python backend (backend_codegen path). Env-gated (STARTD8_PY_TYPECHECK);
             # mypy import-resolution noise from absent app deps is treated as infra, not fault.
             self._evaluate_python_toolchain(report.features, project_root)
-            # C-6 runtime boot-smoke: actually BOOT the generated app (app.server:app, else
-            # app.main:app) and confirm it serves /openapi.json. Catches the import-class that
+            # C-6 runtime boot-smoke: actually BOOT the generated app (target resolved from
+            # the scaffold manifest + on-disk entrypoints — see resolve_app_target, F-5)
+            # and confirm it serves /openapi.json. Catches the import-class that
             # compileall/mypy/structural scoring miss (run-021..026: `from ai.x` wrong root, bare
             # `import get_session` — modules that pass syntax but fail at import). Default-on;
             # gracefully degrades to a warning (never a silent PASS) when app deps aren't installed.
@@ -1725,6 +1821,16 @@ class PrimePostMortemEvaluator:
                 report.features, report.aggregate_verdict
             )
 
+        # F-3 verdict floor (RUN-006): a run in which NOTHING completed can never read as
+        # PASS, regardless of what the disk-quality mean says. RUN-006 scored PASS/1.00
+        # with successful=0 because its one failed feature generated no files, so disk
+        # validation fell back to its target_files and scored the PRE-EXISTING file on
+        # disk a vacuous 1.0 — which the disk-score recompute then averaged into a
+        # perfect run. Zero successful completions ⇒ FAIL / 0.0, unconditionally.
+        if report.total_features > 0 and report.successful_features == 0:
+            report.aggregate_score = 0.0
+            report.aggregate_verdict = "FAIL"
+
         # Extract lessons
         report.lessons = self._extract_lessons(report)
 
@@ -1785,6 +1891,24 @@ class PrimePostMortemEvaluator:
             root_cause, pipeline_stage = self._classifier.classify_feature(
                 feature_dict, history_entry
             )
+
+        # F-3 attribution (RUN-006 §3.2): thread who-made-the-call through to the report.
+        # The prime contractor stamps feature.metadata["failure_attribution"] at the
+        # failure site and mirrors agent/model/provider onto history entries, so a failed
+        # LLM call is never reported as agent/model/provider: null when the failure site
+        # knew the answer.
+        meta_attr = (feature_dict.get("metadata") or {}).get("failure_attribution") or {}
+        hist = history_entry or {}
+        agent = hist.get("agent") or meta_attr.get("agent")
+        model = hist.get("model") or meta_attr.get("model")
+        provider = hist.get("provider") or meta_attr.get("provider")
+        if not success and pipeline_stage == PipelineStage.UNKNOWN:
+            stage_str = str(hist.get("pipeline_stage") or meta_attr.get("stage") or "")
+            try:
+                pipeline_stage = PipelineStage(stage_str)
+            except ValueError:
+                if stage_str == "quality_gate":
+                    pipeline_stage = PipelineStage.GENERATION
 
         # Extract cost from history
         cost_usd = 0.0
@@ -1900,6 +2024,9 @@ class PrimePostMortemEvaluator:
             force_regenerated=force_regenerated,
             generation_path=generation_path,
             deterministic=deterministic,
+            agent=agent,
+            model=model,
+            provider=provider,
         )
 
     def _score_requirements(
@@ -2276,26 +2403,25 @@ class PrimePostMortemEvaluator:
     ) -> None:
         """C-6 Layer 1 — boot the generated app and confirm it serves ``/openapi.json``.
 
-        Boots ``app.server:app`` (the AI composition entrypoint) if present, else ``app.main:app``,
-        in a subprocess. A boot **failure** (import error, crash) marks the implicated Python
-        feature(s) ``FAIL:boot`` — this is the gate that converts the run-021..026 "compiles but
+        The target is resolved via ``resolve_app_target`` (F-5, RUN-008 1a-iii): package from
+        the scaffold manifest (``app.yaml``) when present, then ``{package}.server:app`` (the AI
+        composition entrypoint) if ``server.py`` exists, else ``{package}.main:app`` — never a
+        hardcoded variant, so a healthy app passes regardless of which entrypoint was generated.
+        A boot **failure** (import error, crash) marks the implicated Python feature(s)
+        ``FAIL:boot`` — this is the gate that converts the run-021..026 "compiles but
         won't import" hollow PASS into an honest verdict. App deps absent ⇒ ``unavailable`` ⇒ a
         per-feature **warning**, never a silent PASS (NFR-MA-2 / FR-9). Best-effort blame: features
         whose generated filename appears in the boot trace; if none localize, the whole non-bootable
         app fails (nothing is usable — cf. run-025 "0/4 usable").
         """
         try:
-            from startd8.validators.boot_smoke import run_boot_smoke
+            from startd8.validators.boot_smoke import resolve_app_target, run_boot_smoke
             from startd8.forward_manifest_validator import DiskComplianceResult
         except ImportError:
             return
 
-        root = Path(project_root)
-        if (root / "app" / "server.py").is_file():
-            app_spec = "app.server:app"
-        elif (root / "app" / "main.py").is_file():
-            app_spec = "app.main:app"
-        else:
+        app_spec = resolve_app_target(project_root)
+        if app_spec is None:
             return  # no generated app entrypoint to boot
 
         py_features: Dict[int, FeaturePostMortem] = {}
@@ -2430,6 +2556,13 @@ class PrimePostMortemEvaluator:
                 pass
 
         for fpm in features:
+            # F-3 vacuous-score guard (RUN-006): a FAILED feature that generated nothing
+            # has no disk output of its own to validate. Falling back to target_files
+            # here would score whatever pre-existing file sits at the target path (the
+            # healthy seam file, in RUN-006's case) a perfect 1.0 — false evidence that
+            # then lifts the aggregate. Skip; the feature keeps its honest 0.0.
+            if not fpm.success and not fpm.generated_files:
+                continue
             # Prefer generated_files (absolute paths to actual output) over
             # target_files (relative paths that may not exist at project root).
             files_to_check = (
