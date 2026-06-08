@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StartD8 SDK - Developer Portal</title>
+    <title>startd8 SDK - Developer Portal</title>
     <style>
         :root {
             --primary: #2563eb;
@@ -495,57 +495,149 @@
         <div class="container">
             <div class="logo">StartD8</div>
             <ul>
+                <li><a href="#codegen">Code Generation</a></li>
                 <li><a href="#features">Features</a></li>
                 <li><a href="#quickstart">Quick Start</a></li>
                 <li><a href="#cli">CLI</a></li>
                 <li><a href="#session-tracking">Observability</a></li>
-                <li><a href="https://github.com/startdate/startd8">GitHub</a></li>
+                <li><a href="https://github.com/neil-the-nowledgeable/startd8">GitHub</a></li>
             </ul>
         </div>
     </nav>
 
     <section class="hero">
-        <h1>Multi-LLM Agent Framework</h1>
+        <h1>A harness for LLM-assisted development</h1>
         <p class="subtitle">
-            Compare LLM responses, track costs, and orchestrate multi-agent workflows with a unified Python SDK
+            Turn a requirements doc into working software via a Requirements&nbsp;&rarr;&nbsp;Capabilities
+            pipeline &mdash; maximizing deterministic ($0) code generation and using LLMs only where they
+            add value. Plus multi-LLM benchmarking and cloud/edge model evaluation.
         </p>
         <div class="hero-badges">
             <span class="badge highlight">Python 3.9+</span>
             <span class="badge">v0.4.0</span>
-            <span class="badge">MIT License</span>
-            <span class="badge">Async Support</span>
+            <span class="badge">Equitable Use License v1.0</span>
+            <span class="badge highlight">$0 deterministic codegen</span>
         </div>
         <div class="cta-buttons">
-            <a href="#quickstart" class="btn btn-primary">Get Started</a>
-            <a href="https://github.com/startdate/startd8" class="btn btn-secondary">View on GitHub</a>
+            <a href="#codegen" class="btn btn-primary">Generate an app</a>
+            <a href="https://github.com/neil-the-nowledgeable/startd8" class="btn btn-secondary">View on GitHub</a>
+        </div>
+    </section>
+
+    <!-- Deterministic Code Generation -->
+    <section id="codegen">
+        <h2>Deterministic Code Generation</h2>
+        <p class="section-subtitle">
+            The headline capability: project one Prisma data-model contract into a working all-Python
+            app (Pydantic + SQLModel + FastAPI + HTMX) at <strong>$0 LLM cost</strong>. The deterministic
+            cascade is ~89% of an app; language models are used only for the integration glue.
+        </p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="icon">&#9889;</div>
+                <h3>Backend from a contract</h3>
+                <p>One <code>.prisma</code> &rarr; Pydantic models, SQLModel tables, FastAPI CRUD, HTMX UI, export, AI-schemas and tests. Idempotent and drift-checkable.</p>
+                <span class="tag">generate backend</span>
+                <span class="tag">backend_codegen</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128208;</div>
+                <h3>Wireframe (preview)</h3>
+                <p>See exactly what the $0 cascade will build &mdash; and what is not yet defined &mdash; before you run it. Read-only, advisory, <code>--json</code> for CI.</p>
+                <span class="tag">wireframe</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#127959;&#65039;</div>
+                <h3>Scaffold &amp; views</h3>
+                <p>Emit project plumbing (pyproject / logging / alembic / Dockerfile) and composite/relational views (dashboard / board / workspace) from declarative inputs.</p>
+                <span class="tag">generate scaffold</span>
+                <span class="tag">generate views</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#127912;</div>
+                <h3>Polish &amp; repair</h3>
+                <p>Apply an accessible design theme to a built app ($0), and run deterministic post-generation repair across 7 language profiles.</p>
+                <span class="tag">polish</span>
+                <span class="tag">repair</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#129520;</div>
+                <h3>Prime Contractor</h3>
+                <p>The active multi-feature construction path for the LLM integration passes &mdash; tier-routed (template &rarr; Haiku &rarr; Sonnet), with checkpoint/resume and Kaizen quality feedback.</p>
+                <span class="tag">PrimeContractorWorkflow</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128260;</div>
+                <h3>Capability Delivery Pipeline</h3>
+                <p>Drive requirements doc + plan &rarr; working app end to end via <code>.cap-dev-pipe/</code>. The deterministic <code>generate</code> cascade is $0 and not a pipeline pass.</p>
+                <span class="tag">cap-dev-pipe</span>
+            </div>
+        </div>
+
+        <div class="code-section" style="margin-top: 2rem;">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Deterministic cascade ($0, no LLM)</span>
+            </div>
+            <pre><code><span class="comment"># Preview what the $0 cascade will build (read-only; --json for CI)</span>
+startd8 wireframe --inputs assembly-inputs.yaml
+
+<span class="comment"># Generate the full backend from the Prisma contract</span>
+startd8 generate backend --schema schema.prisma --out ./app
+
+<span class="comment"># Project plumbing + composite views</span>
+startd8 generate scaffold --inputs app.yaml   --out ./app
+startd8 generate views    --inputs views.yaml --out ./app
+
+<span class="comment"># Apply an accessible design theme ($0); CI drift check</span>
+startd8 polish ./app
+startd8 generate backend --schema schema.prisma --check  <span class="comment"># exit 1 on drift</span></code></pre>
         </div>
     </section>
 
     <!-- Supported Providers -->
     <section id="providers">
         <h2>Supported Providers</h2>
-        <p class="section-subtitle">One unified interface for all major LLM providers</p>
+        <p class="section-subtitle">One unified interface, 8 providers &mdash; cloud, edge/local, and self-hosted</p>
 
         <div class="providers-grid">
             <div class="provider-card">
                 <div class="icon">🟠</div>
                 <h3>Anthropic</h3>
-                <p>Claude 3.5, Claude 4</p>
+                <p>Claude 4.x (Opus/Sonnet/Haiku)</p>
             </div>
             <div class="provider-card">
                 <div class="icon">🟢</div>
                 <h3>OpenAI</h3>
-                <p>GPT-4, GPT-4 Turbo</p>
+                <p>GPT-4o, GPT-4.x</p>
             </div>
             <div class="provider-card">
                 <div class="icon">🔵</div>
                 <h3>Google</h3>
-                <p>Gemini 1.5 Pro</p>
+                <p>Gemini 2.0</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🟣</div>
+                <h3>Mistral</h3>
+                <p>Mistral Large, etc.</p>
             </div>
             <div class="provider-card">
                 <div class="icon">⚪</div>
                 <h3>Ollama</h3>
-                <p>Llama, Mistral, etc.</p>
+                <p>Edge/local: Llama, Mistral…</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🟩</div>
+                <h3>NVIDIA NIM</h3>
+                <p>Self-hosted inference</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🔌</div>
+                <h3>OpenAI-compatible</h3>
+                <p>Any compatible endpoint</p>
             </div>
             <div class="provider-card">
                 <div class="icon">🧪</div>
@@ -557,8 +649,8 @@
 
     <!-- Key Features -->
     <section id="features">
-        <h2>Key Features</h2>
-        <p class="section-subtitle">Everything you need to build, test, and optimize LLM-powered applications</p>
+        <h2>Agent Framework &amp; Evaluation</h2>
+        <p class="section-subtitle">The other half of the toolkit: benchmark, evaluate, and orchestrate LLMs</p>
 
         <div class="features-grid">
             <div class="feature-card">
@@ -712,19 +804,19 @@ results = runner.<span class="function">run_benchmark</span>(
 
         <div class="value-props">
             <div class="value-card">
-                <div class="metric">5+</div>
+                <div class="metric">~89%</div>
+                <h4>Deterministic</h4>
+                <p>Of an app generated at $0 LLM cost</p>
+            </div>
+            <div class="value-card">
+                <div class="metric">8</div>
                 <h4>LLM Providers</h4>
-                <p>Unified interface for major providers</p>
+                <p>Cloud, edge/local, and self-hosted</p>
             </div>
             <div class="value-card">
                 <div class="metric">100%</div>
                 <h4>Async Support</h4>
                 <p>Full async/await for all operations</p>
-            </div>
-            <div class="value-card">
-                <div class="metric">$0</div>
-                <h4>Budget Control</h4>
-                <p>Set limits and get alerts</p>
             </div>
         </div>
     </section>
@@ -736,36 +828,36 @@ results = runner.<span class="function">run_benchmark</span>(
 
         <div class="cli-commands">
             <div class="cli-command">
-                <code>startd8 init</code>
-                <span class="desc">Initialize framework in current directory</span>
+                <code>startd8 wireframe --inputs assembly-inputs.yaml</code>
+                <span class="desc">$0 preview of what the deterministic cascade will build</span>
             </div>
             <div class="cli-command">
-                <code>startd8 tui</code>
-                <span class="desc">Launch interactive terminal UI</span>
+                <code>startd8 generate backend --schema schema.prisma --out ./app</code>
+                <span class="desc">Render the full all-Python backend ($0, no LLM)</span>
             </div>
             <div class="cli-command">
-                <code>startd8 create-prompt "..." --tag backend</code>
-                <span class="desc">Create a versioned prompt with tags</span>
+                <code>startd8 generate scaffold|views --inputs ... --out ./app</code>
+                <span class="desc">Emit project plumbing / composite views ($0)</span>
             </div>
             <div class="cli-command">
-                <code>startd8 run-benchmark --agent anthropic:claude-sonnet-4 --agent openai:gpt-4o</code>
-                <span class="desc">Benchmark multiple models</span>
+                <code>startd8 polish ./app</code>
+                <span class="desc">Apply an accessible design theme ($0)</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 compare-models --seed seed.json --model anthropic:... --model ollama:...</code>
+                <span class="desc">Run a seed across models (cloud + edge/local) and rank</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 run-benchmark &lt;prompt-id&gt; --agent anthropic:claude-sonnet-4-20250514</code>
+                <span class="desc">Benchmark prompts across models</span>
             </div>
             <div class="cli-command">
                 <code>startd8 compare &lt;prompt-id&gt; --output report.md</code>
                 <span class="desc">Generate comparison report</span>
             </div>
             <div class="cli-command">
-                <code>startd8 pipeline "Design a REST API" --workflow planner-implementer</code>
-                <span class="desc">Run multi-step workflow</span>
-            </div>
-            <div class="cli-command">
-                <code>startd8 queue watch</code>
-                <span class="desc">Watch folder and process jobs automatically</span>
-            </div>
-            <div class="cli-command">
-                <code>startd8 stats</code>
-                <span class="desc">View usage statistics and costs</span>
+                <code>startd8 tui</code>
+                <span class="desc">Launch interactive terminal UI</span>
             </div>
         </div>
     </section>
@@ -776,6 +868,24 @@ results = runner.<span class="function">run_benchmark</span>(
         <p class="section-subtitle">Clean, extensible design with provider abstraction</p>
 
         <div class="architecture-diagram">
+            <p style="text-align:center; color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">Deterministic path ($0, no LLM)</p>
+            <div class="arch-flow">
+                <div class="arch-box">
+                    <strong>.prisma</strong>
+                    <br><small>data-model contract</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box highlight">
+                    <strong>backend_codegen</strong>
+                    <br><small>deterministic cascade</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box">
+                    <strong>Working app</strong>
+                    <br><small>Pydantic·SQLModel·FastAPI·HTMX</small>
+                </div>
+            </div>
+            <p style="text-align:center; color: var(--text-muted); margin: 1.5rem 0 1rem; font-size: 0.9rem;">Agent path (LLM integration + evaluation)</p>
             <div class="arch-flow">
                 <div class="arch-box">
                     <strong>Your Code</strong>
@@ -784,7 +894,7 @@ results = runner.<span class="function">run_benchmark</span>(
                 <span class="arch-arrow">→</span>
                 <div class="arch-box highlight">
                     <strong>AgentFramework</strong>
-                    <br><small>Orchestration</small>
+                    <br><small>Prime Contractor · pipelines</small>
                 </div>
                 <span class="arch-arrow">→</span>
                 <div class="arch-box">
@@ -794,7 +904,7 @@ results = runner.<span class="function">run_benchmark</span>(
                 <span class="arch-arrow">→</span>
                 <div class="arch-box">
                     <strong>Providers</strong>
-                    <br><small>Anthropic, OpenAI, etc.</small>
+                    <br><small>8 · cloud + edge/local</small>
                 </div>
             </div>
         </div>
@@ -805,16 +915,20 @@ results = runner.<span class="function">run_benchmark</span>(
                 <p>Providers are registered via entry points. Add custom providers without modifying core code.</p>
                 <pre style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.8rem;"><code>[project.entry-points."startd8.providers"]
 anthropic = "startd8.providers.anthropic:AnthropicProvider"
-openai = "startd8.providers.openai:OpenAIProvider"</code></pre>
+openai = "startd8.providers.openai:OpenAIProvider"
+
+[project.entry-points."startd8.languages"]
+python = "startd8.languages.python:PythonLanguageProfile"
+prisma = "startd8.languages.prisma:PrismaLanguageProfile"</code></pre>
             </div>
 
             <div class="feature-card">
                 <h3>Agent Specs</h3>
                 <p>Simple <code>provider:model</code> format for specifying agents anywhere.</p>
                 <pre style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.8rem;"><code>anthropic:claude-sonnet-4-20250514
-openai:gpt-4oo
+openai:gpt-4o
 gemini:gemini-2.0-flash
-ollama:llama2
+ollama:llama3
 mock:mock-model</code></pre>
             </div>
         </div>
@@ -894,7 +1008,7 @@ recommendations = analytics.<span class="function">get_optimizations</span>()</c
     <!-- Session Tracking -->
     <section id="session-tracking">
         <h2>Session Tracking & Observability</h2>
-        <p class="section-subtitle">Monitor active sessions with Prometheus metrics and Grafana dashboards</p>
+        <p class="section-subtitle">OpenTelemetry traces/metrics/logs to a Loki/Grafana stack (with Mimir/Tempo), plus per-provider cost tracking</p>
 
         <div class="code-section">
             <div class="code-header">
@@ -905,10 +1019,10 @@ recommendations = analytics.<span class="function">get_optimizations</span>()</c
             </div>
             <pre><code><span class="keyword">from</span> startd8 <span class="keyword">import</span> AgentFramework
 
-<span class="comment"># Enable session tracking with Prometheus export</span>
+<span class="comment"># Enable session tracking + OpenTelemetry export</span>
 framework = <span class="class">AgentFramework</span>(
     enable_session_tracking=<span class="keyword">True</span>,
-    prometheus_port=<span class="number">9091</span>  <span class="comment"># Metrics at http://localhost:9091/metrics</span>
+    enable_otel=<span class="keyword">True</span>  <span class="comment"># traces/metrics/logs via OTLP → Loki/Grafana</span>
 )
 
 <span class="comment"># Start a tracked session</span>
@@ -929,8 +1043,8 @@ framework.<span class="function">end_session</span>(session_id)</code></pre>
 
         <div class="features-grid" style="margin-top: 2rem;">
             <div class="feature-card">
-                <h3>Prometheus Metrics</h3>
-                <p>Metrics exported at <code>http://localhost:9091/metrics</code></p>
+                <h3>Metrics (via OTel)</h3>
+                <p>Exported over OTLP to the Mimir/Grafana stack. CLI: <code>startd8 otel-status</code> / <code>otel-configure</code></p>
                 <table style="width: 100%; margin-top: 1rem; font-size: 0.85rem;">
                     <tr style="border-bottom: 1px solid var(--border);">
                         <td style="padding: 0.5rem 0;"><code>startd8_active_sessions</code></td>
@@ -997,8 +1111,9 @@ framework.<span class="function">end_session</span>(session_id)</code></pre>
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=...
+MISTRAL_API_KEY=...
 
-<span class="comment"># Optional: Ollama configuration</span>
+<span class="comment"># Optional: edge/local + self-hosted</span>
 OLLAMA_HOST=http://localhost:11434</code></pre>
         </div>
     </section>
@@ -1006,15 +1121,15 @@ OLLAMA_HOST=http://localhost:11434</code></pre>
     <!-- Footer -->
     <footer>
         <p style="margin-bottom: 1rem;">
-            <strong>StartD8 SDK</strong> v0.4.0 — MIT License
+            <strong>startd8 SDK</strong> v0.4.0 — Equitable Use License v1.0
         </p>
         <p>
-            <a href="https://github.com/startdate/startd8">GitHub</a> ·
-            <a href="https://github.com/startdate/startd8/issues">Issues</a> ·
-            <a href="https://github.com/startdate/startd8/blob/main/docs/API_REFERENCE_v1.md">API Reference</a>
+            <a href="https://github.com/neil-the-nowledgeable/startd8">GitHub</a> ·
+            <a href="https://github.com/neil-the-nowledgeable/startd8/issues">Issues</a> ·
+            <a href="https://github.com/neil-the-nowledgeable/startd8/blob/main/docs/API_REFERENCE_v1.md">API Reference</a>
         </p>
         <p style="margin-top: 1rem; font-size: 0.85rem;">
-            Built for developers who want to leverage multiple LLMs efficiently.
+            A software-engineering harness for LLM-assisted development &mdash; deterministic-first.
         </p>
     </footer>
 
