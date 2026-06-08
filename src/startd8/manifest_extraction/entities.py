@@ -4,8 +4,9 @@ Runs FIRST (extraction-ordering constraint): downstream extractors need the deri
 models (views ``Shows:`` fks, completeness category words) and the field notes
 (``ONLY HUMANS ENTER THIS`` → human_inputs).
 
-Pilot posture (FR-WPI-8): **DIFF mode** — no Prisma writer exists; the doc-derived graph is
-compared against the live contract and reported, never emitted. Greenfield DRAFT mode is P7.
+FR-WPI-8: both modes now exist. **DIFF mode** (``diff_against_live``) compares the doc-derived graph
+against the live contract; **DRAFT mode** (``prisma_emitter.render_prisma_schema`` + the FR-PE-6/7
+gate/promotion) *emits* ``schema.prisma`` from the graph. The §2.1 grammar below feeds both.
 
 Closed grammar implemented (contract v0.2):
 - plain types: text/long text → String; number → Int; decimal → Float; date, date+time →

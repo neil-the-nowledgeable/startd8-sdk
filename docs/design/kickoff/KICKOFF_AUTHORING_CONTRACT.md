@@ -96,8 +96,25 @@ Relationships: a ProofPoint **belongs to** a Profile; a ProofPoint **links** Cap
     exactly 3 join models — the §4-acceptance set.)
   - "links X to **nothing** (plain link)" is **non-conforming** ⇒ `not_extracted` — write the
     pairwise sentences instead.
+- **DRAFT-mode emitter grammar (FR-PE-5 — the `schema.prisma` *writer*).** These three constructs
+  let the doc express everything the live contract uses; they are emitted by the Prisma emitter
+  (`prisma_emitter.render_prisma_schema`) and verified by the semantic-parity diff (`semantic_diff`):
+  - **Field defaults (FR-PE-5a, OQ-PE-1):** a `default: <value>` clause in the **Notes** cell →
+    `@default(<value>)`. A defaulted scalar is emitted **non-optional** (the default supplies the
+    value), regardless of the Required column. `| matchScore | number | no | default: 0 |` →
+    `matchScore Int @default(0)`.
+  - **Loose references (FR-PE-5c, OQ-PE-3) — the verb `references`:** the antonym of `belongs to`.
+    `a TailoredMatch **references** a JobDescription` → a `jobDescriptionId` scalar with **no**
+    `@relation` and **no** reverse list (the labeled-but-unlinked / polymorphic id the live contract
+    uses). Use `belongs to` for an owned FK; use `references` for a loose id. *This is also the
+    marker the source-bound AI-pass derivation keys on (OQ-SBE-2).*
+  - **Indexes & compound uniqueness (FR-PE-5b, OQ-PE-2):** per-entity **`Indexes:`** and **`Unique:`**
+    lines (after the `Relationships:` paragraph, blank-line separated). Semicolon-separated specs,
+    each a comma-separated column list: `Indexes: jobDescriptionId; jobDescriptionId, kind` → two
+    `@@index`; `Unique: jobDescriptionId, subjectType, subjectId` → one compound `@@unique`.
 - Extraction emits a *draft* contract; the Architect validates (the bookend, preserved —
-  drafting ≠ the forbidden mid-run mutation).
+  drafting ≠ the forbidden mid-run mutation). The draft is gated (round-trip + whole-schema parity,
+  FR-PE-6) and reaches the project tree only by an explicit human-triggered **promotion** (FR-PE-7).
 
 ### 2.2 Pages → `pages.yaml`
 
