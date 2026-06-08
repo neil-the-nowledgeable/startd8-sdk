@@ -43,6 +43,7 @@ from .tui.mixin_prompt_builder_menu import PromptBuilderMixin
 from .tui.mixin_job_queue_menu import JobQueueMixin
 from .tui.mixin_external_tools import ExternalToolsMixin
 from .tui.mixin_capdevpipe import CapDevPipeMixin
+from .tui.mixin_polish import PolishMixin
 from .tui.mixin_prompts_stats import PromptsStatsMixin
 from .tui.mixin_iterative_workflow import IterativeWorkflowMixin
 from .tui.mixin_enhancement_chain import EnhancementChainMixin
@@ -92,6 +93,7 @@ class ImprovedTUI(
     JobWorkflowRunnersMixin,
     ExternalToolsMixin,
     CapDevPipeMixin,
+    PolishMixin,
     PromptsStatsMixin,
     IterativeWorkflowMixin,
     EnhancementChainMixin,
@@ -294,6 +296,7 @@ class ImprovedTUI(
         # Project setup section
         choices.append(questionary.Separator("═══ PROJECT SETUP ═══"))
         choices.append("📦 Install Capability Pipeline (cap-dev-pipe)")
+        choices.append("🎨 Polish App UI (apply design theme)")
 
         # System section
         choices.append(questionary.Separator("═══ SYSTEM ═══"))
@@ -515,6 +518,8 @@ class ImprovedTUI(
                 self.manage_external_tools()
             elif "cap-dev-pipe" in choice:
                 self.install_capdevpipe_flow()
+            elif "Polish App UI" in choice:
+                self.run_polish_flow()
             elif "Tour Guide" in choice:
                 if self.tour_guide:
                     self.tour_guide.show_tour_menu()

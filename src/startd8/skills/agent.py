@@ -5,6 +5,19 @@ This module contains the core SkillAgent class which bridges the startd8 SDK
 with Claude Skills through the Model Context Protocol (MCP).
 
 Design Document: design/SKILL_AGENT_CORE_DESIGN.md
+
+.. warning::
+   **KNOWN LIMITATION (verified 2026-06-08): this path does NOT load a Claude Code skill's
+   content.** Both :meth:`SkillAgent._call_mcp_skill` and the gateway's ``_execute_mcp_skill``
+   merely send the base model the literal string ``"Execute the {skill_id} skill with this
+   task: ..."`` — the skill's ``SKILL.md`` is never read from disk, the declared
+   ``startd8_use_skill`` tool is never executed, and ``_discover_skills`` registers hardcoded
+   metadata stubs ("In production, this would query the MCP server"). So the model runs on
+   whatever it associates with the *name*, NOT the skill's actual instructions. **Output is
+   generic base-model output that can be falsely attributed to the skill** — a Looks-Like-Success
+   trap. Do NOT build skill-leveraging features on this path until it is fixed. To genuinely run
+   a skill from the SDK, read its ``SKILL.md`` and inject it as the agent's ``system_prompt``
+   (no MCP needed). See the Presentation Polish OQ-8 spike findings.
 """
 
 import os
@@ -531,7 +544,10 @@ class SkillAgent(BaseAgent):
             }
         ]
         
-        # Build message requesting skill execution
+        # Build message requesting skill execution.
+        # WARNING (see module docstring): this only NAMES the skill to the base model — it does
+        # NOT load the skill's SKILL.md. The `startd8_use_skill` tool above is declared but never
+        # executed (we read block.text below). Output is base-model output, not skill-driven.
         messages = [
             {
                 "role": "user",

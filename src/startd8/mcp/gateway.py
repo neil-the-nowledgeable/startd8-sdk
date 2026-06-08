@@ -627,7 +627,15 @@ class MCPGateway:
         max_tokens: int,
         timeout_ms: int
     ) -> SkillExecutionResult:
-        """Execute skill via MCP protocol."""
+        """Execute skill via MCP protocol.
+
+        .. warning::
+           **KNOWN LIMITATION (2026-06-08): does NOT load the skill's content.** This sends the base
+           model the literal ``"Execute the {skill_id} skill ..."`` string; the ``SKILL.md`` is never
+           read and the declared ``startd8_use_skill`` tool is never executed. Output is generic
+           base-model output that can be falsely attributed to the skill. See ``skills/agent.py``
+           module docstring. To truly run a skill, inject its ``SKILL.md`` as the ``system_prompt``.
+        """
         start_time = time.time()
         
         if not self._client:

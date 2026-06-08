@@ -55,6 +55,11 @@ def _run(project: Path, theme: str, check: bool) -> None:
         console.print(f"[red]error[/red]: {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
+    # OTel telemetry at the CLI boundary (FR-23) — no-op when OTel is unavailable; never raises.
+    from .presentation_polish.telemetry import record_polish
+
+    record_polish(result, check=check)
+
     for relpath, status in result.files:
         color = {
             FileStatus.CREATED: "green",
