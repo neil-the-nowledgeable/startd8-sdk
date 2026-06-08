@@ -1,17 +1,24 @@
-# Startd8 Quick Start Guide
+# startd8 Quick Start Guide
 
 **Version:** 0.4.0  
-**Document Version:** v1  
-**Last Updated:** 2025-01-13
+**Document Version:** v2  
+**Last Updated:** 2026-06-08
 
-## What is Startd8?
+## What is startd8?
 
-Startd8 (StartDate SDK) is a Python framework for:
-- 🤖 Managing multiple LLM agents (Claude, GPT-4, etc.)
-- 📝 Creating and versioning prompts
-- 🔗 Building multi-step AI workflows
-- 📊 Comparing and benchmarking responses
-- 💰 Tracking token usage and costs
+**startd8-SDK** is a software-engineering harness and toolkit for LLM-assisted development. It
+has two halves that work together:
+
+1. **Deterministic-first code generation** — turn a data-model contract into a working
+   application at **$0 LLM cost**, using language models only for integration glue. This is the
+   headline capability (see the next section).
+2. **Multi-LLM benchmarking & model evaluation** — compare and rank models (cloud and
+   edge/local), version prompts, build multi-step workflows, and track token usage and costs.
+
+The throughline: maximize deterministic generation, use LLMs only where they earn their cost —
+a bridge toward deterministic, auditable generation for production/enterprise apps. The original
+agent-framework capabilities are below; start with **Deterministic Code Generation** if you want
+to build an app.
 
 ## Installation
 
@@ -61,9 +68,45 @@ startd8 tui
 # Select: 🔑 Manage API Keys
 ```
 
+## Quick Start: Deterministic Code Generation ($0, no LLM)
+
+The deterministic cascade projects **one Prisma data-model contract** into a working all-Python
+application (Pydantic + SQLModel + FastAPI + HTMX) — no API calls, no cost.
+
+```bash
+# 1. Preview what the $0 cascade WILL build (read-only, advisory; add --json for CI)
+startd8 wireframe --inputs assembly-inputs.yaml
+
+# 2. Generate the full backend from the contract
+startd8 generate backend --schema schema.prisma --out ./app
+
+# 3. Emit project plumbing (pyproject / logging / alembic / Dockerfile) from app.yaml
+startd8 generate scaffold --inputs app.yaml --out ./app
+
+# 4. Emit composite/relational views (dashboard / board / workspace) from views.yaml
+startd8 generate views --inputs views.yaml --out ./app
+
+# 5. (optional) apply an accessible design theme to the built app ($0)
+startd8 polish ./app
+```
+
+`startd8 generate --help` lists all four targets (`frontend`, `backend`, `scaffold`, `views`).
+
+For a full requirements-doc → working-app run, use the **Capability Delivery Pipeline** from
+`.cap-dev-pipe/` — see [Prime Contractor Workflow Guide](PRIME_CONTRACTOR_WORKFLOW_GUIDE.md).
+
+### Evaluate models for a generation task
+
+```bash
+# Run the same seed through Prime Contractor across 2+ models (cloud + edge/local) and rank
+startd8 compare-models --seed seed.json \
+    --model anthropic:claude-sonnet-4-20250514 \
+    --model ollama:llama3
+```
+
 ## Quick Start: Interactive TUI
 
-The fastest way to get started:
+The fastest way to explore the benchmarking side:
 
 ```bash
 startd8 tui
@@ -270,18 +313,19 @@ startd8 tui
 
 ## Next Steps
 
-1. **Configure Real LLMs**: Set up Claude or GPT-4 API keys
-2. **Explore Pipelines**: Try different workflow templates
-3. **Build Custom Workflows**: Create your own pipelines
-4. **Compare Agents**: Benchmark different models
-5. **Automate**: Use job queue for batch processing
+1. **Build an app**: run the deterministic `generate` cascade against your `.prisma` contract
+2. **Run the full pipeline**: requirements doc → working app via `.cap-dev-pipe/`
+3. **Evaluate models**: `startd8 compare-models` across cloud and edge/local models
+4. **Configure Real LLMs**: set up API keys for the integration passes
+5. **Benchmark & automate**: prompt benchmarking, workflow templates, and the job queue
 
 ## Resources
 
+- [Prime Contractor Workflow Guide](PRIME_CONTRACTOR_WORKFLOW_GUIDE.md) — requirements → app
 - [SDK Architecture](SDK_ARCHITECTURE_v1.md)
-- [TUI User Guide](TUI_USER_GUIDE_v1.md)
-- [Agent Configuration](AGENT_CONFIGURATION_GUIDE_v1.md)
 - [API Reference](API_REFERENCE_v1.md)
+- [Cost Tracking User Guide](COST_TRACKING_USER_GUIDE.md)
+- [TUI User Guide](TUI_USER_GUIDE_v1.md)
 - [Pipeline Workflows](PIPELINE_WORKFLOWS_v1.md)
 
 ## Getting Help
