@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "startd8"
 version = "0.4.0"
-description = "Python SDK for StartDate (startd8) Agent Framework - Multi-LLM benchmarking and prompt management"
+description = "startd8-SDK: a software-engineering harness for LLM-assisted development — Requirements-to-Capabilities delivery, deterministic ($0) code generation, plus multi-LLM benchmarking and cloud/edge model evaluation"
 readme = "README.md"
 license = {file = "LICENSE.md"}
 requires-python = ">=3.9"
