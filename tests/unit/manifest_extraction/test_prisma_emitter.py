@@ -11,7 +11,11 @@ import pytest
 
 from startd8.languages.prisma_parser import parse_prisma_schema
 from startd8.manifest_extraction.entities import DocEntity, DocField, EntityGraph, JoinModel
-from startd8.manifest_extraction.prisma_emitter import render_prisma_schema
+from startd8.manifest_extraction.prisma_emitter import (
+    parity_against_live,
+    render_prisma_schema,
+    semantic_diff,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -102,3 +106,83 @@ def test_unknown_type_flagged_never_emitted():
 def test_deterministic_byte_stable():
     g = _graph()
     assert render_prisma_schema(g).text == render_prisma_schema(g).text
+
+
+# --------------------------------------------------------------------------- #
+# FR-PE-4 — semantic parity diff
+# --------------------------------------------------------------------------- #
+
+_PREAMBLE = (
+    'generator client {\n  provider = "prisma-client-js"\n}\n\n'
+    'datasource db {\n  provider = "sqlite"\n  url      = env("DATABASE_URL")\n}\n\n'
+)
+
+
+def _schema(*models: str) -> str:
+    return _PREAMBLE + "\n\n".join(models)
+
+
+def test_semantic_diff_self_is_clean():
+    # The emitter's own output has zero semantic drift against itself (FR-PE-6 parity baseline).
+    text = render_prisma_schema(_graph()).text
+    assert semantic_diff(text, text) == []
+
+
+def test_semantic_diff_flags_type_and_optionality():
+    left = _schema("model M {\n  id String @id\n  name String?\n}")
+    right = _schema("model M {\n  id String @id\n  name String\n}")
+    drift = semantic_diff(left, right)
+    assert any("M.name: type String? (emitted) vs String (live)" == d for d in drift)
+
+
+def test_semantic_diff_flags_field_default_attr():
+    # The FR-PE-5 "@default on a non-bookkeeping field" gap: emitted lacks it, live has it.
+    left = _schema("model M {\n  id String @id\n  score Int\n}")
+    right = _schema("model M {\n  id String @id\n  score Int @default(0)\n}")
+    drift = semantic_diff(left, right)
+    assert any("M.score: attr @default(0) in live, not emitted" == d for d in drift)
+
+
+def test_semantic_diff_flags_block_attrs():
+    # FR-PE-5 @@index / compound @@unique gaps surface as block-attr drift.
+    left = _schema("model M {\n  id String @id\n  ref String\n}")
+    right = _schema("model M {\n  id String @id\n  ref String\n  @@index([ref])\n}")
+    drift = semantic_diff(left, right)
+    assert any("M: block-attr @@index([ref]) in live, not emitted" == d for d in drift)
+
+
+def test_semantic_diff_flags_missing_and_extra_models():
+    left = _schema("model A {\n  id String @id\n}")
+    right = _schema("model B {\n  id String @id\n}")
+    drift = semantic_diff(left, right)
+    assert "model A: emitted, absent from live" in drift
+    assert "model B: in live, not emitted" in drift
+
+
+def test_parity_against_live_surfaces_fr_pe_5_gaps():
+    # Slice-1 emitter vs a live model carrying all three FR-PE-5 constructs → each flagged,
+    # nothing silently passed. This is the measurement that defines slice-3's worklist.
+    g = EntityGraph()
+    g.entities["Match"] = DocEntity("Match", (
+        DocField("matchScore", "number", "Int", False, "", False, 0),
+        DocField("subjectId", "text", "String", True, "", False, 1),
+    ), ("Entities", "Match"))
+    live = _schema(
+        "model Match {\n"
+        "  id String @id @default(cuid())\n"
+        "  ownerId String @default(\"local\")\n"
+        "  source String @default(\"user\")\n"
+        "  confirmed Boolean @default(true)\n"
+        "  createdAt DateTime @default(now())\n"
+        "  updatedAt DateTime @updatedAt\n"
+        "  matchScore Int @default(0)\n"
+        "  subjectId String\n"
+        "  @@index([subjectId])\n"
+        "}"
+    )
+    drift = parity_against_live(g, live)
+    assert any("matchScore: attr @default(0) in live" in d for d in drift)        # gap (a) default
+    assert any("block-attr @@index([subjectId]) in live" in d for d in drift)     # gap (b) index
+    # gap (c) loose-ref: a non-FK `subjectId` scalar already emits correctly — NO drift. The
+    # slice-3 worklist is therefore (a) defaults + (b) indexes/compound-unique, not loose-ref render.
+    assert not any("subjectId: type" in d or "subjectId: attr" in d for d in drift)

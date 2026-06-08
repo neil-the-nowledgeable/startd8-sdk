@@ -24,8 +24,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+import re
+
 from ..backend_codegen._headers import header_standard
 from ..frontend_codegen.schema_renderer import schema_sha256
+from ..languages.prisma_parser import PrismaField, PrismaModel, parse_prisma_schema
 from .entities import DocEntity, EntityGraph, JoinModel, _lower_camel
 
 # The datasource/generator block — verbatim from the live strtd8 contract (FR-PE-1). SQLite, the
@@ -149,3 +152,72 @@ def render_prisma_schema(
         models_rendered=len(graph.entities) + len(graph.joins),
         unrenderable=tuple(unrenderable),
     )
+
+
+# --------------------------------------------------------------------------- #
+# FR-PE-4 — semantic parity diff (the flip-gate oracle). Compares two *parsed*  #
+# schemas field-by-field and block-by-block, not just model/field presence.     #
+# --------------------------------------------------------------------------- #
+
+def _norm_attr(a: str) -> str:
+    """Normalize an attribute for comparison (collapse internal whitespace)."""
+    return re.sub(r"\s+", "", a)
+
+
+def _type_sig(f: PrismaField) -> str:
+    """A field's full type signature: base + list + optional (e.g. ``String?``, ``Outcome[]``)."""
+    return f"{f.type}{'[]' if f.is_list else ''}{'?' if f.is_optional else ''}"
+
+
+def _attr_set(f: PrismaField) -> frozenset:
+    return frozenset(_norm_attr(a) for a in f.attributes)
+
+
+def _block_set(m: PrismaModel) -> frozenset:
+    return frozenset(_norm_attr(a) for a in m.block_attributes)
+
+
+def semantic_diff(emitted_text: str, live_text: str) -> List[str]:
+    """Semantic-parity drift between an *emitted* schema (left) and the *live* contract (right).
+
+    Per field: base type, optionality, list-ness, and the normalized attribute set
+    (``@id``/``@unique``/``@default(…)``/``@relation(…)``/``@updatedAt``). Per model: the block
+    attributes (``@@id``/``@@unique``/``@@index``). Every divergence is one stable-keyed line
+    (sorted); an empty list is parity. FR-PE-4 / FR-PE-6.
+    """
+    left = parse_prisma_schema(emitted_text)
+    right = parse_prisma_schema(live_text)
+    out: List[str] = []
+
+    for missing in sorted(set(left.models) - set(right.models)):
+        out.append(f"model {missing}: emitted, absent from live")
+    for extra in sorted(set(right.models) - set(left.models)):
+        out.append(f"model {extra}: in live, not emitted")
+
+    for name in sorted(set(left.models) & set(right.models)):
+        lm, rm = left.models[name], right.models[name]
+        lf, rf = {f.name: f for f in lm.fields}, {f.name: f for f in rm.fields}
+        for fn in sorted(set(lf) - set(rf)):
+            out.append(f"{name}.{fn}: emitted, absent from live")
+        for fn in sorted(set(rf) - set(lf)):
+            out.append(f"{name}.{fn}: in live, not emitted")
+        for fn in sorted(set(lf) & set(rf)):
+            le, ri = lf[fn], rf[fn]
+            if _type_sig(le) != _type_sig(ri):
+                out.append(f"{name}.{fn}: type {_type_sig(le)} (emitted) vs {_type_sig(ri)} (live)")
+            la, ra = _attr_set(le), _attr_set(ri)
+            for a in sorted(la - ra):
+                out.append(f"{name}.{fn}: attr {a} emitted, absent from live")
+            for a in sorted(ra - la):
+                out.append(f"{name}.{fn}: attr {a} in live, not emitted")
+        lb, rb = _block_set(lm), _block_set(rm)
+        for a in sorted(lb - rb):
+            out.append(f"{name}: block-attr {a} emitted, absent from live")
+        for a in sorted(rb - lb):
+            out.append(f"{name}: block-attr {a} in live, not emitted")
+    return out
+
+
+def parity_against_live(graph: EntityGraph, live_text: str) -> List[str]:
+    """Emit *graph* and report its semantic-parity drift against the live contract (FR-PE-6 gate)."""
+    return semantic_diff(render_prisma_schema(graph).text, live_text)
