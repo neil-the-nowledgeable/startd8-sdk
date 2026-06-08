@@ -10,7 +10,14 @@ from __future__ import annotations
 import pytest
 
 from startd8.languages.prisma_parser import parse_prisma_schema
-from startd8.manifest_extraction.entities import DocEntity, DocField, EntityGraph, JoinModel
+from startd8.manifest_extraction.entities import (
+    DocEntity,
+    DocField,
+    EntityGraph,
+    JoinModel,
+    extract_entities,
+)
+from startd8.manifest_extraction.grammar import find_section, parse_sections
 from startd8.manifest_extraction.prisma_emitter import (
     parity_against_live,
     render_prisma_schema,
@@ -186,3 +193,74 @@ def test_parity_against_live_surfaces_fr_pe_5_gaps():
     # gap (c) loose-ref: a non-FK `subjectId` scalar already emits correctly — NO drift. The
     # slice-3 worklist is therefore (a) defaults + (b) indexes/compound-unique, not loose-ref render.
     assert not any("subjectId: type" in d or "subjectId: attr" in d for d in drift)
+
+
+# --------------------------------------------------------------------------- #
+# FR-PE-5 (slice 3) — defaults, indexes/compound-unique, loose-ref marker
+# --------------------------------------------------------------------------- #
+
+def test_field_default_emits_non_optional():
+    g = EntityGraph()
+    g.entities["M"] = DocEntity("M", (
+        DocField("matchScore", "number", "Int", False, "", False, 0, default="0"),
+    ), ("Entities", "M"))
+    f = parse_prisma_schema(render_prisma_schema(g).text).model("M").field("matchScore")
+    assert "@default(0)" in f.attributes
+    assert not f.is_optional                                # default ⇒ non-optional (FR-PE-5a)
+
+
+def test_loose_ref_emits_scalar_without_relation_or_reverse_list():
+    g = EntityGraph()
+    g.entities["TailoredMatch"] = DocEntity("TailoredMatch", (
+        _f("rationale", "String"),), ("Entities", "TailoredMatch"))
+    g.entities["JobDescription"] = DocEntity("JobDescription", (
+        _f("title", "String"),), ("Entities", "JobDescription"))
+    g.loose_refs["TailoredMatch"] = ["JobDescription"]
+    schema = parse_prisma_schema(render_prisma_schema(g).text)
+    tm = schema.model("TailoredMatch")
+    assert tm.field("jobDescriptionId") is not None         # plain scalar present
+    assert tm.field("jobDescription") is None               # NO @relation object (FR-PE-5c)
+    assert schema.model("JobDescription").field("tailoredMatchs") is None  # NO reverse list
+
+
+def test_index_and_compound_unique_block_attrs_emitted():
+    g = EntityGraph()
+    g.entities["TM"] = DocEntity("TM", (
+        _f("a", "String", required=True), _f("b", "String", required=True),
+    ), ("Entities", "TM"))
+    g.indexes["TM"] = [("a",), ("a", "b")]
+    g.uniques["TM"] = [("a", "b")]
+    m = parse_prisma_schema(render_prisma_schema(g).text).model("TM")
+    assert ("a", "b") in m.compound_unique_keys                                  # @@unique
+    norm = {x.replace(" ", "") for x in m.block_attributes}
+    assert "@@index([a])" in norm and "@@index([a,b])" in norm                   # @@index
+
+
+def test_grammar_end_to_end_drives_fr_pe_5():
+    """The full chain: doc grammar (default:/references/Unique:/Indexes:) → graph → emit."""
+    doc = (
+        "## Entities\n\n"
+        "### TailoredMatch\n"
+        "| Field | Type | Required | Notes |\n"
+        "|-------|------|----------|-------|\n"
+        "| matchScore | number | no | default: 0 |\n"
+        "| subjectId | text | yes | |\n\n"
+        "Relationships: a TailoredMatch **references** a JobDescription.\n\n"
+        "Unique: jobDescriptionId, subjectId\n"
+        "Indexes: jobDescriptionId\n\n"
+        "### JobDescription\n"
+        "| Field | Type | Required | Notes |\n"
+        "|-------|------|----------|-------|\n"
+        "| title | text | no | |\n"
+    )
+    secs = parse_sections(doc)
+    root = find_section(secs, "Entities")
+    blocks = [s for s in secs if s.level == root.level + 1
+              and len(s.heading_path) >= 2 and s.heading_path[-2] == root.title]
+    g = extract_entities("D", blocks, [])
+    tm = parse_prisma_schema(render_prisma_schema(g).text).model("TailoredMatch")
+    assert "@default(0)" in tm.field("matchScore").attributes                    # default: parsed
+    assert tm.field("jobDescriptionId") is not None and tm.field("jobDescription") is None  # references
+    assert ("jobDescriptionId", "subjectId") in tm.compound_unique_keys          # Unique:
+    norm = {x.replace(" ", "") for x in tm.block_attributes}
+    assert "@@index([jobDescriptionId])" in norm                                 # Indexes:

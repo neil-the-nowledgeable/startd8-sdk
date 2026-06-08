@@ -123,12 +123,21 @@ def render_prisma_schema(
             if f.prisma_type is None:
                 unrenderable.append(UnrenderableField(name, f.name, "type outside plain-type vocabulary"))
                 continue
-            opt = "" if f.required else "?"
-            lines.append(_field_line(f.name, f"{f.prisma_type}{opt}"))
+            if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
+                lines.append(_field_line(f.name, f"{f.prisma_type} @default({f.default})"))
+            else:
+                opt = "" if f.required else "?"
+                lines.append(_field_line(f.name, f"{f.prisma_type}{opt}"))
+        for parent in graph.loose_refs.get(name, []):   # FR-PE-5(c): loose ref — scalar, no @relation
+            lines.append(_field_line(f"{_lower_camel(parent)}Id", "String"))
         for fk, body in fk_blocks.get(name, []):
             lines.append(_field_line(fk, body))
         for lf, body in rev_lists.get(name, []):
             lines.append(_field_line(lf, body))
+        for cols in graph.uniques.get(name, []):        # FR-PE-5(b): explicit compound @@unique
+            lines.append(f"  @@unique([{', '.join(cols)}])")
+        for cols in graph.indexes.get(name, []):        # FR-PE-5(b): explicit @@index
+            lines.append(f"  @@index([{', '.join(cols)}])")
         blocks.append(_model_block(name, lines))
 
     # --- join models (FR-PE-3): bookkeeping + two FK + two relation objects + compound @@unique --

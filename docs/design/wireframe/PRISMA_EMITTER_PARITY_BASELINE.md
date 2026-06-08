@@ -39,6 +39,26 @@ doc declares `ProofPoint belongs to Profile` but the live schema models ownershi
 an FK. That is the **app-side prerequisite** (FR-PE-7) — reconcile doc vs contract — and the diff
 surfacing it is the parity oracle working as intended.
 
+## Slice 3 result (FR-PE-5 shipped)
+
+The three grammar constructs are implemented (`default:` Notes clause, `Indexes:`/`Unique:` lines,
+the `references` loose-ref verb) and emit correctly. Re-measuring with the FR-PE-5 grammar applied
+to the strtd8 entities drives parity drift **10 → 3**:
+
+```
+BEFORE: 10 drift lines
+AFTER:   3 drift lines
+   Profile.proofPoints: emitted, absent from live
+   ProofPoint.profile:  emitted, absent from live
+   ProofPoint.profileId: emitted, absent from live
+```
+
+The remaining **3 are not emitter gaps** — the doc declares `ProofPoint belongs to Profile` but the
+live contract models ownership via the implicit `ownerId` bookkeeping field, not an FK. Closing them
+is the **app-side FR-PE-7 reconciliation** (drop the doc relation *or* add the FK to the contract) —
+an owner decision, captured here, not an emitter change. The emitter now reproduces **every Prisma
+construct the live 16-model contract actually uses.**
+
 ## Positive findings
 
 - Loose-reference **scalars already emit correctly** (a `text` field with no relationship sentence

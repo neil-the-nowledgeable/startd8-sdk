@@ -39,6 +39,8 @@ PLAIN_TYPES: Dict[str, str] = {
 _CHOICE_RE = re.compile(r"^choice of:\s*(.+)$", re.IGNORECASE)
 _HUMAN_ONLY_RE = re.compile(r"ONLY HUMANS ENTER", re.IGNORECASE)
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+# FR-PE-5(a): a `default: <value>` clause in the Notes cell → @default(<value>).
+_DEFAULT_RE = re.compile(r"\bdefault:\s*([^,;|]+)", re.IGNORECASE)
 
 
 def _lower_camel(name: str) -> str:
@@ -54,6 +56,7 @@ class DocField:
     notes: str
     human_only: bool
     row_index: int
+    default: Optional[str] = None    # FR-PE-5(a): a `default: X` Notes convention → @default(X)
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,10 @@ class EntityGraph:
     entities: Dict[str, DocEntity] = field(default_factory=dict)
     joins: List[JoinModel] = field(default_factory=list)
     fk_parents: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...]
+    # FR-PE-5 grammar gaps (slice 3):
+    loose_refs: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...] (no FK)
+    indexes: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@index]
+    uniques: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@unique]
 
     @property
     def join_names(self) -> List[str]:
@@ -156,13 +163,16 @@ def extract_entities(
                     source=SourceRef(doc_label, sec.heading_path, row_index=i),
                     reason=f"type {ftype!r} outside the plain-type vocabulary",
                 ))
+            dm = _DEFAULT_RE.search(notes)
             fields.append(DocField(
                 name=fname, plain_type=ftype, prisma_type=prisma_type,
                 required=req, notes=notes,
                 human_only=bool(_HUMAN_ONLY_RE.search(notes)),
                 row_index=i,
+                default=dm.group(1).strip() if dm else None,
             ))
         graph.entities[name] = DocEntity(name, tuple(fields), sec.heading_path)
+        _parse_index_lines(name, sec.body, graph)  # FR-PE-5(b): Indexes:/Unique: per-entity lines
         records.append(ExtractionRecord(
             "schema.prisma", f"/models/{name}", Status.EXTRACTED,
             value=f"{len(fields)} fields",
@@ -177,6 +187,25 @@ def extract_entities(
     for subject, text, path in relationship_lines:
         _parse_relationships(doc_label, subject, text, path, graph, records)
     return graph
+
+
+def _parse_index_lines(entity: str, body: str, graph: EntityGraph) -> None:
+    """FR-PE-5(b): per-entity ``Indexes:`` / ``Unique:`` lines → @@index / compound @@unique.
+
+    ``Indexes: jobDescriptionId; jobDescriptionId, kind`` → two indexes (semicolon-separated specs,
+    each a comma-separated column list). ``Unique: a, b, c`` → one compound unique.
+    """
+    for line in body.splitlines():
+        s = line.strip()
+        for label, dst in (("Indexes:", graph.indexes), ("Unique:", graph.uniques)):
+            if s.lower().startswith(label.lower()):
+                specs = [
+                    tuple(c.strip() for c in grp.split(",") if c.strip())
+                    for grp in s[len(label):].split(";")
+                ]
+                specs = [c for c in specs if c]
+                if specs:
+                    dst.setdefault(entity, []).extend(specs)
 
 
 def _relationship_paragraph(body: str) -> str:
@@ -197,7 +226,8 @@ _VERB_3FORM = re.compile(
     r"links\s+(?P<x>\w+)\s+to\s+(?P<y>\w+)", re.IGNORECASE
 )
 _VERB_RE = re.compile(
-    r"\b(?P<subj>[A-Z]\w+)\b\s+(?P<verb>links to many|has many|has one|belongs to|links)\s+"
+    r"\b(?P<subj>[A-Z]\w+)\b\s+"
+    r"(?P<verb>links to many|has many|has one|belongs to|references|links)\s+"
     r"(?P<rest>.+)$",
     re.IGNORECASE,
 )
@@ -286,6 +316,23 @@ def _parse_relationships(
             records.append(ExtractionRecord(
                 "schema.prisma", f"/relationships/{subj}-belongs_to-{obj}",
                 Status.EXTRACTED, value=f"{subj}.{_lower_camel(obj)}Id", source=src,
+            ))
+        elif verb == "references":
+            # FR-PE-5(c) / OQ-PE-3: a LOOSE reference — a `<parent>Id` scalar with NO @relation and
+            # no reverse list (the polymorphic / cross-aggregate link the live contract uses).
+            obj = graph.resolve_entity(rest.split()[0] if rest else "")
+            if not obj:
+                records.append(ExtractionRecord(
+                    "schema.prisma", f"/relationships/{subj}", Status.NOT_EXTRACTED,
+                    source=src, reason=f"unresolvable referenced entity: {rest[:40]!r}",
+                ))
+                continue
+            graph.loose_refs.setdefault(subj, [])
+            if obj not in graph.loose_refs[subj]:
+                graph.loose_refs[subj].append(obj)
+            records.append(ExtractionRecord(
+                "schema.prisma", f"/relationships/{subj}-references-{obj}",
+                Status.EXTRACTED, value=f"{subj}.{_lower_camel(obj)}Id (loose, no FK)", source=src,
             ))
 
 
