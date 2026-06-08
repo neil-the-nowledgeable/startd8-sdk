@@ -36,6 +36,18 @@ shapes against the contract; reports errors WITHOUT mutating) -> POST ``<route>/
 destructive step — refused without an explicit ``confirm`` field; UPSERT by primary key with the
 retired ``import_routes.py`` merge semantics: idempotent, never deletes). ``route`` is the optional
 base path (default ``/import``). It takes no entity keys at all — those fail loud.
+
+``rendered-content`` (AR-6, FR-16 — "make the generated artifact readable") binds a
+**prose-from-a-JSON-field** presenter to an entity whose user-facing content lives in a long-text
+JSON column (e.g. ``Artifact.dataJson = {"body": "<prose>", "traces": [ids]}``). It declares the
+entity (``root``), the JSON column (``content_field``, e.g. ``dataJson``), and which JSON key holds
+the prose (``prose_key``, default ``body``); the entity's ``kind`` field, if present, becomes the
+heading. ``content_field`` must be a real scalar field on ``root`` (loud-fail otherwise — closed,
+parser-validated keys mirroring AR-2/AR-3). Route derives ``/<kebab(view name)>`` with an optional
+``route:`` override. The detail view renders ``content_field[prose_key]`` as **prose** (no JSON, no
+visible trace ids) with a copy-to-clipboard control yielding the body as plain text; the list view
+shows kind + a prose preview. The SAME prose-from-JSON renderer feeds the model-scoped
+export-package's named layout (FR-10 conformance — pitches verbatim, not a JSON dump).
 """
 
 from __future__ import annotations
@@ -47,7 +59,7 @@ import yaml
 
 _KINDS = {
     "dashboard", "board", "workspace", "detail-compose", "export-package", "computed-panel",
-    "import-flow",
+    "import-flow", "rendered-content",
 }
 # `scope` is valid on export-package (AR-3: whole-model export) and detail-compose (AR-1:
 # whole-model compose — the Value Map). `model` = iterate/serve the WHOLE model, not one row.
@@ -63,9 +75,12 @@ _SCOPED_KINDS = {"export-package", "detail-compose"}
 _COMPUTED_PANEL_KEYS = {"name", "kind", "route", "compute"}
 # Keys an import-flow may carry — it is contract-driven (app/export.py), so no entity keys at all.
 _IMPORT_FLOW_KEYS = {"name", "kind", "route"}
+# Keys a rendered-content view may carry (AR-6): the entity (root), the JSON content column, and the
+# JSON key holding the prose. Aggregate/relation/panel/compute keys are wrong-kind there and fail loud.
+_RENDERED_CONTENT_KEYS = {"name", "kind", "route", "root", "content_field", "prose_key"}
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
-    "relations", "panels", "gap", "scope", "compute",
+    "relations", "panels", "gap", "scope", "compute", "content_field", "prose_key",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
@@ -118,6 +133,8 @@ class ViewSpec:
     root: str   # "" for model-scoped export-packages / computed-panels (no single root row)
     scope: str = "row"                    # export-package/detail-compose: "row" | "model" (AR-3/AR-1)
     compute: str = ""                     # computed-panel only: the compute binding (AR-2)
+    content_field: str = ""               # rendered-content only: the JSON content column (AR-6)
+    prose_key: str = "body"               # rendered-content only: JSON key holding the prose (AR-6)
     aggregates: Tuple[Aggregate, ...] = ()
     signal: str = ""                      # "<aggname> >= <int>"
     group_by: str = ""
@@ -154,15 +171,30 @@ def _signal_parts(expr: str) -> Tuple[str, int]:
         raise ValueError(f"views.yaml: signal threshold must be an int, got {toks[2]!r}")
 
 
-def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[ViewSpec, ...]:
-    """Parse + strictly validate ``views.yaml``. ``known_entities`` (if given) gates entity refs."""
+def parse_views(
+    text: str,
+    *,
+    known_entities: frozenset = frozenset(),
+    known_fields: Dict[str, frozenset] | None = None,
+) -> Tuple[ViewSpec, ...]:
+    """Parse + strictly validate ``views.yaml``. ``known_entities`` (if given) gates entity refs;
+    ``known_fields`` (entity -> field-name set, if given) gates field refs (AR-6 ``content_field``)
+    — loud-fail on an unknown field, mirroring the unknown-entity loud-fail."""
     data = yaml.safe_load(text or "") or {}
     if not isinstance(data, dict) or "views" not in data:
         raise ValueError("views.yaml must be a mapping with a top-level `views:` list")
+    known_fields = known_fields or {}
 
     def _check_entity(ent: str, where: str) -> None:
         if known_entities and ent not in known_entities:
             raise ValueError(f"views.yaml: {where} references unknown entity {ent!r}")
+
+    def _check_field(ent: str, fld: str, where: str) -> None:
+        fields = known_fields.get(ent)
+        if fields is not None and fld not in fields:
+            raise ValueError(
+                f"views.yaml: {where} references unknown field {fld!r} on {ent!r}"
+            )
 
     out: List[ViewSpec] = []
     for i, entry in enumerate(data["views"] or []):
@@ -192,7 +224,15 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             raise ValueError(
                 f"views.yaml: view #{i} `compute` is only valid on kind 'computed-panel', not {kind!r}"
             )
+        for ck in ("content_field", "prose_key"):
+            if ck in entry and kind != "rendered-content":
+                raise ValueError(
+                    f"views.yaml: view #{i} `{ck}` is only valid on kind 'rendered-content', "
+                    f"not {kind!r}"
+                )
         compute = ""
+        content_field = ""
+        prose_key = "body"
         model_export = kind == "export-package" and scope == "model"
         model_compose = kind == "detail-compose" and scope == "model"
         if kind == "import-flow":
@@ -225,6 +265,31 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
                 )
             root = ""
             route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+        elif kind == "rendered-content":
+            # AR-6 (FR-16): a prose-from-a-JSON-field presenter. Declares the entity (root), the
+            # JSON content column, and the JSON key holding the prose. Aggregate/relation/panel/
+            # compute keys are wrong-kind here and fail loud (closed key set, like AR-2/AR-3).
+            wrong_kind = set(entry) - _RENDERED_CONTENT_KEYS
+            if wrong_kind:
+                raise ValueError(
+                    f"views.yaml: view #{i} keys {sorted(wrong_kind)} are not valid on kind "
+                    "'rendered-content' (it binds a prose-from-JSON presenter to one entity)"
+                )
+            if not entry.get("root"):
+                raise ValueError(f"views.yaml: view #{i} missing required `root`")
+            root = str(entry["root"])
+            _check_entity(root, f"view {entry['name']!r} root")
+            content_field = str(entry.get("content_field") or "")
+            if not content_field:
+                raise ValueError(f"views.yaml: view #{i} missing required `content_field`")
+            _check_field(root, content_field, f"view {entry['name']!r} content_field")
+            prose_key = str(entry.get("prose_key") or "body")
+            route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+            if "{" in route:
+                raise ValueError(
+                    f"views.yaml: view #{i} route {route!r} must not take path params "
+                    "(a rendered-content view lists/reads its entity by query id)"
+                )
         elif model_export:
             # Whole-model export (AR-3): no root row — root/relations are meaningless and forbidden;
             # route is the optional base path (authoring-contract default: /export).
@@ -330,7 +395,7 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
 
         out.append(ViewSpec(
             name=str(entry["name"]), kind=kind, route=route, root=root, scope=scope,
-            compute=compute,
+            compute=compute, content_field=content_field, prose_key=prose_key,
             aggregates=tuple(aggregates), signal=str(entry.get("signal", "")),
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),

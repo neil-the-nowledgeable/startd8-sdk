@@ -296,6 +296,92 @@ def _render_computed_panel(v: ViewSpec) -> str:
     return _COMPUTE_RENDERERS[v.compute](v)
 
 
+# --------------------------------------------------------------------------- #
+# rendered-content (AR-6 / FR-16) — the prose-from-a-JSON-field presenter
+# --------------------------------------------------------------------------- #
+# A SINGLE prose-from-JSON renderer (``app/views/_prose.py``), reused by BOTH the rendered-content
+# view AND the model-scoped export-package's named layout (FR-10) — no duplicated extraction logic.
+# It tolerates the column being a dict, a JSON string, or empty/missing, and never raises: an
+# empty/missing body yields "" (the empty state), never a crash or a leaked JSON blob/trace ids.
+_PROSE_MODULE = "\n".join([
+    "from __future__ import annotations", "",
+    "import json",
+    "from html import escape",
+    "from typing import Any", "", "",
+    "def prose_body(value: Any, key: str = \"body\") -> str:",
+    '    """The prose stored under *key* in a JSON content column. Tolerates a dict, a JSON string,',
+    '    or None/empty -> "" (never raises, never leaks the raw blob or trace ids)."""',
+    "    data: Any = value",
+    "    if isinstance(value, str):",
+    "        try:",
+    "            data = json.loads(value)",
+    "        except (ValueError, TypeError):",
+    "            return value  # a plain string column is itself the prose",
+    "    if isinstance(data, dict):",
+    "        body = data.get(key)",
+    "        return body if isinstance(body, str) else \"\"",
+    "    return \"\"", "", "",
+    "def prose_preview(value: Any, key: str = \"body\", limit: int = 140) -> str:",
+    '    """A one-line preview of the prose (kind + preview list view) — never JSON."""',
+    "    text = \" \".join(prose_body(value, key).split())",
+    "    return text if len(text) <= limit else text[: limit - 1].rstrip() + \"\\u2026\"", "", "",
+    "def prose_html(value: Any, key: str = \"body\") -> str:",
+    '    """Render the prose as HTML paragraphs (blank-line split), HTML-escaped — no Markdown',
+    '    dependency, no JSON, no trace ids. Empty body -> \"\" (the caller shows the empty state)."""',
+    "    text = prose_body(value, key)",
+    "    if not text.strip():",
+    "        return \"\"",
+    "    blocks = [b.strip() for b in text.replace(\"\\r\\n\", \"\\n\").split(\"\\n\\n\") if b.strip()]",
+    "    return \"\\n\".join(",
+    "        \"<p>\" + escape(b).replace(\"\\n\", \"<br>\") + \"</p>\" for b in blocks",
+    "    )", "",
+    "__all__ = [\"prose_body\", \"prose_preview\", \"prose_html\"]", "",
+])
+
+
+def _render_rendered_content(v: ViewSpec) -> str:
+    """Rendered-content module (AR-6 / FR-16): list + read one entity's prose-from-a-JSON-field.
+
+    Two data fns: ``<view>_list`` returns each row's (id, kind, preview) — kind + a prose preview,
+    never JSON; ``<view>_data`` returns one row resolved to ``{id, kind, body, html}`` for the
+    detail view (prose, copyable plain ``body``, no trace ids). The prose extraction is the shared
+    ``app/views/_prose.py`` renderer (also feeding the FR-10 export), never duplicated here.
+    """
+    cf, pk = v.content_field, v.prose_key
+    return "\n".join([
+        "from __future__ import annotations", "",
+        "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        f"from app.tables import {v.root}",
+        "from app.views._prose import prose_body, prose_html, prose_preview", "", "",
+        f"def {v.module}_list(session: Session) -> list[dict[str, Any]]:",
+        f'    """List view: each {v.root} as kind + a prose preview (never the raw JSON)."""',
+        "    out: list[dict[str, Any]] = []",
+        f"    for row in session.exec(select({v.root})).all():",
+        f"        value = getattr(row, {cf!r}, None)",
+        "        out.append({",
+        "            \"id\": row.id,",
+        f"            \"kind\": getattr(row, \"kind\", None) or {v.module!r},",
+        f"            \"preview\": prose_preview(value, {pk!r}),",
+        "        })",
+        "    return out", "", "",
+        f"def {v.module}_data(session: Session, root_id: str) -> dict[str, Any]:",
+        f'    """Detail view: one {v.root}\'s prose under its kind heading — body (copyable plain',
+        '    text) + html (rendered paragraphs); no JSON, no trace ids. Missing row/body -> empty."""',
+        f"    row = session.get({v.root}, root_id)",
+        "    if row is None:",
+        '        return {"id": root_id, "kind": ' + repr(v.module) + ', "body": "", "html": ""}',
+        f"    value = getattr(row, {cf!r}, None)",
+        "    return {",
+        "        \"id\": row.id,",
+        f"        \"kind\": getattr(row, \"kind\", None) or {v.module!r},",
+        f"        \"body\": prose_body(value, {pk!r}),",
+        f"        \"html\": prose_html(value, {pk!r}),",
+        "    }", "",
+        f"__all__ = [{(v.module + '_list')!r}, {(v.module + '_data')!r}]", "",
+    ])
+
+
 def _pk_fields(schema, entity: str) -> Tuple[str, ...]:
     """The entity's primary-key field(s): ``@id`` scalars, else the ``@@id([...])`` compound."""
     ids = tuple(f.name for f in schema.scalar_fields(entity) if f.is_id)
@@ -410,20 +496,34 @@ def _render_import_flow(v: ViewSpec, schema) -> str:
     ])
 
 
-def _render_export_package_model(v: ViewSpec) -> str:
+def _render_export_package_model(v: ViewSpec, prose_specs: Tuple[ViewSpec, ...] = ()) -> str:
     """Model-scoped export-package (AR-3 / FR-10): the WHOLE model, serialized by ``app/export.py``.
 
     The data module REUSES the generated serialization layer (``ENTITY_ORDER``/``FIELDS`` +
     ``to_json``/``to_markdown``) — no duplicated serialization logic. The payload shape
     (entity name -> list of field-faithful row dicts) is the round-trippable JSON the AR-4
     import flow will consume.
+
+    FR-10 conformance: when the manifest declares rendered-content views (AR-6), the Markdown
+    layout appends each such entity's prose **verbatim**, rendered as prose via the SAME
+    ``app/views/_prose.py`` ``prose_body`` renderer the in-app presenter uses — NOT a per-entity
+    ``dataJson`` dump. The pitches/summary land in the export as the text the person would send.
     """
-    return "\n".join([
+    prose_roots = sorted({pv.root for pv in prose_specs})
+    extra_imports: List[str] = []
+    if prose_specs:
+        extra_imports.append(f"from app.tables import {', '.join(prose_roots)}")
+        extra_imports.append("from app.views._prose import prose_body")
+    lines = [
         "from __future__ import annotations", "",
         "from typing import Any", "",
         "from sqlmodel import Session, select", "",
         "import app.tables as _tables",
-        "from app.export import ENTITY_ORDER, FIELDS, to_json, to_markdown", "", "",
+        "from app.export import ENTITY_ORDER, FIELDS, to_json, to_markdown",
+    ]
+    lines += extra_imports
+    lines += [
+        "", "",
         f"def {v.module}_payload(session: Session) -> dict[str, list[dict[str, Any]]]:",
         '    """Whole-model payload: entity name -> field-faithful row dicts (the import-flow shape)."""',
         "    payload: dict[str, list[dict[str, Any]]] = {}",
@@ -436,11 +536,36 @@ def _render_export_package_model(v: ViewSpec) -> str:
         '    """Complete, round-trippable JSON of all entities (app/export.py `to_json`)."""',
         f"    return to_json({v.module}_payload(session))", "", "",
         f"def {v.module}_markdown(session: Session) -> str:",
-        '    """Human-readable Markdown of the full model (app/export.py `to_markdown`)."""',
-        f"    return to_markdown({v.module}_payload(session))", "",
+        '    """Human-readable Markdown of the full model (app/export.py `to_markdown`), then the',
+        '    rendered-content prose VERBATIM in a declared, named layout (FR-10) — not a JSON dump."""',
+        f"    md = to_markdown({v.module}_payload(session))",
+    ]
+    if prose_specs:
+        lines.append("    sections: list[str] = [md]")
+        for pv in prose_specs:
+            heading = pv.module.replace("_", " ").title()
+            lines += [
+                f'    # {pv.root} prose (rendered-content {pv.module}), verbatim',
+                '    sections.append("")',
+                f'    sections.append("# {heading}")',
+                f"    for _row in session.exec(select({pv.root})).all():",
+                f"        _kind = getattr(_row, \"kind\", None) or {pv.module!r}",
+                f"        _body = prose_body(getattr(_row, {pv.content_field!r}, None), {pv.prose_key!r})",
+                "        if not _body.strip():",
+                "            continue",
+                '        sections.append("")',
+                '        sections.append(f"## {_kind}")',
+                '        sections.append(_body)  # VERBATIM — the prose exactly as stored',
+            ]
+        lines.append("    return chr(10).join(sections)")
+    else:
+        lines.append("    return md")
+    lines += [
+        "",
         f"__all__ = [{(v.module + '_payload')!r}, {(v.module + '_json')!r}, "
         f"{(v.module + '_markdown')!r}]", "",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def _render_export_package(v: ViewSpec) -> str:
@@ -497,18 +622,32 @@ _MODULE_RENDERERS = {
     "detail-compose": _render_detail_compose,
     "export-package": _render_export_package,
     "computed-panel": _render_computed_panel,
+    "rendered-content": _render_rendered_content,
 }
 
 # Kinds that take a ``/{id}`` route -> their data/package fn is called with the path id.
 _ID_ROUTED = {"workspace", "detail-compose", "export-package"}
 
 
-def render_view_module(v: ViewSpec, schema_sha: str, views_sha: str, schema=None) -> str:
+def render_view_module(
+    v: ViewSpec, schema_sha: str, views_sha: str, schema=None, views: Tuple[ViewSpec, ...] = (),
+) -> str:
     if v.kind == "import-flow":  # contract-driven: bakes datetime-field + PK maps from the schema
         body = _render_import_flow(v, schema)
+    elif _is_model_export(v):
+        # FR-10 conformance: the named MD layout renders rendered-content prose VERBATIM (the same
+        # AR-6 prose-from-JSON renderer), not a per-entity dataJson dump. Needs the sibling
+        # rendered-content specs in the manifest to know which entity/field holds the prose.
+        body = _render_export_package_model(v, _prose_content_specs(views))
     else:
         body = _MODULE_RENDERERS[v.kind](v)
     return _header(schema_sha, views_sha, "view-module") + "\n\n" + body
+
+
+def _prose_content_specs(views: Tuple[ViewSpec, ...]) -> Tuple[ViewSpec, ...]:
+    """The rendered-content views (AR-6) in a manifest — the entities whose JSON column holds prose
+    the FR-10 model export renders verbatim. Order-stable (declaration order)."""
+    return tuple(v for v in views if v.kind == "rendered-content")
 
 
 # --------------------------------------------------------------------------- #
@@ -545,6 +684,10 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
             # (scope: model emits a single whole-model _data — no index.)
             import_lines.append(
                 f"from app.views.{v.module} import {v.module}_data, {v.module}_roots"
+            )
+        elif v.kind == "rendered-content":  # AR-6: a bare list + ?id= prose detail
+            import_lines.append(
+                f"from app.views.{v.module} import {v.module}_data, {v.module}_list"
             )
         else:
             import_lines.append(f"from app.views.{v.module} import {v.module}_data")
@@ -618,6 +761,19 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"    data = {v.module}_data(session)\n"
                 f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'data': data}})"
             )
+        elif v.kind == "rendered-content":  # AR-6: bare list (kind + preview); ?id= prose detail
+            routes.append(
+                f"@views_router.get({v.route!r}, response_class=HTMLResponse)\n"
+                f"def {v.module}(request: Request, id: Optional[str] = None, "
+                "session: Session = Depends(get_session)):\n"
+                f"    if id is None:\n"
+                f"        rows = {v.module}_list(session)\n"
+                f"        return _templates.TemplateResponse(request, {tmpl!r}, "
+                f"{{'rows': rows, 'data': None, 'detail_route': {v.route!r}}})\n"
+                f"    data = {v.module}_data(session, id)\n"
+                f"    return _templates.TemplateResponse(request, {tmpl!r}, "
+                "{'rows': None, 'data': data})"
+            )
         elif v.kind == "import-flow":  # AR-4: form -> non-mutating validate -> confirmed restore
             base = v.route.rstrip("/")
             routes.append(
@@ -664,7 +820,8 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"    return _templates.TemplateResponse(request, {tmpl!r}, {{'rows': rows}})"
             )
     needs_optional = any(
-        v.kind == "detail-compose" and "{" not in v.route and not _is_model_compose(v)
+        (v.kind == "detail-compose" and "{" not in v.route and not _is_model_compose(v))
+        or v.kind == "rendered-content"
         for v in views
     )
     body = (
@@ -735,6 +892,36 @@ def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
             '{% extends "base.html" %}\n{% block content %}\n'
             f"<h1>{v.module}</h1>\n"
             "<ul>{% for r in data.resolved %}<li>{% if r.dangling %}⚠ dangling{% else %}{{ r.entity.id }}{% endif %}</li>{% endfor %}</ul>\n"
+            "{% endblock %}\n"
+        )
+    elif v.kind == "rendered-content":  # AR-6: list (kind + preview) | detail (prose + copy)
+        # Detail (data set): the prose under its kind heading — rendered HTML, NO JSON, NO trace
+        # ids; a copy-to-clipboard control carries the body as plain text. Empty body -> empty
+        # state, never an error. List (rows set): kind + a prose preview, never JSON.
+        block = (
+            '{% extends "base.html" %}\n{% block content %}\n'
+            "{% if data %}\n"
+            "<article>\n"
+            "<h1>{{ data.kind }}</h1>\n"
+            "{% if data.html %}\n"
+            '<div class="prose">{{ data.html | safe }}</div>\n'
+            '<button type="button" class="copy" '
+            'data-copy="{{ data.body }}" onclick="navigator.clipboard.writeText('
+            "this.getAttribute('data-copy'))\">Copy</button>\n"
+            "{% else %}\n"
+            '<p class="empty">Nothing to read yet.</p>\n'
+            "{% endif %}\n"
+            "</article>\n"
+            "{% else %}\n"
+            f"<h1>{v.module}</h1>\n"
+            "{% if not rows %}<p class=\"empty\">Nothing here yet.</p>{% endif %}\n"
+            "<ul>\n"
+            "{% for r in rows %}"
+            '<li><a href="{{ detail_route }}?id={{ r.id }}"><strong>{{ r.kind }}</strong>'
+            " — {{ r.preview }}</a></li>\n"
+            "{% endfor %}\n"
+            "</ul>\n"
+            "{% endif %}\n"
             "{% endblock %}\n"
         )
     elif _is_model_compose(v):  # AR-1: every root on one page; meaningful empty state; unlinked flagged
@@ -862,7 +1049,7 @@ def _needs_route_test(v: ViewSpec) -> bool:
 
 def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, views_sha: str) -> str:
     """Rung-4 view tests — exercise each data function against a fixtured DB (the D1 gate)."""
-    blocks = [_render_view_test(schema, v) for v in views]
+    blocks = [_render_view_test(schema, v, views) for v in views]
     preamble = (
         _TEST_SHIM + "\n"
         "import pytest\n\n"
@@ -876,15 +1063,17 @@ def render_view_tests(views: Tuple[ViewSpec, ...], schema, schema_sha: str, view
     return header + "\n\n" + body + "\n"
 
 
-def _render_view_test(schema, v: ViewSpec) -> str:
+def _render_view_test(schema, v: ViewSpec, views: Tuple[ViewSpec, ...] = ()) -> str:
     if _is_model_export(v):
-        return _render_model_export_test(schema, v)
+        return _render_model_export_test(schema, v, _prose_content_specs(views))
     if _is_model_compose(v):
         return _render_model_compose_test(schema, v)
     if v.kind == "computed-panel":
         return _render_computed_panel_test(schema, v)
     if v.kind == "import-flow":
         return _render_import_flow_test(schema, v)
+    if v.kind == "rendered-content":
+        return _render_rendered_content_test(schema, v)
     if v.kind == "export-package":
         import_line = (
             f"    from app.views.{v.module} import {v.module}_package, {v.module}_to_markdown"
@@ -967,6 +1156,46 @@ def _render_view_test(schema, v: ViewSpec) -> str:
         for r in v.relations:
             setup.append(f"    assert '## {r.name}' in md  # {r.name} section header")
     return "\n".join(setup)
+
+
+def _render_rendered_content_test(schema, v: ViewSpec) -> str:
+    """Rendered-content test (AR-6 / FR-16): the detail renders body-as-PROSE (not JSON, no trace
+    ids), the list shows kind + a prose preview, copy yields plain text, an empty/missing body is
+    the empty state — proven against a row whose JSON column holds ``{body, traces}``."""
+    cf, pk = v.content_field, v.prose_key
+    # A known prose body + a trace id that MUST NOT leak into the rendered prose.
+    body_text = "Lead with the win. Then the proof.\n\nClose with the ask."
+    trace_id = "cap-trace-xyz"
+    payload = '{{"{pk}": {body!r}, "traces": ["{tid}"]}}'.format(pk=pk, body=body_text, tid=trace_id)
+    return "\n".join([
+        f"def test_{v.module}_renders_prose_not_json(tmp_path):",
+        "    import app.tables as t",
+        f"    from app.views.{v.module} import {v.module}_data, {v.module}_list",
+        '    engine = create_engine(f"sqlite:///{tmp_path}/v.db")',
+        "    SQLModel.metadata.create_all(engine)",
+        "    with Session(engine) as s:",
+        _seed(schema, "row", v.root, {cf: repr(payload), "kind": repr("value-summary")}),
+        _seed(schema, "blank", v.root, {cf: repr("")}),  # empty body -> empty state, never errors
+        f"        detail = {v.module}_data(s, row.id)",
+        f"        empty = {v.module}_data(s, blank.id)",
+        f"        listing = {v.module}_list(s)",
+        f"        missing = {v.module}_data(s, 'no-such-id')",
+        "    # detail: body is the verbatim prose (copy yields THIS, plain text, no markup)",
+        f"    assert detail['body'] == {body_text!r}",
+        "    # the rendered html is PROSE — contains the words, never the JSON braces or trace ids",
+        '    assert "Lead with the win" in detail["html"]',
+        '    assert "<p>" in detail["html"]            # rendered as paragraphs',
+        '    assert "{" not in detail["html"]          # no raw JSON leaked',
+        f"    assert {trace_id!r} not in detail['html']  # no visible trace ids (FR-16)",
+        f"    assert {trace_id!r} not in detail['body']",
+        "    # list: kind + a prose preview, never the JSON blob",
+        "    assert any(r['kind'] == 'value-summary' for r in listing)",
+        f"    assert all({trace_id!r} not in r['preview'] for r in listing)",
+        '    assert any("Lead with the win" in r["preview"] for r in listing)',
+        "    # empty/missing body -> empty state, not an error",
+        "    assert empty['body'] == '' and empty['html'] == ''",
+        "    assert missing['body'] == '' and missing['html'] == ''",
+    ])
 
 
 def _render_computed_panel_test(schema, v: ViewSpec) -> str:
@@ -1123,10 +1352,12 @@ def _render_import_flow_test(schema, v: ViewSpec) -> str:
     return "\n".join(round_trip) + "\n\n\n" + "\n".join(confirm_gate)
 
 
-def _render_model_export_test(schema, v: ViewSpec) -> str:
-    """Model-export test: whole-model coverage + JSON round-trip through app/export.py's shape."""
+def _render_model_export_test(schema, v: ViewSpec, prose_specs: Tuple[ViewSpec, ...] = ()) -> str:
+    """Model-export test: whole-model coverage + JSON round-trip through app/export.py's shape,
+    plus the FR-10 conformance pin — when the manifest declares a rendered-content entity, the
+    Markdown export contains that entity's prose VERBATIM (rendered as prose, not a JSON dump)."""
     first = next(iter(schema.models))
-    return "\n".join([
+    lines = [
         f"def test_{v.module}_data(tmp_path):",
         "    import json",
         "",
@@ -1138,6 +1369,20 @@ def _render_model_export_test(schema, v: ViewSpec) -> str:
         "    SQLModel.metadata.create_all(engine)",
         "    with Session(engine) as s:",
         _seed(schema, "root", first, {}),
+    ]
+    # FR-10: seed each rendered-content entity with a known JSON-stored body, then assert the
+    # markdown export carries that prose verbatim (not the {body, traces} JSON blob).
+    pin = prose_specs[0] if prose_specs else None
+    if pin is not None:
+        prose_body = "Our edge in one line. The proof in the next."
+        trace = "trace-deadbeef"
+        payload_json = '{{"{pk}": {b!r}, "traces": ["{t}"]}}'.format(
+            pk=pin.prose_key, b=prose_body, t=trace
+        )
+        lines.append(
+            _seed(schema, "_art", pin.root, {pin.content_field: repr(payload_json)})
+        )
+    lines += [
         f"        payload = {v.module}_payload(s)",
         f"        exported_json = {v.module}_json(s)",
         f"        exported_md = {v.module}_markdown(s)",
@@ -1147,7 +1392,13 @@ def _render_model_export_test(schema, v: ViewSpec) -> str:
         "    assert set(restored) == set(payload)",
         f"    assert restored[{first!r}][0]['id'] == root.id  # field-faithful, restorable (AR-4)",
         f"    assert '# ' + {first!r} in exported_md  # a markdown section per entity",
-    ])
+    ]
+    if pin is not None:
+        lines += [
+            f"    assert {prose_body!r} in exported_md  # FR-10: artifact prose VERBATIM in the export",
+            f"    assert {trace!r} not in exported_md   # the JSON traces are NOT dumped",
+        ]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -1164,12 +1415,24 @@ def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ..
 
     schema = parse_prisma_schema(schema_text)
     known = frozenset(schema.models)
-    views = parse_views(views_text, known_entities=known)
+    # Field-level loud-fail for AR-6 content_field: entity -> its scalar field names.
+    known_fields = {
+        name: frozenset(f.name for f in schema.scalar_fields(name)) for name in schema.models
+    }
+    views = parse_views(views_text, known_entities=known, known_fields=known_fields)
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
     out: List[Tuple[str, str]] = [("app/views/__init__.py", "")]
+    # The single prose-from-JSON renderer (AR-6 / FR-16): emitted only when a rendered-content view
+    # exists, so manifests without one render byte-identically. Shared by the view AND the FR-10
+    # model export — never duplicated.
+    if _prose_content_specs(views):
+        out.append((
+            "app/views/_prose.py",
+            _header(s_sha, v_sha, "view-prose-helper") + "\n\n" + _PROSE_MODULE,
+        ))
     for v in views:
-        out.append((_module_path(v), render_view_module(v, s_sha, v_sha, schema=schema)))
+        out.append((_module_path(v), render_view_module(v, s_sha, v_sha, schema=schema, views=views)))
         if _is_model_export(v):
             continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
         out.append((f"app/templates/views/{v.module}.html", render_view_template(v, s_sha, v_sha)))

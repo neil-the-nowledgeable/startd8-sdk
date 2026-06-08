@@ -93,6 +93,15 @@ model Activity {
   confirmed     Boolean @default(true)
   opportunityId String?
 }
+
+model Artifact {
+  id        String  @id @default(cuid())
+  ownerId   String  @default("local")
+  source    String  @default("user")
+  confirmed Boolean @default(true)
+  kind      String?
+  dataJson  String?
+}
 """.strip()
 
 VIEWS = """
@@ -149,6 +158,12 @@ views:
     kind: computed-panel
     compute: completeness
     route: /completeness
+  - name: artifact_reader
+    kind: rendered-content
+    root: Artifact
+    content_field: dataJson
+    prose_key: body
+    route: /artifacts
   - name: model_import
     kind: import-flow
     route: /import
@@ -163,14 +178,18 @@ def test_strict_validation_rejects_unknown_entity():
     with pytest.raises(ValueError):
         parse_views(bad, known_entities=frozenset({
             "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
-            "Opportunity", "Contact", "Activity",
+            "Opportunity", "Contact", "Activity", "Artifact",
         }))
 
 
 _KNOWN = frozenset({
     "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
-    "Opportunity", "Contact", "Activity",
+    "Opportunity", "Contact", "Activity", "Artifact",
 })
+# Entity -> scalar field names (for AR-6 content_field loud-fail-on-unknown-field tests).
+_KNOWN_FIELDS = {
+    "Artifact": frozenset({"id", "ownerId", "source", "confirmed", "kind", "dataJson"}),
+}
 
 
 def test_strict_validation_rejects_unknown_relation_panel_gap_keys():
@@ -461,6 +480,118 @@ def test_router_without_model_export_keeps_minimal_imports():
     assert "return Response(" not in routes
 
 
+def test_rendered_content_grammar_and_loud_failures():
+    """AR-6 (FR-16): `rendered-content` — a prose-from-a-JSON-field presenter bound to one entity."""
+    specs = {v.name: v for v in parse_views(VIEWS, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)}
+    ar = specs["artifact_reader"]
+    assert ar.kind == "rendered-content" and ar.root == "Artifact"
+    assert ar.content_field == "dataJson" and ar.prose_key == "body" and ar.route == "/artifacts"
+    # prose_key defaults to "body" when omitted
+    derived = VIEWS.replace("    content_field: dataJson\n    prose_key: body\n", "    content_field: dataJson\n")
+    specs2 = {v.name: v for v in parse_views(derived, known_entities=_KNOWN)}
+    assert specs2["artifact_reader"].prose_key == "body"
+    # route derives /<kebab(view name)> when omitted
+    derived = VIEWS.replace("    content_field: dataJson\n    prose_key: body\n    route: /artifacts",
+                            "    content_field: dataJson")
+    specs3 = {v.name: v for v in parse_views(derived, known_entities=_KNOWN)}
+    assert specs3["artifact_reader"].route == "/artifact-reader"
+    # missing content_field is loud
+    bad = VIEWS.replace("    content_field: dataJson\n", "")
+    with pytest.raises(ValueError, match="missing required `content_field`"):
+        parse_views(bad, known_entities=_KNOWN)
+    # content_field/prose_key are rendered-content-only (wrong-kind elsewhere)
+    bad = VIEWS.replace("kind: board\n    route: /pipeline",
+                        "kind: board\n    content_field: stage\n    route: /pipeline")
+    with pytest.raises(ValueError, match="only valid on kind 'rendered-content'"):
+        parse_views(bad, known_entities=_KNOWN)
+    # aggregate/relation/panel keys are wrong-kind on a rendered-content view
+    bad = VIEWS.replace("    content_field: dataJson\n    prose_key: body\n    route: /artifacts",
+                        "    content_field: dataJson\n    route: /artifacts\n    group_by: kind")
+    with pytest.raises(ValueError, match="not valid on kind"):
+        parse_views(bad, known_entities=_KNOWN)
+    # a path-param route is a contradiction (the view lists/reads by query id)
+    bad = VIEWS.replace("    route: /artifacts", "    route: /artifacts/{id}")
+    with pytest.raises(ValueError, match="must not take path params"):
+        parse_views(bad, known_entities=_KNOWN)
+
+
+def test_rendered_content_unknown_field_is_loud():
+    """content_field must be a REAL field on root — loud-fail when known_fields is supplied (AR-6)."""
+    bad = VIEWS.replace("content_field: dataJson", "content_field: noSuchColumn")
+    with pytest.raises(ValueError, match="unknown field 'noSuchColumn' on 'Artifact'"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # render_views derives known_fields from the schema, so the same drift fails loud end-to-end
+    with pytest.raises(ValueError, match="unknown field"):
+        render_views(SCHEMA, bad)
+
+
+def test_rendered_content_module_router_and_template():
+    rendered = dict(render_views(SCHEMA, VIEWS))
+    mod = rendered["app/views/artifact_reader.py"]
+    assert is_owned_view_file(mod)
+    # the prose extraction is the SHARED app/views/_prose.py renderer — imported, never duplicated
+    assert "from app.views._prose import prose_body, prose_html, prose_preview" in mod
+    assert "def artifact_reader_list(session: Session)" in mod
+    assert "def artifact_reader_data(session: Session, root_id: str)" in mod
+    assert "'dataJson'" in mod and "'body'" in mod  # binds content_field + prose_key
+    # the single prose-from-JSON helper module
+    prose = rendered["app/views/_prose.py"]
+    assert is_owned_view_file(prose)
+    assert "def prose_body(" in prose and "def prose_html(" in prose and "def prose_preview(" in prose
+    routes = rendered["app/views/routes.py"]
+    assert "@views_router.get('/artifacts', response_class=HTMLResponse)" in routes
+    assert "from app.views.artifact_reader import artifact_reader_data, artifact_reader_list" in routes
+    assert "include_router" not in routes  # mounts via the owned user_routers seam only
+    tmpl = rendered["app/templates/views/artifact_reader.html"]
+    # detail: prose html + a copy control (plain-text body); list: kind + preview; no raw JSON
+    assert "data.html | safe" in tmpl and "navigator.clipboard.writeText" in tmpl
+    assert "data-copy=\"{{ data.body }}\"" in tmpl
+    assert "r.kind" in tmpl and "r.preview" in tmpl
+    assert "dataJson" not in tmpl  # the template never surfaces the raw JSON column name
+
+
+def test_rendered_content_prose_helper_extracts_body_only():
+    """The emitted prose helper turns a {body, traces} JSON column into prose — never the blob/ids."""
+    import ast
+
+    prose = dict(render_views(SCHEMA, VIEWS))["app/views/_prose.py"]
+    ns: dict = {}
+    exec(compile(ast.parse(prose), "<_prose>", "exec"), ns)  # noqa: S102 (generated, trusted)
+    payload = '{"body": "Win first. Proof next.", "traces": ["cap-1", "out-2"]}'
+    assert ns["prose_body"](payload) == "Win first. Proof next."
+    html = ns["prose_html"](payload)
+    assert "Win first" in html and "<p>" in html
+    assert "cap-1" not in html and "traces" not in html and "{" not in html  # no JSON, no ids
+    assert ns["prose_preview"](payload).startswith("Win first")
+    # tolerant: a dict column, a plain string, and empty/None all behave (never raise)
+    assert ns["prose_body"]({"body": "X"}) == "X"
+    assert ns["prose_body"]("not json at all") == "not json at all"
+    assert ns["prose_body"](None) == "" and ns["prose_html"]("") == ""
+
+
+def test_fr10_model_export_renders_artifact_prose_verbatim():
+    """FR-10 (capability A): the model-scoped Markdown export pulls Artifact.dataJson.body and
+    renders it VERBATIM as prose, reusing the SAME prose renderer — not a per-entity JSON dump."""
+    rendered = dict(render_views(SCHEMA, VIEWS))
+    export_mod = rendered["app/views/model_export.py"]
+    # the export reuses the shared prose renderer, keyed off the rendered-content declaration
+    assert "from app.views._prose import prose_body" in export_mod
+    assert "from app.tables import Artifact" in export_mod
+    assert "prose_body(getattr(_row, 'dataJson', None), 'body')" in export_mod
+    assert "VERBATIM" in export_mod
+    # an export with NO rendered-content view keeps the prose machinery out (byte-parity guard)
+    _artifact_lines = {
+        "  - name: artifact_reader", "    kind: rendered-content", "    root: Artifact",
+        "    content_field: dataJson", "    prose_key: body", "    route: /artifacts",
+    }
+    no_artifact = "\n".join(
+        line for line in VIEWS.splitlines() if line not in _artifact_lines
+    )
+    plain = dict(render_views(SCHEMA, no_artifact))["app/views/model_export.py"]
+    assert "prose_body" not in plain and "return md" in plain
+    assert "app/views/_prose.py" not in dict(render_views(SCHEMA, no_artifact))
+
+
 def test_render_byte_identical_and_paths():
     a = render_views(SCHEMA, VIEWS)
     assert a == render_views(SCHEMA, VIEWS)
@@ -469,11 +600,12 @@ def test_render_byte_identical_and_paths():
         "app/views/jobs_dashboard.py", "app/views/pipeline_board.py", "app/views/job_workspace.py",
         "app/views/opportunity_detail.py", "app/views/job_export.py", "app/views/model_export.py",
         "app/views/value_map.py", "app/views/completeness_panel.py", "app/views/model_import.py",
+        "app/views/artifact_reader.py", "app/views/_prose.py",
         "app/views/routes.py", "tests/test_views.py",
         "app/templates/views/job_workspace.html",
         "app/templates/views/opportunity_detail.html", "app/templates/views/job_export.html",
         "app/templates/views/value_map.html", "app/templates/views/completeness_panel.html",
-        "app/templates/views/model_import.html",
+        "app/templates/views/model_import.html", "app/templates/views/artifact_reader.html",
     ):
         assert expected in paths
     # AR-3: a model-scoped export serves raw Markdown/JSON — no template is emitted for it
@@ -535,5 +667,5 @@ def test_emitted_view_tests_run_green(tmp_path):
     )
     assert result.returncode == 0, f"emitted view tests failed:\n{result.stdout}\n{result.stderr}"
     # 6 data tests + value_map data/route (AR-1) + completeness_panel data (AR-2)
-    # + model_import round-trip/confirm-gate (AR-4)
-    assert "11 passed" in result.stdout
+    # + artifact_reader prose-not-json (AR-6 / FR-16) + model_import round-trip/confirm-gate (AR-4)
+    assert "12 passed" in result.stdout
