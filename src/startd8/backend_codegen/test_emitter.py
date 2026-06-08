@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from ._headers import header_standard as _header
+from .crud_generator import _pk_field
+from .htmx_generator import _confirm_field
 
 CONTRACT_TESTS_PATH = "tests/test_contract.py"
 COMPLETENESS_TESTS_PATH = "tests/test_completeness.py"
@@ -248,6 +250,8 @@ from app.main import app  # noqa: E402
 _TABLES = {tables}
 _PK = {pk_map}
 _FILL = {{name.lower(): name for name in _PK}}
+# Entities (lowercased) carrying the confirm toggle — baked from the contract's `confirmed` field.
+_CONFIRM = {confirm}
 
 _OK_STATUSES = frozenset({{200, 303, 307, 308}})
 _SEEDS_DIR = Path(__file__).resolve().parents[1] / "seeds"
@@ -362,6 +366,22 @@ def test_every_get_route_smokes(case_id, seed_path):
         f"[{{case_id}}] {{len(failures)}} route(s) failed smoke:\\n  "
         + "\\n  ".join(failures)
     )
+
+
+def test_confirm_routes_registered():
+    """Each `confirmed`-bearing entity exposes POST /ui/<e>/{{id}}/confirm (AR-5 / FR-CA-8).
+
+    GET-smoke proves a page renders, not that an action exists — exactly how AR-5 slipped
+    through. This asserts the suggest->confirm verb's route is *registered*, so a regression
+    that drops the toggle is caught at the generated-app level, not only in the SDK.
+    """
+    post_paths = {{
+        r.path for r in app.routes
+        if isinstance(r, APIRoute) and "POST" in (r.methods or ())
+    }}
+    missing = [e for e in _CONFIRM
+               if ("/ui/" + e + "/{{id}}/confirm") not in post_paths]
+    assert not missing, "confirm route missing for: " + repr(missing)
 '''
 
 
@@ -394,5 +414,16 @@ def render_route_smoke_tests(
 
     tables_literal = "[" + ", ".join(f'"{n}"' for n in names) + "]"
     pk_literal = "{" + ", ".join(pk_entries) + "}"
-    body = _ROUTE_SMOKE_BODY.format(tables=tables_literal, pk_map=pk_literal)
+    # Confirmed-bearing entities get the confirm-route existence check (FR-CA-8). A single-column
+    # PK is required for the by-id route — same gate the generator applies.
+    confirm_names = [
+        n.lower()
+        for n in names
+        if _confirm_field(schema, n) is not None
+        and _pk_field(schema, n) is not None
+    ]
+    confirm_literal = "[" + ", ".join(f'"{n}"' for n in confirm_names) + "]"
+    body = _ROUTE_SMOKE_BODY.format(
+        tables=tables_literal, pk_map=pk_literal, confirm=confirm_literal
+    )
     return header + "\n\n" + body

@@ -182,3 +182,56 @@ def test_ui_create_prg_flow(tmp_path, monkeypatch):
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
         _purge_app_modules()
+
+
+# Confirmed-bearing entity for the AR-5 confirm toggle. A unique model name avoids colliding with
+# the other smoke tests' tables in SQLModel's process-global metadata registry.
+CONFIRM = """\
+model Suggestion {
+  id        String  @id @default(cuid())
+  result    String
+  source    String  @default("human")
+  confirmed Boolean @default(false)
+}
+"""
+
+
+def test_confirm_toggle_flips_and_reswaps_the_row(tmp_path, monkeypatch):
+    """CONFIRM_AFFORDANCE FR-CA-2/4/7: POST confirm flips `confirmed` and returns the re-rendered row."""
+    for rel, content in render_backend(CONFIRM):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+
+    sys.path.insert(0, str(tmp_path))
+    _purge_app_modules()
+    try:
+        main = importlib.import_module("app.main")
+        from fastapi.testclient import TestClient
+
+        with TestClient(main.app) as c:
+            # an AI-suggested, unconfirmed row (created via the UI form → confirmed defaults false)
+            r = c.post("/ui/suggestion", data={"result": "shipped"}, follow_redirects=False)
+            sid = r.headers["location"].split("/")[-1].split("?")[0]
+            assert c.get(f"/suggestion/{sid}").json()["confirmed"] is False
+
+            # the list row offers a confirm control (not yet confirmed)
+            assert ">confirm</button>" in c.get("/ui/suggestion").text
+
+            # POST confirm flips the DB flag and returns the re-rendered row showing the new state
+            r = c.post(f"/ui/suggestion/{sid}/confirm")
+            assert r.status_code == 200
+            assert "✓ confirmed" in r.text and ">unconfirm</button>" in r.text
+            assert f'id="row-{sid}"' in r.text  # same row id → subsequent toggles still target it
+            assert c.get(f"/suggestion/{sid}").json()["confirmed"] is True
+
+            # a second POST toggles it back (FR-CA-4 full toggle, reversible)
+            r = c.post(f"/ui/suggestion/{sid}/confirm")
+            assert ">confirm</button>" in r.text
+            assert c.get(f"/suggestion/{sid}").json()["confirmed"] is False
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        _purge_app_modules()

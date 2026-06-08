@@ -144,18 +144,27 @@ def test_web_create_rules_exclude_system_fields():
 
 
 def test_list_still_shows_system_fields_for_readonly_display():
-    # FR-PG-5 is forms-only: read-only list/detail still surface createdAt etc.
+    # FR-PG-5 is forms-only: read-only list/detail still surface createdAt etc. The row cells live
+    # in the shared partial now (FR-CA-3); the list header still carries the column.
+    from startd8.backend_codegen.htmx_generator import render_row_template
+
+    row = render_row_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
+    assert "{{ item.createdAt }}" in row
+    assert "{{ item.id }}" in row
     lst = render_list_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
-    assert "{{ item.createdAt }}" in lst
-    assert "{{ item.id }}" in lst
+    assert "<th>createdAt</th>" in lst  # column header stays in the list
 
 
 def test_list_template_has_rows_and_delete():
+    # The list loops + includes the partial; the row markup (cells + delete) is in the partial.
+    from startd8.backend_codegen.htmx_generator import render_row_template
+
     lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
-    assert "{% for item in items %}" in lst
-    assert "<td>{{ item.result }}</td>" in lst
-    assert 'hx-post="/ui/proofpoint/{{ item.id }}/delete"' in lst
-    assert 'hx-swap="outerHTML"' in lst
+    assert '{% for item in items %}{% include "proofpoint/_row.html" %}{% endfor %}' in lst
+    row = render_row_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert "<td>{{ item.result }}</td>" in row
+    assert 'hx-post="/ui/proofpoint/{{ item.id }}/delete"' in row
+    assert 'hx-swap="outerHTML"' in row
 
 
 def test_all_ui_artifacts_in_sync_and_kind_tagged():
@@ -236,9 +245,11 @@ def test_templates_carry_flash_banners():
 
 
 def test_list_highlights_new_row_and_base_has_styles():
-    lst = render_list_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
-    # ?created=<pk> (list mode) highlights the just-stored row
-    assert '{% if created == item.id|string %} class="new-row"{% endif %}' in lst
+    from startd8.backend_codegen.htmx_generator import render_row_template
+
+    # ?created=<pk> highlights the just-stored row — now in the shared partial (FR-CA-3)
+    row = render_row_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert '{% if created == item.id|string %} class="new-row"{% endif %}' in row
     from startd8.backend_codegen.htmx_generator import render_base_template
 
     base = render_base_template(SCHEMA)
@@ -349,6 +360,76 @@ def test_no_pk_falls_back_to_list():
     assert "falls back to list (FR-FS-8)" in web
     assert 'return RedirectResponse("/ui/pair?created=1", status_code=303)' in web
     assert "/created" not in web  # no confirmation route without a by-id page
+
+
+# --------------------------------------------------------------------------- #
+# Confirm affordance (CONFIRM_AFFORDANCE_REQUIREMENTS.md FR-CA-1..8 / strtd8 AR-5)
+# --------------------------------------------------------------------------- #
+
+CONFIRM_SCHEMA = """\
+model ProofPoint {
+  id        String  @id @default(cuid())
+  result    String
+  source    String  @default("human")
+  confirmed Boolean @default(false)
+}
+
+model Metric {
+  id    String @id
+  value Float
+}
+"""
+
+
+def test_confirm_route_only_for_confirmed_bearing_entities():
+    from startd8.backend_codegen.htmx_generator import render_row_template
+
+    web = render_web(CONFIRM_SCHEMA)
+    compile(web, "<web>", "exec")
+    # FR-CA-2: toggle route + full flip + re-rendered row, for the confirmed-bearing entity
+    assert '@web_router.post("/ui/proofpoint/{id}/confirm"' in web
+    assert "obj.confirmed = not obj.confirmed" in web
+    assert 'request, "proofpoint/_row.html"' in web
+    # FR-CA-1: Metric has no `confirmed` -> no confirm route, no control
+    assert "/ui/metric/{id}/confirm" not in web
+    mrow = render_row_template(CONFIRM_SCHEMA, "prisma/schema.prisma", "Metric")
+    assert "/confirm" not in mrow and "delete</button>" in mrow
+
+
+def test_confirm_control_branches_on_state():
+    from startd8.backend_codegen.htmx_generator import render_row_template
+
+    row = render_row_template(CONFIRM_SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert embedded_artifact_kind(row) == "htmx-row"
+    assert embedded_entity(row) == "ProofPoint"
+    # FR-CA-4: confirmed -> ✓ + unconfirm; unconfirmed -> confirm; one POST either way (toggle)
+    assert "{% if item.confirmed %}" in row
+    assert ">confirm</button>" in row and ">unconfirm</button>" in row
+    assert 'hx-post="/ui/proofpoint/{{ item.id }}/confirm"' in row
+    assert 'hx-target="#row-{{ item.id }}"' in row and 'hx-swap="outerHTML"' in row
+    # no destructive guard on a reversible action (OQ-3): exactly one hx-confirm, on delete
+    assert row.count("hx-confirm") == 1
+    assert 'hx-confirm="Delete?">delete' in row
+
+
+def test_row_partial_emitted_and_drift_in_sync():
+    from startd8.backend_codegen import check_drift
+
+    arts = dict(render_ui(CONFIRM_SCHEMA))
+    assert "app/templates/proofpoint/_row.html" in arts
+    assert "app/templates/metric/_row.html" in arts  # emitted for every entity (uniform include)
+    # the list includes the partial; row markup is no longer inline in the list
+    assert (
+        '{% for item in items %}{% include "proofpoint/_row.html" %}{% endfor %}'
+        in arts["app/templates/proofpoint/list.html"]
+    )
+    # htmx-row is schema-only (1-hash) — owned + in-sync with no manifest
+    for path, content in arts.items():
+        assert owned_file_in_sync(CONFIRM_SCHEMA, content) is True, path
+    assert (
+        check_drift(CONFIRM_SCHEMA, arts["app/templates/proofpoint/_row.html"]).status
+        == "in_sync"
+    )
 
 
 def test_template_provided_via_registry(tmp_path):

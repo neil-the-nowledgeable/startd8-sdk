@@ -121,5 +121,6 @@ def test_emitted_ai_tests_run_green(tmp_path):
         text=True,
     )
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
-    # contract + completeness + edge + gate + route-smoke (1 unseeded case — F-8)
-    assert "17 passed" in result.stdout
+    # contract + completeness + edge + gate + route-smoke (1 unseeded GET case — F-8)
+    # + confirm-route existence (FR-CA-8; the schema's entities carry `confirmed`)
+    assert "18 passed" in result.stdout

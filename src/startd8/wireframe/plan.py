@@ -460,6 +460,7 @@ def _entities_section(state: _ManifestState) -> WireframeSection:
                 detail="routes: list/get/create/update/delete",
                 paths=(
                     f"app/templates/{e}/list.html",
+                    f"app/templates/{e}/_row.html",  # shared row partial (FR-CA-3)
                     f"app/templates/{e}/detail.html",
                 ),
             )

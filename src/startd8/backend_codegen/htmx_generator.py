@@ -5,15 +5,18 @@ FastAPI HTML routes that serve them. This is where the locked HTMX vocabulary li
 **CRUD + inline validation** (list / detail / create+edit form / delete + validate-on-blur,
 field-level errors, partial swaps). Per the target architecture, the UI is *templated from the
 contract* (field → input widget), not hand-authored — so the React/component-invention classes
-cannot occur.
+cannot occur. Entities carrying a ``confirmed`` Boolean also get a **confirm toggle** (AR-5 /
+``CONFIRM_AFFORDANCE_REQUIREMENTS.md``) — the curation half of the suggest→confirm loop.
 
 Artifacts (all owned, all $0.00-skippable via the shared drift path):
 - ``app/web.py`` — HTML-serving routes per entity (list / new / create / detail / edit / update /
   delete) + a ``/validate`` endpoint for inline field validation. Plain ``#`` header (kind
   ``fastapi-web``; with a forms manifest, ``fastapi-web-forms`` carrying a 2-hash header).
 - ``app/templates/base.html`` (``htmx-base``), ``_field_error.html`` (``htmx-field-error``), and
-  per-entity ``<e>/list.html`` / ``<e>/detail.html`` / ``<e>/form.html`` (``htmx-list`` /
-  ``htmx-detail`` / ``htmx-form``, each tagged ``# startd8-entity: <Name>``). Template headers wrap
+  per-entity ``<e>/list.html`` / ``<e>/_row.html`` / ``<e>/detail.html`` / ``<e>/form.html``
+  (``htmx-list`` / ``htmx-row`` / ``htmx-detail`` / ``htmx-form``, each tagged
+  ``# startd8-entity: <Name>``). The list ``{% include %}``s the row partial, which is the single
+  source of row markup so the confirm route can re-render one row. Template headers wrap
   the same ``#`` provenance lines inside a Jinja ``{# … #}`` comment so the existing drift regexes
   recognize them with no new machinery.
 
@@ -128,6 +131,19 @@ def _is_required(field: PrismaField) -> bool:
     return not field.is_optional and not field.is_list
 
 
+def _confirm_field(schema: PrismaSchema, name: str) -> Optional[PrismaField]:
+    """The ``confirmed`` provenance Boolean, iff the entity carries one (FR-CA-1).
+
+    The confirm-affordance trigger: a scalar field literally named ``confirmed`` of type
+    ``Boolean`` (`CONFIRM_AFFORDANCE_REQUIREMENTS.md`). The toggle route also needs a by-id path,
+    so callers additionally gate on a single-column PK. Returns ``None`` when absent — entities
+    without it are unchanged (no confirm control, no confirm route)."""
+    for f in schema.scalar_fields(name):
+        if f.name == "confirmed" and f.type == "Boolean" and not f.is_list:
+            return f
+    return None
+
+
 # ----------------------------------------------------------------------------- #
 # Templates
 # ----------------------------------------------------------------------------- #
@@ -197,16 +213,63 @@ def render_field_error_template(
     return head + "\n" + body
 
 
-def render_list_template(schema_text: str, source_file: str, entity: str) -> str:
+def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
+    """``<e>/_row.html`` — one table row (kind ``htmx-row``, schema-only, entity-tagged).
+
+    The single source of truth for a list row (FR-CA-3): the list loop ``{% include %}``s it, and
+    the confirm route re-renders it standalone so a toggled row swaps in with a working, restated
+    control (FR-CA-4). Renders the read-only cells + view/edit/(confirm)/delete actions. When the
+    entity carries a ``confirmed`` Boolean (`_confirm_field`), the actions include the confirm
+    toggle. PK-less entities get cells + an empty action cell (no by-id actions). ``created`` is the
+    list's just-stored pk (undefined when rendered standalone → no highlight)."""
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
     pk = _pk_field(schema, entity)
     fields = _form_fields(schema, entity)
+    head = _tmpl_header(source_file, sha, "htmx-row", entity)
+
+    cells = "".join("<td>{{ item." + f.name + " }}</td>" for f in fields)
+    if pk is None:
+        return head + "\n" + f"<tr>{cells}<td></td></tr>\n"
+
+    rid = "{{ item." + pk.name + " }}"
+    # ?created=<pk> (list mode) highlights the just-stored row (FR-FS OQ-6 follow-through).
+    hl = "{% if created == item." + pk.name + '|string %} class="new-row"{% endif %}'
+    cf = _confirm_field(schema, entity)
+    confirm_html = ""
+    if cf is not None:
+        # The suggest→confirm verb (AR-5 / FR-CA-3/4): a full toggle, reversible, no guard dialog.
+        confirm_html = (
+            "{% if item." + cf.name + " %}"
+            '<span class="confirmed">✓ confirmed</span> '
+            f'<button hx-post="/ui/{e}/{rid}/confirm" hx-target="#row-{rid}" '
+            'hx-swap="outerHTML">unconfirm</button>'
+            "{% else %}"
+            f'<button hx-post="/ui/{e}/{rid}/confirm" hx-target="#row-{rid}" '
+            'hx-swap="outerHTML">confirm</button>'
+            "{% endif %}\n    "
+        )
+    body = (
+        f'<tr id="row-{rid}"{hl}>{cells}<td>\n'
+        f'    <a href="/ui/{e}/{rid}">view</a>\n'
+        f'    <a href="/ui/{e}/{rid}/edit">edit</a>\n'
+        f"    {confirm_html}"
+        f'<button hx-post="/ui/{e}/{rid}/delete" hx-target="#row-{rid}" '
+        'hx-swap="outerHTML" hx-confirm="Delete?">delete</button>\n'
+        "  </td></tr>\n"
+    )
+    return head + "\n" + body
+
+
+def render_list_template(schema_text: str, source_file: str, entity: str) -> str:
+    schema = parse_prisma_schema(schema_text)
+    sha = schema_sha256(schema_text)
+    e = entity.lower()
+    fields = _form_fields(schema, entity)
     head = _tmpl_header(source_file, sha, "htmx-list", entity)
 
     cols = "".join(f"<th>{f.name}</th>" for f in fields)
-    cells = "".join("<td>{{ item." + f.name + " }}</td>" for f in fields)
 
     lines = [
         '{% extends "base.html" %}',
@@ -218,24 +281,8 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
         f'<a href="/ui/{e}/new">New {entity}</a>',
         f"<table>\n  <thead><tr>{cols}<th></th></tr></thead>",
         "  <tbody>",
-        "  {% for item in items %}",
-    ]
-    if pk is not None:
-        rid = "{{ item." + pk.name + " }}"
-        # ?created=<pk> (list mode) highlights the just-stored row (OQ-6 follow-through).
-        hl = "{% if created == item." + pk.name + '|string %} class="new-row"{% endif %}'
-        lines += [
-            f'  <tr id="row-{rid}"{hl}>{cells}<td>',
-            f'    <a href="/ui/{e}/{rid}">view</a>',
-            f'    <a href="/ui/{e}/{rid}/edit">edit</a>',
-            f'    <button hx-post="/ui/{e}/{rid}/delete" hx-target="#row-{rid}" '
-            'hx-swap="outerHTML" hx-confirm="Delete?">delete</button>',
-            "  </td></tr>",
-        ]
-    else:
-        lines.append(f"  <tr>{cells}<td></td></tr>")
-    lines += [
-        "  {% endfor %}",
+        # Row markup lives in the shared partial (FR-CA-3) so the confirm route can re-render it.
+        '  {% for item in items %}{% include "' + e + '/_row.html" %}{% endfor %}',
         "  </tbody>\n</table>",
         "{% endblock %}",
     ]
@@ -590,6 +637,27 @@ def _entity_routes(
             f"        '<p class=\"flash\">✓ {name} deleted.</p></td></tr>'",
             "    )",
         ]
+        cf = _confirm_field(schema, name)
+        if cf is not None:
+            # AR-5 / FR-CA-2: the suggest→confirm verb. Full toggle; returns the re-rendered row
+            # so the HTMX outerHTML swap leaves a working, restated control (FR-CA-4).
+            lines += [
+                "",
+                "",
+                f'@web_router.post("/ui/{e}/{pkref}/confirm", response_class=HTMLResponse)',
+                f"def confirm_{e}({pkname}: {pkkind}, request: Request, "
+                f"session: Session = Depends(get_session)):",
+                f"    obj = session.get({name}, {pkname})",
+                "    if obj is None:",
+                f'        raise HTTPException(status_code=404, detail="{name} not found")',
+                f"    obj.{cf.name} = not obj.{cf.name}",
+                "    session.add(obj)",
+                "    session.commit()",
+                "    session.refresh(obj)",
+                "    return templates.TemplateResponse(",
+                f'        request, "{e}/_row.html", {{"item": obj}}',
+                "    )",
+            ]
         if on_create == "confirmation":
             # The dedicated confirmation page (FR-FS-5) — the create handler 303s here.
             lines += [
@@ -682,6 +750,12 @@ def render_ui(
             (
                 f"app/templates/{e}/list.html",
                 render_list_template(schema_text, source_file, n),
+            )
+        )
+        out.append(
+            (
+                f"app/templates/{e}/_row.html",
+                render_row_template(schema_text, source_file, n),
             )
         )
         out.append(
