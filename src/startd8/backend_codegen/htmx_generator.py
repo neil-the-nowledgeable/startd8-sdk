@@ -151,8 +151,9 @@ def _confirm_field(schema: PrismaSchema, name: str) -> Optional[PrismaField]:
 # ----------------------------------------------------------------------------- #
 
 
-# Minimal owned styling, inlined in base.html (bucket-2 placeholder; real design is bucket-4).
-# Inline <style> deliberately — no static mount in main.py, no extra artifact/kind to drift-track.
+# Minimal owned styling, inlined in base.html as a always-present *fallback*. `startd8 polish`
+# overrides it with a mounted /static/css/app.css (linked below, after this block, so the external
+# sheet wins the cascade). When polish hasn't run, the link 404s harmlessly and this fallback applies.
 _BASE_STYLE = """\
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; color: #222; }
@@ -197,9 +198,16 @@ def render_base_template(
         "  <title>{% block title %}StartDate{% endblock %}</title>\n"
         '  <script src="https://unpkg.com/htmx.org@2.0.3"></script>\n'
         + _BASE_STYLE
+        + '  <link rel="stylesheet" href="/static/css/app.css">\n'
+        # Tolerant presentation-polish theme hooks — the template analog of main.py's optional
+        # `user_routers` seam. No-ops until `startd8 polish` drops the partials into templates/theme/;
+        # they let polish add a head extra, a header bar, and a footer without editing this owned file.
+        + '  {% include "theme/_head_extra.html" ignore missing %}\n'
         + "</head>\n<body>\n"
+        + '  {% include "theme/_header.html" ignore missing %}\n'
         + nav
-        + "  <main>{% block content %}{% endblock %}</main>\n"
+        + '  <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>\n'
+        + '  {% include "theme/_footer.html" ignore missing %}\n'
         "</body>\n</html>\n"
     )
     return head + "\n" + body

@@ -12,12 +12,13 @@ from __future__ import annotations
 from .drift import is_owned_view_file, views_in_sync
 from .manifest import ViewSpec, parse_views
 from .provider import CompositeViewProvider
-from .renderers import render_views
+from .renderers import compute_binding_names, render_views
 
 __all__ = [
     "ViewSpec",
     "parse_views",
     "render_views",
+    "compute_binding_names",
     "views_in_sync",
     "is_owned_view_file",
     "CompositeViewProvider",

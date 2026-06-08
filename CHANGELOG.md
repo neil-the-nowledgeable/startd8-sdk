@@ -47,6 +47,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a `max_cost_usd` ceiling, are unchanged. The `has_fillable_elements`
   signal defaults to `None` (no guard); the budget guard is a no-op without a cap.
 
+## [0.4.0] - 2026-06-02
+
+> **The deterministic-first pivot.** startd8 became a software-engineering harness for
+> LLM-assisted development built on a Requirements→Capabilities delivery pipeline, with the
+> explicit goal of maximizing deterministic ($0) generation and using LLMs only for
+> integration. This entry consolidates the 0.3.x → 0.4.0 history (the changelog had no
+> intermediate release entries).
+
+### Added — deterministic code generation ($0, no LLM)
+- **`src/startd8/backend_codegen/`** — projects one `.prisma` data-model contract into a full
+  all-Python backend (Pydantic + SQLModel + FastAPI + HTMX + export/AI-schemas/completeness),
+  ~12 owned file kinds, all $0-deterministic. Runtime-verified end to end against FastAPI +
+  SQLModel + Jinja2 (FK / `Relationship()` / `@default` translation / reserved-name guard).
+- **`startd8 generate`** CLI with four targets: `frontend`, `backend`, `scaffold`
+  (pyproject/logging/alembic/Dockerfile from `app.yaml`), `views` (composite/relational views
+  from `views.yaml`).
+- **`startd8 wireframe`** — $0 read-only pre-generation summary of what the deterministic
+  cascade will build, with `--json` for CI.
+- **`startd8 polish`** — apply an accessible design theme to a built app ($0).
+- `validators/python_toolchain.py` deterministic quality gate; `STARTD8_PY_TYPECHECK` env.
+
+### Added — pipeline, contractors & evaluation
+- **Prime Contractor** as the active multi-feature construction path (tier-routed
+  template → Haiku → Sonnet), with checkpoint/resume, ~45 per-language repair steps, and the
+  **Kaizen** cross-run quality feedback system.
+- **`startd8 compare-models`** — run the same seed through Prime Contractor across 2+ models in
+  isolated sandboxes (cloud and edge/local) and rank them.
+- New CLI surfaces: `fde` (forward-deployed-engineer failure explanation), `sapper`
+  (pre-execution plan validation), `assist` (Service Assistant run triage), `repair`,
+  `manifest`, `workflow`, `project`, `serve`, `element-registry`.
+- Embedded **Capability Delivery Pipeline** (`.cap-dev-pipe/`).
+
+### Added — providers & languages
+- Providers expanded to 8: added `nim` and `openai-compatible` (edge/local + self-hosted)
+  alongside `anthropic`, `openai`, `gemini`, `mistral`, `ollama`, `mock`.
+- Language profiles expanded to 7: added `vue` and `prisma` alongside `python`, `go`,
+  `nodejs`, `java`, `csharp`.
+
+### Changed
+- **Artisan Contractor placed ON HOLD (2026-03-12)**; Prime Contractor is the only active
+  construction path. Prime-vs-Artisan routing is vestigial.
+- Primary Contractor naming: `LeadContractorWorkflow` is also exported as
+  `PrimaryContractorWorkflow`; legacy `lead_contractor_*` names preserved for compatibility.
+
+### Fixed
+- Orchestration harden-in-place (R1-S2 gate ADR): per-run repair circuit-breaker scope
+  (`RepairSession`), `deque(maxlen=)` event history (trim race removed), and `FeatureQueue`
+  resume state-hash integrity with loud refusal on corrupt/invalid resume state. Also revived a
+  silently-disabled post-integrate contract-violation repair path.
+
 ## [0.2.0] - 2024-12-XX
 
 ### Added (Phase 2)

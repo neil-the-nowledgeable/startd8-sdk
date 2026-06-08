@@ -10,6 +10,16 @@ v1 archetypes: ``dashboard`` (aggregates + signal), ``board`` (group-by an order
 panels + conditional panels) and ``export-package`` (root + relations -> lossless package + named MD
 layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
 
+``board`` has two variants (FR-EB). The static-``order`` form groups root rows by a scalar
+``group_by`` in a baked ``order: [...]`` allow-list (compile-time columns, e.g. a status enum). The
+**entity-backed** form (selected only when ``columns_from`` is present) groups by a related entity's
+RUNTIME rows ordered by a numeric ``order_by`` field: ``columns_from`` names the column entity (its
+rows ARE the columns), ``group_by`` is the root's FK-ish ref to it, ``order_by`` is the column
+entity's ordering field. Columns are queried at request time (user-definable, no regeneration);
+roots whose ref matches no column are kept in an unassigned tail (no row lost). Loud-fail:
+``columns_from`` naming a non-entity, ``order_by`` not a field on it, ``group_by`` not a root field,
+or mixing ``order:`` with ``columns_from:``. The static board stays valid and byte-identical.
+
 ``export-package`` additionally takes ``scope: row | model`` (default ``row`` — the existing per-row
 package). ``scope: model`` (AR-3, FR-10 whole-model export) serves the WHOLE model through the
 generated ``app/export.py`` serialization layer: ``route`` becomes the optional base path (default
@@ -21,9 +31,11 @@ roots flagged, never dropped), so the route takes no ``{id}`` — it derives ``/
 per authoring contract §2.3 (optional explicit ``route:`` override; ``{id}`` in it fails loud).
 
 ``computed-panel`` (AR-2, FR-9 — the completeness page) binds a **generated compute function** to
-a score+nudges panel at a declared route. ``compute`` names the binding from a closed vocabulary
-(v1: ``completeness`` — ``app/completeness.py``'s ``compute_completeness``, fed live per-entity row
-counts); the table is deliberately a vocabulary so future generated compute functions slot in.
+a score+nudges panel at a declared route. ``compute`` names the binding from an OPEN, registrable
+vocabulary (v1: ``completeness`` — ``app/completeness.py``'s ``compute_completeness``, fed live
+per-entity row counts). The vocabulary's single source of truth is ``renderers._COMPUTE_RENDERERS``
+(name -> renderer fn); adding a binding there (e.g. a ``funnel`` metrics binding) automatically
+opens it here, with no duplicate allow-list to keep in sync.
 Route derives ``/<kebab(view name)>``. Entity-shaped keys (``root``/``relations``/``aggregates``/…)
 are wrong-kind on a computed-panel and fail loud.
 
@@ -34,6 +46,18 @@ shapes against the contract; reports errors WITHOUT mutating) -> POST ``<route>/
 destructive step — refused without an explicit ``confirm`` field; UPSERT by primary key with the
 retired ``import_routes.py`` merge semantics: idempotent, never deletes). ``route`` is the optional
 base path (default ``/import``). It takes no entity keys at all — those fail loud.
+
+``rendered-content`` (AR-6, FR-16 — "make the generated artifact readable") binds a
+**prose-from-a-JSON-field** presenter to an entity whose user-facing content lives in a long-text
+JSON column (e.g. ``Artifact.dataJson = {"body": "<prose>", "traces": [ids]}``). It declares the
+entity (``root``), the JSON column (``content_field``, e.g. ``dataJson``), and which JSON key holds
+the prose (``prose_key``, default ``body``); the entity's ``kind`` field, if present, becomes the
+heading. ``content_field`` must be a real scalar field on ``root`` (loud-fail otherwise — closed,
+parser-validated keys mirroring AR-2/AR-3). Route derives ``/<kebab(view name)>`` with an optional
+``route:`` override. The detail view renders ``content_field[prose_key]`` as **prose** (no JSON, no
+visible trace ids) with a copy-to-clipboard control yielding the body as plain text; the list view
+shows kind + a prose preview. The SAME prose-from-JSON renderer feeds the model-scoped
+export-package's named layout (FR-10 conformance — pitches verbatim, not a JSON dump).
 """
 
 from __future__ import annotations
@@ -45,22 +69,29 @@ import yaml
 
 _KINDS = {
     "dashboard", "board", "workspace", "detail-compose", "export-package", "computed-panel",
-    "import-flow",
+    "import-flow", "rendered-content",
 }
 # `scope` is valid on export-package (AR-3: whole-model export) and detail-compose (AR-1:
 # whole-model compose — the Value Map). `model` = iterate/serve the WHOLE model, not one row.
 _SCOPES = {"row", "model"}
 _SCOPED_KINDS = {"export-package", "detail-compose"}
-# computed-panel compute bindings (AR-2): a closed vocabulary of GENERATED compute functions.
-# v1: only `completeness` exists (app/completeness.py); the set is the extension point.
-_COMPUTE_BINDINGS = {"completeness"}
+# computed-panel compute bindings (AR-2): an OPEN, registrable vocabulary of GENERATED compute
+# functions. The canonical registry is `renderers._COMPUTE_RENDERERS` (name -> renderer fn) — the
+# single source of truth for BOTH what parses here and what renders. We read it via a deferred
+# import (`renderers` depends on `manifest`, so a module-level import would cycle), guaranteeing the
+# parse-time allow-list and the render dispatch can never drift. To add a binding, register one
+# entry in that dict — no edit here. v1 ships only `completeness` (app/completeness.py).
 # Keys a computed-panel may carry — entity-shaped keys are wrong-kind there and fail loud.
 _COMPUTED_PANEL_KEYS = {"name", "kind", "route", "compute"}
 # Keys an import-flow may carry — it is contract-driven (app/export.py), so no entity keys at all.
 _IMPORT_FLOW_KEYS = {"name", "kind", "route"}
+# Keys a rendered-content view may carry (AR-6): the entity (root), the JSON content column, and the
+# JSON key holding the prose. Aggregate/relation/panel/compute keys are wrong-kind there and fail loud.
+_RENDERED_CONTENT_KEYS = {"name", "kind", "route", "root", "content_field", "prose_key"}
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
-    "relations", "panels", "gap", "scope", "compute",
+    "relations", "panels", "gap", "scope", "compute", "content_field", "prose_key",
+    "columns_from", "order_by",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
@@ -113,6 +144,10 @@ class ViewSpec:
     root: str   # "" for model-scoped export-packages / computed-panels (no single root row)
     scope: str = "row"                    # export-package/detail-compose: "row" | "model" (AR-3/AR-1)
     compute: str = ""                     # computed-panel only: the compute binding (AR-2)
+    content_field: str = ""               # rendered-content only: the JSON content column (AR-6)
+    prose_key: str = "body"               # rendered-content only: JSON key holding the prose (AR-6)
+    columns_from: str = ""                # entity-backed board only: the column entity (FR-EB)
+    order_by: str = ""                    # entity-backed board only: column entity's order field
     aggregates: Tuple[Aggregate, ...] = ()
     signal: str = ""                      # "<aggname> >= <int>"
     group_by: str = ""
@@ -127,6 +162,17 @@ class ViewSpec:
         return self.name
 
 
+def _compute_bindings() -> frozenset:
+    """The registered compute-binding vocabulary, read from the canonical renderer registry.
+
+    Deferred import (``renderers`` imports ``manifest``) so the allow-list this validator enforces
+    is literally the set of renderers that exist — the single source of truth, never a duplicate.
+    """
+    from .renderers import compute_binding_names
+
+    return compute_binding_names()
+
+
 def _signal_parts(expr: str) -> Tuple[str, int]:
     """Parse a ``<aggname> >= <int>`` signal into ``(aggname, threshold)``. Loud on anything else."""
     toks = expr.split()
@@ -138,15 +184,30 @@ def _signal_parts(expr: str) -> Tuple[str, int]:
         raise ValueError(f"views.yaml: signal threshold must be an int, got {toks[2]!r}")
 
 
-def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[ViewSpec, ...]:
-    """Parse + strictly validate ``views.yaml``. ``known_entities`` (if given) gates entity refs."""
+def parse_views(
+    text: str,
+    *,
+    known_entities: frozenset = frozenset(),
+    known_fields: Dict[str, frozenset] | None = None,
+) -> Tuple[ViewSpec, ...]:
+    """Parse + strictly validate ``views.yaml``. ``known_entities`` (if given) gates entity refs;
+    ``known_fields`` (entity -> field-name set, if given) gates field refs (AR-6 ``content_field``)
+    — loud-fail on an unknown field, mirroring the unknown-entity loud-fail."""
     data = yaml.safe_load(text or "") or {}
     if not isinstance(data, dict) or "views" not in data:
         raise ValueError("views.yaml must be a mapping with a top-level `views:` list")
+    known_fields = known_fields or {}
 
     def _check_entity(ent: str, where: str) -> None:
         if known_entities and ent not in known_entities:
             raise ValueError(f"views.yaml: {where} references unknown entity {ent!r}")
+
+    def _check_field(ent: str, fld: str, where: str) -> None:
+        fields = known_fields.get(ent)
+        if fields is not None and fld not in fields:
+            raise ValueError(
+                f"views.yaml: {where} references unknown field {fld!r} on {ent!r}"
+            )
 
     out: List[ViewSpec] = []
     for i, entry in enumerate(data["views"] or []):
@@ -176,7 +237,22 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             raise ValueError(
                 f"views.yaml: view #{i} `compute` is only valid on kind 'computed-panel', not {kind!r}"
             )
+        for ck in ("content_field", "prose_key"):
+            if ck in entry and kind != "rendered-content":
+                raise ValueError(
+                    f"views.yaml: view #{i} `{ck}` is only valid on kind 'rendered-content', "
+                    f"not {kind!r}"
+                )
+        for bk in ("columns_from", "order_by"):
+            if bk in entry and kind != "board":
+                raise ValueError(
+                    f"views.yaml: view #{i} `{bk}` is only valid on kind 'board', not {kind!r}"
+                )
         compute = ""
+        content_field = ""
+        prose_key = "body"
+        columns_from = ""
+        order_by = ""
         model_export = kind == "export-package" and scope == "model"
         model_compose = kind == "detail-compose" and scope == "model"
         if kind == "import-flow":
@@ -202,13 +278,38 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             compute = str(entry.get("compute") or "")
             if not compute:
                 raise ValueError(f"views.yaml: view #{i} missing required `compute`")
-            if compute not in _COMPUTE_BINDINGS:
+            if compute not in _compute_bindings():
                 raise ValueError(
                     f"views.yaml: view #{i} unknown compute binding {compute!r} "
-                    f"(allowed: {sorted(_COMPUTE_BINDINGS)})"
+                    f"(allowed: {sorted(_compute_bindings())})"
                 )
             root = ""
             route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+        elif kind == "rendered-content":
+            # AR-6 (FR-16): a prose-from-a-JSON-field presenter. Declares the entity (root), the
+            # JSON content column, and the JSON key holding the prose. Aggregate/relation/panel/
+            # compute keys are wrong-kind here and fail loud (closed key set, like AR-2/AR-3).
+            wrong_kind = set(entry) - _RENDERED_CONTENT_KEYS
+            if wrong_kind:
+                raise ValueError(
+                    f"views.yaml: view #{i} keys {sorted(wrong_kind)} are not valid on kind "
+                    "'rendered-content' (it binds a prose-from-JSON presenter to one entity)"
+                )
+            if not entry.get("root"):
+                raise ValueError(f"views.yaml: view #{i} missing required `root`")
+            root = str(entry["root"])
+            _check_entity(root, f"view {entry['name']!r} root")
+            content_field = str(entry.get("content_field") or "")
+            if not content_field:
+                raise ValueError(f"views.yaml: view #{i} missing required `content_field`")
+            _check_field(root, content_field, f"view {entry['name']!r} content_field")
+            prose_key = str(entry.get("prose_key") or "body")
+            route = str(entry.get("route") or "/" + str(entry["name"]).replace("_", "-"))
+            if "{" in route:
+                raise ValueError(
+                    f"views.yaml: view #{i} route {route!r} must not take path params "
+                    "(a rendered-content view lists/reads its entity by query id)"
+                )
         elif model_export:
             # Whole-model export (AR-3): no root row — root/relations are meaningless and forbidden;
             # route is the optional base path (authoring-contract default: /export).
@@ -241,6 +342,31 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
             root = str(entry["root"])
             route = str(entry["route"])
             _check_entity(root, f"view {entry['name']!r} root")
+
+        if kind == "board" and "columns_from" in entry:
+            # Entity-backed board (FR-EB): columns are a related entity's runtime rows ordered by a
+            # numeric field. Loud-fail on a non-entity column source, an order_by that isn't its
+            # field, a group_by that isn't a root field, or mixing the static `order:` list.
+            if "order" in entry:
+                raise ValueError(
+                    f"views.yaml: view #{i} cannot mix `order:` (static columns) with "
+                    "`columns_from:` (entity-backed columns) — choose one board variant"
+                )
+            columns_from = str(entry["columns_from"])
+            _check_entity(columns_from, f"view {entry['name']!r} columns_from")
+            if not entry.get("order_by"):
+                raise ValueError(
+                    f"views.yaml: view #{i} entity-backed board missing required `order_by` "
+                    "(the column entity's ordering field)"
+                )
+            order_by = str(entry["order_by"])
+            _check_field(columns_from, order_by, f"view {entry['name']!r} order_by")
+            if not entry.get("group_by"):
+                raise ValueError(
+                    f"views.yaml: view #{i} entity-backed board missing required `group_by` "
+                    "(the root's ref to the column entity)"
+                )
+            _check_field(root, str(entry["group_by"]), f"view {entry['name']!r} group_by")
 
         aggregates: List[Aggregate] = []
         for a in entry.get("aggregates") or []:
@@ -314,7 +440,8 @@ def parse_views(text: str, *, known_entities: frozenset = frozenset()) -> Tuple[
 
         out.append(ViewSpec(
             name=str(entry["name"]), kind=kind, route=route, root=root, scope=scope,
-            compute=compute,
+            compute=compute, content_field=content_field, prose_key=prose_key,
+            columns_from=columns_from, order_by=order_by,
             aggregates=tuple(aggregates), signal=str(entry.get("signal", "")),
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),

@@ -1,68 +1,115 @@
-# StartDate SDK
+# startd8-SDK
 
 **Version 0.4.0**
 
-A comprehensive Python SDK for managing multi-LLM agent workflows, benchmarking, and prompt version control in the StartDate project.
+A **software-engineering harness and development toolkit for Language-Model-assisted
+development.** startd8 turns a requirements document into working software through a
+**Requirements → Capabilities delivery pipeline**, and gives you **multi-LLM benchmarking
+plus cloud and edge/local model evaluation** to choose the right model for each job.
 
-## Features
+The throughline is a deliberate one: **maximize what is generated deterministically (at $0
+LLM cost) and use language models only where they add real value** — a bridge toward
+deterministic, auditable generation for **production and enterprise applications.**
 
-- 🤖 **Multi-Agent Support**: Provider-based agents via `ProviderRegistry` (Anthropic, OpenAI, Gemini, Ollama, Mock)
-- 📝 **Prompt Version Control**: Track and manage prompts with semantic versioning
-- ⏱️ **Response Tracking**: Record responses with timing and token usage
-- 📊 **Benchmarking**: Compare multiple LLMs on the same prompts
-- 💰 **Cost Tracking**: Automatic cost estimation based on token usage
-- 🎯 **CLI Tools**: Command-line interface for easy management
-- 🖥️ **Interactive TUI**: Full-featured terminal UI (`startd8 tui`)
-- 💾 **Flexible Storage**: JSON-based file system storage (extensible to other backends)
+> The original benchmarking framework is still here and fully supported (see
+> [Benchmarking & model evaluation](#benchmarking--model-evaluation)). It is now one half of a
+> larger toolkit whose other half is deterministic code delivery.
 
-> **[View Developer Portal](docs/developer-portal.html)** - Interactive documentation with code examples and architecture overview
+---
+
+## The idea in one screen
+
+Building an application and *generating the content that fills it* are different jobs. startd8
+keeps four buckets separate and prioritizes them strictly — and the SDK's generation scope
+**ends at integration**:
+
+| # | Bucket | What it is | Owner / cost |
+|---|--------|-----------|--------------|
+| **1** | **Application** | data model, pages, forms, CRUD, composite views — the structural skeleton | **SDK, deterministic, $0 LLM** (≈89% of an app) |
+| **2** | **Placeholder content + static test data** | throwaway copy + fixtures that prove the app runs | SDK, minimal |
+| **3** | **Integration** | the LLM-generated glue that wires the deterministic pieces into a working whole | **SDK — the one in-scope LLM aspect** |
+| **4** | **Real end-user / company content** | the actual value content | **You / the commissioning company — out of scope** |
+
+This is why a full app needs only **~4 LLM passes** (all integration-focused): the deterministic
+cascade (`generate backend` + `generate scaffold` + `generate views`) is **$0, no API calls**.
+
+---
 
 ## Installation
 
-### Recommended: pipx (Isolated Environment)
-
-**Best for:** Most users who want a clean, isolated installation
+### Recommended: pipx (isolated environment)
 
 ```bash
-# Install pipx (one-time setup)
-brew install pipx  # macOS
-# or: pip install --user pipx
-pipx ensurepath    # Add to PATH
+# one-time setup
+brew install pipx            # macOS  (or: pip install --user pipx)
+pipx ensurepath
 
-# Install startd8 in isolated environment
+# install
 pipx install startd8
 
-# Or install from local source (for development)
-pipx install -e /path/to/startd8-sdk-project
+# from local source (development)
+pipx install -e /path/to/startd8-sdk
 
-# Update startd8
-pipx upgrade startd8
-
-# Uninstall
-pipx uninstall startd8
+startd8 --help
 ```
 
-**Why pipx?** 
-- ✅ Complete isolation from your system Python
-- ✅ No dependency conflicts
-- ✅ Easy updates and uninstalls
-- ✅ Standard tool used by `black`, `pytest`, `poetry`
-
-### Alternative: Standard pip Installation
-
-**Best for:** Developers who want to import startd8 as a library
+### Alternative: pip (use as a library)
 
 ```bash
-cd startd8-sdk-project
-pip install -e .
-
-# With development dependencies
-pip install -e ".[dev]"
+cd startd8-sdk
+pip install -e ".[dev]"        # with dev dependencies
+pip install -e ".[all,dev]"    # with all optional providers
 ```
 
-**Note:** This installs into your current Python environment and may conflict with other packages.
+See [INSTALL.md](INSTALL.md) and [INSTALL_PIPX.md](INSTALL_PIPX.md) for details.
 
-## Quick Start
+---
+
+## Quick start
+
+### A. Deterministic code generation ($0, no LLM)
+
+The deterministic cascade projects **one Prisma data-model contract** into a working
+all-Python application (Pydantic + SQLModel + FastAPI + HTMX), runtime-verified end to end.
+
+```bash
+# 1. See exactly what the $0 cascade WILL build before you run it (read-only, advisory)
+startd8 wireframe --inputs assembly-inputs.yaml
+
+# 2. Generate the full backend from the Prisma contract
+startd8 generate backend --schema schema.prisma --out ./app
+
+# 3. Emit project plumbing (pyproject / logging / alembic / Dockerfile) from app.yaml
+startd8 generate scaffold --inputs app.yaml --out ./app
+
+# 4. Emit composite/relational views (dashboard / board / workspace) from views.yaml
+startd8 generate views --inputs views.yaml --out ./app
+
+# Bonus: apply an accessible design theme to the built app ($0)
+startd8 polish ./app
+```
+
+`startd8 generate --help` lists all four targets (`frontend`, `backend`, `scaffold`, `views`).
+
+### B. Benchmarking & model evaluation
+
+```bash
+# Initialize storage
+startd8 init
+
+# Run the SAME seed through Prime Contractor across 2+ models in isolated
+# sandboxes, then rank — cloud and edge/local side by side
+startd8 compare-models --seed seed.json \
+    --model anthropic:claude-sonnet-4-20250514 \
+    --model ollama:llama3 \
+    --model gemini:gemini-2.0-flash
+
+# Classic prompt benchmarking
+startd8 create-prompt "Implement JWT auth" --version 1.0.0 --tag auth
+startd8 run-benchmark <prompt-id> --name "Auth comparison" --agent mock:mock-model
+startd8 compare <prompt-id> --output report.md
+startd8 stats
+```
 
 ### Python API
 
@@ -71,419 +118,141 @@ from startd8 import AgentFramework
 from startd8.benchmark import BenchmarkRunner
 from startd8.providers import ProviderRegistry
 
-# Initialize framework
-framework = AgentFramework()
-
-# Prompt to benchmark
-prompt_text = "Implement a user authentication system with JWT tokens"
-
-# Set up agents (provider:model)
-ProviderRegistry.discover()
+ProviderRegistry.discover()                      # always discover first
 anthropic = ProviderRegistry.get_provider("anthropic")
-openai = ProviderRegistry.get_provider("openai")
-if not anthropic or not openai:
-    raise RuntimeError("Required providers not available")
-anthropic.validate_config({})
-openai.validate_config({})
+anthropic.validate_config({})                    # always validate before use
+agent = anthropic.create_agent("claude-sonnet-4-20250514")
 
-agents = [
-    anthropic.create_agent("claude-sonnet-4-20250514"),
-    openai.create_agent("gpt-4o"),
-]
-
-# Run benchmark
+framework = AgentFramework()
 runner = BenchmarkRunner(framework)
 results = runner.run_benchmark(
-    prompt_content=prompt_text,
-    agents=agents,
-    benchmark_name="Auth System Comparison",
-    tags=["auth", "backend", "security"],
+    prompt_content="Design a schema for an e-commerce platform",
+    agents=[agent],
+    benchmark_name="Schema design",
 )
-
-# Compare responses (also available as results["comparison"])
-comparison = results["comparison"]
-print(f"Average response time: {comparison['avg_response_time_ms']}ms")
-print(f"Total tokens used: {comparison['total_tokens']}")
+print(results["comparison"]["avg_response_time_ms"])
 ```
 
-### Command Line Interface
+---
+
+## The Requirements → Capabilities delivery pipeline
+
+The **Capability Delivery Pipeline** (`cap-dev-pipe`) carries a requirements doc + plan through
+ingestion, deterministic assembly, and LLM-assisted integration. It is embedded in this repo via
+symlinks to the canonical source and driven from `.cap-dev-pipe/`:
 
 ```bash
-# Initialize framework
-startd8 init
-
-# Create a prompt
-startd8 create-prompt "Write a REST API for user registration" \
-    --version 1.0.0 \
-    --tag api --tag backend
-
-# List prompts
-startd8 list-prompts
-
-# Run a benchmark (using mock agents for testing)
-startd8 run-benchmark <prompt-id> \
-    --name "User Registration API" \
-    --agent mock:mock-model
-
-# Compare responses
-startd8 compare <prompt-id>
-
-# Generate markdown report
-startd8 compare <prompt-id> --output report.md
-
-# Show statistics
-startd8 stats
+cd .cap-dev-pipe
+./run-cap-delivery.sh   --plan plan.md --requirements reqs.md --project myapp --name run-1
+./run-plan-ingestion.sh --provenance pipeline-output/run-1/run-provenance.json
+./run-prime-contractor.sh --provenance pipeline-output/run-1/run-provenance.json --list
 ```
+
+Bracket every pass with the two human design bookends — **DATA MODEL** (front: design the
+contract bucket 1 derives from) and **RETROSPECTIVE** (back: feed lessons back into
+requirements/plan). The deterministic `generate` cascade is **$0 and not a pipeline pass**; the
+LLM passes are integration-focused.
+
+Guides: [PRIME_CONTRACTOR_WORKFLOW_GUIDE](docs/PRIME_CONTRACTOR_WORKFLOW_GUIDE.md) ·
+[FEATURE_WORKFLOW_GUIDE](docs/FEATURE_WORKFLOW_GUIDE.md) ·
+[ITERATIVE_DEV_WORKFLOW](docs/ITERATIVE_DEV_WORKFLOW.md)
+
+---
+
+## Command surface
+
+`startd8 <command>` — run `startd8 --help` or `startd8 <command> --help` for full options.
+
+| Area | Commands |
+|------|----------|
+| **Deterministic codegen** | `wireframe`, `generate` (frontend/backend/scaffold/views), `polish`, `repair`, `manifest` |
+| **Pipeline & contractors** | `workflow`, `project`, `queue`, `compare-models`, `assist`, `fde`, `sapper`, `element-registry` |
+| **Benchmarking & prompts** | `init`, `create-prompt`, `list-prompts`, `show-prompt`, `run-benchmark`, `compare`, `list-responses`, `show-response`, `stats`, `templates`, `build-prompt` |
+| **Pipelines & serving** | `pipeline`, `serve`, `dashboard` |
+| **Interactive & ops** | `tui`, `otel-status`, `otel-configure` |
+
+---
 
 ## Architecture
 
-### Core Components
+- **Provider abstraction** — 8 providers via entry points: `anthropic`, `openai`, `gemini`,
+  `mistral`, `ollama`, `nim`, `openai-compatible`, `mock`. Edge/local and self-hosted models
+  run through `ollama`, `nim`, and any OpenAI-compatible endpoint.
+- **Multi-language code generation** — 7 language profiles: `python` (strongest — AST repair,
+  splicing), `go`, `nodejs`, `java`, `csharp`, `vue`, `prisma`. Python is the deterministic
+  backend target.
+- **Prime Contractor** — the active multi-feature construction path (tier-routed: template →
+  Haiku → Sonnet), with checkpoint/resume, per-language repair (~45 steps), and Kaizen
+  cross-run quality feedback.
+- **Backend codegen** — `src/startd8/backend_codegen/` projects one `.prisma` contract into
+  models / tables / CRUD / HTMX UI / export / AI-schemas / completeness, all $0-deterministic.
+- **Observability** — OpenTelemetry traces/metrics/logs with a Loki/Grafana stack; cost
+  tracking across all providers.
 
-1. **AgentFramework**: Main orchestrator for prompts, responses, and benchmarks
-2. **Agents**: Abstract base class and implementations for different LLM providers
-3. **Storage**: Pluggable storage backends (currently file system)
-4. **Benchmark**: Tools for running and comparing multi-agent tests
-5. **CLI**: Command-line interface for interactive use
+Deeper reference: [SDK_ARCHITECTURE_v1](docs/SDK_ARCHITECTURE_v1.md) ·
+[API_REFERENCE_v1](docs/API_REFERENCE_v1.md) ·
+[PROVIDER_PLUGIN_GUIDE](PROVIDER_PLUGIN_GUIDE.md) ·
+[COST_TRACKING_USER_GUIDE](docs/COST_TRACKING_USER_GUIDE.md)
 
-### Data Models
-
-```python
-from startd8.models import (
-    Prompt,           # Versioned prompt with tags and metadata
-    AgentResponse,    # Agent response with timing and tokens
-    Benchmark,        # Benchmark definition and status
-    TokenUsage,       # Token usage statistics
-    ComparisonMetrics # Comparison metrics across agents
-)
-```
+---
 
 ## Configuration
 
-### Environment Variables
-
 ```bash
-# API Keys
-export ANTHROPIC_API_KEY="your-anthropic-api-key"
-export OPENAI_API_KEY="your-openai-api-key"
-export GOOGLE_API_KEY="your-gemini-api-key"
-
-# Storage location
-# Python: pass `storage_dir` to AgentFramework
-# CLI: pass `--dir` to commands (e.g., `startd8 init --dir "$HOME/.startd8"`)
+# API keys (read from environment; never hardcode)
+export ANTHROPIC_API_KEY="..."
+export OPENAI_API_KEY="..."
+export GOOGLE_API_KEY="..."      # Gemini
+export MISTRAL_API_KEY="..."
+export OLLAMA_HOST="http://localhost:11434"   # optional, for edge/local
 ```
 
-### Storage Structure
+Default storage is a `.startd8/` directory in the project root (JSON file storage; configurable
+via `AgentFramework(storage_dir=...)` or `--dir` on the CLI).
 
-```
-.startd8/
-├── prompts/
-│   ├── prompt-abc123.json
-│   └── prompt-def456.json
-├── responses/
-│   ├── response-ghi789.json
-│   └── response-jkl012.json
-└── benchmarks/
-    └── benchmark-mno345.json
-```
+Observability setup: [LOKI_SETUP_GUIDE](docs/LOKI_SETUP_GUIDE.md) ·
+[OTEL_INTEGRATION_GUIDE](OTEL_INTEGRATION_GUIDE.md).
 
-## Usage Examples
-
-### Example 1: Compare Three Models
-
-```python
-from startd8 import AgentFramework
-from startd8.providers import ProviderRegistry
-from pathlib import Path
-
-# Initialize
-framework = AgentFramework(Path("./.startd8"))
-
-# Create prompt
-prompt = framework.create_prompt(
-    content="Design a database schema for an e-commerce platform",
-    version="1.0.0",
-    tags=["database", "design", "ecommerce"]
-)
-
-# Initialize agents (provider:model)
-ProviderRegistry.discover()
-agent_specs = [
-    ("anthropic", "claude-sonnet-4-20250514", "anthropic-sonnet"),
-    ("openai", "gpt-4o", "openai-gpt4o"),
-    ("mock", "mock-model", "baseline"),
-]
-
-agents = []
-for provider_name, model, name in agent_specs:
-    provider = ProviderRegistry.get_provider(provider_name)
-    if not provider:
-        raise RuntimeError(f"Unknown provider: {provider_name}")
-    provider.validate_config({})
-    agents.append(provider.create_agent(model, name=name))
-
-# Get responses
-for agent in agents:
-    try:
-        response = agent.create_response(
-            prompt_id=prompt.id,
-            prompt=prompt.content
-        )
-        framework.storage.save_response(response)
-        print(f"✓ {agent.name}: {response.response_time_ms}ms")
-    except Exception as e:
-        print(f"✗ {agent.name}: {e}")
-
-# Compare
-comparison = framework.compare_responses(prompt.id)
-
-print("\n🏆 Rankings:")
-print("By Speed:", comparison['rankings']['by_speed'])
-print("By Efficiency:", comparison['rankings']['by_token_efficiency'])
-```
-
-### Example 2: Track Development Across Branches
-
-```python
-from startd8 import AgentFramework
-import subprocess
-
-framework = AgentFramework()
-
-# Create feature prompt
-prompt = framework.create_prompt(
-    content="Implement password reset functionality",
-    version="1.0.0",
-    tags=["feature", "auth", "password-reset"]
-)
-
-# Assign to different provider:model branches
-agent_specs = {
-    "anthropic:claude-sonnet-4-20250514": "feature/password-reset-anthropic-sonnet-4",
-    "openai:gpt-4o": "feature/password-reset-openai-gpt4o",
-    "gemini:gemini-2.0-flash": "feature/password-reset-gemini-2-flash",
-}
-
-for spec, branch in agent_specs.items():
-    # Create git branch
-    subprocess.run(["git", "checkout", "-b", branch])
-    
-    # Record metadata
-    safe_key = spec.replace(":", "_").replace("/", "_")
-    prompt.metadata[safe_key] = {
-        "branch": branch,
-        "status": "in_progress"
-    }
-
-framework.storage.save_prompt(prompt)
-```
-
-### Example 3: Generate Comparison Reports
-
-```python
-from startd8 import AgentFramework
-from startd8.benchmark import ComparisonReport
-from pathlib import Path
-
-framework = AgentFramework()
-report_gen = ComparisonReport(framework)
-
-# Generate markdown report
-report = report_gen.generate_markdown_report(
-    prompt_id="prompt-abc123",
-    output_file=Path("./reports/comparison.md")
-)
-
-# Generate metrics
-metrics = report_gen.generate_metrics("prompt-abc123")
-
-print(f"Total responses: {metrics.total_responses}")
-print(f"Fastest agent: {metrics.fastest_agent}")
-print(f"Most efficient: {metrics.most_efficient_agent}")
-print(f"Cheapest: {metrics.cheapest_agent}")
-print(f"Total cost: ${metrics.total_cost_estimate:.2f}")
-```
-
-## Integration with StartDate Workflow
-
-### Recommended Workflow
-
-1. **Create Feature Prompt**
-   ```bash
-   startd8 create-prompt "Feature description" --tag feature-name
-   ```
-
-2. **Create Model Branches**
-   ```bash
-   git checkout -b feature/name-anthropic
-   git checkout -b feature/name-openai
-   git checkout -b feature/name-gemini
-   ```
-
-3. **Implement on Each Branch**
-   - Let each AI agent implement the feature on its branch
-   - Record responses and timing data
-
-4. **Compare Implementations**
-   ```bash
-   startd8 compare <prompt-id> --output comparison.md
-   ```
-
-5. **Review and Merge**
-   - Review comparison report
-   - Select best implementation or combine approaches
-   - Merge to main branch
-
-## API Reference
-
-### AgentFramework
-
-```python
-framework = AgentFramework(storage_dir: Optional[Path] = None)
-
-# Prompt management
-prompt = framework.create_prompt(content, version, tags, metadata)
-prompt = framework.get_prompt(prompt_id)
-prompts = framework.list_prompts(tags)
-
-# Response management
-response = framework.record_response(prompt_id, agent_name, model, response, response_time_ms, token_usage, metadata)
-response = framework.get_response(response_id)
-responses = framework.list_responses(prompt_id, agent_name)
-
-# Benchmarking
-benchmark = framework.create_benchmark(name, prompt_id, metadata)
-benchmark = framework.complete_benchmark(benchmark_id, summary)
-benchmark = framework.get_benchmark(benchmark_id)
-
-# Comparison
-comparison = framework.compare_responses(prompt_id)
-report = framework.export_benchmark_report(benchmark_id, output_file)
-```
-
-### Agents
-
-```python
-from startd8.providers import ProviderRegistry
-
-ProviderRegistry.discover()
-
-# ProviderRegistry (preferred)
-anthropic = ProviderRegistry.get_provider("anthropic")
-anthropic.validate_config({})
-agent = anthropic.create_agent(
-    "claude-sonnet-4-20250514",
-    name="anthropic-sonnet",
-    max_tokens=8192,
-)
-
-# Generate response
-response = agent.create_response(prompt_id, prompt, metadata)
-```
+---
 
 ## Development
 
-### For Contributors
-
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd startd8-sdk-project
-
-# Create a virtual environment (recommended)
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install in development mode with dev dependencies
+git clone https://github.com/neil-the-nowledgeable/startd8.git
+cd startd8
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run tests
-pytest
-
-# Format code
-black src/
-
-# Lint
-ruff check src/
-
-# Type check
-mypy src/
+pytest                 # run tests
+ruff check src/        # lint
+black src/             # format
+mypy src/              # type-check
 ```
 
-### Testing pipx Installation
+See [TESTING.md](TESTING.md) and [CLAUDE.md](CLAUDE.md) (repository conventions and
+architecture map).
 
-```bash
-# Test pipx installation from local source
-pipx install -e /path/to/startd8-sdk-project
-
-# Verify it works
-startd8 --help
-startd8 tui
-```
-
-## Contributing
-
-Contributions are welcome! This project is part of the StartDate initiative to benchmark LLM-driven development.
+---
 
 ## License
 
-This software is licensed under the **Equitable Use License v1.0**.
+This software is licensed under the **Equitable Use License v1.0** (see [LICENSE.md](LICENSE.md)).
 
-### Who Can Use This Software for Free
+Free for individuals, small businesses (<$1M revenue), non-profits, educational institutions,
+worker cooperatives, open-source projects, and founders from historically excluded communities
+(Restorative Access). Large corporations and for-profit healthcare pay an equitable fee
+(5–15% of documented value); government agencies, fossil-fuel companies, military contractors,
+private-prison operators, investment banks, and lobbyists pay the maximum fee permissible.
 
-| You Are | Fee |
-|---------|-----|
-| Individual (personal use) | **Free** |
-| Small business (<$1M annual revenue) | **Free** |
-| Non-profit organization (501(c)(3) or equivalent) | **Free** |
-| Educational institution | **Free** |
-| Worker cooperative | **Free** |
-| Open source project | **Free** |
-| Founder from historically excluded community | **Free** (Restorative Access) |
+The license also requires that efficiency gains from automation benefit workers (50% of
+documented savings to affected workers, 25% to retraining); using this software to eliminate
+jobs violates the license. Prohibited uses include fascism, genocide, weapons, and surveillance.
+Full terms in [LICENSE.md](LICENSE.md).
 
-### Who Pays an Equitable Fee (5-15% of documented value)
-
-| You Are | Fee Basis |
-|---------|-----------|
-| Large corporation ($100M+ revenue) | 5-15% of documented value received |
-| Healthcare company (for-profit) | 5-15% of documented value received |
-
-### Who Pays Maximum Fee
-
-The following users are subject to the maximum fee permissible under law:
-
-- **All government agencies** (federal, state, and local) — including but not limited to law enforcement, military, intelligence, and immigration enforcement
-- Fossil fuel companies
-- Military contractors
-- Private prison operators
-- Investment banks
-- Lobbyists
-- Individuals with assets exceeding $100 million
-- Organizations using forced ranking/stack ranking systems
-
-### Worker Protection
-
-This license requires that efficiency gains from automation benefit workers:
-- **50%** of documented savings must flow to affected workers
-- **25%** must fund retraining and transition support
-- Using this software to eliminate jobs violates the license
-
-### Full License
-
-See [LICENSE.md](LICENSE.md) for complete terms, including:
-- Restorative Access provisions for historically excluded communities
-- Worker displacement remedies
-- Prohibited uses (fascism, genocide, weapons, surveillance)
-
-## Related Projects
-
-- **MCP Agent Framework**: Model Context Protocol server for Claude Desktop integration
-- **StartDate CLI**: Command-line tools for project management
-- **StartDate Web**: Web interface for visualization and comparison
+---
 
 ## Support
 
-For issues, questions, or contributions, please visit:
-- GitHub Issues: [startdate/issues](https://github.com/startdate/startdate-oss/issues)
-- Documentation: [docs.startdate.dev](https://docs.startdate.dev)
-- Discord: [StartDate Community](https://discord.gg/startdate)
-
+- **Issues:** https://github.com/neil-the-nowledgeable/startd8/issues
+- **Repository conventions & architecture:** [CLAUDE.md](CLAUDE.md)
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)

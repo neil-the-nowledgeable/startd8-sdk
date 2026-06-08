@@ -34,6 +34,7 @@ from .cli_dashboard import dashboard_app
 from .cli_element_registry import element_registry_app
 from .cli_generate import generate_app
 from .cli_assist import assist_app
+from .cli_polish import polish_app
 from .cli_fde import fde_app
 from .cli_sapper import sapper_app
 from .cli_wireframe import wireframe as _wireframe_command
@@ -781,6 +782,7 @@ app.command("wireframe")(_wireframe_command)
 # Service Assistant (project<->SDK bridge: detect runs, triage, notify)
 # ──────────────────────────────────────────────────────────────────────────
 app.add_typer(assist_app, name="assist")
+app.add_typer(polish_app, name="polish")
 app.add_typer(fde_app, name="fde")
 app.add_typer(sapper_app, name="sapper")
 

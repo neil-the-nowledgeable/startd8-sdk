@@ -1,21 +1,82 @@
-# Startd8 API Reference
+# startd8 API Reference
 
 **Version:** 0.4.0
-**Document Version:** v1.1
-**Last Updated:** 2026-02-11
+**Document Version:** v1.2
+**Last Updated:** 2026-06-08
+
+> **Scope note.** startd8 has two halves. The **deterministic code generation** API (the headline
+> capability) is in [§0](#deterministic-code-generation) and the [CLI](#cli-command-surface).
+> The **agent-framework** API (benchmarking, pipelines, agents) follows from §1 onward and is
+> unchanged. A few legacy concrete agent classes (`ClaudeAgent`, `GPT4Agent`) remain for
+> backward compatibility, but the preferred entry point is `ProviderRegistry` (see
+> [Agent Classes](#agent-classes)).
 
 ## Table of Contents
 
-1. [Core Classes](#core-classes)
-2. [Agent Classes](#agent-classes)
-3. [Orchestration](#orchestration)
-4. [Contractors](#contractors)
-5. [Data Models](#data-models)
-6. [Storage](#storage)
-7. [Job Queue](#job-queue)
-8. [Document Enhancement](#document-enhancement)
-9. [Exceptions](#exceptions)
-10. [Utilities](#utilities)
+0. [Deterministic Code Generation](#deterministic-code-generation)
+1. [CLI Command Surface](#cli-command-surface)
+2. [Core Classes](#core-classes)
+3. [Agent Classes](#agent-classes)
+4. [Orchestration](#orchestration)
+5. [Contractors](#contractors)
+6. [Data Models](#data-models)
+7. [Storage](#storage)
+8. [Job Queue](#job-queue)
+9. [Document Enhancement](#document-enhancement)
+10. [Exceptions](#exceptions)
+11. [Utilities](#utilities)
+
+---
+
+## Deterministic Code Generation
+
+`$0`, no LLM calls. Projects one Prisma data-model contract into a working all-Python
+application (Pydantic + SQLModel + FastAPI + HTMX). Output is idempotent and drift-checkable.
+
+```python
+from startd8.backend_codegen import (
+    render_backend,            # full cascade entry point (.prisma + inputs → file set)
+    render_pydantic_models,    # → Pydantic models     (PydanticRenderResult)
+    render_sqlmodel_tables,    # → SQLModel tables      (SQLModelRenderResult)
+    render_routers, render_db, render_main, render_spine,    # FastAPI CRUD + wiring
+    render_web, render_ui, render_pages, render_authoring,   # HTMX UI + page authoring
+    render_export, render_ai_schemas, render_completeness,   # export / LLM-facing / completeness
+    render_requirements,                                     # generated requirements.txt
+    render_contract_tests, render_completeness_tests,        # generated test suites
+    check_drift, owned_file_in_sync, is_owned_generated_file,  # drift detection
+    verify_pydantic_fidelity, verify_sqlmodel_fidelity,       # contract-fidelity gates
+    PydanticSQLModelProvider, CANONICAL_LAYOUT,
+)
+```
+
+These are normally invoked through the CLI (below) rather than directly. Drift detection backs
+`startd8 generate --check` (CI-friendly: non-zero exit when a generated file is out of sync).
+
+---
+
+## CLI Command Surface
+
+`startd8 <command>` — run `startd8 --help` or `startd8 <command> --help` for full options.
+
+| Area | Commands |
+|------|----------|
+| **Deterministic codegen** | `wireframe`, `generate {frontend\|backend\|scaffold\|views}`, `polish`, `repair`, `manifest` |
+| **Pipeline & contractors** | `workflow`, `project`, `queue`, `compare-models`, `assist`, `fde`, `sapper`, `element-registry` |
+| **Benchmarking & prompts** | `init`, `create-prompt`, `list-prompts`, `show-prompt`, `run-benchmark`, `compare`, `list-responses`, `show-response`, `stats`, `templates`, `build-prompt` |
+| **Pipelines & serving** | `pipeline`, `serve`, `dashboard` |
+| **Interactive & ops** | `tui`, `otel-status`, `otel-configure` |
+
+Key codegen/eval commands:
+
+```bash
+startd8 wireframe --inputs assembly-inputs.yaml [--json]   # $0 read-only preview
+startd8 generate backend  --schema schema.prisma --out ./app
+startd8 generate scaffold --inputs app.yaml --out ./app
+startd8 generate views    --inputs views.yaml --out ./app
+startd8 generate --check                                   # CI drift check (non-zero on drift)
+startd8 polish ./app                                       # $0 accessible theme
+startd8 compare-models --seed seed.json --model anthropic:... --model ollama:...
+```
 
 ---
 
@@ -320,9 +381,16 @@ class PipelineResult:
 
 ## Contractors
 
-Multi-phase workflow orchestration for code generation.
+Multi-phase workflow orchestration for the LLM-assisted **integration** passes (bucket 3).
 
-### ArtisanContractorWorkflow
+> **Active path: Prime Contractor.** `PrimeContractorWorkflow` is the only active construction
+> path; use it (or the `.cap-dev-pipe/` Capability Delivery Pipeline) for multi-feature
+> generation. The **Artisan Contractor is ON HOLD (2026-03-12)** — its API is documented below
+> for reference and remains importable, but new work should target Prime. See the
+> [Prime Contractor Workflow Guide](PRIME_CONTRACTOR_WORKFLOW_GUIDE.md) and
+> [PRIME_CONTRACTOR_CONFIG_REFERENCE](PRIME_CONTRACTOR_CONFIG_REFERENCE.md).
+
+### ArtisanContractorWorkflow (ON HOLD — reference only)
 
 ```python
 from startd8.contractors.artisan_contractor import (
