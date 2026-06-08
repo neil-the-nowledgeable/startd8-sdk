@@ -20,7 +20,8 @@ from ..backend_codegen.ai_layer import AiPass, parse_ai_passes, parse_human_inpu
 from ..backend_codegen.crud_generator import CANONICAL_LAYOUT
 from ..backend_codegen.derived import load_completeness_manifest
 from ..backend_codegen.forms_manifest import parse_forms
-from ..backend_codegen.htmx_generator import form_fields, writable_fields
+from ..backend_codegen.crud_generator import _pk_field
+from ..backend_codegen.htmx_generator import _confirm_field, form_fields, writable_fields
 from ..backend_codegen.pages_generator import ContentPage, parse_pages
 from ..backend_codegen.test_emitter import (
     COMPLETENESS_TESTS_PATH,
@@ -454,16 +455,18 @@ def _entities_section(state: _ManifestState) -> WireframeSection:
     ]
     for n in names:
         e = n.lower()
+        paths = [
+            f"app/templates/{e}/list.html",
+            f"app/templates/{e}/_row.html",  # shared row partial (FR-CA-3)
+            f"app/templates/{e}/detail.html",
+        ]
+        detail = "routes: list/get/create/update/delete"
+        if _confirm_field(schema, n) is not None and _pk_field(schema, n) is not None:
+            # confirmed-bearing entity → confirm toggle (list row + detail block, FR-CA-3/5)
+            paths.append(f"app/templates/{e}/_confirm.html")
+            detail += " (+confirm)"
         items.append(
-            WireframeItem(
-                n, state.status,
-                detail="routes: list/get/create/update/delete",
-                paths=(
-                    f"app/templates/{e}/list.html",
-                    f"app/templates/{e}/_row.html",  # shared row partial (FR-CA-3)
-                    f"app/templates/{e}/detail.html",
-                ),
-            )
+            WireframeItem(n, state.status, detail=detail, paths=tuple(paths))
         )
     return WireframeSection(
         "entities", "Entities & CRUD", state.status, tuple(items),

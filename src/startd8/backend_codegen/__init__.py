@@ -25,7 +25,12 @@ from .derived import (
 )
 from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
 from .forms_manifest import parse_forms
-from .htmx_generator import render_row_template, render_ui, render_web
+from .htmx_generator import (
+    render_confirm_template,
+    render_row_template,
+    render_ui,
+    render_web,
+)
 from .pages_generator import (
     parse_pages,
     render_pages,
@@ -56,6 +61,7 @@ __all__ = [
     "render_web",
     "render_ui",
     "render_row_template",
+    "render_confirm_template",
     "parse_pages",
     "parse_forms",
     "render_pages",

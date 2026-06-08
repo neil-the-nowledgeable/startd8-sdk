@@ -432,6 +432,43 @@ def test_row_partial_emitted_and_drift_in_sync():
     )
 
 
+def test_detail_page_confirm_toggle():
+    """FR-CA-5: the confirm toggle on the detail page — its own fragment, one shared route."""
+    from startd8.backend_codegen.htmx_generator import (
+        render_confirm_template,
+        render_detail_template,
+    )
+
+    web = render_web(CONFIRM_SCHEMA)
+    compile(web, "<web>", "exec")
+    # one route, two fragments: HX-Target discriminates detail block vs list row (FR-CA-5)
+    assert 'request.headers.get("hx-target", "").startswith("confirm-")' in web
+    assert 'request, "proofpoint/_confirm.html"' in web
+    assert 'request, "proofpoint/_row.html"' in web
+
+    conf = render_confirm_template(CONFIRM_SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert embedded_artifact_kind(conf) == "htmx-confirm"
+    assert embedded_entity(conf) == "ProofPoint"
+    # self-contained block: same id re-established on swap so repeat toggles keep working
+    assert '<span id="confirm-{{ item.id }}">' in conf
+    assert 'hx-target="#confirm-{{ item.id }}"' in conf
+    assert ">confirm</button>" in conf and ">unconfirm</button>" in conf
+
+    # detail includes the block only for confirmed-bearing entities
+    det = render_detail_template(CONFIRM_SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert '{% include "proofpoint/_confirm.html" %}' in det
+    detm = render_detail_template(CONFIRM_SCHEMA, "prisma/schema.prisma", "Metric")
+    assert "_confirm.html" not in detm
+
+    arts = dict(render_ui(CONFIRM_SCHEMA))
+    assert "app/templates/proofpoint/_confirm.html" in arts
+    assert "app/templates/metric/_confirm.html" not in arts  # Metric has no `confirmed`
+    # the list-row control still targets the row (whole-row swap), not the confirm block
+    row = arts["app/templates/proofpoint/_row.html"]
+    assert 'hx-target="#row-{{ item.id }}"' in row
+    assert "confirm-{{ item.id }}" not in row
+
+
 def test_template_provided_via_registry(tmp_path):
     p = tmp_path / "prisma" / "schema.prisma"
     p.parent.mkdir(parents=True, exist_ok=True)

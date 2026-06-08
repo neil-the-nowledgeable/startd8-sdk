@@ -2,7 +2,7 @@
 
 **Version:** 0.2 (Post-planning — self-reflective update; pre-CRP)
 **Date:** 2026-06-08
-**Status:** Implemented (v1; FR-CA-5 detail toggle deferred to v1.1)
+**Status:** Implemented (v1 + v1.1 FR-CA-5 detail toggle, 2026-06-08)
 **Plan:** `CONFIRM_AFFORDANCE_PLAN.md`
 **Companion:** `FORM_SUBMIT_BEHAVIOR_REQUIREMENTS.md` (the sibling that opened the "deterministic
 UX defaults" category — this is instance #2), `PYTHON_CONTRACT_CODEGEN_REQUIREMENTS.md` (the
@@ -96,9 +96,16 @@ working, restated control and an updated `confirmed` cell. One row template, no 
 **Confirm**; confirmed → a `✓` marker + an **Unconfirm** affordance (same POST — full toggle). The
 re-rendered row after the swap shows the flipped control automatically (it is the same partial).
 
-**FR-CA-5 (detail parity — deferred to v1.1).** The detail page toggle is **out of v1** (OQ-2):
-detail has no rows, so it needs its own fragment target — a clean follow-up, not a blocker for the
-list affordance that closes AR-5.
+**FR-CA-5 (detail parity — SHIPPED in v1.1, 2026-06-08).** The same confirm toggle on the detail
+page. Detail has no rows, so it gets its **own fragment**: a new `<e>/_confirm.html` partial (kind
+`htmx-confirm`, schema-only) — a self-contained `<span id="confirm-<pk>">` that the detail template
+`{% include %}`s, emitted only for confirmed-bearing entities. **One route serves both surfaces**:
+the confirm handler inspects the `HX-Target` header — `confirm-<pk>` → return the detail block;
+anything else (the list's `#row-<pk>`) → return the re-rendered row. The toggle markup is factored
+into a shared `_confirm_control(target)` helper used by both the row and the detail block (one
+source for the verb; only the swap target differs). Verified end-to-end in the runtime smoke
+(detail GET shows the block; POST with `HX-Target: confirm-<id>` returns the `<span>` fragment, not
+a `<tr>`, and flips the flag).
 
 **FR-CA-6 (drift).** `web.py` and the list template re-render byte-identically; the new `_row.html`
 partial is **schema-only (1-hash)** — no manifest, no 2-hash machinery (unlike the `forms:`-driven

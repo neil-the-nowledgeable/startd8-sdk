@@ -16,7 +16,9 @@ Artifacts (all owned, all $0.00-skippable via the shared drift path):
   per-entity ``<e>/list.html`` / ``<e>/_row.html`` / ``<e>/detail.html`` / ``<e>/form.html``
   (``htmx-list`` / ``htmx-row`` / ``htmx-detail`` / ``htmx-form``, each tagged
   ``# startd8-entity: <Name>``). The list ``{% include %}``s the row partial, which is the single
-  source of row markup so the confirm route can re-render one row. Template headers wrap
+  source of row markup so the confirm route can re-render one row. Confirmed-bearing entities also
+  get ``<e>/_confirm.html`` (``htmx-confirm``) — the detail-page confirm block (FR-CA-5). Template
+  headers wrap
   the same ``#`` provenance lines inside a Jinja ``{# … #}`` comment so the existing drift regexes
   recognize them with no new machinery.
 
@@ -213,6 +215,42 @@ def render_field_error_template(
     return head + "\n" + body
 
 
+def _confirm_control(entity_lower: str, rid: str, cf_name: str, target: str) -> str:
+    """The confirm/unconfirm toggle markup (AR-5 / FR-CA-4), parameterized by HTMX *target*.
+
+    One source for the suggest→confirm verb shared by the list row (target ``#row-<pk>``, swaps
+    the whole row so the ``confirmed`` cell updates) and the detail page (target ``#confirm-<pk>``,
+    swaps just the confirm block — FR-CA-5). Full toggle, reversible, no guard dialog."""
+    return (
+        "{% if item." + cf_name + " %}"
+        '<span class="confirmed">✓ confirmed</span> '
+        f'<button hx-post="/ui/{entity_lower}/{rid}/confirm" hx-target="{target}" '
+        'hx-swap="outerHTML">unconfirm</button>'
+        "{% else %}"
+        f'<button hx-post="/ui/{entity_lower}/{rid}/confirm" hx-target="{target}" '
+        'hx-swap="outerHTML">confirm</button>'
+        "{% endif %}"
+    )
+
+
+def render_confirm_template(schema_text: str, source_file: str, entity: str) -> str:
+    """``<e>/_confirm.html`` — the detail-page confirm block (kind ``htmx-confirm``, schema-only).
+
+    FR-CA-5: the same suggest→confirm toggle on the detail page. A self-contained
+    ``<span id="confirm-<pk>">`` so the HTMX ``outerHTML`` swap re-establishes the same id and
+    subsequent toggles keep working. Emitted only for entities carrying a ``confirmed`` Boolean
+    with a single-column PK; the detail template ``{% include %}``s it for exactly those."""
+    schema = parse_prisma_schema(schema_text)
+    sha = schema_sha256(schema_text)
+    e = entity.lower()
+    pk = _pk_field(schema, entity)
+    cf = _confirm_field(schema, entity)
+    head = _tmpl_header(source_file, sha, "htmx-confirm", entity)
+    rid = "{{ item." + pk.name + " }}"
+    control = _confirm_control(e, rid, cf.name, f"#confirm-{rid}")
+    return head + "\n" + f'<span id="confirm-{rid}">{control}</span>\n'
+
+
 def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
     """``<e>/_row.html`` — one table row (kind ``htmx-row``, schema-only, entity-tagged).
 
@@ -239,17 +277,9 @@ def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
     cf = _confirm_field(schema, entity)
     confirm_html = ""
     if cf is not None:
-        # The suggest→confirm verb (AR-5 / FR-CA-3/4): a full toggle, reversible, no guard dialog.
-        confirm_html = (
-            "{% if item." + cf.name + " %}"
-            '<span class="confirmed">✓ confirmed</span> '
-            f'<button hx-post="/ui/{e}/{rid}/confirm" hx-target="#row-{rid}" '
-            'hx-swap="outerHTML">unconfirm</button>'
-            "{% else %}"
-            f'<button hx-post="/ui/{e}/{rid}/confirm" hx-target="#row-{rid}" '
-            'hx-swap="outerHTML">confirm</button>'
-            "{% endif %}\n    "
-        )
+        # The suggest→confirm verb (AR-5 / FR-CA-3/4). The row control swaps the whole row
+        # (so the `confirmed` cell updates too) → it targets the row, not a confirm block.
+        confirm_html = _confirm_control(e, rid, cf.name, f"#row-{rid}") + "\n    "
     body = (
         f'<tr id="row-{rid}"{hl}>{cells}<td>\n'
         f'    <a href="/ui/{e}/{rid}">view</a>\n'
@@ -292,11 +322,16 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
 def render_detail_template(schema_text: str, source_file: str, entity: str) -> str:
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
+    e = entity.lower()
     fields = _form_fields(schema, entity)
     head = _tmpl_header(source_file, sha, "htmx-detail", entity)
     rows = "\n".join(
         f"  <dt>{f.name}</dt><dd>{{{{ item.{f.name} }}}}</dd>" for f in fields
     )
+    # FR-CA-5: confirmed-bearing entities get the confirm toggle on the detail page too.
+    confirm_block = ""
+    if _confirm_field(schema, entity) is not None and _pk_field(schema, entity) is not None:
+        confirm_block = '{% include "' + e + '/_confirm.html" %}\n'
     body = (
         '{% extends "base.html" %}\n'
         "{% block title %}" + entity + " detail{% endblock %}\n"
@@ -305,6 +340,7 @@ def render_detail_template(schema_text: str, source_file: str, entity: str) -> s
         '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}\n"
         '{% if updated %}<p class="flash">✓ ' + entity + " updated.</p>{% endif %}\n"
         f"<h1>{entity}</h1>\n<dl>\n{rows}\n</dl>\n"
+        f"{confirm_block}"
         "{% endblock %}\n"
     )
     return head + "\n" + body
@@ -639,8 +675,9 @@ def _entity_routes(
         ]
         cf = _confirm_field(schema, name)
         if cf is not None:
-            # AR-5 / FR-CA-2: the suggest→confirm verb. Full toggle; returns the re-rendered row
-            # so the HTMX outerHTML swap leaves a working, restated control (FR-CA-4).
+            # AR-5 / FR-CA-2: the suggest→confirm verb. Full toggle. One route serves both surfaces
+            # (FR-CA-5): the HX-Target header says which fragment to swap — the detail confirm block
+            # (#confirm-<pk>) or, by default, the list row (re-rendered so its `confirmed` cell flips).
             lines += [
                 "",
                 "",
@@ -654,6 +691,10 @@ def _entity_routes(
                 "    session.add(obj)",
                 "    session.commit()",
                 "    session.refresh(obj)",
+                '    if request.headers.get("hx-target", "").startswith("confirm-"):',
+                "        return templates.TemplateResponse(",
+                f'            request, "{e}/_confirm.html", {{"item": obj}}',
+                "        )",
                 "    return templates.TemplateResponse(",
                 f'        request, "{e}/_row.html", {{"item": obj}}',
                 "    )",
@@ -770,6 +811,14 @@ def render_ui(
                 render_form_template(schema_text, source_file, n),
             )
         )
+        # FR-CA-5: the detail-page confirm block, only for confirmed-bearing entities with a PK.
+        if _confirm_field(schema, n) is not None and _pk_field(schema, n) is not None:
+            out.append(
+                (
+                    f"app/templates/{e}/_confirm.html",
+                    render_confirm_template(schema_text, source_file, n),
+                )
+            )
         if forms.get(n) == "confirmation" and _pk_field(schema, n) is not None:
             out.append(
                 (

@@ -85,6 +85,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
     _cmpl = _load_completeness_manifest(completeness_text)  # weighted regen must match generate
     from .htmx_generator import (
         render_base_template,
+        render_confirm_template,
         render_detail_template,
         render_field_error_template,
         render_form_template,
@@ -120,6 +121,7 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
         "htmx-list": lambda s, sf, e: render_list_template(s, sf, e),
         "htmx-row": lambda s, sf, e: render_row_template(s, sf, e),
+        "htmx-confirm": lambda s, sf, e: render_confirm_template(s, sf, e),
         "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e),
         "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
         "python-export": lambda s, sf, e: render_export(s, sf),

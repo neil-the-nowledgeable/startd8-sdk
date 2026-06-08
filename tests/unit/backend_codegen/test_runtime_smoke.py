@@ -231,6 +231,21 @@ def test_confirm_toggle_flips_and_reswaps_the_row(tmp_path, monkeypatch):
             r = c.post(f"/ui/suggestion/{sid}/confirm")
             assert ">confirm</button>" in r.text
             assert c.get(f"/suggestion/{sid}").json()["confirmed"] is False
+
+            # FR-CA-5: the detail page carries the same toggle in its own block
+            detail = c.get(f"/ui/suggestion/{sid}")
+            assert detail.status_code == 200
+            assert f'id="confirm-{sid}"' in detail.text and ">confirm</button>" in detail.text
+
+            # the detail control sends HX-Target=confirm-<id> → route returns the confirm fragment
+            # (a <span>, not a <tr>), and flips the flag
+            r = c.post(
+                f"/ui/suggestion/{sid}/confirm", headers={"HX-Target": f"confirm-{sid}"}
+            )
+            assert r.status_code == 200
+            assert f'<span id="confirm-{sid}">' in r.text and "<tr" not in r.text
+            assert "✓ confirmed" in r.text and ">unconfirm</button>" in r.text
+            assert c.get(f"/suggestion/{sid}").json()["confirmed"] is True
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))
