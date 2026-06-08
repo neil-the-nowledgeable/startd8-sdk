@@ -10,6 +10,16 @@ v1 archetypes: ``dashboard`` (aggregates + signal), ``board`` (group-by an order
 panels + conditional panels) and ``export-package`` (root + relations -> lossless package + named MD
 layout) are the fast-follow (VIEW_GENERATOR_REQUIREMENTS.md).
 
+``board`` has two variants (FR-EB). The static-``order`` form groups root rows by a scalar
+``group_by`` in a baked ``order: [...]`` allow-list (compile-time columns, e.g. a status enum). The
+**entity-backed** form (selected only when ``columns_from`` is present) groups by a related entity's
+RUNTIME rows ordered by a numeric ``order_by`` field: ``columns_from`` names the column entity (its
+rows ARE the columns), ``group_by`` is the root's FK-ish ref to it, ``order_by`` is the column
+entity's ordering field. Columns are queried at request time (user-definable, no regeneration);
+roots whose ref matches no column are kept in an unassigned tail (no row lost). Loud-fail:
+``columns_from`` naming a non-entity, ``order_by`` not a field on it, ``group_by`` not a root field,
+or mixing ``order:`` with ``columns_from:``. The static board stays valid and byte-identical.
+
 ``export-package`` additionally takes ``scope: row | model`` (default ``row`` — the existing per-row
 package). ``scope: model`` (AR-3, FR-10 whole-model export) serves the WHOLE model through the
 generated ``app/export.py`` serialization layer: ``route`` becomes the optional base path (default
@@ -81,6 +91,7 @@ _RENDERED_CONTENT_KEYS = {"name", "kind", "route", "root", "content_field", "pro
 _VIEW_KEYS = {
     "name", "kind", "route", "root", "aggregates", "signal", "group_by", "order", "polymorphic",
     "relations", "panels", "gap", "scope", "compute", "content_field", "prose_key",
+    "columns_from", "order_by",
 }
 _AGG_KEYS = {"name", "of", "fk"}
 _POLY_KEYS = {"of", "fk", "type_field", "id_field", "type_map"}
@@ -135,6 +146,8 @@ class ViewSpec:
     compute: str = ""                     # computed-panel only: the compute binding (AR-2)
     content_field: str = ""               # rendered-content only: the JSON content column (AR-6)
     prose_key: str = "body"               # rendered-content only: JSON key holding the prose (AR-6)
+    columns_from: str = ""                # entity-backed board only: the column entity (FR-EB)
+    order_by: str = ""                    # entity-backed board only: column entity's order field
     aggregates: Tuple[Aggregate, ...] = ()
     signal: str = ""                      # "<aggname> >= <int>"
     group_by: str = ""
@@ -230,9 +243,16 @@ def parse_views(
                     f"views.yaml: view #{i} `{ck}` is only valid on kind 'rendered-content', "
                     f"not {kind!r}"
                 )
+        for bk in ("columns_from", "order_by"):
+            if bk in entry and kind != "board":
+                raise ValueError(
+                    f"views.yaml: view #{i} `{bk}` is only valid on kind 'board', not {kind!r}"
+                )
         compute = ""
         content_field = ""
         prose_key = "body"
+        columns_from = ""
+        order_by = ""
         model_export = kind == "export-package" and scope == "model"
         model_compose = kind == "detail-compose" and scope == "model"
         if kind == "import-flow":
@@ -323,6 +343,31 @@ def parse_views(
             route = str(entry["route"])
             _check_entity(root, f"view {entry['name']!r} root")
 
+        if kind == "board" and "columns_from" in entry:
+            # Entity-backed board (FR-EB): columns are a related entity's runtime rows ordered by a
+            # numeric field. Loud-fail on a non-entity column source, an order_by that isn't its
+            # field, a group_by that isn't a root field, or mixing the static `order:` list.
+            if "order" in entry:
+                raise ValueError(
+                    f"views.yaml: view #{i} cannot mix `order:` (static columns) with "
+                    "`columns_from:` (entity-backed columns) — choose one board variant"
+                )
+            columns_from = str(entry["columns_from"])
+            _check_entity(columns_from, f"view {entry['name']!r} columns_from")
+            if not entry.get("order_by"):
+                raise ValueError(
+                    f"views.yaml: view #{i} entity-backed board missing required `order_by` "
+                    "(the column entity's ordering field)"
+                )
+            order_by = str(entry["order_by"])
+            _check_field(columns_from, order_by, f"view {entry['name']!r} order_by")
+            if not entry.get("group_by"):
+                raise ValueError(
+                    f"views.yaml: view #{i} entity-backed board missing required `group_by` "
+                    "(the root's ref to the column entity)"
+                )
+            _check_field(root, str(entry["group_by"]), f"view {entry['name']!r} group_by")
+
         aggregates: List[Aggregate] = []
         for a in entry.get("aggregates") or []:
             bad = set(a) - _AGG_KEYS
@@ -396,6 +441,7 @@ def parse_views(
         out.append(ViewSpec(
             name=str(entry["name"]), kind=kind, route=route, root=root, scope=scope,
             compute=compute, content_field=content_field, prose_key=prose_key,
+            columns_from=columns_from, order_by=order_by,
             aggregates=tuple(aggregates), signal=str(entry.get("signal", "")),
             group_by=str(entry.get("group_by", "")),
             order=tuple(str(s) for s in (entry.get("order") or ())),

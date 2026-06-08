@@ -74,6 +74,8 @@ def _render_dashboard(v: ViewSpec) -> str:
 
 
 def _render_board(v: ViewSpec) -> str:
+    if v.columns_from:
+        return _render_entity_board(v)
     order_lit = "[" + ", ".join(f'"{s}"' for s in v.order) + "]"
     return "\n".join([
         "from __future__ import annotations", "",
@@ -95,6 +97,49 @@ def _render_board(v: ViewSpec) -> str:
         "        cols.setdefault(_key, []).append(root)",
         "    ordered = [(s, cols.pop(s, [])) for s in _ORDER]",
         "    ordered += [(s, rows) for s, rows in cols.items()]  # statuses outside the allow-list",
+        "    return ordered", "",
+        f"__all__ = [{(v.module + '_data')!r}]", "",
+    ])
+
+
+def _render_entity_board(v: ViewSpec) -> str:
+    """Entity-backed board (FR-EB): columns ARE a related entity's runtime rows, ordered by a
+    numeric ``order_by`` field — no static ``_ORDER`` list. Columns are queried at request time
+    (user-definable, no regeneration); each column holds the root rows whose ``group_by`` matches
+    its id; roots matching no column are kept in an "Unassigned" tail (no row lost).
+
+    Returns ``list[tuple[str, list]]`` (column label -> root rows) — the SAME shape the static
+    board returns, so the board template renders both variants identically. The label is the
+    column row's ``name``/``title`` (falling back to its id), so columns read as user-named stages.
+    """
+    imports = ", ".join(sorted({v.root, v.columns_from}))
+    return "\n".join([
+        "from __future__ import annotations", "",
+        "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        f"from app.tables import {imports}", "", "",
+        f"def {v.module}_data(session: Session) -> list[tuple[str, list[Any]]]:",
+        f'    """Entity-backed board: columns are {v.columns_from} rows ordered by `{v.order_by}`;'
+        f' group {v.root} by `{v.group_by}` == column id; unmatched roots kept in an Unassigned'
+        ' tail (no row lost). Columns are runtime data — reorder/rename/add with no regeneration."""',
+        f"    columns = session.exec(select({v.columns_from})"
+        f".order_by({v.columns_from}.{v.order_by})).all()",
+        "    grouped: dict[Any, list[Any]] = {}",
+        f"    for root in session.exec(select({v.root})).all():",
+        f"        grouped.setdefault(getattr(root, {v.group_by!r}), []).append(root)",
+        "    ordered: list[tuple[str, list[Any]]] = []",
+        "    _claimed: set[Any] = set()",
+        "    for col in columns:",
+        "        _label = getattr(col, \"name\", None) or getattr(col, \"title\", None) or col.id",
+        "        ordered.append((str(_label), grouped.get(col.id, [])))",
+        "        _claimed.add(col.id)",
+        "    # any root whose ref matches no column (incl. None) -> the Unassigned tail, never dropped",
+        "    _leftover: list[Any] = []",
+        "    for _key, _rows in grouped.items():",
+        "        if _key not in _claimed:",
+        "            _leftover.extend(_rows)",
+        "    if _leftover:",
+        '        ordered.append(("Unassigned", _leftover))',
         "    return ordered", "",
         f"__all__ = [{(v.module + '_data')!r}]", "",
     ])
@@ -1074,6 +1119,8 @@ def _render_view_test(schema, v: ViewSpec, views: Tuple[ViewSpec, ...] = ()) -> 
         return _render_import_flow_test(schema, v)
     if v.kind == "rendered-content":
         return _render_rendered_content_test(schema, v)
+    if v.kind == "board" and v.columns_from:
+        return _render_entity_board_test(schema, v)
     if v.kind == "export-package":
         import_line = (
             f"    from app.views.{v.module} import {v.module}_package, {v.module}_to_markdown"
@@ -1195,6 +1242,41 @@ def _render_rendered_content_test(schema, v: ViewSpec) -> str:
         "    # empty/missing body -> empty state, not an error",
         "    assert empty['body'] == '' and empty['html'] == ''",
         "    assert missing['body'] == '' and missing['html'] == ''",
+    ])
+
+
+def _render_entity_board_test(schema, v: ViewSpec) -> str:
+    """Entity-backed board test (FR-EB): columns come from a related entity's runtime rows ordered
+    by ``order_by``; reordering a position reorders the columns with NO regeneration; an unmatched
+    root lands in the Unassigned tail (no row lost)."""
+    cf, ob, gb = v.columns_from, v.order_by, v.group_by
+    # Seed two column rows OUT of position order (c_b created first, position 2) so passing the
+    # assertion requires the data fn to actually sort by order_by, not insertion order.
+    return "\n".join([
+        f"def test_{v.module}_data(tmp_path):",
+        "    import app.tables as t",
+        f"    from app.views.{v.module} import {v.module}_data",
+        '    engine = create_engine(f"sqlite:///{tmp_path}/v.db")',
+        "    SQLModel.metadata.create_all(engine)",
+        "    with Session(engine) as s:",
+        _seed(schema, "c_b", cf, {ob: "2", "name": repr("Second")}),
+        _seed(schema, "c_a", cf, {ob: "1", "name": repr("First")}),
+        _seed(schema, "_r_a", v.root, {gb: "c_a.id"}),
+        _seed(schema, "_r_b", v.root, {gb: "c_b.id"}),
+        _seed(schema, "_r_orphan", v.root, {gb: repr("no-such-column")}),
+        f"        board = {v.module}_data(s)",
+        "        labels = [label for label, _ in board]",
+        "        # columns appear in order_by (position) order, not insertion order",
+        '        assert labels[:2] == ["First", "Second"]',
+        "        cols = dict(board)",
+        '        assert len(cols["First"]) == 1 and len(cols["Second"]) == 1  # grouped by ref',
+        '        assert "Unassigned" in cols and len(cols["Unassigned"]) == 1  # orphan kept, not lost',
+        "        # reorder a position -> the columns reorder with NO regeneration (columns are data)",
+        f"        c_a.{ob} = 9",
+        "        s.add(c_a); s.commit()",
+        f"        reordered = [label for label, _ in {v.module}_data(s)]",
+        '        assert reordered[:2] == ["Second", "First"]  # First now sorts last',
+        "    assert board is not None",
     ])
 
 

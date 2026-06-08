@@ -66,8 +66,18 @@ model Opportunity {
   source    String  @default("user")
   confirmed Boolean @default(true)
   stage     String?
+  stageId   String?
   metrics       String?
   economicBuyer String?
+}
+
+model PipelineStage {
+  id        String  @id @default(cuid())
+  ownerId   String  @default("local")
+  source    String  @default("user")
+  confirmed Boolean @default(true)
+  name      String?
+  position  Int     @default(0)
 }
 
 model Capability {
@@ -164,6 +174,13 @@ views:
     content_field: dataJson
     prose_key: body
     route: /artifacts
+  - name: stage_board
+    kind: board
+    route: /stages
+    root: Opportunity
+    group_by: stageId
+    columns_from: PipelineStage
+    order_by: position
   - name: model_import
     kind: import-flow
     route: /import
@@ -178,17 +195,21 @@ def test_strict_validation_rejects_unknown_entity():
     with pytest.raises(ValueError):
         parse_views(bad, known_entities=frozenset({
             "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
-            "Opportunity", "Contact", "Activity", "Artifact",
+            "Opportunity", "Contact", "Activity", "Artifact", "PipelineStage",
         }))
 
 
 _KNOWN = frozenset({
     "JobDescription", "TailoredMatch", "TailoredAsset", "Capability",
-    "Opportunity", "Contact", "Activity", "Artifact",
+    "Opportunity", "Contact", "Activity", "Artifact", "PipelineStage",
 })
-# Entity -> scalar field names (for AR-6 content_field loud-fail-on-unknown-field tests).
+# Entity -> scalar field names (for AR-6 content_field + FR-EB board field loud-fail tests).
 _KNOWN_FIELDS = {
     "Artifact": frozenset({"id", "ownerId", "source", "confirmed", "kind", "dataJson"}),
+    "Opportunity": frozenset({
+        "id", "ownerId", "source", "confirmed", "stage", "stageId", "metrics", "economicBuyer",
+    }),
+    "PipelineStage": frozenset({"id", "ownerId", "source", "confirmed", "name", "position"}),
 }
 
 
@@ -592,6 +613,88 @@ def test_fr10_model_export_renders_artifact_prose_verbatim():
     assert "app/views/_prose.py" not in dict(render_views(SCHEMA, no_artifact))
 
 
+def test_entity_backed_board_grammar_and_loud_failures():
+    """FR-EB: a board variant grouping by a related entity's runtime rows ordered by `position`."""
+    specs = {v.name: v for v in parse_views(VIEWS, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)}
+    eb = specs["stage_board"]
+    assert eb.kind == "board" and eb.root == "Opportunity"
+    assert eb.columns_from == "PipelineStage" and eb.group_by == "stageId" and eb.order_by == "position"
+    assert eb.order == ()  # no static order list
+    # the static-order board is still parsed as the static variant
+    assert specs["pipeline_board"].columns_from == "" and specs["pipeline_board"].order == ("identified", "offer")
+    # mixing static `order:` with `columns_from:` is loud
+    bad = VIEWS.replace(
+        "    group_by: stageId\n    columns_from: PipelineStage\n    order_by: position",
+        "    group_by: stageId\n    columns_from: PipelineStage\n    order_by: position\n    order: [a, b]",
+    )
+    with pytest.raises(ValueError, match="cannot mix `order:`"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # columns_from naming a non-entity is loud
+    bad = VIEWS.replace("columns_from: PipelineStage", "columns_from: Ghost")
+    with pytest.raises(ValueError, match="unknown entity 'Ghost'"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # order_by not a field on the column entity is loud
+    bad = VIEWS.replace("order_by: position", "order_by: notAField")
+    with pytest.raises(ValueError, match="unknown field 'notAField' on 'PipelineStage'"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # group_by not a root field is loud
+    bad = VIEWS.replace("group_by: stageId\n    columns_from", "group_by: bogusRef\n    columns_from")
+    with pytest.raises(ValueError, match="unknown field 'bogusRef' on 'Opportunity'"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # missing order_by is loud
+    bad = VIEWS.replace("    columns_from: PipelineStage\n    order_by: position",
+                        "    columns_from: PipelineStage")
+    with pytest.raises(ValueError, match="missing required `order_by`"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+    # columns_from/order_by are board-only
+    bad = VIEWS.replace("compute: completeness\n    route: /completeness",
+                        "compute: completeness\n    columns_from: PipelineStage\n    route: /completeness")
+    with pytest.raises(ValueError, match="only valid on kind 'board'"):
+        parse_views(bad, known_entities=_KNOWN, known_fields=_KNOWN_FIELDS)
+
+
+def test_entity_backed_board_module_and_static_board_byte_identical():
+    rendered = dict(render_views(SCHEMA, VIEWS))
+    eb = rendered["app/views/stage_board.py"]
+    assert is_owned_view_file(eb)
+    # columns are queried from the entity at request time, ordered by order_by — NO static list
+    assert "select(PipelineStage).order_by(PipelineStage.position)" in eb
+    assert "_ORDER" not in eb  # no baked static order list
+    assert "from app.tables import Opportunity, PipelineStage" in eb
+    assert "Unassigned" in eb  # the no-row-lost tail
+    assert "getattr(root, 'stageId')" in eb  # group by the root's ref
+    # the static board (pipeline_board) is unchanged — still the baked-_ORDER variant, byte-identical
+    sb = rendered["app/views/pipeline_board.py"]
+    assert "_ORDER = [\"identified\", \"offer\"]" in sb
+    assert "columns_from" not in sb and "PipelineStage" not in sb and "Unassigned" not in sb
+    # entity-backed board uses the SAME router/template path (board), so it passes `rows`
+    routes = rendered["app/views/routes.py"]
+    assert "@views_router.get('/stages', response_class=HTMLResponse)" in routes
+    tmpl = rendered["app/templates/views/stage_board.html"]
+    assert "{% for stage, rows in rows %}" in tmpl  # same board template shape
+
+
+def test_static_board_render_unaffected_by_entity_board_feature():
+    """Regression guard: a manifest with ONLY the static board renders the static board exactly as
+    before (the entity-backed branch is gated on `columns_from`, never touches the static path)."""
+    static_only = (
+        "views:\n"
+        "  - name: pipeline_board\n"
+        "    kind: board\n"
+        "    route: /pipeline\n"
+        "    root: Opportunity\n"
+        "    group_by: stage\n"
+        "    order: [identified, offer]\n"
+    )
+    mod = dict(render_views(SCHEMA, static_only))["app/views/pipeline_board.py"]
+    # the static board body is the baked-_ORDER grouping — no entity-backed machinery leaked in
+    assert "_ORDER = [\"identified\", \"offer\"]" in mod
+    assert "order_by" not in mod and "columns_from" not in mod and "Unassigned" not in mod
+    assert "_key.value if isinstance(_key, Enum)" in mod  # the enum-.value hardening is preserved
+    # idempotent
+    assert render_views(SCHEMA, static_only) == render_views(SCHEMA, static_only)
+
+
 def test_render_byte_identical_and_paths():
     a = render_views(SCHEMA, VIEWS)
     assert a == render_views(SCHEMA, VIEWS)
@@ -600,12 +703,13 @@ def test_render_byte_identical_and_paths():
         "app/views/jobs_dashboard.py", "app/views/pipeline_board.py", "app/views/job_workspace.py",
         "app/views/opportunity_detail.py", "app/views/job_export.py", "app/views/model_export.py",
         "app/views/value_map.py", "app/views/completeness_panel.py", "app/views/model_import.py",
-        "app/views/artifact_reader.py", "app/views/_prose.py",
+        "app/views/artifact_reader.py", "app/views/_prose.py", "app/views/stage_board.py",
         "app/views/routes.py", "tests/test_views.py",
         "app/templates/views/job_workspace.html",
         "app/templates/views/opportunity_detail.html", "app/templates/views/job_export.html",
         "app/templates/views/value_map.html", "app/templates/views/completeness_panel.html",
         "app/templates/views/model_import.html", "app/templates/views/artifact_reader.html",
+        "app/templates/views/stage_board.html",
     ):
         assert expected in paths
     # AR-3: a model-scoped export serves raw Markdown/JSON — no template is emitted for it
@@ -667,5 +771,6 @@ def test_emitted_view_tests_run_green(tmp_path):
     )
     assert result.returncode == 0, f"emitted view tests failed:\n{result.stdout}\n{result.stderr}"
     # 6 data tests + value_map data/route (AR-1) + completeness_panel data (AR-2)
-    # + artifact_reader prose-not-json (AR-6 / FR-16) + model_import round-trip/confirm-gate (AR-4)
-    assert "12 passed" in result.stdout
+    # + artifact_reader prose-not-json (AR-6) + stage_board entity-backed (FR-EB)
+    # + model_import round-trip/confirm-gate (AR-4)
+    assert "13 passed" in result.stdout
