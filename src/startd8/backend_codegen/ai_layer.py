@@ -69,6 +69,11 @@ class AiPass:
     prompt: str
     input_entities: Tuple[str, ...] = ()
     request_field: str = "text"
+    # SPIKE (FR-IMP-4/5): when set, this text-mode pass is *source-bound* — the harness takes a
+    # source_id, stamps it onto this provenance field of the (single) output entity, and makes
+    # re-runs idempotent by source (clears prior *unconfirmed* rows of that source before insert).
+    # None (the default) => today's unbound `def <pass>(text, session)` — byte-identical.
+    source_binding: Optional[str] = None
 
     @property
     def module(self) -> str:
@@ -80,7 +85,8 @@ class HumanInputs:
     human_only_fields: frozenset  # {(Entity, field)}
 
 
-_PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field"}
+_PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field",
+              "source_binding"}
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -125,6 +131,22 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
         route = str(entry["route_path"])
         if not route.startswith("/"):
             raise ValueError(f"ai_passes.yaml: route_path must start with '/': {route!r}")
+        binding = entry.get("source_binding")
+        if binding is not None:
+            binding = str(binding)
+            # `none` is the explicit opt-out sentinel (disable derivation). It is allowed on ANY
+            # pass — including read-mode or multi-output ones — since it only ever means "do not
+            # source-bind", so the text-mode/single-output constraints below don't apply to it.
+            if binding.strip().lower() != "none":
+                if entry.get("input_entities"):
+                    raise ValueError(
+                        f"ai_passes.yaml: pass #{i} `source_binding` is text-mode only "
+                        "(remove `input_entities`)"
+                    )
+                if len(tuple(entry["output_entities"])) != 1:
+                    raise ValueError(
+                        f"ai_passes.yaml: pass #{i} `source_binding` requires exactly one output entity"
+                    )
         passes.append(
             AiPass(
                 name=str(entry["name"]),
@@ -133,6 +155,7 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 prompt=str(entry["prompt"]),
                 input_entities=tuple(entry.get("input_entities", ())),
                 request_field=str(entry.get("request_field", "text")),
+                source_binding=binding,
             )
         )
     if not passes:
@@ -168,6 +191,63 @@ def parse_human_inputs(text: Optional[str]) -> HumanInputs:
         ent, _, fld = target.partition(".")
         human.add((ent, fld))
     return HumanInputs(human_only_fields=frozenset(human))
+
+
+# --------------------------------------------------------------------------- #
+# SPIKE (FR-IMP-4/5): DERIVE the source-binding — no new authored config.       #
+# --------------------------------------------------------------------------- #
+# Goal (operator-stated): extract config from the requirements doc with maximum
+# simplicity, and DERIVE from already-extracted manifests wherever possible. The
+# source-binding is one such derivation — it falls out of the convergence of
+# facts the existing extractors already produce:
+#   * ai_passes.yaml  → a TEXT-mode pass (prose `Reads` cell, no input_entities)
+#   * human_inputs.yaml → a server-managed field on that pass's output entity
+#   * schema.prisma   → that field is a *loose reference* (optional scalar String,
+#                        not the PK, not a relation FK the ORM manages)
+# A field matching all three IS the provenance target. The author writes nothing
+# new: declaring the field + `Only humans enter: <Entity>.<field>` is the whole
+# "config". The explicit `source_binding:` manifest key is reserved as the
+# disambiguation OVERRIDE for the rare >1-candidate case (a kickoff input).
+
+def _loose_ref_candidates(schema, ent: str, human: HumanInputs) -> List[str]:
+    """Server-managed loose-reference scalar fields on *ent* (the provenance shape)."""
+    return [
+        f.name
+        for f in schema.scalar_fields(ent)
+        if not f.is_id
+        and f.is_optional
+        and f.type == "String"
+        and (ent, f.name) in human.human_only_fields
+    ]
+
+
+def effective_source_binding(schema_text: str, ps: AiPass, human: HumanInputs) -> Optional[str]:
+    """The provenance field this pass stamps, or None. Explicit > derived > none.
+
+    Derivation fires only for a single-output text-mode pass. An explicit ``source_binding:``
+    in the manifest always wins (the override / kickoff-input escape hatch). The sentinel value
+    ``source_binding: none`` (case-insensitive) is an explicit DISABLE — it returns None even when
+    a loose-ref candidate exists, the opt-out for an app whose output entity happens to carry a
+    server-managed optional String by coincidence (§7 residual). More than one candidate with no
+    override is ambiguous → loud failure naming the disambiguating input.
+    """
+    if ps.source_binding:  # explicit override (validated in parse_ai_passes)
+        if ps.source_binding.strip().lower() == "none":
+            return None  # explicit opt-out: never bind, even if a loose-ref candidate exists
+        return ps.source_binding
+    if ps.input_entities or len(ps.output_entities) != 1:
+        return None  # read-mode / multi-output: never auto-derived
+    schema = parse_prisma_schema(schema_text)
+    cands = _loose_ref_candidates(schema, ps.output_entities[0], human)
+    if len(cands) == 1:
+        return cands[0]  # DERIVED — zero authored config
+    if len(cands) > 1:
+        raise ValueError(
+            f"ai_passes.yaml: pass {ps.name!r} has {len(cands)} server-managed loose-reference "
+            f"fields on {ps.output_entities[0]} ({sorted(cands)}); add an explicit "
+            "`source_binding: <field>` to disambiguate (declare it as a kickoff input)"
+        )
+    return None  # no loose-ref → unbound, exactly as today
 
 
 # --------------------------------------------------------------------------- #
@@ -422,11 +502,92 @@ def render_ai_pass(
         "# startd8-artifact: ai-pass",
         f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
     )
-    body = _render_pass_read(ps) if ps.input_entities else _render_pass_text(ps)
+    if ps.input_entities:
+        body = _render_pass_read(ps)
+    else:  # SPIKE (FR-IMP-4): bind is DERIVED from schema+human_inputs (or explicit override)
+        binding = effective_source_binding(schema_text, ps, parse_human_inputs(human_text))
+        body = _render_pass_text(ps, binding)
     return header + "\n\n" + body
 
 
-def _render_pass_text(ps: AiPass) -> str:
+# SPIKE (FR-IMP-5): the source-bound persist variant — stamps the provenance field and skips
+# name-dedup (source-scope idempotency is handled once-per-run in the harness, not per row). Emitted
+# ONLY into source-bound harnesses; the unbound/read `_PERSIST_HELPER` is untouched (byte-identical).
+_PERSIST_SOURCE_HELPER = '''def _persist_source(session: Session, model: Any, edge_obj: Any, source_id: str) -> int:
+    """Persist one edge object, stamped with source_id on the provenance field (source=ai). 0/1."""
+    data = edge_obj.model_dump(exclude_none=True)
+    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
+    row = model(**fields)
+    if hasattr(row, "source"):
+        row.source = "ai"
+    if hasattr(row, "confirmed"):
+        row.confirmed = False
+    setattr(row, _PROVENANCE_FIELD, source_id)  # server-stamped, never AI-authored (FR-IMP-5)
+    session.add(row)
+    session.flush()
+    return 1
+'''
+
+
+def _render_pass_text_bound(ps: AiPass, prov: str) -> str:
+    """SPIKE: source-bound text pass — ``def <pass>(text, session, source_id)`` (FR-IMP-4/5)."""
+    out = ps.output_entities[0]
+    lines = [
+        "from __future__ import annotations",
+        "",
+        "import logging",
+        "from pathlib import Path",
+        "from typing import Any",
+        "",
+        "from sqlmodel import Session, select",
+        "",
+        "from app.ai.service import call_ai_service",
+        f"from app.ai.edge_schemas import {out}Edge",
+        f"from app.tables import {out}",
+        "",
+        "logger = logging.getLogger(__name__)",
+        "",
+        f"_PROVENANCE_FIELD = {prov!r}  # server-stamped provenance (FR-IMP-5); AI-omitted via human_inputs",
+        f"_PROMPT_PATH = Path(__file__).resolve().parents[2] / {ps.prompt!r}",
+        "",
+        "",
+        f"def {ps.module}({ps.request_field}: str, session: Session, source_id: str) -> dict[str, Any]:",
+        f'    """Free-text from a stored source → {out}s (source=ai), stamped + idempotent by source."""',
+        '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
+        f'    full_prompt = (prompt + "\\n\\n" + {ps.request_field}).strip()',
+        f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
+        "    # Source-scope idempotency (FR-IMP-2): clear this source's prior UNCONFIRMED rows so a",
+        "    # re-run replaces rather than appends; CONFIRMED rows are never touched. Done only AFTER",
+        "    # a successful call — a keyless/failed call raises first, so prior rows are never lost.",
+        f"    prior = session.exec(",
+        f"        select({out}).where(",
+        f"            getattr({out}, _PROVENANCE_FIELD) == source_id, {out}.confirmed.is_(False)",
+        "        )",
+        "    ).all()",
+        "    for stale in prior:",
+        "        session.delete(stale)",
+        "    created = 0",
+        "    try:",
+        "        with session.begin_nested():  # isolate the row (M1)",
+        f"            created = _persist_source(session, {out}, result, source_id)",
+        "    except Exception as exc:  # noqa: BLE001",
+        f'        logger.warning("skipping {out} row: %s", exc)',
+        "    session.commit()",
+        f'    return {{"created": {{{out!r}: created}}}}',
+        "",
+        "",
+        _PERSIST_SOURCE_HELPER,
+        "",
+        f"__all__ = [{ps.module!r}]",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _render_pass_text(ps: AiPass, source_binding: Optional[str] = None) -> str:
+    if source_binding:  # SPIKE (FR-IMP-4/5): source-bound variant (derived or explicit)
+        return _render_pass_text_bound(ps, source_binding)
     out = ps.output_entities[0]
     lines = [
         "from __future__ import annotations",
@@ -553,8 +714,11 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
     """``app/ai/routes.py`` — one APIRouter(prefix='/ai'); one route per pass (FR-MA-3)."""
     s, p, h = _hashes(schema_text, manifest_text, human_text)
     passes = parse_ai_passes(manifest_text)
+    human = parse_human_inputs(human_text)
     header = header_ai_layer(source_file, s, p, h, "ai-router")
     has_text = any(not ps.input_entities for ps in passes)
+    # SPIKE (FR-IMP-4): per-pass derived binding (None for read-mode/unbound).
+    bindings = {ps.name: effective_source_binding(schema_text, ps, human) for ps in passes}
 
     imports = "\n".join(f"from app.ai.{ps.module} import {ps.module}" for ps in passes)
     routes: List[str] = []
@@ -570,6 +734,12 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
                 f"        raise HTTPException(status_code=503, detail=str(exc))"
             )
         else:  # text mode — free-text body
+            # SPIKE (FR-IMP-4): a source-bound pass threads body.source_id as a 3rd arg.
+            call = (
+                f"{ps.module}(body.{ps.request_field}, session, source_id=body.source_id)"
+                if bindings[ps.name]
+                else f"{ps.module}(body.{ps.request_field}, session)"
+            )
             routes.append(
                 f"@ai_router.post({ps.route_path!r})\n"
                 f"def post_{ps.module}(\n"
@@ -578,7 +748,7 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
                 f") -> dict[str, Any]:\n"
                 f'    """Run the {ps.name} pass."""\n'
                 f"    try:\n"
-                f"        return {ps.module}(body.{ps.request_field}, session)\n"
+                f"        return {call}\n"
                 f"    except AIUnavailableError as exc:  # keyless = polite 503, app stays up\n"
                 f"        raise HTTPException(status_code=503, detail=str(exc))"
             )
@@ -598,10 +768,18 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
         'ai_router = APIRouter(prefix="/ai", tags=["ai"])\n\n\n'
     )
     if has_text:
+        has_bound = any(bindings.values())  # SPIKE (FR-IMP-4): derived bindings
+        source_id_field = (
+            '    source_id: str | None = None  # set for a source-bound pass (FR-IMP-4)\n'
+            if has_bound
+            else ""
+        )
         head += (
             "class _Request(BaseModel):\n"
             '    """Free-text input for a text-mode AI pass."""\n\n'
-            '    text: str = ""\n\n\n'
+            '    text: str = ""\n'
+            + source_id_field
+            + "\n\n"
         )
     body = head + "\n\n\n".join(routes) + "\n\n\n__all__ = " + repr(exports) + "\n"
     return header + "\n\n" + body
@@ -721,19 +899,29 @@ def render_ai_pass_tests(schema_text, manifest_text, human_text, source_file="pr
 
     blocks: List[str] = []
     for ps in passes:
+        # SPIKE (FR-SBE-6): a source-bound pass's harness owns `_persist_source` (stamps the
+        # provenance field), NOT `_persist` — the generated test must call the helper that exists
+        # and additionally assert the server-stamp. Unbound/read passes are byte-identical.
+        binding = effective_source_binding(schema_text, ps, human)
         for out in dict.fromkeys(ps.output_entities):
             cols = {f.name for f in schema.scalar_fields(out)}
             has_prov = "source" in cols and "confirmed" in cols
             kwargs = _edge_required_kwargs(schema, out, human)
+            if binding:  # source-bound: helper takes a source_id and stamps `binding`
+                persist_call = f'mod._persist_source(s, t.{out}, {out}Edge(**{kwargs}), "doc-x")'
+                name_suffix = "persist_is_ai_owned_and_stamped"
+            else:
+                persist_call = f"mod._persist(s, t.{out}, {out}Edge(**{kwargs}))"
+                name_suffix = "persist_is_ai_owned"
             lines = [
-                f"def test_{ps.module}_{_snake(out)}_persist_is_ai_owned(tmp_path):",
+                f"def test_{ps.module}_{_snake(out)}_{name_suffix}(tmp_path):",
                 f"    import app.tables as t  # noqa: F401 — registers tables on SQLModel.metadata",
                 f"    import app.ai.{ps.module} as mod",
                 f"    from app.ai.edge_schemas import {out}Edge",
                 f'    engine = create_engine(f"sqlite:///{{tmp_path}}/gate.db")',
                 "    SQLModel.metadata.create_all(engine)",
                 "    with Session(engine) as s:",
-                f"        n = mod._persist(s, t.{out}, {out}Edge(**{kwargs}))",
+                f"        n = {persist_call}",
                 "        s.commit()",
                 f"        rows = s.exec(select(t.{out})).all()",
                 "    assert n == 1",
@@ -743,6 +931,8 @@ def render_ai_pass_tests(schema_text, manifest_text, human_text, source_file="pr
                     '    assert rows[0].source == "ai"',
                     "    assert rows[0].confirmed is False",
                 ]
+            if binding:  # FR-SBE-6: the server-stamp is the bound pass's distinguishing guarantee
+                lines += [f'    assert rows[0].{binding} == "doc-x"']
             blocks.append("\n".join(lines))
 
     body = preamble + ("\n\n\n" + "\n\n\n".join(blocks) if blocks else "\n")

@@ -123,3 +123,83 @@ def test_emitted_ai_tests_run_green(tmp_path):
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
     # contract + completeness + edge + gate + route-smoke (1 unseeded case — F-8)
     assert "17 passed" in result.stdout
+
+
+# --------------------------------------------------------------------------- #
+# FR-SBE-6: a source-bound pass's generated gate test must call `_persist_source`
+# (the helper the bound harness actually defines) and assert the server-stamp —
+# NOT `_persist` (which a bound harness does not emit). The `extract` pass below
+# is bound by DERIVATION (no `source_binding:` key): ProofPoint carries a
+# server-managed loose-reference `sourceDocumentId`.
+# --------------------------------------------------------------------------- #
+
+SCHEMA_BOUND = """
+model ImportedDocument {
+  id        String  @id @default(cuid())
+  ownerId   String  @default("local")
+  source    String  @default("user")
+  confirmed Boolean @default(true)
+  label     String?
+}
+
+model ProofPoint {
+  id               String  @id @default(cuid())
+  ownerId          String  @default("local")
+  source           String  @default("user")
+  confirmed        Boolean @default(true)
+  title            String?
+  sourceDocumentId String?
+}
+
+model AiCall {
+  id        String  @id @default(cuid())
+  ownerId   String  @default("local")
+  source    String  @default("user")
+  confirmed Boolean @default(true)
+  purpose   String?
+}
+""".strip()
+
+MANIFEST_BOUND = """
+passes:
+  - name: extract
+    output_entities: [ProofPoint]
+    route_path: /extract
+    prompt: prompts/extract.md
+""".strip()
+
+HUMAN_BOUND = """
+fields:
+  - target: ProofPoint.sourceDocumentId
+    authored_by: human
+""".strip()
+
+
+def test_bound_pass_gate_test_uses_persist_source_and_asserts_stamp():
+    a = render_ai_pass_tests(SCHEMA_BOUND, MANIFEST_BOUND, HUMAN_BOUND)
+    assert a == render_ai_pass_tests(SCHEMA_BOUND, MANIFEST_BOUND, HUMAN_BOUND)  # byte-stable
+    assert "def test_extract_proof_point_persist_is_ai_owned_and_stamped(" in a
+    assert "_persist_source(" in a
+    assert 'rows[0].sourceDocumentId == "doc-x"' in a
+    assert "mod._persist(" not in a  # the bound harness defines _persist_source, not _persist
+
+
+def test_emitted_bound_ai_tests_run_green(tmp_path):
+    """FR-SBE-6 acceptance: a generated app with a DERIVED source-bound pass has green generated
+    tests. Pre-fix this failed — the gate test called `mod._persist` on a `_persist_source`-only
+    harness (AttributeError)."""
+    pytest.importorskip("sqlmodel")
+    pytest.importorskip("fastapi")
+    backend = {rel: text for rel, text in render_backend(
+        SCHEMA_BOUND, manifest_text=MANIFEST_BOUND, human_inputs_text=HUMAN_BOUND)}
+    for rel, text in backend.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/", "-q"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"emitted bound tests failed:\n{result.stdout}\n{result.stderr}"
