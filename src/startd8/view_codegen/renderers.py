@@ -77,6 +77,7 @@ def _render_board(v: ViewSpec) -> str:
     order_lit = "[" + ", ".join(f'"{s}"' for s in v.order) + "]"
     return "\n".join([
         "from __future__ import annotations", "",
+        "from enum import Enum",
         "from typing import Any", "",
         "from sqlmodel import Session, select", "",
         f"from app.tables import {v.root}", "",
@@ -86,7 +87,12 @@ def _render_board(v: ViewSpec) -> str:
         'unknown statuses kept (no row lost), appended last."""',
         "    cols: dict[str, list[Any]] = {}",
         f"    for root in session.exec(select({v.root})).all():",
-        f"        cols.setdefault(getattr(root, {v.group_by!r}), []).append(root)",
+        f"        _key = getattr(root, {v.group_by!r})",
+        "        # Group by the field's string form so the _ORDER (plain strings) matches whether "
+        "the column is a str, a str-mixed Enum, or a plain Enum (a non-str Enum member would "
+        "otherwise never equal an _ORDER string — empty columns, a silent looks-like-success bug).",
+        "        _key = _key.value if isinstance(_key, Enum) else _key",
+        "        cols.setdefault(_key, []).append(root)",
         "    ordered = [(s, cols.pop(s, [])) for s in _ORDER]",
         "    ordered += [(s, rows) for s, rows in cols.items()]  # statuses outside the allow-list",
         "    return ordered", "",

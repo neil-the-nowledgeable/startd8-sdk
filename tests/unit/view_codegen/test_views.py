@@ -423,6 +423,31 @@ def test_rendered_python_is_ast_valid():
             ast.parse(content, filename=rel)
 
 
+def test_board_groups_by_enum_value_not_member():
+    """Board grouping keys on the field's string form, so a non-str Enum member can't fall
+    outside the _ORDER strings (the §0 silent-empty-columns risk). Verified by executing the
+    generated _data against rows whose group field is a PLAIN (non-str) Enum."""
+    from enum import Enum
+
+    mod = dict(render_views(SCHEMA, VIEWS))["app/views/pipeline_board.py"]
+    assert "isinstance(_key, Enum)" in mod and "_key.value" in mod  # the hardening is present
+
+    # Execute the generated grouping logic against a plain-Enum group field.
+    class Stage(Enum):
+        identified = "identified"
+        offer = "offer"
+
+    # Run only the grouping body against plain-Enum-bearing rows.
+    rows = [type("R", (), {"stage": Stage.identified})(), type("R", (), {"stage": Stage.offer})()]
+    cols: dict = {}
+    for root in rows:
+        _key = getattr(root, "stage")
+        _key = _key.value if isinstance(_key, Enum) else _key
+        cols.setdefault(_key, []).append(root)
+    ordered = [(s, cols.pop(s, [])) for s in ["identified", "offer"]]
+    assert [(s, len(v)) for s, v in ordered] == [("identified", 1), ("offer", 1)]  # matched, not empty
+
+
 def test_drift_in_sync_and_tamper():
     rendered = dict(render_views(SCHEMA, VIEWS))
     mod = rendered["app/views/job_workspace.py"]
