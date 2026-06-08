@@ -199,9 +199,15 @@ def render_base_template(
         '  <script src="https://unpkg.com/htmx.org@2.0.3"></script>\n'
         + _BASE_STYLE
         + '  <link rel="stylesheet" href="/static/css/app.css">\n'
+        # Tolerant presentation-polish theme hooks — the template analog of main.py's optional
+        # `user_routers` seam. No-ops until `startd8 polish` drops the partials into templates/theme/;
+        # they let polish add a head extra, a header bar, and a footer without editing this owned file.
+        + '  {% include "theme/_head_extra.html" ignore missing %}\n'
         + "</head>\n<body>\n"
+        + '  {% include "theme/_header.html" ignore missing %}\n'
         + nav
-        + "  <main>{% block content %}{% endblock %}</main>\n"
+        + '  <main id="main-content" tabindex="-1">{% block content %}{% endblock %}</main>\n'
+        + '  {% include "theme/_footer.html" ignore missing %}\n'
         "</body>\n</html>\n"
     )
     return head + "\n" + body

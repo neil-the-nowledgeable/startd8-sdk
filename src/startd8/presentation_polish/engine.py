@@ -24,6 +24,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from ..logging_config import get_logger
+from .components import (
+    render_components_macros,
+    render_footer_partial,
+    render_head_extra,
+    render_header_partial,
+)
 from .css import POLISH_VERSION, render_static_setup, render_stylesheet
 from .themes import DEFAULT_THEME, get_theme
 
@@ -32,6 +38,11 @@ logger = get_logger(__name__)
 # Polish-owned artifacts, relative to the project root. (path -> how to render its content.)
 STYLESHEET_RELPATH = "app/static/css/app.css"
 STATIC_SETUP_RELPATH = "app/static_setup.py"
+# Theme partials filling backend's tolerant base.html hooks (the {% import %} seam).
+THEME_COMPONENTS_RELPATH = "app/templates/theme/_components.html"
+THEME_HEADER_RELPATH = "app/templates/theme/_header.html"
+THEME_FOOTER_RELPATH = "app/templates/theme/_footer.html"
+THEME_HEAD_EXTRA_RELPATH = "app/templates/theme/_head_extra.html"
 MANIFEST_RELPATH = ".startd8/polish-manifest.json"
 
 
@@ -89,6 +100,11 @@ def _planned_artifacts(theme_name: str) -> Dict[str, str]:
     return {
         STYLESHEET_RELPATH: render_stylesheet(theme),
         STATIC_SETUP_RELPATH: render_static_setup(),
+        # Theme partials are theme-independent markup (the stylesheet themes them); constant + deterministic.
+        THEME_COMPONENTS_RELPATH: render_components_macros(),
+        THEME_HEADER_RELPATH: render_header_partial(),
+        THEME_FOOTER_RELPATH: render_footer_partial(),
+        THEME_HEAD_EXTRA_RELPATH: render_head_extra(),
     }
 
 

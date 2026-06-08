@@ -22,7 +22,8 @@ from .tokens import ThemeTokens
 POLISH_MARKER = "STARTD8-POLISH"
 
 # Bump when the generator's output shape changes — invalidates idempotency / triggers re-render.
-POLISH_VERSION = "1"
+# v2: added component styles (.app-header/.app-footer/.brand/.badge/.card) for the theme-partial seam.
+POLISH_VERSION = "2"
 
 
 def _scale(base_rem: float, ratio: float, step: int) -> str:
@@ -181,6 +182,49 @@ button, .btn {
 }
 button:hover, .btn:hover { filter: brightness(0.94); }
 
+/* Components (consumed by the theme partials' macros — theme/_components.html) */
+.app-header {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+}
+.app-header .brand, .brand {
+  font-family: var(--font-heading);
+  font-size: var(--text-h3);
+  font-weight: 700;
+  color: var(--color-text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.app-footer {
+  border-top: 1px solid var(--color-border);
+  padding: calc(var(--space) * 2);
+  margin-top: calc(var(--space) * 4);
+  color: var(--color-muted);
+  text-align: center;
+}
+.badge {
+  display: inline-block;
+  padding: calc(var(--space) * 0.25) calc(var(--space) * 0.9);
+  font-size: var(--text-small);
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+}
+.badge--success { background: var(--color-success-bg); border-color: var(--color-success); color: var(--color-success); }
+.badge--danger { background: var(--color-danger-bg); border-color: var(--color-danger); color: var(--color-danger); }
+.card {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: calc(var(--space) * 2);
+  margin-bottom: calc(var(--space) * 2);
+}
+.card__title { margin-top: 0; }
+
 /* Accessibility baseline (WCAG 2.2 AA) */
 :focus-visible {
   outline: 3px solid var(--color-focus);
@@ -192,6 +236,15 @@ button:hover, .btn:hover { filter: brightness(0.94); }
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
+/* Skip-link: visually hidden until focused, then revealed (keyboard a11y). */
+.skip-link:focus {
+  position: fixed; top: var(--space); left: var(--space);
+  width: auto; height: auto; margin: 0; overflow: visible; clip: auto;
+  z-index: 1000; padding: calc(var(--space) * 0.75) calc(var(--space) * 1.25);
+  background: var(--color-primary); color: var(--color-on-primary);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+main:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

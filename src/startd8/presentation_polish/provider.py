@@ -19,9 +19,31 @@ from pathlib import Path
 from typing import Optional
 
 from ..contractors.deterministic_providers import ProviderContext
+from .components import (
+    render_components_macros,
+    render_footer_partial,
+    render_head_extra,
+    render_header_partial,
+)
 from .css import POLISH_MARKER, render_static_setup, render_stylesheet
-from .engine import MANIFEST_RELPATH, STATIC_SETUP_RELPATH, STYLESHEET_RELPATH
+from .engine import (
+    MANIFEST_RELPATH,
+    STATIC_SETUP_RELPATH,
+    STYLESHEET_RELPATH,
+    THEME_COMPONENTS_RELPATH,
+    THEME_FOOTER_RELPATH,
+    THEME_HEAD_EXTRA_RELPATH,
+    THEME_HEADER_RELPATH,
+)
 from .themes import get_theme
+
+# Theme partials are theme-independent → resolved by path suffix, no theme needed.
+_CONSTANT_PARTIALS = {
+    THEME_COMPONENTS_RELPATH: render_components_macros,
+    THEME_HEADER_RELPATH: render_header_partial,
+    THEME_FOOTER_RELPATH: render_footer_partial,
+    THEME_HEAD_EXTRA_RELPATH: render_head_extra,
+}
 
 
 class PresentationPolishFileProvider:
@@ -47,11 +69,15 @@ class PresentationPolishFileProvider:
     @staticmethod
     def _render_for(path: Path, theme_name: str) -> Optional[str]:
         """Re-render the artifact *path* represents for *theme_name*, or None if unrecognized."""
+        p = str(path).replace("\\", "/")
+        # Theme-independent partials: resolved by suffix, no theme needed.
+        for relpath, render in _CONSTANT_PARTIALS.items():
+            if p.endswith(relpath):
+                return render()
         try:
             theme = get_theme(theme_name)
         except KeyError:
             return None
-        p = str(path).replace("\\", "/")
         if p.endswith(STYLESHEET_RELPATH) or p.endswith("static/css/app.css"):
             return render_stylesheet(theme)
         if p.endswith(STATIC_SETUP_RELPATH) or p.endswith("static_setup.py"):

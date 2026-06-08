@@ -20,6 +20,12 @@ Public surface:
 
 from __future__ import annotations
 
+from .components import (
+    render_components_macros,
+    render_footer_partial,
+    render_head_extra,
+    render_header_partial,
+)
 from .css import POLISH_MARKER, render_static_setup, render_stylesheet
 from .engine import PolishConfig, PolishResult, apply_polish
 from .provider import PresentationPolishFileProvider
@@ -35,6 +41,10 @@ __all__ = [
     "theme_names",
     "render_stylesheet",
     "render_static_setup",
+    "render_components_macros",
+    "render_header_partial",
+    "render_footer_partial",
+    "render_head_extra",
     "POLISH_MARKER",
     "PolishConfig",
     "PolishResult",

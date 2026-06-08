@@ -9,6 +9,10 @@ from startd8.presentation_polish.engine import (
     MANIFEST_RELPATH,
     STATIC_SETUP_RELPATH,
     STYLESHEET_RELPATH,
+    THEME_COMPONENTS_RELPATH,
+    THEME_FOOTER_RELPATH,
+    THEME_HEAD_EXTRA_RELPATH,
+    THEME_HEADER_RELPATH,
     FileStatus,
 )
 
@@ -16,7 +20,7 @@ pytestmark = []
 
 
 def _project(tmp_path):
-    (tmp_path / "app").mkdir()
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
     return tmp_path
 
 
@@ -35,6 +39,27 @@ def test_apply_creates_files_and_manifest(tmp_path):
     manifest = json.loads((root / MANIFEST_RELPATH).read_text())
     assert manifest["theme"] == "professional"
     assert STYLESHEET_RELPATH in manifest["files"]
+
+
+def test_apply_creates_theme_partials(tmp_path):
+    """The {% import %} seam: polish fills backend's tolerant theme hooks."""
+    root = _project(tmp_path)
+    result = apply_polish(PolishConfig(project_root=root, theme="professional"))
+    statuses = dict(result.files)
+    for relpath in (
+        THEME_COMPONENTS_RELPATH,
+        THEME_HEADER_RELPATH,
+        THEME_FOOTER_RELPATH,
+        THEME_HEAD_EXTRA_RELPATH,
+    ):
+        assert (root / relpath).is_file(), f"missing {relpath}"
+        assert statuses[relpath] == FileStatus.CREATED
+    # theme partials are theme-independent → identical across themes
+    other = _project(tmp_path / "b")
+    apply_polish(PolishConfig(project_root=other, theme="editorial"))
+    assert (root / THEME_COMPONENTS_RELPATH).read_text() == (
+        other / THEME_COMPONENTS_RELPATH
+    ).read_text()
 
 
 def test_apply_is_idempotent(tmp_path):

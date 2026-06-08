@@ -80,7 +80,12 @@ def test_polished_app_serves_stylesheet(tmp_path, monkeypatch):
             # the UI page links the stylesheet and still renders
             page = c.get("/ui/gadget")
             assert page.status_code == 200
-            assert '/static/css/app.css' in page.text
+            assert "/static/css/app.css" in page.text
+            # the {% import %} seam: base.html's tolerant hooks resolve to the polish theme partials,
+            # which import the macro lib and render the header + footer.
+            assert 'class="app-header"' in page.text  # theme/_header.html → brand_header macro
+            assert "skip-link" in page.text  # accessibility skip-link
+            assert 'class="app-footer"' in page.text  # theme/_footer.html → site_footer macro
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))

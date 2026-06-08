@@ -41,6 +41,12 @@ def test_stylesheet_targets_existing_html_and_a11y():
     assert ".sr-only" in css
 
 
+def test_stylesheet_styles_component_classes():
+    css = render_stylesheet(get_theme("professional"))
+    for selector in [".app-header", ".brand", ".app-footer", ".badge", ".card", ".skip-link:focus"]:
+        assert selector in css, f"missing component style: {selector}"
+
+
 def test_themes_produce_distinct_stylesheets():
     sheets = {name: render_stylesheet(t) for name, t in THEMES.items()}
     assert len(set(sheets.values())) == len(sheets)  # each theme is visually distinct
