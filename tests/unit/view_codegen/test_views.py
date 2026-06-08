@@ -15,7 +15,15 @@ from pathlib import Path
 import pytest
 
 from startd8.backend_codegen import render_backend
-from startd8.view_codegen import is_owned_view_file, parse_views, render_views, views_in_sync
+from startd8.view_codegen import (
+    compute_binding_names,
+    is_owned_view_file,
+    parse_views,
+    render_views,
+    views_in_sync,
+)
+from startd8.view_codegen import manifest as _manifest
+from startd8.view_codegen import renderers as _renderers
 
 pytestmark = pytest.mark.unit
 
@@ -311,6 +319,63 @@ def test_computed_panel_reuses_generated_compute_and_routes():
     assert "def completeness_panel(request: Request, session: Session = Depends(get_session)):" in routes
     tmpl = rendered["app/templates/views/completeness_panel.html"]
     assert "data.score" in tmpl and "data.nudges" in tmpl  # the score+nudges panel
+
+
+def test_compute_binding_registry_is_single_source_of_truth():
+    """AR-2 extension point: the manifest's parse-validation vocabulary is DERIVED from the renderer
+    registry (renderers._COMPUTE_RENDERERS) — one place, no drift between "what parses" and "what
+    renders"."""
+    # the public accessor, the renderer registry, and the manifest's allow-list are all the same set
+    assert compute_binding_names() == frozenset(_renderers._COMPUTE_RENDERERS)
+    assert _manifest._compute_bindings() == frozenset(_renderers._COMPUTE_RENDERERS)
+    # v1 ships exactly `completeness`
+    assert compute_binding_names() == frozenset({"completeness"})
+
+
+def test_compute_binding_registry_is_open_and_extensible():
+    """Registering ONE entry (name + renderer fn) opens BOTH parse-validation and render dispatch —
+    the whole extension surface. Uses a throwaway in-test binding, restored afterward."""
+    saved = dict(_renderers._COMPUTE_RENDERERS)
+
+    def _render_throwaway(v):  # a minimal valid data module — emits a no-op compute view
+        return "\n".join([
+            "from __future__ import annotations", "",
+            "from typing import Any", "",
+            "from sqlmodel import Session", "", "",
+            f"def {v.module}_data(session: Session) -> dict[str, Any]:",
+            '    return {"score": 0.0, "nudges": []}', "",
+            f"__all__ = [{(v.module + '_data')!r}]", "",
+        ])
+
+    try:
+        _renderers._COMPUTE_RENDERERS["throwaway"] = _render_throwaway
+        # 1) the manifest validator now ACCEPTS the new binding (derived, not hardcoded)
+        assert "throwaway" in _manifest._compute_bindings()
+        yaml_text = (
+            "views:\n"
+            "  - name: tw_panel\n"
+            "    kind: computed-panel\n"
+            "    compute: throwaway\n"
+            "    route: /tw\n"
+        )
+        specs = {v.name: v for v in parse_views(yaml_text, known_entities=_KNOWN)}
+        assert specs["tw_panel"].compute == "throwaway"
+        # 2) the render dispatch picks the SAME registry entry up automatically
+        from startd8.view_codegen.renderers import _render_computed_panel
+        out = _render_computed_panel(specs["tw_panel"])
+        assert "tw_panel_data" in out and 'score": 0.0' in out
+    finally:
+        _renderers._COMPUTE_RENDERERS.clear()
+        _renderers._COMPUTE_RENDERERS.update(saved)
+    # restored: vocabulary is closed again to v1
+    assert compute_binding_names() == frozenset({"completeness"})
+
+
+def test_unknown_compute_binding_message_lists_registered_set():
+    """An unknown binding fails loud AND names the registered set (the closed-vocabulary contract)."""
+    bad = VIEWS.replace("compute: completeness", "compute: vibes")
+    with pytest.raises(ValueError, match=r"unknown compute binding 'vibes' \(allowed: \['completeness'\]\)"):
+        parse_views(bad, known_entities=_KNOWN)
 
 
 def test_import_flow_grammar_and_loud_failures():

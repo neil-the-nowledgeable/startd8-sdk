@@ -254,10 +254,36 @@ def _render_computed_panel_completeness(v: ViewSpec) -> str:
     ])
 
 
-# compute binding -> module renderer (the AR-2 extension point; mirrors manifest._COMPUTE_BINDINGS).
+# --------------------------------------------------------------------------- #
+# computed-panel compute-binding registry (AR-2) — THE single source of truth
+# --------------------------------------------------------------------------- #
+# A compute binding is exactly ``(name, renderer-fn)``: ``name`` is the manifest's
+# ``compute:`` token, ``renderer-fn`` emits the binding's ``app/views/<view>.py`` data module.
+# This dict is the ONE place the vocabulary lives — ``manifest.parse_views`` derives its
+# parse-time validation set from ``compute_binding_names()`` (a deferred import, since
+# renderers depends on manifest), so "what parses" and "what renders" can never drift.
+#
+# To add a new $0 compute binding (worked example — FR-37 funnel metrics):
+#   1. Write the generated-source contract the binding reads (e.g. ``app/funnel.py`` exposing
+#      ``STAGES`` + ``compute_funnel(counts)`` — the deterministic per-stage conversion math),
+#      the same way ``completeness`` reuses the generated ``app/completeness.py``. The renderer
+#      must IMPORT that contract, never re-implement the metric here.
+#   2. Add a ``_render_computed_panel_funnel(v: ViewSpec) -> str`` emitting the view's data module
+#      (gather live inputs -> call the generated compute fn -> return the panel dict).
+#   3. Register it below: ``"funnel": _render_computed_panel_funnel``.
+# That single entry opens the vocabulary: ``parse_views`` now accepts ``compute: funnel`` and the
+# render dispatch picks it up automatically — no other edit, no duplicated allow-list. (``funnel``
+# and ``prediction`` are intentionally NOT implemented here; each needs its own generated-source
+# contract, out of scope for the registry mechanism itself.)
 _COMPUTE_RENDERERS = {
     "completeness": _render_computed_panel_completeness,
 }
+
+
+def compute_binding_names() -> frozenset:
+    """The registered compute-binding vocabulary — the single source of truth for both the
+    manifest parse-validation set and the render dispatch (see ``_COMPUTE_RENDERERS``)."""
+    return frozenset(_COMPUTE_RENDERERS)
 
 
 def _render_computed_panel(v: ViewSpec) -> str:
