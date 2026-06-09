@@ -166,15 +166,32 @@ def render_completeness_tests(
 
     Pins the generated ``compute_completeness`` at its endpoints, mode-agnostically: a fully-populated
     model scores ``1.0`` with no nudges; an empty model scores ``0.0`` with one nudge per *included*
-    entity (the manifest ``exclude`` set drops join/system tables from the denominator). The expected
-    values are baked literals computed here, so a bug in the generated function (wrong rounding,
-    off-by-one denominator, miscounted nudges) flips the test red.
+    entity. The expected values are baked literals computed here, so a bug in the generated function
+    (wrong rounding, off-by-one denominator, miscounted nudges) flips the test red.
+
+    The *included* set MUST mirror the runtime (``derived.render_completeness``) exactly, or the
+    emitted test contradicts its own runtime (F-13 follow-up):
+      - **No manifest (presence rule)** → every entity is a signal (``included = names``).
+      - **Domain-weighted manifest** → signals are **opt-in**: an entity counts iff it has an explicit
+        ``min_rows``/``weight`` entry (i.e. it lands in the runtime's ``_CONFIG``); ``exclude`` is an
+        advisory override. New schema entities are inert by default, so regen can't re-break the test.
     """
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
-    excluded = {str(e) for e in (manifest.get("exclude") or [])} if manifest else set()
-    included = [n for n in names if n not in excluded]
+    if manifest:
+        excluded = {str(e) for e in (manifest.get("exclude") or [])}
+        cfg_in = manifest.get("entities") or {}
+        # opt-in, mirroring derived.render_completeness's _CONFIG construction: an entity is a signal
+        # iff it has an explicit min_rows/weight entry (an `exclude` then drops it as an override).
+        included = [
+            n for n in names
+            if isinstance(cfg_in.get(n), dict)
+            and ("min_rows" in cfg_in[n] or "weight" in cfg_in[n])
+            and n not in excluded
+        ]
+    else:
+        included = list(names)  # presence rule — every entity is a signal (v1, no manifest)
 
     header = _header(source_file, sha, _COMPLETENESS_KIND)
     preamble = _SHIM + "\nfrom app.completeness import compute_completeness"

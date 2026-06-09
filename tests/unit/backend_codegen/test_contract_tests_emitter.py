@@ -151,3 +151,43 @@ def test_completeness_tests_run_green_against_generated_fn(tmp_path):
     )
     assert result.returncode == 0, f"completeness tests failed:\n{result.stdout}\n{result.stderr}"
     assert "2 passed" in result.stdout
+
+
+def test_completeness_test_emitter_mirrors_runtime_opt_in():
+    """F-13 follow-up regression: the emitted test's baked nudge count MUST equal the runtime's
+    actual count. With a domain-weighted manifest, signals are opt-in — an entity that is neither
+    configured nor excluded is INERT. Under the old opt-out emitter (names − exclude) the baked
+    count was 2 (ProofPoint + the unconfigured Metric) while the runtime produced 1, so the test
+    contradicted its own runtime. This pins them together as a fast unit check."""
+    manifest = {"entities": {"ProofPoint": {"min_rows": 1}}}  # Metric: neither configured nor excluded
+    ns: dict = {}
+    exec(compile(render_completeness(PILOT_SCHEMA, manifest=manifest), "<rt>", "exec"), ns)
+    actual = len(ns["compute_completeness"]({}).nudges)
+    assert actual == 1  # only the configured ProofPoint is a signal; Metric is inert (opt-in)
+    test_src = render_completeness_tests(PILOT_SCHEMA, manifest=manifest)
+    assert f"assert len(r.nudges) == {actual}" in test_src  # baked count agrees with the runtime
+
+
+def test_completeness_emitted_test_runs_green_against_runtime_with_manifest(tmp_path):
+    """F-13 follow-up, definitive lock-step: render BOTH the runtime and its test from the SAME
+    domain-weighted manifest (with an unconfigured+unexcluded entity) and run the emitted test
+    against the runtime. Under the opt-out emitter this went red (asserted 2 vs the runtime's 1);
+    green here means the two generators agree about what a signal is — they can't silently re-diverge."""
+    manifest = {"entities": {"ProofPoint": {"min_rows": 1}}}
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "app" / "completeness.py").write_text(
+        render_completeness(PILOT_SCHEMA, "prisma/schema.prisma", manifest=manifest), encoding="utf-8"
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_completeness.py").write_text(
+        render_completeness_tests(PILOT_SCHEMA, "prisma/schema.prisma", manifest=manifest),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_completeness.py", "-q"],
+        cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, (
+        f"emitted completeness test disagrees with its runtime:\n{result.stdout}\n{result.stderr}"
+    )
