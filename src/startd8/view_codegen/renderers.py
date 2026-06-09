@@ -582,21 +582,23 @@ def _render_export_package_model(v: ViewSpec, prose_specs: Tuple[ViewSpec, ...] 
         '    """Complete, round-trippable JSON of all entities (app/export.py `to_json`)."""',
         f"    return to_json({v.module}_payload(session))", "", "",
         f"def {v.module}_markdown(session: Session) -> str:",
-        '    """Human-readable Markdown of the full model: the generic per-entity dump with each',
-        "    rendered-content entity's JSON content field REDACTED (so no raw JSON / trace ids leak),",
-        '    then that prose rendered VERBATIM in a declared, named layout (FR-10) — not a JSON dump."""',
+        '    """Human-readable Markdown of the model: the generic per-entity dump of the NON-prose',
+        "    entities, then each rendered-content entity rendered ONCE as a named prose section",
+        '    (kind-headed, body verbatim) — never also as a row in the generic dump (F-10b: no',
+        "    duplicate blank row, no JSON / trace ids). NOTE: a fuller domain-specific named layout",
+        "    (e.g. résumé bullets + interview-prep ordering) is the consuming app's owned-glue — the",
+        '    generic archetype can only present prose-vs-structured cleanly, not impose a domain order."""',
         f"    payload = {v.module}_payload(session)",
     ]
     if prose_specs:
-        prose_map = "{" + ", ".join(
-            f"{pv.root!r}: {pv.content_field!r}" for pv in prose_specs
-        ) + "}"
+        # F-10b: drop the prose entities from the generic dump ENTIRELY (not just
+        # redact their content field) — they are rendered as named prose below, so a
+        # blanked row in the dump would be a confusing duplicate. The JSON export
+        # (<view>_json) keeps every entity, so AR-4 round-trip is unaffected.
+        prose_roots = "{" + ", ".join(f"{pv.root!r}" for pv in prose_specs) + "}"
         lines += [
-            f"    _redact = {prose_map}  # entity -> JSON content field rendered as prose below",
-            "    _dump = {",
-            "        _e: [{_k: _v for _k, _v in _row.items() if _k != _redact.get(_e)} for _row in _rows]",
-            "        for _e, _rows in payload.items()",
-            "    }",
+            f"    _prose_entities = {prose_roots}  # rendered as named prose below, not in the dump",
+            "    _dump = {_e: _rows for _e, _rows in payload.items() if _e not in _prose_entities}",
             "    sections: list[str] = [to_markdown(_dump)]",
         ]
         for pv in prose_specs:

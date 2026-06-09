@@ -600,6 +600,11 @@ def test_fr10_model_export_renders_artifact_prose_verbatim():
     assert "from app.tables import Artifact" in export_mod
     assert "prose_body(getattr(_row, 'dataJson', None), 'body')" in export_mod
     assert "VERBATIM" in export_mod
+    # F-10b: the prose entity is dropped from the generic dump ENTIRELY (rendered once as
+    # named prose), not kept as a redacted/blank row — no duplicate, no `_redact` machinery.
+    assert "_prose_entities = {'Artifact'}" in export_mod
+    assert "_e not in _prose_entities" in export_mod
+    assert "_redact" not in export_mod  # the old redact-the-field-but-keep-the-row path is gone
     # an export with NO rendered-content view keeps the prose machinery out (byte-parity guard)
     _artifact_lines = {
         "  - name: artifact_reader", "    kind: rendered-content", "    root: Artifact",
