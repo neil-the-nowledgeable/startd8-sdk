@@ -240,7 +240,13 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "except ModuleNotFoundError:\n"
         "    pages_admin_router = None\n"
         "if pages_admin_router is not None:\n"
-        "    app.include_router(pages_admin_router)  # /ui/pages authoring screens\n"
+        "    app.include_router(pages_admin_router)  # /ui/pages authoring screens\n\n"
+        "try:  # optional AI layer (generate backend --ai-passes); /ai/* one POST per pass (F-9)\n"
+        "    from .ai.routes import ai_router\n"
+        "except ModuleNotFoundError:\n"
+        "    ai_router = None\n"
+        "if ai_router is not None:\n"
+        "    app.include_router(ai_router)  # AI passes reachable at /ai/* via app.main\n"
     )
     return header + "\n\n" + body
 

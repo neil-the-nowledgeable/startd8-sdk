@@ -282,14 +282,18 @@ def _hashes(schema_text: str, manifest_text: str, human_text: Optional[str]) -> 
 
 
 def render_server(schema_text, manifest_text, human_text, source_file="prisma/schema.prisma") -> str:
-    """``app/server.py`` — composition entrypoint (FR-MA-4): mount owned app + AI router only."""
+    """``app/server.py`` — composition entrypoint (FR-MA-4): re-exports the owned app.
+
+    F-9: ``ai_router`` is now mounted by ``app.main`` (tolerant optional import), so this
+    entrypoint must NOT mount it again — including it twice yields duplicate ``/ai/*`` routes.
+    server.py imports main's already-AI-mounted ``app`` and re-exports it, so the historical
+    ``from app.server import app`` consumers (e.g. the generated keyless-boot test) keep working.
+    """
     s, p, h = _hashes(schema_text, manifest_text, human_text)
     header = header_ai_layer(source_file, s, p, h, "ai-server")
     body = (
         "from __future__ import annotations\n\n"
-        "from app.main import app\n"
-        "from app.ai.routes import ai_router\n\n"
-        "app.include_router(ai_router)\n\n"
+        "from app.main import app  # ai_router is mounted by app.main (F-9), not here\n\n"
         '__all__ = ["app"]\n'
     )
     return header + "\n\n" + body

@@ -394,6 +394,30 @@ def test_confirm_routes_registered():
     missing = [e for e in _CONFIRM
                if ("/ui/" + e + "/{{id}}/confirm") not in post_paths]
     assert not missing, "confirm route missing for: " + repr(missing)
+
+
+def test_ai_routes_mounted_if_ai_layer_present():
+    """F-9: if this app generated an AI layer, its /ai/* POST routes MUST be mounted.
+
+    GET-smoke can't catch an unmounted POST layer — that's exactly how the AI router shipped
+    generated-but-unmounted (every /ai/* pass 404'd). Guarded: an app with no AI layer simply
+    skips. A non-404 (200/422/400/503) proves the route is MOUNTED — we never exercise the pass.
+    """
+    # Detect the AI layer on DISK — importing `app.ai.routes` would rebind the name `app`
+    # (the package) over the FastAPI `app` object imported above, breaking `app.routes`.
+    if not (Path(__file__).resolve().parents[1] / "app" / "ai" / "routes.py").is_file():
+        pytest.skip("no AI layer in this app")
+    ai_posts = sorted(
+        r.path for r in app.routes
+        if isinstance(r, APIRoute) and "POST" in (r.methods or ()) and r.path.startswith("/ai/")
+    )
+    assert ai_posts, "AI layer present but zero /ai/* POST routes mounted (F-9 regression)"
+    # raise_server_exceptions=False: an empty-body POST may 500 inside the pass handler
+    # (no key / unparseable input) — that still proves the route is MOUNTED. We only reject 404.
+    with _testclient.TestClient(app, raise_server_exceptions=False) as client:
+        for path in ai_posts:
+            resp = client.post(path, json={{}})
+            assert resp.status_code != 404, f"POST {{path}} -> 404 (route not mounted)"
 '''
 
 

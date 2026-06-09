@@ -14,10 +14,46 @@ import sys
 import pytest
 
 from startd8.backend_codegen import render_backend
-from startd8.backend_codegen.ai_layer import render_ai_pass_tests, render_edge_tests
+from startd8.backend_codegen.ai_layer import (
+    render_ai_pass_tests,
+    render_edge_tests,
+    render_server,
+)
+from startd8.backend_codegen.crud_generator import render_main
 from startd8.backend_codegen.drift import check_drift
+from startd8.backend_codegen.test_emitter import render_route_smoke_tests
 
 pytestmark = pytest.mark.unit
+
+
+def test_f9_main_mounts_ai_router_tolerantly():
+    """F-9: main.py mounts ai_router via a tolerant optional import — reachable at /ai/* when the
+    AI layer was generated, a no-op (schema-only, byte-identical) when it wasn't."""
+    schema = "model ProofPoint {\n  id String @id\n  title String\n}\n"
+    m = render_main(schema)
+    assert "from .ai.routes import ai_router" in m
+    assert "except ModuleNotFoundError" in m
+    assert "app.include_router(ai_router)" in m
+    # static block, no manifest input -> byte-identical regardless of --ai-passes
+    assert render_main(schema) == render_main(schema)
+
+
+def test_f9_server_does_not_double_mount_ai_router():
+    """F-9: server.py re-exports main's (already AI-mounted) app — mounting ai_router there too
+    would duplicate every /ai/* route. It must NOT include_router(ai_router)."""
+    srv = render_server("model P {\n  id String @id\n}\n", "passes: []", None)
+    assert "from app.main import app" in srv
+    assert "include_router(ai_router)" not in srv
+
+
+def test_f9_route_smoke_post_smokes_ai_routes():
+    """F-9(b): the generated route-smoke POST-smokes /ai/* (non-404) so an unmounted AI layer
+    fails loud — GET-smoke alone cannot catch a missing POST layer."""
+    rs = render_route_smoke_tests("model P {\n  id String @id\n}\n")
+    assert "def test_ai_routes_mounted_if_ai_layer_present" in rs
+    assert 'r.path.startswith("/ai/")' in rs
+    assert "!= 404" in rs
+    assert "raise_server_exceptions=False" in rs  # a 500 still proves mounted
 
 # Two passes: extract → ProofPoint (text), quantify → Metric. Metric.value is human-authored, so the
 # AI edge for Metric must omit it (FR-6); value is optional so an AI-persisted Metric is still valid.
@@ -122,8 +158,8 @@ def test_emitted_ai_tests_run_green(tmp_path):
     )
     assert result.returncode == 0, f"emitted tests failed:\n{result.stdout}\n{result.stderr}"
     # contract + completeness + edge + gate + route-smoke (1 unseeded GET case — F-8)
-    # + confirm-route existence (FR-CA-8; the schema's entities carry `confirmed`)
-    assert "18 passed" in result.stdout
+    # + confirm-route existence (FR-CA-8) + /ai POST-smoke (F-9: AI routes now mounted)
+    assert "19 passed" in result.stdout
 
 
 # --------------------------------------------------------------------------- #
