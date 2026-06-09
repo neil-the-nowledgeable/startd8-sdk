@@ -141,6 +141,36 @@ def test_completeness_weighted_fraction_and_nudge_qty():
     assert r.nudges == ["Add at least 2 ProofPoint."]
 
 
+def test_completeness_signals_are_opt_in_new_entity_is_inert():
+    """F-13 regression: a signal is OPT-IN — an entity that is neither configured nor excluded
+    is INERT (out of the denominator), so adding a model to the contract cannot silently change
+    the score. Under the old opt-out rule (included = ENTITIES - exclude) the unconfigured
+    ProofPoint would have become a default-required signal, dropping a complete model to 0.5 with
+    a spurious nudge — exactly the leak that turned StartDate's `main` red."""
+    # Only Profile is declared a signal; ProofPoint is neither configured nor excluded.
+    manifest = {"entities": {"Profile": {"min_rows": 1}}}
+    ns = _exec(render_completeness(SCHEMA, manifest=manifest))
+    # Profile satisfied, ProofPoint inert → complete, no spurious ProofPoint nudge.
+    r = ns["compute_completeness"]({"Profile": 1})
+    assert r.score == 1.0 and r.nudges == []
+    # An unconfigured entity having rows neither helps nor hurts the score.
+    assert ns["compute_completeness"]({"Profile": 1, "ProofPoint": 99}).score == 1.0
+    # The single configured signal still drives the score when unmet.
+    unmet = ns["compute_completeness"]({})
+    assert unmet.score == 0.0 and unmet.nudges == ["Add at least one Profile."]
+
+
+def test_completeness_exclude_is_advisory_override_of_a_configured_signal():
+    """F-13: with opt-in, `exclude` is no longer needed to keep non-signals out, but it still
+    works as an override — it can drop an explicitly-configured entity from the denominator."""
+    manifest = {"exclude": ["ProofPoint"], "entities": {"Profile": {"min_rows": 1},
+                                                          "ProofPoint": {"min_rows": 1}}}
+    ns = _exec(render_completeness(SCHEMA, manifest=manifest))
+    # ProofPoint is configured but also excluded → excluded wins, out of denominator.
+    r = ns["compute_completeness"]({"Profile": 1})
+    assert r.score == 1.0 and r.nudges == []
+
+
 _CMPL_YAML = "exclude: [ProofPoint]\nentities:\n  Profile: {min_rows: 2, weight: 3}\n"
 
 

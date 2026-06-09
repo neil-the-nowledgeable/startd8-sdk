@@ -117,14 +117,18 @@ def render_completeness(
       - **No manifest (default)** → the v1 *presence rule* (score = fraction of entities with >=1
         row; one nudge per absent entity). Byte-identical to the prior output — zero change for
         projects that don't add a manifest.
-      - **Domain-weighted manifest** → per-entity ``min_rows`` + ``weight`` thresholds and an
-        ``exclude`` set (e.g. drop join tables / ``AiCall``; require >=3 ProofPoints). Score is the
-        weighted fraction of *included* entities meeting their threshold; nudges name the threshold.
+      - **Domain-weighted manifest** → per-entity ``min_rows`` + ``weight`` thresholds. A
+        completeness signal is **opt-in** (F-13): an entity counts iff it has an explicit entry
+        under ``entities:`` (i.e. it appears in ``_CONFIG``). New schema entities are **inert by
+        default** — adding a model to the contract can no longer silently change the score. Score
+        is the weighted fraction of *configured* entities meeting their threshold; nudges name the
+        threshold. ``exclude`` is an **advisory override** (drop a configured entity without
+        deleting its config); it is no longer load-bearing for keeping non-signals out.
 
     The manifest (``completeness.yaml``) shape::
 
-        exclude: [AiCall, ProofPointCapability, ...]
-        entities:
+        exclude: [AiCall, ProofPointCapability, ...]   # advisory override (opt-out a configured signal)
+        entities:                                       # opt-in: each listed entity IS a signal
           ProofPoint: {min_rows: 3, weight: 2}
           Capability: {min_rows: 2}
     """
@@ -188,10 +192,12 @@ def render_completeness(
         "_DEFAULT_MIN_ROWS = 1\n"
         "_DEFAULT_WEIGHT = 1.0\n\n\n"
         "def compute_completeness(present: Dict[str, int]) -> CompletenessResult:\n"
-        '    """Domain-weighted (OQ-4): weighted fraction of INCLUDED entities meeting their\n'
-        "    min_rows threshold; one nudge per unmet entity (naming the threshold). Excluded\n"
-        '    entities (join tables, system) are out of the denominator."""\n'
-        "    included = [e for e in ENTITIES if e not in _EXCLUDED]\n"
+        '    """Domain-weighted (OQ-4): weighted fraction of CONFIGURED entities meeting their\n'
+        "    min_rows threshold; one nudge per unmet entity (naming the threshold). Signals are\n"
+        "    OPT-IN (F-13) — an entity counts iff it has an explicit entry in _CONFIG, so adding\n"
+        "    a new schema entity does NOT silently make it a required signal. _EXCLUDED is an\n"
+        '    advisory override that can drop a configured entity from the denominator."""\n'
+        "    included = [e for e in ENTITIES if e in _CONFIG and e not in _EXCLUDED]\n"
         "    if not included:\n"
         "        return CompletenessResult(score=1.0, nudges=[])\n"
         "    total = 0.0\n"
