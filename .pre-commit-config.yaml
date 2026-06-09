@@ -1,0 +1,16 @@
+# Pre-commit hooks for startd8-sdk.
+# One-time setup (per clone):
+#     pip install pre-commit      # or: pipx install pre-commit
+#     pre-commit install          # installs the git hook
+#
+# After that, `gitleaks protect --staged` runs automatically on every commit and
+# BLOCKS the commit if a secret is detected — so a keys.md-style exposure can't
+# be committed again. It honours .gitleaks.toml (allowlist of benign fixtures).
+#
+# Run on demand against everything:  pre-commit run --all-files
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: gitleaks (block committed secrets)

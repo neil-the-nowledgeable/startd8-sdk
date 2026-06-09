@@ -1,0 +1,48 @@
+# gitleaks configuration for startd8-sdk
+# Docs: https://github.com/gitleaks/gitleaks
+#
+# Scope: extends gitleaks' built-in rule set and allowlists a small set of
+# KNOWN-BENIGN matches (synthetic unit-test fixtures + documentation
+# placeholders) that were individually verified on 2026-06-09 — see the scan
+# triage in that session. Real secrets (e.g. the removed keys.md) are NOT
+# allowlisted and will still fail.
+#
+# Run locally:   gitleaks dir .            # scan the working tree
+#                gitleaks git .            # scan full history
+# Pre-commit:    handled by .pre-commit-config.yaml (gitleaks protect --staged)
+
+title = "startd8-sdk gitleaks config"
+
+[extend]
+# Keep all of gitleaks' default detectors (OpenAI, Anthropic, GCP, AWS,
+# private keys, generic high-entropy, etc.).
+useDefault = true
+
+[allowlist]
+description = "Verified-benign synthetic test fixtures and doc placeholders (2026-06-09 triage)"
+
+# Path-scoped suppression. These files exist to TEST secret-handling
+# (sanitizer fixtures) or are requirements/runbook docs whose prose tripped
+# the entropy detector. Paths are regexes matched against the file path.
+paths = [
+  # --- synthetic secret fixtures (the sanitizer test literally feeds fake
+  #     keys/PEMs/connection-strings to assert they get redacted) ---
+  '''tests/unit/contractors/test_artisan_sanitizer\.py''',
+  '''tests/unit/contractors/test_postmortem\.py''',
+  '''tests/unit/contractors/test_run_validator\.py''',
+  '''tests/unit/test_encryption\.py''',
+  # --- documentation false positives (prose / demo creds, not real secrets) ---
+  '''docs/design/wireframe/WIREFRAME_INGESTION_WIRING_REQUIREMENTS\.md''',
+  '''docs/design/DEMO_RUNBOOK\.md''',
+  '''docs/capability-index/startd8\.workflow\.functional-requirements\.yaml''',
+]
+
+# Obvious placeholder key shapes used across tests/docs (defense in depth, in
+# case a fixture moves to a new file). Real provider keys are far longer and
+# random; these stub patterns never appear in production code.
+regexes = [
+  '''sk-abc123[A-Za-z0-9]*''',
+  '''sk-proj-abc[A-Za-z0-9_-]*''',
+  '''admin:adminadminadmin''',
+  '''postgresql://user:password123@''',
+]
