@@ -218,7 +218,7 @@ Observability setup: [LOKI_SETUP_GUIDE](docs/LOKI_SETUP_GUIDE.md) ·
 ## Development
 
 ```bash
-git clone https://github.com/neil-the-nowledgeable/startd8.git
+git clone https://github.com/neil-the-nowledgeable/startd8-sdk.git
 cd startd8
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
@@ -253,6 +253,6 @@ Full terms in [LICENSE.md](LICENSE.md).
 
 ## Support
 
-- **Issues:** https://github.com/neil-the-nowledgeable/startd8/issues
+- **Issues:** https://github.com/neil-the-nowledgeable/startd8-sdk/issues
 - **Repository conventions & architecture:** [CLAUDE.md](CLAUDE.md)
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
