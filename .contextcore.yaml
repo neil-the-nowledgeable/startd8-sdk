@@ -23,8 +23,8 @@ metadata:
       summary: "Initial v2.0 manifest for startd8-sdk (Beaver/Amik)"
   lastUpdated: "2026-02-11T00:00:00Z"
   links:
-    repository: https://github.com/example/startd8-sdk
-    docs: https://github.com/example/startd8-sdk/tree/main/docs
+    repository: https://github.com/neil-the-nowledgeable/startd8-sdk
+    docs: https://github.com/neil-the-nowledgeable/startd8-sdk/tree/main/docs
 
 # =============================================================================
 # Operational Context (synced to Kubernetes CRD)

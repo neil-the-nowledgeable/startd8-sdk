@@ -26,7 +26,7 @@ description: |
   v2.0.0: Updated from Phase 3 functional requirements with implementation details.
 
 owner: neilyashinsky
-repository: https://github.com/neilyashinsky/startd8-sdk
+repository: https://github.com/neil-the-nowledgeable/startd8-sdk
 
 labels:
   domain: workflow-orchestration

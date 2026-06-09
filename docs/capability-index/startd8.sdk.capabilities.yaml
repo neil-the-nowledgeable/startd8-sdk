@@ -18,7 +18,7 @@ description: |
   independently valuable.
 
 owner: neilyashinsky
-repository: https://github.com/neilyashinsky/startd8-sdk
+repository: https://github.com/neil-the-nowledgeable/startd8-sdk
 
 labels:
   domain: llm-orchestration

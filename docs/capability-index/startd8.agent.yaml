@@ -21,7 +21,7 @@ description: |
   Beaver (Amik) in the ContextCore expansion pack ecosystem.
 
 owner: force-multiplier-labs
-repository: https://github.com/neilyashinsky/startd8-sdk
+repository: https://github.com/neil-the-nowledgeable/startd8-sdk
 labels:
   domain: llm-orchestration
   tier: sdk
