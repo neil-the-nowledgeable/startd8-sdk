@@ -37,28 +37,15 @@ def _emit_yaml(data: dict) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
-def extract_manifests(
-    docs: Mapping[str, str],
-    *,
-    live_schema_text: Optional[str] = None,
-) -> ExtractionResult:
-    """Extract the assembly manifests from *docs* (label/path → markdown text).
+def _build_graph(
+    docs: Mapping[str, str], records: List[ExtractionRecord]
+) -> tuple:
+    """Parse every doc → merged :class:`EntityGraph`, recording per-value traceability.
 
-    *live_schema_text* — when the project already has an authored contract, the entities pass
-    runs in DIFF mode (FR-WPI-8): the doc-derived graph is compared, never emitted.
+    The entities pass merges across docs (plan + requirements may split the catalog); later docs
+    never silently override earlier entity blocks (``setdefault`` / dedup). Returns
+    ``(graph, per_doc_sections)`` — the sections are reused by the manifest passes downstream.
     """
-    import hashlib
-
-    result = ExtractionResult()
-    records: List[ExtractionRecord] = result.records
-    # FR-WPI-7: the report carries the kickoff-doc checksums, so downstream consumers (the
-    # wireframe's run_linkage) never need to read the seed (no-seed-coupling non-requirement).
-    result.source_docs = {
-        label: hashlib.sha256(text.encode("utf-8")).hexdigest() for label, text in docs.items()
-    }
-
-    # One section index per doc; the entities pass merges across docs (plan + requirements
-    # may split the catalog), later docs never silently override earlier entity blocks.
     graph = EntityGraph()
     per_doc_sections: List[tuple] = []
     for label, text in docs.items():
@@ -83,6 +70,42 @@ def extract_manifests(
                 for p in parents:
                     if p not in dst:
                         dst.append(p)
+    return graph, per_doc_sections
+
+
+def build_entity_graph(docs: Mapping[str, str]) -> EntityGraph:
+    """Public doc(s) → :class:`EntityGraph` — the schema-emit input (FR-EMIT-1).
+
+    Shared with :func:`extract_manifests` so the CLI emit path and the manifest path derive the
+    graph identically. Traceability records are computed but discarded here; callers that need them
+    (the report) go through :func:`extract_manifests`.
+    """
+    return _build_graph(docs, [])[0]
+
+
+def extract_manifests(
+    docs: Mapping[str, str],
+    *,
+    live_schema_text: Optional[str] = None,
+) -> ExtractionResult:
+    """Extract the assembly manifests from *docs* (label/path → markdown text).
+
+    *live_schema_text* — when the project already has an authored contract, the entities pass
+    runs in DIFF mode (FR-WPI-8): the doc-derived graph is compared, never emitted.
+    """
+    import hashlib
+
+    result = ExtractionResult()
+    records: List[ExtractionRecord] = result.records
+    # FR-WPI-7: the report carries the kickoff-doc checksums, so downstream consumers (the
+    # wireframe's run_linkage) never need to read the seed (no-seed-coupling non-requirement).
+    result.source_docs = {
+        label: hashlib.sha256(text.encode("utf-8")).hexdigest() for label, text in docs.items()
+    }
+
+    # One section index per doc; the entities pass merges across docs (plan + requirements
+    # may split the catalog), later docs never silently override earlier entity blocks.
+    graph, per_doc_sections = _build_graph(docs, records)
 
     if live_schema_text:
         result.contract_diff = diff_against_live(graph, live_schema_text)

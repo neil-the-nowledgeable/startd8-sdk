@@ -23,6 +23,24 @@ def header_standard(source_file: str, sha: str, kind: str) -> str:
     )
 
 
+def header_emitted_contract(source_file: str, sha: str) -> str:
+    """Provenance header for an EMITTED ``schema.prisma`` (OQ-PE-4 / FR-EMIT-5).
+
+    Unlike :func:`header_standard`, the emitted contract's *source is the requirements doc*, not the
+    schema itself, and it is regenerated via ``startd8 generate contract`` — not ``generate backend``
+    (which *consumes* the schema). The generic header would be self-referential here ("source of
+    truth: the Prisma schema" on the Prisma schema). The ``startd8-artifact: prisma-schema`` +
+    ``schema-sha256:`` lines are preserved verbatim so "derived vs hand-authored" stays decidable.
+    """
+    return (
+        f"# GENERATED from {source_file} — do not edit by hand; regenerate via\n"
+        f"#   `startd8 generate contract --requirements {source_file} --promote`.\n"
+        f"# startd8-artifact: prisma-schema\n"
+        f"# Source of truth: the requirements doc (this schema is derived from prose).\n"
+        f"# schema-sha256: {sha}"
+    )
+
+
 def header_pages(
     source_file: str,
     schema_sha: str,

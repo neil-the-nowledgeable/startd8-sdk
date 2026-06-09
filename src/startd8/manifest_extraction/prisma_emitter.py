@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 import re
 
-from ..backend_codegen._headers import header_standard
+from ..backend_codegen._headers import header_emitted_contract
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import PrismaField, PrismaModel, parse_prisma_schema
 from .entities import DocEntity, EntityGraph, JoinModel, _lower_camel
@@ -154,7 +154,7 @@ def render_prisma_schema(
 
     body = _PRISMA_PREAMBLE + "\n\n" + "\n\n".join(blocks) + "\n"
     sha = schema_sha256(body)
-    header = header_standard(source_file, sha, "prisma-schema")
+    header = header_emitted_contract(source_file, sha)
     text = header + "\n\n" + body
     return PrismaSchemaResult(
         text=text,

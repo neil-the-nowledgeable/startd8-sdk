@@ -8,7 +8,7 @@ fast and is unit-testable in isolation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -458,3 +458,140 @@ def views(
             console.print(f"[red]error:[/red] cannot write {target}: {exc}")
             raise typer.Exit(_EXIT_ERROR)
     console.print(f"[green]wrote[/green] {written} view file(s) under {out}")
+
+
+@generate_app.command("contract")
+def contract(
+    requirements: List[Path] = typer.Option(
+        ..., "--requirements", "-r",
+        help="Requirements/plan doc(s) — the source of truth. Repeatable (plan + requirements split).",
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="Run-dir for the gated DRAFT (default: a temp dir, printed)."),
+    live: Optional[Path] = typer.Option(
+        None, "--live", help="Current contract for the parity gate (default: auto-detect --contract-path)."),
+    contract_path: Path = typer.Option(
+        Path("prisma/schema.prisma"), "--contract-path",
+        help="Project contract path (promote target + parity auto-detect)."),
+    promote: bool = typer.Option(
+        False, "--promote",
+        help="FR-PE-7 explicit flip: copy the gated draft to --contract-path (only if the gate passes)."),
+    with_manifests: bool = typer.Option(
+        False, "--with-manifests",
+        help="Also re-derive the YAML manifests (pages/views/completeness/…) alongside the contract."),
+    check: bool = typer.Option(
+        False, "--check",
+        help="Gate only; write nothing to the project. Exit 0=ok / 1=drift|round-trip-fail / 2=error."),
+    json_out: bool = typer.Option(False, "--json", help="Emit the gate result as JSON."),
+):
+    """Emit `prisma/schema.prisma` from the requirements doc (FR-PE / FR-EMIT) — $0, no LLM.
+
+    The inverse of the other `generate` subcommands: they READ the schema; this one PRODUCES it
+    from prose. Default = a gated DRAFT written to a run-dir only (never the project tree); the gate
+    runs round-trip (FR-PE-6) + parity vs the live contract. `--promote` performs the explicit,
+    human-triggered flip to --contract-path (FR-PE-7), only when the gate passes.
+    """
+    import json as _json
+    import tempfile
+
+    from .manifest_extraction.extract import build_entity_graph, extract_manifests
+    from .manifest_extraction.prisma_emitter import emit_schema_draft, promote_schema
+
+    # 1. read the source doc(s) — label = path (provenance header + traceability)
+    docs: dict = {}
+    for req in requirements:
+        try:
+            docs[str(req)] = req.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read requirements doc {req}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    # 2. live contract for parity (explicit --live, else auto-detect the project contract)
+    live_text: Optional[str] = None
+    live_src = live if live is not None else (contract_path if contract_path.exists() else None)
+    if live_src is not None:
+        try:
+            live_text = live_src.read_text(encoding="utf-8")
+        except OSError as exc:
+            console.print(f"[red]error:[/red] cannot read live contract {live_src}: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    # 3. doc → graph → gated draft (FR-EMIT-1/2). --check writes the draft to a throwaway dir so
+    #    nothing lands in the project tree; the gate result is identical.
+    try:
+        graph = build_entity_graph(docs)
+    except Exception as exc:  # malformed entity blocks — fail loud, never an empty graph
+        console.print(f"[red]error:[/red] could not parse entities from requirements: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    run_dir = Path(tempfile.mkdtemp(prefix="startd8-emit-")) if (check or out is None) else out
+    source_file = str(requirements[0])  # provenance header names the (primary) requirements doc
+    res = emit_schema_draft(graph, str(run_dir), live_text=live_text, source_file=source_file)
+
+    # 4. report the gate (FR-EMIT-2/7)
+    if json_out:
+        console.print_json(_json.dumps({
+            "ok": res.ok, "round_trips": res.round_trips, "models": res.models,
+            "parity_drift": list(res.parity_drift),
+            "unrenderable": [f"{u.entity}.{u.field}: {u.reason}" for u in res.unrenderable],
+            "draft_path": res.draft_path,
+        }))
+    else:
+        console.print(f"models rendered: {res.models}")
+        console.print(f"round-trips: {'[green]yes[/green]' if res.round_trips else '[red]no[/red]'}")
+        if live_text is not None:
+            if res.parity_drift:
+                console.print(f"[yellow]parity drift ({len(res.parity_drift)}):[/yellow]")
+                for d in res.parity_drift:
+                    console.print(f"  - {d}")
+            else:
+                console.print("parity: [green]clean[/green] (matches the live contract)")
+        for u in res.unrenderable:  # FR-EMIT-7: never silently drop
+            console.print(f"[yellow]unrenderable[/yellow]: {u.entity}.{u.field} — {u.reason}")
+        if res.draft_path:
+            console.print(f"draft: {res.draft_path}")
+
+    # 5. --check: gate only, nothing written to the project (FR-EMIT-4)
+    if check:
+        raise typer.Exit(0 if res.ok else 1)
+
+    # 6. optional manifest re-derivation into the run-dir (OQ-EMIT-1)
+    manifest_texts: dict = {}
+    if with_manifests:
+        try:
+            mres = extract_manifests(docs, live_schema_text=live_text)
+            manifest_texts = mres.manifests
+            for fname, text in manifest_texts.items():
+                (run_dir / fname).write_text(text, encoding="utf-8")
+            console.print(f"[green]derived[/green] {len(manifest_texts)} manifest(s) into {run_dir}")
+        except Exception as exc:
+            console.print(f"[red]error:[/red] manifest derivation failed: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+
+    # 7. --promote: explicit, human-triggered flip (FR-PE-7/FR-EMIT-3). The blocking gate is
+    #    round-trip + non-empty — parity DRIFT is the intended change being applied (you promote
+    #    *because* the prose changed), so it is surfaced, not blocked. (Strict parity is `--check`.)
+    if promote:
+        if not res.round_trips or res.models == 0:
+            console.print("[red]refusing to promote[/red]: the emitted schema did not round-trip "
+                          f"to a non-empty model set (models={res.models}) — fix the requirements "
+                          "doc (no parseable entities?) before flipping the contract.")
+            raise typer.Exit(1)
+        if live_text is not None and res.parity_drift:
+            console.print(f"[cyan]applying {len(res.parity_drift)} change(s)[/cyan] vs the live contract.")
+        try:
+            target = promote_schema(str(run_dir), str(contract_path))
+        except OSError as exc:
+            console.print(f"[red]error:[/red] promote failed: {exc}")
+            raise typer.Exit(_EXIT_ERROR)
+        console.print(f"[green]promoted[/green] contract → {target}")
+        if with_manifests:  # land manifests next to the contract so the $0 cascade reads them
+            for fname, text in manifest_texts.items():
+                (contract_path.parent / fname).write_text(text, encoding="utf-8")
+            console.print(
+                f"[green]promoted[/green] {len(manifest_texts)} manifest(s) → {contract_path.parent}")
+        raise typer.Exit(0)
+
+    # 8. draft-only: a valid (round-tripping, non-empty) draft is success; parity drift is
+    #    informational here (use `--check` for the strict in-sync gate).
+    raise typer.Exit(0 if (res.round_trips and res.models > 0) else 1)
