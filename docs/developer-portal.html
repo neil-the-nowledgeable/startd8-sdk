@@ -1,0 +1,1185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>startd8 SDK - Developer Portal</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #7c3aed;
+            --accent: #06b6d4;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+            padding: 1rem 2rem;
+        }
+
+        nav .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        nav ul {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+        }
+
+        nav a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        nav a:hover {
+            color: var(--text);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 8rem 2rem 4rem;
+            text-align: center;
+            background: linear-gradient(180deg, var(--bg) 0%, var(--bg-card) 100%);
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--text) 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .subtitle {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto 2rem;
+        }
+
+        .hero-badges {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+        }
+
+        .badge {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .badge.highlight {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-card);
+            border-color: var(--text-muted);
+        }
+
+        /* Section Styling */
+        section {
+            padding: 5rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        section h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+
+        section .section-subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            margin-bottom: 3rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Providers Grid */
+        .providers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .provider-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.2s;
+        }
+
+        .provider-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-4px);
+        }
+
+        .provider-card .icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .provider-card h3 {
+            font-size: 1rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .provider-card p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Features Grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            transition: all 0.2s;
+        }
+
+        .feature-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--primary);
+        }
+
+        .feature-card .icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature-card .tag {
+            display: inline-block;
+            background: rgba(37, 99, 235, 0.2);
+            color: var(--primary);
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            margin-right: 0.5rem;
+        }
+
+        /* Code Block */
+        .code-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+
+        .code-header {
+            background: var(--bg);
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .code-header .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .code-header .dot.red { background: #ef4444; }
+        .code-header .dot.yellow { background: #f59e0b; }
+        .code-header .dot.green { background: #10b981; }
+
+        .code-header span {
+            margin-left: auto;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+
+        .code-section {
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.4rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            z-index: 10;
+        }
+
+        .copy-btn:hover {
+            background: var(--bg-card-hover);
+            color: var(--text);
+            border-color: var(--primary);
+        }
+
+        .copy-btn.copied {
+            background: var(--success);
+            border-color: var(--success);
+            color: white;
+        }
+
+        pre {
+            padding: 1.5rem;
+            overflow-x: auto;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+
+        pre code {
+            color: var(--text);
+        }
+
+        .keyword { color: #c678dd; }
+        .string { color: #98c379; }
+        .comment { color: #5c6370; }
+        .function { color: #61afef; }
+        .class { color: #e5c07b; }
+        .number { color: #d19a66; }
+
+        /* Value Props */
+        .value-props {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .value-card {
+            text-align: center;
+        }
+
+        .value-card .metric {
+            font-size: 3rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .value-card h4 {
+            margin: 0.5rem 0;
+        }
+
+        .value-card p {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* CLI Section */
+        .cli-commands {
+            display: grid;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .cli-command {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .cli-command code {
+            font-family: 'SF Mono', Monaco, monospace;
+            color: var(--accent);
+            white-space: nowrap;
+        }
+
+        .cli-command .desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        /* Architecture */
+        .architecture-diagram {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin: 2rem 0;
+        }
+
+        .arch-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .arch-box {
+            background: var(--bg);
+            border: 2px solid var(--border);
+            border-radius: 0.5rem;
+            padding: 1rem 1.5rem;
+            text-align: center;
+            min-width: 120px;
+        }
+
+        .arch-box.highlight {
+            border-color: var(--primary);
+            background: rgba(37, 99, 235, 0.1);
+        }
+
+        .arch-arrow {
+            color: var(--text-muted);
+            font-size: 1.5rem;
+        }
+
+        /* Footer */
+        footer {
+            background: var(--bg-card);
+            border-top: 1px solid var(--border);
+            padding: 3rem 2rem;
+            text-align: center;
+            color: var(--text-muted);
+        }
+
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+
+            nav ul {
+                display: none;
+            }
+
+            .arch-flow {
+                flex-direction: column;
+            }
+
+            .arch-arrow {
+                transform: rotate(90deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <div class="logo">StartD8</div>
+            <ul>
+                <li><a href="#codegen">Code Generation</a></li>
+                <li><a href="#features">Features</a></li>
+                <li><a href="#quickstart">Quick Start</a></li>
+                <li><a href="#cli">CLI</a></li>
+                <li><a href="#session-tracking">Observability</a></li>
+                <li><a href="https://github.com/neil-the-nowledgeable/startd8">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <h1>A harness for LLM-assisted development</h1>
+        <p class="subtitle">
+            Turn a requirements doc into working software via a Requirements&nbsp;&rarr;&nbsp;Capabilities
+            pipeline &mdash; maximizing deterministic ($0) code generation and using LLMs only where they
+            add value. Plus multi-LLM benchmarking and cloud/edge model evaluation.
+        </p>
+        <div class="hero-badges">
+            <span class="badge highlight">Python 3.9+</span>
+            <span class="badge">v0.4.0</span>
+            <span class="badge">Equitable Use License v1.0</span>
+            <span class="badge highlight">$0 deterministic codegen</span>
+        </div>
+        <div class="cta-buttons">
+            <a href="#codegen" class="btn btn-primary">Generate an app</a>
+            <a href="https://github.com/neil-the-nowledgeable/startd8" class="btn btn-secondary">View on GitHub</a>
+        </div>
+    </section>
+
+    <!-- Deterministic Code Generation -->
+    <section id="codegen">
+        <h2>Deterministic Code Generation</h2>
+        <p class="section-subtitle">
+            The headline capability: project one Prisma data-model contract into a working all-Python
+            app (Pydantic + SQLModel + FastAPI + HTMX) at <strong>$0 LLM cost</strong>. The deterministic
+            cascade is ~89% of an app; language models are used only for the integration glue.
+        </p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="icon">&#9889;</div>
+                <h3>Backend from a contract</h3>
+                <p>One <code>.prisma</code> &rarr; Pydantic models, SQLModel tables, FastAPI CRUD, HTMX UI, export, AI-schemas and tests. Idempotent and drift-checkable.</p>
+                <span class="tag">generate backend</span>
+                <span class="tag">backend_codegen</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128208;</div>
+                <h3>Wireframe (preview)</h3>
+                <p>See exactly what the $0 cascade will build &mdash; and what is not yet defined &mdash; before you run it. Read-only, advisory, <code>--json</code> for CI.</p>
+                <span class="tag">wireframe</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#127959;&#65039;</div>
+                <h3>Scaffold &amp; views</h3>
+                <p>Emit project plumbing (pyproject / logging / alembic / Dockerfile) and composite/relational views (dashboard / board / workspace) from declarative inputs.</p>
+                <span class="tag">generate scaffold</span>
+                <span class="tag">generate views</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#127912;</div>
+                <h3>Polish &amp; repair</h3>
+                <p>Apply an accessible design theme to a built app ($0), and run deterministic post-generation repair across 7 language profiles.</p>
+                <span class="tag">polish</span>
+                <span class="tag">repair</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#129520;</div>
+                <h3>Prime Contractor</h3>
+                <p>The active multi-feature construction path for the LLM integration passes &mdash; tier-routed (template &rarr; Haiku &rarr; Sonnet), with checkpoint/resume and Kaizen quality feedback.</p>
+                <span class="tag">PrimeContractorWorkflow</span>
+            </div>
+            <div class="feature-card">
+                <div class="icon">&#128260;</div>
+                <h3>Capability Delivery Pipeline</h3>
+                <p>Drive requirements doc + plan &rarr; working app end to end via <code>.cap-dev-pipe/</code>. The deterministic <code>generate</code> cascade is $0 and not a pipeline pass.</p>
+                <span class="tag">cap-dev-pipe</span>
+            </div>
+        </div>
+
+        <div class="code-section" style="margin-top: 2rem;">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Deterministic cascade ($0, no LLM)</span>
+            </div>
+            <pre><code><span class="comment"># Preview what the $0 cascade will build (read-only; --json for CI)</span>
+startd8 wireframe --inputs assembly-inputs.yaml
+
+<span class="comment"># Generate the full backend from the Prisma contract</span>
+startd8 generate backend --schema schema.prisma --out ./app
+
+<span class="comment"># Project plumbing + composite views</span>
+startd8 generate scaffold --inputs app.yaml   --out ./app
+startd8 generate views    --inputs views.yaml --out ./app
+
+<span class="comment"># Apply an accessible design theme ($0); CI drift check</span>
+startd8 polish ./app
+startd8 generate backend --schema schema.prisma --check  <span class="comment"># exit 1 on drift</span></code></pre>
+        </div>
+    </section>
+
+    <!-- Supported Providers -->
+    <section id="providers">
+        <h2>Supported Providers</h2>
+        <p class="section-subtitle">One unified interface, 8 providers &mdash; cloud, edge/local, and self-hosted</p>
+
+        <div class="providers-grid">
+            <div class="provider-card">
+                <div class="icon">🟠</div>
+                <h3>Anthropic</h3>
+                <p>Claude 4.x (Opus/Sonnet/Haiku)</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🟢</div>
+                <h3>OpenAI</h3>
+                <p>GPT-4o, GPT-4.x</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🔵</div>
+                <h3>Google</h3>
+                <p>Gemini 2.0</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🟣</div>
+                <h3>Mistral</h3>
+                <p>Mistral Large, etc.</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">⚪</div>
+                <h3>Ollama</h3>
+                <p>Edge/local: Llama, Mistral…</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🟩</div>
+                <h3>NVIDIA NIM</h3>
+                <p>Self-hosted inference</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🔌</div>
+                <h3>OpenAI-compatible</h3>
+                <p>Any compatible endpoint</p>
+            </div>
+            <div class="provider-card">
+                <div class="icon">🧪</div>
+                <h3>Mock</h3>
+                <p>Testing & Development</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Key Features -->
+    <section id="features">
+        <h2>Agent Framework &amp; Evaluation</h2>
+        <p class="section-subtitle">The other half of the toolkit: benchmark, evaluate, and orchestrate LLMs</p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="icon">⚡</div>
+                <h3>Benchmarking</h3>
+                <p>Compare responses across multiple models simultaneously. Get detailed metrics on speed, token usage, and cost.</p>
+                <span class="tag">BenchmarkRunner</span>
+                <span class="tag">ComparisonReport</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">💰</div>
+                <h3>Cost Tracking</h3>
+                <p>Track API costs in real-time with budget management, alerts, and optimization recommendations.</p>
+                <span class="tag">CostTracker</span>
+                <span class="tag">BudgetManager</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">🔗</div>
+                <h3>Pipeline Orchestration</h3>
+                <p>Chain multiple agents together for complex workflows. Built-in templates for common patterns.</p>
+                <span class="tag">Pipeline</span>
+                <span class="tag">WorkflowTemplates</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📄</div>
+                <h3>Document Enhancement</h3>
+                <p>Multi-agent document refinement with automatic versioning and intermediate saves.</p>
+                <span class="tag">DocumentEnhancementChain</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📝</div>
+                <h3>Prompt Version Control</h3>
+                <p>Store, version, and tag your prompts. Track which prompts produce the best results.</p>
+                <span class="tag">AgentFramework</span>
+                <span class="tag">Prompt</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📦</div>
+                <h3>Job Queue</h3>
+                <p>Batch process prompts with a file-based job queue. Watch folders for automated processing.</p>
+                <span class="tag">JobQueue</span>
+                <span class="tag">queue watch</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">🎯</div>
+                <h3>Skills / MCP</h3>
+                <p>Execute Claude Skills via Model Context Protocol for specialized task handling.</p>
+                <span class="tag">SkillAgent</span>
+                <span class="tag">MCP</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📡</div>
+                <h3>Event System</h3>
+                <p>Observable workflows with event bus. Hook into agent calls, benchmarks, and pipelines.</p>
+                <span class="tag">EventBus</span>
+                <span class="tag">EventType</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">🔄</div>
+                <h3>Retry & Resilience</h3>
+                <p>Built-in retry with exponential backoff. Handle transient API failures gracefully.</p>
+                <span class="tag">RetryConfig</span>
+                <span class="tag">enable_retry</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📊</div>
+                <h3>Session Tracking</h3>
+                <p>Monitor active sessions with Prometheus metrics. Track context usage, costs, and truncations in real-time.</p>
+                <span class="tag">Prometheus</span>
+                <span class="tag">Grafana</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section id="quickstart">
+        <h2>Quick Start</h2>
+        <p class="section-subtitle">Get up and running in minutes</p>
+
+        <div class="code-section">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Installation</span>
+            </div>
+            <pre><code><span class="comment"># Install with pip</span>
+pip install startd8
+
+<span class="comment"># Install with all providers</span>
+pip install startd8[all]
+
+<span class="comment"># Or install specific providers</span>
+pip install startd8[anthropic,openai]</code></pre>
+        </div>
+
+        <div class="code-section" style="margin-top: 1.5rem;">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Basic Usage</span>
+            </div>
+            <pre><code><span class="keyword">from</span> startd8 <span class="keyword">import</span> AgentFramework, BenchmarkRunner
+<span class="keyword">from</span> startd8.providers <span class="keyword">import</span> ProviderRegistry
+
+<span class="comment"># Initialize framework</span>
+framework = <span class="class">AgentFramework</span>()
+<span class="class">ProviderRegistry</span>.<span class="function">discover</span>()
+
+<span class="comment"># Create a versioned prompt</span>
+prompt = framework.<span class="function">create_prompt</span>(
+    content=<span class="string">"Explain quantum computing in simple terms"</span>,
+    version=<span class="string">"1.0.0"</span>,
+    tags=[<span class="string">"science"</span>, <span class="string">"explainer"</span>]
+)
+
+<span class="comment"># Get providers and create agents</span>
+anthropic = <span class="class">ProviderRegistry</span>.<span class="function">get_provider</span>(<span class="string">"anthropic"</span>)
+openai = <span class="class">ProviderRegistry</span>.<span class="function">get_provider</span>(<span class="string">"openai"</span>)
+
+anthropic.<span class="function">validate_config</span>({})
+openai.<span class="function">validate_config</span>({})
+
+agents = [
+    anthropic.<span class="function">create_agent</span>(<span class="string">"claude-sonnet-4-20250514"</span>),
+    openai.<span class="function">create_agent</span>(<span class="string">"gpt-4o"</span>),
+]
+
+<span class="comment"># Run benchmark</span>
+runner = <span class="class">BenchmarkRunner</span>(framework)
+results = runner.<span class="function">run_benchmark</span>(
+    prompt_content=prompt.content,
+    agents=agents,
+    benchmark_name=<span class="string">"quantum-explainer"</span>
+)
+
+<span class="comment"># View comparison</span>
+<span class="keyword">print</span>(f<span class="string">"Fastest: {results['comparison']['rankings']['by_speed'][0]['agent']}"</span>)
+<span class="keyword">print</span>(f<span class="string">"Total cost: ${sum(r['cost_estimate'] for r in results['comparison']['responses']):.4f}"</span>)</code></pre>
+        </div>
+
+        <div class="value-props">
+            <div class="value-card">
+                <div class="metric">~89%</div>
+                <h4>Deterministic</h4>
+                <p>Of an app generated at $0 LLM cost</p>
+            </div>
+            <div class="value-card">
+                <div class="metric">8</div>
+                <h4>LLM Providers</h4>
+                <p>Cloud, edge/local, and self-hosted</p>
+            </div>
+            <div class="value-card">
+                <div class="metric">100%</div>
+                <h4>Async Support</h4>
+                <p>Full async/await for all operations</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- CLI Section -->
+    <section id="cli">
+        <h2>Powerful CLI</h2>
+        <p class="section-subtitle">Full-featured command-line interface with Rich terminal output</p>
+
+        <div class="cli-commands">
+            <div class="cli-command">
+                <code>startd8 wireframe --inputs assembly-inputs.yaml</code>
+                <span class="desc">$0 preview of what the deterministic cascade will build</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 generate backend --schema schema.prisma --out ./app</code>
+                <span class="desc">Render the full all-Python backend ($0, no LLM)</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 generate scaffold|views --inputs ... --out ./app</code>
+                <span class="desc">Emit project plumbing / composite views ($0)</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 polish ./app</code>
+                <span class="desc">Apply an accessible design theme ($0)</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 compare-models --seed seed.json --model anthropic:... --model ollama:...</code>
+                <span class="desc">Run a seed across models (cloud + edge/local) and rank</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 run-benchmark &lt;prompt-id&gt; --agent anthropic:claude-sonnet-4-20250514</code>
+                <span class="desc">Benchmark prompts across models</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 compare &lt;prompt-id&gt; --output report.md</code>
+                <span class="desc">Generate comparison report</span>
+            </div>
+            <div class="cli-command">
+                <code>startd8 tui</code>
+                <span class="desc">Launch interactive terminal UI</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture -->
+    <section id="architecture">
+        <h2>Architecture</h2>
+        <p class="section-subtitle">Clean, extensible design with provider abstraction</p>
+
+        <div class="architecture-diagram">
+            <p style="text-align:center; color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">Deterministic path ($0, no LLM)</p>
+            <div class="arch-flow">
+                <div class="arch-box">
+                    <strong>.prisma</strong>
+                    <br><small>data-model contract</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box highlight">
+                    <strong>backend_codegen</strong>
+                    <br><small>deterministic cascade</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box">
+                    <strong>Working app</strong>
+                    <br><small>Pydantic·SQLModel·FastAPI·HTMX</small>
+                </div>
+            </div>
+            <p style="text-align:center; color: var(--text-muted); margin: 1.5rem 0 1rem; font-size: 0.9rem;">Agent path (LLM integration + evaluation)</p>
+            <div class="arch-flow">
+                <div class="arch-box">
+                    <strong>Your Code</strong>
+                    <br><small>SDK / CLI</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box highlight">
+                    <strong>AgentFramework</strong>
+                    <br><small>Prime Contractor · pipelines</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box">
+                    <strong>ProviderRegistry</strong>
+                    <br><small>Discovery</small>
+                </div>
+                <span class="arch-arrow">→</span>
+                <div class="arch-box">
+                    <strong>Providers</strong>
+                    <br><small>8 · cloud + edge/local</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="features-grid" style="margin-top: 2rem;">
+            <div class="feature-card">
+                <h3>Provider Pattern</h3>
+                <p>Providers are registered via entry points. Add custom providers without modifying core code.</p>
+                <pre style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.8rem;"><code>[project.entry-points."startd8.providers"]
+anthropic = "startd8.providers.anthropic:AnthropicProvider"
+openai = "startd8.providers.openai:OpenAIProvider"
+
+[project.entry-points."startd8.languages"]
+python = "startd8.languages.python:PythonLanguageProfile"
+prisma = "startd8.languages.prisma:PrismaLanguageProfile"</code></pre>
+            </div>
+
+            <div class="feature-card">
+                <h3>Agent Specs</h3>
+                <p>Simple <code>provider:model</code> format for specifying agents anywhere.</p>
+                <pre style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.8rem;"><code>anthropic:claude-sonnet-4-20250514
+openai:gpt-4o
+gemini:gemini-2.0-flash
+ollama:llama3
+mock:mock-model</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Workflow Templates -->
+    <section id="workflows">
+        <h2>Built-in Workflow Templates</h2>
+        <p class="section-subtitle">Common multi-agent patterns ready to use</p>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <h3>Planner → Implementer</h3>
+                <p>Design phase followed by implementation guidance. Great for feature planning.</p>
+                <code style="color: var(--accent);">WorkflowTemplates.planner_implementer()</code>
+            </div>
+
+            <div class="feature-card">
+                <h3>Code Review</h3>
+                <p>Review code for issues, then suggest specific improvements.</p>
+                <code style="color: var(--accent);">WorkflowTemplates.code_review()</code>
+            </div>
+
+            <div class="feature-card">
+                <h3>Design Review Chain</h3>
+                <p>Draft → Review → Final Polish. Three-stage document refinement.</p>
+                <code style="color: var(--accent);">WorkflowTemplates.design_review_chain()</code>
+            </div>
+
+            <div class="feature-card">
+                <h3>Error Analysis</h3>
+                <p>Analyze errors, identify root causes, and suggest solutions.</p>
+                <code style="color: var(--accent);">WorkflowTemplates.error_analysis_chain()</code>
+            </div>
+        </div>
+    </section>
+
+    <!-- Cost Tracking -->
+    <section id="costs">
+        <h2>Cost Tracking & Budget Management</h2>
+        <p class="section-subtitle">Never exceed your LLM budget again</p>
+
+        <div class="code-section">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Cost Tracking Example</span>
+            </div>
+            <pre><code><span class="keyword">from</span> startd8.costs <span class="keyword">import</span> CostTracker, BudgetManager, CostAnalytics
+
+<span class="comment"># Initialize cost tracking</span>
+tracker = <span class="class">CostTracker</span>()
+budget = <span class="class">BudgetManager</span>(tracker)
+
+<span class="comment"># Set a monthly budget</span>
+budget.<span class="function">set_budget</span>(
+    name=<span class="string">"monthly-limit"</span>,
+    amount=<span class="number">100.00</span>,
+    period=<span class="string">"monthly"</span>,
+    alert_threshold=<span class="number">0.8</span>  <span class="comment"># Alert at 80%</span>
+)
+
+<span class="comment"># Track costs automatically with agents</span>
+agent = anthropic.<span class="function">create_agent</span>(
+    <span class="string">"claude-sonnet-4-20250514"</span>,
+    cost_tracker=tracker
+)
+
+<span class="comment"># Get analytics and optimization recommendations</span>
+analytics = <span class="class">CostAnalytics</span>(tracker)
+summary = analytics.<span class="function">get_summary</span>()
+recommendations = analytics.<span class="function">get_optimizations</span>()</code></pre>
+        </div>
+    </section>
+
+    <!-- Session Tracking -->
+    <section id="session-tracking">
+        <h2>Session Tracking & Observability</h2>
+        <p class="section-subtitle">OpenTelemetry traces/metrics/logs to a Loki/Grafana stack (with Mimir/Tempo), plus per-provider cost tracking</p>
+
+        <div class="code-section">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Session Tracking Example</span>
+            </div>
+            <pre><code><span class="keyword">from</span> startd8 <span class="keyword">import</span> AgentFramework
+
+<span class="comment"># Enable session tracking + OpenTelemetry export</span>
+framework = <span class="class">AgentFramework</span>(
+    enable_session_tracking=<span class="keyword">True</span>,
+    enable_otel=<span class="keyword">True</span>  <span class="comment"># traces/metrics/logs via OTLP → Loki/Grafana</span>
+)
+
+<span class="comment"># Start a tracked session</span>
+session_id = framework.<span class="function">start_session</span>(
+    agent_name=<span class="string">"claude"</span>,
+    model=<span class="string">"claude-sonnet-4-20250514"</span>
+)
+
+<span class="comment"># Get session summary</span>
+summary = framework.<span class="function">get_session_summary</span>()
+<span class="keyword">print</span>(f<span class="string">"Active sessions: {summary['active_sessions']}"</span>)
+<span class="keyword">print</span>(f<span class="string">"Context usage: {summary['average_context_usage']:.1%}"</span>)
+<span class="keyword">print</span>(f<span class="string">"Total cost: ${summary['total_cost']:.4f}"</span>)
+
+<span class="comment"># End session when done</span>
+framework.<span class="function">end_session</span>(session_id)</code></pre>
+        </div>
+
+        <div class="features-grid" style="margin-top: 2rem;">
+            <div class="feature-card">
+                <h3>Metrics (via OTel)</h3>
+                <p>Exported over OTLP to the Mimir/Grafana stack. CLI: <code>startd8 otel-status</code> / <code>otel-configure</code></p>
+                <table style="width: 100%; margin-top: 1rem; font-size: 0.85rem;">
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_active_sessions</code></td>
+                        <td style="color: var(--text-muted);">Gauge</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_requests_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_tokens_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_response_time_ms</code></td>
+                        <td style="color: var(--text-muted);">Histogram</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_context_usage_ratio</code></td>
+                        <td style="color: var(--text-muted);">Gauge</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_truncations_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 0.5rem 0;"><code>startd8_cost_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="feature-card">
+                <h3>Grafana Dashboard</h3>
+                <p>Pre-built dashboard at <code>dashboards/startd8-metrics.json</code></p>
+                <ul style="margin-top: 1rem; padding-left: 1.5rem; color: var(--text-muted); font-size: 0.9rem;">
+                    <li>Overview KPIs (sessions, requests, tokens, cost)</li>
+                    <li>Session trends by agent/model</li>
+                    <li>Token consumption over time</li>
+                    <li>Response time percentiles (P50/P90/P99)</li>
+                    <li>Context usage with capacity warnings</li>
+                </ul>
+                <p style="margin-top: 1rem; font-size: 0.85rem;">
+                    <span style="color: var(--accent);">Live:</span>
+                    <code>http://localhost:3000/d/startd8-sdk-metrics</code>
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Environment Variables -->
+    <section id="config">
+        <h2>Configuration</h2>
+        <p class="section-subtitle">Simple environment-based configuration</p>
+
+        <div class="code-section">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>.env</span>
+            </div>
+            <pre><code><span class="comment"># Required for each provider you use</span>
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=...
+MISTRAL_API_KEY=...
+
+<span class="comment"># Optional: edge/local + self-hosted</span>
+OLLAMA_HOST=http://localhost:11434</code></pre>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <p style="margin-bottom: 1rem;">
+            <strong>startd8 SDK</strong> v0.4.0 — Equitable Use License v1.0
+        </p>
+        <p>
+            <a href="https://github.com/neil-the-nowledgeable/startd8">GitHub</a> ·
+            <a href="https://github.com/neil-the-nowledgeable/startd8/issues">Issues</a> ·
+            <a href="https://github.com/neil-the-nowledgeable/startd8/blob/main/docs/API_REFERENCE_v1.md">API Reference</a>
+        </p>
+        <p style="margin-top: 1rem; font-size: 0.85rem;">
+            A software-engineering harness for LLM-assisted development &mdash; deterministic-first.
+        </p>
+    </footer>
+
+    <script>
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // Add copy buttons to all code sections
+        document.querySelectorAll('.code-section').forEach(section => {
+            const pre = section.querySelector('pre');
+            if (!pre) return;
+
+            const btn = document.createElement('button');
+            btn.className = 'copy-btn';
+            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy';
+
+            btn.addEventListener('click', async () => {
+                const code = pre.querySelector('code');
+                const text = code ? code.textContent : pre.textContent;
+
+                try {
+                    await navigator.clipboard.writeText(text);
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
+                    btn.classList.add('copied');
+
+                    setTimeout(() => {
+                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy';
+                        btn.classList.remove('copied');
+                    }, 2000);
+                } catch (err) {
+                    btn.textContent = 'Failed';
+                    setTimeout(() => {
+                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy';
+                    }, 2000);
+                }
+            });
+
+            section.appendChild(btn);
+        });
+    </script>
+</body>
+</html>
