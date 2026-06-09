@@ -216,7 +216,6 @@ _INT_PK_TYPES = frozenset({"Int", "BigInt"})
 # one literal so the emitted module reads as a coherent program, not codegen
 # confetti. Placeholders: {tables} {pk_map}.
 _ROUTE_SMOKE_BODY = '''\
-import os
 import re
 import sys
 import tempfile
@@ -230,20 +229,34 @@ _testclient = pytest.importorskip("fastapi.testclient")
 pytest.importorskip("sqlmodel")
 pytest.importorskip("httpx")
 
-# Isolate the DB BEFORE the app binds its engine. No-op when another test
-# module already imported app.db (then this suite shares that engine and
-# resets rows around itself — the documented test-user lifecycle).
-if "app.db" not in sys.modules and "DATABASE_URL" not in os.environ:
-    os.environ["DATABASE_URL"] = (
-        "sqlite:///" + str(Path(tempfile.mkdtemp(prefix="route-smoke-")) / "app.db")
-    )
-
 from fastapi.routing import APIRoute  # noqa: E402
-from sqlmodel import Session, delete, select  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
+from sqlmodel import Session, SQLModel, delete, select  # noqa: E402
 
 from app import tables  # noqa: E402
-from app.db import engine, init_db  # noqa: E402
+from app.db import get_session  # noqa: E402
 from app.main import app  # noqa: E402
+
+# F-12: this suite's _reset() DELETEs every table. It MUST run against a
+# dedicated, isolated database — NEVER the app's real engine. The old
+# conditional isolation no-op'd whenever another test module imported app.db
+# first, so _reset ran against the operator's production `app.db` and emptied
+# it (a regen's pytest run wiped a real 116-row value model + 4 artifacts).
+# Fix: own temp engine, UNCONDITIONALLY, plus a get_session dependency override
+# so the seed/reset writes AND the routes under test both use the temp DB. The
+# real app.db engine is never written to here (the app import only create_all's
+# it via the lifespan, which is harmless/idempotent).
+_smoke_db = Path(tempfile.mkdtemp(prefix="route-smoke-")) / "smoke.db"
+_engine = create_engine(f"sqlite:///{{_smoke_db}}")
+SQLModel.metadata.create_all(_engine)
+
+
+def _override_get_session():
+    with Session(_engine) as s:
+        yield s
+
+
+app.dependency_overrides[get_session] = _override_get_session
 
 # Baked from the contract: every entity table (reset/seed surface) and the
 # single-column-PK entities (route param filling + PK synthesis on seed rows).
@@ -334,15 +347,14 @@ def test_every_get_route_smokes(case_id, seed_path):
     suite: the empty fixture proves empty states render; populated fixtures
     prove rows render. Unfillable parameterized routes are skipped, not failed.
     """
-    init_db()
-    with Session(engine) as session:
+    with Session(_engine) as session:
         _reset(session)
         if seed_path is not None:
             _load_rows(session, seed_path)
 
     failures, checked = [], 0
     try:
-        with _testclient.TestClient(app) as client, Session(engine) as session:
+        with _testclient.TestClient(app) as client, Session(_engine) as session:
             for path in _get_paths():
                 target = _fill_path(path, session)
                 if target is None:
@@ -358,7 +370,7 @@ def test_every_get_route_smokes(case_id, seed_path):
                     elif "Traceback (most recent call last)" in body:
                         failures.append(f"GET {{target}} -> 200 with a traceback body")
     finally:
-        with Session(engine) as session:
+        with Session(_engine) as session:
             _reset(session)
 
     assert checked > 0, "route walk found no smokable GET routes"

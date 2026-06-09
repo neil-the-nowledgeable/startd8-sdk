@@ -127,6 +127,46 @@ class TestGeneratedSuiteRuns:
         assert "test-user-empty" in proc.stdout
         assert "test-user-full" in proc.stdout
 
+    def test_route_smoke_never_wipes_the_real_db(self, tmp_path):
+        """F-12: running the suite must NOT touch the operator's real app.db, even when
+        app.db is imported/bound first. Pre-seed the real ./app.db with a sentinel row,
+        run the full suite, and assert the row survives (the regression that emptied a
+        real 116-row model on a regen's pytest run)."""
+        pytest.importorskip("fastapi")
+        pytest.importorskip("sqlmodel")
+        pytest.importorskip("jinja2")
+        pytest.importorskip("multipart")
+        pytest.importorskip("httpx")
+        pytest.importorskip("yaml")
+
+        self._generate(tmp_path)
+        # Seed the REAL app.db (sqlite:///./app.db, relative to cwd) with a sentinel,
+        # then run the route-smoke suite, then re-read — all in one subprocess so the
+        # real engine is bound (the exact condition that no-op'd the old guard).
+        driver = (
+            "import sys; sys.path.insert(0, '.')\n"
+            "from sqlmodel import Session, select\n"
+            "from app.db import engine, init_db\n"
+            "from app import tables as t\n"
+            "init_db()\n"
+            "with Session(engine) as s:\n"
+            "    s.add(t.ProofPoint(id='keepme', title='real user data')); s.commit()\n"
+            "import pytest\n"
+            "rc = pytest.main(['tests/test_route_smoke.py', '-q'])\n"
+            "with Session(engine) as s:\n"
+            "    survived = s.get(t.ProofPoint, 'keepme') is not None\n"
+            "print('SENTINEL_SURVIVED' if survived else 'SENTINEL_WIPED')\n"
+        )
+        (tmp_path / "_f12_driver.py").write_text(driver)
+        proc = subprocess.run(
+            [sys.executable, "_f12_driver.py"],
+            cwd=tmp_path, capture_output=True, text=True, timeout=300,
+        )
+        assert "SENTINEL_SURVIVED" in proc.stdout, (
+            f"route-smoke wiped the real app.db!\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+        assert "SENTINEL_WIPED" not in proc.stdout
+
     def test_generated_suite_catches_bad_route(self, tmp_path):
         """A user router that 500s must FAIL the generated suite (the F-8 point)."""
         pytest.importorskip("fastapi")
