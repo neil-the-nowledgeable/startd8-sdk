@@ -144,3 +144,8 @@ notes/
 # Capability delivery pipeline (symlinked from ~/Documents/dev/cap-dev-pipe)
 # ---------------------------------------------------------------------------
 .cap-dev-pipe/
+
+# secrets — never commit (keys.md was an exposure incident, removed)
+keys.md
+*.keys.md
+secrets.md
