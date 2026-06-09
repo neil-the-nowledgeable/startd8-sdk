@@ -11,7 +11,7 @@ setup(
     description="Python SDK for StartDate (startd8) Agent Framework - Multi-LLM benchmarking and prompt management",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/startdate/startd8",
+    url="https://github.com/neil-the-nowledgeable/startd8-sdk",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     package_data={

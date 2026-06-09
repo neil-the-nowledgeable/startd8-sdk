@@ -154,8 +154,8 @@ composite-view = "startd8.view_codegen.provider:CompositeViewProvider"
 presentation-polish = "startd8.presentation_polish.provider:PresentationPolishFileProvider"
 
 [project.urls]
-Homepage = "https://github.com/startdate/startd8"
-Repository = "https://github.com/startdate/startd8"
+Homepage = "https://github.com/neil-the-nowledgeable/startd8-sdk"
+Repository = "https://github.com/neil-the-nowledgeable/startd8-sdk"
 
 [tool.setuptools.packages.find]
 where = ["src"]
