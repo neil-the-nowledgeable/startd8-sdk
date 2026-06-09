@@ -216,6 +216,7 @@ _INT_PK_TYPES = frozenset({"Int", "BigInt"})
 # one literal so the emitted module reads as a coherent program, not codegen
 # confetti. Placeholders: {tables} {pk_map}.
 _ROUTE_SMOKE_BODY = '''\
+import os
 import re
 import sys
 import tempfile
@@ -258,6 +259,25 @@ def _override_get_session():
 
 app.dependency_overrides[get_session] = _override_get_session
 
+
+def _engine_is_temp() -> bool:
+    """F-12 fail-loud tripwire. _reset() DELETEs every table, so it MUST run against the
+    dedicated throwaway engine above — never a real DB. Structurally _engine is always a
+    mkdtemp sqlite file, so this can only fail if a future change re-points it at the real
+    ./app.db; then _reset REFUSES (skips loud) rather than wipe it. Opt out with
+    STARTD8_ALLOW_NONTEMP_RESET=1 for a deliberately disposable real-path DB."""
+    if os.environ.get("STARTD8_ALLOW_NONTEMP_RESET") == "1":
+        return True
+    url = str(_engine.url)
+    if not url.startswith("sqlite:///"):
+        return False  # remote / non-sqlite / engine default -> never reset
+    try:
+        db_path = Path(url[len("sqlite:///"):]).resolve()
+        tmp = Path(tempfile.gettempdir()).resolve()
+        return tmp in db_path.parents or db_path == tmp
+    except (OSError, ValueError):
+        return False
+
 # Baked from the contract: every entity table (reset/seed surface) and the
 # single-column-PK entities (route param filling + PK synthesis on seed rows).
 _TABLES = {tables}
@@ -288,6 +308,12 @@ _CASES = _seed_cases()
 
 
 def _reset(session):
+    if not _engine_is_temp():  # F-12 belt-and-suspenders: never DELETE against a real DB
+        pytest.skip(
+            "route-smoke refuses to DELETE: its engine is not a temp database ("
+            + str(_engine.url) + ") — running this reset could WIPE a real DB (F-12). "
+            "Set STARTD8_ALLOW_NONTEMP_RESET=1 if it is disposable."
+        )
     for name in _TABLES:
         session.exec(delete(getattr(tables, name)))
     session.commit()

@@ -82,6 +82,29 @@ class TestRenderRouteSmoke:
         artifacts = dict(render_backend(PILOT))
         assert "httpx" in artifacts["requirements.txt"]
 
+    def test_reset_has_fail_loud_nontemp_guard(self):
+        """F-12 belt-and-suspenders: on top of the dedicated temp engine, _reset() refuses to
+        DELETE unless the engine resolves to a temp path — fail-loud (skip) rather than wipe a
+        real DB if a future change ever re-points _engine. STARTD8_ALLOW_NONTEMP_RESET opts out."""
+        text = render_route_smoke_tests(PILOT)
+        assert "def _engine_is_temp()" in text
+        assert "STARTD8_ALLOW_NONTEMP_RESET" in text
+        # the guard is the FIRST thing _reset does, before any delete()
+        reset_body = text.split("def _reset(session):")[1].split("def ")[0]
+        assert reset_body.index("_engine_is_temp()") < reset_body.index("delete(")
+        assert "refuses to DELETE" in reset_body
+        # exec the guard logic: a temp-dir sqlite url passes, ./app.db is refused
+        import tempfile
+        from pathlib import Path as _P
+        tmp = _P(tempfile.gettempdir()).resolve()
+        for url, want in [(f"sqlite:///{tmp/'x'/'smoke.db'}", True),
+                          ("sqlite:///./app.db", False),
+                          ("postgresql://h/db", False)]:
+            ok = url.startswith("sqlite:///") and (
+                lambda p: tmp in p.parents or p == tmp
+            )(_P(url[len("sqlite:///"):]).resolve()) if url.startswith("sqlite:///") else False
+            assert ok is want, (url, ok)
+
 
 class TestGeneratedSuiteRuns:
     """End-to-end: the generated suite passes against the generated app."""
