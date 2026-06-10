@@ -91,6 +91,36 @@ def _model_block(name: str, lines: List[str]) -> str:
     return f"model {name} {{\n" + "\n".join(lines) + "\n}"
 
 
+def _enum_block(name: str, values: Tuple[str, ...]) -> str:
+    return f"enum {name} {{\n" + "\n".join(f"  {v}" for v in values) + "\n}"
+
+
+def _collect_enum_blocks(
+    graph: EntityGraph, unrenderable: List[UnrenderableField]
+) -> List[str]:
+    """FR-PE-10: render every enum block — named enums (``graph.enums``) and per-field inline
+    ``choice of:`` enums (``DocField.enum_values``) — before the model blocks, in stable order.
+
+    A synthesized ``<Entity><Field>`` name colliding with a declared ``## Enums`` name is flagged
+    (OQ-PE-8), never silently merged.
+    """
+    blocks: List[str] = []
+    for name in sorted(graph.enums):                       # named enums: alpha, stable
+        blocks.append(_enum_block(name, graph.enums[name]))
+    for ent_name, ent in graph.entities.items():           # per-field: entity/field decl order
+        for f in ent.fields:
+            if f.enum_values is None or f.prisma_type is None:
+                continue
+            if f.prisma_type in graph.enums:
+                unrenderable.append(UnrenderableField(
+                    ent_name, f.name,
+                    f"enum-name-collision: synthesized {f.prisma_type!r} clashes with a named enum",
+                ))
+                continue
+            blocks.append(_enum_block(f.prisma_type, f.enum_values))
+    return blocks
+
+
 def render_prisma_schema(
     graph: EntityGraph, source_file: str = "prisma/schema.prisma"
 ) -> PrismaSchemaResult:
@@ -114,7 +144,8 @@ def render_prisma_schema(
         rev_lists.setdefault(j.left, []).append((_plural(j.right), f"{j.name}[]"))
         rev_lists.setdefault(j.right, []).append((_plural(j.left), f"{j.name}[]"))
 
-    blocks: List[str] = []
+    # --- enum blocks (FR-PE-10): named + per-field inline, before the models -------------------
+    blocks: List[str] = _collect_enum_blocks(graph, unrenderable)
 
     # --- entity models -------------------------------------------------------------------------
     for name, ent in graph.entities.items():
@@ -203,6 +234,18 @@ def semantic_diff(emitted_text: str, live_text: str) -> List[str]:
         out.append(f"model {missing}: emitted, absent from live")
     for extra in sorted(set(right.models) - set(left.models)):
         out.append(f"model {extra}: in live, not emitted")
+
+    # FR-PE-11: enum-block parity — presence + ordered value set (the parser exposes both).
+    for missing in sorted(set(left.enums) - set(right.enums)):
+        out.append(f"enum {missing}: emitted, absent from live")
+    for extra in sorted(set(right.enums) - set(left.enums)):
+        out.append(f"enum {extra}: in live, not emitted")
+    for name in sorted(set(left.enums) & set(right.enums)):
+        if left.enums[name] != right.enums[name]:
+            out.append(
+                f"enum {name}: values {list(left.enums[name])} (emitted) "
+                f"vs {list(right.enums[name])} (live)"
+            )
 
     for name in sorted(set(left.models) & set(right.models)):
         lm, rm = left.models[name], right.models[name]

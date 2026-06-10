@@ -18,7 +18,7 @@ from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import parse_app_manifest
 from ..backend_codegen.forms_manifest import parse_forms
 from ..view_codegen.manifest import parse_views
-from .entities import EntityGraph, diff_against_live, extract_entities
+from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
 from .extractors import (
     extract_ai_passes,
     extract_app,
@@ -48,9 +48,26 @@ def _build_graph(
     """
     graph = EntityGraph()
     per_doc_sections: List[tuple] = []
+
+    # Pass 0 — named enums (FR-PE-8). Extracted across ALL docs BEFORE entities, so an
+    # `enum: <Name>` field reference (FR-PE-9) can be validated against the declared set. Enums have
+    # no reverse dependency on entities; later docs never override an earlier declaration.
     for label, text in docs.items():
         sections = parse_sections(text)
         per_doc_sections.append((label, text, sections))
+        enums_root = find_section(sections, "Enums")
+        if enums_root is not None:
+            enum_blocks = [
+                s for s in sections
+                if s.level == enums_root.level + 1
+                and len(s.heading_path) >= 2
+                and s.heading_path[-2] == enums_root.title
+            ]
+            for name, values in extract_enums(label, enum_blocks, records).items():
+                graph.enums.setdefault(name, values)
+
+    known_enums = frozenset(graph.enums)
+    for label, text, sections in per_doc_sections:
         entities_root = find_section(sections, "Entities")
         if entities_root is not None:
             blocks = [
@@ -59,7 +76,7 @@ def _build_graph(
                 and len(s.heading_path) >= 2
                 and s.heading_path[-2] == entities_root.title
             ]
-            sub = extract_entities(label, blocks, records)
+            sub = extract_entities(label, blocks, records, known_enums=known_enums)
             for name, ent in sub.entities.items():
                 graph.entities.setdefault(name, ent)
             for join in sub.joins:

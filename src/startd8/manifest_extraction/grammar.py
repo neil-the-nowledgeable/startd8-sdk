@@ -101,7 +101,14 @@ def find_section(sections: List[Section], title_prefix: str) -> Optional[Section
 def md_tables(body: str) -> List[Table]:
     """ALL tables in *body*, segmented as maximal consecutive-``|`` runs (F1)."""
     def cells(line: str) -> Tuple[str, ...]:
-        return tuple(c.strip() for c in line.strip().strip("|").split("|"))
+        # Split on UNESCAPED pipes only, then unescape ``\|`` → ``|`` (the markdown convention the
+        # authoring contract uses for literal pipes inside a cell, e.g. ``choice of: a\|b\|c``).
+        s = line.strip()
+        if s.startswith("|"):
+            s = s[1:]
+        if s.endswith("|") and not s.endswith("\\|"):
+            s = s[:-1]
+        return tuple(c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", s))
 
     tables: List[Table] = []
     run: List[str] = []

@@ -38,6 +38,10 @@ PLAIN_TYPES: Dict[str, str] = {
 }
 
 _CHOICE_RE = re.compile(r"^choice of:\s*(.+)$", re.IGNORECASE)
+# FR-PE-9: a `enum: <Name>` Type-cell reference to a named enum declared under `## Enums`.
+# Matched against the RAW (un-lowercased) cell so the enum name's case survives (entities.py
+# lowercases the cell for plain-type / `choice of:` matching, which would destroy the name).
+_ENUM_REF_RE = re.compile(r"^enum:\s*(\w+)$", re.IGNORECASE)
 _HUMAN_ONLY_RE = re.compile(r"ONLY HUMANS ENTER", re.IGNORECASE)
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 # FR-PE-5(a): a `default: <value>` clause in the Notes cell → @default(<value>).
@@ -58,6 +62,9 @@ class DocField:
     human_only: bool
     row_index: int
     default: Optional[str] = None    # FR-PE-5(a): a `default: X` Notes convention → @default(X)
+    # FR-PE-10: the values of an inline `choice of: a|b|c` (was discarded). When set, the emitter
+    # synthesizes a `<Entity><Field>` enum block from them. None for plain/named-enum fields.
+    enum_values: Optional[Tuple[str, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,8 @@ class EntityGraph:
     entities: Dict[str, DocEntity] = field(default_factory=dict)
     joins: List[JoinModel] = field(default_factory=list)
     fk_parents: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...]
+    # FR-PE-8: named enums declared under `## Enums` (name -> ordered values), shared by N fields.
+    enums: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
     # FR-PE-5 grammar gaps (slice 3):
     loose_refs: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...] (no FK)
     indexes: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@index]
@@ -120,12 +129,55 @@ class EntityGraph:
         return None
 
 
+def extract_enums(
+    doc_label: str,
+    enum_sections: List[Section],
+    records: List[ExtractionRecord],
+) -> Dict[str, Tuple[str, ...]]:
+    """FR-PE-8: parse the ``### Enum: <Name>`` blocks under ``## Enums`` into name → ordered values.
+
+    Each block's value set is the first non-empty body line, pipe-separated (the same delimiter as
+    the inline ``choice of:`` form). The enum name keeps its declared case (used verbatim as the
+    Prisma enum type). A block with no parseable values is recorded ``not_extracted``.
+    """
+    out: Dict[str, Tuple[str, ...]] = {}
+    for sec in enum_sections:
+        m = re.match(r"^Enum:\s*(\w+)$", sec.title, re.IGNORECASE)
+        if not m:
+            continue
+        name = m.group(1)
+        values: Tuple[str, ...] = ()
+        for line in sec.body.splitlines():
+            stripped = strip_annotations(line)
+            if stripped:
+                values = tuple(v.strip() for v in stripped.split("|") if v.strip())
+                break
+        if not values:
+            records.append(ExtractionRecord(
+                "schema.prisma", f"/enums/{name}", Status.NOT_EXTRACTED,
+                source=SourceRef(doc_label, sec.heading_path),
+                reason="enum block has no pipe-separated value line",
+            ))
+            continue
+        out[name] = values
+        records.append(ExtractionRecord(
+            "schema.prisma", f"/enums/{name}", Status.EXTRACTED,
+            value=f"{len(values)} values", source=SourceRef(doc_label, sec.heading_path),
+        ))
+    return out
+
+
 def extract_entities(
     doc_label: str,
     entity_sections: List[Section],
     records: List[ExtractionRecord],
+    known_enums: frozenset = frozenset(),
 ) -> EntityGraph:
-    """Parse the ### blocks under ## Entities into the graph; record per-value traceability."""
+    """Parse the ### blocks under ## Entities into the graph; record per-value traceability.
+
+    *known_enums* — names declared under ``## Enums`` (FR-PE-8), so an ``enum: <Name>`` field
+    reference (FR-PE-9) can be validated in this pass. An undeclared reference is ``not_extracted``.
+    """
     graph = EntityGraph()
     relationship_lines: List[Tuple[str, str, Tuple[str, ...]]] = []  # (subject, text, path)
 
@@ -142,7 +194,8 @@ def extract_entities(
         fields: List[DocField] = []
         for i, row in enumerate(tables[0].dicts()):
             fname = strip_annotations(row.get("field", ""))
-            ftype = strip_annotations(row.get("type", "")).lower()
+            raw_ftype = strip_annotations(row.get("type", ""))   # case preserved for enum refs
+            ftype = raw_ftype.lower()                            # lowercased for plain/choice match
             req = strip_annotations(row.get("required", "")).lower() == "yes"
             notes = row.get("notes", "")
             if not fname:
@@ -155,14 +208,25 @@ def extract_entities(
                 ))
                 continue
             prisma_type: Optional[str] = PLAIN_TYPES.get(ftype)
-            choice = _CHOICE_RE.match(ftype)
-            if choice:
-                prisma_type = f"{name}{fname[0].upper()}{fname[1:]}"  # enum type name
+            enum_values: Optional[Tuple[str, ...]] = None
+            notext_reason = f"type {ftype!r} outside the plain-type vocabulary"
+            enum_ref = _ENUM_REF_RE.match(raw_ftype)             # FR-PE-9: named-enum reference
+            choice = _CHOICE_RE.match(raw_ftype)                 # FR-PE-10: inline one-off enum
+            if enum_ref:
+                ename = enum_ref.group(1)
+                if ename in known_enums:
+                    prisma_type = ename                          # share the declared named enum
+                else:
+                    prisma_type = None
+                    notext_reason = f"enum-undeclared: {ename!r} not declared under ## Enums"
+            elif choice:
+                prisma_type = f"{name}{fname[0].upper()}{fname[1:]}"  # synthesized enum type name
+                enum_values = tuple(v.strip() for v in choice.group(1).split("|") if v.strip())
             if prisma_type is None:
                 records.append(ExtractionRecord(
                     "schema.prisma", f"/models/{name}/fields/{fname}", Status.NOT_EXTRACTED,
                     source=SourceRef(doc_label, sec.heading_path, row_index=i),
-                    reason=f"type {ftype!r} outside the plain-type vocabulary",
+                    reason=notext_reason,
                 ))
             dm = _DEFAULT_RE.search(notes)
             fields.append(DocField(
@@ -171,6 +235,7 @@ def extract_entities(
                 human_only=bool(_HUMAN_ONLY_RE.search(notes)),
                 row_index=i,
                 default=dm.group(1).strip() if dm else None,
+                enum_values=enum_values,
             ))
         graph.entities[name] = DocEntity(name, tuple(fields), sec.heading_path)
         _parse_index_lines(name, sec.body, graph)  # FR-PE-5(b): Indexes:/Unique: per-entity lines
