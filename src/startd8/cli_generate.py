@@ -479,6 +479,10 @@ def contract(
     with_manifests: bool = typer.Option(
         False, "--with-manifests",
         help="Also re-derive the YAML manifests (pages/views/completeness/…) alongside the contract."),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Allow --with-manifests to overwrite a live manifest whose content differs from a fresh "
+             "derivation (default: skip hand-corrected manifests so they aren't silently clobbered)."),
     check: bool = typer.Option(
         False, "--check",
         help="Gate only; write nothing to the project. Exit 0=ok / 1=drift|round-trip-fail / 2=error."),
@@ -586,10 +590,22 @@ def contract(
             raise typer.Exit(_EXIT_ERROR)
         console.print(f"[green]promoted[/green] contract → {target}")
         if with_manifests:  # land manifests next to the contract so the $0 cascade reads them
+            # Derivation is lossy vs hand-corrected manifests — never silently clobber one that
+            # differs. New/identical manifests write; differing ones skip unless --force.
+            skipped = []
             for fname, text in manifest_texts.items():
-                (contract_path.parent / fname).write_text(text, encoding="utf-8")
+                dest = contract_path.parent / fname
+                if dest.is_file() and dest.read_text(encoding="utf-8") != text and not force:
+                    skipped.append(fname)
+                    continue
+                dest.write_text(text, encoding="utf-8")
             console.print(
-                f"[green]promoted[/green] {len(manifest_texts)} manifest(s) → {contract_path.parent}")
+                f"[green]promoted[/green] {len(manifest_texts) - len(skipped)} manifest(s) "
+                f"→ {contract_path.parent}")
+            if skipped:
+                console.print(
+                    f"[yellow]skipped[/yellow] {len(skipped)} hand-corrected manifest(s) that differ "
+                    f"from a fresh derivation: {', '.join(skipped)}. Re-run with --force to overwrite.")
         raise typer.Exit(0)
 
     # 8. draft-only: a valid (round-tripping, non-empty) draft is success; parity drift is

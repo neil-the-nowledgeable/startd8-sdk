@@ -343,8 +343,13 @@ def promote_schema(run_dir: str, project_path: str, *, archive: bool = True) -> 
     target = Path(project_path)
     if archive and target.is_file():
         archive_dir = target.parent / "_superseded-handauthored"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        (archive_dir / target.name).write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+        archived = archive_dir / target.name
+        # Archive ONCE: the dir means "the original hand-authored contract", not "whatever was live
+        # before the last promote". Re-archiving on every promote churned it (header/reorder-only
+        # diffs) — skip if it already exists so subsequent promotes don't touch it.
+        if not archived.exists():
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archived.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(draft.read_text(encoding="utf-8"), encoding="utf-8")
     return str(target)

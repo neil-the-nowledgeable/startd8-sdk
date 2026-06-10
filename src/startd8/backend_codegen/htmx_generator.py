@@ -365,7 +365,12 @@ def _form_input_html(
         f' hx-post="/ui/{entity_lower}/validate" hx-trigger="blur changed"'
         f' hx-target="#err-{name}" hx-swap="innerHTML" hx-include="this"'
     )
-    val = "{{ item." + name + " if item and item." + name + " is not none else '' }}"
+    # On the create form (item is None) fall back to a query-param prefill value (FK pre-linking).
+    # `prefill` is undefined in edit/list contexts; the `if prefill` guard keeps Jinja safe there.
+    val = (
+        "{{ item." + name + " if item and item." + name + " is not none"
+        " else (prefill.get('" + name + "') if prefill else '') }}"
+    )
 
     if kind == "select":
         opts = []
@@ -590,7 +595,10 @@ def _entity_routes(
         "",
         f'@web_router.get("/ui/{e}/new", response_class=HTMLResponse)',
         f"def new_{e}(request: Request):",
-        '    ctx = {"item": None, "created": request.query_params.get("created")}',
+        # Prefill known writable fields from query params, so `/ui/<e>/new?<fk>=<id>` pre-links a
+        # parent (e.g. `?jobDescriptionId=<id>`). Restricted to declared fields — unknown params ignored.
+        f"    prefill = {{k: v for k, v in request.query_params.items() if k in _{e}_rules}}",
+        '    ctx = {"item": None, "prefill": prefill, "created": request.query_params.get("created")}',
         "    return templates.TemplateResponse(",
         f'        request, "{e}/form.html", ctx',
         "    )",

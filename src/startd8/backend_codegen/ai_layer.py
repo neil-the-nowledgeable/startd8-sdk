@@ -374,7 +374,15 @@ def call_ai_service(
             f"AI assist unavailable: could not resolve {agent_spec!r} ({exc}). "
             "The app works fully without it; configure a provider key to enable drafts."
         ) from exc
-    value, raw = agent.generate_structured(prompt, output_schema, max_tokens=max_tokens)
+    try:
+        value, raw = agent.generate_structured(prompt, output_schema, max_tokens=max_tokens)
+    except AIUnavailableError:
+        raise
+    except Exception as exc:  # provider auth/rate-limit/transport AT CALL TIME → polite 503, never a crash (FR-40)
+        raise AIUnavailableError(
+            f"AI assist unavailable: the provider call failed ({type(exc).__name__}: {exc}). "
+            "The app works fully without it; check the configured provider key / connectivity."
+        ) from exc
     _log_ai_call(session, pass_name, raw, agent_spec)
     return value
 

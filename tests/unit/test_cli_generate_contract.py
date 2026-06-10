@@ -162,6 +162,44 @@ def test_with_manifests_promotes_yaml_next_to_contract(tmp_path):
     assert any(contract.parent.glob("*.yaml"))
 
 
+def test_promote_archives_handauthored_once_not_every_promote(tmp_path):
+    """SDK_QUICK_WINS #2: the `_superseded-handauthored` archive is written ONCE (the original
+    hand-authored contract), not re-churned on every promote."""
+    doc = _write_doc(tmp_path)
+    contract = tmp_path / "prisma" / "schema.prisma"
+    contract.parent.mkdir(parents=True)
+    contract.write_text("// original hand-authored\n", encoding="utf-8")
+    args = ["contract", "-r", str(doc), "--out", str(tmp_path / "run"),
+            "--contract-path", str(contract), "--promote"]
+    runner.invoke(generate_app, args)
+    archive = contract.parent / "_superseded-handauthored" / "schema.prisma"
+    assert "original hand-authored" in archive.read_text(encoding="utf-8")
+    first = archive.read_text(encoding="utf-8")
+    # second promote (now overwriting a DERIVED contract) must NOT touch the archive
+    runner.invoke(generate_app, args)
+    assert archive.read_text(encoding="utf-8") == first  # archive unchanged — no churn
+
+
+def test_with_manifests_skips_handcorrected_manifest_without_force(tmp_path):
+    """SDK_QUICK_WINS #6: --with-manifests never silently clobbers a manifest whose content differs
+    from a fresh derivation; --force overrides."""
+    doc = _write_doc(tmp_path)
+    contract = tmp_path / "prisma" / "schema.prisma"
+    contract.parent.mkdir(parents=True)
+    hand = contract.parent / "pages.yaml"
+    hand.write_text("pages:\n  - hand-corrected: keep me\n", encoding="utf-8")
+    base = ["contract", "-r", str(doc), "--out", str(tmp_path / "run"),
+            "--contract-path", str(contract), "--with-manifests", "--promote"]
+    res = runner.invoke(generate_app, base)
+    assert res.exit_code == 0, res.output
+    assert "skipped" in res.output and "pages.yaml" in res.output
+    assert "hand-corrected: keep me" in hand.read_text(encoding="utf-8")  # not clobbered
+    # --force overwrites it
+    res2 = runner.invoke(generate_app, base + ["--force"])
+    assert res2.exit_code == 0, res2.output
+    assert "hand-corrected: keep me" not in hand.read_text(encoding="utf-8")
+
+
 def test_malformed_requirements_fails_loud(tmp_path):
     """FR-EMIT-1: a doc with no parseable entities must fail loud, never emit an empty contract."""
     doc = _write_doc(tmp_path, "# Reqs\n\nNo entities section here.\n")

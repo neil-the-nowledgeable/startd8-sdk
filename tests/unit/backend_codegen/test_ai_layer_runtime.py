@@ -136,3 +136,49 @@ def test_read_mode_pass_reads_inputs_and_persists(tmp_path, monkeypatch):
             sys.path.remove(str(tmp_path))
         _purge_app()
         _drop_my_tables()  # leave the shared metadata clean for the next table-defining test
+
+
+def test_provider_error_at_call_time_degrades_to_503(tmp_path, monkeypatch):
+    """SDK_QUICK_WINS #1 / FR-40: a key present-but-invalid (or rate-limit/network) error raised
+    DURING the provider call degrades to a polite 503, not a 500 crash — the runtime sibling of the
+    keyless-boot test. Regression for the unwrapped `generate_structured` call in `call_ai_service`.
+    """
+    for rel, content in render_backend(SCHEMA, manifest_text=MANIFEST, human_inputs_text=""):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-invalid")  # key PRESENT → past the keyless precheck
+    sys.path.insert(0, str(tmp_path))
+    _purge_app()
+    _drop_my_tables()
+    try:
+        importlib.import_module("app.main")
+        server = importlib.import_module("app.server")
+        db = importlib.import_module("app.db")
+        tables = importlib.import_module("app.tables")
+        ai_service = importlib.import_module("app.ai.service")
+        from fastapi.testclient import TestClient
+        from sqlmodel import Session
+
+        # Mock the SDK agent so the CALL raises a provider-style error (the 401/429/network class).
+        class _ExplodingAgent:
+            def generate_structured(self, prompt, output_schema, **kw):
+                raise RuntimeError("AuthenticationError: 401 invalid x-api-key")
+
+        monkeypatch.setattr(ai_service, "resolve_agent_spec", lambda *a, **k: _ExplodingAgent())
+
+        with TestClient(server.app) as c:
+            with Session(db.engine) as s:
+                s.add(tables.ProofPoint(title="Led a 12-person team", description="delivered $2M"))
+                s.commit()
+            resp = c.post("/ai/caps")
+            assert resp.status_code == 503, resp.text   # polite no, not a 500 crash
+            assert resp.status_code != 500
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        _purge_app()
+        _drop_my_tables()

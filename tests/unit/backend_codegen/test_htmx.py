@@ -106,6 +106,19 @@ def test_number_widget_for_float_field():
     assert '<input type="number" step="any" name="value"' in form
 
 
+def test_new_form_query_param_prefill():
+    """SDK_QUICK_WINS #4: the new-form handler seeds known writable fields from query params
+    (e.g. `/ui/<e>/new?<fk>=<id>`), and the form template falls back to that prefill on create."""
+    web = render_web(SCHEMA)
+    compile(web, "<web>", "exec")
+    # handler builds a prefill dict restricted to the entity's declared rules
+    assert "prefill = {k: v for k, v in request.query_params.items() if k in _proofpoint_rules}" in web
+    assert '"prefill": prefill' in web
+    # form template uses the prefill fallback (guarded for edit/list contexts where it's undefined)
+    form = render_form_template(SCHEMA, "prisma/schema.prisma", "ProofPoint")
+    assert "prefill.get('result') if prefill else ''" in form
+
+
 # Schema carrying the full provenance/timestamp set, to exercise FR-PG-5 omission.
 PROV_SCHEMA = """\
 model Profile {
