@@ -227,6 +227,52 @@ def test_list_of_text_emits_string_array(tmp_path=None):
     assert f.is_list and f.type == "String"        # round-trips as a list field
 
 
+def test_optional_references_emits_nullable_scalar():
+    # G2: `references Y (optional)` → `yId String?` (the optional loose-ref variant).
+    doc = (
+        "## Entities\n\n### TailoredMatch\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| rationale | text | no | |\n\n"
+        "Relationships: a TailoredMatch **references** a JobDescription (optional).\n\n"
+        "### JobDescription\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| title | text | no | |\n"
+    )
+    tm = parse_prisma_schema(render_prisma_schema(build_entity_graph({"d.md": doc})).text).model("TailoredMatch")
+    assert tm.field("jobDescriptionId").is_optional        # String? — nullable loose ref
+    assert tm.field("jobDescription") is None              # still no @relation object
+
+
+def test_required_references_stays_non_optional():
+    doc = (
+        "## Entities\n\n### TailoredMatch\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| rationale | text | no | |\n\n"
+        "Relationships: a TailoredMatch **references** a JobDescription.\n\n"
+        "### JobDescription\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| title | text | no | |\n"
+    )
+    tm = parse_prisma_schema(render_prisma_schema(build_entity_graph({"d.md": doc})).text).model("TailoredMatch")
+    assert not tm.field("jobDescriptionId").is_optional     # required String (today's default)
+
+
+def test_enum_default_not_a_member_is_flagged_not_blocked():
+    # OQ-PE-7: a default outside the enum's value set → a warning, but the field still emits.
+    doc = (
+        "## Enums\n\n### Enum: Status\ndraft | final\n\n"
+        "## Entities\n\n### Build\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| status | enum: Status | yes | default: bogus |\n"
+    )
+    res = render_prisma_schema(build_entity_graph({"d.md": doc}))
+    assert any("default 'bogus' is not a value of enum Status" in w for w in res.warnings)
+    assert "@default(bogus)" in res.text                    # not blocked — still emitted
+    # a valid default produces no warning
+    ok = render_prisma_schema(build_entity_graph({"d.md": doc.replace("bogus", "draft")}))
+    assert ok.warnings == ()
+
+
 def test_string_default_is_quoted():
     # G1: a String (non-enum/number/bool) default must be QUOTED — unquoted is invalid prisma.
     g = EntityGraph()

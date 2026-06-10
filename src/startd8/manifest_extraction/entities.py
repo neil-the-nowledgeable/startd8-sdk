@@ -108,6 +108,9 @@ class EntityGraph:
     reverse_names: Dict[Tuple[str, str], str] = field(default_factory=dict)
     # FR-PE-5 grammar gaps (slice 3):
     loose_refs: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...] (no FK)
+    # G2: loose refs declared optional via `references <Y> (optional)` → emit `String?`. Keyed
+    # (child, parent); absent ⇒ required `String` (today's default).
+    optional_loose_refs: set = field(default_factory=set)
     indexes: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@index]
     uniques: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@unique]
 
@@ -423,9 +426,13 @@ def _parse_relationships(
             graph.loose_refs.setdefault(subj, [])
             if obj not in graph.loose_refs[subj]:
                 graph.loose_refs[subj].append(obj)
+            if re.search(r"\boptional\b", rest, re.IGNORECASE):   # G2: `references Y (optional)` → String?
+                graph.optional_loose_refs.add((subj, obj))
+            opt = " optional" if (subj, obj) in graph.optional_loose_refs else ""
             records.append(ExtractionRecord(
                 "schema.prisma", f"/relationships/{subj}-references-{obj}",
-                Status.EXTRACTED, value=f"{subj}.{_lower_camel(obj)}Id (loose, no FK)", source=src,
+                Status.EXTRACTED,
+                value=f"{subj}.{_lower_camel(obj)}Id (loose, no FK{opt})", source=src,
             ))
 
 

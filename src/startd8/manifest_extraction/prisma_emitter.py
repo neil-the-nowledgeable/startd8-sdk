@@ -71,6 +71,7 @@ class PrismaSchemaResult:
     schema_sha256: str
     models_rendered: int
     unrenderable: Tuple[UnrenderableField, ...]
+    warnings: Tuple[str, ...] = ()    # OQ-PE-7: advisory (e.g. enum default not a member) — never blocks
 
 
 def _plural(name: str) -> str:
@@ -126,6 +127,7 @@ def render_prisma_schema(
 ) -> PrismaSchemaResult:
     """Render ``schema.prisma`` from the doc-derived :class:`EntityGraph` (FR-PE-1/2/3, $0)."""
     unrenderable: List[UnrenderableField] = []
+    warnings: List[str] = []
 
     # --- precompute relationship-derived members keyed by entity name (FR-PE-3) -----------------
     rev_lists: Dict[str, List[Tuple[str, str]]] = {n: [] for n in graph.entities}
@@ -166,12 +168,20 @@ def render_prisma_schema(
                 dv = f.default
                 if f.prisma_type == "String":
                     dv = '"' + dv.strip().strip('"').strip("'") + '"'
+                # OQ-PE-7: flag (don't block) an enum default that isn't a value of its enum.
+                enum_vals = graph.enums.get(f.prisma_type) or f.enum_values
+                if enum_vals is not None and f.default not in enum_vals:
+                    warnings.append(
+                        f"{name}.{f.name}: default {f.default!r} is not a value of enum "
+                        f"{f.prisma_type} {list(enum_vals)}"
+                    )
                 lines.append(_field_line(f.name, f"{f.prisma_type} @default({dv})"))
             else:
                 opt = "" if f.required else "?"
                 lines.append(_field_line(f.name, f"{f.prisma_type}{opt}"))
         for parent in graph.loose_refs.get(name, []):   # FR-PE-5(c): loose ref — scalar, no @relation
-            lines.append(_field_line(f"{_lower_camel(parent)}Id", "String"))
+            opt = "?" if (name, parent) in graph.optional_loose_refs else ""  # G2: optional variant
+            lines.append(_field_line(f"{_lower_camel(parent)}Id", f"String{opt}"))
         for fk, body in fk_blocks.get(name, []):
             lines.append(_field_line(fk, body))
         for lf, body in rev_lists.get(name, []):
@@ -202,6 +212,7 @@ def render_prisma_schema(
         schema_sha256=sha,
         models_rendered=len(graph.entities) + len(graph.joins),
         unrenderable=tuple(unrenderable),
+        warnings=tuple(warnings),
     )
 
 

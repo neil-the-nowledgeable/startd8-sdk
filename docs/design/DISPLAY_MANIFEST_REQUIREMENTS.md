@@ -11,8 +11,10 @@ the group heading; `generate views --display` + drift consistency. Opt-in; unres
 **Increment 3 (FR-DM-7) IMPLEMENTED 2026-06-10 — Part A (always-on zero-config defaults):** list/detail
 now drop id + provenance/timestamps by default (reusing the forms omit policy) and the row link reads as
 the heuristic label (name/title/label/headline) — a zero-config app no longer leaks ids. **Part B
-(wireframe `display` coverage section) deferred** — a Low-severity advisory addition (an 8th catalog key
-that ripples the wireframe determinism/cross-check goldens); not worth the churn vs the zero-config value.
+(wireframe `display` coverage section) deferred — empirically justified:** adding `display` as an 8th
+wireframe catalog key ripples ~81 wireframe tests (catalog/determinism/cross-check goldens) and requires
+regenerating the determinism fixtures — disproportionate for an advisory coverage line, with the
+functional display capability already fully delivered (increments 1/2/3A). Available on request.
 **Scope:** strtd8 `SDK_PRESENTATION_DISPLAY_HANDOFF_2026-06-10` — a new **`display.yaml`** manifest giving
 the generators the display metadata they lack, so generated screens stop leaking system IDs as labels
 (`neil-tr-01`). The **structure** sibling of #7 (view prose = words); they meet on composite views,

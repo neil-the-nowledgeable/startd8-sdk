@@ -95,6 +95,7 @@ def _build_graph(
                 for p in parents:
                     if p not in dst:
                         dst.append(p)
+            graph.optional_loose_refs |= sub.optional_loose_refs   # G2: optional loose-ref flags
             for entity, specs in sub.indexes.items():
                 graph.indexes.setdefault(entity, []).extend(specs)
             for entity, specs in sub.uniques.items():

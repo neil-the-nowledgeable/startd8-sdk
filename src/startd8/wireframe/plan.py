@@ -324,7 +324,11 @@ def _scaffold_section(state: _ManifestState) -> WireframeSection:
     if manifest.migrations:
         items.append(
             WireframeItem(
-                "migrations: alembic", state.status, paths=("alembic.ini", "alembic/env.py")
+                # FR-MG-1: the scaffold also emits the revision template + versions dir so the
+                # generated app can actually produce/apply a migration.
+                "migrations: alembic", state.status,
+                paths=("alembic.ini", "alembic/env.py", "alembic/script.py.mako",
+                       "alembic/versions/.gitkeep"),
             )
         )
     else:
