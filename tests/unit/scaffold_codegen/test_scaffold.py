@@ -60,8 +60,12 @@ def test_render_is_byte_identical_and_full_set():
         "Dockerfile",
         "alembic.ini",
         "alembic/env.py",
+        "alembic/script.py.mako",          # FR-MG-1: the revision template
+        "alembic/versions/.gitkeep",       # FR-MG-1: the versions dir must exist
     }
-    for _, content in a:
+    for rel, content in a:
+        if rel.endswith(".gitkeep"):
+            continue  # intentional empty placeholder — no header
         assert "# startd8-artifact: scaffold-" in content
         assert "# manifest-sha256:" in content
 
@@ -118,3 +122,19 @@ def test_generated_python_compiles(tmp_path):
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_alembic_mako_completes_the_migration_harness():
+    """FR-MG-1: the scaffold emits script.py.mako (so `alembic revision` works) + a versions dir."""
+    files = dict(render_scaffold(MANIFEST))
+    mako = files["alembic/script.py.mako"]
+    # the canonical revision-template substitution points alembic fills in
+    for tok in ("${message}", "${up_revision}", "${repr(down_revision)}",
+                "def upgrade()", "def downgrade()", "from alembic import op"):
+        assert tok in mako, tok
+    assert files["alembic/versions/.gitkeep"] == ""              # empty dir placeholder
+    # env.py uses SQLite batch mode (needed to ALTER) — FR-MG-1
+    assert "render_as_batch=True" in files["alembic/env.py"]
+    # the mako is owned + drift-tracked like the other scaffold files
+    assert scaffold_in_sync(MANIFEST, mako) is True
+    assert scaffold_in_sync(MANIFEST, mako.replace("upgrade", "upgradeX", 1)) is False

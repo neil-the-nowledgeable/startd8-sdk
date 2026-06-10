@@ -512,6 +512,19 @@ def test_db_and_main_spine():
     assert "from . import tables" in db  # registers tables on metadata
     compile(db, "<db>", "exec")
 
+
+def test_init_db_demotes_create_all_and_warns_on_drift():
+    """FR-MG-5: create_all is dev-bootstrap only; init_db reflects the DB and warns loudly when a
+    contract column is missing (the 'migration pending' signal) instead of limping to a 500."""
+    db = render_db(PILOT_SCHEMA)
+    assert "SQLModel.metadata.create_all(engine)" in db        # still bootstraps fresh DBs
+    assert "_warn_on_schema_drift()" in db                     # ...then checks for drift
+    assert "def _warn_on_schema_drift() -> None:" in db
+    assert "missing contract column" in db                     # the loud warning text
+    assert "alembic upgrade head" in db                        # tells the operator what to run
+    assert "from sqlalchemy import event, inspect as _sa_inspect" in db
+    compile(db, "<db>", "exec")
+
     main = render_main(PILOT_SCHEMA)
     assert "app = FastAPI(title=" in main
     assert "from .routers import all_routers" in main

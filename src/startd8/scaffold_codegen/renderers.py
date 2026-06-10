@@ -156,7 +156,8 @@ def render_alembic_env(manifest_text: str) -> str:
         'config.set_main_option("sqlalchemy.url", _url)\n'
         "target_metadata = SQLModel.metadata\n\n\n"
         "def run_migrations_offline() -> None:\n"
-        "    context.configure(url=_url, target_metadata=target_metadata, literal_binds=True)\n"
+        "    context.configure(url=_url, target_metadata=target_metadata, literal_binds=True,\n"
+        "                      render_as_batch=True)  # SQLite needs batch mode to ALTER\n"
         "    with context.begin_transaction():\n"
         "        context.run_migrations()\n\n\n"
         "def run_migrations_online() -> None:\n"
@@ -166,7 +167,8 @@ def render_alembic_env(manifest_text: str) -> str:
         "        poolclass=pool.NullPool,\n"
         "    )\n"
         "    with connectable.connect() as connection:\n"
-        "        context.configure(connection=connection, target_metadata=target_metadata)\n"
+        "        context.configure(connection=connection, target_metadata=target_metadata,\n"
+        "                          render_as_batch=True)  # SQLite needs batch mode to ALTER\n"
         "        with context.begin_transaction():\n"
         "            context.run_migrations()\n\n\n"
         "if context.is_offline_mode():\n"
@@ -175,6 +177,36 @@ def render_alembic_env(manifest_text: str) -> str:
         "    run_migrations_online()\n"
     )
     return _header("scaffold-alembic-env", sha) + "\n\n" + body
+
+
+def render_alembic_mako(manifest_text: str) -> str:
+    """``alembic/script.py.mako`` — the revision template Alembic needs to GENERATE a revision.
+
+    Without it ``alembic revision`` fails; the scaffold previously emitted env.py + ini but not this,
+    so a generated app could not actually produce a migration (FR-MG-1). Canonical Alembic template.
+    """
+    sha = schema_sha256(manifest_text)
+    body = (
+        '"""${message}\n\n'
+        "Revision ID: ${up_revision}\n"
+        "Revises: ${down_revision | comma,n}\n"
+        "Create Date: ${create_date}\n\n"
+        '"""\n'
+        "from typing import Sequence, Union\n\n"
+        "from alembic import op\n"
+        "import sqlalchemy as sa\n"
+        "${imports if imports else ''}\n\n"
+        "# revision identifiers, used by Alembic.\n"
+        "revision: str = ${repr(up_revision)}\n"
+        "down_revision: Union[str, None] = ${repr(down_revision)}\n"
+        "branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}\n"
+        "depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}\n\n\n"
+        "def upgrade() -> None:\n"
+        "    ${upgrades if upgrades else 'pass'}\n\n\n"
+        "def downgrade() -> None:\n"
+        "    ${downgrades if downgrades else 'pass'}\n"
+    )
+    return _header("scaffold-alembic-mako", sha) + "\n\n" + body
 
 
 def render_env_example(manifest_text: str) -> str:
@@ -202,6 +234,9 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
     if m.migrations:
         out.append(("alembic.ini", render_alembic_ini(manifest_text)))
         out.append(("alembic/env.py", render_alembic_env(manifest_text)))
+        out.append(("alembic/script.py.mako", render_alembic_mako(manifest_text)))
+        # versions/ must exist for `alembic revision`/`upgrade`; .gitkeep keeps the empty dir in git.
+        out.append(("alembic/versions/.gitkeep", ""))
     return tuple(out)
 
 
@@ -212,5 +247,6 @@ SCAFFOLD_RENDERERS = {
     "scaffold-dockerfile": render_dockerfile,
     "scaffold-alembic-ini": render_alembic_ini,
     "scaffold-alembic-env": render_alembic_env,
+    "scaffold-alembic-mako": render_alembic_mako,
     "scaffold-env": render_env_example,
 }
