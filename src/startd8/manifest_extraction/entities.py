@@ -64,6 +64,7 @@ class DocField:
     human_only: bool
     row_index: int
     default: Optional[str] = None    # FR-PE-5(a): a `default: X` Notes convention → @default(X)
+    is_list: bool = False            # G3: `list of text` → String[] (Column(JSON) downstream)
     # FR-PE-10: the values of an inline `choice of: a|b|c` (was discarded). When set, the emitter
     # synthesizes a `<Entity><Field>` enum block from them. None for plain/named-enum fields.
     enum_values: Optional[Tuple[str, ...]] = None
@@ -214,10 +215,14 @@ def extract_entities(
                 continue
             prisma_type: Optional[str] = PLAIN_TYPES.get(ftype)
             enum_values: Optional[Tuple[str, ...]] = None
+            is_list = False
             notext_reason = f"type {ftype!r} outside the plain-type vocabulary"
             enum_ref = _ENUM_REF_RE.match(raw_ftype)             # FR-PE-9: named-enum reference
             choice = _CHOICE_RE.match(raw_ftype)                 # FR-PE-10: inline one-off enum
-            if enum_ref:
+            if ftype in ("list of text", "list of long text"):  # G3: list-of-string → String[]
+                prisma_type = "String"
+                is_list = True
+            elif enum_ref:
                 ename = enum_ref.group(1)
                 if ename in known_enums:
                     prisma_type = ename                          # share the declared named enum
@@ -241,6 +246,7 @@ def extract_entities(
                 row_index=i,
                 default=dm.group(1).strip() if dm else None,
                 enum_values=enum_values,
+                is_list=is_list,
             ))
         graph.entities[name] = DocEntity(name, tuple(fields), sec.heading_path)
         _parse_index_lines(name, sec.body, graph)  # FR-PE-5(b): Indexes:/Unique: per-entity lines

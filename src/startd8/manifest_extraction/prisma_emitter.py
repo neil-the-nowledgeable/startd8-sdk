@@ -157,6 +157,9 @@ def render_prisma_schema(
             if f.prisma_type is None:
                 unrenderable.append(UnrenderableField(name, f.name, "type outside plain-type vocabulary"))
                 continue
+            if f.is_list:              # G3: list-of-scalar → String[] @default([]) (Column(JSON))
+                lines.append(_field_line(f.name, f"{f.prisma_type}[] @default([])"))
+                continue
             if f.default is not None:  # FR-PE-5(a): a defaulted scalar is non-optional
                 # G1: a String default must be QUOTED (unquoted is invalid prisma); enum/number/
                 # boolean/DateTime-function defaults stay bare.

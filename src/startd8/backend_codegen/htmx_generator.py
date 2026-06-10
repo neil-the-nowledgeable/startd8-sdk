@@ -42,6 +42,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha2
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from .ai_layer import _PROVENANCE_OMIT
 from .crud_generator import _model_names, _pk_field
+from .filters_manifest import EntityFilter, parse_filters
 from .forms_manifest import ON_CREATE_DEFAULT, parse_forms
 
 # ----------------------------------------------------------------------------- #
@@ -300,7 +301,28 @@ def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
     return head + "\n" + body
 
 
-def render_list_template(schema_text: str, source_file: str, entity: str) -> str:
+def _filter_form_html(e: str, ef: EntityFilter) -> str:
+    """P0-2: a GET filter form (facet inputs + search box) that preserves current values."""
+    parts = [f'<form method="get" action="/ui/{e}" class="filters">']
+    for field in ef.facets:
+        parts.append(
+            f'  <label>{field} <input type="text" name="{field}"'
+            f' value="{{{{ filters.get("{field}", "") }}}}"></label>'
+        )
+    if ef.search:
+        parts.append(
+            '  <label>search <input type="search" name="q"'
+            ' value="{{ filters.get(\'q\', \'\') }}"></label>'
+        )
+    parts.append('  <button type="submit">Filter</button>')
+    parts.append(f'  <a href="/ui/{e}">clear</a>')
+    parts.append("</form>")
+    return "\n".join(parts)
+
+
+def render_list_template(
+    schema_text: str, source_file: str, entity: str, efilter: Optional[EntityFilter] = None
+) -> str:
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
@@ -308,6 +330,7 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
     head = _tmpl_header(source_file, sha, "htmx-list", entity)
 
     cols = "".join(f"<th>{f.name}</th>" for f in fields)
+    filter_form = (_filter_form_html(e, efilter) + "\n") if efilter else ""
 
     lines = [
         '{% extends "base.html" %}',
@@ -317,6 +340,7 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
         '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}",
         f"<h1>{entity}</h1>",
         f'<a href="/ui/{e}/new">New {entity}</a>',
+        filter_form.rstrip("\n") if filter_form else None,
         f"<table>\n  <thead><tr>{cols}<th></th></tr></thead>",
         "  <tbody>",
         # Row markup lives in the shared partial (FR-CA-3) so the confirm route can re-render it.
@@ -324,7 +348,7 @@ def render_list_template(schema_text: str, source_file: str, entity: str) -> str
         "  </tbody>\n</table>",
         "{% endblock %}",
     ]
-    return head + "\n" + "\n".join(lines) + "\n"
+    return head + "\n" + "\n".join(x for x in lines if x is not None) + "\n"
 
 
 def render_detail_template(schema_text: str, source_file: str, entity: str) -> str:
@@ -567,8 +591,35 @@ def _create_redirect(e: str, pkname: str, has_pk: bool, on_create: str) -> List[
     return [f"    return RedirectResponse({target}, status_code=303)"]
 
 
+def _list_query_lines(schema: PrismaSchema, name: str, ef: EntityFilter) -> List[str]:
+    """The filter/search query-building lines for a filtered ``list_<e>`` handler (P0-2)."""
+    lines = [f"    stmt = select({name})"]
+    for field in ef.facets:
+        f = schema.model(name).field(field)
+        lines.append(f'    _v = request.query_params.get("{field}")')
+        if f is not None and f.is_list:           # JSON-array column → membership (quoted, no false sub-hits)
+            lines.append("    if _v:")
+            lines.append(
+                f'        stmt = stmt.where(_sa_cast({name}.{field}, _SAString)'
+                f".like('%\"' + _v + '\"%'))"
+            )
+        else:                                       # scalar → exact match
+            lines.append("    if _v:")
+            lines.append(f"        stmt = stmt.where({name}.{field} == _v)")
+    if ef.search:
+        terms = ", ".join(
+            f'_sa_cast({name}.{s}, _SAString).ilike("%" + _q + "%")' for s in ef.search
+        )
+        lines.append('    _q = request.query_params.get("q")')
+        lines.append("    if _q:")
+        lines.append(f"        stmt = stmt.where(_or({terms}))")
+    lines.append("    items = list(session.exec(stmt).all())")
+    return lines
+
+
 def _entity_routes(
-    schema: PrismaSchema, name: str, on_create: str = ON_CREATE_DEFAULT
+    schema: PrismaSchema, name: str, on_create: str = ON_CREATE_DEFAULT,
+    efilter: Optional[EntityFilter] = None,
 ) -> str:
     e = name.lower()
     pk = _pk_field(schema, name)
@@ -589,8 +640,12 @@ def _entity_routes(
         "",
         f'@web_router.get("/ui/{e}", response_class=HTMLResponse)',
         f"def list_{e}(request: Request, session: Session = Depends(get_session)):",
-        f"    items = list(session.exec(select({name})).all())",
-        '    ctx = {"items": items, "created": request.query_params.get("created")}',
+        *(
+            _list_query_lines(schema, name, efilter) if efilter
+            else [f"    items = list(session.exec(select({name})).all())"]
+        ),
+        '    ctx = {"items": items, "created": request.query_params.get("created"),',
+        '           "filters": dict(request.query_params)}',
         "    return templates.TemplateResponse(",
         f'        request, "{e}/list.html", ctx',
         "    )",
@@ -736,6 +791,18 @@ def _entity_routes(
     return "\n".join(lines)
 
 
+def _validate_filter_fields(schema: PrismaSchema, filters: dict) -> None:
+    """P0-2: every facet/search field must be a real column on its entity (loud-fail at render)."""
+    for entity, ef in filters.items():
+        model = schema.model(entity)
+        cols = {f.name for f in model.fields} if model else set()
+        for field in (*ef.facets, *ef.search):
+            if field not in cols:
+                raise ValueError(
+                    f"views.yaml: filters[{entity}] references unknown field {field!r}"
+                )
+
+
 def render_web(
     schema_text: str,
     source_file: str = "prisma/schema.prisma",
@@ -752,6 +819,8 @@ def render_web(
     sha = schema_sha256(schema_text)
     names = _model_names(schema, schema_text)
     forms = parse_forms(forms_text, known_entities=frozenset(names))
+    filters = parse_filters(forms_text, known_entities=frozenset(names))
+    _validate_filter_fields(schema, filters)       # P0-2: facet/search fields must be real columns
 
     if forms_text is not None:
         from ._headers import header_forms
@@ -770,11 +839,13 @@ def render_web(
         "from sqlmodel import Session, select\n\n"
         "from .db import get_session\n"
     )
+    if filters:  # P0-2: cast/or_ for facet membership + free-text search query building
+        imports += "from sqlalchemy import String as _SAString, cast as _sa_cast, or_ as _or\n"
     if names:
         imports += "from .tables import " + ", ".join(sorted(names)) + "\n"
 
     blocks = [
-        _entity_routes(schema, n, forms.get(n, ON_CREATE_DEFAULT)) for n in names
+        _entity_routes(schema, n, forms.get(n, ON_CREATE_DEFAULT), filters.get(n)) for n in names
     ]
     body = _WEB_HELPERS + ("\n\n" + "\n\n\n".join(blocks) if blocks else "")
     return header + "\n\n" + imports + "\n\n" + body + "\n"
@@ -795,6 +866,7 @@ def render_ui(
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
     forms = parse_forms(forms_text, known_entities=frozenset(names))
+    filters = parse_filters(forms_text, known_entities=frozenset(names))
 
     out: List[Tuple[str, str]] = [
         ("app/web.py", render_web(schema_text, source_file, forms_text)),
@@ -809,7 +881,7 @@ def render_ui(
         out.append(
             (
                 f"app/templates/{e}/list.html",
-                render_list_template(schema_text, source_file, n),
+                render_list_template(schema_text, source_file, n, filters.get(n)),
             )
         )
         out.append(

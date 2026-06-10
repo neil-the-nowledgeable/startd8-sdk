@@ -212,6 +212,21 @@ def test_field_default_emits_non_optional():
     assert not f.is_optional                                # default ⇒ non-optional (FR-PE-5a)
 
 
+def test_list_of_text_emits_string_array(tmp_path=None):
+    # G3: `list of text` prose type → String[] @default([]) (Column(JSON) downstream).
+    doc = (
+        "## Entities\n\n### Item\n"
+        "| Field | Type | Required | Notes |\n"
+        "|-------|------|----------|-------|\n"
+        "| tags | list of text | no | |\n"
+    )
+    g = build_entity_graph({"d.md": doc})
+    text = render_prisma_schema(g).text
+    assert "tags String[] @default([])" in text
+    f = parse_prisma_schema(text).model("Item").field("tags")
+    assert f.is_list and f.type == "String"        # round-trips as a list field
+
+
 def test_string_default_is_quoted():
     # G1: a String (non-enum/number/bool) default must be QUOTED — unquoted is invalid prisma.
     g = EntityGraph()
