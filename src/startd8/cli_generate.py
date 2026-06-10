@@ -611,3 +611,56 @@ def contract(
     # 8. draft-only: a valid (round-tripping, non-empty) draft is success; parity drift is
     #    informational here (use `--check` for the strict in-sync gate).
     raise typer.Exit(0 if (res.round_trips and res.models > 0) else 1)
+
+
+@generate_app.command("migrate")
+def migrate(
+    contract: Path = typer.Option(
+        Path("prisma/schema.prisma"), "--contract",
+        help="The current contract to migrate the DB up to."),
+    versions: Path = typer.Option(
+        Path("alembic/versions"), "--versions",
+        help="Alembic versions dir (the revision chain + embedded snapshots)."),
+    message: str = typer.Option("auto", "--message", "-m", help="Revision message (→ filename slug)."),
+    check: bool = typer.Option(
+        False, "--check",
+        help="Report whether a migration is pending; write nothing. Exit 0=up-to-date / 1=pending / 2=error."),
+):
+    """Emit an additive Alembic revision for the contract delta (OQ-SCAF-2 fork B) — $0, no live DB.
+
+    Diffs the current contract against the schema embedded in the latest revision (self-contained
+    chain). New models → `create_table`, new fields → `add_column`; **never** a drop. The operator
+    applies it with `alembic upgrade head` (FR-MG-4 — this never touches the DB).
+    """
+    from .migration_codegen import next_revision
+
+    try:
+        current_text = contract.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.print(f"[red]error:[/red] cannot read contract {contract}: {exc}")
+        raise typer.Exit(_EXIT_ERROR)
+
+    result = next_revision(versions, current_text, message)
+
+    if check:
+        if result is None:
+            console.print("[green]up to date[/green]: no pending migration.")
+            raise typer.Exit(0)
+        fname, _, plan = result
+        kind = "baseline" if plan.is_baseline else f"{len(plan.upgrade_ops)} change(s)"
+        console.print(f"[yellow]migration pending[/yellow]: {kind} → would write {fname}")
+        raise typer.Exit(1)
+
+    if result is None:
+        console.print("[green]up to date[/green]: no migration emitted.")
+        raise typer.Exit(0)
+
+    fname, text, plan = result
+    versions.mkdir(parents=True, exist_ok=True)
+    (versions / fname).write_text(text, encoding="utf-8")
+    label = "baseline" if plan.is_baseline else f"{len(plan.upgrade_ops)} additive op(s)"
+    console.print(f"[green]wrote[/green] {label} → {versions / fname}")
+    for note in plan.notes:
+        console.print(f"[yellow]note:[/yellow] {note}")
+    console.print("apply with: [cyan]alembic upgrade head[/cyan]")
+    raise typer.Exit(0)

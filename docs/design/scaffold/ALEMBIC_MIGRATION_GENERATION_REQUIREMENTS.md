@@ -2,9 +2,11 @@
 
 **Version:** 0.2 (Post-planning — self-reflective update)
 **Date:** 2026-06-10
-**Status:** Partially IMPLEMENTED 2026-06-10 — **FR-MG-1 (scaffold completion) + FR-MG-5 (create_all
-demotion + drift guard) shipped & tested** (247 passed). FR-MG-2/3/6 (fork-B baseline + delta emitter +
-check) pending OQ-SCAF-2c (the "previous-snapshot source" decision) — the focused increment-2 build.
+**Status:** IMPLEMENTED 2026-06-10 (fork B). Increment 1: FR-MG-1 (scaffold completion) + FR-MG-5
+(create_all demotion + drift guard). Increment 2: FR-MG-2/3/6 via `src/startd8/migration_codegen/` +
+`startd8 generate migrate` — OQ-SCAF-2c resolved as **self-contained snapshots** (each revision embeds
+the schema it migrates to; the chain auto-discovers its previous). **Proven end-to-end**: a generated
+baseline applies under real `alembic upgrade head` (guarded integration test). 267 passed.
 **Scope:** Close the long-deferred **OQ-SCAF-2**: give a generated app a way to evolve a **persistent**
 database to match an updated contract, so a contract field-add stops silently diverging from
 `app.db`. Driven by strtd8 `SDK_QUICK_WINS_2026-06-10` #5 + `SDK_RESUME_LIBRARY_ARCHETYPE_GAPS` P0-3.
