@@ -8,7 +8,11 @@ which also closed the latent P0-2 filter-template drift gap). Runtime-proven. 37
 **Increment 2 IMPLEMENTED 2026-06-10** — FR-DM-6 (composite-view FK resolution): a model-compose view's
 relations resolve `via_fk → target entity → label_field` (kills `neil-cpo-01`); `root_label_field` sets
 the group heading; `generate views --display` + drift consistency. Opt-in; unresolvable FK falls back.
-**Increment 3 (always-on defaults + wireframe, FR-DM-7) remains.**
+**Increment 3 (FR-DM-7) IMPLEMENTED 2026-06-10 — Part A (always-on zero-config defaults):** list/detail
+now drop id + provenance/timestamps by default (reusing the forms omit policy) and the row link reads as
+the heuristic label (name/title/label/headline) — a zero-config app no longer leaks ids. **Part B
+(wireframe `display` coverage section) deferred** — a Low-severity advisory addition (an 8th catalog key
+that ripples the wireframe determinism/cross-check goldens); not worth the churn vs the zero-config value.
 **Scope:** strtd8 `SDK_PRESENTATION_DISPLAY_HANDOFF_2026-06-10` — a new **`display.yaml`** manifest giving
 the generators the display metadata they lack, so generated screens stop leaking system IDs as labels
 (`neil-tr-01`). The **structure** sibling of #7 (view prose = words); they meet on composite views,

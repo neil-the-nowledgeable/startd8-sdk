@@ -106,16 +106,33 @@ def test_detail_groups_into_sections():
 
 
 def test_unconfigured_entity_is_byte_identical():
-    # opt-in: an entity with no display is unchanged vs the no-display render
+    # no-display renders deterministically (None == None). FR-DM-7: the zero-config default now hides
+    # id + provenance (no manifest needed) and shows domain fields.
     a = render_list_template(SCHEMA, "prisma/schema.prisma", "TargetRole")
     b = render_list_template(SCHEMA, "prisma/schema.prisma", "TargetRole", None, None)
     assert a == b
-    assert "<th>id</th>" in a                                       # default still shows all scalars
+    assert "<th>id</th>" not in a and "<th>ownerId</th>" not in a   # FR-DM-7: system cols hidden
+    assert "<th>name</th>" in a                                     # domain field shown
 
 
 # --------------------------------------------------------------------------- #
 # FR-DM-4 wiring + drift consistency (the --check false-flag fix)
 # --------------------------------------------------------------------------- #
+
+def test_zero_config_defaults_hide_system_fields_and_label_by_heuristic():
+    """FR-DM-7: with NO display.yaml at all, list/detail drop id + provenance/timestamps and the row
+    link reads as the heuristic label (name/title/...) — so a zero-config app never leaks ids."""
+    files = dict(render_backend(SCHEMA))                  # no display_text
+    lst = files["app/templates/targetrole/list.html"]
+    assert "<th>id</th>" not in lst and "<th>ownerId</th>" not in lst and "<th>createdAt</th>" not in lst
+    assert "<th>name</th>" in lst and "<th>industry</th>" in lst
+    row = files["app/templates/targetrole/_row.html"]
+    assert "<td>{{ item.id }}</td>" not in row            # no id data cell
+    assert "{{ item.name or 'view' }}" in row             # heuristic label on the link
+    detail = files["app/templates/targetrole/detail.html"]
+    assert "<dt>id</dt>" not in detail and "<dt>ownerId</dt>" not in detail
+    assert "<dt>name</dt>" in detail
+
 
 def test_display_threads_and_check_is_consistent():
     files = dict(render_backend(SCHEMA, display_text=DISPLAY))

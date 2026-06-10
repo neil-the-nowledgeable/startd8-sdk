@@ -156,16 +156,19 @@ def test_web_create_rules_exclude_system_fields():
         assert f'"{sysf}":' not in web, sysf
 
 
-def test_list_still_shows_system_fields_for_readonly_display():
-    # FR-PG-5 is forms-only: read-only list/detail still surface createdAt etc. The row cells live
-    # in the shared partial now (FR-CA-3); the list header still carries the column.
+def test_list_hides_system_fields_by_default_and_labels_by_heuristic():
+    # FR-DM-7 (zero-config): list/detail now DROP id + provenance/timestamps by default (the same
+    # omit policy forms use) and the row link reads as the heuristic label (name), not id.
     from startd8.backend_codegen.htmx_generator import render_row_template
 
     row = render_row_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
-    assert "{{ item.createdAt }}" in row
-    assert "{{ item.id }}" in row
+    for sysf in _SYSTEM_FIELDS:
+        assert "<td>{{ item." + sysf + " }}</td>" not in row  # system data cells hidden by default
+    assert "<td>{{ item.name }}</td>" in row         # domain field shown as a cell
+    assert "{{ item.name or 'view' }}" in row        # label heuristic on the row link (id stays in href)
     lst = render_list_template(PROV_SCHEMA, "prisma/schema.prisma", "Profile")
-    assert "<th>createdAt</th>" in lst  # column header stays in the list
+    assert "<th>createdAt</th>" not in lst and "<th>id</th>" not in lst
+    assert "<th>name</th>" in lst and "<th>title</th>" in lst
 
 
 def test_list_template_has_rows_and_delete():

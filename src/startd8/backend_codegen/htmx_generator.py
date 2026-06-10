@@ -261,12 +261,22 @@ def render_confirm_template(schema_text: str, source_file: str, entity: str) -> 
     return head + "\n" + f'<span id="confirm-{rid}">{control}</span>\n'
 
 
+_LABEL_HEURISTIC = ("name", "title", "label", "headline")
+
+
+def _default_label_field(schema: PrismaSchema, entity: str) -> Optional[str]:
+    """FR-DM-7: the zero-config row label — first of name/title/label/headline that's a column."""
+    cols = {f.name for f in schema.scalar_fields(entity)}
+    return next((c for c in _LABEL_HEURISTIC if c in cols), None)
+
+
 def _display_columns(schema: PrismaSchema, entity: str, display) -> List[Tuple[str, str, str]]:
-    """FR-DM-2: (field, header_label, format) per displayed list column. With a manifest, use its
-    `columns` (or default minus `hidden_fields`); without one, the current all-scalars behavior."""
+    """(field, header_label, format) per displayed list column. With a manifest, use its `columns`;
+    otherwise (FR-DM-7) default to the human/domain fields — the same id+provenance omit policy forms
+    use — so a zero-config app never leads with id/ownerId/... `hidden_fields` removes more."""
     if display and display.columns:
         return [(c.field, c.label or c.field, c.format) for c in display.columns]
-    fields = form_fields(schema, entity)
+    fields = writable_fields(schema, entity)            # FR-DM-7: drop id + provenance/timestamps
     if display and display.hidden_fields:
         fields = [f for f in fields if f.name not in display.hidden_fields]
     return [(f.name, f.name, "") for f in fields]
@@ -314,8 +324,10 @@ def render_row_template(schema_text: str, source_file: str, entity: str, display
         # The suggest→confirm verb (AR-5 / FR-CA-3/4). The row control swaps the whole row
         # (so the `confirmed` cell updates too) → it targets the row, not a confirm block.
         confirm_html = _confirm_control(e, rid, cf.name, f"#row-{rid}") + "\n    "
-    # FR-DM-2: the view link reads as the row's label (label_field) instead of a generic "view".
-    view_text = ("{{ item." + display.label_field + " or 'view' }}") if (display and display.label_field) else "view"
+    # FR-DM-2/7: the view link reads as the row's label — display.label_field, else the zero-config
+    # heuristic (name/title/label/headline), else a generic "view".
+    _lf = display.label_field if (display and display.label_field) else _default_label_field(schema, entity)
+    view_text = ("{{ item." + _lf + " or 'view' }}") if _lf else "view"
     body = (
         f'<tr id="row-{rid}"{hl}>{cells}<td>\n'
         f'    <a href="/ui/{e}/{rid}">{view_text}</a>\n'
@@ -400,7 +412,7 @@ def render_detail_template(schema_text: str, source_file: str, entity: str, disp
             for s in display.sections
         )
     else:
-        fields = form_fields(schema, entity)
+        fields = writable_fields(schema, entity)        # FR-DM-7: drop id + provenance by default
         if display and display.hidden_fields:
             fields = [f for f in fields if f.name not in display.hidden_fields]
         detail_html = _detail_dl([f.name for f in fields])
