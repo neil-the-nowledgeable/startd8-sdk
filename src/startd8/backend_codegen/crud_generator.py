@@ -270,6 +270,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "    ai_router = None\n"
         "if ai_router is not None:\n"
         "    app.include_router(ai_router)  # AI passes reachable at /ai/* via app.main\n"
+        "try:  # optional AI-pass UI triggers (ai_passes.yaml `trigger:`); detail-page buttons (FR-AIT)\n"
+        "    from .ai.ui import ai_ui_router\n"
+        "except ModuleNotFoundError:\n"
+        "    ai_ui_router = None\n"
+        "if ai_ui_router is not None:\n"
+        "    app.include_router(ai_ui_router)  # POST /ui/<entity>/{id}/run-<pass>\n"
     )
     return header + "\n\n" + body
 

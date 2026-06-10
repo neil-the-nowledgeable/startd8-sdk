@@ -349,6 +349,9 @@ def render_detail_template(schema_text: str, source_file: str, entity: str) -> s
         '{% if updated %}<p class="flash">✓ ' + entity + " updated.</p>{% endif %}\n"
         f"<h1>{entity}</h1>\n<dl>\n{rows}\n</dl>\n"
         f"{confirm_block}"
+        # FR-AIT-3: tolerant seam — the AI layer emits <e>/_ai_triggers.html only for entities with a
+        # pass `trigger:`; `ignore missing` makes this inert (and byte-stable) for everyone else.
+        '{% include "' + e + '/_ai_triggers.html" ignore missing %}\n'
         "{% endblock %}\n"
     )
     return head + "\n" + body

@@ -62,6 +62,15 @@ AI_KINDS = (
 # --------------------------------------------------------------------------- #
 
 @dataclass(frozen=True)
+class PassTrigger:
+    """FR-AIT-1: opt a pass into a generated 'Run {pass}' button on an entity's detail page."""
+
+    entity: str          # whose detail page hosts the button (its row id → source_id)
+    text_field: str      # the row field sent as the pass `text`
+    label: str           # button label
+
+
+@dataclass(frozen=True)
 class AiPass:
     name: str
     output_entities: Tuple[str, ...]
@@ -78,6 +87,8 @@ class AiPass:
     # entity has no `name` column (e.g. `Artifact` → `dedup_by: kind`). None (the default) keeps
     # today's name-based dedup — byte-identical for passes whose outputs carry a `name`.
     dedup_by: Optional[str] = None
+    # FR-AIT-1: optional generated UI trigger (a detail-page button). None ⇒ API-only (unchanged).
+    trigger: Optional[PassTrigger] = None
 
     @property
     def module(self) -> str:
@@ -90,7 +101,8 @@ class HumanInputs:
 
 
 _PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field",
-              "source_binding", "dedup_by"}
+              "source_binding", "dedup_by", "trigger"}
+_TRIGGER_KEYS = {"entity", "text_field", "label"}
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -158,6 +170,22 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                     raise ValueError(
                         f"ai_passes.yaml: pass #{i} `source_binding` requires exactly one output entity"
                     )
+        trigger = None
+        tspec = entry.get("trigger")
+        if tspec is not None:                                    # FR-AIT-1
+            if not isinstance(tspec, dict):
+                raise ValueError(f"ai_passes.yaml: pass #{i} `trigger` must be a mapping")
+            unknown_t = set(tspec) - _TRIGGER_KEYS
+            if unknown_t:
+                raise ValueError(f"ai_passes.yaml: pass #{i} `trigger` has unknown keys {sorted(unknown_t)}")
+            for req in ("entity", "text_field"):
+                if not tspec.get(req):
+                    raise ValueError(f"ai_passes.yaml: pass #{i} `trigger` missing required `{req}`")
+            trigger = PassTrigger(
+                entity=str(tspec["entity"]),
+                text_field=str(tspec["text_field"]),
+                label=str(tspec.get("label") or f"Run {entry['name']}"),
+            )
         passes.append(
             AiPass(
                 name=str(entry["name"]),
@@ -168,6 +196,7 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 request_field=str(entry.get("request_field", "text")),
                 source_binding=binding,
                 dedup_by=dedup_by,
+                trigger=trigger,
             )
         )
     if not passes:
@@ -866,6 +895,105 @@ def render_ai_routes(schema_text, manifest_text, human_text, source_file="prisma
 
 
 # --------------------------------------------------------------------------- #
+# FR-AIT-2/3 — generated UI trigger to RUN a pass from an entity detail page    #
+# --------------------------------------------------------------------------- #
+
+def _triggered_passes(manifest_text: str) -> List[AiPass]:
+    return [ps for ps in parse_ai_passes(manifest_text) if ps.trigger]
+
+
+def render_ai_ui_routes(
+    schema_text: str, manifest_text: str, human_text: Optional[str],
+    source_file: str = "prisma/schema.prisma",
+) -> str:
+    """``app/ai/ui.py`` — `ai_ui_router`: one form-POST route per triggered pass (FR-AIT-2).
+
+    Loads the host row, sends its ``text_field`` (and id as ``source_id`` for source-bound passes),
+    then 303-redirects back to the detail page with an ``?ai=ok|unavailable`` flash. Plain PRG, no JS.
+    """
+    s, p, h = _hashes(schema_text, manifest_text, human_text)
+    human = parse_human_inputs(human_text)
+    triggered = _triggered_passes(manifest_text)
+    bindings = {ps.name: effective_source_binding(schema_text, ps, human) for ps in triggered}
+    entities = sorted({ps.trigger.entity for ps in triggered})
+    header = header_ai_layer(source_file, s, p, h, "ai-ui-router")
+
+    routes: List[str] = []
+    for ps in triggered:
+        t = ps.trigger
+        e = t.entity.lower()
+        idv = f"{e}_id"
+        call = (
+            f"{ps.module}(text, session, source_id={idv})"
+            if bindings[ps.name] else f"{ps.module}(text, session)"
+        )
+        routes.append(
+            '@ai_ui_router.post("/ui/' + e + '/{' + idv + '}/run-' + ps.module + '")\n'
+            "def run_" + ps.module + "(" + idv + ": str, session: Session = Depends(get_session)):\n"
+            '    """Run the ' + ps.name + " pass from the " + t.entity + ' detail page (FR-AIT-2)."""\n'
+            "    item = session.get(" + t.entity + ", " + idv + ")\n"
+            "    if item is None:\n"
+            '        raise HTTPException(status_code=404, detail="' + t.entity + ' not found")\n'
+            '    text = getattr(item, "' + t.text_field + '", "") or ""\n'
+            '    flash = "ok"\n'
+            "    try:\n"
+            "        " + call + "\n"
+            "    except AIUnavailableError:  # FR-40: a polite no, never a crash\n"
+            '        flash = "unavailable"\n'
+            '    return RedirectResponse(f"/ui/' + e + "/{" + idv + '}?ai={flash}", status_code=303)'
+        )
+    head = (
+        "from __future__ import annotations\n\n"
+        "from fastapi import APIRouter, Depends, HTTPException\n"
+        "from fastapi.responses import RedirectResponse\n"
+        "from sqlmodel import Session\n\n"
+        "from app.db import get_session\n"
+        "from app.tables import " + ", ".join(entities) + "\n"
+        "from app.ai.service import AIUnavailableError\n"
+        + "".join(f"from app.ai.{ps.module} import {ps.module}\n" for ps in triggered)
+        + '\nai_ui_router = APIRouter(tags=["ai-ui"])\n\n\n'
+    )
+    return header + "\n\n" + head + "\n\n\n".join(routes) + "\n"
+
+
+def render_ai_trigger_partials(
+    schema_text: str, manifest_text: str,
+    source_file: str = "prisma/schema.prisma",
+) -> List[Tuple[str, str]]:
+    """``app/templates/<entity>/_ai_triggers.html`` per host entity (FR-AIT-3).
+
+    A form-button per pass + an ``?ai=`` flash. Included by the detail template via a tolerant
+    ``{% include ... ignore missing %}`` seam, so no-trigger projects are unaffected.
+    """
+    schema = parse_prisma_schema(schema_text)
+    triggered = _triggered_passes(manifest_text)
+    by_entity: Dict[str, List[AiPass]] = {}
+    for ps in triggered:
+        by_entity.setdefault(ps.trigger.entity, []).append(ps)
+
+    out: List[Tuple[str, str]] = []
+    for entity, plist in by_entity.items():
+        e = entity.lower()
+        model = schema.model(entity)
+        pk = next((f.name for f in model.fields if f.is_id), "id") if model else "id"
+        flash = (
+            "{# startd8-artifact: ai-trigger-partial — GENERATED, do not edit #}\n"
+            "{% if request.query_params.get('ai') == 'ok' %}"
+            '<p class="flash">✓ AI pass complete.</p>{% endif %}\n'
+            "{% if request.query_params.get('ai') == 'unavailable' %}"
+            '<p class="flash">AI assist unavailable — the app works fully without it.</p>{% endif %}\n'
+        )
+        forms = "\n".join(
+            '<form method="post" action="/ui/' + e + "/{{ item." + pk + " }}/run-" + ps.module + '">\n'
+            "  <button type=\"submit\">" + ps.trigger.label + "</button>\n"
+            "</form>"
+            for ps in plist
+        )
+        out.append((f"app/templates/{e}/_ai_triggers.html", flash + forms + "\n"))
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # AI-layer semantic tests (rung 4 — the deterministic floor under the LLM core)
 # --------------------------------------------------------------------------- #
 
@@ -1168,6 +1296,10 @@ def render_ai_layer(
             )
         )
     out.append(("app/ai/routes.py", render_ai_routes(schema_text, manifest_text, human_text, source_file)))
+    # FR-AIT-2/3: a generated UI trigger (route + detail-page button) for each pass that opts in.
+    if any(ps.trigger for ps in passes):
+        out.append(("app/ai/ui.py", render_ai_ui_routes(schema_text, manifest_text, human_text, source_file)))
+        out.extend(render_ai_trigger_partials(schema_text, manifest_text, source_file))
     out.append(("app/server.py", render_server(schema_text, manifest_text, human_text, source_file)))
     # Rung-4 AI-layer semantic tests: FR-6/NFR-2 edge privacy + the offline provenance gate.
     out.append(("tests/test_edge_privacy.py", render_edge_tests(schema_text, manifest_text, human_text, source_file)))
