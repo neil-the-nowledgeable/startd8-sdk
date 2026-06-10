@@ -45,7 +45,9 @@ _ENUM_REF_RE = re.compile(r"^enum:\s*(\w+)$", re.IGNORECASE)
 _HUMAN_ONLY_RE = re.compile(r"ONLY HUMANS ENTER", re.IGNORECASE)
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 # FR-PE-5(a): a `default: <value>` clause in the Notes cell → @default(<value>).
-_DEFAULT_RE = re.compile(r"\bdefault:\s*([^,;|]+)", re.IGNORECASE)
+# G1: the value is a BOUNDED token — stop at `,` `;` `|` AND `(` so a trailing parenthetical
+# (e.g. `default: draft (FR-RM-2)`) is not swallowed greedily into the default.
+_DEFAULT_RE = re.compile(r"\bdefault:\s*([^,;|(]+)", re.IGNORECASE)
 
 
 def _lower_camel(name: str) -> str:

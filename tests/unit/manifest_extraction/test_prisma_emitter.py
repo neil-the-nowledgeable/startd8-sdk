@@ -17,6 +17,7 @@ from startd8.manifest_extraction.entities import (
     JoinModel,
     extract_entities,
 )
+from startd8.manifest_extraction.extract import build_entity_graph
 from startd8.manifest_extraction.grammar import find_section, parse_sections
 from startd8.manifest_extraction.prisma_emitter import (
     emit_schema_draft,
@@ -209,6 +210,33 @@ def test_field_default_emits_non_optional():
     f = parse_prisma_schema(render_prisma_schema(g).text).model("M").field("matchScore")
     assert "@default(0)" in f.attributes
     assert not f.is_optional                                # default ⇒ non-optional (FR-PE-5a)
+
+
+def test_string_default_is_quoted():
+    # G1: a String (non-enum/number/bool) default must be QUOTED — unquoted is invalid prisma.
+    g = EntityGraph()
+    g.entities["M"] = DocEntity("M", (
+        DocField("heading", "text", "String", False, "", False, 0, default="Hello World"),
+    ), ("Entities", "M"))
+    f = parse_prisma_schema(render_prisma_schema(g).text).model("M").field("heading")
+    assert '@default("Hello World")' in f.attributes      # quoted, round-trips
+    assert not f.is_optional
+
+
+def test_default_value_parsed_as_bounded_token():
+    # G1: `default:` must stop at `(` (and ;,|), not run greedily to end-of-cell, so a trailing
+    # parenthetical (e.g. an FR ref) is not swallowed into the @default(...).
+    doc = (
+        "## Enums\n\n### Enum: Status\ndraft | final\n\n"
+        "## Entities\n\n### Build\n"
+        "| Field | Type | Required | Notes |\n"
+        "|-------|------|----------|-------|\n"
+        "| status | enum: Status | yes | lifecycle; default: draft (FR-RM-2) |\n"
+    )
+    g = build_entity_graph({"d.md": doc})
+    f = parse_prisma_schema(render_prisma_schema(g).text).model("Build").field("status")
+    assert "@default(draft)" in f.attributes                # enum default unquoted + bounded
+    assert not any("FR-RM-2" in a for a in f.attributes)    # parenthetical NOT swallowed
 
 
 def test_loose_ref_emits_scalar_without_relation_or_reverse_list():

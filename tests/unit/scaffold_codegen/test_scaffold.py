@@ -124,6 +124,26 @@ def test_generated_python_compiles(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_extra_dependencies_flow_to_pyproject_and_owned_requirements():
+    """G4: app.yaml `extra_dependencies` flow into pyproject `dependencies` + requirements-owned.txt
+    so an owned-glue capability's runtime deps reach a deploy without a hand-maintained file."""
+    m = MANIFEST + "\nextra_dependencies:\n  - reportlab\n  - pypdf\n"
+    files = dict(render_scaffold(m))
+    py = files["pyproject.toml"]
+    assert "reportlab" in py and "pypdf" in py                 # in [project].dependencies
+    owned = files["requirements-owned.txt"]
+    assert owned.splitlines()[-2:] == ["reportlab", "pypdf"]   # generated deploy file
+    assert scaffold_in_sync(m, owned) is True                  # owned + drift-tracked
+    # no extra_dependencies → no requirements-owned.txt (FR: emitted only when declared)
+    assert "requirements-owned.txt" not in dict(render_scaffold(MANIFEST))
+
+
+def test_extra_dependencies_must_be_a_string_list():
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="extra_dependencies"):
+        render_scaffold(MANIFEST + "\nextra_dependencies:\n  reportlab: yes\n")
+
+
 def test_alembic_mako_completes_the_migration_harness():
     """FR-MG-1: the scaffold emits script.py.mako (so `alembic revision` works) + a versions dir."""
     files = dict(render_scaffold(MANIFEST))

@@ -57,7 +57,8 @@ def render_pyproject(manifest_text: str) -> str:
         f'name = "{m.name}"\n'
         'version = "0.1.0"\n'
         f'requires-python = ">={m.python_version}"\n'
-        f"dependencies = {_toml_list(_RUNTIME_DEPS)}\n\n"
+        # G4: contract-stack deps + any owned-glue deps declared in app.yaml `extra_dependencies`.
+        f"dependencies = {_toml_list(_RUNTIME_DEPS + m.extra_dependencies)}\n\n"
         "[project.optional-dependencies]\n"
         f"dev = {_toml_list(_DEV_DEPS)}\n\n"
         "[tool.setuptools]\n"
@@ -209,6 +210,20 @@ def render_alembic_mako(manifest_text: str) -> str:
     return _header("scaffold-alembic-mako", sha) + "\n\n" + body
 
 
+def render_owned_requirements(manifest_text: str) -> str:
+    """``requirements-owned.txt`` — owned-glue runtime deps from app.yaml `extra_dependencies` (G4).
+
+    The SDK-fixed runtime stack stays in the backend's ``requirements.txt``; owned-capability deps
+    (e.g. reportlab/pypdf for an owned PDF path) land here so a deploy can
+    ``pip install -r requirements.txt -r requirements-owned.txt`` instead of hand-maintaining a file.
+    Emitted only when ``extra_dependencies`` is non-empty (see render_scaffold).
+    """
+    m = parse_app_manifest(manifest_text)
+    sha = schema_sha256(manifest_text)
+    body = "\n".join(m.extra_dependencies)
+    return _header("scaffold-owned-requirements", sha) + "\n\n" + body + "\n"
+
+
 def render_env_example(manifest_text: str) -> str:
     """``.env.example`` — the local-config template (API key, DB url, cost budget). Bucket-1 plumbing."""
     m = parse_app_manifest(manifest_text)
@@ -229,6 +244,8 @@ def render_scaffold(manifest_text: str) -> Tuple[Tuple[str, str], ...]:
         (f"{m.package}/logging_config.py", render_logging(manifest_text)),
         (".env.example", render_env_example(manifest_text)),
     ]
+    if m.extra_dependencies:  # G4: only when the app declares owned-glue deps
+        out.append(("requirements-owned.txt", render_owned_requirements(manifest_text)))
     if m.dockerfile:
         out.append(("Dockerfile", render_dockerfile(manifest_text)))
     if m.migrations:
@@ -248,5 +265,6 @@ SCAFFOLD_RENDERERS = {
     "scaffold-alembic-ini": render_alembic_ini,
     "scaffold-alembic-env": render_alembic_env,
     "scaffold-alembic-mako": render_alembic_mako,
+    "scaffold-owned-requirements": render_owned_requirements,
     "scaffold-env": render_env_example,
 }

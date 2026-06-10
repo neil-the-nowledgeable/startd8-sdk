@@ -9,11 +9,11 @@ fail loud (never an LLM fallback), mirroring ``ai_passes.yaml``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import yaml
 
-_TOP_KEYS = {"app", "persistence", "logging", "migrations", "container"}
+_TOP_KEYS = {"app", "persistence", "logging", "migrations", "container", "extra_dependencies"}
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,9 @@ class AppManifest:
     migrations: bool = True
     dockerfile: bool = True
     python_version: str = "3.11"
+    # G4: owned-glue runtime deps (e.g. reportlab/pypdf for an owned PDF path) declared in app.yaml,
+    # so an app that adds an owned capability can flow its deps through the generate path.
+    extra_dependencies: Tuple[str, ...] = ()
 
 
 def parse_app_manifest(text: Optional[str]) -> AppManifest:
@@ -50,6 +53,10 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         if not isinstance(block, dict):
             raise ValueError(f"app.yaml: `{name}` must be a mapping")
 
+    extra_deps = data.get("extra_dependencies") or []
+    if not isinstance(extra_deps, list) or not all(isinstance(d, str) for d in extra_deps):
+        raise ValueError("app.yaml: `extra_dependencies` must be a list of strings")
+
     return AppManifest(
         name=str(app.get("name", "app")),
         package=str(app.get("package", "app")),
@@ -58,4 +65,5 @@ def parse_app_manifest(text: Optional[str]) -> AppManifest:
         migrations=bool(migrations_.get("enabled", True)),
         dockerfile=bool(container.get("dockerfile", True)),
         python_version=str(app.get("python_version", "3.11")),
+        extra_dependencies=tuple(extra_deps),
     )
