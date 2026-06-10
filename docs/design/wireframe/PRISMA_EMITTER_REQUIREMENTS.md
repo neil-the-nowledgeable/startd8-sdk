@@ -148,6 +148,26 @@ deterministic assembly).
   only under the run dir; promotion is a separate, logged copy; re-running without promotion never
   mutates the project `schema.prisma`.
 
+- **FR-PE-13 — Custom reverse-relation names (`as <name>`).** A relationship sentence may name the
+  parent's reverse-list field with a trailing `as <name>` clause — e.g.
+  `JobDescription has many JobStatusEntry as statusHistory` (or the child's-perspective
+  `JobStatusEntry belongs to JobDescription as statusHistory`). The emitter uses that name for the
+  reverse list; absent the clause it falls back to the plural-of-child convention (`_plural`). This
+  lets a contract whose hand-authored reverse name diverges from the convention (e.g. `statusHistory`
+  vs the convention's `jobStatusEntries`, referenced by owned `fsm.py`) stay **fully derived without
+  renaming the live field** — the gap #4 resolution from `SDK_EMITTER_GRAMMAR_GAPS_2026-06-09`.
+  Extends: FR-PE-3. Verify: `has many X as Y` emits the parent's reverse list named `Y` typed `X[]`;
+  the same sentence without `as` emits the plural convention name.
+
+> **Implementation note (gaps #1–#3, `SDK_EMITTER_GRAMMAR_GAPS_2026-06-09`):** the FR-PE-5(b/c)
+> constructs (`@@index`, compound `@@unique`, loose-ref scalars) were *emitted* correctly but never
+> reached the emitter through the CLI path: `extract.py::_build_graph` merged only
+> `entities`/`joins`/`fk_parents` from each doc's sub-graph and silently dropped `indexes`/`uniques`/
+> `loose_refs` (only the unit tests, calling `extract_entities` directly, exercised them). The old
+> `diff_against_live` compared presence only, so the drop was invisible until `generate contract
+> --check` (semantic parity) existed. Fixed by merging all per-entity graph fields in `_build_graph`;
+> regression-tested through `build_entity_graph` (the real CLI path).
+
 ## 3. Non-Requirements
 
 - **No LLM in the emitter.** It renders a parsed AST deterministically; any value not present in

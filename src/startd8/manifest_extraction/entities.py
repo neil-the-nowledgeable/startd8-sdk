@@ -100,6 +100,9 @@ class EntityGraph:
     fk_parents: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...]
     # FR-PE-8: named enums declared under `## Enums` (name -> ordered values), shared by N fields.
     enums: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    # FR-PE-13: custom reverse-relation names from an `as <name>` clause, keyed (parent, child).
+    # Absent ⇒ the emitter falls back to the plural-of-child convention.
+    reverse_names: Dict[Tuple[str, str], str] = field(default_factory=dict)
     # FR-PE-5 grammar gaps (slice 3):
     loose_refs: Dict[str, List[str]] = field(default_factory=dict)  # child -> [parent,...] (no FK)
     indexes: Dict[str, List[Tuple[str, ...]]] = field(default_factory=dict)   # entity -> [@@index]
@@ -291,6 +294,16 @@ def _relationship_paragraph(body: str) -> str:
 _VERB_3FORM = re.compile(
     r"links\s+(?P<x>\w+)\s+to\s+(?P<y>\w+)", re.IGNORECASE
 )
+# FR-PE-13: an optional trailing `as <name>` clause naming the reverse-relation list field.
+_AS_RE = re.compile(r"\bas\s+(?P<name>\w+)\s*$", re.IGNORECASE)
+
+
+def _split_as_clause(rest: str) -> Tuple[str, Optional[str]]:
+    """Strip a trailing ``as <name>`` from a relationship object phrase; return (rest, name)."""
+    m = _AS_RE.search(rest)
+    if not m:
+        return rest, None
+    return rest[: m.start()].strip(), m.group("name")
 _VERB_RE = re.compile(
     r"\b(?P<subj>[A-Z]\w+)\b\s+"
     r"(?P<verb>links to many|has many|has one|belongs to|references|links)\s+"
@@ -354,6 +367,7 @@ def _parse_relationships(
                 continue
             _add_join(graph, subj, obj, src, records)  # symmetric restatements dedup inside
         elif verb in ("has many", "has one"):
+            rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
             obj = graph.resolve_entity(rest.split()[0] if rest else "")
             if not obj:
                 records.append(ExtractionRecord(
@@ -364,11 +378,14 @@ def _parse_relationships(
             graph.fk_parents.setdefault(obj, [])
             if subj not in graph.fk_parents[obj]:
                 graph.fk_parents[obj].append(subj)
+            if rev_name:                              # parent=subj, child=obj
+                graph.reverse_names[(subj, obj)] = rev_name
             records.append(ExtractionRecord(
                 "schema.prisma", f"/relationships/{subj}-{verb.replace(' ', '_')}-{obj}",
                 Status.EXTRACTED, value=f"{obj}.{_lower_camel(subj)}Id", source=src,
             ))
         elif verb == "belongs to":
+            rest, rev_name = _split_as_clause(rest)   # FR-PE-13: optional `as <name>`
             obj = graph.resolve_entity(rest.split()[0] if rest else "")
             if not obj:
                 records.append(ExtractionRecord(
@@ -379,6 +396,8 @@ def _parse_relationships(
             graph.fk_parents.setdefault(subj, [])
             if obj not in graph.fk_parents[subj]:
                 graph.fk_parents[subj].append(obj)
+            if rev_name:                              # parent=obj, child=subj
+                graph.reverse_names[(obj, subj)] = rev_name
             records.append(ExtractionRecord(
                 "schema.prisma", f"/relationships/{subj}-belongs_to-{obj}",
                 Status.EXTRACTED, value=f"{subj}.{_lower_camel(obj)}Id", source=src,

@@ -87,6 +87,20 @@ def _build_graph(
                 for p in parents:
                     if p not in dst:
                         dst.append(p)
+            # FR-PE-5(b/c): these per-entity constructs were dropped here, so the CLI emit path
+            # silently lost @@index / @@unique / loose-ref FKs (only direct extract_entities, used
+            # by unit tests, saw them). Merge them like the rest — first declaration wins.
+            for child, parents in sub.loose_refs.items():
+                dst = graph.loose_refs.setdefault(child, [])
+                for p in parents:
+                    if p not in dst:
+                        dst.append(p)
+            for entity, specs in sub.indexes.items():
+                graph.indexes.setdefault(entity, []).extend(specs)
+            for entity, specs in sub.uniques.items():
+                graph.uniques.setdefault(entity, []).extend(specs)
+            for key, name in sub.reverse_names.items():     # FR-PE-13: custom reverse names
+                graph.reverse_names.setdefault(key, name)
     return graph, per_doc_sections
 
 

@@ -137,7 +137,9 @@ def render_prisma_schema(
             fk = f"{_lower_camel(parent)}Id"
             fk_blocks.setdefault(child, []).append((fk, "String"))
             fk_blocks[child].append((_lower_camel(parent), f"{parent} {_relation_attr(fk)}"))
-            rev_lists.setdefault(parent, []).append((_plural(child), f"{child}[]"))
+            # FR-PE-13: a custom `as <name>` reverse-relation name wins over the plural convention.
+            rev_name = graph.reverse_names.get((parent, child), _plural(child))
+            rev_lists.setdefault(parent, []).append((rev_name, f"{child}[]"))
 
     # M2M join: each side gets a reverse list typed by the join model.
     for j in graph.joins:
