@@ -12,7 +12,7 @@ Two-hash drift: a view file is stale if **either** the schema or ``views.yaml`` 
 from __future__ import annotations
 
 import json
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
 from .manifest import ViewSpec, _signal_parts, parse_views
@@ -190,16 +190,45 @@ def _render_workspace(v: ViewSpec) -> str:
     return "\n".join(lines)
 
 
-def _render_detail_compose_model(v: ViewSpec) -> str:
+def _fk_target(via_fk: str, schema) -> Optional[str]:
+    """SDK FK convention: ``<lowerCamel(Target)>Id`` → ``Target`` (validated against the schema)."""
+    if schema and via_fk.endswith("Id"):
+        cand = via_fk[:-2]
+        cand = cand[:1].upper() + cand[1:]
+        if schema.model(cand) is not None:
+            return cand
+    return None
+
+
+def _resolved_rel_map(v: ViewSpec, vd, schema) -> Dict[str, Tuple[str, str, str]]:
+    """FR-DM-6: relations with a display binding (via_fk + label_field) whose FK target resolves →
+    {rel_name: (via_fk, label_field, target_entity)}. The data-fetch + template use this identically
+    so a bound relation renders the target's LABEL, not the join-row id (kills ``neil-cpo-01``)."""
+    out: Dict[str, Tuple[str, str, str]] = {}
+    if not vd:
+        return out
+    rel_names = {r.name for r in v.relations}
+    for rd in vd.relations:
+        if rd.name in rel_names and rd.via_fk and rd.label_field:
+            tgt = _fk_target(rd.via_fk, schema)
+            if tgt is not None:
+                out[rd.name] = (rd.via_fk, rd.label_field, tgt)
+    return out
+
+
+def _render_detail_compose_model(v: ViewSpec, vd=None, schema=None) -> str:
     """Model-scoped detail-compose (AR-1 / FR-8): EVERY root + resolved relations on ONE page.
 
     The whole-model compose behind the Value Map: iterate ALL roots, resolve each declared
     relation per root, compute conditional panels per root, and flag a root with no resolved
     relation rows as unlinked (the "not yet linked" empty-ish state) — never drop it. The route
     takes no ``{id}``; bare GET serves 200 on empty AND populated DBs (empty -> empty list ->
-    the template's meaningful empty state).
+    the template's meaningful empty state). FR-DM-6: relations bound in display.yaml resolve the
+    join row → the target entity's label (``{id, label}``) instead of leaking the join-row id.
     """
-    entities = sorted({v.root} | {r.frm for r in v.relations})
+    resolved = _resolved_rel_map(v, vd, schema)
+    extra_targets = {t for (_fk, _lf, t) in resolved.values()}
+    entities = sorted({v.root} | {r.frm for r in v.relations} | extra_targets)
     imports = ", ".join(entities)
     lines = [
         "from __future__ import annotations", "",
@@ -213,11 +242,27 @@ def _render_detail_compose_model(v: ViewSpec) -> str:
         f"    for root in session.exec(select({v.root})).all():",
         '        item: dict[str, Any] = {"root": root}',
     ]
-    for r in v.relations:
+    if vd and vd.root_label_field:                  # FR-DM-6: group heading = the root's label
         lines.append(
-            f"        item[{r.name!r}] = session.exec("
-            f"select({r.frm}).where({r.frm}.{r.fk} == root.id)).all()"
+            f'        item["root_label"] = getattr(root, {vd.root_label_field!r}, None) or root.id'
         )
+    for r in v.relations:
+        if r.name in resolved:                      # FR-DM-6: resolve join row → target {id, label}
+            via_fk, label_field, tgt = resolved[r.name]
+            lines += [
+                f"        item[{r.name!r}] = []",
+                f"        for _j in session.exec("
+                f"select({r.frm}).where({r.frm}.{r.fk} == root.id)).all():",
+                f"            _tid = getattr(_j, {via_fk!r})",
+                f"            _t = session.get({tgt}, _tid)",
+                f"            item[{r.name!r}].append("
+                f"{{'id': _tid, 'label': getattr(_t, {label_field!r}, None) or _tid}})",
+            ]
+        else:
+            lines.append(
+                f"        item[{r.name!r}] = session.exec("
+                f"select({r.frm}).where({r.frm}.{r.fk} == root.id)).all()"
+            )
     if v.panels:
         lines.append("        panels: dict[str, bool] = {}")
         for pn in v.panels:
@@ -690,8 +735,11 @@ _ID_ROUTED = {"workspace", "detail-compose", "export-package"}
 
 def render_view_module(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, views: Tuple[ViewSpec, ...] = (),
+    view_display=None,
 ) -> str:
-    if v.kind == "import-flow":  # contract-driven: bakes datetime-field + PK maps from the schema
+    if _is_model_compose(v) and view_display is not None:
+        body = _render_detail_compose_model(v, view_display, schema)  # FR-DM-6 label resolution
+    elif v.kind == "import-flow":  # contract-driven: bakes datetime-field + PK maps from the schema
         body = _render_import_flow(v, schema)
     elif _is_model_export(v):
         # FR-10 conformance: the named MD layout renders rendered-content prose VERBATIM (the same
@@ -928,7 +976,9 @@ def render_view_index_template(v: ViewSpec, schema_sha: str, views_sha: str) -> 
     )
 
 
-def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
+def render_view_template(
+    v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None
+) -> str:
     head = (
         "{#\n"
         "# GENERATED from prisma/schema.prisma (+ views.yaml) — do not edit by hand.\n"
@@ -984,10 +1034,16 @@ def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
             "{% endblock %}\n"
         )
     elif _is_model_compose(v):  # AR-1: every root on one page; meaningful empty state; unlinked flagged
+        # FR-DM-6: bound relations render the resolved target label ({{ x.label }}); the group
+        # heading uses the root's label when display.yaml sets root_label_field. Unbound → id (today).
+        resolved = _resolved_rel_map(v, view_display, schema)
         rel_lines = "".join(
-            f"<h3>{r.name}</h3>\n<ul>{{% for x in item.{r.name} %}}<li>{{{{ x.id }}}}</li>{{% endfor %}}</ul>\n"
+            (f"<h3>{r.name}</h3>\n<ul>{{% for x in item.{r.name} %}}<li>"
+             + ("{{ x.label }}" if r.name in resolved else "{{ x.id }}")
+             + "</li>{% endfor %}</ul>\n")
             for r in v.relations
         )
+        heading = "{{ item.root_label }}" if (view_display and view_display.root_label_field) else "{{ item.root.id }}"
         unlinked = (
             '{% if not item.linked %}<p class="unlinked">not yet linked</p>{% endif %}\n'
             if v.relations else ""
@@ -996,7 +1052,7 @@ def render_view_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
             '{% extends "base.html" %}\n{% block content %}\n'
             f"<h1>{v.module}</h1>\n"
             f'{{% if not rows %}}<p class="empty">No {v.root} records yet — add one to start the map.</p>{{% endif %}}\n'
-            "{% for item in rows %}<section><h2>{{ item.root.id }}</h2>\n"
+            "{% for item in rows %}<section><h2>" + heading + "</h2>\n"
             + unlinked + rel_lines +
             "</section>{% endfor %}\n"
             "{% endblock %}\n"
@@ -1501,15 +1557,22 @@ def _render_model_export_test(schema, v: ViewSpec, prose_specs: Tuple[ViewSpec, 
 # Assembly
 # --------------------------------------------------------------------------- #
 
-def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ...]:
+def render_views(
+    schema_text: str, views_text: str, display_text: Optional[str] = None
+) -> Tuple[Tuple[str, str], ...]:
     """Every composite-view artifact as ``(relative_path, text)`` pairs.
 
     ``known_entities`` for strict validation is derived from the schema (reuses the parser via
-    ``backend_codegen`` would cause a cycle, so we parse names cheaply here).
+    ``backend_codegen`` would cause a cycle, so we parse names cheaply here). *display_text*
+    (``display.yaml``) drives FR-DM-6 composite-view label resolution (via_fk → target → label).
     """
     from ..languages.prisma_parser import parse_prisma_schema
 
     schema = parse_prisma_schema(schema_text)
+    view_displays: Dict[str, object] = {}
+    if display_text:
+        from ..backend_codegen.display_manifest import parse_display
+        _, view_displays = parse_display(display_text, schema)
     known = frozenset(schema.models)
     # Field-level loud-fail for AR-6 content_field: entity -> its scalar field names.
     known_fields = {
@@ -1528,10 +1591,13 @@ def render_views(schema_text: str, views_text: str) -> Tuple[Tuple[str, str], ..
             _header(s_sha, v_sha, "view-prose-helper") + "\n\n" + _PROSE_MODULE,
         ))
     for v in views:
-        out.append((_module_path(v), render_view_module(v, s_sha, v_sha, schema=schema, views=views)))
+        vd = view_displays.get(v.module)            # FR-DM-6: per-view display (None ⇒ today's output)
+        out.append((_module_path(v), render_view_module(
+            v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
             continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
-        out.append((f"app/templates/views/{v.module}.html", render_view_template(v, s_sha, v_sha)))
+        out.append((f"app/templates/views/{v.module}.html",
+                    render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd)))
         if v.kind == "detail-compose" and "{" not in v.route:
             out.append((
                 f"app/templates/views/{v.module}_index.html",

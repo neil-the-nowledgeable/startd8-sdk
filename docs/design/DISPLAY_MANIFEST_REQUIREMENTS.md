@@ -4,8 +4,11 @@
 **Date:** 2026-06-10
 **Status:** Increment 1 IMPLEMENTED 2026-06-10 — FR-DM-1..5 (`display_manifest` parser + entity list
 columns/labels/order/label_field/format + detail sections + `--display` wiring + drift consistency,
-which also closed the latent P0-2 filter-template drift gap). Runtime-proven. 375 passed. **Increments
-2 (composite-view FK resolution, FR-DM-6) and 3 (always-on defaults + wireframe, FR-DM-7) remain.**
+which also closed the latent P0-2 filter-template drift gap). Runtime-proven. 375 passed.
+**Increment 2 IMPLEMENTED 2026-06-10** — FR-DM-6 (composite-view FK resolution): a model-compose view's
+relations resolve `via_fk → target entity → label_field` (kills `neil-cpo-01`); `root_label_field` sets
+the group heading; `generate views --display` + drift consistency. Opt-in; unresolvable FK falls back.
+**Increment 3 (always-on defaults + wireframe, FR-DM-7) remains.**
 **Scope:** strtd8 `SDK_PRESENTATION_DISPLAY_HANDOFF_2026-06-10` — a new **`display.yaml`** manifest giving
 the generators the display metadata they lack, so generated screens stop leaking system IDs as labels
 (`neil-tr-01`). The **structure** sibling of #7 (view prose = words); they meet on composite views,

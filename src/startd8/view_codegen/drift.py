@@ -18,14 +18,16 @@ def is_owned_view_file(text: str) -> bool:
     return _MARKER in t and "views-sha256:" in t
 
 
-def views_in_sync(schema_text: str, views_text: str, path, ondisk_text: str) -> bool:
-    """True iff *ondisk_text* at *path* matches a fresh render of (schema, views.yaml)."""
+def views_in_sync(
+    schema_text: str, views_text: str, path, ondisk_text: str, display_text=None
+) -> bool:
+    """True iff *ondisk_text* at *path* matches a fresh render of (schema, views.yaml[, display.yaml])."""
     if not is_owned_view_file(ondisk_text):
         return False
     from .renderers import render_views
 
     try:
-        rendered = render_views(schema_text, views_text)
+        rendered = render_views(schema_text, views_text, display_text)
     except ValueError:
         return False
     tail = Path(path).as_posix()

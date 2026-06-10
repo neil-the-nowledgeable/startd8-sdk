@@ -416,6 +416,12 @@ def views(
     schema: Path = typer.Option(..., "--schema", help="Path to prisma/schema.prisma."),
     views_manifest: Path = typer.Option(..., "--views", help="Path to views.yaml (composite views)."),
     out: Path = typer.Option(Path("."), "--out", help="Project root to write app/views into."),
+    display: Optional[Path] = typer.Option(
+        None, "--display",
+        help="Path to display.yaml. Drives FR-DM-6 composite-view label resolution: a view's "
+        "relations resolve via_fk → target entity → label_field so rows show names, not join-row "
+        "ids. Threaded to both generate and --check.",
+    ),
     check: bool = typer.Option(
         False, "--check", help="Drift-check owned view files instead of writing (exit 1 on drift)."
     ),
@@ -430,12 +436,13 @@ def views(
     try:
         schema_text = schema.read_text(encoding="utf-8")
         views_text = views_manifest.read_text(encoding="utf-8")
+        display_text = display.read_text(encoding="utf-8") if display is not None else None
     except OSError as exc:
         console.print(f"[red]error:[/red] cannot read input: {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
     try:
-        artifacts = render_views(schema_text, views_text)
+        artifacts = render_views(schema_text, views_text, display_text)
     except ValueError as exc:  # malformed views.yaml / unknown entity — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
@@ -447,7 +454,9 @@ def views(
                 continue  # the empty package marker
             target = out / rel
             ondisk = target.read_text(encoding="utf-8") if target.exists() else None
-            if ondisk is None or not views_in_sync(schema_text, views_text, target, ondisk):
+            if ondisk is None or not views_in_sync(
+                schema_text, views_text, target, ondisk, display_text
+            ):
                 drifted += 1
                 console.print(
                     f"[yellow]drift[/yellow]: {rel} — missing or differs from a fresh render "
