@@ -276,6 +276,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "    ai_ui_router = None\n"
         "if ai_ui_router is not None:\n"
         "    app.include_router(ai_ui_router)  # POST /ui/<entity>/{id}/run-<pass>\n"
+        "try:  # optional step-state flows (views.yaml `flows:`); /flow/<name>/* (FR-WZ-5)\n"
+        "    from .flows import flow_routers\n"
+        "except ModuleNotFoundError:\n"
+        "    flow_routers = []\n"
+        "for _flow_router in flow_routers:\n"
+        "    app.include_router(_flow_router)  # start/resume/advance/back\n"
     )
     return header + "\n\n" + body
 
