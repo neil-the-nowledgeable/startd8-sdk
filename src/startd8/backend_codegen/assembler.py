@@ -44,6 +44,7 @@ def render_backend(
     authoring: bool = False,
     completeness_text: Optional[str] = None,
     views_text: Optional[str] = None,
+    display_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -73,7 +74,7 @@ def render_backend(
         (CANONICAL_LAYOUT["fastapi-main"], render_main(schema_text, source_file)),
     ]
     # app/web.py + templates (+ nav, + per-entity post-create behavior from views.yaml `forms:`)
-    out.extend(render_ui(schema_text, source_file, pages_text, views_text))
+    out.extend(render_ui(schema_text, source_file, pages_text, views_text, display_text))
     # P0-1: step-state flow routers + shells from views.yaml `flows:` (empty when none declared)
     out.extend(render_flows(schema_text, views_text or ""))
     out.extend(

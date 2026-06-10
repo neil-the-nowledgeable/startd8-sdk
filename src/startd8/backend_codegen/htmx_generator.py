@@ -42,6 +42,7 @@ from ..frontend_codegen.schema_renderer import composite_type_names, schema_sha2
 from ..languages.prisma_parser import PrismaField, PrismaSchema, parse_prisma_schema
 from .ai_layer import _PROVENANCE_OMIT
 from .crud_generator import _model_names, _pk_field
+from .display_manifest import parse_display
 from .filters_manifest import EntityFilter, parse_filters
 from .forms_manifest import ON_CREATE_DEFAULT, parse_forms
 
@@ -260,7 +261,32 @@ def render_confirm_template(schema_text: str, source_file: str, entity: str) -> 
     return head + "\n" + f'<span id="confirm-{rid}">{control}</span>\n'
 
 
-def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
+def _display_columns(schema: PrismaSchema, entity: str, display) -> List[Tuple[str, str, str]]:
+    """FR-DM-2: (field, header_label, format) per displayed list column. With a manifest, use its
+    `columns` (or default minus `hidden_fields`); without one, the current all-scalars behavior."""
+    if display and display.columns:
+        return [(c.field, c.label or c.field, c.format) for c in display.columns]
+    fields = form_fields(schema, entity)
+    if display and display.hidden_fields:
+        fields = [f for f in fields if f.name not in display.hidden_fields]
+    return [(f.name, f.name, "") for f in fields]
+
+
+def _cell_expr(field: str, fmt: str, e: str, pk_ref: str) -> str:
+    """FR-DM-5: the Jinja cell expression for a field given its display `format`."""
+    base = "item." + field
+    if fmt == "badge":
+        return '<span class="badge">{{ ' + base + " }}</span>"
+    if fmt == "date":
+        return "{{ " + base + ".strftime('%Y-%m-%d') if " + base + " else '' }}"
+    if fmt.startswith("truncate:"):
+        return "{{ " + base + "|truncate(" + fmt.split(":", 1)[1] + ") }}"
+    if fmt == "link":
+        return '<a href="/ui/' + e + "/" + pk_ref + '">{{ ' + base + " }}</a>"
+    return "{{ " + base + " }}"
+
+
+def render_row_template(schema_text: str, source_file: str, entity: str, display=None) -> str:
     """``<e>/_row.html`` — one table row (kind ``htmx-row``, schema-only, entity-tagged).
 
     The single source of truth for a list row (FR-CA-3): the list loop ``{% include %}``s it, and
@@ -273,14 +299,13 @@ def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
     sha = schema_sha256(schema_text)
     e = entity.lower()
     pk = _pk_field(schema, entity)
-    fields = _form_fields(schema, entity)
     head = _tmpl_header(source_file, sha, "htmx-row", entity)
 
-    cells = "".join("<td>{{ item." + f.name + " }}</td>" for f in fields)
+    rid = "{{ item." + pk.name + " }}" if pk is not None else ""
+    cols = _display_columns(schema, entity, display)
+    cells = "".join("<td>" + _cell_expr(f, fmt, e, rid) + "</td>" for f, _lbl, fmt in cols)
     if pk is None:
         return head + "\n" + f"<tr>{cells}<td></td></tr>\n"
-
-    rid = "{{ item." + pk.name + " }}"
     # ?created=<pk> (list mode) highlights the just-stored row (FR-FS OQ-6 follow-through).
     hl = "{% if created == item." + pk.name + '|string %} class="new-row"{% endif %}'
     cf = _confirm_field(schema, entity)
@@ -289,9 +314,11 @@ def render_row_template(schema_text: str, source_file: str, entity: str) -> str:
         # The suggest→confirm verb (AR-5 / FR-CA-3/4). The row control swaps the whole row
         # (so the `confirmed` cell updates too) → it targets the row, not a confirm block.
         confirm_html = _confirm_control(e, rid, cf.name, f"#row-{rid}") + "\n    "
+    # FR-DM-2: the view link reads as the row's label (label_field) instead of a generic "view".
+    view_text = ("{{ item." + display.label_field + " or 'view' }}") if (display and display.label_field) else "view"
     body = (
         f'<tr id="row-{rid}"{hl}>{cells}<td>\n'
-        f'    <a href="/ui/{e}/{rid}">view</a>\n'
+        f'    <a href="/ui/{e}/{rid}">{view_text}</a>\n'
         f'    <a href="/ui/{e}/{rid}/edit">edit</a>\n'
         f"    {confirm_html}"
         f'<button hx-post="/ui/{e}/{rid}/delete" hx-target="#row-{rid}" '
@@ -321,16 +348,18 @@ def _filter_form_html(e: str, ef: EntityFilter) -> str:
 
 
 def render_list_template(
-    schema_text: str, source_file: str, entity: str, efilter: Optional[EntityFilter] = None
+    schema_text: str, source_file: str, entity: str, efilter: Optional[EntityFilter] = None,
+    display=None,
 ) -> str:
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
-    fields = _form_fields(schema, entity)
     head = _tmpl_header(source_file, sha, "htmx-list", entity)
 
-    cols = "".join(f"<th>{f.name}</th>" for f in fields)
+    # FR-DM-2: <thead> from the display columns (labels, order); else current all-scalars.
+    cols = "".join(f"<th>{label}</th>" for _f, label, _fmt in _display_columns(schema, entity, display))
     filter_form = (_filter_form_html(e, efilter) + "\n") if efilter else ""
+    title = display.title if (display and display.title) else entity      # FR-DM-3 page title
 
     lines = [
         '{% extends "base.html" %}',
@@ -338,7 +367,7 @@ def render_list_template(
         "{% block content %}",
         # Post-create flash (FR-FS-3): set when the route passes the ?created query param through.
         '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}",
-        f"<h1>{entity}</h1>",
+        f"<h1>{title}</h1>",
         f'<a href="/ui/{e}/new">New {entity}</a>',
         filter_form.rstrip("\n") if filter_form else None,
         f"<table>\n  <thead><tr>{cols}<th></th></tr></thead>",
@@ -351,15 +380,32 @@ def render_list_template(
     return head + "\n" + "\n".join(x for x in lines if x is not None) + "\n"
 
 
-def render_detail_template(schema_text: str, source_file: str, entity: str) -> str:
+def _detail_dl(fields_: List[str]) -> str:
+    return "<dl>\n" + "\n".join(
+        f"  <dt>{fn}</dt><dd>{{{{ item.{fn} }}}}</dd>" for fn in fields_
+    ) + "\n</dl>"
+
+
+def render_detail_template(schema_text: str, source_file: str, entity: str, display=None) -> str:
     schema = parse_prisma_schema(schema_text)
     sha = schema_sha256(schema_text)
     e = entity.lower()
-    fields = _form_fields(schema, entity)
     head = _tmpl_header(source_file, sha, "htmx-detail", entity)
-    rows = "\n".join(
-        f"  <dt>{f.name}</dt><dd>{{{{ item.{f.name} }}}}</dd>" for f in fields
-    )
+
+    # FR-DM-3: grouped <section>s when the display declares them; else the flat <dl> over all scalars
+    # (minus hidden_fields when a manifest is present).
+    if display and display.sections:
+        detail_html = "\n".join(
+            f"<section>\n<h2>{s.title}</h2>\n{_detail_dl(list(s.fields))}\n</section>"
+            for s in display.sections
+        )
+    else:
+        fields = form_fields(schema, entity)
+        if display and display.hidden_fields:
+            fields = [f for f in fields if f.name not in display.hidden_fields]
+        detail_html = _detail_dl([f.name for f in fields])
+    title = display.title if (display and display.title) else entity
+    subtitle = (f'<p class="subtitle">{display.subtitle}</p>\n' if (display and display.subtitle) else "")
     # FR-CA-5: confirmed-bearing entities get the confirm toggle on the detail page too.
     confirm_block = ""
     if _confirm_field(schema, entity) is not None and _pk_field(schema, entity) is not None:
@@ -371,7 +417,7 @@ def render_detail_template(schema_text: str, source_file: str, entity: str) -> s
         # Post-submit flash (FR-FS-3/FR-FS-6): the create/update PRG redirects land here.
         '{% if created %}<p class="flash">✓ ' + entity + " stored.</p>{% endif %}\n"
         '{% if updated %}<p class="flash">✓ ' + entity + " updated.</p>{% endif %}\n"
-        f"<h1>{entity}</h1>\n<dl>\n{rows}\n</dl>\n"
+        f"<h1>{title}</h1>\n{subtitle}{detail_html}\n"
         f"{confirm_block}"
         # FR-AIT-3: tolerant seam — the AI layer emits <e>/_ai_triggers.html only for entities with a
         # pass `trigger:`; `ignore missing` makes this inert (and byte-stable) for everyone else.
@@ -856,17 +902,21 @@ def render_ui(
     source_file: str = "prisma/schema.prisma",
     pages_text: Optional[str] = None,
     forms_text: Optional[str] = None,
+    display_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """All UI artifacts as ``(relative_path, text)`` pairs: web.py + base/error + per-entity templates.
 
     *pages_text* (when content pages are enabled) makes ``base.html`` carry the manifest nav.
     *forms_text* (``views.yaml``) selects per-entity post-create behavior; entities declaring
-    ``on_create: confirmation`` additionally get a ``<e>/created.html`` template (FR-FS-5)."""
+    ``on_create: confirmation`` additionally get a ``<e>/created.html`` template (FR-FS-5).
+    *display_text* (``display.yaml``) drives per-entity list columns/labels/order + detail sections
+    (FR-DM); absent ⇒ today's all-scalars behavior (opt-in)."""
     schema = parse_prisma_schema(schema_text)
     composites = composite_type_names(schema_text)
     names = [n for n in schema.models if n not in composites]
     forms = parse_forms(forms_text, known_entities=frozenset(names))
     filters = parse_filters(forms_text, known_entities=frozenset(names))
+    displays, _ = parse_display(display_text, schema)
 
     out: List[Tuple[str, str]] = [
         ("app/web.py", render_web(schema_text, source_file, forms_text)),
@@ -878,22 +928,23 @@ def render_ui(
     ]
     for n in names:
         e = n.lower()
+        ed = displays.get(n)                       # FR-DM: per-entity display (None ⇒ default)
         out.append(
             (
                 f"app/templates/{e}/list.html",
-                render_list_template(schema_text, source_file, n, filters.get(n)),
+                render_list_template(schema_text, source_file, n, filters.get(n), ed),
             )
         )
         out.append(
             (
                 f"app/templates/{e}/_row.html",
-                render_row_template(schema_text, source_file, n),
+                render_row_template(schema_text, source_file, n, ed),
             )
         )
         out.append(
             (
                 f"app/templates/{e}/detail.html",
-                render_detail_template(schema_text, source_file, n),
+                render_detail_template(schema_text, source_file, n, ed),
             )
         )
         out.append(

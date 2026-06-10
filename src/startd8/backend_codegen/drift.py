@@ -65,7 +65,11 @@ _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-conten
 _FORMS_KINDS: frozenset = frozenset({"fastapi-web-forms", "htmx-created"})
 
 
-def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
+def _renderers(
+    completeness_text: Optional[str] = None,
+    forms_text: Optional[str] = None,
+    display_text: Optional[str] = None,
+) -> Dict[str, Callable[[str, str, Optional[str]], str]]:
     """Map artifact-kind → a ``(schema_text, source_file, entity) -> text`` renderer.
 
     Imported lazily so this module has no load-order dependency on the renderers. Each backend
@@ -105,6 +109,20 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         render_contract_tests,
         render_route_smoke_tests,
     )
+    # P0-2/FR-DM: list/row/detail re-render must use the SAME filter (views.yaml) + display
+    # (display.yaml) inputs the generate path used, or a filtered/display-configured template
+    # false-flags drift. Parsed lazily per entity from the threaded manifests.
+    from .display_manifest import parse_display
+    from .filters_manifest import parse_filters
+    from ..languages.prisma_parser import parse_prisma_schema as _pps
+
+    def _filt(s, e):
+        return parse_filters(forms_text, known_entities=frozenset(_pps(s).models)).get(e) if forms_text else None
+
+    def _disp(s, e):
+        if not display_text:
+            return None
+        return parse_display(display_text, _pps(s))[0].get(e)
 
     return {
         "pydantic-models": lambda s, sf, e: render_pydantic_models(
@@ -119,10 +137,10 @@ def _renderers(completeness_text: Optional[str] = None) -> Dict[str, Callable[[s
         "fastapi-web": lambda s, sf, e: render_web(s, sf),
         "htmx-base": lambda s, sf, e: render_base_template(s, sf),
         "htmx-field-error": lambda s, sf, e: render_field_error_template(s, sf),
-        "htmx-list": lambda s, sf, e: render_list_template(s, sf, e),
-        "htmx-row": lambda s, sf, e: render_row_template(s, sf, e),
+        "htmx-list": lambda s, sf, e: render_list_template(s, sf, e, _filt(s, e), _disp(s, e)),
+        "htmx-row": lambda s, sf, e: render_row_template(s, sf, e, _disp(s, e)),
         "htmx-confirm": lambda s, sf, e: render_confirm_template(s, sf, e),
-        "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e),
+        "htmx-detail": lambda s, sf, e: render_detail_template(s, sf, e, _disp(s, e)),
         "htmx-form": lambda s, sf, e: render_form_template(s, sf, e),
         "python-export": lambda s, sf, e: render_export(s, sf),
         "python-ai-schemas": lambda s, sf, e: render_ai_schemas(s, sf),
@@ -471,6 +489,7 @@ def check_drift(
     pages_text: Optional[str] = None,
     completeness_text: Optional[str] = None,
     forms_text: Optional[str] = None,
+    display_text: Optional[str] = None,
 ) -> DriftResult:
     """Compare an on-disk owned file against its source contract(s). No writes.
 
@@ -515,7 +534,9 @@ def check_drift(
     kind = embedded_artifact_kind(ondisk_text)
     # completeness.py is schema + optional completeness.yaml → regen with the same manifest
     # the generate path used, or drift would false-flag a weighted file.
-    renderer = _renderers(completeness_text=completeness_text).get(kind or "")
+    renderer = _renderers(
+        completeness_text=completeness_text, forms_text=forms_text, display_text=display_text
+    ).get(kind or "")
     if renderer is None:
         return DriftResult(
             "tampered",
