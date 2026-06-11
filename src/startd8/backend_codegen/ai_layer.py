@@ -72,6 +72,15 @@ class PassTrigger:
 
 
 @dataclass(frozen=True)
+class ScopeRelation:
+    """FR-SRP-1: one FK traversal from the scope row → a related entity, for the prompt context."""
+
+    via: str             # the FK scalar field on the scope entity (e.g. `jobDescriptionId`)
+    entity: str          # the target entity it points to (e.g. `JobDescription`)
+    optional: bool = False   # a null FK is allowed (skipped) rather than a needs_more_data floor
+
+
+@dataclass(frozen=True)
 class AiPass:
     name: str
     output_entities: Tuple[str, ...]
@@ -90,10 +99,21 @@ class AiPass:
     dedup_by: Optional[str] = None
     # FR-AIT-1: optional generated UI trigger (a detail-page button). None ⇒ API-only (unchanged).
     trigger: Optional[PassTrigger] = None
+    # FR-SRP: a "scoped relational" pass — runs per-row (source_id = a `scope` row id), resolves the
+    # declared FK traversals + whole-model confirmed reads into the prompt context, and sets real FKs
+    # on the output. None (the default) ⇒ not scoped (whole-model / source-bound shapes, unchanged).
+    scope: Optional[str] = None                              # the scope entity (source_id = its row id)
+    scope_relations: Tuple[ScopeRelation, ...] = ()         # FK traversals → prompt context
+    reads_confirmed: Tuple[str, ...] = ()                   # whole-model confirmed context entities
+    output_fk: Tuple[Tuple[str, str], ...] = ()             # (output FK field, target entity) — real FKs
 
     @property
     def module(self) -> str:
         return _ident(self.name)
+
+    @property
+    def is_scoped(self) -> bool:
+        return self.scope is not None
 
 
 @dataclass(frozen=True)
@@ -102,8 +122,10 @@ class HumanInputs:
 
 
 _PASS_KEYS = {"name", "output_entities", "route_path", "prompt", "input_entities", "request_field",
-              "source_binding", "dedup_by", "trigger"}
+              "source_binding", "dedup_by", "trigger",
+              "scope", "scope_relations", "reads_confirmed", "output_fk"}   # FR-SRP
 _TRIGGER_KEYS = {"entity", "text_field", "label"}
+_SCOPE_REL_KEYS = {"via", "entity", "optional"}
 _HUMAN_FIELD_KEYS = {"target", "authored_by", "default", "test_default", "type"}
 _HUMAN_TOP_KEYS = {"config", "fields"}
 
@@ -187,6 +209,26 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 text_field=str(tspec["text_field"]),
                 label=str(tspec.get("label") or f"Run {entry['name']}"),
             )
+        scope = None
+        scope_relations: List[ScopeRelation] = []
+        reads_confirmed: Tuple[str, ...] = ()
+        output_fk: List[Tuple[str, str]] = []
+        if entry.get("scope") is not None:                       # FR-SRP-1: scoped relational pass
+            scope = str(entry["scope"])
+            if entry.get("input_entities"):
+                raise ValueError(f"ai_passes.yaml: pass #{i} `scope` is per-row (remove `input_entities`)")
+            if len(tuple(entry["output_entities"])) != 1:
+                raise ValueError(f"ai_passes.yaml: pass #{i} `scope` requires exactly one output entity")
+            for j, rel in enumerate(entry.get("scope_relations", ()) or ()):
+                if not isinstance(rel, dict) or set(rel) - _SCOPE_REL_KEYS or not rel.get("via") or not rel.get("entity"):
+                    raise ValueError(f"ai_passes.yaml: pass #{i} scope_relations[{j}] needs `via` + `entity`")
+                scope_relations.append(ScopeRelation(
+                    via=str(rel["via"]), entity=str(rel["entity"]), optional=bool(rel.get("optional", False))))
+            reads_confirmed = tuple(str(e) for e in (entry.get("reads_confirmed", ()) or ()))
+            ofk = entry.get("output_fk") or {}
+            if not isinstance(ofk, dict):
+                raise ValueError(f"ai_passes.yaml: pass #{i} `output_fk` must be a mapping field->entity")
+            output_fk = [(str(k), str(v)) for k, v in ofk.items()]
         passes.append(
             AiPass(
                 name=str(entry["name"]),
@@ -198,6 +240,10 @@ def parse_ai_passes(text: str) -> Tuple[AiPass, ...]:
                 source_binding=binding,
                 dedup_by=dedup_by,
                 trigger=trigger,
+                scope=scope,
+                scope_relations=tuple(scope_relations),
+                reads_confirmed=reads_confirmed,
+                output_fk=tuple(output_fk),
             )
         )
     if not passes:
@@ -596,7 +642,10 @@ def render_ai_pass(
         "# startd8-artifact: ai-pass",
         f"# startd8-artifact: ai-pass\n# startd8-entity: {ps.name}",
     )
-    if ps.input_entities:
+    if ps.is_scoped:  # FR-SRP: per-row relational pass (join resolution + real-FK child)
+        body = _render_pass_scoped(ps, parse_prisma_schema(schema_text),
+                                   effective_source_binding(schema_text, ps, parse_human_inputs(human_text)))
+    elif ps.input_entities:
         body = _render_pass_read(ps)
     else:  # SPIKE (FR-IMP-4): bind is DERIVED from schema+human_inputs (or explicit override)
         binding = effective_source_binding(schema_text, ps, parse_human_inputs(human_text))
@@ -675,6 +724,134 @@ def _render_pass_text_bound(ps: AiPass, prov: str) -> str:
         "",
         f"__all__ = [{ps.module!r}]",
         "",
+    ]
+    return "\n".join(lines)
+
+
+# FR-SRP: the scoped-relational persist — sets the loose provenance AND real FK(s) from the join.
+_PERSIST_SCOPED_HELPER = '''def _persist_scoped(session: Session, model: Any, edge_obj: Any, source_id: str, prov_field: str, fk_values: dict[str, Any]) -> int:
+    """Persist one edge object as a CHILD: AI edge fields + source=ai/confirmed=false + the loose
+    provenance (prov_field=source_id) + real FK(s) from the resolved join (fk_values). 0/1."""
+    data = edge_obj.model_dump(exclude_none=True)
+    _server_managed = {"id", "ownerId", "source", "confirmed", "createdAt", "updatedAt"}
+    fields = {k: v for k, v in data.items() if hasattr(model, k) and k not in _server_managed}
+    row = model(**fields)
+    if hasattr(row, "source"):
+        row.source = "ai"
+    if hasattr(row, "confirmed"):
+        row.confirmed = False
+    setattr(row, prov_field, source_id)            # loose provenance (output -> scope row)
+    for _fk, _val in fk_values.items():
+        setattr(row, _fk, _val)                    # real FK from the resolved relation (never AI-authored)
+    session.add(row)
+    session.flush()
+    return 1
+'''
+
+
+def _validate_scoped(ps: AiPass, schema) -> None:
+    """FR-SRP-1: validate a scoped pass against the contract (loud-fail; explicit, no magic)."""
+    sm = schema.model(ps.scope)
+    if sm is None:
+        raise ValueError(f"ai_passes.yaml: pass {ps.name!r} scope {ps.scope!r} is not a model")
+    scope_cols = {f.name for f in sm.fields}
+    for r in ps.scope_relations:
+        if r.via not in scope_cols:
+            raise ValueError(f"ai_passes.yaml: pass {ps.name!r} scope_relations via {r.via!r} is not a field of {ps.scope}")
+        if schema.model(r.entity) is None:
+            raise ValueError(f"ai_passes.yaml: pass {ps.name!r} scope_relations entity {r.entity!r} is not a model")
+    for e in ps.reads_confirmed:
+        if schema.model(e) is None:
+            raise ValueError(f"ai_passes.yaml: pass {ps.name!r} reads_confirmed {e!r} is not a model")
+    out = ps.output_entities[0]
+    om = schema.model(out)
+    out_cols = {f.name for f in om.fields} if om else set()
+    required_rel = {r.entity for r in ps.scope_relations if not r.optional}
+    for fk, target in ps.output_fk:
+        if fk not in out_cols:
+            raise ValueError(f"ai_passes.yaml: pass {ps.name!r} output_fk field {fk!r} is not a column of {out}")
+        if target not in required_rel:
+            raise ValueError(
+                f"ai_passes.yaml: pass {ps.name!r} output_fk target {target!r} must be a REQUIRED "
+                "scope_relations entity (else the FK could be null)"
+            )
+
+
+def _render_pass_scoped(ps: AiPass, schema, source_binding: Optional[str]) -> str:
+    """``app/ai/<pass>.py`` — FR-SRP: a per-row pass that resolves a relational join + confirmed value
+    model into the prompt context and writes a cascade-FK child. ``def <pass>(text, session, source_id)``."""
+    _validate_scoped(ps, schema)
+    if not source_binding:
+        raise ValueError(
+            f"ai_passes.yaml: scoped pass {ps.name!r} requires a source_binding (the loose provenance "
+            "linking the output child to the scope row)"
+        )
+    out = ps.output_entities[0]
+
+    def _var(e: str) -> str:
+        return "_" + e.lower()
+
+    tables = sorted({ps.scope, out} | {r.entity for r in ps.scope_relations} | set(ps.reads_confirmed))
+    fk_pairs = ", ".join(f"{fk!r}: {_var(target)}.id" for fk, target in ps.output_fk)
+    conf_vars = [(_var(e) + "_rows", e) for e in ps.reads_confirmed]
+
+    lines = [
+        "from __future__ import annotations", "",
+        "import json", "import logging",
+        "from pathlib import Path", "from typing import Any", "",
+        "from sqlmodel import Session, select", "",
+        "from app.ai.service import call_ai_service",
+        f"from app.ai.edge_schemas import {out}Edge",
+        f"from app.tables import {', '.join(tables)}", "",
+        "logger = logging.getLogger(__name__)",
+        f"_PROVENANCE_FIELD = {source_binding!r}  # loose provenance (FR-SRP): the output child -> scope row",
+        f"_PROMPT_PATH = Path(__file__).resolve().parents[2] / {ps.prompt!r}", "", "",
+        f"def {ps.module}({ps.request_field}: str, session: Session, source_id: str) -> dict[str, Any]:",
+        f'    """Scoped relational pass: one {ps.scope} (+ relations + confirmed value model) -> one {out}."""',
+        f"    _needs = {{'status': 'needs_more_data', 'created': {{{out!r}: 0}}}}",
+        f"    scope = session.get({ps.scope}, source_id)",
+        "    if scope is None:",
+        "        return _needs",
+    ]
+    for r in ps.scope_relations:                              # FR-SRP-2: FK traversal (+ FR-SRP-4 floor)
+        v = _var(r.entity)
+        lines.append(f"    _fkid = getattr(scope, {r.via!r}, None)")
+        lines.append(f"    {v} = session.get({r.entity}, _fkid) if _fkid else None")
+        if not r.optional:
+            lines.append(f"    if {v} is None:")
+            lines.append("        return _needs   # a required relation did not resolve")
+    for v, e in conf_vars:                                    # whole-model confirmed reads (read shape)
+        lines.append(f"    {v} = session.exec(select({e}).where({e}.confirmed.is_(True))).all()")
+    if conf_vars:
+        lines.append(f"    if not any([{', '.join(v for v, _ in conf_vars)}]):")
+        lines.append("        return _needs   # no confirmed context to ground the draft")
+    ctx = [f'"{ps.scope.lower()}": scope.model_dump()']
+    ctx += [f'"{r.entity.lower()}": {_var(r.entity)}.model_dump() if {_var(r.entity)} else None'
+            for r in ps.scope_relations]
+    ctx += [f'"{_plural_field(e)}": [r.model_dump() for r in {v}]' for v, e in conf_vars]
+    lines += [
+        "    context = {",
+        *(f"        {c}," for c in ctx),
+        "    }",
+        '    prompt = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.is_file() else ""',
+        f'    full_prompt = (prompt + "\\n\\n" + json.dumps(context, default=str) + "\\n\\n" + {ps.request_field}).strip()',
+        f"    result = call_ai_service({ps.name!r}, full_prompt, {out}Edge, session)",
+        "    # Source-scope idempotency (FR-IMP-2): replace this scope's prior UNCONFIRMED rows.",
+        f"    prior = session.exec(select({out}).where(",
+        f"        getattr({out}, _PROVENANCE_FIELD) == source_id, {out}.confirmed.is_(False))).all()",
+        "    for stale in prior:",
+        "        session.delete(stale)",
+        "    created = 0",
+        "    try:",
+        "        with session.begin_nested():  # isolate the row (M1)",
+        f"            created = _persist_scoped(session, {out}, result, source_id, _PROVENANCE_FIELD, {{{fk_pairs}}})",
+        "    except Exception as exc:  # noqa: BLE001",
+        f'        logger.warning("skipping {out} row: %s", exc)',
+        "    session.commit()",
+        f'    return {{"status": "ok", "created": {{{out!r}: created}}}}',
+        "", "",
+        _PERSIST_SCOPED_HELPER, "",
+        f"__all__ = [{ps.module!r}]", "",
     ]
     return "\n".join(lines)
 
