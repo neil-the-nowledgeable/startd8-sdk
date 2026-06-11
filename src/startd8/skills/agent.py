@@ -6,24 +6,24 @@ with Claude Skills through the Model Context Protocol (MCP).
 
 Design Document: design/SKILL_AGENT_CORE_DESIGN.md
 
-.. warning::
-   **KNOWN LIMITATION (verified 2026-06-08): this path does NOT load a Claude Code skill's
-   content.** Both :meth:`SkillAgent._call_mcp_skill` and the gateway's ``_execute_mcp_skill``
-   merely send the base model the literal string ``"Execute the {skill_id} skill with this
-   task: ..."`` — the skill's ``SKILL.md`` is never read from disk, the declared
-   ``startd8_use_skill`` tool is never executed, and ``_discover_skills`` registers hardcoded
-   metadata stubs ("In production, this would query the MCP server"). So the model runs on
-   whatever it associates with the *name*, NOT the skill's actual instructions. **Output is
-   generic base-model output that can be falsely attributed to the skill** — a Looks-Like-Success
-   trap. Do NOT build skill-leveraging features on this path until it is fixed. To genuinely run
-   a skill from the SDK, read its ``SKILL.md`` and inject it as the agent's ``system_prompt``
-   (no MCP needed). See the Presentation Polish OQ-8 spike findings.
+.. note::
+   **Skill execution mechanism (fixed 2026-06-11).** :meth:`SkillAgent._call_mcp_skill` and the
+   gateway's ``_execute_mcp_skill`` now load the skill's ``SKILL.md`` via :func:`resolve_skill_md`
+   (``~/.claude/skills/<id>/SKILL.md``) and inject it as the model's **system prompt**, so the
+   skill's actual instructions steer the response. The old behavior — a phantom ``startd8_use_skill``
+   tool that was never executed and never loaded skill content, sending only ``"Execute the
+   {skill_id} skill ..."`` — has been removed (it produced generic base-model output falsely
+   attributed to the skill; the Presentation Polish OQ-8 spike caught it). **Caveat:** when the
+   skill isn't installed on disk, :func:`resolve_skill_md` returns ``None`` and the call runs without
+   skill instructions (a warning is logged) — so output is only skill-driven when the skill is
+   present. ``_discover_skills`` still registers metadata stubs (it does not enumerate disk skills).
 """
 
 import os
 import time
 import asyncio
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 
@@ -48,6 +48,33 @@ except ImportError:
     _COSTS_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+
+def resolve_skill_md(skill_id: str) -> Optional[str]:
+    """Find and read a Claude Code skill's ``SKILL.md`` from disk; return its content or ``None``.
+
+    Looks under ``~/.claude/skills/<id>/SKILL.md`` (trying the id both as-is and with a leading
+    ``skill-`` stripped, since on-disk dirs are often un-prefixed, e.g. ``frontend-design``), then
+    best-effort under ``~/.claude/plugins/**/skills/<id>/SKILL.md``. This is the real mechanism that
+    lets the SDK actually *use* a skill: its instructions are injected as the model's system prompt.
+    Returns ``None`` (caller degrades gracefully) when the skill isn't installed.
+    """
+    names = [skill_id]
+    if skill_id.startswith("skill-"):
+        names.append(skill_id[len("skill-") :])
+    home = Path.home() / ".claude"
+    candidates = [home / "skills" / n / "SKILL.md" for n in names]
+    plugins = home / "plugins"
+    if plugins.is_dir():
+        for n in names:
+            candidates.extend(plugins.glob(f"**/skills/{n}/SKILL.md"))
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover - unreadable file → try the next candidate
+            continue
+    return None
 
 
 class CircuitState(str, Enum):
@@ -514,58 +541,28 @@ class SkillAgent(BaseAgent):
             )
         client = AsyncAnthropic()
         
-        # Define the MCP tool for skill execution
-        tools = [
-            {
-                "name": "startd8_use_skill",
-                "description": (
-                    "Execute a Claude Skill via startd8 MCP. "
-                    "The skill will generate specialized responses with metrics."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "skill_id": {
-                            "type": "string",
-                            "description": "The ID of the skill to execute"
-                        },
-                        "prompt": {
-                            "type": "string",
-                            "description": "The task/prompt for the skill"
-                        },
-                        "max_tokens": {
-                            "type": "integer",
-                            "description": "Maximum output tokens",
-                            "default": 8192
-                        }
-                    },
-                    "required": ["skill_id", "prompt"]
-                }
-            }
-        ]
-        
-        # Build message requesting skill execution.
-        # WARNING (see module docstring): this only NAMES the skill to the base model — it does
-        # NOT load the skill's SKILL.md. The `startd8_use_skill` tool above is declared but never
-        # executed (we read block.text below). Output is base-model output, not skill-driven.
-        messages = [
-            {
-                "role": "user",
-                "content": (
-                    f"Execute the {self.skill_id} skill with this task:\n\n{prompt}"
-                )
-            }
-        ]
-        
-        # Call Claude with tool use
+        # Load the skill's instructions and inject them as the SYSTEM PROMPT — the real mechanism
+        # for *using* a skill. (The old path declared a phantom `startd8_use_skill` tool that was
+        # never executed and never loaded SKILL.md, so output was generic base-model text falsely
+        # attributed to the skill. Fixed: resolve_skill_md() reads ~/.claude/skills/<id>/SKILL.md.)
+        skill_md = resolve_skill_md(self.skill_id)
+        create_kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if skill_md:
+            create_kwargs["system"] = skill_md
+        else:
+            logger.warning(
+                "SkillAgent: no SKILL.md found for '%s' under ~/.claude/skills — running WITHOUT "
+                "skill instructions; output will be generic, not skill-driven.",
+                self.skill_id,
+            )
+
         response = await asyncio.wait_for(
-            client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                tools=tools,
-                messages=messages
-            ),
-            timeout=self.timeout_ms / 1000  # Convert to seconds
+            client.messages.create(**create_kwargs),
+            timeout=self.timeout_ms / 1000,  # Convert to seconds
         )
         
         # Extract skill response from tool use

@@ -629,51 +629,40 @@ class MCPGateway:
     ) -> SkillExecutionResult:
         """Execute skill via MCP protocol.
 
-        .. warning::
-           **KNOWN LIMITATION (2026-06-08): does NOT load the skill's content.** This sends the base
-           model the literal ``"Execute the {skill_id} skill ..."`` string; the ``SKILL.md`` is never
-           read and the declared ``startd8_use_skill`` tool is never executed. Output is generic
-           base-model output that can be falsely attributed to the skill. See ``skills/agent.py``
-           module docstring. To truly run a skill, inject its ``SKILL.md`` as the ``system_prompt``.
+        .. note::
+           Fixed 2026-06-11: loads the skill's ``SKILL.md`` (``resolve_skill_md``) and injects it as
+           the model's ``system`` prompt, so the skill's instructions steer the response. Falls back
+           to a plain call (with a logged warning) when the skill isn't installed on disk. See
+           ``skills/agent.py`` module docstring.
         """
         start_time = time.time()
         
         if not self._client:
             raise RuntimeError("Gateway not initialized")
         
-        # Define MCP tool
-        tools = [
-            {
-                "name": "startd8_use_skill",
-                "description": "Execute a Claude Skill via startd8 MCP",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "skill_id": {"type": "string"},
-                        "prompt": {"type": "string"},
-                        "max_tokens": {"type": "integer", "default": 8192}
-                    },
-                    "required": ["skill_id", "prompt"]
-                }
-            }
-        ]
-        
-        messages = [
-            {
-                "role": "user",
-                "content": f"Execute the {skill_id} skill with this task:\n\n{prompt}"
-            }
-        ]
-        
+        # Load the skill's SKILL.md and inject it as the system prompt — the real mechanism for
+        # using a skill (fixed 2026-06-11; previously a phantom tool that never loaded skill content).
+        from ..skills.agent import resolve_skill_md
+
+        skill_md = resolve_skill_md(skill_id)
+        create_kwargs: Dict[str, Any] = {
+            "model": self.config.model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if skill_md:
+            create_kwargs["system"] = skill_md
+        else:
+            logger.warning(
+                "MCPGateway: no SKILL.md found for '%s' under ~/.claude/skills — running WITHOUT "
+                "skill instructions; output will be generic, not skill-driven.",
+                skill_id,
+            )
+
         # Call Claude with timeout
         response = await asyncio.wait_for(
-            self._client.messages.create(
-                model=self.config.model,
-                max_tokens=max_tokens,
-                tools=tools,
-                messages=messages
-            ),
-            timeout=timeout_ms / 1000
+            self._client.messages.create(**create_kwargs),
+            timeout=timeout_ms / 1000,
         )
         
         # Extract response
