@@ -49,6 +49,36 @@ def test_unknown_key_fails_loud():
         parse_app_manifest("nonsense_key: 1")
 
 
+# --- Deployment mode (DEPLOYMENT_MODE_REQUIREMENTS.md FR-CFG-1/2, Plan Step A1) -------------------
+
+def test_deployment_mode_defaults_to_installed():
+    # FR-CFG-1: absent `deployment:` block reproduces today's behavior (installed default).
+    assert parse_app_manifest(None).deployment_mode == "installed"
+    assert parse_app_manifest(MANIFEST).deployment_mode == "installed"
+
+
+def test_deployment_mode_deployed_parses():
+    m = parse_app_manifest("deployment:\n  mode: deployed\n")
+    assert m.deployment_mode == "deployed"
+
+
+def test_deployment_mode_invalid_value_fails_loud():
+    # Strict enum (NR-2): exactly two modes; anything else fails loud, never coerced.
+    with pytest.raises(ValueError, match="deployment.mode"):
+        parse_app_manifest("deployment:\n  mode: hybrid\n")
+
+
+def test_deployment_unknown_subkey_fails_loud():
+    # Tier-B `tenant` is intentionally not accepted yet — strict-key discipline holds.
+    with pytest.raises(ValueError, match="unknown keys"):
+        parse_app_manifest("deployment:\n  mode: deployed\n  tenant: User\n")
+
+
+def test_deployment_block_must_be_a_mapping():
+    with pytest.raises(ValueError, match="`deployment` must be a mapping"):
+        parse_app_manifest("deployment: 5\n")
+
+
 def test_render_is_byte_identical_and_full_set():
     a = render_scaffold(MANIFEST)
     assert a == render_scaffold(MANIFEST)

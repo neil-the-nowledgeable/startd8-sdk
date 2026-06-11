@@ -23,7 +23,8 @@ from .derived import (
     render_export,
     render_requirements,
 )
-from .drift import check_drift, is_owned_generated_file, owned_file_in_sync
+from .drift import check_drift, embedded_mode, is_owned_generated_file, owned_file_in_sync
+from .settings_renderer import render_settings
 from .forms_manifest import parse_forms
 from .htmx_generator import (
     render_confirm_template,
@@ -82,6 +83,8 @@ __all__ = [
     "check_drift",
     "owned_file_in_sync",
     "is_owned_generated_file",
+    "render_settings",
+    "embedded_mode",
     "PydanticSQLModelProvider",
     "verify_pydantic_fidelity",
     "verify_sqlmodel_fidelity",

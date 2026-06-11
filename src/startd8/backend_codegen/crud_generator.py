@@ -39,6 +39,7 @@ CANONICAL_LAYOUT: Dict[str, str] = {
     "python-ai-schemas": "app/ai_schemas.py",
     "python-completeness": "app/completeness.py",
     "python-requirements": "requirements.txt",
+    "python-settings": "app/settings.py",  # deployed-only (FR-CFG-7); the single mode-varying file
 }
 
 

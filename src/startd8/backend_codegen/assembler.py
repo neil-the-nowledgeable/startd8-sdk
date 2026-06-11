@@ -45,6 +45,7 @@ def render_backend(
     completeness_text: Optional[str] = None,
     views_text: Optional[str] = None,
     display_text: Optional[str] = None,
+    deployment_mode: str = "installed",
 ) -> Tuple[Tuple[str, str], ...]:
     """Every backend artifact as ``(relative_path, text)`` pairs, in canonical write order.
 
@@ -112,5 +113,15 @@ def render_backend(
         out.extend(render_ai_layer(
             schema_text, manifest_text, human_inputs_text, source_file,
             ai_agent_spec=ai_agent_spec,
+        ))
+    # FR-CFG-7 / D11: app/settings.py is emitted ONLY in deployed mode. Installed mode is the
+    # settings-absent default and stays byte-identical to today (R4). settings.py — present here,
+    # absent in installed — is the single file that differs between the two modes.
+    if deployment_mode == "deployed":
+        from .settings_renderer import render_settings
+
+        out.append((
+            CANONICAL_LAYOUT["python-settings"],
+            render_settings(schema_text, source_file, mode=deployment_mode),
         ))
     return tuple(out)
