@@ -149,3 +149,6 @@ notes/
 keys.md
 *.keys.md
 secrets.md
+
+# Runtime exemplar registry — rewritten (timestamp) on every run/test; not shared state.
+exemplar-registry.json
