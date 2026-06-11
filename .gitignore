@@ -149,6 +149,14 @@ notes/
 keys.md
 *.keys.md
 secrets.md
+# Doppler / managed-secrets backend (startd8.secrets): never commit service tokens or local
+# secret dumps. Tokens belong in $HOME (~/.startd8/config.json, ~/.doppler) or env — not the repo.
+# (doppler.yaml — the non-secret project config — is intentionally NOT ignored.)
+*.token
+*.tokens
+secrets.json
+.env.*
+!.env.example
 
 # Runtime exemplar registry — rewritten (timestamp) on every run/test; not shared state.
 exemplar-registry.json
