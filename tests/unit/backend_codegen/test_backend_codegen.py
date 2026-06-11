@@ -537,6 +537,11 @@ def test_init_db_demotes_create_all_and_warns_on_drift():
     assert "from .user_routers import user_routers" in main
     assert "for _user_router in user_routers:" in main
     assert "app.include_router(_user_router)" in main
+    # FR-GEN-1..3: guarded secrets-hydration preamble runs BEFORE the db import so DATABASE_URL
+    # (read at import time in app/db.py) can be sourced from the configured backend (e.g. Doppler).
+    assert "from startd8.secrets import hydrate" in main
+    assert main.index("from startd8.secrets import hydrate") < main.index("from .db import init_db")
+    assert "except Exception:\n    pass" in main  # fully guarded → no-op without SDK/backend
     compile(main, "<main>", "exec")
 
 
