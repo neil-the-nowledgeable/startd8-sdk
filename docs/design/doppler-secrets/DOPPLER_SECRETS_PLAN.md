@@ -158,9 +158,26 @@ mocked transport) writes **no new file** containing secret material — snapshot
 before/after and assert no secret-bearing artifact appears. Makes FR-14 a verified invariant, not an
 implicit consequence of "no caching code."
 
+### Step 11 — Runtime rotation (FR-ROT-1..6, added 2026-06-11)
+Promotes former NR-7. **IMPLEMENTED + live-verified against real Doppler.**
+- `doppler.py`: `invalidate()` + `get_all_secrets(force=True)` bust the in-process cache (FR-ROT-3);
+  span carries `secrets.refresh`.
+- `manager.py`: shared `_run_hydration(force_fetch, overwrite_owned, reason)` body; `refresh()`
+  overwrites **only `_source_map`-owned keys**, never user env (FR-ROT-2); fail-open-preserving — a
+  failed refresh keeps current env (FR-ROT-5); lazy TTL via `secrets_backend.ttl_seconds` /
+  `STARTD8_SECRETS_TTL`, checked in `hydrate()`/`get_secret()` (FR-ROT-4).
+- `secrets.refresh()` public export; `startd8 secrets refresh` CLI reports rotated-key counts.
+- Tests: `test_rotation.py` (owned-overwrite, user-env-preserved, lazy TTL, fail-open-preserving,
+  fail-closed) + doppler force-invalidation + CLI refresh. Live proof: rotated a key in `startd8/dev`
+  mid-process → `refresh()` picked it up, provider keys untouched.
+- **Test-isolation fix:** a persisted `backend=doppler` in `~/.startd8/config.json` was bleeding into
+  the unit suite (every `AgentFramework()` hit live Doppler). Added `pytest_configure` in
+  `tests/conftest.py` forcing `STARTD8_SECRETS_BACKEND=local` unless `STARTD8_RUN_INTEGRATION=1`,
+  plus per-suite config neutralization in `tests/unit/secrets/conftest.py`.
+
 ## Sequencing
-1 → 2 → (3, 4 parallel) → 5 → 6 → 6b → 7 → 8 → 9 → 10. Steps 1–5 are the core; 6–6b–7 wire it in;
-8–10 harden. Note OTel (8) is *specified* late but *implemented* at the Step 4 call site (R1-S5).
+1 → 2 → (3, 4 parallel) → 5 → 6 → 6b → 7 → 8 → 9 → 10 → 11. Steps 1–5 are the core; 6–6b–7 wire it in;
+8–10 harden; 11 adds rotation. Note OTel (8) is *specified* late but *implemented* at the Step 4 call site (R1-S5).
 
 ## Open questions resolved by planning
 - **OQ-1** → REST + httpx (no SDK dep, no extra). **OQ-4** → whole-config fetch (hydration).

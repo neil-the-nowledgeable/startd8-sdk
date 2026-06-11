@@ -47,6 +47,7 @@ __all__ = [
     "LocalSecretsProvider",
     "DopplerSecretsProvider",
     "hydrate",
+    "refresh",
     "get_secret",
     "get_secret_source",
 ]
@@ -59,6 +60,15 @@ def hydrate(force: bool = False) -> HydrationResult:
     (the CLI and ``AgentFramework`` already do — FR-17).
     """
     return SecretsManager.hydrate(force=force)
+
+
+def refresh() -> HydrationResult:
+    """Re-fetch the active backend and rotate SDK-owned env keys in place (FR-ROT-1).
+
+    Overwrites only keys the SDK injected; user/shell env is never touched. Use this in
+    a long-lived process to pick up a secret rotated in Doppler without a restart.
+    """
+    return SecretsManager.refresh()
 
 
 def get_secret(name: str) -> Optional[str]:

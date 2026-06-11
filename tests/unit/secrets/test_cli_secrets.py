@@ -49,6 +49,29 @@ def test_test_doppler_auth_failure_nonzero(monkeypatch, fake_httpx):
     assert result.exit_code == 1
 
 
+def test_refresh_local_is_noop():
+    result = runner.invoke(secrets_app, ["refresh"])
+    assert result.exit_code == 0
+    assert "nothing to refresh" in result.stdout.lower()
+
+
+def test_refresh_doppler_rotates_key(monkeypatch, fake_httpx):
+    fake_httpx.queue = [
+        FakeResponse(200, {"ANTHROPIC_API_KEY": "v1"}),
+        FakeResponse(200, {"ANTHROPIC_API_KEY": "v2"}),
+    ]
+    monkeypatch.setenv("STARTD8_SECRETS_BACKEND", "doppler")
+    monkeypatch.setenv("DOPPLER_TOKEN", "dp.st.abc123")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    SecretsProviderRegistry.discover()
+
+    runner.invoke(secrets_app, ["status"])          # hydrate v1
+    result = runner.invoke(secrets_app, ["refresh"])  # force re-fetch -> v2
+    assert result.exit_code == 0
+    assert "rotated" in result.stdout.lower()
+    assert "ANTHROPIC_API_KEY" in result.stdout
+
+
 def test_list_doppler_masks_values(monkeypatch, fake_httpx):
     fake_httpx.queue = [FakeResponse(200, {"ANTHROPIC_API_KEY": "sk-ant-abcdef123456"})]
     monkeypatch.setenv("STARTD8_SECRETS_BACKEND", "doppler")

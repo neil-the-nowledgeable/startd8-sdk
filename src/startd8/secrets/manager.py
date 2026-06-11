@@ -17,6 +17,7 @@ so it cannot leak to child processes (FR-15a).
 
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
@@ -67,6 +68,8 @@ class SecretsManager:
     _fetch_failure: Optional[str] = None  # masked failure string (fail-open)
     _backend_name: str = "local"
     _last_result: Optional[HydrationResult] = None
+    _hydrated_at: Optional[float] = None  # monotonic time of last successful (re)hydrate
+    _ttl: Optional[float] = None          # seconds; None/0 => fetch-once (FR-ROT-4)
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -74,81 +77,123 @@ class SecretsManager:
         """Select the active backend and populate ``os.environ`` once (FR-4, FR-17).
 
         Idempotent and thread-safe: concurrent callers (e.g. ``AgentFramework`` built
-        on multiple threads) trigger exactly one fetch (FR-6a).
+        on multiple threads) trigger exactly one fetch (FR-6a). If a TTL is configured
+        and has elapsed, an already-hydrated call lazily refreshes first (FR-ROT-4).
         """
         with cls._lock:
             if cls._hydrated and not force:
+                if cls._ttl_expired():
+                    return cls._run_hydration(_load_settings(), force_fetch=True,
+                                              overwrite_owned=True, reason="ttl-refresh")
                 return cls._last_result or HydrationResult(backend=cls._backend_name)
 
             if force:
-                # Drop prior-run attribution so a re-hydrate can't report stale sources
-                # or a stale fail-open note. (Already-injected os.environ keys are left
-                # in place — "existing env wins" still holds on the re-run.)
+                # Full re-bootstrap: reset attribution; re-hydrate only-if-absent.
                 cls._source_map = {}
                 cls._fetch_failure = None
 
-            cfg = _load_settings()
-            backend_name = cfg["backend"]
-            cls._backend_name = backend_name
-            result = HydrationResult(backend=backend_name)
+            return cls._run_hydration(_load_settings(), force_fetch=force,
+                                      overwrite_owned=False, reason="hydrate")
 
-            if backend_name == "local":
-                # Default: nothing to hydrate; env/config already apply (FR-9).
-                cls._hydrated = True
-                cls._last_result = result
-                return result
+    @classmethod
+    def refresh(cls) -> HydrationResult:
+        """Force a fresh fetch and rotate SDK-owned keys in place (FR-ROT-1/2).
 
-            backend = _resolve_backend(backend_name, cfg)
-            secrets: Dict[str, str] = {}
-            try:
-                backend.validate_config()
-                secrets = backend.get_all_secrets()
-                result.outcome = "ok"
-            except (SecretsBackendError, ConfigurationError) as e:
-                masked = _mask_error(str(e))
-                if cfg["fail_closed"]:
-                    # Surface misconfiguration at the exact source (FR-13).
-                    raise ConfigurationError(
-                        f"Secrets backend '{backend_name}' failed (fail_closed): {masked}. "
-                        f"Check credentials/network, or set secrets_backend.fail_closed=false "
-                        f"to continue with env/config."
-                    )
-                # Fail-open: one loud masked warning, continue un-hydrated (FR-13a).
-                cls._fetch_failure = masked
-                result.outcome = "fail_open"
-                result.fetch_failure = masked
-                logger.warning(
-                    "Secrets backend '%s' fetch failed; continuing with env/config "
-                    "(fail-open). Cause: %s", backend_name, masked
-                )
+        Overwrites only keys the SDK injected (tracked in ``_source_map``); user/shell
+        env is never touched. Fail-open-preserving: a failed refresh keeps the
+        previously hydrated values rather than leaving the process worse off (FR-ROT-5).
+        """
+        with cls._lock:
+            # If nothing was hydrated yet, a refresh is just a first (forced) hydration.
+            return cls._run_hydration(_load_settings(), force_fetch=True,
+                                      overwrite_owned=cls._hydrated, reason="refresh")
 
-            allowlist = cfg["allowlist"]  # None=all, set()=none, {..}=those
-            for key, value in secrets.items():
-                if is_dangerous_key(key):
-                    result.skipped_dangerous.append(key)
-                    logger.warning(
-                        "Refusing to hydrate process-control key '%s' from secrets "
-                        "backend '%s' (deny-list)", key, backend_name
-                    )
-                    continue
-                if allowlist is not None and key not in allowlist:
-                    continue
-                if key in os.environ:  # existing env ALWAYS wins
-                    result.skipped_present.append(key)
-                    continue
-                os.environ[key] = value
-                cls._source_map[key] = backend_name
-                result.hydrated_keys.append(key)
+    # ------------------------------------------------------------------ #
+    @classmethod
+    def _run_hydration(cls, cfg, *, force_fetch: bool, overwrite_owned: bool,
+                       reason: str) -> HydrationResult:
+        """Shared fetch + apply body. **Caller MUST hold ``cls._lock``.**"""
+        backend_name = cfg["backend"]
+        cls._backend_name = backend_name
+        cls._ttl = cfg.get("ttl")
+        result = HydrationResult(backend=backend_name)
 
-            if result.outcome != "fail_open":
-                logger.info(
-                    "Secrets hydration via '%s': %d injected, %d skipped (present), "
-                    "%d denied", backend_name, len(result.hydrated_keys),
-                    len(result.skipped_present), len(result.skipped_dangerous)
-                )
+        if backend_name == "local":
             cls._hydrated = True
+            cls._hydrated_at = time.monotonic()
             cls._last_result = result
             return result
+
+        backend = _resolve_backend(backend_name, cfg)
+        owned = set(cls._source_map) if overwrite_owned else set()
+        secrets: Dict[str, str] = {}
+        try:
+            backend.validate_config()
+            secrets = _fetch(backend, force=force_fetch)
+            result.outcome = "ok"
+            cls._fetch_failure = None  # a successful (re)fetch clears a prior masked failure
+        except (SecretsBackendError, ConfigurationError) as e:
+            masked = _mask_error(str(e))
+            if cfg["fail_closed"]:
+                # Surface misconfiguration at the exact source (FR-13).
+                raise ConfigurationError(
+                    f"Secrets backend '{backend_name}' failed (fail_closed): {masked}. "
+                    f"Check credentials/network, or set secrets_backend.fail_closed=false "
+                    f"to continue with env/config."
+                )
+            # Fail-open: keep any already-hydrated env intact (FR-ROT-5), warn once (FR-13a).
+            cls._fetch_failure = masked
+            result.outcome = "fail_open"
+            result.fetch_failure = masked
+            logger.warning(
+                "Secrets backend '%s' %s fetch failed; keeping current env "
+                "(fail-open). Cause: %s", backend_name, reason, masked
+            )
+            cls._hydrated = True
+            cls._hydrated_at = time.monotonic()  # don't hammer a down backend each access
+            cls._last_result = result
+            return result
+
+        allowlist = cfg["allowlist"]  # None=all, set()=none, {..}=those
+        for key, value in secrets.items():
+            if is_dangerous_key(key):
+                result.skipped_dangerous.append(key)
+                logger.warning(
+                    "Refusing to hydrate process-control key '%s' from secrets "
+                    "backend '%s' (deny-list)", key, backend_name
+                )
+                continue
+            if allowlist is not None and key not in allowlist:
+                continue
+            if key in owned:
+                # Rotation: the SDK owns this key — update it in place (FR-ROT-2).
+                if os.environ.get(key) != value:
+                    result.hydrated_keys.append(key)  # count only the keys that changed
+                os.environ[key] = value
+                cls._source_map[key] = backend_name
+                continue
+            if key in os.environ:  # existing (user/shell) env ALWAYS wins
+                result.skipped_present.append(key)
+                continue
+            os.environ[key] = value
+            cls._source_map[key] = backend_name
+            result.hydrated_keys.append(key)
+
+        logger.info(
+            "Secrets %s via '%s': %d applied, %d skipped (present), %d denied",
+            reason, backend_name, len(result.hydrated_keys),
+            len(result.skipped_present), len(result.skipped_dangerous)
+        )
+        cls._hydrated = True
+        cls._hydrated_at = time.monotonic()
+        cls._last_result = result
+        return result
+
+    @classmethod
+    def _ttl_expired(cls) -> bool:
+        if not cls._ttl or cls._hydrated_at is None:
+            return False
+        return (time.monotonic() - cls._hydrated_at) >= cls._ttl
 
     # ------------------------------------------------------------------ #
     @classmethod
@@ -156,6 +201,8 @@ class SecretsManager:
         """Resolve a secret from the (possibly hydrated) environment."""
         if not cls._hydrated:
             cls.hydrate()
+        elif cls._ttl_expired():  # lazy TTL refresh on access (FR-ROT-4)
+            cls.refresh()
         return os.environ.get(name)
 
     @classmethod
@@ -205,6 +252,8 @@ class SecretsManager:
             cls._fetch_failure = None
             cls._backend_name = "local"
             cls._last_result = None
+            cls._hydrated_at = None
+            cls._ttl = None
 
 
 # ---------------------------------------------------------------------- #
@@ -241,12 +290,30 @@ def _load_settings() -> Dict[str, object]:
 
     token = os.environ.get("DOPPLER_TOKEN") or cfg.get("doppler_token")
 
+    # ttl: env wins, else config, else None (fetch-once). Invalid/0 => None (FR-ROT-4).
+    ttl_raw = os.environ.get("STARTD8_SECRETS_TTL", cfg.get("ttl_seconds"))
+    try:
+        ttl: Optional[float] = float(ttl_raw) if ttl_raw not in (None, "", 0) else None
+        if ttl is not None and ttl <= 0:
+            ttl = None
+    except (TypeError, ValueError):
+        ttl = None
+
     return {
         "backend": backend,
         "fail_closed": fail_closed,
         "allowlist": allowlist,
         "doppler_token": token,
+        "ttl": ttl,
     }
+
+
+def _fetch(backend: SecretsProvider, *, force: bool) -> Dict[str, str]:
+    """Call ``get_all_secrets``, passing ``force`` to backends that accept it (FR-ROT-3)."""
+    try:
+        return backend.get_all_secrets(force=force)  # type: ignore[call-arg]
+    except TypeError:
+        return backend.get_all_secrets()
 
 
 def _resolve_backend(name: str, cfg: Dict[str, object]) -> SecretsProvider:

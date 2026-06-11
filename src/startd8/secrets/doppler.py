@@ -81,13 +81,22 @@ class DopplerSecretsProvider:
     def get_secret(self, key: str) -> Optional[str]:
         return self.get_all_secrets().get(key)
 
-    def get_all_secrets(self) -> Dict[str, str]:
+    def invalidate(self) -> None:
+        """Drop the in-process cache so the next fetch hits the API (FR-ROT-3)."""
+        self._cache = None
+
+    def get_all_secrets(self, force: bool = False) -> Dict[str, str]:
         """Fetch + cache the config's secret map (FR-3, FR-6, FR-16).
+
+        Args:
+            force: bypass the in-process cache and re-fetch (FR-ROT-3, rotation).
 
         Raises:
             SecretsBackendError: on network/auth/parse failure — the manager decides
                 fail-open vs fail-closed (FR-13).
         """
+        if force:
+            self._cache = None
         if self._cache is not None:
             return self._cache
         self.validate_config()
@@ -98,8 +107,8 @@ class DopplerSecretsProvider:
         )
         with span_cm as span:
             _set_attr(span, "secrets.backend", "doppler")
-            cache_hit = False  # this method only runs on a cache miss
-            _set_attr(span, "secrets.cache_hit", cache_hit)
+            _set_attr(span, "secrets.cache_hit", False)  # this path only runs on a miss
+            _set_attr(span, "secrets.refresh", force)
             try:
                 raw = self._download()
                 secrets = {
