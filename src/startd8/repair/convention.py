@@ -60,13 +60,21 @@ _IDIOM_RULES: Tuple[IdiomRule, ...] = (
         safe_fixable=False,
     ),
     IdiomRule(
-        # Declaration-surface ORM rule (Sapper OQ-6): catch `from sqlalchemy[.orm] import …`
-        # at *import* time, not only via the `.query(` body call below — a skeleton imports
-        # SQLAlchemy before any body exists, so the import is the only signal at plan time.
+        # Declaration-surface ORM rule (Sapper OQ-6): catch raw-SQLAlchemy ORM usage at *import*
+        # time — a bare `import sqlalchemy`, the `from sqlalchemy.orm import …` layer, or an ORM
+        # construct (select/Session/relationship/…) pulled from `from sqlalchemy import …`. The old
+        # rule flagged ANY `from sqlalchemy import`, false-positiving on infrastructure primitives a
+        # SQLModel app legitimately needs (event for the WAL pragma, inspect for the drift guard,
+        # cast/or_/String for filters, Column(JSON) for list fields) — none of which sqlmodel exposes.
         "orm_idiom",
-        re.compile(r"^\s*(?:from\s+sqlalchemy\b|import\s+sqlalchemy\b)"),
+        re.compile(
+            r"^\s*import\s+sqlalchemy\b"
+            r"|^\s*from\s+sqlalchemy\.orm\s+import\b"
+            r"|^\s*from\s+sqlalchemy\s+import\b[^\n]*\b"
+            r"(?:select|Session|sessionmaker|scoped_session|declarative_base|relationship|mapped_column|Mapped)\b"
+        ),
         "sqlalchemy",
-        "SQLModel (Session/select from sqlmodel) — generated apps use SQLModel, not raw SQLAlchemy",
+        "SQLModel (Session/select from sqlmodel) — generated apps use SQLModel, not raw SQLAlchemy ORM",
         safe_fixable=False,  # wholesale ORM swap → escalate
     ),
     IdiomRule(

@@ -119,6 +119,24 @@ def test_orm_query_without_get_is_flagged_unsafe():
     assert d[0].safe_fixable is False  # plain .query() has no single-symbol rewrite
 
 
+def test_sqlalchemy_infra_imports_are_not_flagged_but_orm_imports_are():
+    # The sqlalchemy import rule must NOT false-fire on infrastructure primitives a SQLModel app
+    # legitimately needs (no sqlmodel equivalent) — event/inspect (db.py), cast/or_/String (filters).
+    for ok in (
+        "from sqlalchemy import event, inspect as _i\n",
+        "from sqlalchemy import String as _S, cast as _c, or_ as _o\n",
+        "from sqlalchemy import Column, JSON\n",
+    ):
+        assert [d for d in detect_conventions(ok) if d.symbol == "sqlalchemy"] == [], ok
+    # ...but genuine raw-ORM usage still fires.
+    for bad in (
+        "import sqlalchemy\n",
+        "from sqlalchemy.orm import Session\n",
+        "from sqlalchemy import select, event\n",
+    ):
+        assert any(d.symbol == "sqlalchemy" for d in detect_conventions(bad)), bad
+
+
 # --------------------------------------------------------------------------- #
 # Phase B.1 — the verdict hard-gate (FR-CAR-7)
 # --------------------------------------------------------------------------- #
