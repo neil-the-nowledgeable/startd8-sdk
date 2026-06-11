@@ -49,6 +49,7 @@ AI_KINDS = (
     "ai-edge-schemas",
     "ai-pass",
     "ai-router",
+    "ai-ui-router",        # FR-AIT: app/ai/ui.py (the detail-page trigger routes)
     "ai-server",
     "ai-tests-edge",
     "ai-tests-pass",

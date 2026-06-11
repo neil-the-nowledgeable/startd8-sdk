@@ -362,7 +362,7 @@ def scaffold(
     Class-2 determinism — $0 LLM, owned, drift-checked. Non-overlapping with `generate backend`
     (which owns ``app/``); this owns the project *around* it.
     """
-    from .scaffold_codegen import render_scaffold, scaffold_in_sync
+    from .scaffold_codegen import is_owned_scaffold_file, render_scaffold, scaffold_in_sync
 
     manifest_text = ""
     if manifest is not None:
@@ -381,6 +381,8 @@ def scaffold(
     if check:
         drifted = 0
         for rel, content in artifacts:
+            if not is_owned_scaffold_file(content):
+                continue  # headerless placeholders (e.g. alembic/versions/.gitkeep) aren't drift-tracked
             target = out / rel
             ondisk = target.read_text(encoding="utf-8") if target.exists() else None
             if ondisk is None:

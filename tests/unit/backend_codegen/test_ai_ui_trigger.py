@@ -138,6 +138,17 @@ def test_main_mounts_ai_ui_router_tolerantly():
     compile(main, "<main>", "exec")
 
 
+def test_ai_ui_router_is_drift_registered():
+    # ai-ui-router was emitted but unregistered in AI_KINDS/_AI_KINDS → `generate backend --check`
+    # perma-flagged app/ai/ui.py as 'tampered', masking real drift. Now it round-trips to in_sync.
+    from startd8.backend_codegen import check_drift, render_backend
+
+    files = dict(render_backend(SCHEMA, manifest_text=MANIFEST, human_inputs_text=""))
+    ui = files["app/ai/ui.py"]
+    res = check_drift(SCHEMA, ui, manifest_text=MANIFEST, human_inputs_text="")
+    assert res.status == "in_sync", res.reason          # not 'tampered: unknown kind'
+
+
 def test_layer_emits_ui_only_when_triggered():
     with_trigger = dict(render_ai_layer(SCHEMA, MANIFEST, ""))
     assert "app/ai/ui.py" in with_trigger

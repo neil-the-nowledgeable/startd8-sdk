@@ -289,17 +289,24 @@ def _parse_index_lines(entity: str, body: str, graph: EntityGraph) -> None:
 
 
 def _relationship_paragraph(body: str) -> str:
-    """The text of the ``Relationships:`` paragraph, joined across wrapped lines."""
-    lines = body.splitlines()
-    for i, line in enumerate(lines):
-        if line.strip().startswith("Relationships:"):
-            collected = [line.split(":", 1)[1]]
-            for cont in lines[i + 1:]:
-                if not cont.strip() or cont.strip().startswith(("|", "#", "-")):
-                    break
-                collected.append(cont)
-            return " ".join(s.strip() for s in collected)
-    return ""
+    """The text of the ``Relationships:`` paragraph(s), joined across wrapped lines.
+
+    Multiple ``Relationships:`` lines are each collected (prefix stripped) — a SECOND such line is a
+    new declaration, not a continuation of the first (which would silently swallow it, dropping the
+    relationship; the workaround was to ``;``-join them onto one line)."""
+    collected: List[str] = []
+    in_block = False
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("Relationships:"):
+            collected.append(line.split(":", 1)[1])     # new declaration line — strip the prefix
+            in_block = True
+        elif in_block:
+            if not s or s.startswith(("|", "#", "-")):
+                in_block = False                          # the block ends; later lines may re-open it
+            else:
+                collected.append(line)                    # wrapped continuation of the current line
+    return " ".join(s.strip() for s in collected)
 
 
 _VERB_3FORM = re.compile(

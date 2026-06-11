@@ -227,6 +227,26 @@ def test_list_of_text_emits_string_array(tmp_path=None):
     assert f.is_list and f.type == "String"        # round-trips as a list field
 
 
+def test_two_relationship_lines_both_emit():
+    # A SECOND `Relationships:` line must not be silently swallowed as a continuation of the first
+    # (the reported bug: the relationship never emitted and --check still passed).
+    doc = (
+        "## Entities\n\n### Contact\n"
+        "| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| name | text | yes | |\n\n"
+        "Relationships: a Contact **belongs to** a JobDescription.\n"
+        "Relationships: a Contact **references** a Company (optional).\n\n"
+        "### JobDescription\n| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| title | text | no | |\n\n"
+        "### Company\n| Field | Type | Required | Notes |\n|-------|------|----------|-------|\n"
+        "| name | text | no | |\n"
+    )
+    c = parse_prisma_schema(render_prisma_schema(build_entity_graph({"d.md": doc})).text).model("Contact")
+    assert c.field("jobDescriptionId") is not None          # first relationship (belongs-to FK)
+    assert c.field("companyId") is not None                 # second line — NOT dropped
+    assert c.field("companyId").is_optional                 # references (optional) → String?
+
+
 def test_optional_references_emits_nullable_scalar():
     # G2: `references Y (optional)` → `yId String?` (the optional loose-ref variant).
     doc = (

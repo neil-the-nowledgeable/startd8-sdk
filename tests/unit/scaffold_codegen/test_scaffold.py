@@ -144,6 +144,23 @@ def test_extra_dependencies_must_be_a_string_list():
         render_scaffold(MANIFEST + "\nextra_dependencies:\n  reportlab: yes\n")
 
 
+def test_scaffold_check_is_clean_after_generate_gitkeep_not_flagged(tmp_path):
+    """`generate scaffold --check` reaches in_sync right after a clean generate — the headerless
+    alembic/versions/.gitkeep placeholder must NOT perma-flag the drift gate."""
+    from typer.testing import CliRunner
+    from startd8.cli_generate import generate_app
+
+    runner = CliRunner()
+    man = tmp_path / "app.yaml"
+    man.write_text(MANIFEST, encoding="utf-8")
+    proj = tmp_path / "proj"
+    assert runner.invoke(generate_app, ["scaffold", "--manifest", str(man), "--out", str(proj)]).exit_code == 0
+    (proj / "alembic" / "versions" / ".gitkeep").write_text("", encoding="utf-8")  # ensure it exists
+    chk = runner.invoke(generate_app, ["scaffold", "--manifest", str(man), "--out", str(proj), "--check"])
+    assert chk.exit_code == 0, chk.output            # in_sync — no .gitkeep drift
+    assert ".gitkeep" not in chk.output
+
+
 def test_alembic_mako_completes_the_migration_harness():
     """FR-MG-1: the scaffold emits script.py.mako (so `alembic revision` works) + a versions dir."""
     files = dict(render_scaffold(MANIFEST))
