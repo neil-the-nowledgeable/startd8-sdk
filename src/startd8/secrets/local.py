@@ -21,7 +21,7 @@ class LocalSecretsProvider:
     def name(self) -> str:
         return "local"
 
-    def get_all_secrets(self) -> Dict[str, str]:
+    def get_all_secrets(self, force: bool = False) -> Dict[str, str]:
         # Hydrates nothing — env + config file already apply. (FR-9 / FR-5a)
         return {}
 

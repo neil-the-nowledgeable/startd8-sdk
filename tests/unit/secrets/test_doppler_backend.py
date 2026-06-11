@@ -36,6 +36,18 @@ def test_download_is_cached_single_fetch(fake_httpx):
     assert first == second == {"A": "1"}
 
 
+def test_force_invalidates_cache_and_refetches(fake_httpx):
+    # Rotation: force=True must bypass the cache and pull the new value (FR-ROT-3).
+    fake_httpx.queue = [FakeResponse(200, {"A": "1"}), FakeResponse(200, {"A": "2"})]
+    backend = DopplerSecretsProvider(token="dp.st.abc123def")
+    assert backend.get_all_secrets() == {"A": "1"}
+    assert backend.get_all_secrets() == {"A": "1"}          # cached
+    assert backend.get_all_secrets(force=True) == {"A": "2"}  # refetched
+    backend.invalidate()  # also exposed directly
+    fake_httpx.queue = [FakeResponse(200, {"A": "3"})]
+    assert backend.get_all_secrets() == {"A": "3"}
+
+
 def test_auth_failure_is_not_retried(fake_httpx):
     fake_httpx.queue = [FakeResponse(401, {})]  # single 401, no retries consumed
     backend = DopplerSecretsProvider(token="dp.st.badtoken")

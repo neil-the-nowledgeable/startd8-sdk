@@ -20,10 +20,28 @@ def _isolate_secrets_state():
 
     # Drop any secrets-related env that could leak in from the host shell.
     for var in ("STARTD8_SECRETS_BACKEND", "STARTD8_SECRETS_FAIL_CLOSED",
-                "STARTD8_SECRETS_ALLOWLIST", "DOPPLER_TOKEN"):
+                "STARTD8_SECRETS_ALLOWLIST", "STARTD8_SECRETS_TTL", "DOPPLER_TOKEN"):
         os.environ.pop(var, None)
 
+    # Isolate from the developer's real ~/.startd8/config.json: a persisted
+    # secrets_backend (e.g. backend=doppler) must not bleed into unit tests. Neutralize
+    # the section in-memory only (no file write); restore it afterward.
+    try:
+        from startd8.config import get_config_manager
+        cm = get_config_manager()
+        saved_sb = cm._config.get("secrets_backend", "__unset__")
+        cm._config["secrets_backend"] = {}
+    except Exception:
+        cm = None
+        saved_sb = "__unset__"
+
     yield
+
+    if cm is not None:
+        if saved_sb == "__unset__":
+            cm._config.pop("secrets_backend", None)
+        else:
+            cm._config["secrets_backend"] = saved_sb
 
     SecretsManager._reset_for_tests()
     SecretsProviderRegistry._reset_for_tests()

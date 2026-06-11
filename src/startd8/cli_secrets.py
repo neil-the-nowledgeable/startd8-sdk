@@ -102,6 +102,27 @@ def secrets_list() -> None:
     console.print(table)
 
 
+@secrets_app.command("refresh")
+def secrets_refresh() -> None:
+    """Force a re-fetch and rotate SDK-owned secrets in place (no restart needed)."""
+    SecretsManager = _manager()
+    result = SecretsManager.refresh()
+    if result.backend == "local":
+        console.print("[dim]Backend 'local' — nothing to refresh.[/dim]")
+        return
+    if result.outcome == "fail_open":
+        console.print(f"[yellow]Refresh fetch failed (kept current env):[/yellow] "
+                      f"{result.fetch_failure}")
+        raise typer.Exit(1)
+    changed = result.hydrated_keys
+    if changed:
+        console.print(f"[green]✓[/green] refreshed '{result.backend}' — "
+                      f"{len(changed)} key(s) rotated: {', '.join(sorted(changed))}")
+    else:
+        console.print(f"[green]✓[/green] refreshed '{result.backend}' — no changes "
+                      f"(all SDK-owned keys already current).")
+
+
 @secrets_app.command("test")
 def secrets_test() -> None:
     """Validate connectivity/auth to the configured backend.

@@ -60,8 +60,12 @@ class SecretsProvider(Protocol):
         """Unique, lowercase backend identifier (e.g. ``'doppler'``)."""
         ...
 
-    def get_all_secrets(self) -> Dict[str, str]:
+    def get_all_secrets(self, force: bool = False) -> Dict[str, str]:
         """Return the full secret map this backend exposes.
+
+        Args:
+            force: bypass any in-process cache and re-fetch (rotation — FR-ROT-3).
+                Backends without a cache may ignore it.
 
         Returns:
             Mapping of secret name -> value. May be empty (the ``local`` backend

@@ -15,6 +15,20 @@ from startd8.agents import MockAgent
 from startd8.storage import FileSystemStorage
 
 
+def pytest_configure(config):
+    """Force the no-network ``local`` secrets backend for the unit suite.
+
+    A developer may have persisted ``secrets_backend.backend = doppler`` in their real
+    ``~/.startd8/config.json``. Without this guard, every ``AgentFramework()`` (and the
+    CLI callback) would hydrate from their live Doppler during an ordinary ``pytest`` run
+    — a surprise network call against a personal token. Mirrors the integration-test
+    policy: live secrets backends are opt-in via STARTD8_RUN_INTEGRATION=1. Individual
+    secrets tests still override this per-test via ``monkeypatch``.
+    """
+    if os.getenv("STARTD8_RUN_INTEGRATION") != "1":
+        os.environ["STARTD8_SECRETS_BACKEND"] = "local"
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip @pytest.mark.integration tests unless STARTD8_RUN_INTEGRATION=1.
 

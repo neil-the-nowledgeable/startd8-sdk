@@ -1,8 +1,8 @@
 # Doppler Secrets Management Integration — Requirements
 
-**Version:** 0.3 (Post-CRP — R1 triaged & applied)
-**Date:** 2026-06-10
-**Status:** Draft — CRP Round 1 applied (9/9 F-suggestions accepted); ready for implementation
+**Version:** 0.4 (NR-7 runtime rotation promoted → FR-ROT-1..6, IMPLEMENTED)
+**Date:** 2026-06-11
+**Status:** v0.3 shipped+merged; v0.4 adds runtime rotation (FR-ROT) — IMPLEMENTED 2026-06-11
 
 ---
 
@@ -211,6 +211,31 @@ the existing env-var-first workflow.
   construct providers directly. Re-invocation must be a guarded no-op, and the guard must be
   **thread-safe** (FR-6a) since `AgentFramework.__init__` may be reached concurrently.
 
+### Runtime rotation (added in v0.4 — promotes former NR-7)
+> Closes the §1 "rotate centrally" contradiction by adding an explicit in-process refresh path.
+> The single load-bearing design decision is **FR-ROT-2**.
+
+- **FR-ROT-1 — Explicit refresh.** A public `SecretsManager.refresh()` / `startd8.secrets.refresh()`
+  re-fetches the active backend (busting its cache) and re-hydrates, under the same module lock as
+  `hydrate()` (FR-6a). For the `local` backend it is a no-op.
+- **FR-ROT-2 — Refresh overwrites only backend-owned keys (the key decision).** On refresh, a key is
+  updated in `os.environ` **only if the SDK injected it** (tracked in the `_source_map` from FR-5).
+  Keys the user/shell set explicitly are **never overwritten** — "explicit env always wins" must hold
+  across rotation exactly as it does at first hydration. A rotated Doppler value therefore updates the
+  process iff the SDK owns that key; a user-pinned key is left intact. (Without this, refresh would
+  either clobber user overrides or fail to pick up rotations — both wrong.)
+- **FR-ROT-3 — Backend cache invalidation.** The Doppler backend must expose a way to force a fresh
+  fetch (e.g. `get_all_secrets(force=True)` / `invalidate()`); refresh must not return the stale
+  in-process cache (supersedes the FR-6 single-fetch limit *only* on explicit refresh).
+- **FR-ROT-4 — Optional TTL (lazy).** An optional `secrets_backend.ttl_seconds` (env
+  `STARTD8_SECRETS_TTL`) enables **lazy** auto-refresh: the next `hydrate()`/`get_secret()` after the
+  TTL elapses triggers one refresh. No background thread. TTL unset/0 ⇒ fetch-once (today's behavior).
+- **FR-ROT-5 — Refresh failure is fail-open-preserving.** A failed refresh fetch must not wipe the
+  already-hydrated environment: on error, keep the prior values, honor FR-13 fail-open/closed, and
+  record the masked failure (FR-13a). A refresh must never leave the process *worse* than before it.
+- **FR-ROT-6 — CLI + telemetry.** `startd8 secrets refresh` forces a refresh and reports what changed
+  (counts only, masked). The refresh fetch reuses the FR-16 OTel span (with `secrets.refresh=true`).
+
 ## 4. Non-Requirements
 
 - **NR-1** Writing or mutating secrets in Doppler (create/update/delete). Read-only consumer only.
@@ -220,11 +245,9 @@ the existing env-var-first workflow.
 - **NR-5** Other managed backends (Vault, AWS Secrets Manager, 1Password). The abstraction must
   *allow* them, but only `local` + `doppler` ship now.
 - **NR-6** Secrets sync/mirroring into CI provider variables.
-- **NR-7 — Runtime secret rotation / re-hydration (R1-F3).** v1 fetches **once per process**; picking
-  up rotated secrets requires a **process restart**. No TTL, no `hydrate(force=True)`, no live
-  invalidation. The §1 "rotate centrally" benefit refers to Doppler being the single rotation *control
-  point* (rotate once, every process restart picks it up) — **not** zero-downtime in-process refresh.
-  Runtime rotation is a deliberate, deferred follow-on.
+- **NR-7 — ~~Runtime secret rotation~~ → PROMOTED to FR-ROT-1..6 (v0.4).** Originally deferred in v0.3;
+  now in scope. Runtime refresh (explicit `refresh()` + optional lazy TTL) is specified above; the
+  load-bearing rule is FR-ROT-2 (refresh overwrites only SDK-injected keys, never user env).
 - **NR-8 — Simultaneous multi-config / multi-project resolution (R1-F6).** One active backend resolves
   one project+config (one service token). Targeting dev+prd (or multiple Doppler projects) at once
   within a single process is deferred; the v1 "per-environment scoping" story is achieved by selecting
