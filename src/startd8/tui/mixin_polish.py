@@ -44,6 +44,11 @@ class PolishMixin:
             self.console.print(f"[red]Polish failed:[/red] {exc}")
             return
 
+        # OTel telemetry at the TUI boundary, parity with the CLI (FR-23) — no-op-safe, never raises.
+        from ..presentation_polish.telemetry import record_polish
+
+        record_polish(result, check=False)
+
         for relpath, status in result.files:
             self.console.print(f"  [cyan]{status.value}[/cyan]: {relpath}")
         for skipped in result.skipped_user_owned:
