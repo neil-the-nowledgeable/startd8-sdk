@@ -81,6 +81,15 @@ class AgentFramework:
             except ImportError:
                 logger.debug("OTel not available, skipping auto-configure")
 
+        # Secrets hydration (FR-17): populate os.environ from the active backend once,
+        # so providers' os.getenv() calls see managed secrets. Idempotent + thread-safe;
+        # a no-op for the default 'local' backend (no network), fail-open on Doppler error.
+        try:
+            from .secrets import hydrate
+            hydrate()
+        except Exception as e:
+            logger.debug("Secrets hydration skipped: %s", e)
+
         if storage_dir is None:
             storage_dir = Path.cwd() / ".startd8"
 

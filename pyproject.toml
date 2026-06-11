@@ -135,6 +135,12 @@ csharp = "startd8.languages.csharp:CSharpLanguageProfile"
 vue = "startd8.languages.vue:VueLanguageProfile"
 prisma = "startd8.languages.prisma:PrismaLanguageProfile"
 
+# Secrets backends — SecretsProviderRegistry consults these to source credentials.
+# `local` preserves env + ~/.startd8/config.json; `doppler` hydrates from doppler.com.
+[project.entry-points."startd8.secrets"]
+local = "startd8.secrets.local:LocalSecretsProvider"
+doppler = "startd8.secrets.doppler:DopplerSecretsProvider"
+
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"
 

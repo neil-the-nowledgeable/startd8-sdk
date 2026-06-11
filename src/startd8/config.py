@@ -225,11 +225,38 @@ class ConfigManager:
         """Get where the API key is coming from"""
         env_var = f"{provider.upper()}_API_KEY"
         if os.getenv(env_var):
+            # The value is in the environment — but it may have been *hydrated* there
+            # by a secrets backend (e.g. Doppler). Report that provenance when known,
+            # so a single resolution path (the hydrated env) stays self-describing
+            # for both this getter's callers and the provider os.getenv() sites (R1-S6).
+            try:
+                from .secrets import get_secret_source
+                src = get_secret_source(env_var)
+                if src and src != "env":
+                    return src
+            except Exception:
+                pass
             return "environment"
         elif self._config.get("api_keys", {}).get(provider):
             return "config"
         return None
-    
+
+    def get_secrets_backend_config(self) -> Dict[str, Any]:
+        """Return the ``secrets_backend`` config section (backend selection + options).
+
+        Shape (all optional)::
+
+            {
+              "backend": "doppler",        # or "local" (default)
+              "doppler_token": "dp.st...", # prefer the DOPPLER_TOKEN env var
+              "fail_closed": false,        # default fail-open (FR-13)
+              "allowlist": ["ANTHROPIC_API_KEY", ...]  # omit=all, []=none (FR-4b)
+            }
+
+        Empty dict when unset — the manager then defaults to the ``local`` backend.
+        """
+        return dict(self._config.get("secrets_backend", {}))
+
     # Model Configuration
     
     def get_model_config(self, agent: str) -> Dict[str, Any]:
