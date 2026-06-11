@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 __all__ = [
     "ConfigFingerprint",
+    "StructuralPattern",
     "ExemplarEntry",
     "ExemplarScores",
     "SCHEMA_VERSION",
@@ -232,6 +233,27 @@ def _derive_archetype(
             return "simple_module"
 
     return "source_module"
+
+
+# ---------------------------------------------------------------------------
+# Structural Pattern
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class StructuralPattern:
+    """An archetype's structural shape, extracted by ``structural_extractor`` for exemplar reuse:
+    its lifecycle phases, middleware insertion points, config keys, and error strategy. Frozen so a
+    promoted pattern is an immutable template. (Restored — ``structural_extractor`` imports and
+    constructs this; it had gone missing from this module, leaving that module un-importable.)
+    """
+
+    archetype: str
+    lifecycle_phases: tuple[str, ...]
+    middleware_points: tuple[str, ...]
+    config_keys: tuple[str, ...]
+    error_strategy: str
+    source_language: str
+    source_fingerprint: str
 
 
 # ---------------------------------------------------------------------------

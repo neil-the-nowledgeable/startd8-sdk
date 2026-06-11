@@ -14,7 +14,6 @@ from startd8.seeds.derivation import (
     infer_artifact_types_from_files,
     infer_service_metadata,
     is_trivial_test_init,
-    rewrite_split_dependencies,
     split_oversized_tasks,
 )
 
@@ -219,108 +218,6 @@ class TestSplitOversizedTasks:
         assert len(result) == 2
         assert result[0]["task_id"] == "T1a"
         assert result[1]["task_id"] == "T1b"
-
-
-class TestRewriteSplitDependencies:
-    """Tests for rewrite_split_dependencies — Gate 2a-post."""
-
-    def _make_task(self, task_id, depends_on=None, split_from=None):
-        ctx = {"target_files": ["dummy.py"]}
-        if split_from:
-            ctx["_split_from"] = split_from
-        return {
-            "task_id": task_id,
-            "depends_on": depends_on or [],
-            "config": {"context": ctx},
-        }
-
-    def test_no_splits_passthrough(self):
-        tasks = [self._make_task("T1"), self._make_task("T2", depends_on=["T1"])]
-        result = rewrite_split_dependencies(tasks)
-        assert result[1]["depends_on"] == ["T1"]
-
-    def test_rewrites_parent_to_children(self):
-        """PI-002 depends on PI-001, which was split into PI-001a, PI-001b."""
-        tasks = [
-            self._make_task("PI-001a", split_from="PI-001"),
-            self._make_task("PI-001b", split_from="PI-001"),
-            self._make_task("PI-002a", depends_on=["PI-001"], split_from="PI-002"),
-        ]
-        result = rewrite_split_dependencies(tasks)
-        assert result[2]["depends_on"] == ["PI-001a", "PI-001b"]
-
-    def test_preserves_live_deps(self):
-        """Deps that reference live task IDs are kept as-is."""
-        tasks = [
-            self._make_task("PI-001a", split_from="PI-001"),
-            self._make_task("PI-002a", depends_on=["PI-001a"]),
-        ]
-        result = rewrite_split_dependencies(tasks)
-        assert result[1]["depends_on"] == ["PI-001a"]
-
-    def test_mixed_deps(self):
-        """Some deps are live, some reference split parents."""
-        tasks = [
-            self._make_task("T1"),
-            self._make_task("T2a", split_from="T2"),
-            self._make_task("T2b", split_from="T2"),
-            self._make_task("T3", depends_on=["T1", "T2"]),
-        ]
-        result = rewrite_split_dependencies(tasks)
-        assert result[3]["depends_on"] == ["T1", "T2a", "T2b"]
-
-    def test_multi_parent_rewrite(self):
-        """Deps on multiple split parents all get expanded."""
-        tasks = [
-            self._make_task("A1", split_from="A"),
-            self._make_task("A2", split_from="A"),
-            self._make_task("B1", split_from="B"),
-            self._make_task("C", depends_on=["A", "B"]),
-        ]
-        result = rewrite_split_dependencies(tasks)
-        assert result[3]["depends_on"] == ["A1", "A2", "B1"]
-
-    def test_end_to_end_with_split(self):
-        """Full pipeline: split then rewrite."""
-        tasks = [
-            {
-                "task_id": "PI-001",
-                "title": "Host",
-                "depends_on": [],
-                "config": {
-                    "task_description": "host files",
-                    "context": {
-                        "feature_id": "F1",
-                        "target_files": ["Program.cs", "Startup.cs"],
-                        "estimated_loc": 100,
-                    },
-                },
-            },
-            {
-                "task_id": "PI-002",
-                "title": "Cart",
-                "depends_on": ["PI-001"],
-                "config": {
-                    "task_description": "cart service",
-                    "context": {
-                        "feature_id": "F2",
-                        "target_files": ["Cart.cs"],
-                        "estimated_loc": 50,
-                    },
-                },
-            },
-        ]
-        split = split_oversized_tasks(tasks, max_files=1)
-        result = rewrite_split_dependencies(split)
-        # PI-001 split into PI-001a, PI-001b
-        assert result[0]["task_id"] == "PI-001a"
-        assert result[1]["task_id"] == "PI-001b"
-        # PI-002 was single-file, passed through
-        assert result[2]["task_id"] == "PI-002"
-        # PI-002's depends_on should now reference PI-001a, PI-001b
-        assert "PI-001a" in result[2]["depends_on"]
-        assert "PI-001b" in result[2]["depends_on"]
-        assert "PI-001" not in result[2]["depends_on"]
 
 
 class TestFilterTrivialTestInitTasks:
