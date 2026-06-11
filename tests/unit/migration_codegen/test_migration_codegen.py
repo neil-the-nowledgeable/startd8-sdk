@@ -71,6 +71,18 @@ def test_delta_adds_columns_and_new_table():
     assert "op.drop_table('tag')" in down
 
 
+def test_string_default_with_apostrophe_is_sql_escaped():
+    # a string default containing ' must emit valid SQL (doubled quote), not break the server_default.
+    v = (
+        "model Co {\n"
+        "  id   String @id @default(cuid())\n"
+        '  name String @default("O\'Brien")\n'
+        "}\n"
+    )
+    up = "\n".join(plan_migration(v, None).upgrade_ops)
+    assert "server_default=sa.text(\"'O''Brien'\")" in up      # ' doubled → valid SQL literal
+
+
 def test_required_field_without_default_softened_to_nullable_with_note():
     v3 = V1.replace("  title String\n", "  title String\n  city String\n")  # required, NO @default
     plan = plan_migration(v3, V1)

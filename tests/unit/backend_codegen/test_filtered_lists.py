@@ -65,8 +65,9 @@ def test_handler_builds_facet_and_search_query():
     assert "from sqlalchemy import String as _SAString, cast as _sa_cast, or_ as _or" in web
     assert "stmt = select(Item)" in web
     assert "stmt = stmt.where(Item.status == _v)" in web                       # scalar exact
-    assert "_sa_cast(Item.tags, _SAString).like('%\"' + _v + '\"%')" in web    # JSON membership
-    assert "stmt = stmt.where(_or(_sa_cast(Item.label, _SAString).ilike(\"%\" + _q + \"%\")))" in web
+    # JSON membership + search use autoescape so LIKE wildcards (% _) in user input aren't wildcards
+    assert "_sa_cast(Item.tags, _SAString).contains('\"' + _v + '\"', autoescape=True)" in web
+    assert "_or(_sa_cast(Item.label, _SAString).icontains(_q, autoescape=True))" in web
     assert '"filters": dict(request.query_params)' in web
 
 
@@ -152,6 +153,9 @@ def test_filters_narrow_rows_at_runtime(tmp_path, monkeypatch):
             assert "figma" not in py or "Designer" not in py         # figma row excluded
             srch = _ids({"q": "lead"})                               # case-insensitive search
             assert "Lead engineer" in srch and "Manager" not in srch
+            # autoescape: a literal LIKE wildcard in user input is NOT a wildcard (no match-everything)
+            pct = _ids({"q": "%"})
+            assert "Lead engineer" not in pct and "Manager" not in pct and "Designer" not in pct
     finally:
         if str(tmp_path) in sys.path:
             sys.path.remove(str(tmp_path))

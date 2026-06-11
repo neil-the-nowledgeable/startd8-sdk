@@ -659,14 +659,15 @@ def _list_query_lines(schema: PrismaSchema, name: str, ef: EntityFilter) -> List
             lines.append("    if _v:")
             lines.append(
                 f'        stmt = stmt.where(_sa_cast({name}.{field}, _SAString)'
-                f".like('%\"' + _v + '\"%'))"
+                # autoescape: LIKE wildcards (% _) in user input are escaped, not treated as wildcards
+                ".contains('\"' + _v + '\"', autoescape=True))"
             )
         else:                                       # scalar → exact match
             lines.append("    if _v:")
             lines.append(f"        stmt = stmt.where({name}.{field} == _v)")
     if ef.search:
         terms = ", ".join(
-            f'_sa_cast({name}.{s}, _SAString).ilike("%" + _q + "%")' for s in ef.search
+            f"_sa_cast({name}.{s}, _SAString).icontains(_q, autoescape=True)" for s in ef.search
         )
         lines.append('    _q = request.query_params.get("q")')
         lines.append("    if _q:")

@@ -77,8 +77,8 @@ def _server_default(field: PrismaField) -> Optional[str]:
             return f"sa.text('{1 if raw.lower() == 'true' else 0}')"
         if re.fullmatch(r"-?\d+(\.\d+)?", raw):          # numeric literal
             return f"sa.text('{raw}')"
-        lit = raw.strip("\"'")                            # string/enum literal → quoted SQL literal
-        return f"sa.text(\"'{lit}'\")"
+        lit = raw.strip("\"'").replace("'", "''")         # string/enum literal → quoted SQL literal
+        return f"sa.text(\"'{lit}'\")"                     # embedded ' doubled (SQL escaping)
     return None
 
 
