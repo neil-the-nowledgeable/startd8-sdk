@@ -166,9 +166,14 @@ deliverable here.
   startd8-sdk repo (the subproject has its own `pyproject`/CI but is **not** a separate git repo).
   The wrapper imports the SDK as a library and declares the minimum SDK version exposing the API,
   and MUST stay thin (no business logic) so the CLI (FR-C13) and the MCP tool render from the one
-  SDK code path. *(Planning OQ for the implementing pass: `mcp/startd8-mcp-builder/` has both a
-  4.3k-line monolith `startd8_mcp.py` and a `startd8_mcp_server/server.py` — confirm which is the
-  live registration target before adding the tool.)*
+  SDK code path. **Registration target (resolved):** add the `@mcp.tool()` to the root monolith
+  **`startd8_mcp.py`** — it is the documented "Primary Server," the module all 14 test files
+  import, the CLAUDE.md launch target (`python3 startd8_mcp.py`), and the public entrypoint the
+  `startd8_mcp_server/` package itself defers to "for backward compatibility." Caveat for the
+  implementer: the 20 existing tools are **duplicated** in `startd8_mcp_server/server.py` (a
+  parked monolith→package refactor with the identical tool surface); a tool added to the monolith
+  must be mirrored there too, or the refactor's go-forward status confirmed first — pre-existing
+  drift, flagged not inherited.
 
 ---
 
