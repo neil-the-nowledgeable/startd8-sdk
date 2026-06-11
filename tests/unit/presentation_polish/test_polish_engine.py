@@ -71,7 +71,9 @@ def test_apply_is_idempotent(tmp_path):
     result2 = apply_polish(PolishConfig(project_root=root, theme="professional"))
     assert all(s == FileStatus.UNCHANGED for _, s in result2.files)
     assert (root / STYLESHEET_RELPATH).read_text() == css_first
-    assert (root / MANIFEST_RELPATH).read_text() == manifest_first  # manifest byte-stable too
+    assert (
+        root / MANIFEST_RELPATH
+    ).read_text() == manifest_first  # manifest byte-stable too
 
 
 def test_changing_theme_updates(tmp_path):
@@ -91,13 +93,30 @@ def test_non_destructive_to_user_files(tmp_path):
 
     result = apply_polish(PolishConfig(project_root=root, theme="professional"))
     assert dict(result.files)[STYLESHEET_RELPATH] == FileStatus.SKIPPED_USER_OWNED
-    assert css_path.read_text() == "/* my own hand-written styles */\nbody { color: red; }\n"
+    assert (
+        css_path.read_text()
+        == "/* my own hand-written styles */\nbody { color: red; }\n"
+    )
     assert STYLESHEET_RELPATH in result.skipped_user_owned
+
+
+def test_non_destructive_to_unreadable_file(tmp_path):
+    """An undecodable/binary file at a polish path must be skipped, not crash apply_polish."""
+    root = _project(tmp_path)
+    css_path = root / STYLESHEET_RELPATH
+    css_path.parent.mkdir(parents=True, exist_ok=True)
+    css_path.write_bytes(b"\xff\xfe\x00\x01 not valid utf-8")
+
+    result = apply_polish(PolishConfig(project_root=root, theme="professional"))
+    assert dict(result.files)[STYLESHEET_RELPATH] == FileStatus.SKIPPED_USER_OWNED
+    assert css_path.read_bytes() == b"\xff\xfe\x00\x01 not valid utf-8"  # untouched
 
 
 def test_check_mode_writes_nothing(tmp_path):
     root = _project(tmp_path)
-    result = apply_polish(PolishConfig(project_root=root, theme="professional", check=True))
+    result = apply_polish(
+        PolishConfig(project_root=root, theme="professional", check=True)
+    )
     assert not (root / STYLESHEET_RELPATH).exists()
     assert not (root / MANIFEST_RELPATH).exists()
     assert result.has_drift  # everything "missing"
@@ -124,4 +143,6 @@ def test_unknown_theme_raises(tmp_path):
 
 def test_missing_project_root_raises(tmp_path):
     with pytest.raises(NotADirectoryError):
-        apply_polish(PolishConfig(project_root=tmp_path / "does-not-exist", theme="professional"))
+        apply_polish(
+            PolishConfig(project_root=tmp_path / "does-not-exist", theme="professional")
+        )

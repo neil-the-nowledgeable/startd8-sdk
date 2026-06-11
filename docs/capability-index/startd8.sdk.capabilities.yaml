@@ -10,7 +10,7 @@
 
 manifest_id: startd8.sdk.capabilities
 name: StartD8 SDK Core Capabilities
-version: "1.4.0"
+version: "1.5.0"
 description: |
   Core capabilities of the StartD8 SDK covering multi-LLM agent management,
   provider abstraction, code utilities, resilience, rate limiting, session
@@ -691,20 +691,57 @@ capabilities:
         description: "WIREFRAME_REQUIREMENTS v0.3 (post-CRP R1-R6) + WIREFRAME_PLAN v1.1 + WIREFRAME_USAGE"
     confidence: 0.85
 
+  - capability_id: startd8.codegen.presentation_polish
+    category: generate
+    maturity: beta
+    summary: "Deterministically (no LLM, $0) apply a curated, WCAG 2.2 AA-accessible design system to a built all-Python app's generated UI — design tokens → mounted stylesheet, 3 themes, component macros + theme partials via base.html's tolerant {% include %} seam — coexisting with `generate backend` via a DeterministicFileProvider"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 polish apply|check|themes --project ROOT [--theme NAME]`
+        (presentation_polish.apply_polish) restyles the EXISTING server-rendered HTMX/Jinja UI with
+        NO LLM ($0): design tokens → a mounted app/static/css/app.css, 3 curated AA-gated themes
+        (professional/editorial/minimal), an accessibility baseline (focus-visible, skip-link,
+        reduced-motion, contrast), and a component macro library (theme/_components.html) wired
+        through base.html's tolerant `{% include "theme/_*.html" ignore missing %}` hooks + the
+        FastAPI static mount (both emitted by backend_codegen). Idempotent + non-destructive (skips
+        user-authored files lacking the STARTD8-POLISH marker); polish-owned files are recognized by
+        a DeterministicFileProvider so a later `generate backend` never clobbers them.
+        Runtime-verified (TestClient serves the stylesheet + renders header/footer through the
+        import). Deferred: skill-driven bespoke Tier 2, skill vendoring, theme preview.
+      agent: |
+        from startd8.presentation_polish import apply_polish, PolishConfig
+        apply_polish(PolishConfig(project_root=root, theme="professional"))  # $0; writes css + theme partials
+    triggers: ["polish", "presentation polish", "design theme", "make it presentable", "style the app", "accessible ui", "css generation"]
+    evidence:
+      - type: code
+        ref: src/startd8/presentation_polish/
+        description: "tokens/themes/css/components/engine + DeterministicFileProvider + OTel telemetry"
+      - type: code
+        ref: src/startd8/cli_polish.py
+        description: "startd8 polish apply|check|themes (operate-on-target --project, headless-drivable)"
+      - type: test
+        ref: tests/unit/presentation_polish/
+        description: "36 tests: WCAG-AA contrast gate per theme, idempotency, non-destructive, provider in-sync, {% import %} seam, runtime smoke"
+      - type: docs
+        ref: docs/design/PRESENTATION_POLISH_CAPABILITY_REQUIREMENTS.md
+        description: "REQUIREMENTS v0.3 (reflective loop + OQ-8 spike) + PLAN v1.2"
+    confidence: 0.8
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_capabilities: 22
+  total_capabilities: 23
   by_maturity:
     stable: 16
-    beta: 6
+    beta: 7
   by_category:
     action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
     observe: 3     # session_tracking, cost_tracking, otel_logging
     validate: 4    # truncation_detection, diagnostics, mock_provider, multilang_manifest_validation
-    generate: 3    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend
+    generate: 4    # forward_manifest_draft_time_injection, observability_artifact_generation, deterministic_backend, presentation_polish
     integration: 4 # provider_registry, contextcore, mcp, capdevpipe_install
     query: 2       # model_catalog, wireframe_summary
     transform: 1   # code_extraction
@@ -714,6 +751,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "1.5.0"
+    date: "2026-06-08"
+    changes:
+      - "Added startd8.codegen.presentation_polish (generate, beta, confidence 0.8) — `startd8 polish`: $0 no-LLM design system over a built all-Python app's generated UI (tokens→mounted stylesheet, 3 WCAG-AA-gated themes, component macros + theme partials via base.html tolerant {% include %} seam), idempotent + non-destructive, coexists with generate backend via a DeterministicFileProvider; OTel telemetry + runtime-verified (PRESENTATION_POLISH_CAPABILITY REQUIREMENTS v0.3 + reflective loop/OQ-8 spike)"
+      - "23 capabilities: 16 stable, 7 beta; generate 3→4"
   - version: "1.4.0"
     date: "2026-06-05"
     changes:

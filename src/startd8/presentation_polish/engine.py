@@ -114,7 +114,12 @@ def _classify(target: Path, new_content: str, *, check: bool) -> FileStatus:
 
     if not target.exists():
         return FileStatus.MISSING if check else FileStatus.CREATED
-    existing = target.read_text(encoding="utf-8")
+    try:
+        existing = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Unreadable (binary, a directory, bad perms) → we can't confirm it's ours, so never
+        # overwrite it. Treat as the user's (FR-20 non-destructive); safer than crashing.
+        return FileStatus.SKIPPED_USER_OWNED
     if POLISH_MARKER not in existing:
         # User-authored a file at our path — respect it, never clobber (FR-20).
         return FileStatus.SKIPPED_USER_OWNED

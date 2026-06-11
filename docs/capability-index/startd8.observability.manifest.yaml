@@ -476,6 +476,29 @@ metrics:
   - status
   category: pipeline_innate
   orientation: system
+- name: startd8.presentation_polish.files
+  instrument: counter
+  unit: files
+  description: Polish-owned files, labelled by per-file status + theme
+  meter: startd8.presentation_polish
+  source_file: src/startd8/presentation_polish/telemetry.py
+  labels:
+  - status
+  - theme
+  category: pipeline_innate
+  orientation: system
+- name: startd8.presentation_polish.runs
+  instrument: counter
+  unit: runs
+  description: Polish apply/check runs, labelled by theme + mode + result
+  meter: startd8.presentation_polish
+  source_file: src/startd8/presentation_polish/telemetry.py
+  labels:
+  - theme
+  - mode
+  - result
+  category: pipeline_innate
+  orientation: system
 spans:
 - name_pattern: agent.generate:{agent_name}
   kind: CLIENT
