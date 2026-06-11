@@ -25,7 +25,7 @@
 | v0.1 Assumption | Planning Discovery | Impact |
 |-----------------|-------------------|--------|
 | MCP surface = the gateway single-tool-with-actions **bridge** (`get_workflow_tool_schema`/`handle_workflow_tool`) | The **real client-facing server is a SEPARATE repo** — `mcp/startd8-mcp-builder/startd8_mcp.py` (`FastMCP("startd8_mcp")`) — with **discrete `@mcp.tool()` functions** (list_skills, use_skill, help, status, tasks_*), each = Pydantic input + `@mcp.tool(annotations=…)` + async handler importing `startd8.*`. The gateway bridge is library-internal and **not** what the server uses. | **FR-C1 reframed:** `startd8_concierge` is **one `@mcp.tool()`** in the FastMCP server whose Pydantic input carries an `action` field. "Single tool, action-dispatched" survives as a *within-tool* design; registration is `@mcp.tool()`, not the gateway bridge. |
-| The tool lives in the SDK (gateway.py) | Logic and registration are in **two different repos**: SDK ships the callable library; the FastMCP-builder repo (own CI/CODEOWNERS) holds the `@mcp.tool()` wrapper. | **New FR-C14 (cross-repo split).** Echoes F-10 durability — the wrapper lands in a committed repo, not an untracked tree. |
+| The tool lives in the SDK (gateway.py) | Logic and registration are in **two packages of the same repo**: `src/startd8/` ships the callable library; the self-contained subproject `mcp/startd8-mcp-builder/` (own `pyproject`=`startd8-mcp`, CLAUDE.md, CI/CODEOWNERS — **tracked in the SDK repo, not a separate repo**) holds the `@mcp.tool()` wrapper alongside its existing 17 `startd8_*` tools. | **New FR-C14 (cross-package split).** Simpler than a cross-repo split; both halves are committed in one repo (also satisfies F-10 durability). |
 | `derive-contract` is "a deterministic AST transform, not generation" (implied lightweight) | Pydantic→Prisma introspection is **net-new AST work**; only the *emit* half is reusable (`manifest_extraction/entities.py` `EntityGraph` → `prisma_emitter.render_prisma_schema()`). The introspection front-half does not exist. | **FR-C8 is the heaviest action by far → DEFERRED out of v1** to its own follow-on (resolves OQ-1 granularity). When built, it reuses `prisma_emitter` for the back half only. |
 | `assess` wraps a wireframe that "exists" (hoped) | **CONFIRMED:** `build_wireframe_plan()` → `WireframePlan` carries the exact provisioning states; `cli_wireframe.py` is the rendering precedent. | **FR-C6/FR-C10 strengthened** — `assess` is cheap (wrap + summarize); wireframe is the model for the whole JSON/CLI shape. `validate` folds into `assess` (no separate action). |
 | `instantiate-kickoff` just copies templates | Templates in `docs/design/kickoff/templates/` are **NOT packaged** (docs tree isn't shipped). Must become package data — `src/startd8/help_content/` is the shipped-data precedent. | **FR-C7 gains a prerequisite:** package the templates (`src/startd8/concierge_templates/`) before the action can read them at a consumer site. |
@@ -157,15 +157,18 @@ deliverable here.
   `build_*`/`handle_concierge_tool` code path (one logic, two front doors — the FR-W16 stable-API
   pattern; `cli_queue.py` is the `typer.Typer` + `app.add_typer` registration template), but the
   MCP tool is the primary deliverable; CLI parity is deferrable.
-- **FR-C14 — Cross-repo split (SDK logic / MCP-builder wrapper).** The callable logic and its
-  stable public API (`build_concierge_*` / `handle_concierge_tool(action, project_root, …)`)
-  live in the SDK (`src/startd8/concierge/`). The thin `@mcp.tool()` registration —
-  Pydantic input model, annotations, async handler delegating to the SDK — lives in the separate
-  **`mcp/startd8-mcp-builder`** repo (its own CI/CODEOWNERS). Version contract: the wrapper
-  imports the SDK as a library and pins/declares the minimum SDK version exposing the API. The
-  wrapper MUST stay thin (no business logic) so the CLI (FR-C13) and the MCP tool render from the
-  one SDK code path. (This split also satisfies the F-10 durability lesson: the only copies of
-  both halves live in committed repos, never an untracked working tree.)
+- **FR-C14 — Cross-package split (SDK logic / MCP-builder wrapper), one repo.** The callable
+  logic and its stable public API (`build_concierge_*` / `handle_concierge_tool(action,
+  project_root, …)`) live in the SDK package (`src/startd8/concierge/`). The thin `@mcp.tool()`
+  registration — Pydantic input model, annotations, async handler delegating to the SDK — is
+  added to the existing FastMCP server in the **`mcp/startd8-mcp-builder/`** subproject
+  (`startd8_mcp.py`), beside the 17 `startd8_*` tools already there. Both packages live in the
+  startd8-sdk repo (the subproject has its own `pyproject`/CI but is **not** a separate git repo).
+  The wrapper imports the SDK as a library and declares the minimum SDK version exposing the API,
+  and MUST stay thin (no business logic) so the CLI (FR-C13) and the MCP tool render from the one
+  SDK code path. *(Planning OQ for the implementing pass: `mcp/startd8-mcp-builder/` has both a
+  4.3k-line monolith `startd8_mcp.py` and a `startd8_mcp_server/server.py` — confirm which is the
+  live registration target before adding the tool.)*
 
 ---
 
