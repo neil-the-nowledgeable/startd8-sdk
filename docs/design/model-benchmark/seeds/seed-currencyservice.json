@@ -1,0 +1,46 @@
+{
+  "generator": "gen_ob_benchmark_seeds.py",
+  "schema_version": "1.0",
+  "service_metadata": {
+    "dependencies": [
+      "ECB currency rates (data file)"
+    ],
+    "estimated_loc": 160,
+    "language": "nodejs",
+    "language_rationale": "Canonical native language of this service in GoogleCloudPlatform/microservices-demo (hipstershop), pinned constant across all models/reps for cross-language comparability (FR-31).",
+    "proto_service": "CurrencyService",
+    "proto_sha256": "b1f2fa42c0a9305211bf51fba7d8b5832cd3defd7b8855c327ebd5b1f0f86884",
+    "rpc_count": 2,
+    "rpcs": [
+      "GetSupportedCurrencies",
+      "Convert"
+    ],
+    "service": "currencyservice"
+  },
+  "tasks": [
+    {
+      "config": {
+        "context": {
+          "artifact_types_addressed": [
+            "grpc_service"
+          ],
+          "estimated_loc": 160,
+          "feature_id": "OB-CURRENCYSERVICE",
+          "language": "nodejs",
+          "language_rationale": "Canonical native language of this service in GoogleCloudPlatform/microservices-demo (hipstershop), pinned constant across all models/reps for cross-language comparability (FR-31).",
+          "proto_sha256": "b1f2fa42c0a9305211bf51fba7d8b5832cd3defd7b8855c327ebd5b1f0f86884",
+          "target_files": [
+            "src/currencyservice/server.js"
+          ]
+        },
+        "requirements_text": "## Online Boutique — CurrencyService (nodejs)\n\nImplement ONLY `CurrencyService` from the shared gRPC contract below. All Online Boutique services share this single `demo.proto` (package hipstershop).\n\n- RPCs to implement: GetSupportedCurrencies, Convert\n- Downstream gRPC dependencies (for context; out of scope to implement here): ECB currency rates (data file)\n- Target file: `src/currencyservice/server.js`\n\n### demo.proto (Apache-2.0, GoogleCloudPlatform/microservices-demo)\n\n```proto\n// Copyright 2020 Google LLC\n//\n// Licensed under the Apache License, Version 2.0 (the \"License\");\n// you may not use this file except in compliance with the License.\n// You may obtain a copy of the License at\n//\n//      http://www.apache.org/licenses/LICENSE-2.0\n//\n// Unless required by applicable law or agreed to in writing, software\n// distributed under the License is distributed on an \"AS IS\" BASIS,\n// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n// See the License for the specific language governing permissions and\n// limitations under the License.\n\nsyntax = \"proto3\";\n\npackage hipstershop;\n\noption go_package = \"github.com/GoogleCloudPlatform/microservices-demo/hipstershop\";\n\n// -----------------Cart service-----------------\n\nservice CartService {\n    rpc AddItem(AddItemRequest) returns (Empty) {}\n    rpc GetCart(GetCartRequest) returns (Cart) {}\n    rpc EmptyCart(EmptyCartRequest) returns (Empty) {}\n}\n\nmessage CartItem {\n    string product_id = 1;\n    int32  quantity = 2;\n}\n\nmessage AddItemRequest {\n    string user_id = 1;\n    CartItem item = 2;\n}\n\nmessage EmptyCartRequest {\n    string user_id = 1;\n}\n\nmessage GetCartRequest {\n    string user_id = 1;\n}\n\nmessage Cart {\n    string user_id = 1;\n    repeated CartItem items = 2;\n}\n\nmessage Empty {}\n\n// ---------------Recommendation service----------\n\nservice RecommendationService {\n  rpc ListRecommendations(ListRecommendationsRequest) returns (ListRecommendationsResponse){}\n}\n\nmessage ListRecommendationsRequest {\n    string user_id = 1;\n    repeated string product_ids = 2;\n}\n\nmessage ListRecommendationsResponse {\n    repeated string product_ids = 1;\n}\n\n// ---------------Product Catalog----------------\n\nservice ProductCatalogService {\n    rpc ListProducts(Empty) returns (ListProductsResponse) {}\n    rpc GetProduct(GetProductRequest) returns (Product) {}\n    rpc SearchProducts(SearchProductsRequest) returns (SearchProductsResponse) {}\n}\n\nmessage Product {\n    string id = 1;\n    string name = 2;\n    string description = 3;\n    string picture = 4;\n    Money price_usd = 5;\n\n    // Categories such as \"clothing\" or \"kitchen\" that can be used to look up\n    // other related products.\n    repeated string categories = 6;\n}\n\nmessage ListProductsResponse {\n    repeated Product products = 1;\n}\n\nmessage GetProductRequest {\n    string id = 1;\n}\n\nmessage SearchProductsRequest {\n    string query = 1;\n}\n\nmessage SearchProductsResponse {\n    repeated Product results = 1;\n}\n\n// ---------------Shipping Service----------\n\nservice ShippingService {\n    rpc GetQuote(GetQuoteRequest) returns (GetQuoteResponse) {}\n    rpc ShipOrder(ShipOrderRequest) returns (ShipOrderResponse) {}\n}\n\nmessage GetQuoteRequest {\n    Address address = 1;\n    repeated CartItem items = 2;\n}\n\nmessage GetQuoteResponse {\n    Money cost_usd = 1;\n}\n\nmessage ShipOrderRequest {\n    Address address = 1;\n    repeated CartItem items = 2;\n}\n\nmessage ShipOrderResponse {\n    string tracking_id = 1;\n}\n\nmessage Address {\n    string street_address = 1;\n    string city = 2;\n    string state = 3;\n    string country = 4;\n    int32 zip_code = 5;\n}\n\n// -----------------Currency service-----------------\n\nservice CurrencyService {\n    rpc GetSupportedCurrencies(Empty) returns (GetSupportedCurrenciesResponse) {}\n    rpc Convert(CurrencyConversionRequest) returns (Money) {}\n}\n\n// Represents an amount of money with its currency type.\nmessage Money {\n    // The 3-letter currency code defined in ISO 4217.\n    string currency_code = 1;\n\n    // The whole units of the amount.\n    // For example if `currencyCode` is `\"USD\"`, then 1 unit is one US dollar.\n    int64 units = 2;\n\n    // Number of nano (10^-9) units of the amount.\n    // The value must be between -999,999,999 and +999,999,999 inclusive.\n    // If `units` is positive, `nanos` must be positive or zero.\n    // If `units` is zero, `nanos` can be positive, zero, or negative.\n    // If `units` is negative, `nanos` must be negative or zero.\n    // For example $-1.75 is represented as `units`=-1 and `nanos`=-750,000,000.\n    int32 nanos = 3;\n}\n\nmessage GetSupportedCurrenciesResponse {\n    // The 3-letter currency code defined in ISO 4217.\n    repeated string currency_codes = 1;\n}\n\nmessage CurrencyConversionRequest {\n    Money from = 1;\n\n    // The 3-letter currency code defined in ISO 4217.\n    string to_code = 2;\n}\n\n// -------------Payment service-----------------\n\nservice PaymentService {\n    rpc Charge(ChargeRequest) returns (ChargeResponse) {}\n}\n\nmessage CreditCardInfo {\n    string credit_card_number = 1;\n    int32 credit_card_cvv = 2;\n    int32 credit_card_expiration_year = 3;\n    int32 credit_card_expiration_month = 4;\n}\n\nmessage ChargeRequest {\n    Money amount = 1;\n    CreditCardInfo credit_card = 2;\n}\n\nmessage ChargeResponse {\n    string transaction_id = 1;\n}\n\n// -------------Email service-----------------\n\nservice EmailService {\n    rpc SendOrderConfirmation(SendOrderConfirmationRequest) returns (Empty) {}\n}\n\nmessage OrderItem {\n    CartItem item = 1;\n    Money cost = 2;\n}\n\nmessage OrderResult {\n    string   order_id = 1;\n    string   shipping_tracking_id = 2;\n    Money shipping_cost = 3;\n    Address  shipping_address = 4;\n    repeated OrderItem items = 5;\n}\n\nmessage SendOrderConfirmationRequest {\n    string email = 1;\n    OrderResult order = 2;\n}\n\n\n// -------------Checkout service-----------------\n\nservice CheckoutService {\n    rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse) {}\n}\n\nmessage PlaceOrderRequest {\n    string user_id = 1;\n    string user_currency = 2;\n\n    Address address = 3;\n    string email = 5;\n    CreditCardInfo credit_card = 6;\n}\n\nmessage PlaceOrderResponse {\n    OrderResult order = 1;\n}\n\n// ------------Ad service------------------\n\nservice AdService {\n    rpc GetAds(AdRequest) returns (AdResponse) {}\n}\n\nmessage AdRequest {\n    // List of important key words from the current page describing the context.\n    repeated string context_keys = 1;\n}\n\nmessage AdResponse {\n    repeated Ad ads = 1;\n}\n\nmessage Ad {\n    // url to redirect to when an ad is clicked.\n    string redirect_url = 1;\n\n    // short advertisement text to display.\n    string text = 2;\n}\n```\n",
+        "task_description": "Implement the **CurrencyService** gRPC service for the Online Boutique microservices demo, in **nodejs** (its canonical native language). Converts money between currencies using ECB rates. Highest-QPS service. Implement exactly the RPCs defined for CurrencyService in the embedded demo.proto contract: GetSupportedCurrencies, Convert. Wire up a gRPC server that serves these RPCs. Do not implement any other service from the proto."
+      },
+      "depends_on": [],
+      "task_id": "OB-CURRENCYSERVICE",
+      "task_type": "task",
+      "title": "CurrencyService (nodejs) — Online Boutique gRPC service"
+    }
+  ],
+  "version": "0.1"
+}
