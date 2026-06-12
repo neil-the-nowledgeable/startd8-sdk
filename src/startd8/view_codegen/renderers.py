@@ -1072,10 +1072,9 @@ def render_export_landing_template(
         "#}\n"
     )
     base = v.route.rstrip("/")
-    title = _view_title_block(v, True) if has_chrome else f"<h1>{v.module}</h1>\n"
     block = (
         '{% extends "base.html" %}\n{% block content %}\n'
-        + title
+        + _view_title_block(v, has_chrome)  # fragment include when chrome, else today's literal <h1>
         + '<ul class="export-formats">\n'
         + f'  <li><a href="{base}/markdown">' + _control_text(v, "markdown", "Download as Markdown", control_ids) + "</a>"
         + _control_help(v, "markdown", help_ids).strip() + "</li>\n"
@@ -1162,6 +1161,18 @@ def _control_help(v: ViewSpec, cid: str, help_ids: "frozenset[str]") -> str:
         return ('  <small class="control-help">{% include "views/_'
                 + v.module + ".control." + cid + '.help.html" %}</small>\n')
     return ""
+
+
+def _control_fragments(v: ViewSpec, prose) -> List[Tuple[str, str]]:
+    """Untracked label (+ optional help) fragment per authored control, as ``(path, content)`` pairs."""
+    frags: List[Tuple[str, str]] = []
+    for cid, control in prose.controls.items():
+        frags.append((f"app/templates/views/_{v.module}.control.{cid}.html",
+                      render_control_fragment(control["label"])))
+        if control.get("help"):
+            frags.append((f"app/templates/views/_{v.module}.control.{cid}.help.html",
+                          render_control_fragment(control["help"])))
+    return frags
 
 
 def render_import_result_template(v: ViewSpec, schema_sha: str, views_sha: str, kind: str) -> str:
@@ -1889,18 +1900,10 @@ def render_views(
         has_chrome = bool(prose and (prose.title or prose.intro))
         has_empty = bool(prose and prose.empty)
         control_ids = frozenset(prose.controls) if (prose and prose.controls) else frozenset()
-        help_ids = frozenset(
-            cid for cid, c in prose.controls.items() if c.get("help")
-        ) if (prose and prose.controls) else frozenset()
-
-        def _control_frags():  # emit label + optional help fragment per authored control (untracked)
-            for cid, c in prose.controls.items():
-                out.append((f"app/templates/views/_{v.module}.control.{cid}.html",
-                            render_control_fragment(c["label"])))
-                if c.get("help"):
-                    out.append((f"app/templates/views/_{v.module}.control.{cid}.help.html",
-                                render_control_fragment(c["help"])))
-
+        help_ids = (
+            frozenset(cid for cid, c in prose.controls.items() if c.get("help"))
+            if control_ids else frozenset()
+        )
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
@@ -1914,7 +1917,7 @@ def render_views(
                     out.append((f"app/templates/views/_{v.module}.prose.html",
                                 render_view_prose_fragment(prose, v.module)))
                 if control_ids:
-                    _control_frags()
+                    out.extend(_control_fragments(v, prose))
             continue
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
@@ -1928,7 +1931,7 @@ def render_views(
             out.append((f"app/templates/views/_{v.module}.empty.html",
                         render_view_empty_fragment(prose)))
         if control_ids:
-            _control_frags()
+            out.extend(_control_fragments(v, prose))
         # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an
         # owned result page the restore route renders (see render_view_router). Each independently gated.
         if v.kind == "import-flow" and prose:
