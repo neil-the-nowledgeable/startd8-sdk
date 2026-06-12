@@ -203,6 +203,12 @@ CRUD / views / filters. The only app residue is a tiny app-specific **default-va
   (**R1-S3 — this half is load-bearing, not parenthetical**: the bug has two halves — router false-flag +
   shell/aggregator silent-skip). Verified: a clean `flows:` app currently fails `--check` with exit 1.
   Ship as a small standalone PR ahead of the archetype.
+  **Status: IMPLEMENTED + tested.** `header_forms` gained an optional `entity` slot; `render_flow_router`
+  stamps the flow name; `render_flow_shell`/`render_flow_aggregator` are now header-bearing;
+  `fastapi-flow`/`flow-shell`/`flow-aggregator` registered in `_FORMS_KINDS` + `_forms_renderers()` with
+  by-name re-render (`render_named_flow_*`) and orphan→drift handling. All 3 flow artifacts now
+  `--check in_sync` + skip-hook `True` (was tampered/skipped). 12 flow tests + 303 backend_codegen tests
+  green. (One-time re-stamp of existing `flows:` apps' shell/aggregator on first regen — the R1-S8 note.)
 - **FR-ED-16 — Fix manifest-derived drift + skip-hook recognition (the shared prerequisite).**
   **(v0.4, scope widened again — empirically the gap is broader than views.yaml)** Implementation revealed
   (and verified) that the skip-hook `owned_file_in_sync` → `PydanticSQLModelProvider.is_in_sync` passed

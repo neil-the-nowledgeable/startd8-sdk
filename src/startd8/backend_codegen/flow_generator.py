@@ -12,7 +12,7 @@ from typing import List, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
 from ..languages.prisma_parser import parse_prisma_schema
-from ._headers import header_forms
+from ._headers import header_forms, header_forms_tmpl
 from .crud_generator import _pk_field
 from .flows_manifest import FlowSpec, parse_flows
 
@@ -31,8 +31,10 @@ def render_flow_router(schema_text: str, views_text: str, flow: FlowSpec) -> str
     """``app/flows/<name>.py`` — the start/resume/advance/back router (FR-WZ-2/4)."""
     schema = parse_prisma_schema(schema_text)
     _validate_flow(schema, flow)
+    # entity slot = the flow NAME so drift re-renders THIS flow by name (the per-name router precedent).
     header = header_forms(
-        "prisma/schema.prisma", schema_sha256(schema_text), schema_sha256(views_text), "fastapi-flow"
+        "prisma/schema.prisma", schema_sha256(schema_text), schema_sha256(views_text),
+        "fastapi-flow", entity=flow.name,
     )
     entity = flow.draft_entity
     e = entity.lower()
@@ -109,12 +111,21 @@ def render_flow_router(schema_text: str, views_text: str, flow: FlowSpec) -> str
     return header + "\n\n" + body
 
 
-def render_flow_shell(views_text: str, flow: FlowSpec) -> str:
-    """``app/templates/flows/<name>/shell.html`` — step indicator + tolerant per-step seam + nav (FR-WZ-3)."""
+def render_flow_shell(schema_text: str, views_text: str, flow: FlowSpec) -> str:
+    """``app/templates/flows/<name>/shell.html`` — step indicator + tolerant per-step seam + nav (FR-WZ-3).
+
+    Header-bearing (FR-ED-15/R1-S3): carries the full ``{# GENERATED … schema-sha256 … forms-sha256 #}``
+    provenance + a ``startd8-entity: <flow name>`` slot, so it is drift-protected and ``$0``-recognized
+    rather than silently skipped. (Previously a bare ``{# … #}`` one-liner with no hashes.)
+    """
     n = flow.name
     sf = flow.step_field
+    header = header_forms_tmpl(
+        "prisma/schema.prisma", schema_sha256(schema_text), schema_sha256(views_text),
+        "flow-shell", entity=n,
+    )
     return (
-        "{# startd8-artifact: flow-shell — GENERATED; per-step bodies are app-owned #}\n"
+        header + "\n"
         '{% extends "base.html" %}\n'
         "{% block title %}" + n + "{% endblock %}\n"
         "{% block content %}\n"
@@ -130,6 +141,51 @@ def render_flow_shell(views_text: str, flow: FlowSpec) -> str:
     )
 
 
+def render_flow_aggregator(schema_text: str, views_text: str) -> str:
+    """``app/flows/__init__.py`` — the flat ``flow_routers`` list main.py mounts tolerantly (FR-WZ-5).
+
+    Header-bearing (FR-ED-15/R1-S3): derived from ALL flows, so it carries app-wide ``fastapi``-style
+    provenance (no entity slot) and is re-rendered whole in drift — not silently skipped.
+    """
+    schema = parse_prisma_schema(schema_text)
+    flows = parse_flows(views_text, known_entities=frozenset(schema.models))
+    header = header_forms(
+        "prisma/schema.prisma", schema_sha256(schema_text), schema_sha256(views_text), "flow-aggregator"
+    )
+    imports = "\n".join(f"from .{f.name} import flow_{f.name}_router" for f in flows)
+    listing = ", ".join(f"flow_{f.name}_router" for f in flows)
+    return (
+        header + "\n"
+        "# flow routers aggregator; main.py mounts `flow_routers` tolerantly.\n"
+        + imports + f"\n\nflow_routers = [{listing}]\n"
+    )
+
+
+def _flow_by_name(views_text: str, name: str):
+    """The :class:`FlowSpec` named *name* in *views_text*, or ``None`` (orphan — entry removed)."""
+    for f in parse_flows(views_text):
+        if f.name == name:
+            return f
+    return None
+
+
+def render_named_flow_router(schema_text: str, views_text: str, name: str) -> str:
+    """Drift re-render of ``app/flows/<name>.py`` by flow name. Orphan (name gone) → a deterministic
+    non-matching sentinel so drift reports ``tampered`` (exit 1), never a crash (R1-F2/R1-S6)."""
+    flow = _flow_by_name(views_text, name)
+    if flow is None:
+        return f"# orphan flow router {name!r}: no longer declared in views.yaml `flows:`\n"
+    return render_flow_router(schema_text, views_text, flow)
+
+
+def render_named_flow_shell(schema_text: str, views_text: str, name: str) -> str:
+    """Drift re-render of ``app/templates/flows/<name>/shell.html`` by name; orphan → sentinel (R1-F2)."""
+    flow = _flow_by_name(views_text, name)
+    if flow is None:
+        return f"{{# orphan flow shell {name!r}: no longer declared in views.yaml `flows:` #}}\n"
+    return render_flow_shell(schema_text, views_text, flow)
+
+
 def render_flows(schema_text: str, views_text: str) -> List[Tuple[str, str]]:
     """All flow artifacts as (path, text): per-flow router + shell, plus an aggregator __init__ that
     main.py tolerantly mounts (FR-WZ-5). Empty when no `flows:` declared."""
@@ -140,13 +196,9 @@ def render_flows(schema_text: str, views_text: str) -> List[Tuple[str, str]]:
     out: List[Tuple[str, str]] = []
     for flow in flows:
         out.append((f"app/flows/{flow.name}.py", render_flow_router(schema_text, views_text, flow)))
-        out.append((f"app/templates/flows/{flow.name}/shell.html", render_flow_shell(views_text, flow)))
-    # aggregator: a flat `flow_routers` list main.py mounts via one tolerant import (the user_routers pattern)
-    imports = "\n".join(f"from .{f.name} import flow_{f.name}_router" for f in flows)
-    listing = ", ".join(f"flow_{f.name}_router" for f in flows)
-    out.append((
-        "app/flows/__init__.py",
-        "# GENERATED — flow routers aggregator; main.py mounts `flow_routers` tolerantly.\n"
-        + imports + f"\n\nflow_routers = [{listing}]\n",
-    ))
+        out.append((
+            f"app/templates/flows/{flow.name}/shell.html",
+            render_flow_shell(schema_text, views_text, flow),
+        ))
+    out.append(("app/flows/__init__.py", render_flow_aggregator(schema_text, views_text)))
     return out

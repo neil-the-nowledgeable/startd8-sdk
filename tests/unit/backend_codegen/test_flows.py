@@ -90,7 +90,7 @@ def test_router_renders_compiles_and_has_nav():
 
 def test_shell_has_dynamic_seam_and_controls():
     flow = parse_flows(VIEWS, known_entities=frozenset({"ResumeBuild"}))[0]
-    html = render_flow_shell(VIEWS, flow)
+    html = render_flow_shell(SCHEMA, VIEWS, flow)
     assert '{% include "flows/resume_builder/_step_" ~ item.currentStep ~ ".html" ignore missing %}' in html
     assert '/flow/resume_builder/{{ item.id }}/back' in html
     assert '/flow/resume_builder/{{ item.id }}/advance' in html
@@ -110,6 +110,43 @@ def test_main_mounts_flow_routers_tolerantly():
     assert "from .flows import flow_routers" in main
     assert "app.include_router(_flow_router)" in main
     compile(main, "<main>", "exec")
+
+
+# --------------------------------------------------------------------------- #
+# FR-ED-15 — flows are $0-recognized + drift-clean (the verified pre-existing bug)
+# --------------------------------------------------------------------------- #
+
+def test_flows_check_round_trip_in_sync():
+    """Every freshly-generated flow artifact is drift `in_sync` AND skip-hook recognized.
+
+    Pre-S12 this FAILED: `fastapi-flow` was registered in no drift renderer (router → `tampered`,
+    exit 1) and the shell/aggregator carried no provenance header (silently skipped, $0-leaked).
+    """
+    from startd8.backend_codegen.drift import check_drift, owned_file_in_sync
+
+    for rel, content in render_flows(SCHEMA, VIEWS):
+        assert check_drift(SCHEMA, content, forms_text=VIEWS).status == "in_sync", rel
+        assert owned_file_in_sync(SCHEMA, content, views_text=VIEWS) is True, rel
+
+
+def test_flow_shell_and_aggregator_are_header_bearing():
+    """R1-S3: shell + aggregator carry GENERATED + sha headers (not silently skipped)."""
+    from startd8.backend_codegen.drift import is_owned_generated_file, embedded_artifact_kind
+
+    files = dict(render_flows(SCHEMA, VIEWS))
+    shell = files["app/templates/flows/resume_builder/shell.html"]
+    agg = files["app/flows/__init__.py"]
+    assert is_owned_generated_file(shell) and embedded_artifact_kind(shell) == "flow-shell"
+    assert is_owned_generated_file(agg) and embedded_artifact_kind(agg) == "flow-aggregator"
+
+
+def test_orphan_flow_drifts_not_crashes():
+    """R1-F2: a flow file whose `flows:` entry was removed reports drift (exit 1), never a crash."""
+    from startd8.backend_codegen.drift import check_drift
+
+    rel, content = render_flows(SCHEMA, VIEWS)[0]  # the router
+    res = check_drift(SCHEMA, content, forms_text="flows: []\n")
+    assert res.status in {"stale", "tampered"}  # drift → exit 1, deterministic, no exception
 
 
 # --------------------------------------------------------------------------- #

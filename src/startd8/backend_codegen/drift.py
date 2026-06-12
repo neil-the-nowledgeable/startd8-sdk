@@ -63,10 +63,15 @@ _AI_KINDS: frozenset = frozenset(
 # ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load).
 _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
 
-# Artifact kinds whose drift derives from two inputs (schema + views.yaml `forms:` section).
-# web.py only carries this kind when generated WITH a forms manifest (else plain ``fastapi-web``)
-# — the htmx-base/pages-base precedent: a distinct kind per dep-set.
-_FORMS_KINDS: frozenset = frozenset({"fastapi-web-forms", "htmx-created"})
+# Artifact kinds whose drift derives from two inputs (schema + views.yaml). web.py only carries
+# ``fastapi-web-forms`` when generated WITH a forms manifest (else plain ``fastapi-web``) — the
+# htmx-base/pages-base precedent: a distinct kind per dep-set. The ``flow-*`` kinds (FR-ED-15) are
+# views.yaml-derived too: ``fastapi-flow``/``flow-shell`` re-render a single flow BY NAME (the
+# ``startd8-entity`` slot), ``flow-aggregator`` re-renders the whole ``app/flows/__init__.py``.
+# Previously ``fastapi-flow`` was registered nowhere → freshly-generated flow apps failed ``--check``.
+_FORMS_KINDS: frozenset = frozenset(
+    {"fastapi-web-forms", "htmx-created", "fastapi-flow", "flow-shell", "flow-aggregator"}
+)
 
 # settings.py derives from the schema + a SELF-EMBEDDED mode (FR-CFG-7a). Unlike the manifest-backed
 # kinds above, its extra input (the mode) lives in the file's own header, so it needs no external
@@ -530,10 +535,19 @@ def forms_stale_reason(
 def _forms_renderers():
     """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer."""
     from .htmx_generator import render_created_template, render_web
+    from .flow_generator import (
+        render_flow_aggregator,
+        render_named_flow_router,
+        render_named_flow_shell,
+    )
 
     return {
         "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f),
         "htmx-created": lambda s, f, sf, e: render_created_template(s, sf, e, f),
+        # flows (FR-ED-15): `e` is the flow NAME from the startd8-entity slot; aggregator ignores it.
+        "fastapi-flow": lambda s, f, sf, e: render_named_flow_router(s, f, e),
+        "flow-shell": lambda s, f, sf, e: render_named_flow_shell(s, f, e),
+        "flow-aggregator": lambda s, f, sf, e: render_flow_aggregator(s, f),
     }
 
 
