@@ -116,6 +116,21 @@ def extract_views(
         view: dict = {"name": ident, "kind": kind}
         vi = len(views)  # value-path index once appended
 
+        # AR-1: `Scope: model` makes a detail-compose a whole-model compose (the Value Map — every
+        # root + relations on ONE page). This is the only archetype that exposes a no-rows surface,
+        # so it is also the gate that lets view-copy author an `empty:` (see extract_view_prose).
+        _scope = keys.get("Scope", "").strip().lower()
+        if _scope == "model" and kind == "detail-compose":
+            view["scope"] = "model"
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{vi}/scope", Status.EXTRACTED, value="model", source=src,
+            ))
+        elif _scope and _scope not in ("", "row"):
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{vi}/scope", Status.NOT_EXTRACTED, source=src,
+                reason=f"`Scope: {_scope}` only supports `model` on a detail-compose (else row, default)",
+            ))
+
         # Root (export-package may instead carry Of: — the workspace it bundles).
         root = graph.resolve_entity(keys.get("Root", "")) if keys.get("Root") else None
         of_route: Optional[str] = None
@@ -238,11 +253,8 @@ def extract_views(
                 "views.yaml", f"/views/{vi}/gap", Status.NOT_EXTRACTED, source=src,
                 reason="`Gap callout:` field-name resolution from prose not in grammar v0.2",
             ))
-        if "Empty state" in keys:
-            records.append(ExtractionRecord(
-                "views.yaml", f"/views/{vi}/empty_state", Status.NOT_EXTRACTED, source=src,
-                reason="generator-gap: parse_views has no empty-state field",
-            ))
+        # `Empty state:` (and `Title:`/`Intro:`) are view-COPY, owned by extract_view_prose →
+        # view_prose.yaml (no longer a dead-end here). They are not structural views.yaml fields.
 
         views.append(view)
         routes_by_name[ident] = view["route"]
@@ -251,6 +263,64 @@ def extract_views(
             value=f"{name} ({kind}, root={root})", source=src,
         ))
     return {"views": views} if views else None
+
+
+# --------------------------------------------------------------------------- #
+# §2.3b View copy → view_prose.yaml (the WORDS layer — outside the drift hash)
+# --------------------------------------------------------------------------- #
+
+def extract_view_prose(
+    doc_label: str,
+    sections: List[Section],
+    records: List[ExtractionRecord],
+) -> Optional[dict]:
+    """Harvest authored view COPY from each ``### View:`` block → ``{view-name: {title,intro,empty}}``.
+
+    The producer half of the kickoff→``view_prose.yaml`` loop (the consumer ``parse_view_prose`` ships).
+    Per-archetype validity is enforced end-to-end: ``title``/``intro`` apply to any HTML view; ``empty``
+    has a no-rows surface ONLY on a **model-scoped detail-compose** (``Scope: model``), so an
+    ``Empty state:`` on any other archetype is **silently dropped** (recorded NOT_EXTRACTED) — preserving
+    today's behavior and never loud-failing an existing reqs doc (the renderer raises on `empty`
+    off-archetype). View idents match :func:`extract_views` (same ``nfkd_kebab`` derivation), so the
+    round-trip's ``known_views`` (taken from the views candidate, not the entity graph) lines up.
+    """
+    blocks = [s for s in sections if s.title.lower().startswith("view:")]
+    if not blocks:
+        return None
+    out: Dict[str, dict] = {}
+    for sec in blocks:
+        name = strip_annotations(sec.title.split(":", 1)[1]).strip()
+        ident = nfkd_kebab(name).replace("-", "_")
+        src = SourceRef(doc_label, sec.heading_path)
+        keys, _ = key_lines(sec.body)
+        kind = keys.get("Kind", "").strip()
+        scope = keys.get("Scope", "").strip().lower()
+        entry: Dict[str, str] = {}
+        for src_key, dest_key in (("Title", "title"), ("Intro", "intro")):
+            val = keys.get(src_key, "").strip()
+            if val:
+                entry[dest_key] = val
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/{dest_key}", Status.EXTRACTED,
+                    value=val[:60], source=src,
+                ))
+        empty = keys.get("Empty state", "").strip()
+        if empty:
+            if kind == "detail-compose" and scope == "model":
+                entry["empty"] = empty
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/empty", Status.EXTRACTED,
+                    value=empty[:60], source=src,
+                ))
+            else:
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/empty", Status.NOT_EXTRACTED, source=src,
+                    reason="`empty` has a no-rows surface only on a model-scoped detail-compose "
+                           "(`Scope: model`); dropped off-archetype to stay back-compatible",
+                ))
+        if entry:
+            out[ident] = entry
+    return out if out else None
 
 
 # --------------------------------------------------------------------------- #

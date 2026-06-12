@@ -91,7 +91,14 @@ Navigation:
 - Kind: <one of the five>
 - Root: <EntityName>
 - Shows: <Entity→Entity connections / fields to surface>
-- Empty state: "<what an empty/unlinked item shows>"
+▷ Scope: model makes a detail-compose a whole-model "Value Map" (every root + relations on ONE
+▷ page) — and is what gives it an Empty state. Omit for the default per-row scope.
+- Scope: model   *(optional; detail-compose only)*
+▷ View COPY [consumed by: extraction → view_prose.yaml]. Title/Intro show on any view; Empty state
+▷ shows when a Scope: model detail-compose has no rows (ignored on other archetypes).
+- Title: "<the human page heading>"   *(optional)*
+- Intro: "<a short sentence under the title, in user language>"   *(optional)*
+- Empty state: "<what the page shows when there are no rows>"   *(optional; Scope: model only)*
 ▷ Route is DERIVED by kind (simple kinds: from the view name; workspace: /<root>/{id};
 ▷ export-package: from its workspace). Add an explicit line only to override:
 - Route: </custom-route>   *(optional)*

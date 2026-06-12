@@ -90,10 +90,20 @@ def test_views_all_five_kinds(result) -> None:
 def test_views_generator_gaps_flagged(result) -> None:
     reasons = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
                if r.manifest == "views.yaml"]
-    assert any("empty-state" in (x or "") for x in reasons)
     assert any("format-selection" in (x or "") for x in reasons)
     # workspace's prose Shows: flagged, not guessed
     assert any("neither the arrow nor the counts grammar" in (x or "") for x in reasons)
+    # `Empty state:` is no longer a views.yaml generator-gap — it moved to view_prose.yaml (FR-VCE-2).
+    assert not any("empty-state" in (x or "") for x in reasons)
+
+
+def test_empty_state_routes_to_view_prose_not_a_dead_end(result) -> None:
+    """FR-VCE-2: `Empty state:` is view-COPY, owned by view_prose.yaml. The fixture's `Widget Wall`
+    is a ROW-scoped detail-compose (no `Scope: model`), so it has no no-rows surface → dropped
+    off-archetype (back-compat), recorded under view_prose.yaml — not a views.yaml dead-end."""
+    vp_reasons = [r.reason for r in result.by_status(Status.NOT_EXTRACTED)
+                  if r.manifest == "view_prose.yaml"]
+    assert any("no-rows surface" in (x or "") for x in vp_reasons)
 
 
 def test_completeness_category_expansion_and_nudges(result) -> None:

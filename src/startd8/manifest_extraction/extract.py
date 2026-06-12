@@ -18,6 +18,7 @@ from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import parse_app_manifest
 from ..backend_codegen.forms_manifest import parse_forms
 from ..view_codegen.manifest import parse_views
+from ..view_codegen.view_prose import parse_view_prose
 from .entities import EntityGraph, diff_against_live, extract_entities, extract_enums
 from .extractors import (
     extract_ai_passes,
@@ -25,6 +26,7 @@ from .extractors import (
     extract_completeness,
     extract_human_inputs,
     extract_pages,
+    extract_view_prose,
     extract_views,
 )
 from .grammar import find_section, parse_sections
@@ -154,6 +156,10 @@ def extract_manifests(
             candidates["human_inputs.yaml"] = extract_human_inputs(label, text, graph, records)
         if "views.yaml" not in candidates or candidates["views.yaml"] is None:
             candidates["views.yaml"] = extract_views(label, sections, graph, records)
+        # View copy (the WORDS layer → view_prose.yaml, FR-VCE-1). Runs alongside views; its idents
+        # match extract_views so the round-trip's known_views (from the views candidate) lines up.
+        if "view_prose.yaml" not in candidates or candidates["view_prose.yaml"] is None:
+            candidates["view_prose.yaml"] = extract_view_prose(label, sections, records)
         if "completeness.yaml" not in candidates or candidates["completeness.yaml"] is None:
             candidates["completeness.yaml"] = extract_completeness(label, sections, graph, records)
 
@@ -172,6 +178,15 @@ def extract_manifests(
             parse_forms(t, known_entities=known),
         ),
         "completeness.yaml": lambda t: _check_completeness(t),
+        # view_prose's keyspace is VIEW names (not model names — `known` above is models, and the
+        # graph has no all_view_names()): source them from the extracted views candidate so a copy
+        # block referencing a non-existent view fails the gate at ingestion (FR-VCE-1, CRP R1-F5).
+        "view_prose.yaml": lambda t: parse_view_prose(
+            t,
+            known_views=frozenset(
+                v["name"] for v in (candidates.get("views.yaml") or {}).get("views", [])
+            ),
+        ),
     }
     for filename, data in candidates.items():
         if data is None:
