@@ -18,6 +18,7 @@ from .crud_generator import (
     render_routers,
 )
 from .derived import _load_completeness_manifest, render_derived, render_requirements
+from .editor_generator import render_editors
 from .flow_generator import render_flows
 from .htmx_generator import render_ui
 from .pydantic_renderer import render_pydantic_models
@@ -78,6 +79,8 @@ def render_backend(
     out.extend(render_ui(schema_text, source_file, pages_text, views_text, display_text))
     # P0-1: step-state flow routers + shells from views.yaml `flows:` (empty when none declared)
     out.extend(render_flows(schema_text, views_text or ""))
+    # FR-ED: bulk child-field editors from views.yaml `editors:` (empty when none declared)
+    out.extend(render_editors(schema_text, views_text or ""))
     out.extend(
         render_derived(schema_text, source_file, completeness_text=completeness_text)
     )  # export / ai_schemas / completeness (completeness weighted when a manifest is given)

@@ -2,7 +2,8 @@
 
 **Version:** 0.4 (Implementation-corrected — FR-ED-16 widened)
 **Date:** 2026-06-12
-**Status:** In implementation (FR-ED-16 holistic skip-hook fix landed; flows/editor slices next)
+**Status:** IMPLEMENTED — FR-ED-1..16 landed + tested (FR-ED-16 holistic skip-hook, FR-ED-15 flows,
+FR-ED-1..14 editor archetype S1–S11); 326 backend_codegen tests green incl. runtime dirty/reset/IDOR proof
 **Component:** `src/startd8/backend_codegen/` (a new editor archetype, sibling to CRUD / `forms:` / `filters:` / `flows:` / `views:`)
 **Requested by:** StartDate (strtd8) app team — `docs/SDK_BULK_CHILD_FIELD_EDITOR_CAPABILITY_BRIEF_2026-06-11.md` (strtd8 repo)
 **Owner:** startd8-sdk team

@@ -70,7 +70,11 @@ _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-conten
 # ``startd8-entity`` slot), ``flow-aggregator`` re-renders the whole ``app/flows/__init__.py``.
 # Previously ``fastapi-flow`` was registered nowhere → freshly-generated flow apps failed ``--check``.
 _FORMS_KINDS: frozenset = frozenset(
-    {"fastapi-web-forms", "htmx-created", "fastapi-flow", "flow-shell", "flow-aggregator"}
+    {
+        "fastapi-web-forms", "htmx-created",
+        "fastapi-flow", "flow-shell", "flow-aggregator",          # flows (FR-ED-15)
+        "fastapi-editor", "editor-form", "editor-aggregator",     # bulk child-field editors (FR-ED-10)
+    }
 )
 
 # settings.py derives from the schema + a SELF-EMBEDDED mode (FR-CFG-7a). Unlike the manifest-backed
@@ -540,6 +544,11 @@ def _forms_renderers():
         render_named_flow_router,
         render_named_flow_shell,
     )
+    from .editor_generator import (
+        render_editor_aggregator,
+        render_named_editor_form,
+        render_named_editor_router,
+    )
 
     return {
         "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f),
@@ -548,6 +557,10 @@ def _forms_renderers():
         "fastapi-flow": lambda s, f, sf, e: render_named_flow_router(s, f, e),
         "flow-shell": lambda s, f, sf, e: render_named_flow_shell(s, f, e),
         "flow-aggregator": lambda s, f, sf, e: render_flow_aggregator(s, f),
+        # editors (FR-ED-10): `e` is the editor NAME; aggregator ignores it.
+        "fastapi-editor": lambda s, f, sf, e: render_named_editor_router(s, f, e),
+        "editor-form": lambda s, f, sf, e: render_named_editor_form(s, f, e),
+        "editor-aggregator": lambda s, f, sf, e: render_editor_aggregator(s, f),
     }
 
 
