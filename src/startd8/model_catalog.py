@@ -47,6 +47,9 @@ class Models:
     # Anthropic Claude Models
     # ==========================================================================
 
+    # Most capable widely-released model (GA 2026-06-09; flagship-class, 1M ctx, 128k out)
+    CLAUDE_FABLE_LATEST = "anthropic:claude-fable-5"
+
     # Flagship - Best quality, highest cost
     CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-8"
 
@@ -172,6 +175,12 @@ class Models:
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # Anthropic
+    "claude-fable-5": ModelInfo(
+        provider="anthropic",
+        model_id="claude-fable-5",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "claude-opus-4-8": ModelInfo(
         provider="anthropic",
         model_id="claude-opus-4-8",

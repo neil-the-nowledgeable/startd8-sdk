@@ -18,6 +18,8 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
+        # Fable / Mythos 5 family (GA 2026-06-09)
+        "claude-fable-5",             # Claude Fable 5 - most capable widely-released model
         # Claude 4.8 family (Latest)
         "claude-opus-4-8",            # Claude Opus 4.8 - most intelligent model
         # Claude 4.7 family

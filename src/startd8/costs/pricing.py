@@ -68,15 +68,22 @@ class PricingService:
     
     # Default pricing (updated January 2026)
     DEFAULT_PRICING: Dict[str, ModelPricing] = {
-        # Anthropic Claude 4.8 / 4.7 (current flagship defaults; rates estimated
-        # from the 4.6 Opus tier until confirmed — REQ-CT-4)
+        # Anthropic Claude Fable 5 — most capable widely-released model (GA 2026-06-09).
+        # Pricing CONFIRMED from platform.claude.com/docs/en/about-claude/models/overview.md.
+        "claude-fable-5": ModelPricing(
+            model="claude-fable-5",
+            provider="anthropic",
+            input_cost_per_million=10.0,
+            output_cost_per_million=50.0,
+            notes="$10/$50 per MTok (input/output), confirmed from Anthropic models overview 2026-06-12.",
+        ),
+        # Anthropic Claude 4.8 (CONFIRMED) / 4.7 (estimated) — REQ-CT-4
         "claude-opus-4-8": ModelPricing(
             model="claude-opus-4-8",
             provider="anthropic",
             input_cost_per_million=5.0,
             output_cost_per_million=25.0,
-            estimated=True,
-            notes="Estimated from Opus 4.6 tier; update when published rate confirmed.",
+            notes="$5/$25 per MTok, confirmed from Anthropic models overview 2026-06-12.",
         ),
         "claude-opus-4-7": ModelPricing(
             model="claude-opus-4-7",
