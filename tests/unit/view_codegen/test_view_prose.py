@@ -167,10 +167,8 @@ def test_fragment_is_not_an_owned_file():
     assert is_owned_view_file(out[_TMPL]) is True   # the owned template still is owned
 
 
-def test_model_scoped_export_prose_loud_fails():
-    model_export = VIEWS + "\n  - name: full_export\n    kind: export-package\n    scope: model\n"
-    with pytest.raises(ValueError, match="no HTML page|landing surface"):
-        render_views(SCHEMA, model_export, None, "full_export:\n  title: x\n")
+# (Model-scoped export title/intro is now ALLOWED — it opts into the Phase-2 export landing page;
+#  see the "export landing" section below. `empty` on an export still loud-fails, tested there.)
 
 
 # --------------------------------------------------------------------------- #
@@ -242,3 +240,54 @@ def test_empty_on_non_model_compose_loud_fails():
     # computed-panel has no no-rows surface today → loud-fail rather than silently drop.
     with pytest.raises(ValueError, match="no-rows surface"):
         render_views(SCHEMA, VIEWS, None, "completeness_panel:\n  empty: x\n")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — export landing (model-scoped export-package title/intro → opt-in HTML page)
+# --------------------------------------------------------------------------- #
+
+# A model-scoped export has NO HTML template today (served as raw JSON/Markdown); /export is a 404.
+_EXPORT_VIEWS = VIEWS + "\n  - name: full_export\n    kind: export-package\n    scope: model\n    route: /export\n"
+_LAND = "app/templates/views/full_export.html"
+_LAND_FRAG = "app/templates/views/_full_export.prose.html"
+_ROUTES = "app/views/routes.py"
+
+
+def test_export_without_prose_has_no_landing_and_router_is_byte_identical():
+    base = dict(render_views(SCHEMA, _EXPORT_VIEWS))
+    assert _LAND not in base                      # no template (today: /export 404)
+    assert dict(render_views(SCHEMA, _EXPORT_VIEWS, None, None)) == base
+
+
+def test_export_with_prose_emits_landing_fragment_and_bare_route():
+    p = 'full_export:\n  title: "Export your value model"\n  intro: "Download as **Markdown** or **JSON**."\n'
+    out = dict(render_views(SCHEMA, _EXPORT_VIEWS, None, p))
+    assert _LAND in out and _LAND_FRAG in out
+    assert '{% include "views/_full_export.prose.html" %}' in out[_LAND]
+    assert "/export/markdown" in out[_LAND] and "/export/json" in out[_LAND]
+    assert "<h1>Export your value model</h1>" in out[_LAND_FRAG]
+    # bare HTML route added; the raw md/json routes are kept
+    assert "@views_router.get('/export', response_class=HTMLResponse)" in out[_ROUTES]
+    assert "'/export/markdown'" in out[_ROUTES] and "'/export/json'" in out[_ROUTES]
+
+
+def test_chrome_on_non_export_leaves_router_byte_identical():
+    # Phase-1 manifests (chrome on a non-export view) must not change the router.
+    base = dict(render_views(SCHEMA, _EXPORT_VIEWS))
+    out = dict(render_views(SCHEMA, _EXPORT_VIEWS, None, "value_map:\n  title: Hi\n"))
+    assert out[_ROUTES] == base[_ROUTES]
+
+
+def test_editing_export_copy_does_not_trip_check():
+    p = 'full_export:\n  title: "Export your value model"\n'
+    files = dict(render_views(SCHEMA, _EXPORT_VIEWS, None, p))
+    owned_land, owned_routes = files[_LAND], files[_ROUTES]
+    edited = p.replace("Export your value model", "Export absolutely everything")
+    assert dict(render_views(SCHEMA, _EXPORT_VIEWS, None, edited))[_LAND] == owned_land
+    assert views_in_sync(SCHEMA, _EXPORT_VIEWS, "p/" + _LAND, owned_land, None, edited) is True
+    assert views_in_sync(SCHEMA, _EXPORT_VIEWS, "p/" + _ROUTES, owned_routes, None, p) is True
+
+
+def test_empty_on_export_loud_fails():
+    with pytest.raises(ValueError, match="no-rows surface"):
+        render_views(SCHEMA, _EXPORT_VIEWS, None, "full_export:\n  empty: x\n")

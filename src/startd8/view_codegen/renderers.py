@@ -769,7 +769,10 @@ def _is_model_compose(v: ViewSpec) -> bool:
     return v.kind == "detail-compose" and v.scope == "model"
 
 
-def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str) -> str:
+def render_view_router(
+    views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str,
+    chrome_views: "frozenset[str]" = frozenset(),
+) -> str:
     import_lines: List[str] = []
     for v in views:
         if _is_model_export(v):
@@ -830,6 +833,12 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
                 f"def {v.module}_json_route(session: Session = Depends(get_session)):\n"
                 f"    return Response({v.module}_json(session), media_type='application/json')"
             )
+            if v.module in chrome_views:  # Phase-2 export landing: a bare HTML page for /export
+                routes.append(
+                    f"@views_router.get({(base or '/')!r}, response_class=HTMLResponse)\n"
+                    f"def {v.module}(request: Request):\n"
+                    f"    return _templates.TemplateResponse(request, {('views/' + v.module + '.html')!r}, {{}})"
+                )
         elif v.kind == "export-package":
             routes.append(
                 f"@views_router.get({v.route!r})\n"
@@ -1005,6 +1014,35 @@ def _view_empty_block(v: ViewSpec, default_html: str, has_empty: bool) -> str:
     if has_empty:
         return '{% if not rows %}{% include "views/_' + v.module + '.empty.html" %}{% endif %}\n'
     return default_html
+
+
+def render_export_landing_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
+    """Owned HTML landing for a model-scoped export-package (Phase 2). Emitted ONLY when the export
+    view has title/intro prose — so ``/export`` (a 404 today) becomes a page that explains the export
+    and links the two download formats. The heading/intro come from the untracked prose fragment
+    (``{% include %}``); the two format links are fixed structure (their *labels* are a later
+    ``controls`` increment). Byte-identical-when-absent holds because this whole file is opt-in.
+    """
+    head = (
+        "{#\n"
+        "# GENERATED from prisma/schema.prisma (+ views.yaml) — do not edit by hand.\n"
+        "# startd8-artifact: view-template\n"
+        f"# startd8-entity: {v.module}\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# views-sha256: {views_sha}\n"
+        "#}\n"
+    )
+    base = v.route.rstrip("/")
+    block = (
+        '{% extends "base.html" %}\n{% block content %}\n'
+        + _view_title_block(v, True)  # landing exists only with chrome ⇒ always the fragment include
+        + '<ul class="export-formats">\n'
+        + f'  <li><a href="{base}/markdown">Download as Markdown</a></li>\n'
+        + f'  <li><a href="{base}/json">Download as JSON</a></li>\n'
+        + "</ul>\n"
+        + "{% endblock %}\n"
+    )
+    return head + block
 
 
 def render_view_index_template(
@@ -1653,19 +1691,13 @@ def render_views(
     view_prose = parse_view_prose(
         view_prose_text, known_views=frozenset(v.module for v in views)
     )
-    # Surface guards (loud-fail rather than silently drop authored prose):
-    #  - a model-scoped export has no HTML template at all (served as raw JSON/Markdown);
-    #  - `empty` only has a clean no-rows surface on a model-scoped detail-compose today.
+    # Surface guard (loud-fail rather than silently drop authored prose): `empty` only has a clean
+    # no-rows surface on a model-scoped detail-compose today. (A model-scoped export's title/intro DO
+    # have a surface now — the Phase-2 export landing page below; but an export has no row list, so
+    # `empty` on one still fails here.)
     for v in views:
         p = view_prose.get(v.module)
-        if p is None:
-            continue
-        if _is_model_export(v):
-            raise ValueError(
-                f"view_prose.yaml: view {v.module!r} is a model-scoped export with no HTML page — "
-                "its title/intro need an HTML landing surface (Phase 2), not available yet"
-            )
-        if p.empty and not _is_model_compose(v):
+        if p is not None and p.empty and not _is_model_compose(v):
             raise ValueError(
                 f"view_prose.yaml: view {v.module!r} uses `empty`, but only a model-scoped "
                 "detail-compose has a no-rows surface today (Phase 2 will add the others)"
@@ -1691,7 +1723,14 @@ def render_views(
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
-            continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
+            # Served as raw Markdown/JSON (no template) — UNLESS the export carries title/intro, in
+            # which case it opts into a Phase-2 HTML landing page (+ a bare route, see render_view_router).
+            if has_chrome:
+                out.append((f"app/templates/views/{v.module}.html",
+                            render_export_landing_template(v, s_sha, v_sha)))
+                out.append((f"app/templates/views/_{v.module}.prose.html",
+                            render_view_prose_fragment(prose, v.module)))
+            continue
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
                                          has_prose=has_chrome, has_empty=has_empty)))
@@ -1707,6 +1746,11 @@ def render_views(
                 f"app/templates/views/{v.module}_index.html",
                 render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome),
             ))
-    out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
+    # The router gains a bare HTML landing route only for export views that carry chrome (others
+    # unchanged ⇒ byte-identical when no export prose, incl. all Phase-1 manifests).
+    chrome_views = frozenset(
+        name for name, p in view_prose.items() if p.title or p.intro
+    )
+    out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha, chrome_views)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
     return tuple(out)
