@@ -8,6 +8,7 @@ orphan handling, the schema-only main.py mount, and the runtime behaviours that 
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import sys
 
@@ -306,3 +307,133 @@ def test_editor_runtime_dirty_reset_and_allowlist(tmp_path, monkeypatch):
             sys.path.remove(str(tmp_path))
         _purge()
         _drop()
+
+
+# --------------------------------------------------------------------------- #
+# FR-ED-9 / FR-ED-12 — runtime gaps the plan's S11 enumerated (resolver + CRLF)
+# --------------------------------------------------------------------------- #
+
+@contextlib.contextmanager
+def _running_app(tmp_path, monkeypatch, views, *, extra_files=None,
+                 schema=SCHEMA, table_names=("resumebuild", "resumebuilditem")):
+    """Render the backend for *views*, write it (+ optional *extra_files* like an owned resolver),
+    import app.* and init the DB. Yields (main, db, tables). Cleans up sys.path + SQLModel metadata."""
+    import sqlmodel
+    from startd8.backend_codegen import render_backend
+
+    def _drop():
+        md = sqlmodel.SQLModel.metadata
+        for t in table_names:
+            tbl = md.tables.get(t)
+            if tbl is not None:
+                md.remove(tbl)
+
+    for rel, content in render_backend(schema, views_text=views):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    for rel, content in (extra_files or {}).items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'app.db'}")
+    sys.path.insert(0, str(tmp_path))
+    _purge()
+    _drop()
+    try:
+        main = importlib.import_module("app.main")
+        db = importlib.import_module("app.db")
+        tables = importlib.import_module("app.tables")
+        db.init_db()
+        yield main, db, tables
+    finally:
+        if str(tmp_path) in sys.path:
+            sys.path.remove(str(tmp_path))
+        _purge()
+        _drop()
+
+
+_RESOLVER_VIEWS = """
+editors:
+  rfe:
+    parent: ResumeBuild
+    child: ResumeBuildItem
+    fk: resumeBuildId
+    edit_field: overrideText
+    filter: { included: true }
+    order_by: orderIndex
+    default_value: effective_text
+    route: /rw/{id}/edit
+""".strip()
+
+# An app-owned resolver: returns a computed value, but RAISES for one row to prove per-row degradation.
+_RESOLVER_MODULE = (
+    "def effective_text(child, session):\n"
+    '    if getattr(child, "sectionKey", "") == "boom":\n'
+    '        raise RuntimeError("resolver failed for this row")\n'
+    '    return f"RESOLVED:{child.sectionKey}"\n'
+)
+
+
+def test_editor_runtime_resolver_used_and_degrades_on_raise(tmp_path, monkeypatch):
+    """FR-ED-9/R1-F5: the default_value resolver pre-fills rows; a row whose resolver RAISES degrades
+    to the raw edit_field and the rest of the form still renders (no 500, one bad row ≠ blank form)."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlmodel")
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session
+
+    with _running_app(
+        tmp_path, monkeypatch, _RESOLVER_VIEWS,
+        extra_files={"app/editors/resolvers.py": _RESOLVER_MODULE},
+    ) as (main, db, tables):
+        with Session(db.engine) as s:
+            parent = tables.ResumeBuild()
+            s.add(parent)
+            s.commit()
+            s.refresh(parent)
+            for sec, idx in (("alpha", 0), ("boom", 1)):
+                s.add(tables.ResumeBuildItem(
+                    resumeBuildId=parent.id, sectionKey=sec, orderIndex=idx, included=True))
+            s.commit()
+            pid = parent.id
+
+        with TestClient(main.app, follow_redirects=False) as c:
+            page = c.get(f"/rw/{pid}/edit")
+            assert page.status_code == 200            # renders despite the raising row (no 500)
+            assert "RESOLVED:alpha" in page.text      # resolver USED for the good row's pre-fill
+            assert "RESOLVED:boom" not in page.text   # raising row DEGRADED to raw edit_field
+
+
+def test_editor_runtime_crlf_unchanged_no_spurious_write(tmp_path, monkeypatch):
+    """FR-ED-12/R1-F8: a browser CRLF-normalizes <textarea>; an otherwise-unchanged multi-line value
+    submitted as CRLF must NOT spuriously materialize over the LF original (no false write)."""
+    pytest.importorskip("fastapi")
+    pytest.importorskip("sqlmodel")
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session
+
+    with _running_app(tmp_path, monkeypatch, VIEWS) as (main, db, tables):
+        with Session(db.engine) as s:
+            parent = tables.ResumeBuild()
+            s.add(parent)
+            s.commit()
+            s.refresh(parent)
+            item = tables.ResumeBuildItem(
+                resumeBuildId=parent.id, sectionKey="a", orderIndex=0,
+                included=True, overrideText="line1\nline2")
+            s.add(item)
+            s.commit()
+            s.refresh(item)
+            pid, iid = parent.id, item.id
+
+        with TestClient(main.app, follow_redirects=False) as c:
+            resp = c.post(f"/resume-wizard/{pid}/edit", data={
+                f"item-{iid}": "line1\r\nline2\r\n",   # browser-normalized CRLF + trailing newline
+                f"default-{iid}": "line1\nline2",       # the LF mirror echoed from GET
+            })
+            assert resp.status_code == 303
+        with Session(db.engine) as s:
+            # unchanged: still the LF original, NOT rewritten to the CRLF form
+            assert s.get(tables.ResumeBuildItem, iid).overrideText == "line1\nline2"
