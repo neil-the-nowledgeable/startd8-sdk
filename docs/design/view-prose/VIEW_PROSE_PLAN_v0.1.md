@@ -1,9 +1,9 @@
 # View Prose — Implementation Plan (SDK-home)
 
-**Version:** v0.3 (Phase 1 SHIPPED — `feat/view-prose-phase1`; `empty` reflected to Phase 2)
-**Date:** 2026-06-12 (v0.3, v0.2) · 2026-06-11 (v0.1)
-**Status:** Phase 1 implemented + tested (20 tests; 121 green across touched surfaces; CLI e2e verified).
-Phase 2 (`empty`/`controls`/`success`/`error`/export-landing) deferred — each gated on a render surface.
+**Version:** v0.4 (Phase 2 mostly SHIPPED — 2a/2b merged to main, 2c on branch; only `controls` left)
+**Date:** 2026-06-12 (v0.4, v0.3, v0.2) · 2026-06-11 (v0.1)
+**Status:** Phase 1 + Phase 2a/2b/2c implemented + tested (66 view tests; 135 green across touched
+surfaces; generated `routes.py` compiles; CLI e2e + `--check` verified). Only `controls` remains (own PR).
 **Pairs with (the "what"):** `strtd8/docs/USER_FACING_CONTENT_REQUIREMENTS.md` §C (FR-PG-10/11/12, OQ-7) —
 the consumer-owned contract. This doc is the SDK-home "how" for hand-off item #3.
 **Tracked:** `strtd8/docs/SDK_QUICK_WINS_2026-06-10.md` #7.
@@ -157,17 +157,19 @@ both `views.yaml prose:` and a parked `prisma/view_prose.yaml`) in favor of the 
   > And a drift-safe `empty` override must route through its **own untracked fragment** (the literal is
   > inside archetype-specific Jinja, not an inline string). So `empty` **moved to Phase 2**; the shipped
   > parser rejects it loud (reserved-until-built) alongside `controls`/`success`/`error`.
-- **Phase 2 — gated, because each needs a new render surface:**
-  - `empty` — the no-rows panel state; needs a per-archetype surface + its own untracked fragment (only
-    `detail-compose`'s `:1054` is clean today). The per-row "not yet linked" flag (`:1048`) is a distinct
-    FR-8 concern that stays archetype-owned.
-  - `controls` labels — needs the two anonymous import-flow buttons to get **stable `id`s** first
-    (trivial, but sequenced). Control set is the closed enum `{validate, restore, confirm}`.
-  - `success`/`error` + placeholders — **import-flow only**, and needs an **HTML outcome surface**
-    (today validate/restore return JSON; there is nowhere to render copy). Placeholder set is closed:
-    validate→`{errors}`/`{counts}`, restore→`{imported}`/`{total}`.
-  - `export-package` title/intro — needs an **HTML landing surface** added to the archetype first
-    (today it serves only JSON/Markdown). Separable archetype enhancement; not blocking Phase 1.
+- **Phase 2 — gated on a new render surface (mostly SHIPPED 2026-06-12, `feat/view-prose-phase2`):**
+  - **`empty` — DONE (2a).** No-rows panel state; own untracked fragment `_<name>.empty.html`; model-scoped
+    `detail-compose` only (the one clean surface, `:1054`); loud-fail elsewhere. The per-row "not yet
+    linked" flag (`:1048`) stays archetype-owned.
+  - **`export-package` title/intro — DONE (2b).** Prose-gated HTML landing page (`render_export_landing_template`)
+    + a bare HTML route (`render_view_router(..., chrome_views)`); `/export` was a 404. Byte-identical absent.
+  - **`success`/`error` — DONE (2c), import-flow RESTORE only.** Server-rendered owned result page
+    (`render_import_result_template`) + untracked outcome fragment (`render_view_outcome_fragment`,
+    `{token}`→Jinja). Only the restore route changes (template untouched). **Validate stays JSON** ⇒ closed
+    set: `success`⊆`{imported}`/`{total}`, `error`⊆`{errors}` (the `{counts}` token was validate-only; dropped).
+  - **`controls` — REMAINING (own PR).** Stamp stable ids on the anonymous import-flow buttons — a change to
+    the **hashed owned template**, so existing downstream apps get a one-time `--check` `stale` bump (R1-S5).
+    Then the closed `{validate, restore, confirm}` + the export landing's format-link labels.
 
 > v0.4 had `success`/`error` in Phase 1. Planning moves them to Phase 2: there is **no HTML surface**
 > to render outcome copy into, and they touch exactly one archetype. Shipping title/intro/empty first

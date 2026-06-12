@@ -19,11 +19,12 @@ Distinct from the ``rendered-content`` archetype's ``prose_key`` / ``app/views/_
 an *entity's text column*). This is *view-chrome* copy; the standalone file + ``ViewProse`` type keep the
 two "prose" concepts uncollided.
 
-**Phase 1 keys:** ``title``, ``intro``. **Phase 2 (this increment):** ``empty`` — the no-rows panel
-state, archetype-specific (only ``detail-compose`` *model* scope has a clean surface today, so ``empty``
-on any other archetype loud-fails in :func:`render_views`). The remaining Phase-2 keys (``controls``,
-``success``, ``error``) still need a render surface (stable control ids; an HTML outcome surface) and
-stay **reserved**: present-but-unbuilt → loud-fail, so nobody authors against a surface that isn't there.
+**Phase 1 keys:** ``title``, ``intro``. **Phase 2 (incremental):** ``empty`` (the no-rows panel state,
+only on a model-scoped ``detail-compose``); ``success``/``error`` (import-flow **restore** outcome copy,
+rendered into an HTML result page with request-time substitution of a closed placeholder set). All
+archetype/placeholder validity is enforced per-view in :func:`render_views` (which knows the kind).
+``controls`` still needs a render surface (stable control ids) and stays **reserved** — present ⇒
+loud-fail, so nobody authors against a surface that isn't there.
 """
 
 from __future__ import annotations
@@ -33,22 +34,25 @@ from typing import Dict, Optional
 
 import yaml
 
-# View-chrome keys rendered into the untracked fragment. ``title``/``intro`` (Phase 1) live in the
-# heading fragment; ``empty`` (Phase 2) renders into its own no-rows fragment and is valid only on
-# archetypes that expose a no-rows surface (enforced per-view in render_views, which knows the kind).
-_PROSE_KEYS = {"title", "intro", "empty"}
-# Still-reserved (Phase-2-pending) keys — each awaits a render surface; present ⇒ loud-fail
-# (reserved-until-built, mirroring the SDK's `filters:`/`forms:` reserved-key policy). See PLAN §2.
-_RESERVED_KEYS = {"controls", "success", "error"}
+# Authorable keys. Each renders into an untracked fragment; archetype/placeholder validity is enforced
+# in render_views (the parser is archetype-blind — it only knows view names). ``title``/``intro`` →
+# heading fragment; ``empty`` → no-rows fragment (model-compose); ``success``/``error`` → import-flow
+# restore-outcome fragments.
+_PROSE_KEYS = {"title", "intro", "empty", "success", "error"}
+# Still-reserved (pending a render surface) — present ⇒ loud-fail (reserved-until-built, mirroring the
+# SDK's `filters:`/`forms:` reserved-key policy). See PLAN §2.
+_RESERVED_KEYS = {"controls"}
 
 
 @dataclass(frozen=True)
 class ViewProse:
-    """View-chrome copy for a single composite view (title/intro = Phase 1; empty = Phase 2)."""
+    """View-chrome copy for a single composite view (title/intro = Phase 1; empty/success/error = Phase 2)."""
 
     title: Optional[str] = None
     intro: Optional[str] = None
     empty: Optional[str] = None
+    success: Optional[str] = None
+    error: Optional[str] = None
 
 
 def parse_view_prose(

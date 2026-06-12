@@ -95,8 +95,10 @@ def test_unknown_key_loud_fails():
         parse_view_prose("value_map:\n  bogus: x\n")
 
 
-@pytest.mark.parametrize("key", ["controls", "success", "error"])
+@pytest.mark.parametrize("key", ["controls"])
 def test_reserved_phase2_keys_loud_fail(key):
+    # `controls` still needs a render surface; `success`/`error` are now allowed at parse (their
+    # archetype + placeholder validity is enforced in render_views — tested in the outcome section).
     with pytest.raises(ValueError, match="reserved"):
         parse_view_prose(f"value_map:\n  {key}: x\n")
 
@@ -291,3 +293,76 @@ def test_editing_export_copy_does_not_trip_check():
 def test_empty_on_export_loud_fails():
     with pytest.raises(ValueError, match="no-rows surface"):
         render_views(SCHEMA, _EXPORT_VIEWS, None, "full_export:\n  empty: x\n")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — import-flow restore outcome copy (success/error → HTML result page)
+# --------------------------------------------------------------------------- #
+
+_IMPORT_VIEWS = SCHEMA and "views:\n  - name: model_import\n    kind: import-flow\n    route: /import\n"
+_ROUTER = "app/views/routes.py"
+_OK_FRAG = "app/templates/views/_model_import.success.html"
+_ERR_FRAG = "app/templates/views/_model_import.error.html"
+_OK_PAGE = "app/templates/views/model_import_success.html"
+_ERR_PAGE = "app/templates/views/model_import_error.html"
+_OUTCOME = (
+    'model_import:\n'
+    '  success: "Restored {total} items. Your value model is back."\n'
+    '  error: "Could not read that export: {errors}"\n'
+)
+
+
+def test_no_outcome_leaves_restore_route_byte_identical_even_with_title():
+    base = dict(render_views(SCHEMA, _IMPORT_VIEWS))
+    assert dict(render_views(SCHEMA, _IMPORT_VIEWS, None, None)) == base
+    # title-only chrome must not perturb the (owned) router restore route.
+    titled = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, "model_import:\n  title: Restore\n"))
+    assert titled[_ROUTER] == base[_ROUTER]
+
+
+def test_outcome_emits_fragments_result_pages_and_html_restore_route():
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, _OUTCOME))
+    assert {_OK_FRAG, _ERR_FRAG, _OK_PAGE, _ERR_PAGE} <= set(out)
+    assert "{{ total }}" in out[_OK_FRAG]
+    assert "{{ errors | join('; ') }}" in out[_ERR_FRAG]
+    assert '{% include "views/_model_import.success.html" %}' in out[_OK_PAGE]
+    assert "_templates.TemplateResponse(request, 'views/model_import_success.html'" in out[_ROUTER]
+    assert "_templates.TemplateResponse(request, 'views/model_import_error.html'" in out[_ROUTER]
+    assert "def model_import_restore_route(\n    request: Request," in out[_ROUTER]
+    # validate stays JSON (out of scope)
+    assert "def model_import_validate_route(file: UploadFile):" in out[_ROUTER]
+
+
+def test_result_pages_owned_outcome_fragments_untracked():
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, _OUTCOME))
+    assert is_owned_view_file(out[_OK_PAGE]) is True
+    assert is_owned_view_file(out[_OK_FRAG]) is False
+
+
+def test_editing_outcome_copy_does_not_trip_check():
+    files = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, _OUTCOME))
+    owned_router, owned_page = files[_ROUTER], files[_OK_PAGE]
+    edited = _OUTCOME.replace("Your value model is back.", "Everything is restored!")
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, edited))
+    assert out[_ROUTER] == owned_router and out[_OK_PAGE] == owned_page
+    assert views_in_sync(SCHEMA, _IMPORT_VIEWS, "p/" + _ROUTER, owned_router, None, edited) is True
+
+
+def test_success_only_keeps_json_error_path():
+    # error not authored → the invalid-payload path stays today's HTTPException (no error page).
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, 'model_import:\n  success: "Done: {total}"\n'))
+    assert _OK_PAGE in out and _ERR_PAGE not in out
+    assert "raise HTTPException(status_code=422" in out[_ROUTER]      # error path unchanged
+    assert "views/model_import_success.html'" in out[_ROUTER]         # success path swapped
+
+
+def test_wrong_placeholder_for_outcome_loud_fails():
+    # `success` may only use {imported}/{total}; {errors} belongs to `error`.
+    with pytest.raises(ValueError, match="not computed"):
+        render_views(SCHEMA, _IMPORT_VIEWS, None, 'model_import:\n  success: "{errors}"\n')
+
+
+def test_success_error_on_non_import_flow_loud_fails():
+    views = _IMPORT_VIEWS + "  - name: cp\n    kind: computed-panel\n    compute: completeness\n    route: /c\n"
+    with pytest.raises(ValueError, match="restore-outcome surface"):
+        render_views(SCHEMA, views, None, "cp:\n  success: x\n")

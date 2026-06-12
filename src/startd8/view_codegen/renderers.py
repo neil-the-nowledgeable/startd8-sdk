@@ -12,6 +12,7 @@ Two-hash drift: a view file is stale if **either** the schema or ``views.yaml`` 
 from __future__ import annotations
 
 import json
+import re
 from typing import Dict, List, Optional, Tuple
 
 from ..frontend_codegen.schema_renderer import schema_sha256
@@ -772,6 +773,8 @@ def _is_model_compose(v: ViewSpec) -> bool:
 def render_view_router(
     views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str,
     chrome_views: "frozenset[str]" = frozenset(),
+    success_views: "frozenset[str]" = frozenset(),
+    error_views: "frozenset[str]" = frozenset(),
 ) -> str:
     import_lines: List[str] = []
     for v in views:
@@ -906,27 +909,60 @@ def render_view_router(
                 "        return {'valid': False, 'errors': [f'not valid JSON: {exc}'], 'counts': {}}\n"
                 f"    return {v.module}_validate(payload)"
             )
-            routes.append(
-                f"@views_router.post({(base + '/restore')!r})\n"
+            # The restore route renders an HTML result page when success/error copy is authored, else
+            # returns today's JSON (byte-identical). The confirm-refusal guard is always an
+            # HTTPException — a safety gate, not a user-content outcome.
+            has_success = v.module in success_views
+            has_error = v.module in error_views
+            err_tmpl = f"views/{v.module}_error.html"
+            ok_tmpl = f"views/{v.module}_success.html"
+            sig = (
                 f"def {v.module}_restore_route(\n"
-                "    file: UploadFile,\n"
+                + ("    request: Request,\n" if (has_success or has_error) else "")
+                + "    file: UploadFile,\n"
                 "    confirm: str = Form(''),\n"
                 "    session: Session = Depends(get_session),\n"
                 "):\n"
+            )
+            guard = (
                 "    if confirm != 'restore':  # the destructive step is explicit, never implied\n"
                 "        raise HTTPException(\n"
                 "            status_code=400,\n"
                 "            detail=\"restore writes to the database — resubmit with confirm='restore'\",\n"
                 "        )\n"
-                "    try:\n"
-                "        payload = json.loads(file.file.read())\n"
-                "    except ValueError as exc:\n"
-                "        raise HTTPException(status_code=422, detail=f'not valid JSON: {exc}')\n"
-                f"    report = {v.module}_validate(payload)\n"
-                "    if not report['valid']:  # invalid payloads are reported, never written\n"
-                "        raise HTTPException(status_code=422, detail={'validation': report})\n"
-                f"    written = {v.module}_restore(session, payload)\n"
-                "    return {'imported': written, 'total': sum(written.values())}"
+            )
+            if has_error:
+                check = (
+                    "    try:\n"
+                    "        payload = json.loads(file.file.read())\n"
+                    "    except ValueError as exc:\n"
+                    f"        return _templates.TemplateResponse(request, {err_tmpl!r}, {{'errors': [f'not valid JSON: {{exc}}']}})\n"
+                    f"    report = {v.module}_validate(payload)\n"
+                    "    if not report['valid']:  # invalid payloads are reported, never written\n"
+                    f"        return _templates.TemplateResponse(request, {err_tmpl!r}, {{'errors': report['errors']}})\n"
+                )
+            else:
+                check = (
+                    "    try:\n"
+                    "        payload = json.loads(file.file.read())\n"
+                    "    except ValueError as exc:\n"
+                    "        raise HTTPException(status_code=422, detail=f'not valid JSON: {exc}')\n"
+                    f"    report = {v.module}_validate(payload)\n"
+                    "    if not report['valid']:  # invalid payloads are reported, never written\n"
+                    "        raise HTTPException(status_code=422, detail={'validation': report})\n"
+                )
+            if has_success:
+                finish = (
+                    f"    written = {v.module}_restore(session, payload)\n"
+                    f"    return _templates.TemplateResponse(request, {ok_tmpl!r}, {{'imported': written, 'total': sum(written.values())}})"
+                )
+            else:
+                finish = (
+                    f"    written = {v.module}_restore(session, payload)\n"
+                    "    return {'imported': written, 'total': sum(written.values())}"
+                )
+            routes.append(
+                f"@views_router.post({(base + '/restore')!r})\n" + sig + guard + check + finish
             )
         else:
             routes.append(
@@ -1040,6 +1076,64 @@ def render_export_landing_template(v: ViewSpec, schema_sha: str, views_sha: str)
         + f'  <li><a href="{base}/markdown">Download as Markdown</a></li>\n'
         + f'  <li><a href="{base}/json">Download as JSON</a></li>\n'
         + "</ul>\n"
+        + "{% endblock %}\n"
+    )
+    return head + block
+
+
+# --------------------------------------------------------------------------- #
+# Import-flow restore outcome copy (success/error) — request-time substitution of a CLOSED placeholder
+# set. The copy lives in an untracked fragment (`{{ token }}` Jinja, converted from the author's
+# `{token}`); the restore route renders an owned result page that {% include %}s it, passing the runtime
+# values. Editing copy rewrites only the fragment ⇒ --check green; absent ⇒ today's JSON response.
+# --------------------------------------------------------------------------- #
+
+# Closed per-(import-flow restore)-outcome placeholder set. A token outside its outcome's set — or any
+# unknown token — is a loud parse error (the whitelist is keyed by outcome, R1-F5).
+_OUTCOME_ALLOWED = {"success": frozenset({"imported", "total"}), "error": frozenset({"errors"})}
+_TOKEN_RE = re.compile(r"\{(\w+)\}")
+
+
+def render_view_outcome_fragment(copy: str, kind: str, where: str) -> str:
+    """Untracked import-flow outcome fragment (``_<name>.success.html`` / ``.error.html``). No header.
+
+    Validates the author's ``{token}`` placeholders against the closed set for *kind* (loud-fail on an
+    unknown or wrong-outcome token), converts them to Jinja (``{errors}`` → a joined list), and wraps in
+    a ``<p>``. The literal copy is consumer-authored/trusted (consistent with ``intro``); placeholder
+    *values* are autoescaped by Jinja at render time.
+    """
+    allowed = _OUTCOME_ALLOWED[kind]
+    bad = set(_TOKEN_RE.findall(copy)) - allowed
+    if bad:
+        raise ValueError(
+            f"{where}: `{kind}` uses placeholder(s) {sorted(bad)} not computed by this archetype "
+            f"(allowed: {sorted(allowed)})"
+        )
+    body = _TOKEN_RE.sub(
+        lambda m: "{{ errors | join('; ') }}" if m.group(1) == "errors" else "{{ %s }}" % m.group(1),
+        copy,
+    )
+    return f'<p class="io-outcome">{body}</p>\n'
+
+
+def render_import_result_template(v: ViewSpec, schema_sha: str, views_sha: str, kind: str) -> str:
+    """Owned result page for an import-flow restore outcome (kind ``success``/``error``). Extends
+    base.html, ``{% include %}``s the untracked outcome fragment, and offers a link back to the form.
+    Pure structure (the words live in the fragment) ⇒ re-renders byte-identically across copy edits."""
+    head = (
+        "{#\n"
+        "# GENERATED from prisma/schema.prisma (+ views.yaml) — do not edit by hand.\n"
+        "# startd8-artifact: view-template\n"
+        f"# startd8-entity: {v.module}_{kind}\n"
+        f"# schema-sha256: {schema_sha}\n"
+        f"# views-sha256: {views_sha}\n"
+        "#}\n"
+    )
+    base = v.route.rstrip("/") or "/import"
+    block = (
+        '{% extends "base.html" %}\n{% block content %}\n'
+        + f'{{% include "views/_{v.module}.{kind}.html" %}}\n'
+        + f'<p><a href="{base}">Back</a></p>\n'
         + "{% endblock %}\n"
     )
     return head + block
@@ -1697,10 +1791,17 @@ def render_views(
     # `empty` on one still fails here.)
     for v in views:
         p = view_prose.get(v.module)
-        if p is not None and p.empty and not _is_model_compose(v):
+        if p is None:
+            continue
+        if p.empty and not _is_model_compose(v):
             raise ValueError(
                 f"view_prose.yaml: view {v.module!r} uses `empty`, but only a model-scoped "
                 "detail-compose has a no-rows surface today (Phase 2 will add the others)"
+            )
+        if (p.success or p.error) and v.kind != "import-flow":
+            raise ValueError(
+                f"view_prose.yaml: view {v.module!r} uses `success`/`error`, but only an import-flow "
+                "has a restore-outcome surface (other archetypes have no write outcome to report)"
             )
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
@@ -1741,16 +1842,32 @@ def render_views(
         if has_empty:
             out.append((f"app/templates/views/_{v.module}.empty.html",
                         render_view_empty_fragment(prose)))
+        # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an
+        # owned result page the restore route renders (see render_view_router). Each independently gated.
+        if v.kind == "import-flow" and prose:
+            where = f"view_prose.yaml: view {v.module!r}"
+            if prose.success:
+                out.append((f"app/templates/views/_{v.module}.success.html",
+                            render_view_outcome_fragment(prose.success, "success", where)))
+                out.append((f"app/templates/views/{v.module}_success.html",
+                            render_import_result_template(v, s_sha, v_sha, "success")))
+            if prose.error:
+                out.append((f"app/templates/views/_{v.module}.error.html",
+                            render_view_outcome_fragment(prose.error, "error", where)))
+                out.append((f"app/templates/views/{v.module}_error.html",
+                            render_import_result_template(v, s_sha, v_sha, "error")))
         if v.kind == "detail-compose" and "{" not in v.route:
             out.append((
                 f"app/templates/views/{v.module}_index.html",
                 render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome),
             ))
-    # The router gains a bare HTML landing route only for export views that carry chrome (others
-    # unchanged ⇒ byte-identical when no export prose, incl. all Phase-1 manifests).
-    chrome_views = frozenset(
-        name for name, p in view_prose.items() if p.title or p.intro
-    )
-    out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha, chrome_views)))
+    # The router gains a bare HTML landing route only for export views that carry chrome, and renders
+    # an HTML restore result only for import-flows that carry success/error (others unchanged ⇒
+    # byte-identical when no such prose, incl. all Phase-1 manifests).
+    chrome_views = frozenset(name for name, p in view_prose.items() if p.title or p.intro)
+    success_views = frozenset(name for name, p in view_prose.items() if p.success)
+    error_views = frozenset(name for name, p in view_prose.items() if p.error)
+    out.append(("app/views/routes.py", render_view_router(
+        views, s_sha, v_sha, chrome_views, success_views, error_views)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
     return tuple(out)

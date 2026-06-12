@@ -14,7 +14,9 @@ from .manifest import ViewSpec, parse_views
 from .provider import CompositeViewProvider
 from .renderers import (
     compute_binding_names,
+    render_import_result_template,
     render_view_empty_fragment,
+    render_view_outcome_fragment,
     render_view_prose_fragment,
     render_views,
 )
@@ -32,4 +34,6 @@ __all__ = [
     "parse_view_prose",
     "render_view_prose_fragment",
     "render_view_empty_fragment",
+    "render_view_outcome_fragment",
+    "render_import_result_template",
 ]
