@@ -196,16 +196,19 @@ pass below.
   `success`/`error`), never emit raw author text into a raw-include slot. *Verify:* a reqs doc with view copy
   yields a valid `view_prose.yaml`; view copy referencing an unknown view name fails ingestion; a value
   containing `<`/`{{ }}` renders escaped per the target archetype.
-- **FR-VCE-2 — Close the `Empty state:` dead-end (the quick win; archetype-filtered per R1-F6/S4).**
-  `Empty state:` is **already authored** in every `### View:` block but maps to `not_extracted(generator-gap)`
-  (`extractors.py:241-245`). Route it to `view_prose.yaml` `empty:` **only for model-scoped detail-compose
-  views**, and **keep silently dropping it (no error) on every other archetype** — preserving today's
-  back-compat. **Why this matters (code-verified):** the renderer raises `ValueError` on `empty` for any
-  non-model-compose view at render time (`renderers.py:~1853`); blind routing would make existing reqs docs
-  that carry `Empty state:` on a board/dashboard/import-flow view **start loud-failing at ingestion**. The
-  archetype filter MUST precede the route. *Verify:* a board view with `Empty state:` extracts with **no**
-  `empty:` and **no** error; a model-compose detail-compose view with `Empty state:` produces `empty:` and
-  the generated page shows that copy.
+- **FR-VCE-2 — Close the `Empty state:` dead-end (the quick win; archetype-filtered per R1-F6/S4).
+  ✅ IMPLEMENTED (`feat/view-copy-extraction`, `1e954fd2`) — with a Phase-6 correction.**
+  `Empty state:` is **already authored** in every `### View:` block but mapped to `not_extracted(generator-gap)`.
+  Route it to `view_prose.yaml` `empty:` **only for model-scoped detail-compose views**, and **keep silently
+  dropping it (no error) on every other archetype** — preserving back-compat (the renderer raises `ValueError`
+  on `empty` off-archetype, `renderers.py:~1853`).
+  > **⚠️ Phase-6 finding (implementation):** the quick win was a **no-op as-planned** — `extract_views` never
+  > emitted `scope`, so **no** kickoff-derived view was a model-scoped detail-compose, and every `Empty state:`
+  > would silent-drop (the only valid surface didn't exist). **Fix shipped:** `extract_views` now emits
+  > `scope: model` from a new `Scope:` key (template FR-FMT-1), which *also* reaches `views.yaml`. Without this
+  > prerequisite the `empty` route delivers zero value; the celebrated quick win required unblocking it first.
+  *Verify:* a board view with `Empty state:` extracts with **no** `empty:` and **no** error; a `Scope: model`
+  detail-compose with `Empty state:` produces `empty:`. (Both pinned in `test_view_prose_extraction.py`.)
 - **FR-VCE-3 — Per-archetype validity is end-to-end (no new validator).** The extractor emits the keys; the
   **shipped renderer already rejects** archetype-invalid combinations (`renderers.py:1862-1881`:
   `empty`→detail-compose-model, `success`/`error`/`controls`→import-flow). *Verify:* `empty` authored on a
