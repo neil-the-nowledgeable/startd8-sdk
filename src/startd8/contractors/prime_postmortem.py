@@ -1512,6 +1512,27 @@ def _load_observability_quality(output_dir: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _load_forward_manifest_from_disk(output_dir: str) -> Optional[Any]:
+    """Load the persisted forward manifest (FR-CL-1 read side).
+
+    PrimeContractor.run() now writes ``forward-manifest.json`` to the run output
+    dir. The active sync-gate path does not thread the manifest in-memory, so
+    disk-compliance scoring would otherwise run without the contract. Loading it
+    here closes that gap. Guarded: a missing/unparsable file returns ``None`` and
+    the caller degrades to today's behaviour (FR-CC-1).
+    """
+    path = Path(output_dir) / "forward-manifest.json"
+    if not path.is_file():
+        return None
+    try:
+        from startd8.forward_manifest import ForwardManifest
+
+        return ForwardManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not load forward manifest from %s: %s", path, exc)
+        return None
+
+
 def _append_obs_suggestions(
     obs: Dict[str, Any],
     suggestions: List[Dict[str, Any]],
@@ -1714,6 +1735,12 @@ class PrimePostMortemEvaluator:
 
         # Disk quality evaluation (opt-in when project_root provided)
         if project_root:
+            # FR-CL-1 (read side): disk-compliance scores generated code against
+            # the forward manifest. The sync-gate path does not pass it in-memory,
+            # so fall back to the persisted forward-manifest.json the contractor
+            # now writes to the run output dir (in-memory param stays the fast path).
+            if forward_manifest is None:
+                forward_manifest = _load_forward_manifest_from_disk(output_dir)
             # Aggregate semantic repair data from history entries (DC-3 dual scoring)
             aggregated_repair: Dict[str, Any] = semantic_repair_data or {}
             if not aggregated_repair:

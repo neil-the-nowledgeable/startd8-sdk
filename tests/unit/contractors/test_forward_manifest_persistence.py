@@ -90,3 +90,27 @@ def test_write_forward_manifest_noop_when_absent(tmp_path: Path) -> None:
     pc._write_forward_manifest()
 
     assert not (tmp_path / ".startd8" / "forward-manifest.json").exists()
+
+
+# --- WI-2: post-mortem read side --------------------------------------------
+
+
+def test_postmortem_loads_persisted_manifest(tmp_path: Path) -> None:
+    """The post-mortem disk loader round-trips what the contractor wrote (FR-CL-1)."""
+    from startd8.contractors.prime_postmortem import _load_forward_manifest_from_disk
+
+    manifest = _make_manifest()
+    (tmp_path / "forward-manifest.json").write_text(
+        manifest.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+    loaded = _load_forward_manifest_from_disk(str(tmp_path))
+
+    assert loaded is not None
+    assert loaded.model_dump() == manifest.model_dump()
+
+
+def test_postmortem_loader_absent_returns_none(tmp_path: Path) -> None:
+    from startd8.contractors.prime_postmortem import _load_forward_manifest_from_disk
+
+    assert _load_forward_manifest_from_disk(str(tmp_path)) is None

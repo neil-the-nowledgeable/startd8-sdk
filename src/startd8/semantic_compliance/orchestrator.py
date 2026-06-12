@@ -32,7 +32,7 @@ from .models import (
     VerdictResult,
     VerificationIssue,
 )
-from .requirement_loader import SeedIndex
+from .requirement_loader import SeedIndex, load_forward_manifest
 from .reviewer import AgentFactory, ReviewOutcome, SemanticReviewer
 from .signature_check import missing_required_symbols
 from .scoring import aggregate_score, compute_compliance_score
@@ -84,6 +84,10 @@ class SemanticComplianceOrchestrator:
     def __init__(self, config: Optional[ReportConfig] = None, agent_factory: Optional[AgentFactory] = None) -> None:
         self.config = config or ReportConfig()
         self.reviewer = SemanticReviewer(self.config, agent_factory=agent_factory)
+        # FR-CL-1 (read side): the persisted forward manifest for the run, loaded
+        # in review_run(). The reviewer (E2) and signature check (E1) read this to
+        # validate against the structured contract instead of api_signatures prose.
+        self._forward_manifest: Optional[object] = None
 
     def review_run(
         self,
@@ -99,6 +103,9 @@ class SemanticComplianceOrchestrator:
 
         features_pm = self._load_postmortem_features(output_dir)
         seeds = SeedIndex.load(output_dir)
+        # FR-CL-1 (read side): make the run's canonical contract reachable to the
+        # detached reviewer. Absent → reviewer/signature-check degrade to prose.
+        self._forward_manifest = load_forward_manifest(output_dir, seeds.seed_path)
         cache = VerdictCache.load(output_dir, run_id)
 
         candidates = triage(features_pm, self.config)

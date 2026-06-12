@@ -50,6 +50,9 @@ class LoadedRequirement:
         )
 
 
+FORWARD_MANIFEST_FILE = "forward-manifest.json"
+
+
 def _select_seed_file(output_dir: Path) -> Optional[Path]:
     """Pick the seed file; on multiple matches use the latest by mtime (R1-S5)."""
     matches = sorted(
@@ -58,6 +61,46 @@ def _select_seed_file(output_dir: Path) -> Optional[Path]:
         reverse=True,
     )
     return matches[0] if matches else None
+
+
+def load_forward_manifest(
+    output_dir: Path,
+    seed_path: Optional[Path] = None,
+) -> Optional["object"]:
+    """Resolve the persisted forward manifest for the run (FR-CL-1 read side).
+
+    The contractor now writes ``forward-manifest.json`` to the run output dir
+    (alongside the post-mortem report the SCR already reads), so the *detached*
+    reviewer can finally reach the structured interface contract instead of
+    re-deriving intent from raw ``api_signatures`` prose (the asymmetry, AC-1).
+
+    Looks in ``output_dir`` first, then next to the seed file as a fallback.
+    Returns ``None`` (and the reviewer keeps today's prose-only behaviour) when
+    the file is absent or unparsable — graceful by design (FR-CC-1).
+    """
+    candidates = [Path(output_dir) / FORWARD_MANIFEST_FILE]
+    if seed_path is not None:
+        candidates.append(Path(seed_path).parent / FORWARD_MANIFEST_FILE)
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            from startd8.forward_manifest import ForwardManifest
+
+            manifest = ForwardManifest.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+            logger.info("SCR: loaded forward manifest from %s", path)
+            return manifest
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("SCR: could not parse forward manifest %s: %s", path, exc)
+            return None
+    logger.info(
+        "SCR: no %s in %s — falling back to api_signatures prose",
+        FORWARD_MANIFEST_FILE,
+        output_dir,
+    )
+    return None
 
 
 def _requirement_text(task: dict) -> str:
