@@ -1855,10 +1855,22 @@ class PrimeContractorWorkflow:
 
     _MANIFEST_SCHEMA_VERSION = "1.1.0"
     _MANIFEST_FILENAME = "generation-manifest.json"
+    # FR-CL-1 (keystone): the persisted forward manifest is the single canonical
+    # contract artifact for the run. It lives in the same run-artifact dir as the
+    # generation manifest and prime-postmortem-report.json — which is exactly the
+    # ``output_dir`` the post-mortem and the *detached* Semantic Compliance
+    # Reviewer both read (the SCR resolves prime-postmortem-report.json + the seed
+    # from there), so persisting it here makes the contract reachable to every
+    # consumer instead of being threaded in-memory only.
+    _FORWARD_MANIFEST_FILENAME = "forward-manifest.json"
 
     def _manifest_path(self) -> Path:
         """Return the path to the generation manifest file."""
         return self.project_root / ".startd8" / self._MANIFEST_FILENAME
+
+    def _forward_manifest_path(self) -> Path:
+        """Return the path to the persisted forward manifest (FR-CL-1)."""
+        return self.project_root / ".startd8" / self._FORWARD_MANIFEST_FILENAME
 
     # ------------------------------------------------------------------
     # REQ-MP-1105: Cross-task element cache assembly
@@ -2213,6 +2225,38 @@ class PrimeContractorWorkflow:
         except OSError as exc:
             logger.warning(
                 "Failed to write generation manifest to %s: %s",
+                path, exc,
+            )
+
+    def _write_forward_manifest(self) -> None:
+        """Persist the forward manifest as the run's canonical contract (FR-CL-1).
+
+        The forward manifest is the single, structured interface contract the
+        generator was bound to. Until now it lived in-memory only (threaded as a
+        parameter into the post-mortem), so the *detached* Semantic Compliance
+        Reviewer could not reach it and fell back to re-parsing raw
+        ``api_signatures`` prose — the generation↔validation asymmetry. Writing
+        ``forward-manifest.json`` next to the generation manifest and
+        prime-postmortem-report.json (the dir the post-mortem and the SCR both
+        read) makes the contract reachable to every consumer.
+
+        No-op when the seed carried no forward manifest. I/O errors are logged
+        but never fail the run (consistent with ``_write_generation_manifest``).
+        """
+        if self._forward_manifest is None:
+            return
+
+        path = self._forward_manifest_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                self._forward_manifest.model_dump_json(indent=2),
+                encoding="utf-8",
+            )
+            logger.info("Forward manifest written to %s", path)
+        except OSError as exc:
+            logger.warning(
+                "Failed to write forward manifest to %s: %s",
                 path, exc,
             )
 
@@ -5728,6 +5772,10 @@ class PrimeContractorWorkflow:
                 "executed": (_todo_succeeded + _todo_failed) > 0,
             }
         self._write_generation_manifest(result_dict)
+        # FR-CL-1 (keystone): persist the forward manifest so the post-mortem and
+        # the detached Semantic Compliance Reviewer read one canonical contract
+        # artifact instead of re-deriving intent from raw api_signatures prose.
+        self._write_forward_manifest()
 
         # REQ-QPA-500: Finalize accumulated Anzen gate metrics across all features
         try:
