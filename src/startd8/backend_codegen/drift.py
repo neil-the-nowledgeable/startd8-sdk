@@ -322,19 +322,49 @@ def is_owned_generated_file(ondisk_text: str) -> bool:
     return _GENERATED_MARKER in text and embedded_schema_sha(text) is not None
 
 
-def owned_file_in_sync(schema_text: str, ondisk_text: str) -> bool:
+def owned_file_in_sync(
+    schema_text: str,
+    ondisk_text: str,
+    *,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
+    completeness_text: Optional[str] = None,
+    display_text: Optional[str] = None,
+) -> bool:
     """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
 
     The safe predicate for the pipeline skip-hook: header presence alone is rejected; the file
-    must re-render byte-identically from the current schema. The embedded source-label is
+    must re-render byte-identically from the current source(s). The embedded source-label is
     recovered so the re-render's header line matches (avoiding a false "tampered"). Any doubt →
     ``False`` (the caller falls through to the LLM — a safe failure).
+
+    **Manifest-derived kinds (FR-ED-16):** an owned file's drift may depend on more than the schema —
+    ``forms:``/``flows:``/``editors:`` on ``views.yaml`` (*views_text*), content pages on ``pages.yaml``
+    (*pages_text*), the AI layer on ``ai_passes.yaml`` + ``human_inputs.yaml`` (*manifest_text* /
+    *human_inputs_text*), weighted completeness on ``completeness.yaml`` (*completeness_text*), and the
+    display structure on ``display.yaml`` (*display_text*). These were previously **not** threaded here,
+    so EVERY manifest-derived kind (forms/pages/AI/flows) routed to its check with the manifest unset →
+    ``ERROR`` → ``False`` → silently fell through to the LLM despite being a clean ``$0`` file. Callers
+    that can resolve these manifests (e.g. the deterministic-file provider) MUST pass them so the file is
+    recognized as ``$0``-owned. Each is optional; a schema-only kind ignores all of them.
     """
     if not is_owned_generated_file(ondisk_text):
         return False
     source_file = embedded_source_file(ondisk_text) or "prisma/schema.prisma"
     return (
-        check_drift(schema_text, ondisk_text, source_file=source_file).status
+        check_drift(
+            schema_text,
+            ondisk_text,
+            source_file=source_file,
+            manifest_text=manifest_text,
+            human_inputs_text=human_inputs_text,
+            pages_text=pages_text,
+            completeness_text=completeness_text,
+            forms_text=views_text,  # check_drift names the views.yaml input `forms_text`
+            display_text=display_text,
+        ).status
         == "in_sync"
     )
 

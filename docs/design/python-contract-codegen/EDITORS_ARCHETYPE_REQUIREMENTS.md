@@ -1,8 +1,8 @@
 # `editors:` Archetype — Bulk Child-Field Editor (Requirements)
 
-**Version:** 0.3 (Post-CRP — convergent-review hardened)
+**Version:** 0.4 (Implementation-corrected — FR-ED-16 widened)
 **Date:** 2026-06-12
-**Status:** Draft (planning-corrected + CRP R1 triaged; ready for implementation)
+**Status:** In implementation (FR-ED-16 holistic skip-hook fix landed; flows/editor slices next)
 **Component:** `src/startd8/backend_codegen/` (a new editor archetype, sibling to CRUD / `forms:` / `filters:` / `flows:` / `views:`)
 **Requested by:** StartDate (strtd8) app team — `docs/SDK_BULK_CHILD_FIELD_EDITOR_CAPABILITY_BRIEF_2026-06-11.md` (strtd8 repo)
 **Owner:** startd8-sdk team
@@ -203,17 +203,29 @@ CRUD / views / filters. The only app residue is a tiny app-specific **default-va
   (**R1-S3 — this half is load-bearing, not parenthetical**: the bug has two halves — router false-flag +
   shell/aggregator silent-skip). Verified: a clean `flows:` app currently fails `--check` with exit 1.
   Ship as a small standalone PR ahead of the archetype.
-- **FR-ED-16 — Fix views.yaml-derived drift + skip-hook recognition (the shared prerequisite).**
-  **(v0.3, scope widened per orchestrator decision)** The skip-hook gap in FR-ED-11 (R1-S2) and the flows
-  drift gap in FR-ED-15 are the **same class** of pre-existing defect: views.yaml-derived owned files are
-  not reliably recognized as `$0`. This requirement covers the shared fix across **forms + flows +
-  editors**: (1) thread the `views.yaml` text into `owned_file_in_sync` (and any other skip-hook callers)
-  so `_check_forms_drift` receives `forms_text` instead of `None`; (2) ensure every views.yaml-derived
-  kind (`fastapi-web-forms`, `htmx-created`, `fastapi-flow`, `fastapi-editor`, `editor-form`) is in the
-  kind-set **and** has a renderer entry; (3) a regression suite proving `owned_file_in_sync` returns
-  `True` for in-sync instances of **all** of these (forms kinds included — they are broken today).
-  FR-ED-15 is the flows slice of this; FR-ED-11 is the editor slice. **This is a prerequisite for the
-  editor archetype's `$0` claim and also repairs shipped `forms:` apps.**
+- **FR-ED-16 — Fix manifest-derived drift + skip-hook recognition (the shared prerequisite).**
+  **(v0.4, scope widened again — empirically the gap is broader than views.yaml)** Implementation revealed
+  (and verified) that the skip-hook `owned_file_in_sync` → `PydanticSQLModelProvider.is_in_sync` passed
+  **only the schema** to `check_drift`, so **every manifest-derived owned kind** returned `False` and fell
+  through to the LLM — not just `forms:`/`flows:`/editors (`views.yaml`) but **also `pages:` (`pages.yaml`)
+  and the entire AI-layer (`ai_passes.yaml` + `human_inputs.yaml`)**, plus weighted completeness and
+  display. (Confirmed: a shipped `fastapi-web-forms` web.py AND `pages-router`/`pages-content` both
+  returned `False` from the skip-hook while `in_sync` under a manifest-threaded drift check.) This
+  requirement is the **holistic** fix:
+  1. `owned_file_in_sync` gains keyword params for **all** manifests (`views_text`, `pages_text`,
+     `manifest_text`/`human_inputs_text`, `completeness_text`, `display_text`) and forwards them to
+     `check_drift`; each is optional (schema-only kinds ignore them).
+  2. `PydanticSQLModelProvider.is_in_sync` **reads** each manifest (anchor-then-`prisma/<name>.yaml`
+     convention, best-effort/`None` when absent) and threads them in.
+  3. Every views.yaml-derived kind (`fastapi-web-forms`, `htmx-created`, `fastapi-flow`, `fastapi-editor`,
+     `editor-form`) is in the kind-set **and** has a renderer entry (flows: FR-ED-15; editors: FR-ED-11).
+  4. A regression suite proves `owned_file_in_sync` returns `True` for in-sync **forms + pages** files when
+     threaded, `False` without (safe-failure), and that schema-only spine kinds are unaffected.
+  FR-ED-15 is the flows slice; FR-ED-11 is the editor slice. **Prerequisite for the editor `$0` claim —
+  and it repairs `$0` recognition for shipped `forms:`/`pages:`/AI-layer apps too.**
+  **Status: parts 1, 2, 4 IMPLEMENTED + tested** (`drift.py`, `provider.py`,
+  `test_skip_hook_manifest_recognition.py`; 5 tests green, 295 backend_codegen tests green); part 3 flows
+  registration = FR-ED-15 (next).
 
 ## 3. Non-Requirements (v1)
 

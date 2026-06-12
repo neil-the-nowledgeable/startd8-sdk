@@ -32,7 +32,20 @@ class PydanticSQLModelProvider:
             # Owned file present but no Prisma schema resolved → cannot verify → not in-sync
             # (safe: the caller falls through to the LLM rather than skipping a stale file).
             return False
-        return owned_file_in_sync(schema_text, content)
+        # FR-ED-16: thread EVERY manifest a generated kind can derive from, or manifest-derived files
+        # (forms/pages/AI/flows/editors) drift-check with their input unset → ERROR → False → fall
+        # through to the LLM despite being clean $0 files. Each read is best-effort (None when absent),
+        # and a schema-only kind ignores all of them — so passing them is always safe.
+        return owned_file_in_sync(
+            schema_text,
+            content,
+            views_text=self._read_views(context),
+            pages_text=self._read_pages(context),
+            manifest_text=self._read_manifest(context),
+            human_inputs_text=self._read_human_inputs(context),
+            completeness_text=self._read_completeness(context),
+            display_text=self._read_display(context),
+        )
 
     @staticmethod
     def _read_schema(context: ProviderContext) -> Optional[str]:
@@ -98,4 +111,32 @@ class PydanticSQLModelProvider:
         """The human-provided inputs file (C-4), raw YAML text or ``None`` if absent."""
         return cls._read_anchored(
             context, suffix="human_inputs.yaml", conventional_relpath="prisma/human_inputs.yaml"
+        )
+
+    @classmethod
+    def _read_views(cls, context: ProviderContext) -> Optional[str]:
+        """``views.yaml`` (``forms:``/``flows:``/``editors:``/``filters:`` sections), raw text or None."""
+        return cls._read_anchored(
+            context, suffix="views.yaml", conventional_relpath="prisma/views.yaml"
+        )
+
+    @classmethod
+    def _read_pages(cls, context: ProviderContext) -> Optional[str]:
+        """``pages.yaml`` (content-pages manifest), raw text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="pages.yaml", conventional_relpath="prisma/pages.yaml"
+        )
+
+    @classmethod
+    def _read_completeness(cls, context: ProviderContext) -> Optional[str]:
+        """``completeness.yaml`` (domain-weighted thresholds), raw text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="completeness.yaml", conventional_relpath="prisma/completeness.yaml"
+        )
+
+    @classmethod
+    def _read_display(cls, context: ProviderContext) -> Optional[str]:
+        """``display.yaml`` (presentation-structure layer, FR-DM), raw text or ``None`` if absent."""
+        return cls._read_anchored(
+            context, suffix="display.yaml", conventional_relpath="prisma/display.yaml"
         )
