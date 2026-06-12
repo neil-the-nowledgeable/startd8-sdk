@@ -95,12 +95,8 @@ def test_unknown_key_loud_fails():
         parse_view_prose("value_map:\n  bogus: x\n")
 
 
-@pytest.mark.parametrize("key", ["controls"])
-def test_reserved_phase2_keys_loud_fail(key):
-    # `controls` still needs a render surface; `success`/`error` are now allowed at parse (their
-    # archetype + placeholder validity is enforced in render_views — tested in the outcome section).
-    with pytest.raises(ValueError, match="reserved"):
-        parse_view_prose(f"value_map:\n  {key}: x\n")
+# (No keys remain reserved at the parser level — `empty`/`success`/`error`/`controls` all ship; their
+#  archetype validity is enforced in render_views. Unknown keys still loud-fail, tested above.)
 
 
 def test_unknown_view_loud_fails_when_gated():
@@ -366,3 +362,60 @@ def test_success_error_on_non_import_flow_loud_fails():
     views = _IMPORT_VIEWS + "  - name: cp\n    kind: computed-panel\n    compute: completeness\n    route: /c\n"
     with pytest.raises(ValueError, match="restore-outcome surface"):
         render_views(SCHEMA, views, None, "cp:\n  success: x\n")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — controls (import-flow button/checkbox labels → per-control untracked fragments)
+# --------------------------------------------------------------------------- #
+
+def test_controls_parse_to_mapping():
+    out = parse_view_prose('model_import:\n  controls: {validate: "Check this file"}\n')
+    assert out["model_import"].controls == {"validate": "Check this file"}
+
+
+def test_no_controls_is_byte_identical():
+    base = dict(render_views(SCHEMA, _IMPORT_VIEWS))
+    assert dict(render_views(SCHEMA, _IMPORT_VIEWS, None, None)) == base
+
+
+def test_authored_controls_become_includes_unauthored_stay_literal():
+    p = 'model_import:\n  controls:\n    validate: "Check this file"\n    confirm: "Yes, write this in"\n'
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, p))
+    tmpl = "app/templates/views/model_import.html"
+    assert out["app/templates/views/_model_import.control.validate.html"] == "Check this file"
+    assert "app/templates/views/_model_import.control.restore.html" not in out  # not authored
+    assert '{% include "views/_model_import.control.validate.html" %}' in out[tmpl]
+    assert '<button type="submit">Restore</button>' in out[tmpl]   # restore label stays literal
+    assert "Check this file" not in out[tmpl]                       # label lives in the fragment
+
+
+def test_control_fragment_escaped_and_unowned():
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, 'model_import:\n  controls: {validate: "A & B <x>"}\n'))
+    frag = out["app/templates/views/_model_import.control.validate.html"]
+    assert frag == "A &amp; B &lt;x&gt;"
+    assert is_owned_view_file(frag) is False
+
+
+def test_editing_control_label_does_not_trip_check():
+    tmpl = "app/templates/views/model_import.html"
+    p = 'model_import:\n  controls: {validate: "Check this file"}\n'
+    owned = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, p))[tmpl]
+    edited = p.replace("Check this file", "Verify the file")
+    assert dict(render_views(SCHEMA, _IMPORT_VIEWS, None, edited))[tmpl] == owned
+    assert views_in_sync(SCHEMA, _IMPORT_VIEWS, "p/" + tmpl, owned, None, edited) is True
+
+
+def test_unknown_control_id_loud_fails():
+    with pytest.raises(ValueError, match="unknown control-id"):
+        render_views(SCHEMA, _IMPORT_VIEWS, None, "model_import:\n  controls: {bogus: x}\n")
+
+
+def test_controls_on_non_import_flow_loud_fails():
+    views = _IMPORT_VIEWS + "  - name: cp\n    kind: computed-panel\n    compute: completeness\n    route: /c\n"
+    with pytest.raises(ValueError, match="labelled controls"):
+        render_views(SCHEMA, views, None, "cp:\n  controls: {validate: x}\n")
+
+
+def test_control_label_must_be_string():
+    with pytest.raises(ValueError, match="label string"):
+        parse_view_prose("model_import:\n  controls: {validate: {label: x}}\n")

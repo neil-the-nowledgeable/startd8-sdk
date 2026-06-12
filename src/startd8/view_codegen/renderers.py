@@ -1116,6 +1116,28 @@ def render_view_outcome_fragment(copy: str, kind: str, where: str) -> str:
     return f'<p class="io-outcome">{body}</p>\n'
 
 
+# Closed per-archetype control-id set (the manifest key, not an HTML id). import-flow exposes the
+# upload form's three controls; an unknown control-id loud-fails. (Export-link labels are a follow-up.)
+_IMPORT_CONTROLS = frozenset({"validate", "restore", "confirm"})
+
+
+def render_control_fragment(label: str) -> str:
+    """Untracked control-label fragment (``_<name>.control.<id>.html``). No header, no wrapper, no
+    trailing newline — it is ``{% include %}``d as inline button/label text, so it carries only the
+    escaped label. Editing the label rewrites only this fragment ⇒ the owned template is unchanged."""
+    import html
+
+    return html.escape(label)
+
+
+def _control_text(v: ViewSpec, cid: str, default: str, control_ids: "frozenset[str]") -> str:
+    """A control's visible text: the untracked fragment include when authored, else today's literal —
+    so an import-flow with no `controls` renders byte-identically (no HTML-id stamping, no drift)."""
+    if cid in control_ids:
+        return '{% include "views/_' + v.module + ".control." + cid + '.html" %}'
+    return default
+
+
 def render_import_result_template(v: ViewSpec, schema_sha: str, views_sha: str, kind: str) -> str:
     """Owned result page for an import-flow restore outcome (kind ``success``/``error``). Extends
     base.html, ``{% include %}``s the untracked outcome fragment, and offers a link back to the form.
@@ -1171,6 +1193,7 @@ def render_view_index_template(
 def render_view_template(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
     has_prose: bool = False, has_empty: bool = False,
+    control_ids: "frozenset[str]" = frozenset(),
 ) -> str:
     head = (
         "{#\n"
@@ -1277,13 +1300,14 @@ def render_view_template(
             + _view_title_block(v, has_prose) +
             f'<form method="post" action="{base}/validate" enctype="multipart/form-data">\n'
             '  <input type="file" name="file" required>\n'
-            "  <button type=\"submit\">Validate</button>\n"
+            '  <button type="submit">' + _control_text(v, "validate", "Validate", control_ids) + "</button>\n"
             "</form>\n"
             f'<form method="post" action="{base}/restore" enctype="multipart/form-data">\n'
             '  <input type="file" name="file" required>\n'
             '  <label><input type="checkbox" name="confirm" value="restore"> '
-            "I understand this writes to the database</label>\n"
-            "  <button type=\"submit\">Restore</button>\n"
+            + _control_text(v, "confirm", "I understand this writes to the database", control_ids)
+            + "</label>\n"
+            '  <button type="submit">' + _control_text(v, "restore", "Restore", control_ids) + "</button>\n"
             "</form>\n"
             "{% endblock %}\n"
         )
@@ -1803,6 +1827,18 @@ def render_views(
                 f"view_prose.yaml: view {v.module!r} uses `success`/`error`, but only an import-flow "
                 "has a restore-outcome surface (other archetypes have no write outcome to report)"
             )
+        if p.controls:
+            if v.kind != "import-flow":
+                raise ValueError(
+                    f"view_prose.yaml: view {v.module!r} uses `controls`, but only an import-flow "
+                    "exposes labelled controls today (export-link labels are a follow-up)"
+                )
+            bad = set(p.controls) - _IMPORT_CONTROLS
+            if bad:
+                raise ValueError(
+                    f"view_prose.yaml: view {v.module!r} has unknown control-id(s) {sorted(bad)} "
+                    f"(import-flow controls: {sorted(_IMPORT_CONTROLS)})"
+                )
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
     out: List[Tuple[str, str]] = [("app/views/__init__.py", "")]
@@ -1821,6 +1857,7 @@ def render_views(
         # only `empty`, leaving its title literal). Both default off ⇒ byte-identical when absent.
         has_chrome = bool(prose and (prose.title or prose.intro))
         has_empty = bool(prose and prose.empty)
+        control_ids = frozenset(prose.controls) if (prose and prose.controls) else frozenset()
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
@@ -1834,7 +1871,8 @@ def render_views(
             continue
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
-                                         has_prose=has_chrome, has_empty=has_empty)))
+                                         has_prose=has_chrome, has_empty=has_empty,
+                                         control_ids=control_ids)))
         # Untracked fragments (no header ⇒ not owned files ⇒ skipped by drift/--check).
         if has_chrome:
             out.append((f"app/templates/views/_{v.module}.prose.html",
@@ -1842,6 +1880,10 @@ def render_views(
         if has_empty:
             out.append((f"app/templates/views/_{v.module}.empty.html",
                         render_view_empty_fragment(prose)))
+        if control_ids:  # one untracked fragment per authored control label (button/checkbox text)
+            for cid, label in prose.controls.items():
+                out.append((f"app/templates/views/_{v.module}.control.{cid}.html",
+                            render_control_fragment(label)))
         # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an
         # owned result page the restore route renders (see render_view_router). Each independently gated.
         if v.kind == "import-flow" and prose:

@@ -21,10 +21,12 @@ two "prose" concepts uncollided.
 
 **Phase 1 keys:** ``title``, ``intro``. **Phase 2 (incremental):** ``empty`` (the no-rows panel state,
 only on a model-scoped ``detail-compose``); ``success``/``error`` (import-flow **restore** outcome copy,
-rendered into an HTML result page with request-time substitution of a closed placeholder set). All
-archetype/placeholder validity is enforced per-view in :func:`render_views` (which knows the kind).
-``controls`` still needs a render surface (stable control ids) and stays **reserved** — present ⇒
-loud-fail, so nobody authors against a surface that isn't there.
+rendered into an HTML result page with request-time substitution of a closed placeholder set);
+``controls`` (a mapping ``control-id → label`` for an archetype's buttons — import-flow
+``validate``/``restore``/``confirm``). Each control label renders into an untracked fragment the template
+``{% include %}``s, **gated on presence** — so no HTML-id stamping and no downstream drift; the
+control-id is the manifest key (the SDK's known per-archetype enum), not an HTML attribute. All
+archetype/control-id validity is enforced per-view in :func:`render_views` (which knows the kind).
 """
 
 from __future__ import annotations
@@ -34,25 +36,24 @@ from typing import Dict, Optional
 
 import yaml
 
-# Authorable keys. Each renders into an untracked fragment; archetype/placeholder validity is enforced
-# in render_views (the parser is archetype-blind — it only knows view names). ``title``/``intro`` →
-# heading fragment; ``empty`` → no-rows fragment (model-compose); ``success``/``error`` → import-flow
-# restore-outcome fragments.
+# String-valued authorable keys. Each renders into an untracked fragment; archetype/placeholder validity
+# is enforced in render_views (the parser is archetype-blind — it only knows view names). ``title``/
+# ``intro`` → heading fragment; ``empty`` → no-rows fragment (model-compose); ``success``/``error`` →
+# import-flow restore-outcome fragments. ``controls`` is a mapping (handled separately below).
 _PROSE_KEYS = {"title", "intro", "empty", "success", "error"}
-# Still-reserved (pending a render surface) — present ⇒ loud-fail (reserved-until-built, mirroring the
-# SDK's `filters:`/`forms:` reserved-key policy). See PLAN §2.
-_RESERVED_KEYS = {"controls"}
+_ALLOWED_KEYS = _PROSE_KEYS | {"controls"}
 
 
 @dataclass(frozen=True)
 class ViewProse:
-    """View-chrome copy for a single composite view (title/intro = Phase 1; empty/success/error = Phase 2)."""
+    """View-chrome copy for one composite view (title/intro = Phase 1; empty/success/error/controls = Phase 2)."""
 
     title: Optional[str] = None
     intro: Optional[str] = None
     empty: Optional[str] = None
     success: Optional[str] = None
     error: Optional[str] = None
+    controls: Optional[Dict[str, str]] = None  # control-id -> label (validity checked in render_views)
 
 
 def parse_view_prose(
@@ -61,8 +62,8 @@ def parse_view_prose(
     """Parse + **strictly** validate ``view_prose.yaml`` → ``{view_name: ViewProse}``.
 
     Tolerant of absence (``None`` / empty / no file ⇒ ``{}`` ⇒ today's behavior). Loud-fails (``ValueError``,
-    caught centrally by the CLI) on: a non-mapping root, a non-mapping per-view entry, **reserved Phase-2
-    keys present**, unknown keys, a view name not in *known_views* (when given), and non-string values.
+    caught centrally by the CLI) on: a non-mapping root, a non-mapping per-view entry, unknown keys, a
+    view name not in *known_views* (when given), a non-string value, and a malformed ``controls`` mapping.
     Mirrors the ``parse_pages`` / ``parse_filters`` strict contract.
     """
     if text is None:
@@ -79,18 +80,12 @@ def parse_view_prose(
             raise ValueError(f"view_prose.yaml: references unknown view {view!r}")
         if not isinstance(spec, dict):
             raise ValueError(f"view_prose.yaml: entry {view!r} must be a mapping")
-        reserved = set(spec) & _RESERVED_KEYS
-        if reserved:
-            raise ValueError(
-                f"view_prose.yaml: entry {view!r} uses reserved (not-yet-built) keys "
-                f"{sorted(reserved)} — these ship in Phase 2 (each needs a render surface)"
-            )
-        unknown = set(spec) - _PROSE_KEYS
+        unknown = set(spec) - _ALLOWED_KEYS
         if unknown:
             raise ValueError(
                 f"view_prose.yaml: entry {view!r} has unknown keys {sorted(unknown)}"
             )
-        vals: Dict[str, str] = {}
+        vals: Dict[str, object] = {}
         for key in _PROSE_KEYS:
             val = spec.get(key)
             if val is None:
@@ -100,6 +95,21 @@ def parse_view_prose(
                     f"view_prose.yaml: entry {view!r} key {key!r} must be a string"
                 )
             vals[key] = val
+        controls = spec.get("controls")
+        if controls is not None:
+            if not isinstance(controls, dict):
+                raise ValueError(
+                    f"view_prose.yaml: entry {view!r} `controls` must be a mapping of control-id -> label"
+                )
+            cvals: Dict[str, str] = {}
+            for cid, label in controls.items():
+                if not isinstance(label, str):  # v1: label string only (help text is a later increment)
+                    raise ValueError(
+                        f"view_prose.yaml: entry {view!r} control {str(cid)!r} must be a label string"
+                    )
+                cvals[str(cid)] = label
+            if cvals:
+                vals["controls"] = cvals
         if vals:  # an entry with no recognized values is inert (no fragment, byte-identical output)
             out[view] = ViewProse(**vals)
     return out
