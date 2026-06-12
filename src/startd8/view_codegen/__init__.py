@@ -12,7 +12,8 @@ from __future__ import annotations
 from .drift import is_owned_view_file, views_in_sync
 from .manifest import ViewSpec, parse_views
 from .provider import CompositeViewProvider
-from .renderers import compute_binding_names, render_views
+from .renderers import compute_binding_names, render_view_prose_fragment, render_views
+from .view_prose import ViewProse, parse_view_prose
 
 __all__ = [
     "ViewSpec",
@@ -22,4 +23,7 @@ __all__ = [
     "views_in_sync",
     "is_owned_view_file",
     "CompositeViewProvider",
+    "ViewProse",
+    "parse_view_prose",
+    "render_view_prose_fragment",
 ]

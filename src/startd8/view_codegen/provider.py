@@ -27,7 +27,14 @@ class CompositeViewProvider:
         views_text = self._read(context, suffix="views.yaml", conventional="views.yaml")
         if not schema_text or not views_text:
             return False  # cannot verify without both inputs → not in-sync (safe)
-        return views_in_sync(schema_text, views_text, path, content)
+        # view_prose.yaml is optional (None ⇒ today's literal-title render). Threaded so a
+        # prose-annotated view's owned template re-renders identically (presence, not content).
+        view_prose_text = self._read(
+            context, suffix="view_prose.yaml", conventional="view_prose.yaml"
+        )
+        return views_in_sync(
+            schema_text, views_text, path, content, view_prose_text=view_prose_text
+        )
 
     @staticmethod
     def _read(context: ProviderContext, *, suffix: str, conventional: str) -> Optional[str]:

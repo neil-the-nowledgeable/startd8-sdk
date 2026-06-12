@@ -424,6 +424,12 @@ def views(
         "relations resolve via_fk → target entity → label_field so rows show names, not join-row "
         "ids. Threaded to both generate and --check.",
     ),
+    view_prose: Optional[Path] = typer.Option(
+        None, "--view-prose",
+        help="Path to view_prose.yaml (view-chrome copy: per-view title/intro). Authored, kept "
+        "OUTSIDE the drift hash — rendered into an untracked fragment the owned template includes. "
+        "Absent ⇒ today's literal-title render. Threaded to both generate and --check.",
+    ),
     check: bool = typer.Option(
         False, "--check", help="Drift-check owned view files instead of writing (exit 1 on drift)."
     ),
@@ -439,13 +445,14 @@ def views(
         schema_text = schema.read_text(encoding="utf-8")
         views_text = views_manifest.read_text(encoding="utf-8")
         display_text = display.read_text(encoding="utf-8") if display is not None else None
+        view_prose_text = view_prose.read_text(encoding="utf-8") if view_prose is not None else None
     except OSError as exc:
         console.print(f"[red]error:[/red] cannot read input: {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
     try:
-        artifacts = render_views(schema_text, views_text, display_text)
-    except ValueError as exc:  # malformed views.yaml / unknown entity — fail loud
+        artifacts = render_views(schema_text, views_text, display_text, view_prose_text)
+    except ValueError as exc:  # malformed views.yaml/view_prose.yaml / unknown entity — fail loud
         console.print(f"[red]error:[/red] {exc}")
         raise typer.Exit(_EXIT_ERROR)
 
@@ -457,7 +464,7 @@ def views(
             target = out / rel
             ondisk = target.read_text(encoding="utf-8") if target.exists() else None
             if ondisk is None or not views_in_sync(
-                schema_text, views_text, target, ondisk, display_text
+                schema_text, views_text, target, ondisk, display_text, view_prose_text
             ):
                 drifted += 1
                 console.print(

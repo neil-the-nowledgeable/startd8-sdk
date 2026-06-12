@@ -949,7 +949,47 @@ def render_view_router(views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: 
     return _header(schema_sha, views_sha, "view-router") + "\n\n" + body
 
 
-def render_view_index_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
+# --------------------------------------------------------------------------- #
+# View prose (view-chrome copy) — title/intro from a standalone view_prose.yaml,
+# rendered into an UNTRACKED fragment the owned template {% include %}s. The include
+# is emitted ONLY when prose exists for the view, so no-prose output is byte-identical
+# to today (the include line never names the title text → editing copy never drifts).
+# --------------------------------------------------------------------------- #
+
+def _view_title_block(v: ViewSpec, has_prose: bool) -> str:
+    """The view's heading line. With prose → include the untracked fragment; without → today's literal.
+
+    The two branches are byte-distinct, but the include line is **content-independent** (it carries no
+    title text), so editing ``view_prose.yaml`` only rewrites the fragment and never changes this owned
+    template. With no prose for the view, this returns the exact pre-feature literal.
+    """
+    if has_prose:
+        return '{% include "views/_' + v.module + '.prose.html" %}\n'
+    return f"<h1>{v.module}</h1>\n"
+
+
+def render_view_prose_fragment(prose, fallback_title: str) -> str:
+    """The untracked view-chrome fragment (``app/templates/views/_<name>.prose.html``). No header.
+
+    Generate-time render: an escaped ``<h1>`` title (``prose.title`` or the view's machine name as
+    fallback) + an optional markdown-rendered intro. Not drift-tracked (no provenance header), so editing
+    ``view_prose.yaml`` never flags drift; overwritten on every regenerate. Mirrors
+    ``pages_generator.render_page_body_fragment``.
+    """
+    import html
+
+    title = prose.title if (prose and prose.title) else fallback_title
+    parts = [f"<h1>{html.escape(title)}</h1>\n"]
+    if prose and prose.intro:
+        from ..backend_codegen.pages_generator import render_markdown
+
+        parts.append(f'<div class="view-intro">{render_markdown(prose.intro)}</div>\n')
+    return "".join(parts)
+
+
+def render_view_index_template(
+    v: ViewSpec, schema_sha: str, views_sha: str, has_prose: bool = False
+) -> str:
     """The bare-route pick-an-item index for a query-id detail-compose view (AR-1)."""
     head = (
         "{#\n"
@@ -963,8 +1003,8 @@ def render_view_index_template(v: ViewSpec, schema_sha: str, views_sha: str) -> 
     return head + (
         '{% extends "base.html" %}\n'
         "{% block content %}\n"
-        f"<h1>{v.module}</h1>\n"
-        "{% if not roots %}<p>Nothing here yet — add and confirm a "
+        + _view_title_block(v, has_prose)
+        + "{% if not roots %}<p>Nothing here yet — add and confirm a "
         f"{v.root} first.</p>{{% endif %}}\n"
         "<ul>\n"
         "{% for r in roots %}"
@@ -977,7 +1017,8 @@ def render_view_index_template(v: ViewSpec, schema_sha: str, views_sha: str) -> 
 
 
 def render_view_template(
-    v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None
+    v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
+    has_prose: bool = False,
 ) -> str:
     head = (
         "{#\n"
@@ -991,7 +1032,7 @@ def render_view_template(
     if v.kind == "board":
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "{% for stage, rows in rows %}<section><h2>{{ stage }}</h2>\n"
             "<ul>{% for r in rows %}<li>{{ r.id }}</li>{% endfor %}</ul></section>{% endfor %}\n"
             "{% endblock %}\n"
@@ -999,7 +1040,7 @@ def render_view_template(
     elif v.kind == "workspace":
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "<ul>{% for r in data.resolved %}<li>{% if r.dangling %}⚠ dangling{% else %}{{ r.entity.id }}{% endif %}</li>{% endfor %}</ul>\n"
             "{% endblock %}\n"
         )
@@ -1022,7 +1063,7 @@ def render_view_template(
             "{% endif %}\n"
             "</article>\n"
             "{% else %}\n"
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "{% if not rows %}<p class=\"empty\">Nothing here yet.</p>{% endif %}\n"
             "<ul>\n"
             "{% for r in rows %}"
@@ -1050,7 +1091,7 @@ def render_view_template(
         )
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             f'{{% if not rows %}}<p class="empty">No {v.root} records yet — add one to start the map.</p>{{% endif %}}\n'
             "{% for item in rows %}<section><h2>" + heading + "</h2>\n"
             + unlinked + rel_lines +
@@ -1060,7 +1101,7 @@ def render_view_template(
     elif v.kind == "detail-compose":
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "<p>{{ data.root.id }}</p>\n"
             "{% for name, shown in data.panels.items() %}{% if shown %}<section><h2>{{ name }}</h2></section>{% endif %}{% endfor %}\n"
             "{% endblock %}\n"
@@ -1068,7 +1109,7 @@ def render_view_template(
     elif v.kind == "computed-panel":  # AR-2: score + ordered nudges (guidance, never a gate)
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             '<p class="score">{{ (data.score * 100) | round | int }}%</p>\n'
             '{% if data.nudges %}<ul class="nudges">{% for n in data.nudges %}<li>{{ n }}</li>{% endfor %}</ul>\n'
             '{% else %}<p class="complete">All signals met.</p>{% endif %}\n'
@@ -1078,7 +1119,7 @@ def render_view_template(
         base = v.route.rstrip("/")
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             f'<form method="post" action="{base}/validate" enctype="multipart/form-data">\n'
             '  <input type="file" name="file" required>\n'
             "  <button type=\"submit\">Validate</button>\n"
@@ -1094,13 +1135,13 @@ def render_view_template(
     elif v.kind == "export-package":  # served as JSON; template is a minimal placeholder
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "{% endblock %}\n"
         )
     else:  # dashboard
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            f"<h1>{v.module}</h1>\n"
+            + _view_title_block(v, has_prose) +
             "<ul>{% for r in rows %}<li>{{ r.root.id }}</li>{% endfor %}</ul>\n"
             "{% endblock %}\n"
         )
@@ -1558,15 +1599,22 @@ def _render_model_export_test(schema, v: ViewSpec, prose_specs: Tuple[ViewSpec, 
 # --------------------------------------------------------------------------- #
 
 def render_views(
-    schema_text: str, views_text: str, display_text: Optional[str] = None
+    schema_text: str, views_text: str, display_text: Optional[str] = None,
+    view_prose_text: Optional[str] = None,
 ) -> Tuple[Tuple[str, str], ...]:
     """Every composite-view artifact as ``(relative_path, text)`` pairs.
 
     ``known_entities`` for strict validation is derived from the schema (reuses the parser via
     ``backend_codegen`` would cause a cycle, so we parse names cheaply here). *display_text*
     (``display.yaml``) drives FR-DM-6 composite-view label resolution (via_fk → target → label).
+    *view_prose_text* (``view_prose.yaml``) supplies view-chrome copy (title/intro): when a view has
+    prose, its owned template ``{% include %}``s an untracked fragment (also emitted here); absent ⇒
+    byte-identical to today. Threaded to the drift checker too (``views_in_sync``) so the include line
+    re-renders identically — prose *content* never enters the hash, only its *presence* affects the
+    owned template, and that is a structural regen correctly caught by ``--check``.
     """
     from ..languages.prisma_parser import parse_prisma_schema
+    from .view_prose import parse_view_prose
 
     schema = parse_prisma_schema(schema_text)
     view_displays: Dict[str, object] = {}
@@ -1579,6 +1627,17 @@ def render_views(
         name: frozenset(f.name for f in schema.scalar_fields(name)) for name in schema.models
     }
     views = parse_views(views_text, known_entities=known, known_fields=known_fields)
+    view_prose = parse_view_prose(
+        view_prose_text, known_views=frozenset(v.module for v in views)
+    )
+    # A model-scoped export view has no HTML template (served as raw JSON/Markdown), so there is no
+    # surface to host its title/intro in Phase 1 — loud-fail rather than silently drop the prose.
+    for v in views:
+        if _is_model_export(v) and v.module in view_prose:
+            raise ValueError(
+                f"view_prose.yaml: view {v.module!r} is a model-scoped export with no HTML page — "
+                "its title/intro need an HTML landing surface (Phase 2), not available yet"
+            )
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
     out: List[Tuple[str, str]] = [("app/views/__init__.py", "")]
@@ -1592,16 +1651,22 @@ def render_views(
         ))
     for v in views:
         vd = view_displays.get(v.module)            # FR-DM-6: per-view display (None ⇒ today's output)
+        prose = view_prose.get(v.module)            # view-chrome copy (None ⇒ literal title, today's output)
+        has_prose = prose is not None
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
             continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
         out.append((f"app/templates/views/{v.module}.html",
-                    render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd)))
+                    render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
+                                         has_prose=has_prose)))
+        if has_prose:  # untracked fragment (no header ⇒ not an owned file ⇒ skipped by drift/--check)
+            out.append((f"app/templates/views/_{v.module}.prose.html",
+                        render_view_prose_fragment(prose, v.module)))
         if v.kind == "detail-compose" and "{" not in v.route:
             out.append((
                 f"app/templates/views/{v.module}_index.html",
-                render_view_index_template(v, s_sha, v_sha),
+                render_view_index_template(v, s_sha, v_sha, has_prose=has_prose),
             ))
     out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
