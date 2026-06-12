@@ -176,7 +176,12 @@ class SemanticComplianceOrchestrator:
         # FR-17 deterministic backstop: a required api_signature symbol absent from the FULL code is
         # a critical fail — override a lenient LLM verdict (run-029: PI-001 missing jobs_dashboard /
         # job_workspace yet passed as a low issue while app boot crashed).
-        missing = missing_required_symbols(code, loaded.api_signatures)
+        # E1: prefer the structured contract (forward manifest) for function/class
+        # names; api_signatures is re-parsed only for the variable residual.
+        contracts = getattr(self._forward_manifest, "contracts", None)
+        missing = missing_required_symbols(
+            code, loaded.api_signatures, contracts=contracts, feature_id=c.feature_id,
+        )
         if missing:
             outcome = _force_missing_symbol_fail(outcome, missing)
         selection.tier = outcome.tier  # reflect final tier (cheap or escalated)

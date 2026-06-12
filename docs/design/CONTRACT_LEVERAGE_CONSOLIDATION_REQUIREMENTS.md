@@ -143,6 +143,15 @@ complexity. **The test for any change: does it move us toward this single flow, 
   names via the contract→element index — not by filtering specs on a tag. If variables break parity,
   narrow E1 to functions/classes/methods and keep `_NAME_RE`'s variable arm rather than add a model
   field (weigh against AG-1).)*
+  *(v0.3.1 — **IMPLEMENTED as NARROWED E1.** The parity test (over the real extractor) confirmed
+  parity holds for **functions/classes** but NOT variables/constants: variable `api_signatures`
+  produce untagged elements with **no deterministic contract** (OQ-5), so the manifest cannot
+  represent them as required symbols. Per the decision rule, `_NAME_RE` is **retained** — the SCR now
+  takes function/class names from the manifest contracts (`required_symbol_names_from_contracts`) and
+  keeps only the **variable residual** + no-manifest fallback on the regex. Net: the SCR no longer
+  re-derives function/class names from raw `api_signatures`; the regex is the lone allowlisted
+  re-parser (feeds FR-CL-3c's guard). Full deletion of `_NAME_RE` is NOT achievable without tagging
+  variable provenance in the extractor — out of scope (AG-1).)*
 - **FR-CL-3b (E3 — drop the prose round-trip).** Remove the prose embedding of `api_signatures` in
   `task_description` (the P0 structured `InterfaceContract` binding is strictly richer). **Gate:**
   golden-prompt diff shows only the prose block removed; structured binding unchanged.

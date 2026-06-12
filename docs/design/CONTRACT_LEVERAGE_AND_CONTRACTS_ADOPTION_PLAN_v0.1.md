@@ -108,6 +108,13 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   `required_symbol_names(api_signatures) == manifest_api_sig_names(...)`. **Ship the deletion only if
   parity holds.** If it fails on variables, narrow E1 to functions/classes/methods and leave the
   variable backstop, or add a minimal `source` tag (last resort — touches serialization, weigh vs AG-1).
+- **STATUS: DONE (narrowed).** Parity test (`test_signature_check_parity.py`, real extractor) showed
+  parity holds for func/class but **not** variables (no deterministic contract — OQ-5). Shipped the
+  **narrowed** E1: `required_symbol_names_from_contracts()` is the authority for func/class; `_NAME_RE`
+  **retained** for the variable residual + no-manifest fallback. Orchestrator passes
+  `self._forward_manifest.contracts` to `missing_required_symbols(...)`. Behavior-preserving (full
+  suite green bar the pre-existing API-key e2e). `_NAME_RE` is the lone allowlisted api_signatures
+  re-parser → feeds WI-6's FR-CL-3c guard.
 - **Tests:** parity test + existing signature_check behavior tests unchanged.
 
 ### WI-4 — FR-CL-2 (E2): reviewer rubric reads the contract
