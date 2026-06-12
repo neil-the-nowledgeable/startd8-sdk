@@ -72,6 +72,8 @@ def _make_workflow(tmp_path: Path, **overrides: Any) -> PrimeContractorWorkflow:
     wf.allow_dirty = defaults["allow_dirty"]
     wf.code_generator = defaults["code_generator"]
     wf.force_regenerate = False
+    wf.skip_deterministic_shortcut = False
+    wf._deterministic_skip_count = 0
     wf.auto_commit = False
     wf.strict_checkpoints = False
     wf.max_retries = 3

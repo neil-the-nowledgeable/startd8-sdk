@@ -181,6 +181,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--benchmark-mode", action="store_true",
+        help=(
+            "LLM-maximize mode for model benchmarking (FR-1/FR-2/FR-3): disables the "
+            "entire deterministic shortcut cascade (copy/uncomment/det-file/corpus/Mottainai), "
+            "forces fresh generation, keeps Micro Prime OFF, and writes a provenance block "
+            "into prime-result.json. Asserts 0 deterministic skips occurred."
+        ),
+    )
+    parser.add_argument(
         "--walkthrough", action="store_true",
         help="Build and persist all LLM prompts without calling LLMs",
     )
@@ -353,6 +362,9 @@ def main() -> int:
         parser.error("--validate and --no-validate are mutually exclusive")
     if args.strict_validation and args.no_validate:
         parser.error("--strict-validation and --no-validate are mutually exclusive")
+    # FR-2: benchmark mode requires Micro Prime OFF (LLM does maximal work).
+    if args.benchmark_mode and args.micro_prime:
+        parser.error("--benchmark-mode is incompatible with --micro-prime (benchmark mode requires the full LLM lead/drafter path; Micro Prime must stay off)")
 
     setup_logging(verbose=args.verbose)
 
@@ -534,6 +546,7 @@ def main() -> int:
         cli_mode=args.mode,
         walkthrough=args.walkthrough,
         repair_config=repair_config,
+        skip_deterministic_shortcut=args.benchmark_mode,  # FR-1/FR-27
     )
 
     # Load features from seed
@@ -586,7 +599,9 @@ def main() -> int:
         logger.debug("Element deriver skipped: %s", exc)
 
     workflow.load_seed_context(seed_data, cli_mode=args.mode, seed_path=str(seed_path))
-    workflow.force_regenerate = args.force_regenerate or pc_config.micro_prime.get("dry_run", False)
+    # Benchmark mode (FR-1/FR-2/FR-27): force fresh generation (no Mottainai reuse) and
+    # confirm Micro Prime is OFF so the LLM does maximal work.
+    workflow.force_regenerate = args.force_regenerate or args.benchmark_mode or pc_config.micro_prime.get("dry_run", False)
 
     # ------------------------------------------------------------------
     # Wire subsystems from pc_config (F-AC-02: consolidated config)
@@ -860,6 +875,54 @@ def main() -> int:
         "postmortem_verdict": result.get("postmortem_verdict"),
     }
 
+    # FR-3/FR-28: benchmark-mode provenance block + R1-S4 zero-skip integrity check.
+    benchmark_integrity_ok = True
+    if args.benchmark_mode:
+        import hashlib
+        import platform as _platform
+        import sys as _sys
+        from datetime import datetime, timezone
+        try:
+            from importlib.metadata import version as _pkg_version
+            _sdk_ver = _pkg_version("startd8")
+        except Exception:
+            _sdk_ver = None
+        try:
+            _seed_sha = hashlib.sha256(Path(seed_path).read_bytes()).hexdigest()
+        except Exception:
+            _seed_sha = None
+        skip_count = workflow.deterministic_skip_count
+        benchmark_integrity_ok = skip_count == 0
+        result_data["benchmark_provenance"] = {
+            "benchmark_mode": True,
+            "llm_maximize": True,
+            "deterministic_skip_count": skip_count,
+            "integrity_ok": benchmark_integrity_ok,
+            "micro_prime_enabled": bool(args.micro_prime),  # guarded to False by FR-2 check
+            "force_regenerate": bool(workflow.force_regenerate),
+            "lead_agent": getattr(pc_config.agents, "lead", None),
+            "drafter_agent": getattr(pc_config.agents, "drafter", None),
+            "sdk_version": _sdk_ver,
+            "python_version": _sys.version.split()[0],
+            "platform": _platform.platform(),
+            "seed_sha256": _seed_sha,
+            "run_finished_utc": datetime.now(timezone.utc).isoformat(),
+            # FR-28 confounder fields (alias→dated model snapshot, per-language toolchain
+            # versions, per-call retry/rate-limit counts, sampling config) are populated in
+            # a later hardening pass — recorded as null here so the schema is stable.
+            "model_snapshots": None,
+            "toolchain_versions": None,
+            "retry_counts": None,
+            "sampling_config": None,
+        }
+        if not benchmark_integrity_ok:
+            logger.error(
+                "BENCHMARK INTEGRITY FAILURE: %d deterministic shortcut(s) fired in "
+                "--benchmark-mode — output is NOT fully LLM-generated (FR-1/FR-27/R1-S4). "
+                "The result is written for debugging but the run is marked failed.",
+                skip_count,
+            )
+
     if not args.dry_run:
         result_path.parent.mkdir(parents=True, exist_ok=True)
         with open(result_path, "w", encoding="utf-8") as f:
@@ -867,6 +930,10 @@ def main() -> int:
         logger.info("Wrote result to %s", result_path)
     else:
         logger.info("Dry run — skipping result file write")
+
+    # R1-S4: fail the run if benchmark-mode integrity was violated.
+    if args.benchmark_mode and not benchmark_integrity_ok:
+        return 1
 
     # Return code based on result
     if result.get("aborted"):
