@@ -293,6 +293,12 @@ def render_main(schema_text: str, source_file: str = "prisma/schema.prisma") -> 
         "    flow_routers = []\n"
         "for _flow_router in flow_routers:\n"
         "    app.include_router(_flow_router)  # start/resume/advance/back\n"
+        "try:  # optional bulk child-field editors (views.yaml `editors:`); <route> per editor (FR-ED-8)\n"
+        "    from .editors import editor_routers\n"
+        "except ModuleNotFoundError:\n"
+        "    editor_routers = []\n"
+        "for _editor_router in editor_routers:\n"
+        "    app.include_router(_editor_router)  # GET grouped editor + POST bulk save\n"
     )
     return header + "\n\n" + body
 

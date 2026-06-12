@@ -117,6 +117,7 @@ def header_forms(
     schema_sha: str,
     forms_sha: str,
     kind: str,
+    entity: str = "",
 ) -> str:
     """Form-behavior provenance header — derives from two inputs (schema + views.yaml), two hashes.
 
@@ -124,15 +125,22 @@ def header_forms(
     changes (see :func:`startd8.backend_codegen.drift.forms_stale_reason`). The hash covers the
     whole ``views.yaml`` text (matching the pages precedent of hashing the whole manifest), so a
     composite-view edit conservatively re-stamps the web routes — a cheap regenerate, never a miss.
+
+    ``entity`` (optional) carries a name in the ``startd8-entity`` slot so a per-name artifact (e.g. a
+    per-flow router ``app/flows/<name>.py`` or a per-editor router) can be re-rendered by-name in drift.
+    Omitted → no entity line, byte-identical to the app-wide form (``fastapi-web-forms`` is unaffected).
     """
-    return (
+    lines = [
         f"# GENERATED from {source_file} (+ views.yaml) — do not edit by hand; "
-        f"regenerate via `startd8 generate backend`.\n"
-        f"# startd8-artifact: {kind}\n"
-        f"# Source of truth: the Prisma schema and the forms manifest.\n"
-        f"# schema-sha256: {schema_sha}\n"
-        f"# forms-sha256: {forms_sha}"
-    )
+        f"regenerate via `startd8 generate backend`.",
+        f"# startd8-artifact: {kind}",
+    ]
+    if entity:
+        lines.append(f"# startd8-entity: {entity}")
+    lines.append("# Source of truth: the Prisma schema and the forms manifest.")
+    lines.append(f"# schema-sha256: {schema_sha}")
+    lines.append(f"# forms-sha256: {forms_sha}")
+    return "\n".join(lines)
 
 
 def header_forms_tmpl(

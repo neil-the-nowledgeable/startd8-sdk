@@ -63,10 +63,19 @@ _AI_KINDS: frozenset = frozenset(
 # ``pages_generator.PAGES_KINDS`` (literal here to avoid an import cycle at module load).
 _PAGES_KINDS: frozenset = frozenset({"pages-base", "pages-router", "pages-content"})
 
-# Artifact kinds whose drift derives from two inputs (schema + views.yaml `forms:` section).
-# web.py only carries this kind when generated WITH a forms manifest (else plain ``fastapi-web``)
-# — the htmx-base/pages-base precedent: a distinct kind per dep-set.
-_FORMS_KINDS: frozenset = frozenset({"fastapi-web-forms", "htmx-created"})
+# Artifact kinds whose drift derives from two inputs (schema + views.yaml). web.py only carries
+# ``fastapi-web-forms`` when generated WITH a forms manifest (else plain ``fastapi-web``) — the
+# htmx-base/pages-base precedent: a distinct kind per dep-set. The ``flow-*`` kinds (FR-ED-15) are
+# views.yaml-derived too: ``fastapi-flow``/``flow-shell`` re-render a single flow BY NAME (the
+# ``startd8-entity`` slot), ``flow-aggregator`` re-renders the whole ``app/flows/__init__.py``.
+# Previously ``fastapi-flow`` was registered nowhere → freshly-generated flow apps failed ``--check``.
+_FORMS_KINDS: frozenset = frozenset(
+    {
+        "fastapi-web-forms", "htmx-created",
+        "fastapi-flow", "flow-shell", "flow-aggregator",          # flows (FR-ED-15)
+        "fastapi-editor", "editor-form", "editor-aggregator",     # bulk child-field editors (FR-ED-10)
+    }
+)
 
 # settings.py derives from the schema + a SELF-EMBEDDED mode (FR-CFG-7a). Unlike the manifest-backed
 # kinds above, its extra input (the mode) lives in the file's own header, so it needs no external
@@ -322,19 +331,49 @@ def is_owned_generated_file(ondisk_text: str) -> bool:
     return _GENERATED_MARKER in text and embedded_schema_sha(text) is not None
 
 
-def owned_file_in_sync(schema_text: str, ondisk_text: str) -> bool:
+def owned_file_in_sync(
+    schema_text: str,
+    ondisk_text: str,
+    *,
+    views_text: Optional[str] = None,
+    pages_text: Optional[str] = None,
+    manifest_text: Optional[str] = None,
+    human_inputs_text: Optional[str] = None,
+    completeness_text: Optional[str] = None,
+    display_text: Optional[str] = None,
+) -> bool:
     """True iff *ondisk_text* is an owned generated file that is **currently in-sync**.
 
     The safe predicate for the pipeline skip-hook: header presence alone is rejected; the file
-    must re-render byte-identically from the current schema. The embedded source-label is
+    must re-render byte-identically from the current source(s). The embedded source-label is
     recovered so the re-render's header line matches (avoiding a false "tampered"). Any doubt →
     ``False`` (the caller falls through to the LLM — a safe failure).
+
+    **Manifest-derived kinds (FR-ED-16):** an owned file's drift may depend on more than the schema —
+    ``forms:``/``flows:``/``editors:`` on ``views.yaml`` (*views_text*), content pages on ``pages.yaml``
+    (*pages_text*), the AI layer on ``ai_passes.yaml`` + ``human_inputs.yaml`` (*manifest_text* /
+    *human_inputs_text*), weighted completeness on ``completeness.yaml`` (*completeness_text*), and the
+    display structure on ``display.yaml`` (*display_text*). These were previously **not** threaded here,
+    so EVERY manifest-derived kind (forms/pages/AI/flows) routed to its check with the manifest unset →
+    ``ERROR`` → ``False`` → silently fell through to the LLM despite being a clean ``$0`` file. Callers
+    that can resolve these manifests (e.g. the deterministic-file provider) MUST pass them so the file is
+    recognized as ``$0``-owned. Each is optional; a schema-only kind ignores all of them.
     """
     if not is_owned_generated_file(ondisk_text):
         return False
     source_file = embedded_source_file(ondisk_text) or "prisma/schema.prisma"
     return (
-        check_drift(schema_text, ondisk_text, source_file=source_file).status
+        check_drift(
+            schema_text,
+            ondisk_text,
+            source_file=source_file,
+            manifest_text=manifest_text,
+            human_inputs_text=human_inputs_text,
+            pages_text=pages_text,
+            completeness_text=completeness_text,
+            forms_text=views_text,  # check_drift names the views.yaml input `forms_text`
+            display_text=display_text,
+        ).status
         == "in_sync"
     )
 
@@ -500,10 +539,28 @@ def forms_stale_reason(
 def _forms_renderers():
     """Map forms-configured kind → a ``(schema, forms, source_file, entity) -> text`` renderer."""
     from .htmx_generator import render_created_template, render_web
+    from .flow_generator import (
+        render_flow_aggregator,
+        render_named_flow_router,
+        render_named_flow_shell,
+    )
+    from .editor_generator import (
+        render_editor_aggregator,
+        render_named_editor_form,
+        render_named_editor_router,
+    )
 
     return {
         "fastapi-web-forms": lambda s, f, sf, e: render_web(s, sf, f),
         "htmx-created": lambda s, f, sf, e: render_created_template(s, sf, e, f),
+        # flows (FR-ED-15): `e` is the flow NAME from the startd8-entity slot; aggregator ignores it.
+        "fastapi-flow": lambda s, f, sf, e: render_named_flow_router(s, f, e),
+        "flow-shell": lambda s, f, sf, e: render_named_flow_shell(s, f, e),
+        "flow-aggregator": lambda s, f, sf, e: render_flow_aggregator(s, f),
+        # editors (FR-ED-10): `e` is the editor NAME; aggregator ignores it.
+        "fastapi-editor": lambda s, f, sf, e: render_named_editor_router(s, f, e),
+        "editor-form": lambda s, f, sf, e: render_named_editor_form(s, f, e),
+        "editor-aggregator": lambda s, f, sf, e: render_editor_aggregator(s, f),
     }
 
 
