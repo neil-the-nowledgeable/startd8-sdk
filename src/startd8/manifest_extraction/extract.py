@@ -163,6 +163,14 @@ def extract_manifests(
         if "completeness.yaml" not in candidates or candidates["completeness.yaml"] is None:
             candidates["completeness.yaml"] = extract_completeness(label, sections, graph, records)
 
+    # Prune view-copy to views that SURVIVED views.yaml extraction (a view dropped for a bad compute
+    # binding / unknown kind must not leave its copy dangling in view_prose → the round-trip would
+    # fail with a confusing "unknown view" instead of the real per-view reason already recorded).
+    _vp = candidates.get("view_prose.yaml")
+    if _vp:
+        _surviving = {v["name"] for v in (candidates.get("views.yaml") or {}).get("views", [])}
+        candidates["view_prose.yaml"] = {k: v for k, v in _vp.items() if k in _surviving} or None
+
     # FR-WPI-4: round-trip through the generators' OWN parsers before returning.
     known = frozenset(graph.all_model_names())
     round_trips = {

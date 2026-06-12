@@ -84,7 +84,12 @@ def extract_pages(
 # §2.3 Views → views.yaml (runs AFTER the entities pass — fks from join models)
 # --------------------------------------------------------------------------- #
 
-_KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package"}
+# `import-flow` (FR-10 restore) + `computed-panel` (FR-9) are **contract-driven** archetypes: they
+# carry no entity fields (parse_views loud-fails entity keys on them), so extract_views emits them
+# minimally (route, +compute for the panel) and skips the relations/aggregates derivation.
+_KINDS = {"dashboard", "board", "workspace", "detail-compose", "export-package",
+          "import-flow", "computed-panel"}
+_CONTRACT_KINDS = {"import-flow", "computed-panel"}
 _ARROW_RE = re.compile(r"(\w+)\s*(?:→|->)\s*(\w+)")
 _COUNTS_RE = re.compile(r"counts of\s+(.+?)(?:\s+per\s+\w+)?$", re.IGNORECASE)
 
@@ -113,6 +118,30 @@ def extract_views(
                 reason=f"Kind {kind!r} outside the published vocabulary",
             ))
             continue
+
+        # Contract-driven archetypes (import-flow / computed-panel): minimal views, no entity logic.
+        if kind in _CONTRACT_KINDS:
+            route = keys["Route"].split()[0] if keys.get("Route") else f"/{nfkd_kebab(name)}"
+            cview: dict = {"name": ident, "kind": kind, "route": route}
+            if kind == "computed-panel":
+                from ..view_codegen.renderers import compute_binding_names
+                compute = keys.get("Compute", "").strip()
+                if compute not in compute_binding_names():
+                    records.append(ExtractionRecord(
+                        "views.yaml", f"/views/{ident}", Status.NOT_EXTRACTED, source=src,
+                        reason=f"computed-panel `Compute: {compute or '(missing)'}` is not a registered "
+                               f"binding {sorted(compute_binding_names())}",
+                    ))
+                    continue
+                cview["compute"] = compute
+            vi = len(views)
+            views.append(cview)
+            routes_by_name[ident] = route
+            records.append(ExtractionRecord(
+                "views.yaml", f"/views/{vi}", Status.EXTRACTED, value=f"{name} ({kind})", source=src,
+            ))
+            continue
+
         view: dict = {"name": ident, "kind": kind}
         vi = len(views)  # value-path index once appended
 
@@ -274,15 +303,16 @@ def extract_view_prose(
     sections: List[Section],
     records: List[ExtractionRecord],
 ) -> Optional[dict]:
-    """Harvest authored view COPY from each ``### View:`` block → ``{view-name: {title,intro,empty}}``.
+    """Harvest authored view COPY from each ``### View:`` block → ``{view-name: {title,intro,…}}``.
 
     The producer half of the kickoff→``view_prose.yaml`` loop (the consumer ``parse_view_prose`` ships).
-    Per-archetype validity is enforced end-to-end: ``title``/``intro`` apply to any HTML view; ``empty``
-    has a no-rows surface ONLY on a **model-scoped detail-compose** (``Scope: model``), so an
-    ``Empty state:`` on any other archetype is **silently dropped** (recorded NOT_EXTRACTED) — preserving
-    today's behavior and never loud-failing an existing reqs doc (the renderer raises on `empty`
-    off-archetype). View idents match :func:`extract_views` (same ``nfkd_kebab`` derivation), so the
-    round-trip's ``known_views`` (taken from the views candidate, not the entity graph) lines up.
+    Per-archetype validity is enforced end-to-end; a key on the wrong archetype is **silently dropped**
+    (recorded NOT_EXTRACTED, no error — the renderer would raise on it):
+    - ``title``/``intro`` — any HTML view;
+    - ``empty`` — model-scoped detail-compose only (``Scope: model``, the only no-rows surface);
+    - ``success``/``error``/``controls`` — import-flow only (its restore-outcome + button labels).
+    View idents match :func:`extract_views` (same ``nfkd_kebab``), so the round-trip's ``known_views``
+    (taken from the views candidate, not the entity graph) lines up.
     """
     blocks = [s for s in sections if s.title.lower().startswith("view:")]
     if not blocks:
@@ -297,14 +327,14 @@ def extract_view_prose(
         scope = keys.get("Scope", "").strip().lower()
         entry: Dict[str, str] = {}
         for src_key, dest_key in (("Title", "title"), ("Intro", "intro")):
-            val = keys.get(src_key, "").strip()
+            val = _strip_quotes(keys.get(src_key, ""))
             if val:
                 entry[dest_key] = val
                 records.append(ExtractionRecord(
                     "view_prose.yaml", f"/{ident}/{dest_key}", Status.EXTRACTED,
                     value=val[:60], source=src,
                 ))
-        empty = keys.get("Empty state", "").strip()
+        empty = _strip_quotes(keys.get("Empty state", ""))
         if empty:
             if kind == "detail-compose" and scope == "model":
                 entry["empty"] = empty
@@ -318,9 +348,60 @@ def extract_view_prose(
                     reason="`empty` has a no-rows surface only on a model-scoped detail-compose "
                            "(`Scope: model`); dropped off-archetype to stay back-compatible",
                 ))
+        # success/error: import-flow RESTORE outcome copy — the only archetype with an outcome surface.
+        for src_key, dest_key in (("Success", "success"), ("Error", "error")):
+            val = _strip_quotes(keys.get(src_key, ""))
+            if not val:
+                continue
+            if kind == "import-flow":
+                entry[dest_key] = val
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/{dest_key}", Status.EXTRACTED, value=val[:60], source=src,
+                ))
+            else:
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/{dest_key}", Status.NOT_EXTRACTED, source=src,
+                    reason=f"`{dest_key}` is import-flow restore-outcome copy; dropped off-archetype",
+                ))
+        # controls: `id = "label"` pairs, archetype-filtered (import-flow: validate/restore/confirm).
+        controls_raw = keys.get("Controls", "").strip()
+        if controls_raw:
+            if kind != "import-flow":
+                records.append(ExtractionRecord(
+                    "view_prose.yaml", f"/{ident}/controls", Status.NOT_EXTRACTED, source=src,
+                    reason="`controls` is authored only on import-flow today (export-link labels deferred)",
+                ))
+            else:
+                parsed = dict(_CONTROL_RE.findall(controls_raw))
+                good = {cid: lbl for cid, lbl in parsed.items() if cid in _IMPORT_CONTROL_IDS}
+                if good:
+                    entry["controls"] = good
+                    records.append(ExtractionRecord(
+                        "view_prose.yaml", f"/{ident}/controls", Status.EXTRACTED,
+                        value=",".join(sorted(good)), source=src,
+                    ))
+                for cid in sorted(set(parsed) - _IMPORT_CONTROL_IDS):
+                    records.append(ExtractionRecord(
+                        "view_prose.yaml", f"/{ident}/controls/{cid}", Status.NOT_EXTRACTED, source=src,
+                        reason=f"unknown import-flow control-id {cid!r} (allowed: "
+                               f"{sorted(_IMPORT_CONTROL_IDS)})",
+                    ))
         if entry:
             out[ident] = entry
     return out if out else None
+
+
+_CONTROL_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+_IMPORT_CONTROL_IDS = frozenset({"validate", "restore", "confirm"})
+
+
+def _strip_quotes(value: str) -> str:
+    """Authored copy may be quoted (the template shows `- Title: "..."`) or bare; strip one matched
+    surrounding pair so the emitted manifest carries the words, not the delimiters."""
+    s = value.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
 
 
 # --------------------------------------------------------------------------- #

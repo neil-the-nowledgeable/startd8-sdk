@@ -88,17 +88,23 @@ Navigation:
 ▷ (downloadable bundle of a workspace).
 
 ### View: <Name>
-- Kind: <one of the five>
-- Root: <EntityName>
+- Kind: <dashboard | board | workspace | detail-compose | export-package | import-flow | computed-panel>
+- Root: <EntityName>   *(omit for import-flow / computed-panel — they carry no entity)*
 - Shows: <Entity→Entity connections / fields to surface>
+▷ computed-panel binds a registered compute function (e.g. the completeness score):
+- Compute: <binding>   *(computed-panel only; e.g. completeness)*
 ▷ Scope: model makes a detail-compose a whole-model "Value Map" (every root + relations on ONE
 ▷ page) — and is what gives it an Empty state. Omit for the default per-row scope.
 - Scope: model   *(optional; detail-compose only)*
-▷ View COPY [consumed by: extraction → view_prose.yaml]. Title/Intro show on any view; Empty state
-▷ shows when a Scope: model detail-compose has no rows (ignored on other archetypes).
+▷ View COPY [consumed by: extraction → view_prose.yaml]. Title/Intro show on any view; the rest are
+▷ per-archetype (ignored, no error, elsewhere): Empty state → Scope: model detail-compose;
+▷ Success/Error/Controls → import-flow.
 - Title: "<the human page heading>"   *(optional)*
 - Intro: "<a short sentence under the title, in user language>"   *(optional)*
 - Empty state: "<what the page shows when there are no rows>"   *(optional; Scope: model only)*
+- Success: "<import-flow restore-OK copy; may use {imported} {total}>"   *(optional; import-flow)*
+- Error: "<import-flow restore-fail copy; may use {errors}>"   *(optional; import-flow)*
+- Controls: validate = "<label>", restore = "<label>", confirm = "<label>"   *(optional; import-flow)*
 ▷ Route is DERIVED by kind (simple kinds: from the view name; workspace: /<root>/{id};
 ▷ export-package: from its workspace). Add an explicit line only to override:
 - Route: </custom-route>   *(optional)*

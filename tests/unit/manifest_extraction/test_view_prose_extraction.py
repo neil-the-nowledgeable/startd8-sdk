@@ -86,3 +86,84 @@ def test_scope_model_is_emitted_into_views_manifest():
     assert value_map.get("scope") == "model"
     board = next(v for v in views["views"] if v["name"] == "widget_board")
     assert board.get("scope") is None  # row-scoped (default) — no scope key emitted
+
+
+# --------------------------------------------------------------------------- #
+# Expanded vocabulary: import-flow + computed-panel are now authorable, and
+# their success/error/controls copy extracts (the remaining copy keys).
+# --------------------------------------------------------------------------- #
+
+_CONTRACT_DOC = """
+## Entities
+
+### Widget
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| name | text | yes | |
+
+## Views
+
+### View: Restore
+- Kind: import-flow
+- Route: /import
+- Title: "Restore from a backup"
+- Success: "Restored {imported} items ({total} total)."
+- Error: "Could not read that export: {errors}"
+- Controls: validate = "Check this file", restore = "Restore my data", bogus = "x"
+
+### View: Completeness
+- Kind: computed-panel
+- Compute: completeness
+- Title: "How complete is your value model?"
+""".strip()
+
+
+def _contract():
+    return extract_manifests({"reqs.md": _CONTRACT_DOC})
+
+
+def test_import_flow_and_computed_panel_are_authorable():
+    views = {v["name"]: v for v in yaml.safe_load(_contract().manifests["views.yaml"])["views"]}
+    assert views["restore"]["kind"] == "import-flow" and views["restore"]["route"] == "/import"
+    assert views["completeness"]["kind"] == "computed-panel"
+    assert views["completeness"]["compute"] == "completeness"
+
+
+def test_quotes_are_stripped_from_copy():
+    vp = yaml.safe_load(_contract().manifests["view_prose.yaml"])
+    assert vp["restore"]["title"] == "Restore from a backup"   # no surrounding quotes
+
+
+def test_import_flow_success_error_extract():
+    vp = yaml.safe_load(_contract().manifests["view_prose.yaml"])
+    assert vp["restore"]["success"] == "Restored {imported} items ({total} total)."
+    assert vp["restore"]["error"].startswith("Could not read")
+
+
+def test_import_flow_controls_extract_and_filter_unknown_ids():
+    vp = yaml.safe_load(_contract().manifests["view_prose.yaml"])
+    assert vp["restore"]["controls"] == {"validate": "Check this file", "restore": "Restore my data"}
+    # `bogus` is not a valid import-flow control-id → dropped, not emitted
+    assert "bogus" not in vp["restore"]["controls"]
+
+
+def test_computed_panel_gets_title_only_no_outcome_keys():
+    vp = yaml.safe_load(_contract().manifests["view_prose.yaml"])
+    assert vp["completeness"] == {"title": "How complete is your value model?"}
+
+
+def test_success_on_non_import_flow_is_dropped():
+    doc = _CONTRACT_DOC + '\n- Success: "should not apply"\n'  # appended to the computed-panel block
+    res = extract_manifests({"reqs.md": doc})
+    vp = yaml.safe_load(res.manifests["view_prose.yaml"])
+    assert "success" not in vp.get("completeness", {})
+
+
+def test_unknown_compute_binding_drops_the_panel():
+    doc = _CONTRACT_DOC.replace("Compute: completeness", "Compute: bogus_binding")
+    res = extract_manifests({"reqs.md": doc})
+    views = {v["name"]: v for v in yaml.safe_load(res.manifests["views.yaml"])["views"]}
+    assert "completeness" not in views  # dropped: unknown binding
+    reasons = [r.reason for r in res.by_status(Status.NOT_EXTRACTED) if r.manifest == "views.yaml"]
+    assert any("not a registered binding" in (x or "") for x in reasons)
