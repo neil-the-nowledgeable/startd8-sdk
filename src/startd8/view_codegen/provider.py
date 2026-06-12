@@ -27,13 +27,20 @@ class CompositeViewProvider:
         views_text = self._read(context, suffix="views.yaml", conventional="views.yaml")
         if not schema_text or not views_text:
             return False  # cannot verify without both inputs → not in-sync (safe)
-        # view_prose.yaml is optional (None ⇒ today's literal-title render). Threaded so a
-        # prose-annotated view's owned template re-renders identically (presence, not content).
+        # FR-DRC-4: thread BOTH optional view inputs the generator consumes, or the re-render
+        # diverges from a display-/prose-configured on-disk file → not-in-sync → the clean $0 file
+        # silently falls through to the LLM. ``display.yaml`` drives FR-DM-6 composite-view label
+        # resolution; ``view_prose.yaml`` drives title/intro/empty/outcome/control chrome. Each is
+        # optional (None ⇒ today's literal/id render); a view that uses neither is unaffected.
+        display_text = self._read(
+            context, suffix="display.yaml", conventional="display.yaml"
+        )
         view_prose_text = self._read(
             context, suffix="view_prose.yaml", conventional="view_prose.yaml"
         )
         return views_in_sync(
-            schema_text, views_text, path, content, view_prose_text=view_prose_text
+            schema_text, views_text, path, content,
+            display_text=display_text, view_prose_text=view_prose_text,
         )
 
     @staticmethod
