@@ -1,0 +1,207 @@
+# Contract Leverage & Consolidation — Requirements
+
+**Version:** 0.2 (Deeper investigation — root cause found)
+**Date:** 2026-06-11
+**Status:** Draft
+**Lens:** *Essential vs. accidental complexity.* The goal is **not to add contract usage** — the SDK
+already leverages contracts heavily — but to **consolidate fragmented contract machinery** and close
+the one real gap (semantic validation), shedding accrued accidental complexity in the process.
+
+---
+
+## 0.1 Deeper investigation (v0.2) — the root cause and the keystone
+
+> A second pass traced the `api_signatures` data flow and found a single **root cause** that both
+> *explains* the asymmetry (AC-1) and *unlocks* its fix with a net complexity **reduction**.
+
+**Finding 1 — `api_signatures` is the upstream SOURCE, not a projection.** `feature.api_signatures`
+(raw signature strings in the seed) is parsed by `forward_manifest_extractor._extract_api_signatures`
+(`forward_manifest_extractor.py:722`) **into** the `InterfaceContract` / `ForwardElementSpec`. So the
+contract is the *derived, structured* form; `api_signatures` is the *raw input*.
+
+**Finding 2 — that one raw artifact is parsed/rendered in ~4 places, by two different regexes.**
+- extractor regex → `InterfaceContract`/`ForwardElementSpec` (rich; generation P0). ✓ structured
+- embedded as **prose** into `task_description` (`consumption_map`: *"consumed as prose, not
+  structured"*) — a second generation copy, **de-structured**.
+- `semantic_compliance/signature_check._NAME_RE` **re-parses the raw strings again** for the
+  deterministic missing-symbol backstop.
+- raw list → the LLM rubric.
+This is a structured → prose → **re-structured** round-trip: classic accidental complexity (duplicated
+parse logic, one fact in four representations).
+
+**Finding 3 (root cause) — the forward manifest is NEVER persisted.** It is threaded **in-memory**
+into the post-mortem (`prime_postmortem.py:1605/2499` take it as a parameter); there is no
+`forward-manifest.json`. The **Semantic Compliance Reviewer is a *detached* service** that reads the
+seed *file*, so it **cannot reach the extracted contract** — which is exactly **why** it falls back to
+raw `api_signatures`. *The generation↔validation asymmetry (AC-1) is a symptom of non-persistence, not
+a design decision.*
+
+**The keystone (a small addition that enables three deletions).** Persist the forward manifest as the
+single canonical contract artifact for the run (`forward-manifest.json`). Reachability then lets EVERY
+consumer read **one** artifact, which retires the duplications:
+- **E1** — SCR `signature_check` uses the manifest's `api_sig`-sourced `ForwardElementSpec.name`s →
+  **delete `_NAME_RE`** (parity-gated). `ForwardElementSpec` already covers the same kinds.
+- **E2** — SCR reviewer rubric uses `InterfaceContract.binding_text` → **drop raw `api_signatures`**
+  (symmetric with generation; behavior-test-gated).
+- **E3 (adjacent, generation)** — drop the **prose embedding** of `api_signatures` in
+  `task_description`; the P0 structured `InterfaceContract` binding is strictly richer.
+- Net: `api_signatures` collapses to an **extractor-input-only** field; **−1 regex parser, −2 raw
+  consumptions, −1 prose round-trip**, all consumers unified on one persisted artifact. *Persisting is
+  not added complexity — it removes the forcing function (non-reachability) that created the
+  duplication.*
+
+**Refined essential model:** parse `api_signatures` **once** (extractor) → **one persisted forward
+manifest** → read by generation, structural validation, post-mortem, and the SCR alike. No consumer
+re-parses `api_signatures`.
+
+---
+
+## 0. The essential model (the north star)
+
+A feature has **one contract**: the interface it must satisfy (elements, signatures, field-sets,
+endpoints, and where they live). The irreducible flow is three steps:
+
+```
+        derive once            inject once             validate once
+schema ┐                  ┌──> generation prompt ──┐
+design ┼─> CONTRACT ─────►┤                          ├──> structural + semantic check
+AST    ┘  (one artifact)  └──> (the model builds to it)   (did it build to the contract?)
+```
+
+Everything beyond *derive → inject → validate against the same contract* is candidate accidental
+complexity. **The test for any change: does it move us toward this single flow, or add a parallel one?**
+
+---
+
+## 1. Current state (honest, from the code map)
+
+### 1.1 Prompt generation **already leverages contracts well** — proactively
+- `InterfaceContract` (binding_text) is injected at **spec-time P0** as *"## Interface Contract
+  Bindings (must enforce)"* + *"## Expected Code Elements"* (`spec_builder.py:1165-1176`); the drafter
+  also gets `forward_contracts` at P1. This is **proactive** (the model is told to build to the
+  contract), not reactive. `FieldSetAuthority` (Prisma) is also P0; `structural_verify` and
+  `engine._semantic_verify` (in-run) and `validate_forward_manifest` (post-merge) all check against
+  the contract.
+- **Verdict:** generation is *not* the gap. We leverage contracts in prompts substantially.
+
+### 1.2 Semantic validation has a real **asymmetry** (the one genuine gap)
+- The LLM **Semantic Compliance Reviewer** validates against **free-text `requirement_text` +
+  `api_signatures`** (`reviewer.py:106-107`; `LoadedRequirement` carries no contract). It **re-derives
+  intent from prose** for the very thing the generator was already *bound* to via the typed contract.
+- **Verdict:** the contract is under-leveraged **here**. Generation targets the contract; the
+  sophisticated (LLM) validation targets prose. Asymmetric, and the source of avoidable false PASS/FAIL.
+
+---
+
+## 2. Pre-existing accidental complexity (catalog, to shed opportunistically)
+
+| # | Accidental complexity | Evidence (file:line) | Essence it obscures |
+|---|----------------------|----------------------|---------------------|
+| **AC-1** | **Generation↔validation asymmetry** — generator bound to `InterfaceContract`; LLM reviewer checks prose | `spec_builder.py:1165` (bound) vs `reviewer.py:106-107` (prose) | "validate against the contract you generated to" |
+| **AC-2** | **≥3 parallel encodings of "expected signature"**: `InterfaceContract.function_name`/`signature`, `ForwardElementSpec.signature`, and the reviewer's separate `api_signatures` (seed `ctx`) | `forward_manifest.py:66,111`; `requirement_loader.py:107` | one signature, one source |
+| **AC-3** | **Security guidance derived 3 independent ways** (kaizen-split, `security_contract` DB guidance, drafter `framework_imports` detection) — can contradict | `spec_builder.py:1275-1292,1349-1356`; `drafter.py:257-279` | one security_contract, rendered once |
+| **AC-4** | **3 quality-hint streams** (`kaizen_hints`, `run_quality_hints`, seed `quality_hints`) — separate keys, no unified section/budget/dedup | `spec_builder.py:1275,1386,1422` | one "guidance" section |
+| **AC-5** | **No single prompt-context assembly point** — spec & draft each re-render `upstream_interfaces`/`project_knowledge` independently; stale-risk between spec & draft | `spec_builder.py:1255` vs `drafter.py:968` | assemble contract+hints once; both consume |
+| **AC-6** | **Semantic validation fragmented across 4+ mechanisms** with overlaps: duplicate-detection in 3 places, import-validation in 3 places, contract-compliance checked twice | `semantic_checks.py`; `forward_manifest_validator.py` L1/L11/L12/contract | one "code-vs-contract" verdict path |
+| **AC-7** | **`binding_text` stored + re-computed** from structured fields (state that can drift) | `forward_manifest.py:728` | computed property, not stored state |
+| **AC-8** | **`parser_tier` severity calibration duplicated** in `ForwardManifest` + the validator | `forward_manifest.py:608`; `forward_manifest_validator.py:89` | one calibration |
+
+> Note: the **3 contract *models*** (`InterfaceContract` = design-derived, `FieldSetAuthority` =
+> schema-derived, `ForwardElementSpec` = AST-derived) are **NOT** redundant — they have different
+> *sources/provenance* and are essential. The accidental complexity is in their **consumption**
+> (scattered injection + the validation asymmetry), not their existence. **Do not merge the models.**
+
+---
+
+## 3. Requirements (consolidation-biased)
+
+### A. The keystone + three gated eliminations (the headline, refined in v0.2)
+- **FR-CL-1 (keystone — persist the contract).** The forward manifest MUST be **persisted to the run
+  dir** (`forward-manifest.json`) as the single canonical contract artifact. The post-mortem and the
+  detached SCR MUST read **that artifact** (the post-mortem may keep its in-memory param as a fast
+  path, but the persisted form is the contract-of-record). This is the reachability fix that makes
+  AC-1 solvable; it adds one file and removes the forcing function for the `api_signatures`
+  duplication. **No new contract *type/model* — only persistence of the existing one.**
+- **FR-CL-2 (E2 — reviewer reads the contract).** The SCR reviewer rubric MUST validate against the
+  feature's `InterfaceContract.binding_text` (+ `ForwardElementSpec`s) from the persisted manifest,
+  with `requirement_text` as *supporting* context — not the sole basis. **Gate:** a behavior test on a
+  known corpus (verdicts must not regress on the Run-029 missing-symbol case).
+- **FR-CL-3 (E1 — one parser).** The SCR `signature_check` MUST use the manifest's `api_sig`-sourced
+  `ForwardElementSpec.name`s and **`_NAME_RE` MUST be deleted**. **Gate:** a parity test —
+  `{e.name for e in api_sig_sourced_specs} == required_symbol_names(api_signatures)` over a corpus;
+  ship the deletion only when parity holds (preserve the "required deliverable" semantics, i.e. filter
+  to `api_sig`-sourced elements, not all manifest elements).
+- **FR-CL-3b (E3 — drop the prose round-trip).** Remove the prose embedding of `api_signatures` in
+  `task_description` (the P0 structured `InterfaceContract` binding is strictly richer). **Gate:**
+  golden-prompt diff shows only the prose block removed; structured binding unchanged.
+- **FR-CL-3c (anti-regression).** After E1/E2/E3, **no consumer re-parses `api_signatures`** — it is an
+  extractor input only. A test/grep guard SHOULD assert no `api_signatures` regex parse outside the
+  extractor.
+
+### B. Shed adjacent accidental complexity (opportunistic, while in these files)
+- **FR-CL-4.** *(DEFERRED — planning downgrade.)* `binding_text` is a **stored, serialized Pydantic
+  field** (`forward_manifest.py:90`), not derived state — converting it to a computed property changes
+  model serialization/round-trip. NOT a one-liner; defer to a deliberate model change, not an
+  opportunistic edit. (AC-7 stands as a known smell.)
+- **FR-CL-5.** De-duplicate the `parser_tier` severity calibration to one helper (AC-8) — the only true
+  small, safe consolidation.
+- **FR-CL-6.** *(direction, not this pass)* A single **generation-context assembler** that renders
+  contract facets + the **one** unified guidance section (folding the 3 hint streams, AC-4, and the
+  3-way security derivation, AC-3) once, consumed by both spec and draft (AC-5).
+
+### C. Anti-goals (explicit — to avoid adding accidental complexity)
+- **AG-1.** Do **NOT** add a new "contract" type/model. There are already 8; the problem is consumption.
+- **AG-2.** Do **NOT** add a new enricher or a new semantic validator. Consolidate, don't multiply.
+- **AG-3.** Do **NOT** inject the ContextCore *propagation* `ContextContract` into generation prompts —
+  it governs phase context plumbing, not code semantics; that would be a category error (it belongs in
+  preflight/boundary validation, where it already is).
+- **AG-4.** Do **NOT** make any of this a hard dependency or change behavior when contracts are absent.
+
+---
+
+## 4. Prioritized low-hanging fruit (v0.2 — sequenced)
+
+| Rank | Item | Tag | Effort | Touches |
+|------|------|-----|--------|---------|
+| **1 — keystone** | **FR-CL-1** persist `forward-manifest.json` | **[enabler; small add that unlocks 3 deletes]** | Small | `prime_contractor` (write), `prime_postmortem`/SCR (read) |
+| **2 — eliminations (gated)** | **FR-CL-3 (E1)** delete `_NAME_RE`; **FR-CL-2 (E2)** reviewer reads contract; **FR-CL-3b (E3)** drop prose round-trip | **[reduces complexity + adds leverage]** | Bounded | `semantic_compliance/{signature_check,reviewer,prompts,requirement_loader}`; `spec_builder` (E3) |
+| **3 — true one-liner** | **FR-CL-5** `parser_tier` dedup | **[reduces complexity]** | Tiny | `forward_manifest.py` + validator |
+| **deferred** | **FR-CL-4** binding_text→property (serialization change); **FR-CL-6** single generation-context assembler | **[reduces complexity, larger]** | Real slices | model change; `spec_builder`+`drafter`+`prime_contractor` |
+
+**Sequencing matters:** #1 (persist) is the *enabler* — without it #2's eliminations have nowhere to
+read the contract from. Each E1/E2/E3 ships **only when its gate passes** (parity / behavior /
+golden-prompt). **FR-CL-6** (the ~7 enrichers → one assembler) remains the biggest *architectural*
+win but is its own slice, explicitly to *remove* machinery, never add — sequence it last.
+
+---
+
+## 5. Open Questions
+
+> **Resolved in the v0.2 deeper pass:** ~~OQ-2~~ — `api_signatures` is the **upstream SOURCE** the
+> extractor parses *into* the contract (`forward_manifest_extractor.py:722`), not a projection; so the
+> fix is to make the *derived* contract the single representation and treat `api_signatures` as
+> extractor-input-only (FR-CL-3c).
+
+- **OQ-1.** Does the contract let the reviewer **drop** reliance on `requirement_text` for the
+  signature/element checks (pure simplification), or must prose stay for behavior the contract can't
+  express? (Resolve in the E2 build; likely: contract for *structure*, prose for *behavior*.)
+- **OQ-3 (new, load-bearing).** **Persistence schema** — what exactly does `forward-manifest.json`
+  serialize, and does `ForwardManifest`/`InterfaceContract` already round-trip via Pydantic
+  `model_dump`/`model_validate`? (If yes, FR-CL-1 is trivial; if the in-memory object carries
+  un-serializable state, scope that first.)
+- **OQ-4 (new).** Does the **detached SCR** know the run dir / can it locate `forward-manifest.json`
+  next to the seed it already reads? (Confirms the reachability the keystone assumes.)
+- **OQ-5 (new).** E1 parity edge: the manifest's elements come from `api_signatures` **and** design/AST;
+  filtering to `source_contract_id ∈ api_sig` must reproduce `_NAME_RE`'s set exactly — verify the
+  extractor tags `api_sig` sources distinctly.
+
+---
+
+*v0.2 — Deeper investigation. Root cause found: the forward manifest is **never persisted**, so the
+detached Semantic Reviewer can't reach it and falls back to raw `api_signatures` — the asymmetry (AC-1)
+is a symptom of non-persistence. The refined plan is a **keystone + 3 gated deletions**: persist the
+one contract artifact (FR-CL-1), then retire the duplicate regex parser (E1), the reviewer's raw-string
+input (E2), and the prose round-trip (E3) — `−1 parser, −2 raw consumptions, −1 round-trip`, all
+consumers unified on one artifact. Net complexity strongly **down**. `api_signatures` becomes
+extractor-input-only. The big assembler refactor (FR-CL-6) stays a separate complexity-reducing slice.
+Anti-goals: no new contract type/enricher/validator; persistence ≠ a new model.*

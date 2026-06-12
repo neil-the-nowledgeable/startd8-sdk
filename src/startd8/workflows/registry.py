@@ -462,8 +462,19 @@ class WorkflowRegistry:
             )
 
         try:
+            # ContextCore Layer 3 Pre-Flight (fail-before-spend) — advisory by default; blocks only
+            # when config sets `preflight_fail_closed`. No-op without a contract or ContextCore.
+            from ._contracts_integration import run_preflight
+
+            if not run_preflight(
+                workflow, config, fail_closed=bool(config.get("preflight_fail_closed", False))
+            ):
+                raise ConfigurationError(
+                    "Pre-flight context-contract check failed (fail-closed) before workflow run"
+                )
+
             result = workflow.run(config, agents, on_progress, dry_run=dry_run)
-            
+
             # ContextCore Layer 1 Boundary Validation (Exit)
             if result.success and not dry_run and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
                 try:
@@ -530,12 +541,23 @@ class WorkflowRegistry:
             )
 
         try:
+            # ContextCore Layer 3 Pre-Flight (fail-before-spend) — advisory by default; blocks only
+            # when config sets `preflight_fail_closed`. No-op without a contract or ContextCore.
+            from ._contracts_integration import run_preflight
+
+            if not run_preflight(
+                workflow, config, fail_closed=bool(config.get("preflight_fail_closed", False))
+            ):
+                raise ConfigurationError(
+                    "Pre-flight context-contract check failed (fail-closed) before workflow run"
+                )
+
             if hasattr(workflow, 'arun'):
                 result = await workflow.arun(config, agents, on_progress)
             else:
                 # Fall back to sync execution
                 result = workflow.run(config, agents, on_progress)
-                
+
             # ContextCore Layer 1 Boundary Validation (Exit)
             if result.success and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
                 try:
