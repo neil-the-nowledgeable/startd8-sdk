@@ -142,8 +142,21 @@ def test_router_compiles_and_has_endpoints():
     compile(r, "<editor>", "exec")
     assert '@editor_resume_final_edit_router.get("/resume-wizard/{id}/edit"' in r
     assert '@editor_resume_final_edit_router.post("/resume-wizard/{id}/edit"' in r
-    assert "stmt = stmt.where(ResumeBuildItem.included == True)" in r       # filter equality WHERE
+    assert "stmt = stmt.where(ResumeBuildItem.included.is_(True))" in r     # bool filter → .is_()
     assert "stmt = stmt.order_by(ResumeBuildItem.orderIndex)" in r          # order_by
+
+
+def test_filter_bool_and_null_use_is_not_equals():
+    """SQLAlchemy correctness: `== None`/`== True` are wrong/non-idiomatic; bool+None → `.is_()`."""
+    schema = "model P { id String @id }\nmodel C { id String @id\n pId String\n txt String?\n flag Boolean\n}\n"
+    views = (
+        "editors:\n  e:\n    parent: P\n    child: C\n    fk: pId\n    edit_field: txt\n"
+        "    filter: { flag: false, txt: null }\n    route: /e/{id}/edit\n"
+    )
+    (spec,) = parse_editors(views, known_entities=frozenset({"P", "C"}))
+    r = render_editor_router(schema, views, spec)
+    assert "C.flag.is_(False)" in r and "C.txt.is_(None)" in r
+    assert "== None" not in r and "== True" not in r and "== False" not in r
 
 
 def test_editor_check_round_trip_and_skip_hook():

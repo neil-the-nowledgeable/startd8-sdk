@@ -84,10 +84,15 @@ def render_editor_router(schema_text: str, views_text: str, spec: EditorSpec) ->
         if spec.default_value else "_resolve_default = None\n\n"
     )
 
-    # filter equality clauses (own-column == literal); identical expr drives GET render + POST allow-list
-    filter_clauses = "".join(
-        f"    stmt = stmt.where({child}.{col} == {value!r})\n" for col, value in spec.filter
-    )
+    # filter clauses (own-column == literal); identical expr drives GET render + POST allow-list.
+    # bool/None MUST use `.is_()`: SQLAlchemy renders `== None` as `col = NULL` (never matches) and
+    # `== True` is non-idiomatic (E712); `.is_(...)` is correct for all three. Scalars use `==`.
+    def _flt(col, value):
+        if value is None or isinstance(value, bool):
+            return f"    stmt = stmt.where({child}.{col}.is_({value!r}))\n"
+        return f"    stmt = stmt.where({child}.{col} == {value!r})\n"
+
+    filter_clauses = "".join(_flt(col, value) for col, value in spec.filter)
     order_clause = f"    stmt = stmt.order_by({child}.{spec.order_by})\n" if spec.order_by else ""
     group_expr = f"getattr(child, {spec.group_by!r})" if has_group else "None"
 
@@ -120,8 +125,9 @@ def render_editor_router(schema_text: str, views_text: str, spec: EditorSpec) ->
         f'            logger.exception("editor {n}: default_value resolver failed for a row")\n'
         f"    val = getattr(child, {ef!r})\n"
         f'    return val if val is not None else ""\n\n\n'
-        f"def _norm(s):  # FR-ED-12: normalize one trailing newline (<textarea> appends one)\n"
-        f'    s = s or ""\n'
+        f"def _norm(s):  # FR-ED-12: CRLF→LF + strip one trailing newline (browsers CRLF-normalize"
+        f" <textarea>)\n"
+        f'    s = (s or "").replace("\\r\\n", "\\n").replace("\\r", "\\n")\n'
         f'    return s[:-1] if s.endswith("\\n") else s\n\n\n'
         f"def _group_{n}(rows):\n"
         + (
