@@ -987,6 +987,26 @@ def render_view_prose_fragment(prose, fallback_title: str) -> str:
     return "".join(parts)
 
 
+def render_view_empty_fragment(prose) -> str:
+    """The untracked no-rows fragment (``app/templates/views/_<name>.empty.html``). No header.
+
+    Holds only the escaped ``empty`` copy; the owned template wraps the include in its own
+    ``{% if not rows %}`` so the structural condition stays hashed while the *words* do not. Editing the
+    ``empty`` text only rewrites this fragment ⇒ ``--check`` stays green. Phase 2 (model-compose only).
+    """
+    import html
+
+    return f'<p class="empty">{html.escape(prose.empty)}</p>\n'
+
+
+def _view_empty_block(v: ViewSpec, default_html: str, has_empty: bool) -> str:
+    """The model-compose no-rows line: include the untracked empty fragment when authored, else today's
+    literal (byte-identical when absent). The ``{% if not rows %}`` guard stays in the owned template."""
+    if has_empty:
+        return '{% if not rows %}{% include "views/_' + v.module + '.empty.html" %}{% endif %}\n'
+    return default_html
+
+
 def render_view_index_template(
     v: ViewSpec, schema_sha: str, views_sha: str, has_prose: bool = False
 ) -> str:
@@ -1018,7 +1038,7 @@ def render_view_index_template(
 
 def render_view_template(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
-    has_prose: bool = False,
+    has_prose: bool = False, has_empty: bool = False,
 ) -> str:
     head = (
         "{#\n"
@@ -1089,11 +1109,14 @@ def render_view_template(
             '{% if not item.linked %}<p class="unlinked">not yet linked</p>{% endif %}\n'
             if v.relations else ""
         )
+        empty_default = (
+            f'{{% if not rows %}}<p class="empty">No {v.root} records yet — add one to start the map.</p>{{% endif %}}\n'
+        )
         block = (
             '{% extends "base.html" %}\n{% block content %}\n'
-            + _view_title_block(v, has_prose) +
-            f'{{% if not rows %}}<p class="empty">No {v.root} records yet — add one to start the map.</p>{{% endif %}}\n'
-            "{% for item in rows %}<section><h2>" + heading + "</h2>\n"
+            + _view_title_block(v, has_prose)
+            + _view_empty_block(v, empty_default, has_empty)
+            + "{% for item in rows %}<section><h2>" + heading + "</h2>\n"
             + unlinked + rel_lines +
             "</section>{% endfor %}\n"
             "{% endblock %}\n"
@@ -1630,13 +1653,22 @@ def render_views(
     view_prose = parse_view_prose(
         view_prose_text, known_views=frozenset(v.module for v in views)
     )
-    # A model-scoped export view has no HTML template (served as raw JSON/Markdown), so there is no
-    # surface to host its title/intro in Phase 1 — loud-fail rather than silently drop the prose.
+    # Surface guards (loud-fail rather than silently drop authored prose):
+    #  - a model-scoped export has no HTML template at all (served as raw JSON/Markdown);
+    #  - `empty` only has a clean no-rows surface on a model-scoped detail-compose today.
     for v in views:
-        if _is_model_export(v) and v.module in view_prose:
+        p = view_prose.get(v.module)
+        if p is None:
+            continue
+        if _is_model_export(v):
             raise ValueError(
                 f"view_prose.yaml: view {v.module!r} is a model-scoped export with no HTML page — "
                 "its title/intro need an HTML landing surface (Phase 2), not available yet"
+            )
+        if p.empty and not _is_model_compose(v):
+            raise ValueError(
+                f"view_prose.yaml: view {v.module!r} uses `empty`, but only a model-scoped "
+                "detail-compose has a no-rows surface today (Phase 2 will add the others)"
             )
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
@@ -1651,22 +1683,29 @@ def render_views(
         ))
     for v in views:
         vd = view_displays.get(v.module)            # FR-DM-6: per-view display (None ⇒ today's output)
-        prose = view_prose.get(v.module)            # view-chrome copy (None ⇒ literal title, today's output)
-        has_prose = prose is not None
+        prose = view_prose.get(v.module)            # view-chrome copy (None ⇒ today's literal output)
+        # The heading include fires on title/intro presence; `empty` is independent (a view may carry
+        # only `empty`, leaving its title literal). Both default off ⇒ byte-identical when absent.
+        has_chrome = bool(prose and (prose.title or prose.intro))
+        has_empty = bool(prose and prose.empty)
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
             continue  # served as raw Markdown/JSON responses — no template at all (AR-3)
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
-                                         has_prose=has_prose)))
-        if has_prose:  # untracked fragment (no header ⇒ not an owned file ⇒ skipped by drift/--check)
+                                         has_prose=has_chrome, has_empty=has_empty)))
+        # Untracked fragments (no header ⇒ not owned files ⇒ skipped by drift/--check).
+        if has_chrome:
             out.append((f"app/templates/views/_{v.module}.prose.html",
                         render_view_prose_fragment(prose, v.module)))
+        if has_empty:
+            out.append((f"app/templates/views/_{v.module}.empty.html",
+                        render_view_empty_fragment(prose)))
         if v.kind == "detail-compose" and "{" not in v.route:
             out.append((
                 f"app/templates/views/{v.module}_index.html",
-                render_view_index_template(v, s_sha, v_sha, has_prose=has_prose),
+                render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome),
             ))
     out.append(("app/views/routes.py", render_view_router(views, s_sha, v_sha)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))

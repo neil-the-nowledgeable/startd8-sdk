@@ -19,10 +19,11 @@ Distinct from the ``rendered-content`` archetype's ``prose_key`` / ``app/views/_
 an *entity's text column*). This is *view-chrome* copy; the standalone file + ``ViewProse`` type keep the
 two "prose" concepts uncollided.
 
-**Phase 1 keys:** ``title``, ``intro``. The Phase-2 keys (``empty``, ``controls``, ``success``,
-``error``) each need a render surface that does not exist uniformly yet (``empty`` is archetype-specific;
-``controls`` need stable ids; ``success``/``error`` need an HTML outcome surface), so they are
-**reserved**: present-but-unbuilt → loud-fail, so nobody authors against a surface that isn't there.
+**Phase 1 keys:** ``title``, ``intro``. **Phase 2 (this increment):** ``empty`` — the no-rows panel
+state, archetype-specific (only ``detail-compose`` *model* scope has a clean surface today, so ``empty``
+on any other archetype loud-fails in :func:`render_views`). The remaining Phase-2 keys (``controls``,
+``success``, ``error``) still need a render surface (stable control ids; an HTML outcome surface) and
+stay **reserved**: present-but-unbuilt → loud-fail, so nobody authors against a surface that isn't there.
 """
 
 from __future__ import annotations
@@ -32,19 +33,22 @@ from typing import Dict, Optional
 
 import yaml
 
-# Phase-1 view-chrome keys (static text rendered into the untracked fragment).
-_PROSE_KEYS = {"title", "intro"}
-# Reserved (Phase-2) keys — each awaits a render surface; present ⇒ loud-fail (reserved-until-built,
-# mirroring the SDK's `filters:`/`forms:` reserved-key policy). See VIEW_PROSE_PLAN §2.
-_RESERVED_KEYS = {"empty", "controls", "success", "error"}
+# View-chrome keys rendered into the untracked fragment. ``title``/``intro`` (Phase 1) live in the
+# heading fragment; ``empty`` (Phase 2) renders into its own no-rows fragment and is valid only on
+# archetypes that expose a no-rows surface (enforced per-view in render_views, which knows the kind).
+_PROSE_KEYS = {"title", "intro", "empty"}
+# Still-reserved (Phase-2-pending) keys — each awaits a render surface; present ⇒ loud-fail
+# (reserved-until-built, mirroring the SDK's `filters:`/`forms:` reserved-key policy). See PLAN §2.
+_RESERVED_KEYS = {"controls", "success", "error"}
 
 
 @dataclass(frozen=True)
 class ViewProse:
-    """View-chrome copy for a single composite view (Phase 1)."""
+    """View-chrome copy for a single composite view (title/intro = Phase 1; empty = Phase 2)."""
 
     title: Optional[str] = None
     intro: Optional[str] = None
+    empty: Optional[str] = None
 
 
 def parse_view_prose(

@@ -95,7 +95,7 @@ def test_unknown_key_loud_fails():
         parse_view_prose("value_map:\n  bogus: x\n")
 
 
-@pytest.mark.parametrize("key", ["empty", "controls", "success", "error"])
+@pytest.mark.parametrize("key", ["controls", "success", "error"])
 def test_reserved_phase2_keys_loud_fail(key):
     with pytest.raises(ValueError, match="reserved"):
         parse_view_prose(f"value_map:\n  {key}: x\n")
@@ -193,3 +193,52 @@ def test_editing_prose_content_does_not_trip_check():
     assert dict(render_views(SCHEMA, VIEWS, None, edited))[_TMPL] == owned
     # …so --check stays green even though the words changed.
     assert views_in_sync(SCHEMA, VIEWS, "proj/" + _TMPL, owned, None, edited) is True
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — the `empty` key (model-compose no-rows surface, own untracked fragment)
+# --------------------------------------------------------------------------- #
+
+_EFRAG = "app/templates/views/_value_map.empty.html"
+
+
+def test_empty_parses_and_is_a_view_prose_field():
+    out = parse_view_prose("value_map:\n  empty: No data yet.\n")
+    assert out["value_map"] == ViewProse(empty="No data yet.")
+
+
+def test_empty_only_keeps_literal_title_and_emits_only_empty_fragment():
+    out = dict(render_views(SCHEMA, VIEWS, None, "value_map:\n  empty: No value map yet.\n"))
+    assert "<h1>value_map</h1>" in out[_TMPL]              # title stays literal (no title/intro authored)
+    assert "app/templates/views/_value_map.prose.html" not in out  # no heading fragment
+    assert _EFRAG in out and "No value map yet." in out[_EFRAG]
+    assert '{% if not rows %}{% include "views/_value_map.empty.html" %}{% endif %}' in out[_TMPL]
+    assert "No value map yet." not in out[_TMPL]           # the words live in the fragment, not the template
+
+
+def test_empty_fragment_escapes_and_is_unowned():
+    out = dict(render_views(SCHEMA, VIEWS, None, 'value_map:\n  empty: "A & B <x>"\n'))
+    assert "<p class=\"empty\">A &amp; B &lt;x&gt;</p>" in out[_EFRAG]
+    assert is_owned_view_file(out[_EFRAG]) is False
+
+
+def test_title_and_empty_emit_both_fragments():
+    out = dict(render_views(SCHEMA, VIEWS, None, "value_map:\n  title: Your value map\n  empty: None yet.\n"))
+    assert "app/templates/views/_value_map.prose.html" in out
+    assert _EFRAG in out
+    assert '{% include "views/_value_map.prose.html" %}' in out[_TMPL]
+    assert '{% include "views/_value_map.empty.html" %}' in out[_TMPL]
+
+
+def test_editing_empty_text_does_not_trip_check():
+    p = "value_map:\n  empty: Nothing here yet.\n"
+    owned = dict(render_views(SCHEMA, VIEWS, None, p))[_TMPL]
+    edited = p.replace("Nothing here yet.", "A completely different empty message")
+    assert dict(render_views(SCHEMA, VIEWS, None, edited))[_TMPL] == owned
+    assert views_in_sync(SCHEMA, VIEWS, "proj/" + _TMPL, owned, None, edited) is True
+
+
+def test_empty_on_non_model_compose_loud_fails():
+    # computed-panel has no no-rows surface today → loud-fail rather than silently drop.
+    with pytest.raises(ValueError, match="no-rows surface"):
+        render_views(SCHEMA, VIEWS, None, "completeness_panel:\n  empty: x\n")
