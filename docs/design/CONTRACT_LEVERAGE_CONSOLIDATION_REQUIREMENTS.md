@@ -1,7 +1,7 @@
 # Contract Leverage & Consolidation — Requirements
 
-**Version:** 0.2 (Deeper investigation — root cause found)
-**Date:** 2026-06-11
+**Version:** 0.3 (Plan fold-back — load-bearing OQs resolved)
+**Date:** 2026-06-12
 **Status:** Draft
 **Lens:** *Essential vs. accidental complexity.* The goal is **not to add contract usage** — the SDK
 already leverages contracts heavily — but to **consolidate fragmented contract machinery** and close
@@ -122,6 +122,11 @@ complexity. **The test for any change: does it move us toward this single flow, 
   path, but the persisted form is the contract-of-record). This is the reachability fix that makes
   AC-1 solvable; it adds one file and removes the forcing function for the `api_signatures`
   duplication. **No new contract *type/model* — only persistence of the existing one.**
+  *(v0.3: OQ-3 resolved — `ForwardManifest`/`InterfaceContract`/`ForwardElementSpec` are frozen Pydantic
+  v2 models that round-trip cleanly via `model_dump_json`/`model_validate_json`; only `_*_index`
+  `PrivateAttr`s are excluded and rebuilt lazily. **FR-CL-1 is trivial, no pre-work.** OQ-4 resolved —
+  canonical write location is the **run/seed output dir** the detached SCR globs (`prime-context-seed*.json`),
+  NOT `.startd8/`; the post-mortem falls back to that same path.)*
 - **FR-CL-2 (E2 — reviewer reads the contract).** The SCR reviewer rubric MUST validate against the
   feature's `InterfaceContract.binding_text` (+ `ForwardElementSpec`s) from the persisted manifest,
   with `requirement_text` as *supporting* context — not the sole basis. **Gate:** a behavior test on a
@@ -131,9 +136,20 @@ complexity. **The test for any change: does it move us toward this single flow, 
   `{e.name for e in api_sig_sourced_specs} == required_symbol_names(api_signatures)` over a corpus;
   ship the deletion only when parity holds (preserve the "required deliverable" semantics, i.e. filter
   to `api_sig`-sourced elements, not all manifest elements).
+  *(v0.3: OQ-5 resolved with a caveat — there is **no provenance/source tag** on `ForwardElementSpec`.
+  api_sig-sourced **class/function/method** specs carry `source_contract_id` (`extractor.py:781,890`);
+  **variable/constant specs do NOT** (`extractor.py:794-799`). So the parity set must be derived by
+  walking `InterfaceContract`s with `source_reference=="deterministic"` and collecting their element
+  names via the contract→element index — not by filtering specs on a tag. If variables break parity,
+  narrow E1 to functions/classes/methods and keep `_NAME_RE`'s variable arm rather than add a model
+  field (weigh against AG-1).)*
 - **FR-CL-3b (E3 — drop the prose round-trip).** Remove the prose embedding of `api_signatures` in
   `task_description` (the P0 structured `InterfaceContract` binding is strictly richer). **Gate:**
   golden-prompt diff shows only the prose block removed; structured binding unchanged.
+  *(v0.3: location corrected — the prose fusion happens **upstream in the design/seed stage**
+  (`consumption_map.py:72-76`), **not** in `spec_builder.py` as v0.2 implied. The edit/gate relocate to
+  the consumption-map layer. If that fused prose has consumers beyond the generation prompt, reclassify
+  E3 as a separate generation-side slice (lower value than E1/E2, which fix the SCR asymmetry directly).)*
 - **FR-CL-3c (anti-regression).** After E1/E2/E3, **no consumer re-parses `api_signatures`** — it is an
   extractor input only. A test/grep guard SHOULD assert no `api_signatures` regex parse outside the
   extractor.
@@ -185,15 +201,15 @@ win but is its own slice, explicitly to *remove* machinery, never add — sequen
 - **OQ-1.** Does the contract let the reviewer **drop** reliance on `requirement_text` for the
   signature/element checks (pure simplification), or must prose stay for behavior the contract can't
   express? (Resolve in the E2 build; likely: contract for *structure*, prose for *behavior*.)
-- **OQ-3 (new, load-bearing).** **Persistence schema** — what exactly does `forward-manifest.json`
-  serialize, and does `ForwardManifest`/`InterfaceContract` already round-trip via Pydantic
-  `model_dump`/`model_validate`? (If yes, FR-CL-1 is trivial; if the in-memory object carries
-  un-serializable state, scope that first.)
-- **OQ-4 (new).** Does the **detached SCR** know the run dir / can it locate `forward-manifest.json`
-  next to the seed it already reads? (Confirms the reachability the keystone assumes.)
-- **OQ-5 (new).** E1 parity edge: the manifest's elements come from `api_signatures` **and** design/AST;
-  filtering to `source_contract_id ∈ api_sig` must reproduce `_NAME_RE`'s set exactly — verify the
-  extractor tags `api_sig` sources distinctly.
+- ~~**OQ-3 (load-bearing).**~~ **RESOLVED (v0.3):** clean Pydantic round-trip; no un-serializable state
+  (`_*_index` are `PrivateAttr`, auto-excluded/rebuilt). `binding_text` is a stored field. **FR-CL-1 trivial.**
+- ~~**OQ-4.**~~ **RESOLVED (v0.3):** the detached SCR globs the **run/seed output dir** for
+  `prime-context-seed*.json` (`requirement_loader._select_seed_file`); write `forward-manifest.json`
+  there (NOT `.startd8/`) for reachability; post-mortem falls back to the same dir.
+- ~~**OQ-5.**~~ **RESOLVED (v0.3, with caveat):** no provenance tag on `ForwardElementSpec`; api_sig
+  class/function/method specs carry `source_contract_id`, **variables do not**. Derive the parity set
+  via `InterfaceContract`s with `source_reference=="deterministic"`; handle variables explicitly (narrow
+  E1 if they break parity). See FR-CL-3 note.
 
 ---
 
@@ -205,3 +221,10 @@ input (E2), and the prose round-trip (E3) — `−1 parser, −2 raw consumption
 consumers unified on one artifact. Net complexity strongly **down**. `api_signatures` becomes
 extractor-input-only. The big assembler refactor (FR-CL-6) stays a separate complexity-reducing slice.
 Anti-goals: no new contract type/enricher/validator; persistence ≠ a new model.*
+
+*v0.3 — Plan fold-back. The implementation plan
+(`CONTRACT_LEVERAGE_AND_CONTRACTS_ADOPTION_PLAN_v0.1.md`) resolved the three load-bearing OQs: OQ-3
+(clean Pydantic round-trip → FR-CL-1 trivial), OQ-4 (write next to the seed in the run output dir, not
+`.startd8/`), OQ-5 (no provenance tag — derive the api_sig set via `source_contract_id` on deterministic
+contracts; variables untagged). E3's prose embedding was relocated from `spec_builder` to
+`consumption_map` (design/seed stage). Spine unchanged: keystone + 3 gated deletions.*
