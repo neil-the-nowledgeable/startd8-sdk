@@ -368,9 +368,18 @@ def test_success_error_on_non_import_flow_loud_fails():
 # Phase 2 — controls (import-flow button/checkbox labels → per-control untracked fragments)
 # --------------------------------------------------------------------------- #
 
-def test_controls_parse_to_mapping():
-    out = parse_view_prose('model_import:\n  controls: {validate: "Check this file"}\n')
-    assert out["model_import"].controls == {"validate": "Check this file"}
+def test_controls_parse_to_normalized_mapping():
+    # string shorthand and {label, help} both normalize to {label, help?}.
+    out = parse_view_prose(
+        'model_import:\n'
+        '  controls:\n'
+        '    validate: "Check this file"\n'
+        '    restore: { label: "Restore my data", help: "Upserts; never deletes." }\n'
+    )
+    assert out["model_import"].controls == {
+        "validate": {"label": "Check this file"},
+        "restore": {"label": "Restore my data", "help": "Upserts; never deletes."},
+    }
 
 
 def test_no_controls_is_byte_identical():
@@ -416,6 +425,64 @@ def test_controls_on_non_import_flow_loud_fails():
         render_views(SCHEMA, views, None, "cp:\n  controls: {validate: x}\n")
 
 
-def test_control_label_must_be_string():
-    with pytest.raises(ValueError, match="label string"):
-        parse_view_prose("model_import:\n  controls: {validate: {label: x}}\n")
+def test_control_value_must_be_string_or_mapping():
+    with pytest.raises(ValueError, match="label string or a"):
+        parse_view_prose("model_import:\n  controls: {validate: 123}\n")
+
+
+def test_control_full_form_requires_label_and_rejects_unknown_inner_keys():
+    with pytest.raises(ValueError, match="requires a string `label`"):
+        parse_view_prose("model_import:\n  controls: {validate: {help: hi}}\n")
+    with pytest.raises(ValueError, match="unknown keys"):
+        parse_view_prose("model_import:\n  controls: {validate: {label: a, bogus: x}}\n")
+
+
+# --------------------------------------------------------------------------- #
+# Follow-ups — control help text + export-package format-link labels
+# --------------------------------------------------------------------------- #
+
+def test_control_help_emits_help_fragment_and_small_element():
+    p = (
+        'model_import:\n'
+        '  controls:\n'
+        '    validate: { label: "Check this file", help: "A dry run — writes nothing." }\n'
+        '    restore: "Restore my data"\n'   # string form → no help
+    )
+    out = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, p))
+    tmpl = "app/templates/views/model_import.html"
+    assert out["app/templates/views/_model_import.control.validate.help.html"] == "A dry run — writes nothing."
+    assert "app/templates/views/_model_import.control.restore.help.html" not in out
+    assert '<small class="control-help">{% include "views/_model_import.control.validate.help.html" %}</small>' in out[tmpl]
+    assert out[tmpl].count("control-help") == 1   # only the one control with help
+
+
+def test_editing_control_help_does_not_trip_check():
+    tmpl = "app/templates/views/model_import.html"
+    p = 'model_import:\n  controls: {validate: {label: "Check", help: "writes nothing"}}\n'
+    owned = dict(render_views(SCHEMA, _IMPORT_VIEWS, None, p))[tmpl]
+    edited = p.replace("writes nothing", "just inspects the file")
+    assert dict(render_views(SCHEMA, _IMPORT_VIEWS, None, edited))[tmpl] == owned
+    assert views_in_sync(SCHEMA, _IMPORT_VIEWS, "p/" + tmpl, owned, None, edited) is True
+
+
+def test_export_link_labels_render_via_controls():
+    p = 'full_export:\n  title: "Export your value model"\n  controls: {markdown: "Get Markdown", json: "Get JSON"}\n'
+    out = dict(render_views(SCHEMA, _EXPORT_VIEWS, None, p))
+    assert out["app/templates/views/_full_export.control.markdown.html"] == "Get Markdown"
+    assert '{% include "views/_full_export.control.markdown.html" %}' in out["app/templates/views/full_export.html"]
+    assert "Download as Markdown" not in out["app/templates/views/full_export.html"]
+    assert "@views_router.get('/export', response_class=HTMLResponse)" in out["app/views/routes.py"]
+
+
+def test_export_controls_only_still_opts_into_landing():
+    # controls without title/intro still triggers the landing page (+ bare route), with a literal title.
+    out = dict(render_views(SCHEMA, _EXPORT_VIEWS, None, 'full_export:\n  controls: {markdown: "MD"}\n'))
+    land = out["app/templates/views/full_export.html"]
+    assert "<h1>full_export</h1>" in land   # literal title (no chrome authored)
+    assert '{% include "views/_full_export.control.markdown.html" %}' in land
+    assert "@views_router.get('/export', response_class=HTMLResponse)" in out["app/views/routes.py"]
+
+
+def test_unknown_export_control_id_loud_fails():
+    with pytest.raises(ValueError, match="unknown control-id"):
+        render_views(SCHEMA, _EXPORT_VIEWS, None, "full_export:\n  controls: {pdf: x}\n")

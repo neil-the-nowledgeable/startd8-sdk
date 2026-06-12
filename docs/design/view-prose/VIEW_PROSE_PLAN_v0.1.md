@@ -169,13 +169,16 @@ both `views.yaml prose:` and a parked `prisma/view_prose.yaml`) in favor of the 
     (`render_import_result_template`) + untracked outcome fragment (`render_view_outcome_fragment`,
     `{token}`→Jinja). Only the restore route changes (template untouched). **Validate stays JSON** ⇒ closed
     set: `success`⊆`{imported}`/`{total}`, `error`⊆`{errors}` (the `{counts}` token was validate-only; dropped).
-  - **`controls` — DONE (2d), import-flow labels.** Per-control untracked fragment
+  - **`controls` — DONE (2d + follow-ups).** Per-control untracked fragment
     (`_<name>.control.<id>.html`); the button/label text becomes an `{% include %}` only for authored
     controls ⇒ byte-identical absent. **R1-S5 caveat RETIRED:** no HTML-id stamping is needed — the
-    control-id is the *manifest key* (the closed `{validate, restore, confirm}` enum), not an HTML
-    attribute — so there is **no hashed-template change for apps without controls prose, hence no
-    downstream `--check` bump.** v1 = label strings only; help text + export-format-link labels are
-    follow-ups. Unknown id / non-import-flow / non-string label loud-fail. **No keys remain reserved.**
+    control-id is the *manifest key* (a closed per-archetype enum), not an HTML attribute — so there is
+    **no hashed-template change for apps without controls prose, hence no downstream `--check` bump.**
+    Control values accept a `label` string **or** a `{label, help}` mapping (help → a trailing `<small>`
+    from its own untracked fragment). **Both control archetypes ship:** import-flow
+    (`validate`/`restore`/`confirm`) and the export landing's format links (`markdown`/`json` — controls
+    alone also opt the export into its landing). Unknown id / non-supported-archetype / malformed value
+    loud-fail. **No keys remain reserved.**
 
 > v0.4 had `success`/`error` in Phase 1. Planning moves them to Phase 2: there is **no HTML surface**
 > to render outcome copy into, and they touch exactly one archetype. Shipping title/intro/empty first

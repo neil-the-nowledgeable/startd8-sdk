@@ -53,7 +53,7 @@ class ViewProse:
     empty: Optional[str] = None
     success: Optional[str] = None
     error: Optional[str] = None
-    controls: Optional[Dict[str, str]] = None  # control-id -> label (validity checked in render_views)
+    controls: Optional[Dict[str, Dict[str, str]]] = None  # control-id -> {label, help?} (validity in render_views)
 
 
 def parse_view_prose(
@@ -101,13 +101,37 @@ def parse_view_prose(
                 raise ValueError(
                     f"view_prose.yaml: entry {view!r} `controls` must be a mapping of control-id -> label"
                 )
-            cvals: Dict[str, str] = {}
-            for cid, label in controls.items():
-                if not isinstance(label, str):  # v1: label string only (help text is a later increment)
+            cvals: Dict[str, Dict[str, str]] = {}
+            for cid, cval in controls.items():
+                cid = str(cid)
+                if isinstance(cval, str):                      # shorthand: control-id -> label
+                    cvals[cid] = {"label": cval}
+                elif isinstance(cval, dict):                   # full form: { label, help? }
+                    extra = set(cval) - {"label", "help"}
+                    if extra:
+                        raise ValueError(
+                            f"view_prose.yaml: entry {view!r} control {cid!r} has unknown keys "
+                            f"{sorted(extra)} (allowed: label, help)"
+                        )
+                    label = cval.get("label")
+                    if not isinstance(label, str):
+                        raise ValueError(
+                            f"view_prose.yaml: entry {view!r} control {cid!r} requires a string `label`"
+                        )
+                    entry = {"label": label}
+                    help_text = cval.get("help")
+                    if help_text is not None:
+                        if not isinstance(help_text, str):
+                            raise ValueError(
+                                f"view_prose.yaml: entry {view!r} control {cid!r} `help` must be a string"
+                            )
+                        entry["help"] = help_text
+                    cvals[cid] = entry
+                else:
                     raise ValueError(
-                        f"view_prose.yaml: entry {view!r} control {str(cid)!r} must be a label string"
+                        f"view_prose.yaml: entry {view!r} control {cid!r} must be a label string "
+                        "or a {label, help} mapping"
                     )
-                cvals[str(cid)] = label
             if cvals:
                 vals["controls"] = cvals
         if vals:  # an entry with no recognized values is inert (no fragment, byte-identical output)

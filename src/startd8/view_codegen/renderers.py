@@ -772,7 +772,7 @@ def _is_model_compose(v: ViewSpec) -> bool:
 
 def render_view_router(
     views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str,
-    chrome_views: "frozenset[str]" = frozenset(),
+    export_landing_views: "frozenset[str]" = frozenset(),
     success_views: "frozenset[str]" = frozenset(),
     error_views: "frozenset[str]" = frozenset(),
 ) -> str:
@@ -836,7 +836,7 @@ def render_view_router(
                 f"def {v.module}_json_route(session: Session = Depends(get_session)):\n"
                 f"    return Response({v.module}_json(session), media_type='application/json')"
             )
-            if v.module in chrome_views:  # Phase-2 export landing: a bare HTML page for /export
+            if v.module in export_landing_views:  # Phase-2 export landing: a bare HTML page for /export
                 routes.append(
                     f"@views_router.get({(base or '/')!r}, response_class=HTMLResponse)\n"
                     f"def {v.module}(request: Request):\n"
@@ -1052,12 +1052,15 @@ def _view_empty_block(v: ViewSpec, default_html: str, has_empty: bool) -> str:
     return default_html
 
 
-def render_export_landing_template(v: ViewSpec, schema_sha: str, views_sha: str) -> str:
-    """Owned HTML landing for a model-scoped export-package (Phase 2). Emitted ONLY when the export
-    view has title/intro prose — so ``/export`` (a 404 today) becomes a page that explains the export
-    and links the two download formats. The heading/intro come from the untracked prose fragment
-    (``{% include %}``); the two format links are fixed structure (their *labels* are a later
-    ``controls`` increment). Byte-identical-when-absent holds because this whole file is opt-in.
+def render_export_landing_template(
+    v: ViewSpec, schema_sha: str, views_sha: str, has_chrome: bool = True,
+    control_ids: "frozenset[str]" = frozenset(), help_ids: "frozenset[str]" = frozenset(),
+) -> str:
+    """Owned HTML landing for a model-scoped export-package (Phase 2). Emitted when the export view has
+    title/intro prose **or** `controls` link labels — so ``/export`` (a 404 today) becomes a page that
+    explains the export and links the two download formats. Heading/intro come from the untracked prose
+    fragment (when chrome); the format-link *labels*/*help* come from control fragments (when authored).
+    Byte-identical-when-absent holds because the whole file is opt-in.
     """
     head = (
         "{#\n"
@@ -1069,12 +1072,15 @@ def render_export_landing_template(v: ViewSpec, schema_sha: str, views_sha: str)
         "#}\n"
     )
     base = v.route.rstrip("/")
+    title = _view_title_block(v, True) if has_chrome else f"<h1>{v.module}</h1>\n"
     block = (
         '{% extends "base.html" %}\n{% block content %}\n'
-        + _view_title_block(v, True)  # landing exists only with chrome ⇒ always the fragment include
+        + title
         + '<ul class="export-formats">\n'
-        + f'  <li><a href="{base}/markdown">Download as Markdown</a></li>\n'
-        + f'  <li><a href="{base}/json">Download as JSON</a></li>\n'
+        + f'  <li><a href="{base}/markdown">' + _control_text(v, "markdown", "Download as Markdown", control_ids) + "</a>"
+        + _control_help(v, "markdown", help_ids).strip() + "</li>\n"
+        + f'  <li><a href="{base}/json">' + _control_text(v, "json", "Download as JSON", control_ids) + "</a>"
+        + _control_help(v, "json", help_ids).strip() + "</li>\n"
         + "</ul>\n"
         + "{% endblock %}\n"
     )
@@ -1116,26 +1122,46 @@ def render_view_outcome_fragment(copy: str, kind: str, where: str) -> str:
     return f'<p class="io-outcome">{body}</p>\n'
 
 
-# Closed per-archetype control-id set (the manifest key, not an HTML id). import-flow exposes the
-# upload form's three controls; an unknown control-id loud-fails. (Export-link labels are a follow-up.)
+# Closed per-archetype control-id sets (the manifest key, not an HTML id); an unknown control-id
+# loud-fails. import-flow = the upload form's three controls; export-package (model) = the two
+# download-link labels on its landing page.
 _IMPORT_CONTROLS = frozenset({"validate", "restore", "confirm"})
+_EXPORT_CONTROLS = frozenset({"markdown", "json"})
 
 
-def render_control_fragment(label: str) -> str:
-    """Untracked control-label fragment (``_<name>.control.<id>.html``). No header, no wrapper, no
-    trailing newline — it is ``{% include %}``d as inline button/label text, so it carries only the
-    escaped label. Editing the label rewrites only this fragment ⇒ the owned template is unchanged."""
+def _archetype_controls(v: ViewSpec) -> "frozenset[str] | None":
+    """The valid control-id set for *v*'s archetype, or ``None`` if it exposes no labelled controls."""
+    if v.kind == "import-flow":
+        return _IMPORT_CONTROLS
+    if _is_model_export(v):
+        return _EXPORT_CONTROLS
+    return None
+
+
+def render_control_fragment(text: str) -> str:
+    """Untracked control text fragment (``_<name>.control.<id>.html`` / ``.help.html``). No header, no
+    wrapper, no trailing newline — it is ``{% include %}``d as inline label/help text, so it carries
+    only the escaped string. Editing it rewrites only this fragment ⇒ the owned template is unchanged."""
     import html
 
-    return html.escape(label)
+    return html.escape(text)
 
 
 def _control_text(v: ViewSpec, cid: str, default: str, control_ids: "frozenset[str]") -> str:
-    """A control's visible text: the untracked fragment include when authored, else today's literal —
-    so an import-flow with no `controls` renders byte-identically (no HTML-id stamping, no drift)."""
+    """A control's visible label: the untracked fragment include when authored, else today's literal —
+    so a view with no `controls` renders byte-identically (no HTML-id stamping, no drift)."""
     if cid in control_ids:
         return '{% include "views/_' + v.module + ".control." + cid + '.html" %}'
     return default
+
+
+def _control_help(v: ViewSpec, cid: str, help_ids: "frozenset[str]") -> str:
+    """A control's optional help text as a trailing ``<small>`` (its own untracked fragment), or ``""``
+    when no help was authored — so help is additive and absent ⇒ no change."""
+    if cid in help_ids:
+        return ('  <small class="control-help">{% include "views/_'
+                + v.module + ".control." + cid + '.help.html" %}</small>\n')
+    return ""
 
 
 def render_import_result_template(v: ViewSpec, schema_sha: str, views_sha: str, kind: str) -> str:
@@ -1193,7 +1219,7 @@ def render_view_index_template(
 def render_view_template(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
     has_prose: bool = False, has_empty: bool = False,
-    control_ids: "frozenset[str]" = frozenset(),
+    control_ids: "frozenset[str]" = frozenset(), help_ids: "frozenset[str]" = frozenset(),
 ) -> str:
     head = (
         "{#\n"
@@ -1301,14 +1327,17 @@ def render_view_template(
             f'<form method="post" action="{base}/validate" enctype="multipart/form-data">\n'
             '  <input type="file" name="file" required>\n'
             '  <button type="submit">' + _control_text(v, "validate", "Validate", control_ids) + "</button>\n"
-            "</form>\n"
+            + _control_help(v, "validate", help_ids)
+            + "</form>\n"
             f'<form method="post" action="{base}/restore" enctype="multipart/form-data">\n'
             '  <input type="file" name="file" required>\n'
             '  <label><input type="checkbox" name="confirm" value="restore"> '
             + _control_text(v, "confirm", "I understand this writes to the database", control_ids)
             + "</label>\n"
-            '  <button type="submit">' + _control_text(v, "restore", "Restore", control_ids) + "</button>\n"
-            "</form>\n"
+            + _control_help(v, "confirm", help_ids)
+            + '  <button type="submit">' + _control_text(v, "restore", "Restore", control_ids) + "</button>\n"
+            + _control_help(v, "restore", help_ids)
+            + "</form>\n"
             "{% endblock %}\n"
         )
     elif v.kind == "export-package":  # served as JSON; template is a minimal placeholder
@@ -1828,16 +1857,18 @@ def render_views(
                 "has a restore-outcome surface (other archetypes have no write outcome to report)"
             )
         if p.controls:
-            if v.kind != "import-flow":
+            allowed = _archetype_controls(v)
+            if allowed is None:
                 raise ValueError(
                     f"view_prose.yaml: view {v.module!r} uses `controls`, but only an import-flow "
-                    "exposes labelled controls today (export-link labels are a follow-up)"
+                    "(validate/restore/confirm) or a model-scoped export-package (markdown/json) "
+                    "exposes labelled controls"
                 )
-            bad = set(p.controls) - _IMPORT_CONTROLS
+            bad = set(p.controls) - allowed
             if bad:
                 raise ValueError(
                     f"view_prose.yaml: view {v.module!r} has unknown control-id(s) {sorted(bad)} "
-                    f"(import-flow controls: {sorted(_IMPORT_CONTROLS)})"
+                    f"(allowed for this archetype: {sorted(allowed)})"
                 )
     s_sha, v_sha = schema_sha256(schema_text), schema_sha256(views_text)
 
@@ -1858,21 +1889,37 @@ def render_views(
         has_chrome = bool(prose and (prose.title or prose.intro))
         has_empty = bool(prose and prose.empty)
         control_ids = frozenset(prose.controls) if (prose and prose.controls) else frozenset()
+        help_ids = frozenset(
+            cid for cid, c in prose.controls.items() if c.get("help")
+        ) if (prose and prose.controls) else frozenset()
+
+        def _control_frags():  # emit label + optional help fragment per authored control (untracked)
+            for cid, c in prose.controls.items():
+                out.append((f"app/templates/views/_{v.module}.control.{cid}.html",
+                            render_control_fragment(c["label"])))
+                if c.get("help"):
+                    out.append((f"app/templates/views/_{v.module}.control.{cid}.help.html",
+                                render_control_fragment(c["help"])))
+
         out.append((_module_path(v), render_view_module(
             v, s_sha, v_sha, schema=schema, views=views, view_display=vd)))
         if _is_model_export(v):
-            # Served as raw Markdown/JSON (no template) — UNLESS the export carries title/intro, in
-            # which case it opts into a Phase-2 HTML landing page (+ a bare route, see render_view_router).
-            if has_chrome:
+            # Served as raw Markdown/JSON (no template) — UNLESS the export carries title/intro OR
+            # control link-labels, in which case it opts into a Phase-2 HTML landing page (+ bare route).
+            if has_chrome or control_ids:
                 out.append((f"app/templates/views/{v.module}.html",
-                            render_export_landing_template(v, s_sha, v_sha)))
-                out.append((f"app/templates/views/_{v.module}.prose.html",
-                            render_view_prose_fragment(prose, v.module)))
+                            render_export_landing_template(v, s_sha, v_sha, has_chrome=has_chrome,
+                                                           control_ids=control_ids, help_ids=help_ids)))
+                if has_chrome:
+                    out.append((f"app/templates/views/_{v.module}.prose.html",
+                                render_view_prose_fragment(prose, v.module)))
+                if control_ids:
+                    _control_frags()
             continue
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
                                          has_prose=has_chrome, has_empty=has_empty,
-                                         control_ids=control_ids)))
+                                         control_ids=control_ids, help_ids=help_ids)))
         # Untracked fragments (no header ⇒ not owned files ⇒ skipped by drift/--check).
         if has_chrome:
             out.append((f"app/templates/views/_{v.module}.prose.html",
@@ -1880,10 +1927,8 @@ def render_views(
         if has_empty:
             out.append((f"app/templates/views/_{v.module}.empty.html",
                         render_view_empty_fragment(prose)))
-        if control_ids:  # one untracked fragment per authored control label (button/checkbox text)
-            for cid, label in prose.controls.items():
-                out.append((f"app/templates/views/_{v.module}.control.{cid}.html",
-                            render_control_fragment(label)))
+        if control_ids:
+            _control_frags()
         # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an
         # owned result page the restore route renders (see render_view_router). Each independently gated.
         if v.kind == "import-flow" and prose:
@@ -1903,13 +1948,17 @@ def render_views(
                 f"app/templates/views/{v.module}_index.html",
                 render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome),
             ))
-    # The router gains a bare HTML landing route only for export views that carry chrome, and renders
-    # an HTML restore result only for import-flows that carry success/error (others unchanged ⇒
-    # byte-identical when no such prose, incl. all Phase-1 manifests).
-    chrome_views = frozenset(name for name, p in view_prose.items() if p.title or p.intro)
+    # The router gains a bare HTML landing route only for export views that opt into a landing page
+    # (title/intro OR control link-labels), and renders an HTML restore result only for import-flows
+    # that carry success/error (others unchanged ⇒ byte-identical absent, incl. all Phase-1 manifests).
+    export_modules = {v.module for v in views if _is_model_export(v)}
+    export_landing_views = frozenset(
+        name for name, p in view_prose.items()
+        if name in export_modules and (p.title or p.intro or p.controls)
+    )
     success_views = frozenset(name for name, p in view_prose.items() if p.success)
     error_views = frozenset(name for name, p in view_prose.items() if p.error)
     out.append(("app/views/routes.py", render_view_router(
-        views, s_sha, v_sha, chrome_views, success_views, error_views)))
+        views, s_sha, v_sha, export_landing_views, success_views, error_views)))
     out.append(("tests/test_views.py", render_view_tests(views, schema, s_sha, v_sha)))
     return tuple(out)
