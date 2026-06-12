@@ -126,6 +126,15 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
 - **Gate (hard):** **behavior test** — verdicts on a known corpus must not regress, specifically the
   **Run-029 missing-symbol case** (must still FAIL).
 - **Tests:** corpus behavior test; manifest-absent path falls back to prose (FR-CC-1).
+- **STATUS: DONE.** `render_rubric(contract_bindings=...)` renders `INTERFACE CONTRACT BINDINGS`
+  (binding_text) as the authority and drops the raw `API SIGNATURES` line when a manifest is present;
+  falls back to api_signatures prose otherwise. `contract_bindings_for_feature()` extracts
+  feature-scoped deterministic-contract bindings; orchestrator threads them via
+  `reviewer.review(..., contract_bindings=)`. RUBRIC_VERSION 1→2. Gates run here: prompt-content
+  (bindings present vs. fallback), feature scoping, no-manifest degrade (43 SCR tests green).
+  **NOTE:** the Run-029 *missing-symbol* guarantee is enforced by the deterministic backstop (WI-3),
+  independent of the rubric; the LLM-*verdict* corpus regression test needs a live API key and is
+  deferred to a keyed run (the manifest-less e2e path is unchanged, so no regression there).
 
 ### WI-5 — FR-CL-3b (E3): drop the `api_signatures` prose round-trip
 - **Reality check (§1):** the prose embedding is upstream in `consumption_map.py:72-76` (design/seed

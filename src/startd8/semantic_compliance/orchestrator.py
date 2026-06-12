@@ -33,7 +33,12 @@ from .models import (
     VerificationIssue,
 )
 from .requirement_loader import SeedIndex, load_forward_manifest
-from .reviewer import AgentFactory, ReviewOutcome, SemanticReviewer
+from .reviewer import (
+    AgentFactory,
+    ReviewOutcome,
+    SemanticReviewer,
+    contract_bindings_for_feature,
+)
 from .signature_check import missing_required_symbols
 from .scoring import aggregate_score, compute_compliance_score
 from .triage import TriageCandidate, reviewable, triage
@@ -172,13 +177,16 @@ class SemanticComplianceOrchestrator:
             # inconclusive and do NOT cache it (an environment issue, retry next run).
             return self._inconclusive(c, selection, InconclusiveReason.CODE_UNAVAILABLE)
 
-        outcome = self.reviewer.review(loaded, code, fqn)
+        # E2 (FR-CL-2): give the LLM rubric the structured contract bindings the
+        # generator was bound to (binding_text), not just raw api_signatures prose.
+        contracts = getattr(self._forward_manifest, "contracts", None)
+        bindings = contract_bindings_for_feature(contracts, c.feature_id)
+        outcome = self.reviewer.review(loaded, code, fqn, contract_bindings=bindings)
         # FR-17 deterministic backstop: a required api_signature symbol absent from the FULL code is
         # a critical fail — override a lenient LLM verdict (run-029: PI-001 missing jobs_dashboard /
         # job_workspace yet passed as a low issue while app boot crashed).
         # E1: prefer the structured contract (forward manifest) for function/class
         # names; api_signatures is re-parsed only for the variable residual.
-        contracts = getattr(self._forward_manifest, "contracts", None)
         missing = missing_required_symbols(
             code, loaded.api_signatures, contracts=contracts, feature_id=c.feature_id,
         )
