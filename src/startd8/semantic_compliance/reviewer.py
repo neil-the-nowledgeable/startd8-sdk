@@ -52,6 +52,31 @@ def _default_agent_factory(spec: str) -> object:
     return resolve_agent_spec(spec, name="scr-reviewer")
 
 
+def contract_bindings_for_feature(
+    contracts: Optional[List[object]],
+    feature_id: Optional[str],
+) -> List[str]:
+    """``InterfaceContract.binding_text`` for the feature's api-sig-derived contracts (E2).
+
+    The structured authority the rubric validates against (FR-CL-2): the extractor
+    already turned ``api_signatures`` into contracts with a ``binding_text``; reading
+    those removes the reviewer's reliance on the raw prose. Scoped to the feature via
+    ``applicable_task_ids`` (empty = project-wide). Returns ``[]`` when no manifest is
+    available so the caller degrades to the api_signatures prose.
+    """
+    bindings: List[str] = []
+    for c in contracts or []:
+        if getattr(c, "source_reference", None) != "deterministic":
+            continue
+        applicable = getattr(c, "applicable_task_ids", None) or []
+        if applicable and feature_id is not None and feature_id not in applicable:
+            continue
+        text = getattr(c, "binding_text", None)
+        if text and text not in bindings:
+            bindings.append(text)
+    return bindings
+
+
 class SemanticReviewer:
     def __init__(self, config: ReportConfig, agent_factory: Optional[AgentFactory] = None) -> None:
         self.config = config
@@ -62,6 +87,7 @@ class SemanticReviewer:
         loaded: LoadedRequirement,
         generated_code: str,
         element_fqn: str,
+        contract_bindings: Optional[List[str]] = None,
     ) -> ReviewOutcome:
         if (loaded.language or "python").lower() != "python":
             # v1 is Python-only — never mis-verdict another language (R2-S1).
@@ -70,7 +96,9 @@ class SemanticReviewer:
             )
 
         code, truncated = self._bound_input(generated_code)
-        cheap = self._one_pass(self.config.model_cheap, Tier.CHEAP, loaded, code, element_fqn)
+        cheap = self._one_pass(
+            self.config.model_cheap, Tier.CHEAP, loaded, code, element_fqn, contract_bindings,
+        )
         cheap.truncated = truncated
 
         theta = self.config.theta or 0.7
@@ -78,7 +106,9 @@ class SemanticReviewer:
         if not needs_escalation or cheap.verdict.inconclusive_reason is not None:
             return cheap
 
-        sonnet = self._one_pass(self.config.model_escalation, Tier.ESCALATED, loaded, code, element_fqn)
+        sonnet = self._one_pass(
+            self.config.model_escalation, Tier.ESCALATED, loaded, code, element_fqn, contract_bindings,
+        )
         sonnet.truncated = truncated
         return sonnet  # Sonnet is terminal — no further escalation (R4-S2)
 
@@ -97,6 +127,7 @@ class SemanticReviewer:
         loaded: LoadedRequirement,
         code: str,
         element_fqn: str,
+        contract_bindings: Optional[List[str]] = None,
     ) -> ReviewOutcome:
         prompt = render_rubric(
             feature_id=loaded.feature_id,
@@ -107,6 +138,7 @@ class SemanticReviewer:
             api_signatures=loaded.api_signatures,
             negative_scope=loaded.negative_scope,
             generated_code=code,
+            contract_bindings=contract_bindings,
         )
         raw = self._call(model_spec, prompt)
         if raw is None:

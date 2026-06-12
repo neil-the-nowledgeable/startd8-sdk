@@ -131,6 +131,12 @@ complexity. **The test for any change: does it move us toward this single flow, 
   feature's `InterfaceContract.binding_text` (+ `ForwardElementSpec`s) from the persisted manifest,
   with `requirement_text` as *supporting* context — not the sole basis. **Gate:** a behavior test on a
   known corpus (verdicts must not regress on the Run-029 missing-symbol case).
+  *(v0.3.1 — **IMPLEMENTED.** The rubric renders `INTERFACE CONTRACT BINDINGS` (binding_text from the
+  feature's deterministic contracts) as the structured authority and drops the raw `API SIGNATURES`
+  line when a manifest is present; `requirement_text` stays as behaviour context (OQ-1). Falls back to
+  api_signatures prose with no manifest (FR-CC-1). The Run-029 *missing-symbol* gate is held by the
+  WI-3 deterministic backstop regardless of the rubric; the LLM-verdict corpus regression test needs a
+  live API key — deferred to a keyed run.)*
 - **FR-CL-3 (E1 — one parser).** The SCR `signature_check` MUST use the manifest's `api_sig`-sourced
   `ForwardElementSpec.name`s and **`_NAME_RE` MUST be deleted**. **Gate:** a parity test —
   `{e.name for e in api_sig_sourced_specs} == required_symbol_names(api_signatures)` over a corpus;
