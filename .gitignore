@@ -160,3 +160,8 @@ secrets.json
 
 # Runtime exemplar registry — rewritten (timestamp) on every run/test; not shared state.
 exemplar-registry.json
+
+# Model-benchmark design docs — kept local (reflective-requirements / CRP / ADR working set).
+# Scoped to top-level *.md so tracked seeds/ and results/ stay tracked.
+docs/design/model-benchmark/*.md
+docs/design/model-benchmark/.startd8/
