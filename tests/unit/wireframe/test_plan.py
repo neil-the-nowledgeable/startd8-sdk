@@ -227,6 +227,27 @@ def test_forms_section_surfaces_on_create(golden_copy: Path) -> None:
     assert plan.section("views").status == Status.PLANNED
 
 
+def test_view_copy_coverage_surfaces_in_views_section(golden_copy: Path) -> None:
+    """FR-WCI-1: the wireframe reports which views carry authored copy (view_prose.yaml) vs render
+    raw machine names, keyed by VIEW name — completing the pre-gen readout for the words layer."""
+    # No view_prose.yaml → every view reads "copy: raw"; the package summarizes 0/N.
+    views = _plan(golden_copy).section("views")
+    pkg = next(i for i in views.items if i.label == "views package")
+    assert "view copy: 0/1 authored" in (pkg.detail or "")
+    pd = next(i for i in views.items if i.label.startswith("profile_dashboard"))
+    assert "copy: raw" in pd.detail
+
+    # Author copy for the view → it flips to "authored" and the package summary updates.
+    (golden_copy / "prisma" / "view_prose.yaml").write_text(
+        'profile_dashboard:\n  title: "Your profile"\n', encoding="utf-8"
+    )
+    views2 = _plan(golden_copy).section("views")
+    pkg2 = next(i for i in views2.items if i.label == "views package")
+    assert "view copy: 1/1 authored" in (pkg2.detail or "")
+    pd2 = next(i for i in views2.items if i.label.startswith("profile_dashboard"))
+    assert "copy: authored" in pd2.detail
+
+
 def test_merge_warnings_surface_in_plan(mini_root: Path) -> None:
     a = mini_root / "a.yaml"
     b = mini_root / "b.yaml"

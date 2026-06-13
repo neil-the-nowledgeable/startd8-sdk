@@ -33,6 +33,7 @@ from ..languages.prisma_parser import PrismaSchema, parse_prisma_schema
 from ..logging_config import get_logger
 from ..scaffold_codegen.manifest import AppManifest, parse_app_manifest
 from ..view_codegen.manifest import ViewSpec, parse_views
+from ..view_codegen.view_prose import parse_view_prose
 from .inputs import AssemblyInputs
 
 logger = get_logger(__name__)
@@ -72,6 +73,7 @@ _ABSENT_STATUS = {
     "ai_passes": Status.NOT_DEFINED,
     "human_inputs": Status.DEFAULTS,
     "completeness": Status.DEFAULTS,
+    "view_prose": Status.DEFAULTS,   # absent ⇒ raw machine-name view chrome (today's behavior)
 }
 
 _ABSENT_CONSEQUENCE = {
@@ -584,9 +586,15 @@ def _forms_section(
 
 
 def _views_section(
-    schema_state: _ManifestState, views_state: _ManifestState
+    schema_state: _ManifestState, views_state: _ManifestState,
+    view_prose_state: Optional[_ManifestState] = None,
 ) -> WireframeSection:
     status = worst(schema_state.status, views_state.status)
+    # FR-WCI-1: which views carry authored copy (title/intro/…) vs. render with raw machine names.
+    chromed = (
+        set(view_prose_state.parsed)
+        if view_prose_state is not None and view_prose_state.parsed else set()
+    )
     worst_state = (
         schema_state
         if _PRECEDENCE[schema_state.status] <= _PRECEDENCE[views_state.status]
@@ -603,9 +611,13 @@ def _views_section(
             error=worst_state.error, error_truncated=worst_state.error_truncated,
         )
     specs: Tuple[ViewSpec, ...] = views_state.parsed
+    n_chromed = sum(1 for v in specs if v.name in chromed)
+    pkg_detail = (
+        f"view copy: {n_chromed}/{len(specs)} authored" if specs else None
+    )
     items = [
         WireframeItem(
-            "views package", status,
+            "views package", status, detail=pkg_detail,
             paths=("app/views/__init__.py", "app/views/routes.py", "tests/test_views.py"),
         )
     ]
@@ -630,6 +642,7 @@ def _views_section(
                 f"app/views/{v.module}.py",
                 f"app/templates/views/{v.module}.html",
             )
+        detail += f" · copy: {'authored' if v.name in chromed else 'raw'}"
         items.append(WireframeItem(f"{v.name} ({v.kind})", status, detail=detail, paths=paths))
     return WireframeSection(
         "views", "Composite Views", status, tuple(items), consequence=_consequence(worst_state)
@@ -808,6 +821,9 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
     states["views"] = _yaml_state(
         "views", *texts["views"], lambda t: parse_views(t, known_entities=known)
     )
+    # FR-WCI-1: view copy (the WORDS layer). Keyed by VIEW name (matches `_views_section`'s idents,
+    # not model names) so per-view chrome coverage lines up.
+    states["view_prose"] = _yaml_state("view_prose", *texts["view_prose"], parse_view_prose)
 
     # Status overrides from the assembly-inputs YAML (FR-W6/R2-F1). Conflicts between an
     # override and disk reality join merge_warnings — visible in tree + JSON, never only logged.
@@ -824,7 +840,7 @@ def build_wireframe_plan(inputs: AssemblyInputs, *, authoring: bool = False) -> 
         _entities_section(schema_state),
         _pages_section(states["pages"], authoring=authoring),
         _forms_section(schema_state, states["human_inputs"], texts["views"][0]),
-        _views_section(schema_state, states["views"]),
+        _views_section(schema_state, states["views"], states["view_prose"]),
         _content_section(inputs, states["pages"], states["ai_passes"]),
         _completeness_section(states["completeness"], schema_state),
     )

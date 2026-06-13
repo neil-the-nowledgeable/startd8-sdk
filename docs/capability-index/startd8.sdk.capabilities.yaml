@@ -728,6 +728,64 @@ capabilities:
         description: "REQUIREMENTS v0.3 (reflective loop + OQ-8 spike) + PLAN v1.2"
     confidence: 0.8
 
+  - capability_id: startd8.codegen.composite_views
+    category: generate
+    maturity: beta
+    summary: "Deterministically (no LLM, $0) project a `views.yaml` over a closed archetype vocabulary (dashboard/board/workspace/detail-compose/export-package/import-flow/computed-panel) into owned, drift-checked composite-view modules + templates + routes — the third determinism class (relational/multi-entity views) beyond single-entity CRUD"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 generate views --schema prisma/schema.prisma --views prisma/views.yaml
+        [--display prisma/display.yaml] [--view-prose prisma/view_prose.yaml] [--check]`
+        (view_codegen.render_views) emits app/views/*.py + app/templates/views/*.html + routes
+        from the contract + a strict-parsed views.yaml. display.yaml drives FR-DM-6 label
+        resolution; view_prose.yaml the words layer (see startd8.codegen.view_prose). Owned/
+        $0.00-skippable via CompositeViewProvider; the skip-hook threads schema+views+display+
+        view_prose so display-/prose-configured views are recognized (FR-DRC-4).
+      agent: |
+        from startd8.view_codegen import render_views
+        for rel, content in render_views(schema_text, views_text, display_text, view_prose_text):
+            ...  # write rel -> content; each owned/$0.00-skip + --check drift-checkable
+    triggers: ["generate views", "composite views", "value map", "dashboard view", "views.yaml", "detail-compose", "computed-panel", "import-flow"]
+    evidence:
+      - type: code
+        ref: src/startd8/view_codegen/
+        description: "manifest.py (ViewSpec + parse_views, 7 archetypes) + renderers.py (render_views + per-archetype emitters) + provider.py (CompositeViewProvider skip-hook) + drift.py"
+      - type: test
+        ref: tests/unit/view_codegen/
+        description: "view spec parsing + per-archetype rendering + display/view_prose threading + provider recognition lock"
+    confidence: 0.8
+
+  - capability_id: startd8.codegen.view_prose
+    category: generate
+    maturity: beta
+    summary: "Deterministically ($0, no LLM) render authored view COPY (title/intro/empty/success/error/controls) for composite views into HEADER-LESS untracked fragments the owned template {% include %}s ONLY when copy is present — so absent ⇒ byte-identical, editing copy never trips --check (the words layer, kept OUTSIDE the drift hash); ALSO compiled from the kickoff requirements doc via manifest_extraction (FR-VCE)"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        `startd8 generate views --view-prose prisma/view_prose.yaml` consumes a standalone,
+        strict-parsed `view_prose.yaml` (keyed by view name) and renders per-view chrome into
+        untracked fragments. Per-archetype validity (empty→model detail-compose; success/error/
+        controls→import-flow) is enforced end-to-end. The kickoff requirements doc is its
+        PRODUCER: `extract_view_prose` (manifest_extraction) compiles `### View:` Title/Intro/
+        Empty state/Success/Error/Controls into view_prose.yaml ($0), round-tripped through
+        parse_view_prose at ingestion. The wireframe reports per-view copy coverage (FR-WCI-1).
+      agent: |
+        from startd8.view_codegen.view_prose import parse_view_prose
+        prose = parse_view_prose(open("prisma/view_prose.yaml").read())  # {view: ViewProse}
+    triggers: ["view prose", "view copy", "view_prose.yaml", "title intro empty", "view chrome", "no screen shows a raw machine name"]
+    evidence:
+      - type: code
+        ref: src/startd8/view_codegen/view_prose.py
+        description: "parse_view_prose + ViewProse (the consumer); strict per-key/per-view validation"
+      - type: code
+        ref: src/startd8/manifest_extraction/extractors.py
+        description: "extract_view_prose (the kickoff→view_prose.yaml compiler, FR-VCE-1/2)"
+      - type: test
+        ref: tests/unit/view_codegen/test_view_prose.py
+        description: "fragment rendering + drift-stability + per-archetype validity; + manifest_extraction/test_view_prose_extraction.py (the compiler)"
+    confidence: 0.8
+
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
