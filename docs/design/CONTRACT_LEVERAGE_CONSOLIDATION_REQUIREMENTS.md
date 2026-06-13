@@ -179,6 +179,11 @@ complexity. **The test for any change: does it move us toward this single flow, 
 - **FR-CL-3c (anti-regression).** After E1/E2/E3, **no consumer re-parses `api_signatures`** — it is an
   extractor input only. A test/grep guard SHOULD assert no `api_signatures` regex parse outside the
   extractor.
+  *(v0.3.1 — **IMPLEMENTED, scoped to the SCR.** Guard: `signature_check.py` is the only module in
+  `semantic_compliance/` that imports `re`. **Scope correction:** the literal "outside the extractor" is
+  too broad — `plan_ingestion_micro_ingest._parse_api_signature` and `micro_prime` element-gen parse
+  api_signatures *upstream* to build the manifest the SCR now consumes; they are not the SCR↔generation
+  asymmetry the consolidation closed. The guard is scoped to the SCR and names the upstream parsers.)*
 
 ### B. Shed adjacent accidental complexity (opportunistic, while in these files)
 - **FR-CL-4.** *(DEFERRED — planning downgrade.)* `binding_text` is a **stored, serialized Pydantic
@@ -187,6 +192,11 @@ complexity. **The test for any change: does it move us toward this single flow, 
   opportunistic edit. (AC-7 stands as a known smell.)
 - **FR-CL-5.** De-duplicate the `parser_tier` severity calibration to one helper (AC-8) — the only true
   small, safe consolidation.
+  *(v0.3.1 — **AC-8 premise corrected; shipped as a clarity/testability refactor.** The calibration was
+  **not** duplicated: `forward_manifest.py:608` is a *skip-on-None* (unsupported-language) check, not
+  severity logic; the `advisory→warning` mapping lives only at `validator.py:96`. Extracted it into a
+  named, unit-tested `severity_for_parser_tier()` (single home for the load-bearing FR-5 rule) rather
+  than manufacture a cross-file "dedup" that would only add indirection.)*
 - **FR-CL-6.** *(direction, not this pass)* A single **generation-context assembler** that renders
   contract facets + the **one** unified guidance section (folding the 3 hint streams, AC-4, and the
   3-way security derivation, AC-3) once, consumed by both spec and draft (AC-5).

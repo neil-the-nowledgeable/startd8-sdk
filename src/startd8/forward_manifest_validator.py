@@ -65,6 +65,23 @@ def validate_forward_manifest(
     return violations
 
 
+def severity_for_parser_tier(parser_tier: Optional[str]) -> str:
+    """Calibrate violation severity to the parser's confidence (MULTILANG FR-5).
+
+    An element miss confirmed by an *authoritative* (AST-grade) parse is an
+    ``error``; a miss from an *advisory* (regex-grade) parse is a ``warning`` — a
+    regex blind spot must NOT block a review for an element that is actually
+    present. An unset tier (``None`` — the legacy Python path) is treated as
+    authoritative (backward-compatible).
+
+    Single home for the FR-5 calibration (FR-CL-5). NOTE: ``forward_manifest.py``
+    also reads ``parser_tier`` but for a *different* decision (skip a file whose
+    language is unsupported, ``parser_tier is None``) — that is not severity
+    calibration, so it is intentionally not routed through here.
+    """
+    return "warning" if parser_tier == "advisory" else "error"
+
+
 def _validate_file_spec(
     file_path: str,
     spec: ForwardFileSpec,
@@ -93,7 +110,7 @@ def _validate_file_spec(
     # violation (R1-F9) so a downstream classifier can discount advisory misses. An unset
     # tier (None — legacy Python path) is treated as authoritative (backward-compatible).
     tier = getattr(file_manifest, "parser_tier", None)
-    severity = "warning" if tier == "advisory" else "error"
+    severity = severity_for_parser_tier(tier)  # tier itself is stamped on each violation below
 
     elements = _flatten_elements(file_manifest.elements)
 

@@ -160,6 +160,13 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
 - **Add:** a test that greps `src/` for `api_signatures` regex parsing and asserts the only matches are
   in `forward_manifest_extractor._extract_api_signatures`. (Allowlist that one site.)
 - **Gate:** runs in CI; fails if a new consumer re-parses `api_signatures`.
+- **STATUS: DONE (scoped to the SCR).** Implemented as a robust, non-brittle guard:
+  `signature_check.py` is the **only** module in `semantic_compliance/` that imports `re` — a new SCR
+  parser would import `re` in a new file and trip the test. **Scope correction:** FR-CL-3c's literal
+  "no parse outside the extractor" is too broad — `plan_ingestion_micro_ingest._parse_api_signature`
+  and `micro_prime` element-gen legitimately parse api_signatures *upstream* (they feed the manifest
+  the SCR now reads); those are not the asymmetry E1/E2 closed. The guard is therefore scoped to the
+  SCR (the consolidation's domain) and documents the upstream parsers explicitly.
 
 ### WI-7 — FR-CL-5: dedup `parser_tier` severity calibration
 - **Files:** `forward_manifest.py:608`, `forward_manifest_validator.py:89-96`.
@@ -167,6 +174,14 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   "error"`) into one location; import at both sites. Note the two sites do slightly different things
   (one *skips* on `None`, one *maps* severity) — factor only the shared **severity-mapping** logic.
 - **Tests:** unit on the helper; existing validator tests unchanged.
+- **STATUS: DONE (premise corrected).** AC-8 claimed the calibration was duplicated across
+  `forward_manifest.py:608` + the validator. On inspection that was a **misread**: line 608 is a
+  *skip-on-None* check (unsupported language), **not** severity logic. The `advisory→warning` mapping
+  lives in exactly one place (`validator.py:96`). So there was no duplication to remove. Shipped the
+  honest improvement instead: extracted `severity_for_parser_tier()` — a named, **unit-tested** home
+  for the load-bearing FR-5 rule ("advisory misses never block"), ready if a second caller appears.
+  Caught and fixed a self-inflicted bug during extraction (the `tier` var is also stamped on each
+  violation — kept it). 95 validator/manifest tests green.
 
 ### WI-8 — FR-REG-2: surface `compare_contracts` at validate/CLI time
 - **File:** the `manifest validate` CLI path (locate the existing `manifest` command group in `cli.py`).
