@@ -147,11 +147,26 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
     (it is generation-side, not the SCR asymmetry — lower value than E1/E2).
 - **Decision rule:** prefer (a) if the only consumer of the fused prose is the generation prompt and the
   golden diff is clean; else (b). Record the decision in v0.3 of the reqs (step 2).
+- **STATUS: DONE (option a).** Precise site was `plan_ingestion_enrichment._enrich_api_signatures`
+  (not `consumption_map`, which is only a doc map). Verified the structured carrier is complete for
+  generation: `spec_builder` consumes only `forward_contracts`/`forward_element_specs`, and
+  `_format_forward_element_specs` renders variables/constants too — so removing the prose block loses
+  nothing (OQ-5's gap is SCR-filtering-only, not generation). Kept the structured `ctx["api_signatures"]`
+  population. Updated both density measures to count the structured field. 4 affected enrichment/density
+  tests updated; 0 new failures vs main baseline. **Real-run golden-prompt validation (token saving, no
+  quality regression) needs a keyed pipeline run — required before merging to main.**
 
 ### WI-6 — FR-CL-3c: anti-regression guard
 - **Add:** a test that greps `src/` for `api_signatures` regex parsing and asserts the only matches are
   in `forward_manifest_extractor._extract_api_signatures`. (Allowlist that one site.)
 - **Gate:** runs in CI; fails if a new consumer re-parses `api_signatures`.
+- **STATUS: DONE (scoped to the SCR).** Implemented as a robust, non-brittle guard:
+  `signature_check.py` is the **only** module in `semantic_compliance/` that imports `re` — a new SCR
+  parser would import `re` in a new file and trip the test. **Scope correction:** FR-CL-3c's literal
+  "no parse outside the extractor" is too broad — `plan_ingestion_micro_ingest._parse_api_signature`
+  and `micro_prime` element-gen legitimately parse api_signatures *upstream* (they feed the manifest
+  the SCR now reads); those are not the asymmetry E1/E2 closed. The guard is therefore scoped to the
+  SCR (the consolidation's domain) and documents the upstream parsers explicitly.
 
 ### WI-7 — FR-CL-5: dedup `parser_tier` severity calibration
 - **Files:** `forward_manifest.py:608`, `forward_manifest_validator.py:89-96`.
@@ -159,12 +174,25 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   "error"`) into one location; import at both sites. Note the two sites do slightly different things
   (one *skips* on `None`, one *maps* severity) — factor only the shared **severity-mapping** logic.
 - **Tests:** unit on the helper; existing validator tests unchanged.
+- **STATUS: DONE (premise corrected).** AC-8 claimed the calibration was duplicated across
+  `forward_manifest.py:608` + the validator. On inspection that was a **misread**: line 608 is a
+  *skip-on-None* check (unsupported language), **not** severity logic. The `advisory→warning` mapping
+  lives in exactly one place (`validator.py:96`). So there was no duplication to remove. Shipped the
+  honest improvement instead: extracted `severity_for_parser_tier()` — a named, **unit-tested** home
+  for the load-bearing FR-5 rule ("advisory misses never block"), ready if a second caller appears.
+  Caught and fixed a self-inflicted bug during extraction (the `tier` var is also stamped on each
+  violation — kept it). 95 validator/manifest tests green.
 
 ### WI-8 — FR-REG-2: surface `compare_contracts` at validate/CLI time
 - **File:** the `manifest validate` CLI path (locate the existing `manifest` command group in `cli.py`).
 - **Change:** add an optional `--against <old-contract>` (or auto-detect prior version) that calls
   `compare_contracts(old, new)` and prints the `DriftReport`; off-run, advisory by default.
 - **Tests:** CLI invocation prints drift; absent ContextCore → graceful no-op (FR-CC-1).
+- **STATUS: DONE.** Fixed the real bug first: `compare_contracts` (and preflight, exit, and
+  plan_ingestion Layer-5) called the **non-existent** `ContractLoader.load_contract(str)` — the correct
+  API is `ContractLoader().load(Path)`. Routed all loads through one `_load_contract` helper. Added
+  `manifest contract-drift <old> <new>` CLI (exit 1 on breaking changes for CI gating, `--format json`).
+  Smoke-tested against a real ContextContract fixture.
 
 ### WI-9 — FR-POST: postexec helper + run-end wiring
 - **File:** `workflows/_contracts_integration.py` (new `run_postexec(workflow, result, *, fail_closed)`)
@@ -173,11 +201,22 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   chain-integrity + final exit requirements (**no L4 cross-ref** — OQ-5). Advisory by default; attach
   findings to the run's post-mortem artifacts (FR-POST-2). Route through the single helper (FR-CC-5).
 - **Tests:** mirror the preflight tests (noop without contract_path; never raises; fail_closed accepted).
+- **STATUS: DONE.** Added `run_postexec()` to the single helper (chain-integrity + final exit; **no**
+  `runtime_summary` → L4 cross-ref deferred, OQ-5) and wired it into both `run`/`arun` after exit
+  validation. **Also consolidated the L4 exit validation** (previously duplicated inline in run+arun and
+  doubly-dead: `load_contract` + a non-existent `has_blocking_violations()`) into
+  `run_exit_validation()`, advisory by default (`exit_validation_fail_closed` to block). Verified
+  against a real ContextContract: postexec returns a `PostExecutionReport`; exit `fail_closed` now
+  actually blocks on blocking failures (was silently dead).
 
 ### WI-10 — FR-CC-4: verify OTel emission
 - **Check:** confirm preflight/postexec/regression findings emit via OTel (not just `get_logger` text).
   If the project's convention is span events/metrics, add them; else document that `get_logger` (with the
   OTel log bridge) satisfies FR-CC-4 and add a test asserting a log record is produced.
+- **STATUS: DONE.** All findings emit via `get_logger(__name__)`, which carries the SDK's OTel log
+  bridge (→ Loki) per the project convention — this satisfies FR-CC-4. Added `caplog` tests asserting
+  preflight and exit findings produce log records. (Span-event/metric emission was not added: the SDK's
+  observability convention for advisory findings is the log bridge, not custom spans.)
 
 ---
 

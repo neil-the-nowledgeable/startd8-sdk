@@ -332,26 +332,30 @@ class TestRequirementRefInjection:
 
 
 class TestApiSignatureStubs:
-    def test_api_signatures_appended(self):
-        """Feature has api_signatures → code block in description."""
-        features = [FakeFeature(
-            "F-1",
-            api_signatures=[
-                'def send_email(to: str, subject: str) -> bool:\n    """Send email."""\n    ...',
-            ],
-        )]
+    def test_api_signatures_populate_structured_field_no_prose(self):
+        """E3 (FR-CL-3b): structured field populated; NO prose block in description.
+
+        The signatures reach generation structurally (forward_contracts /
+        forward_element_specs); the duplicate ``## API Signatures`` prose round-trip
+        is dropped.
+        """
+        sig = 'def send_email(to: str, subject: str) -> bool:\n    """Send email."""\n    ...'
+        features = [FakeFeature("F-1", api_signatures=[sig])]
         tasks = [_make_task("PI-001", feature_id="F-1", description="Implement email.")]
 
         count = _enrich_api_signatures(tasks, {"F-1": features[0]})
 
         assert count == 1
+        # Structured field IS populated (extractor input -> manifest contracts/elements).
+        ctx = tasks[0]["config"]["context"]
+        assert sig in ctx.get("api_signatures", [])
+        # Prose round-trip is gone: description is untouched.
         desc = tasks[0]["config"]["task_description"]
-        assert "## API Signatures" in desc
-        assert "```python" in desc
-        assert "send_email" in desc
+        assert desc == "Implement email."
+        assert "## API Signatures" not in desc
 
-    def test_api_signatures_skip_existing_code(self):
-        """Description already has code blocks → text not doubled, structured field still populated."""
+    def test_api_signatures_structured_field_with_existing_code(self):
+        """Pre-existing code blocks are irrelevant now — only the structured field is set."""
         features = [FakeFeature("F-1", api_signatures=["def foo(): ..."])]
         tasks = [_make_task(
             "PI-001",
@@ -361,26 +365,29 @@ class TestApiSignatureStubs:
 
         count = _enrich_api_signatures(tasks, {"F-1": features[0]})
 
-        # Structured field populated even when description text is not modified
         assert count == 1
         ctx = tasks[0]["config"]["context"]
         assert "def foo(): ..." in ctx.get("api_signatures", [])
-        # Description text NOT modified (no-clobber — no second code block added)
+        # No api_signatures prose block ever added; the pre-existing block is untouched.
         assert tasks[0]["config"]["task_description"].count("```python") == 1
+        assert "## API Signatures" not in tasks[0]["config"]["task_description"]
 
     def test_api_signatures_max_limit(self):
-        """More than 5 signatures → capped at 5."""
+        """More than 5 signatures → structured field capped at 5 (E3: no prose block)."""
         sigs = [f"def func_{i}(): ..." for i in range(10)]
         features = [FakeFeature("F-1", api_signatures=sigs)]
         tasks = [_make_task("PI-001", feature_id="F-1", description="Implement.")]
 
         _enrich_api_signatures(tasks, {"F-1": features[0]})
 
-        desc = tasks[0]["config"]["task_description"]
-        # Should have exactly 5 func_N references
+        # The cap now applies to the structured context field, not a prose block.
+        ctx_sigs = tasks[0]["config"]["context"].get("api_signatures", [])
+        assert len(ctx_sigs) == 5
         for i in range(5):
-            assert f"func_{i}" in desc
-        assert "func_5" not in desc
+            assert f"def func_{i}(): ..." in ctx_sigs
+        assert "def func_5(): ..." not in ctx_sigs
+        # No prose round-trip in the description.
+        assert "## API Signatures" not in tasks[0]["config"]["task_description"]
 
     def test_no_signatures(self):
         """Feature without api_signatures → no change."""
@@ -530,7 +537,11 @@ class TestEnrichOrchestrator:
 
         desc = tasks[0]["config"]["task_description"]
         assert "## Requirements References" in desc
-        assert "## API Signatures" in desc
+        # E3 (FR-CL-3b): api_signatures prose round-trip removed; carried structurally instead.
+        assert "## API Signatures" not in desc
+        assert "def send_email(to: str) -> bool: ..." in (
+            tasks[0]["config"]["context"].get("api_signatures", [])
+        )
 
     def test_all_steps_disabled(self):
         """All config booleans False → no enrichment."""

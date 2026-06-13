@@ -1,0 +1,26 @@
+# Minimal valid ContextCore ContextContract — exercises the SDK's optional contract
+# checks (preflight / exit / postexec / drift) in tests. NOTE: the SDK's own
+# *.contract.yaml files (e.g. plan-ingestion.contract.yaml) are Artisan/gate-schema,
+# NOT ContextContracts, and no workflow currently sets metadata.contract_path to a
+# ContextContract — so this fixture is the only contract these checks can run against.
+schema_version: "1.0"
+pipeline_id: "scr-test-pipeline"
+description: "Two-phase contract used by contract-check unit tests."
+phases:
+  ingest:
+    description: "Ingest phase"
+    entry:
+      required:
+        - name: "project_id"
+          severity: "blocking"
+    exit:
+      required:
+        - name: "plan"
+  build:
+    description: "Build phase"
+    entry:
+      required:
+        - name: "plan"
+    exit:
+      required:
+        - name: "artifacts"

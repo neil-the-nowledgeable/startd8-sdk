@@ -65,7 +65,10 @@ def _compute_density_snapshot(tasks: List[Dict[str, Any]]) -> Any:
             snap.with_target_files += 1
         if _REQ_PATTERN.search(desc):
             snap.with_requirement_refs += 1
-        if "```" in desc:
+        # E3 (FR-CL-3b): api_signatures code stubs now live in the structured
+        # context field, not a prose ``` block — count either so the density
+        # metric stays meaningful after the prose round-trip was removed.
+        if "```" in desc or ctx.get("api_signatures"):
             snap.with_code_examples += 1
         if "## Review Guidance" in desc:
             snap.with_review_guidance += 1
@@ -323,7 +326,18 @@ def _enrich_api_signatures(
     tasks: List[Dict[str, Any]],
     feature_index: Dict[str, Any],
 ) -> int:
-    """Append ## API Signatures code block and populate structured field."""
+    """Populate the structured ``api_signatures`` context field.
+
+    FR-CL-3b (E3): the ``## API Signatures`` prose block is **no longer appended**
+    to ``task_description``. That was a structured→prose round-trip — the same
+    signatures already reach the generation prompt structurally via the forward
+    manifest (``forward_contracts`` binding_text for functions/classes incl.
+    param-less, and ``forward_element_specs`` for functions/classes AND
+    variables/constants — see ``context_resolution._format_forward_element_specs``),
+    which is P0 and strictly richer. We keep populating the structured
+    ``ctx["api_signatures"]`` field (the extractor's input that builds those
+    contracts/elements); only the duplicate prose embedding is dropped.
+    """
     count = 0
     for task in tasks:
         fid = _get_task_feature_id(task)
@@ -333,24 +347,13 @@ def _enrich_api_signatures(
 
         sigs = feat.api_signatures[:_MAX_SIGNATURES_PER_TASK]
 
-        # Always populate the structured context field (merge-with-dedup)
+        # Populate the structured context field (merge-with-dedup). This is the
+        # extractor input; downstream it becomes forward_contracts/element_specs.
         ctx = _ensure_task_context(task)
         existing = set(ctx.get("api_signatures") or [])
         merged = list(existing | set(sigs))
         if merged:
             ctx["api_signatures"] = merged
-
-        # No-clobber on description text: skip fenced block if already present
-        cfg = task.get("config", {})
-        desc = cfg.get("task_description", "") or ""
-        if "```" in desc:
-            logger.debug(
-                "ENRICH-A: skipping api_signatures text for %s (code blocks exist)",
-                task.get("task_id", "?"),
-            )
-        else:
-            sig_block = "\n\n## API Signatures\n```python\n" + "\n\n".join(sigs) + "\n```"
-            cfg["task_description"] = desc + sig_block
 
         count += 1
 

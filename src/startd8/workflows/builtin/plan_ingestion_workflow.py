@@ -3893,12 +3893,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         try:
             from contextcore.contracts.capability.validator import CapabilityValidator
             from contextcore.contracts.propagation.loader import ContractLoader
-            
+
             contract_path = Path(__file__).parent.parent.parent / "contractors" / "contracts" / "plan-ingestion.contract.yaml"
             if contract_path.exists():
                 logger.info("Loading CapabilityContract from %s", contract_path)
-                # We load the contract and initiate the CapabilityValidator
-                contract = ContractLoader.load_contract(str(contract_path))
+                # We load the contract and initiate the CapabilityValidator.
+                # NOTE: ContractLoader.load is an instance method taking a Path — the
+                # old ContractLoader.load_contract(str) did not exist (AttributeError
+                # silently swallowed below, so Layer-5 was dead). This is the correct call.
+                contract = ContractLoader().load(contract_path)
                 validator = CapabilityValidator(contract)
 
                 # We validate entry capabilities

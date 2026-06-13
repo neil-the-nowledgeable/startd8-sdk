@@ -462,32 +462,33 @@ class WorkflowRegistry:
             )
 
         try:
+            # ContextCore Layer 3 Pre-Flight (fail-before-spend) — advisory by default; blocks only
+            # when config sets `preflight_fail_closed`. No-op without a contract or ContextCore.
+            from ._contracts_integration import run_preflight
+
+            if not run_preflight(
+                workflow, config, fail_closed=bool(config.get("preflight_fail_closed", False))
+            ):
+                raise ConfigurationError(
+                    "Pre-flight context-contract check failed (fail-closed) before workflow run"
+                )
+
             result = workflow.run(config, agents, on_progress, dry_run=dry_run)
-            
-            # ContextCore Layer 1 Boundary Validation (Exit)
-            if result.success and not dry_run and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
-                try:
-                    from contextcore.contracts.propagation.validator import BoundaryValidator
-                    from contextcore.contracts.propagation.loader import ContractLoader
-                    
-                    contract = ContractLoader.load_contract(workflow.metadata.contract_path)
-                    validator = BoundaryValidator()
-                    
-                    # Assume workflow output is a dict that represents the exit context
-                    # If it's not a dict, we wrap it
-                    exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
-                    
-                    exit_result = validator.validate_exit(workflow_id, exit_context, contract)
-                    if exit_result.has_blocking_violations():
-                        return WorkflowResult.from_error(
-                            workflow_id, 
-                            f"Context Contract exit validation failed: {exit_result}"
-                        )
-                except ImportError as e:
-                    logger.warning(f"ContextCore not available for contract validation: {e}")
-                except Exception as e:
-                    logger.error(f"Error during context exit validation: {e}", exc_info=True)
-            
+
+            # ContextCore L4 boundary (exit) + L5 post-exec — via the single helper (FR-CC-5),
+            # advisory by default; exit blocks only when config sets `exit_validation_fail_closed`.
+            if result.success and not dry_run:
+                from ._contracts_integration import run_exit_validation, run_postexec
+
+                exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
+                exit_error = run_exit_validation(
+                    workflow_id, workflow, result.output,
+                    fail_closed=bool(config.get("exit_validation_fail_closed", False)),
+                )
+                if exit_error:
+                    return WorkflowResult.from_error(workflow_id, exit_error)
+                run_postexec(workflow, exit_context)
+
             return result
         except Exception as e:
             logger.error(
@@ -530,33 +531,37 @@ class WorkflowRegistry:
             )
 
         try:
+            # ContextCore Layer 3 Pre-Flight (fail-before-spend) — advisory by default; blocks only
+            # when config sets `preflight_fail_closed`. No-op without a contract or ContextCore.
+            from ._contracts_integration import run_preflight
+
+            if not run_preflight(
+                workflow, config, fail_closed=bool(config.get("preflight_fail_closed", False))
+            ):
+                raise ConfigurationError(
+                    "Pre-flight context-contract check failed (fail-closed) before workflow run"
+                )
+
             if hasattr(workflow, 'arun'):
                 result = await workflow.arun(config, agents, on_progress)
             else:
                 # Fall back to sync execution
                 result = workflow.run(config, agents, on_progress)
-                
-            # ContextCore Layer 1 Boundary Validation (Exit)
-            if result.success and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
-                try:
-                    from contextcore.contracts.propagation.validator import BoundaryValidator
-                    from contextcore.contracts.propagation.loader import ContractLoader
-                    
-                    contract = ContractLoader.load_contract(workflow.metadata.contract_path)
-                    validator = BoundaryValidator()
-                    exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
-                    exit_result = validator.validate_exit(workflow_id, exit_context, contract)
-                    
-                    if exit_result.has_blocking_violations():
-                        return WorkflowResult.from_error(
-                            workflow_id, 
-                            f"Context Contract exit validation failed: {exit_result}"
-                        )
-                except ImportError as e:
-                    logger.warning(f"ContextCore not available for contract validation: {e}")
-                except Exception as e:
-                    logger.error(f"Error during context exit validation: {e}", exc_info=True)
-            
+
+            # ContextCore L4 boundary (exit) + L5 post-exec — via the single helper (FR-CC-5),
+            # advisory by default; exit blocks only when config sets `exit_validation_fail_closed`.
+            if result.success:
+                from ._contracts_integration import run_exit_validation, run_postexec
+
+                exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
+                exit_error = run_exit_validation(
+                    workflow_id, workflow, result.output,
+                    fail_closed=bool(config.get("exit_validation_fail_closed", False)),
+                )
+                if exit_error:
+                    return WorkflowResult.from_error(workflow_id, exit_error)
+                run_postexec(workflow, exit_context)
+
             return result
         except Exception as e:
             logger.error(

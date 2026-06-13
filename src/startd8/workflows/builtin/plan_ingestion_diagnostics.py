@@ -457,7 +457,9 @@ def compute_task_density(tasks: List[Dict[str, Any]]) -> List[TaskDensity]:
             task_id=t.get("task_id", ""),
             description_chars=len(desc),
             description_lines=desc.count("\n") + 1 if desc else 0,
-            has_code_examples=_has_code_examples(desc),
+            # E3 (FR-CL-3b): api_signatures code stubs moved to the structured
+            # context field; count them so density doesn't read as a regression.
+            has_code_examples=_has_code_examples(desc) or bool(ctx.get("api_signatures")),
             has_requirements_refs=bool(_REQ_PATTERN.search(desc)),
             has_negative_scope=bool(neg_scope),
         ))

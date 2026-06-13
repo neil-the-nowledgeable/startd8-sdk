@@ -530,3 +530,57 @@ def manifest_dead_code(
             console.print(f"  {fqn}")
         if not candidates:
             console.print("  [dim]No dead code candidates found[/dim]")
+
+
+@manifest_app.command("contract-drift")
+def manifest_contract_drift(
+    old: str = typer.Argument(..., help="Path to the OLD ContextCore ContextContract (YAML)"),
+    new: str = typer.Argument(..., help="Path to the NEW ContextCore ContextContract (YAML)"),
+    fmt: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """Detect propagation-breaking drift between two ContextContract versions (FR-REG-1/2).
+
+    Off-run / CI-friendly: flags added/removed phases and fields a phase stops producing
+    that a downstream phase requires. Exit 1 when breaking changes are found (so CI can gate),
+    0 otherwise. No-op exit 0 with a notice when ContextCore is not installed.
+    """
+    import json as json_mod
+    from startd8.workflows._contracts_integration import compare_contracts
+
+    try:
+        report = compare_contracts(old, new)
+    except Exception as exc:
+        # compare_contracts loads both files eagerly; a missing path or a YAML that
+        # is not a valid ContextContract raises. Fail cleanly (exit 2 = error) rather
+        # than dumping a traceback at the CLI boundary.
+        console.print(f"[red]contract-drift: could not load/parse a contract: {exc}[/red]")
+        raise SystemExit(2)
+    if report is None:
+        console.print(
+            "[yellow]ContextCore not installed — contract-drift is a no-op.[/yellow]"
+        )
+        raise SystemExit(0)
+
+    breaking = getattr(report, "breaking_count", 0) or 0
+    total = getattr(report, "total_changes", 0) or 0
+    changes = getattr(report, "changes", []) or []
+
+    if fmt == "json":
+        console.print_json(json_mod.dumps({
+            "total_changes": total,
+            "breaking_count": breaking,
+            "non_breaking_count": getattr(report, "non_breaking_count", 0),
+            "changes": [str(c) for c in changes],
+        }, indent=2))
+    else:
+        color = "red" if breaking else ("yellow" if total else "green")
+        console.print(
+            f"[bold]Contract drift[/bold]: [{color}]{total} change(s), "
+            f"{breaking} breaking[/{color}]"
+        )
+        for c in changes:
+            console.print(f"  {c}")
+        if not total:
+            console.print("  [dim]No drift — contracts are compatible[/dim]")
+
+    raise SystemExit(1 if breaking else 0)
