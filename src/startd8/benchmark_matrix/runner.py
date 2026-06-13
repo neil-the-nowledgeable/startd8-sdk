@@ -162,9 +162,21 @@ class SubprocessCellExecutor:
         run = run_command(cmd, SDK_ROOT, timeout=self.per_run_timeout_s)
         metrics = extract_metrics(output)
 
+        from ..model_comparison import _latest_match, _load_json
+
+        # Quality fix (M3 smoke): the postmortem report — source of disk_quality_score —
+        # is written to <project_root>/.startd8/, NOT to --output-dir (which holds
+        # prime-result.json). extract_metrics only checks output-dir, so quality comes
+        # back None. Recover it from the project .startd8 dir when missing.
+        if metrics.get("mean_disk_quality_score") is None:
+            pm = _load_json(workdir / ".startd8" / "prime-postmortem-report.json") or {}
+            dq = [f.get("disk_quality_score") for f in (pm.get("features") or [])
+                  if f.get("disk_quality_score") is not None]
+            if dq:
+                metrics["mean_disk_quality_score"] = sum(dq) / len(dq)
+
         # Read benchmark provenance (R1-S4 integrity) from prime-result.json.
         det_skips, integrity_ok = 0, True
-        from ..model_comparison import _latest_match, _load_json
         pr = _load_json(_latest_match(output, "prime-result*.json")) or {}
         prov = pr.get("benchmark_provenance") or {}
         if prov:
