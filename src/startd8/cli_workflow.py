@@ -121,11 +121,19 @@ def workflow_describe(
 
         required = schema.get('required', [])
         for name, prop in schema['properties'].items():
+            if not isinstance(prop, dict):
+                prop = {}
+            # JSON Schema `type` may be a list (e.g. ["string", "null"] for Pydantic v2
+            # Optional fields); rich cannot render a list cell, so normalise to a string.
+            ptype = prop.get('type', '?')
+            if isinstance(ptype, (list, tuple)):
+                ptype = " | ".join(str(t) for t in ptype) or '?'
+            description = prop.get('description') or ''  # description may be present-but-None
             table.add_row(
-                name,
-                prop.get('type', '?'),
+                str(name),
+                str(ptype),
                 "✓" if name in required else "",
-                prop.get('description', '')[:40]
+                str(description)[:40],
             )
 
         console.print(table)
