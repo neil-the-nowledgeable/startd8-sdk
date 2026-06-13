@@ -147,6 +147,14 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
     (it is generation-side, not the SCR asymmetry — lower value than E1/E2).
 - **Decision rule:** prefer (a) if the only consumer of the fused prose is the generation prompt and the
   golden diff is clean; else (b). Record the decision in v0.3 of the reqs (step 2).
+- **STATUS: DONE (option a).** Precise site was `plan_ingestion_enrichment._enrich_api_signatures`
+  (not `consumption_map`, which is only a doc map). Verified the structured carrier is complete for
+  generation: `spec_builder` consumes only `forward_contracts`/`forward_element_specs`, and
+  `_format_forward_element_specs` renders variables/constants too — so removing the prose block loses
+  nothing (OQ-5's gap is SCR-filtering-only, not generation). Kept the structured `ctx["api_signatures"]`
+  population. Updated both density measures to count the structured field. 4 affected enrichment/density
+  tests updated; 0 new failures vs main baseline. **Real-run golden-prompt validation (token saving, no
+  quality regression) needs a keyed pipeline run — required before merging to main.**
 
 ### WI-6 — FR-CL-3c: anti-regression guard
 - **Add:** a test that greps `src/` for `api_signatures` regex parsing and asserts the only matches are

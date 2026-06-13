@@ -165,6 +165,17 @@ complexity. **The test for any change: does it move us toward this single flow, 
   (`consumption_map.py:72-76`), **not** in `spec_builder.py` as v0.2 implied. The edit/gate relocate to
   the consumption-map layer. If that fused prose has consumers beyond the generation prompt, reclassify
   E3 as a separate generation-side slice (lower value than E1/E2, which fix the SCR asymmetry directly).)*
+  *(v0.3.1 — **IMPLEMENTED.** Precise site: `plan_ingestion_enrichment._enrich_api_signatures` appended
+  a `## API Signatures` ```` ```python ```` block to `task_description` AND populated the structured
+  `ctx["api_signatures"]`. Verified the structured path is a complete carrier for **generation**:
+  `spec_builder` reads only `forward_contracts`/`forward_element_specs` (never raw api_signatures), and
+  `context_resolution._format_forward_element_specs` renders functions/classes **and**
+  variables/constants — so OQ-5's provenance gap (which blocks E1's SCR filtering) does **not** apply to
+  generation rendering. Removed the prose append; kept the structured-field population. Density metrics
+  (`_compute_density_snapshot`, `compute_task_density.has_code_examples`) updated to count the structured
+  `api_signatures` so they don't read as a regression. Unit-gated (4 affected tests updated, 0 new
+  failures). The real-run **golden-prompt** diff (token reduction, no quality regression) needs a keyed
+  pipeline run — deferred before merge to main.)*
 - **FR-CL-3c (anti-regression).** After E1/E2/E3, **no consumer re-parses `api_signatures`** — it is an
   extractor input only. A test/grep guard SHOULD assert no `api_signatures` regex parse outside the
   extractor.
