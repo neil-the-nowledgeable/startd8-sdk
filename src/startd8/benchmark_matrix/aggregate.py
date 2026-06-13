@@ -11,6 +11,7 @@ import statistics
 from typing import Dict, List, Optional, Sequence
 
 from .runner import (
+    STATUS_INFRA_FAIL,
     STATUS_INTEGRITY_FAIL,
     STATUS_OK,
     STATUS_TIMEOUT,
@@ -18,6 +19,10 @@ from .runner import (
     STATUS_BUDGET_SKIP,
     CellResult,
 )
+
+# Cells that did not produce a fair model signal — excluded from the model's pass-rate
+# denominator and never counted catastrophic (the model isn't at fault).
+_EXCLUDED_STATUSES = (STATUS_BUDGET_SKIP, STATUS_INFRA_FAIL)
 
 DEFAULT_PASS_THRESHOLD = 0.5  # quality at/above this AND status ok == "pass"
 
@@ -53,12 +58,14 @@ def summarize_group(cells: List[CellResult], pass_threshold: float = DEFAULT_PAS
     costs = [c.cost_usd for c in cells if c.cost_usd is not None]
     latencies = [c.latency_s for c in cells if c.latency_s is not None]
     tps = [c.tokens_per_sec for c in cells if c.tokens_per_sec is not None]
-    ran = [c for c in cells if c.status != STATUS_BUDGET_SKIP]
+    ran = [c for c in cells if c.status not in _EXCLUDED_STATUSES]
     passes = sum(1 for c in cells if _is_pass(c, pass_threshold))
+    infra = sum(1 for c in cells if c.status == STATUS_INFRA_FAIL)
     return {
         "n": len(cells),
         "n_ran": len(ran),
         "n_scored": len(scored),
+        "infra_fail_count": infra,  # auth/access/rate-limit — excluded, not the model's fault
         "quality_median": _median(qualities),
         "quality_iqr": _iqr(qualities),
         "pass_rate": (passes / len(ran)) if ran else None,

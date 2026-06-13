@@ -24,6 +24,8 @@ from .runner import (
     MatrixRunResult,
     SubprocessCellExecutor,
     cell_id,
+    is_infra_error,
+    reclassify_infra_failures,
     run_matrix,
 )
 from .aggregate import aggregate_cells, build_matrix_markdown, rank_models_by_quality
@@ -40,6 +42,8 @@ __all__ = [
     "MatrixRunResult",
     "SubprocessCellExecutor",
     "cell_id",
+    "is_infra_error",
+    "reclassify_infra_failures",
     "run_matrix",
     "aggregate_cells",
     "build_matrix_markdown",

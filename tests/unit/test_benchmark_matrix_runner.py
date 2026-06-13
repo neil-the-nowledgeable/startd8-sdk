@@ -122,3 +122,42 @@ def test_budget_skip_excluded_from_passrate_denominator():
     g = aggregate_cells(cells)["by_service_model"]["s|m"]
     assert g["n_ran"] == 1
     assert g["pass_rate"] == pytest.approx(1.0)  # skip not counted against pass-rate
+
+
+# --- infra-fail vs model-fail (FR-18 refinement from flagships-round1) -------
+
+def test_is_infra_error_detection():
+    from startd8.benchmark_matrix import is_infra_error
+    assert is_infra_error("Error code: 401 - invalid x-api-key")
+    assert is_infra_error("404 not_found_error: Claude Fable 5 is not available")
+    assert is_infra_error("RateLimit: 429 overloaded")
+    assert not is_infra_error("SyntaxError: invalid syntax in generated code")
+    assert not is_infra_error(None)
+
+
+def test_infra_fail_excluded_from_model_score():
+    from startd8.benchmark_matrix.runner import STATUS_INFRA_FAIL
+    # A model whose 9 cells all infra-failed (dead key) must NOT be scored 0/catastrophic.
+    cells = [
+        CellResult(f"x{i}", "svc", "anthropic:claude-fable-5", "python", i,
+                   STATUS_INFRA_FAIL, error="401 invalid x-api-key")
+        for i in range(9)
+    ]
+    g = aggregate_cells(cells)["by_model"]["anthropic:claude-fable-5"]
+    assert g["infra_fail_count"] == 9
+    assert g["n_ran"] == 0                  # nothing fairly ran
+    assert g["catastrophic_count"] == 0     # NOT the model's fault
+    assert g["pass_rate"] is None           # no denominator -> undefined, not 0.0
+
+
+def test_reclassify_infra_failures_upgrades_failed_cells():
+    from startd8.benchmark_matrix import reclassify_infra_failures
+    from startd8.benchmark_matrix.runner import STATUS_FAILED, STATUS_INFRA_FAIL
+    cells = [
+        CellResult("a", "s", "m", "go", 0, STATUS_FAILED, error="Error code: 401 - invalid x-api-key"),
+        CellResult("b", "s", "m", "go", 1, STATUS_FAILED, error="generated code has a real bug"),
+    ]
+    n = reclassify_infra_failures(cells)
+    assert n == 1
+    assert cells[0].status == STATUS_INFRA_FAIL
+    assert cells[1].status == STATUS_FAILED  # genuine model failure stays

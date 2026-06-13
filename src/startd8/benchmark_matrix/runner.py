@@ -20,10 +20,32 @@ from .run_spec import BenchmarkRunSpec, MatrixCell
 
 # Cell lifecycle outcomes (a slice of the FR-38 state machine; full resumability is later).
 STATUS_OK = "ok"
-STATUS_FAILED = "failed"          # generation failed / no artifacts
+STATUS_FAILED = "failed"          # genuine model failure — model produced no/bad artifacts
 STATUS_TIMEOUT = "timeout"
 STATUS_INTEGRITY_FAIL = "integrity_fail"  # deterministic shortcut fired (R1-S4) — not LLM-maximal
 STATUS_BUDGET_SKIP = "budget_skip"        # cumulative budget exhausted before this cell ran
+STATUS_INFRA_FAIL = "infra_fail"  # auth/access/rate-limit/connection — NOT the model's fault; excluded
+                                  # from quality/pass-rate/catastrophic (like FR-32 toolchain-absent).
+
+# Substrings that mark an infrastructure/access failure rather than a model failure.
+# Distinguishing these prevents a dead API key or un-provisioned model from unfairly
+# tanking a model's score (the flagships-round1 run conflated a 401 with a $0 model output).
+_INFRA_ERROR_MARKERS = (
+    "invalid x-api-key", "authentication_error", "401",
+    "not_found_error", "not available", "404",
+    "permission_denied", "permission denied", "403",
+    "rate_limit", "rate limit", "429", "overloaded_error", "overloaded",
+    "apiconnectionerror", "connection error", "timed out connecting",
+    "insufficient_quota", "quota",
+)
+
+
+def is_infra_error(msg: Optional[str]) -> bool:
+    """True if an error string indicates an infra/access failure (not a model failure)."""
+    if not msg:
+        return False
+    low = msg.lower()
+    return any(marker in low for marker in _INFRA_ERROR_MARKERS)
 
 
 def cell_id(spec_hash: str, cell: MatrixCell) -> str:
@@ -183,12 +205,20 @@ class SubprocessCellExecutor:
             det_skips = int(prov.get("deterministic_skip_count", 0) or 0)
             integrity_ok = bool(prov.get("integrity_ok", True))
 
+        # Prefer the structured per-feature error (carries the real API error, e.g. 401/404)
+        # over the stderr tail — needed to classify infra failures vs model failures.
+        hist = pr.get("history") or []
+        hist_err = hist[-1].get("error") if hist else None
+        err_text = hist_err or run.get("stderr_tail") or ""
+
         if run["timed_out"]:
             status = STATUS_TIMEOUT
         elif not integrity_ok or det_skips > 0:
             status = STATUS_INTEGRITY_FAIL
         elif metrics.get("status") == "success":
             status = STATUS_OK
+        elif is_infra_error(err_text):
+            status = STATUS_INFRA_FAIL  # auth/access/rate-limit — not the model's fault
         else:
             status = STATUS_FAILED
 
@@ -201,5 +231,20 @@ class SubprocessCellExecutor:
             input_tokens=metrics.get("input_tokens"),
             output_tokens=metrics.get("output_tokens"),
             deterministic_skips=det_skips, integrity_ok=integrity_ok,
-            error=None if status == STATUS_OK else (run.get("stderr_tail") or status),
+            error=None if status == STATUS_OK else (err_text or status),
         )
+
+
+def reclassify_infra_failures(cells: List[CellResult]) -> int:
+    """Upgrade prior-run cells marked STATUS_FAILED whose error is actually infra/access
+    (e.g. a 401 from a dead key) to STATUS_INFRA_FAIL, so aggregation excludes them from
+    the model's quality/pass-rate/catastrophic. Returns the count reclassified.
+
+    Lets us honestly re-aggregate a run that predates infra classification.
+    """
+    n = 0
+    for c in cells:
+        if c.status == STATUS_FAILED and is_infra_error(c.error):
+            c.status = STATUS_INFRA_FAIL
+            n += 1
+    return n
