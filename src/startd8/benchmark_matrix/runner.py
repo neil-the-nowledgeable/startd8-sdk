@@ -62,13 +62,17 @@ class CellResult:
     language: str
     repetition: int
     status: str
-    quality: Optional[float] = None          # composite/structural score in [0,1]
+    quality: Optional[float] = None          # COMPOSITE score in [0,1] (FR-11): structural gated by compile
+    structural_quality: Optional[float] = None  # disk-compliance only (pre-M4 signal, kept for transparency)
+    compile_ok: Optional[bool] = None        # FR-29 gate; None = toolchain absent (FR-32 degraded)
+    degraded: bool = False                   # a scoring term was unavailable (FR-32)
     cost_usd: Optional[float] = None
     latency_s: Optional[float] = None
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     deterministic_skips: int = 0             # R1-S4: must be 0 for a valid benchmark cell
     integrity_ok: bool = True
+    sandbox_violation: Optional[str] = None  # FR-44: a guardrail tripped scoring this cell
     error: Optional[str] = None
 
     @property
@@ -222,17 +226,57 @@ class SubprocessCellExecutor:
         else:
             status = STATUS_FAILED
 
+        structural = metrics.get("mean_disk_quality_score")
+        quality = structural
+        compile_ok = None
+        degraded = False
+        sandbox_violation = None
+
+        # M4 compile gate (FR-11/FR-29/FR-44): only for cells that actually generated.
+        # Run the language's syntax/compile check on the generated file inside the sandbox;
+        # the composite floors non-compiling output. Failures here are scoring outcomes,
+        # never fatal to the harness.
+        if status == STATUS_OK:
+            try:
+                gen_file = self._generated_file(workdir, cell.service)
+                if gen_file is not None:
+                    from ..languages import LanguageRegistry, resolve_language
+                    from .scoring import score_file
+                    LanguageRegistry.discover()
+                    profile = resolve_language([str(gen_file)])
+                    composite = score_file(gen_file, profile, structural=structural)
+                    quality = composite.value
+                    compile_ok = composite.compile_ok
+                    degraded = composite.degraded
+            except Exception as exc:  # noqa: BLE001 — scoring must not crash a run
+                sandbox_violation = f"scoring error: {type(exc).__name__}: {exc}"
+
         return CellResult(
             cell_id=cid, service=cell.service, model=cell.model, language=language,
             repetition=cell.repetition, status=status,
-            quality=metrics.get("mean_disk_quality_score"),
+            quality=quality, structural_quality=structural,
+            compile_ok=compile_ok, degraded=degraded,
             cost_usd=metrics.get("total_cost"),
             latency_s=run.get("duration_seconds"),
             input_tokens=metrics.get("input_tokens"),
             output_tokens=metrics.get("output_tokens"),
             deterministic_skips=det_skips, integrity_ok=integrity_ok,
+            sandbox_violation=sandbox_violation,
             error=None if status == STATUS_OK else (err_text or status),
         )
+
+    def _generated_file(self, workdir: Path, service: str) -> Optional[Path]:
+        """Resolve the generated service file from the seed's target_files, under workdir."""
+        from ..model_comparison import _load_json
+        seed = _load_json(self.seeds_dir / f"seed-{service}.json") or {}
+        tasks = seed.get("tasks") or []
+        if not tasks:
+            return None
+        targets = (tasks[0].get("config", {}).get("context", {}).get("target_files")) or []
+        if not targets:
+            return None
+        cand = workdir / targets[0]
+        return cand if cand.exists() else None
 
 
 def reclassify_infra_failures(cells: List[CellResult]) -> int:
