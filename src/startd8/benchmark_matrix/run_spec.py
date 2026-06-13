@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Dict, Iterator, List, NamedTuple, Optional, Tuple
+from typing import Dict, Iterator, NamedTuple, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

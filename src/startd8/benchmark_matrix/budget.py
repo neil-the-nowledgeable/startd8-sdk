@@ -12,7 +12,7 @@ Pricing is delegated to ``costs.pricing.PricingService`` (no new pricing tables)
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from ..costs.pricing import PricingService
@@ -95,7 +95,7 @@ def format_estimate(spec: BenchmarkRunSpec, estimate: BenchmarkCostEstimate) -> 
         f"x {spec.repetitions} reps = {estimate.total_cells} cells",
         f"  sizing: ~{spec.est_input_tokens_per_cell} in / "
         f"{spec.est_output_tokens_per_cell} out tokens per cell (estimate, not billing)",
-        f"  budget ceiling: "
+        "  budget ceiling: "
         + (f"${spec.budget_ceiling_usd:,.2f}" if spec.budget_ceiling_usd is not None else "(UNSET — run will refuse to start)"),
         "",
         f"  {'model':<32} {'$/cell':>9} {'cells':>6} {'est $':>10}",

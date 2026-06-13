@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..implementation_engine.budget import (
     EXISTING_FILES_BUDGET_BYTES as _EXISTING_FILES_BUDGET_BYTES,
