@@ -547,11 +547,17 @@ def manifest_contract_drift(
     import json as json_mod
     from startd8.workflows._contracts_integration import compare_contracts
 
-    report = compare_contracts(old, new)
+    try:
+        report = compare_contracts(old, new)
+    except Exception as exc:
+        # compare_contracts loads both files eagerly; a missing path or a YAML that
+        # is not a valid ContextContract raises. Fail cleanly (exit 2 = error) rather
+        # than dumping a traceback at the CLI boundary.
+        console.print(f"[red]contract-drift: could not load/parse a contract: {exc}[/red]")
+        raise SystemExit(2)
     if report is None:
         console.print(
-            "[yellow]ContextCore not installed (or contract unreadable) — contract-drift "
-            "is a no-op.[/yellow]"
+            "[yellow]ContextCore not installed — contract-drift is a no-op.[/yellow]"
         )
         raise SystemExit(0)
 
