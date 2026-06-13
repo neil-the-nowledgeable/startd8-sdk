@@ -501,6 +501,7 @@ Key docs in `docs/`:
   - `KAIZEN_DESIGN_PRINCIPLE.md` - Don't discard lessons (across runs)
   - `WARM_UP_DESIGN_PRINCIPLE.md` - Don't discard context (across toolchain transitions)
   - `HAYAI_DESIGN_PRINCIPLE.md` - Don't defer enforcement (across pipeline stages)
+  - `SOTTO_DESIGN_PRINCIPLE.md` - Don't disturb what exists (authored content rides the deterministic skeleton via a hash-exempt, presence-gated seam → byte-identical-when-absent)
 - `docs/capability-index/` - Capability tracking across versions (benefits, capabilities, functional requirements, agent card, MCP tools)
 
 ## Embedded Pipeline (`.cap-dev-pipe/`)

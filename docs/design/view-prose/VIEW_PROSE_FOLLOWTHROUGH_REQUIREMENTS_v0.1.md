@@ -303,7 +303,13 @@ pass below.
 
 ### F. Design-principle elevation (architectural generalization)
 
-- **FR-DP-1 — Name & document the prose-gated additive-manifest principle.** Add a cross-cutting principle
+- **FR-DP-1 — Name & document the prose-gated additive-manifest principle. ✅ DONE (2026-06-13).** Shipped
+  as `docs/design-princples/SOTTO_DESIGN_PRINCIPLE.md` ("Sotto" そっと = *gently, without disturbing*;
+  tagline "Don't disturb what exists"; diagnostic "when the content is absent, is the output byte-identical?").
+  Covers the two generate-time fragment instances (pages, view-prose) + the ai-layer runtime variant, records
+  the OQ-4 / FR-DP-2 drop rationale, and is indexed in CLAUDE.md's principle list. **Pending tail:** the
+  Words/Structure backlink lands with FR-FMT-3 (Group C, not yet implemented). Original spec:
+  Add a cross-cutting principle
   doc (`docs/design-princples/`, beside MOTTAINAI/KAIZEN/WARM_UP/HAYAI) capturing the proven rule:
   *hash-exempt authored content lives in a standalone file rendered to an untracked (header-less) fragment;
   the owned template gains the include only when the content is present → byte-identical-when-absent → zero
