@@ -334,12 +334,18 @@ class ProviderRegistry:
         """
         cls.discover()
         model_lower = model.lower()
-        
+
         with cls._lock:
             for provider in cls._providers.values():
                 if model_lower in [m.lower() for m in provider.supported_models]:
                     return provider
-        
+
+            # Prefix routing: new Claude ids may not yet be in discovery cache.
+            if model_lower.startswith("claude-"):
+                anthropic = cls._providers.get("anthropic")
+                if anthropic is not None:
+                    return anthropic
+
         return None
     
     @classmethod

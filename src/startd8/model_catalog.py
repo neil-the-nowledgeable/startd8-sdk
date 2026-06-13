@@ -47,7 +47,10 @@ class Models:
     # Anthropic Claude Models
     # ==========================================================================
 
-    # Flagship - Best quality, highest cost
+    # Mythos-class flagship — highest capability tier (above Opus).
+    CLAUDE_FABLE_LATEST = "anthropic:claude-fable-5"
+
+    # Flagship - Best quality Opus-tier, highest cost among Opus models
     CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-8"
 
     # Previous flagships
@@ -171,7 +174,14 @@ class Models:
 
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
-    # Anthropic
+    # Anthropic — Mythos-class (above Opus)
+    "claude-fable-5": ModelInfo(
+        provider="anthropic",
+        model_id="claude-fable-5",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    # Anthropic — Opus tier
     "claude-opus-4-8": ModelInfo(
         provider="anthropic",
         model_id="claude-opus-4-8",

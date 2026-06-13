@@ -68,7 +68,15 @@ class PricingService:
     
     # Default pricing (updated January 2026)
     DEFAULT_PRICING: Dict[str, ModelPricing] = {
-        # Anthropic Claude 4.8 / 4.7 (current flagship defaults; rates estimated
+        # Anthropic Claude Fable 5 — Mythos-class flagship (GA 2026-06-09)
+        "claude-fable-5": ModelPricing(
+            model="claude-fable-5",
+            provider="anthropic",
+            input_cost_per_million=10.0,
+            output_cost_per_million=50.0,
+            notes="Anthropic published rate for Claude Fable 5.",
+        ),
+        # Anthropic Claude 4.8 / 4.7 (current Opus flagship defaults; rates estimated
         # from the 4.6 Opus tier until confirmed — REQ-CT-4)
         "claude-opus-4-8": ModelPricing(
             model="claude-opus-4-8",

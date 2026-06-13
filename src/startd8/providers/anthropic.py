@@ -12,14 +12,27 @@ from ..exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
+# Common shorthand ids → canonical Anthropic API model ids.
+_MODEL_ALIASES = {
+    "fable-5": "claude-fable-5",
+    "claude-fable": "claude-fable-5",
+}
+
+
+def normalize_anthropic_model_id(model: str) -> str:
+    """Map shorthand Anthropic model ids to canonical API ids."""
+    return _MODEL_ALIASES.get(model.strip().lower(), model)
+
 
 class AnthropicProvider:
     """Provider for Anthropic Claude models"""
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        # Claude 4.8 family (Latest)
-        "claude-opus-4-8",            # Claude Opus 4.8 - most intelligent model
+        # Claude Fable 5 — Mythos-class flagship (GA 2026-06-09)
+        "claude-fable-5",             # Claude Fable 5 — highest widely released tier
+        # Claude 4.8 family (Latest Opus)
+        "claude-opus-4-8",            # Claude Opus 4.8 - most intelligent Opus model
         # Claude 4.7 family
         "claude-opus-4-7",            # Claude Opus 4.7
         # Claude 4.6 family (February 2026)
@@ -79,6 +92,29 @@ class AnthropicProvider:
     
     # Model metadata for cost tracking and limits
     MODEL_INFO = {
+        # Claude Fable 5 — Mythos-class
+        "claude-fable-5": {
+            "name": "Claude Fable 5",
+            "context_window": 1000000,
+            "max_output_tokens": 128000,
+            "cost_per_1m_input": 10.00,
+            "cost_per_1m_output": 50.00,
+        },
+        # Claude 4.8 / 4.7 family
+        "claude-opus-4-8": {
+            "name": "Claude Opus 4.8",
+            "context_window": 1000000,
+            "max_output_tokens": 128000,
+            "cost_per_1m_input": 5.00,
+            "cost_per_1m_output": 25.00,
+        },
+        "claude-opus-4-7": {
+            "name": "Claude Opus 4.7",
+            "context_window": 1000000,
+            "max_output_tokens": 128000,
+            "cost_per_1m_input": 5.00,
+            "cost_per_1m_output": 25.00,
+        },
         # Claude 4.6 family
         "claude-opus-4-6": {
             "name": "Claude Opus 4.6",
@@ -248,6 +284,8 @@ class AnthropicProvider:
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
+        model = normalize_anthropic_model_id(model)
+
         # Decision 37A: be permissive about model IDs.
         # Keep a curated list for suggestions, but allow unknown models so users
         # can use newly released IDs without waiting for an SDK update.

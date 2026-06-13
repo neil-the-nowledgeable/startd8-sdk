@@ -23,6 +23,28 @@ logger = logging.getLogger(__name__)
 # request above this is clamped (with a warning) so no caller can re-trigger that failure class.
 NONSTREAMING_MAX_TOKENS_CEILING = 32768
 
+
+def _is_fable_model(model: str) -> bool:
+    """Return True for Claude Fable / Mythos models (adaptive-thinking tier)."""
+    m = model.lower()
+    return m.startswith("claude-fable") or m.startswith("claude-mythos")
+
+
+def _extract_response_text(response: Any, stop_reason: Optional[str]) -> str:
+    """Extract assistant text from an Anthropic Messages response."""
+    if stop_reason == "refusal":
+        for block in getattr(response, "content", []) or []:
+            text = getattr(block, "text", None)
+            if text:
+                return text
+        return "[Model declined this request (stop_reason=refusal)]"
+
+    if not getattr(response, "content", None):
+        return ""
+
+    first = response.content[0]
+    return getattr(first, "text", "") or ""
+
 # Optional Anthropic import
 try:
     from anthropic import Anthropic, AsyncAnthropic
@@ -359,7 +381,6 @@ class ClaudeAgent(BaseAgent):
                 )
 
         except RetryError as e:
-            # All retry attempts exhausted
             from ..exceptions import APIError
 
             end_time = time.time()
@@ -374,7 +395,7 @@ class ClaudeAgent(BaseAgent):
                     "response_time_ms": response_time_ms,
                     "retry_attempts": e.attempts,
                     "total_retry_time": e.total_time,
-                }
+                },
             )
 
             raise APIError(
@@ -436,14 +457,64 @@ class ClaudeAgent(BaseAgent):
                 original_error=e
             ) from e
 
+        except Exception as e:
+            from ..exceptions import APIError, AgentError
+
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            error_msg = str(e)
+            error_msg_lower = error_msg.lower()
+
+            if "404" in error_msg and (
+                "not found" in error_msg_lower
+                or "not available" in error_msg_lower
+                or "model" in error_msg_lower
+            ):
+                hint = (
+                    "Use the canonical API id 'claude-fable-5' (not 'fable-5'). "
+                    if _is_fable_model(self.model) or "fable" in self.model.lower()
+                    else ""
+                )
+                model_error_msg = (
+                    f"Model '{self.model}' not found or not available. "
+                    f"{hint}"
+                    f"Verify the model id and that your Anthropic account has access."
+                )
+                logger.error(
+                    f"Model not found for {self.name}: {model_error_msg} (Original: {e})",
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms},
+                )
+                raise AgentError(
+                    model_error_msg,
+                    agent_name=self.name,
+                    original_error=e,
+                ) from e
+
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "error_type": type(e).__name__,
+                    "operation": "agenerate",
+                },
+            )
+            raise APIError(
+                f"API call failed: {error_msg}",
+                provider=self.name,
+                original_error=e,
+            ) from e
+
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
 
-        response_text = response.content[0].text
-
-        # Extract stop_reason to detect truncation
-        # Anthropic uses: "end_turn" (natural), "max_tokens" (truncated), "stop_sequence"
+        # Extract stop_reason to detect truncation / refusal
+        # Anthropic uses: "end_turn" (natural), "max_tokens" (truncated),
+        # "stop_sequence", "refusal" (Fable safety classifiers)
         stop_reason = getattr(response, 'stop_reason', None)
+        response_text = _extract_response_text(response, stop_reason)
 
         _raw_creation = getattr(response.usage, 'cache_creation_input_tokens', None)
         _raw_read = getattr(response.usage, 'cache_read_input_tokens', None)
