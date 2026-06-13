@@ -19,6 +19,14 @@ from .budget import (
     estimate_run_cost,
     format_estimate,
 )
+from .runner import (
+    CellResult,
+    MatrixRunResult,
+    SubprocessCellExecutor,
+    cell_id,
+    run_matrix,
+)
+from .aggregate import aggregate_cells, build_matrix_markdown, rank_models_by_quality
 
 __all__ = [
     "BenchmarkRunSpec",
@@ -28,4 +36,12 @@ __all__ = [
     "BudgetGuard",
     "estimate_run_cost",
     "format_estimate",
+    "CellResult",
+    "MatrixRunResult",
+    "SubprocessCellExecutor",
+    "cell_id",
+    "run_matrix",
+    "aggregate_cells",
+    "build_matrix_markdown",
+    "rank_models_by_quality",
 ]
