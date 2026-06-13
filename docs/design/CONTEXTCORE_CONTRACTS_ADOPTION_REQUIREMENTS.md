@@ -1,10 +1,42 @@
 # SDK Adoption of ContextCore Defense-in-Depth Contracts — Requirements
 
-**Version:** 0.2 (Post-planning — self-reflective update)
-**Date:** 2026-06-11
+**Version:** 0.3 (Post-implementation — bugs + inert-adoption findings folded back)
+**Date:** 2026-06-12
 **Status:** Draft
 **Scope:** Adopt 5 ContextCore `contracts.*` capabilities the SDK doesn't yet use, completing the
 defense-in-depth around the propagation contracts it already wires.
+
+---
+
+## 0.0 Implementation Insights (v0.3) — the keystone was wired but DEAD
+
+> Building preflight/postexec/regression surfaced that the "already-adopted propagation keystone" this
+> doc leans on **never actually functioned**. Two classes of latent bug + a contract-shape mismatch:
+
+1. **Wrong loader API (4 dead call-sites).** Every ContextCore contract load called
+   `ContractLoader.load_contract(str)` — a method that **does not exist**. The real API is an *instance*
+   method: `ContractLoader().load(Path)`. The dead call sat in: registry preflight, registry **exit
+   boundary validation** (the "shipped keystone"), `compare_contracts`, and `plan_ingestion_workflow`
+   Layer-5 capability validation. All four were swallowed by `try/except` → logged-and-ignored or
+   `return True`, so the defense-in-depth was a silent no-op. **All four fixed** (routed through one
+   `_load_contract`).
+2. **Dead fail-closed (missing result helpers).** Preflight called `result.critical_violations()` and
+   exit called `exit_result.has_blocking_violations()` — **neither method exists** on
+   `PreflightResult` / `ContractValidationResult`. So even had the load worked, `fail_closed` could
+   never block. Fixed: criticality is derived from `violation.severity == BLOCKING`; exit uses
+   `result.passed` / `result.blocking_failures`.
+3. **Contract-shape mismatch (the adoption is INERT until a real contract exists).** **No SDK workflow
+   sets `metadata.contract_path`**, and the only `*.contract.yaml` files (e.g.
+   `plan-ingestion.contract.yaml`) are **Artisan/gate-schema**, not ContextCore `ContextContract`s
+   (which need `schema_version` / `pipeline_id` / `phases`). So even fully fixed, the run-path checks
+   are **contract-gated to no-op** (FR-CC-2) for every current workflow. The functions are now *correct*
+   and *proven* (against a minimal valid `ContextContract` test fixture), but remain **inert** until a
+   workflow declares a real ContextContract via `metadata.contract_path`. **This is the highest-value
+   finding: the adoption is now functional code awaiting a contract, not a working feature.**
+
+**Net:** the code is fixed, consolidated (FR-CC-5: one `_contracts_integration` surface for
+preflight/exit/postexec/drift), advisory-by-default, and unit-proven. Lighting it up for a real
+workflow = authoring a ContextContract + setting `metadata.contract_path` (a separate, small task).
 
 ---
 

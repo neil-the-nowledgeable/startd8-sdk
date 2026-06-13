@@ -188,6 +188,11 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
 - **Change:** add an optional `--against <old-contract>` (or auto-detect prior version) that calls
   `compare_contracts(old, new)` and prints the `DriftReport`; off-run, advisory by default.
 - **Tests:** CLI invocation prints drift; absent ContextCore → graceful no-op (FR-CC-1).
+- **STATUS: DONE.** Fixed the real bug first: `compare_contracts` (and preflight, exit, and
+  plan_ingestion Layer-5) called the **non-existent** `ContractLoader.load_contract(str)` — the correct
+  API is `ContractLoader().load(Path)`. Routed all loads through one `_load_contract` helper. Added
+  `manifest contract-drift <old> <new>` CLI (exit 1 on breaking changes for CI gating, `--format json`).
+  Smoke-tested against a real ContextContract fixture.
 
 ### WI-9 — FR-POST: postexec helper + run-end wiring
 - **File:** `workflows/_contracts_integration.py` (new `run_postexec(workflow, result, *, fail_closed)`)
@@ -196,11 +201,22 @@ OUT OF SCOPE (explicitly deferred by both reqs docs)
   chain-integrity + final exit requirements (**no L4 cross-ref** — OQ-5). Advisory by default; attach
   findings to the run's post-mortem artifacts (FR-POST-2). Route through the single helper (FR-CC-5).
 - **Tests:** mirror the preflight tests (noop without contract_path; never raises; fail_closed accepted).
+- **STATUS: DONE.** Added `run_postexec()` to the single helper (chain-integrity + final exit; **no**
+  `runtime_summary` → L4 cross-ref deferred, OQ-5) and wired it into both `run`/`arun` after exit
+  validation. **Also consolidated the L4 exit validation** (previously duplicated inline in run+arun and
+  doubly-dead: `load_contract` + a non-existent `has_blocking_violations()`) into
+  `run_exit_validation()`, advisory by default (`exit_validation_fail_closed` to block). Verified
+  against a real ContextContract: postexec returns a `PostExecutionReport`; exit `fail_closed` now
+  actually blocks on blocking failures (was silently dead).
 
 ### WI-10 — FR-CC-4: verify OTel emission
 - **Check:** confirm preflight/postexec/regression findings emit via OTel (not just `get_logger` text).
   If the project's convention is span events/metrics, add them; else document that `get_logger` (with the
   OTel log bridge) satisfies FR-CC-4 and add a test asserting a log record is produced.
+- **STATUS: DONE.** All findings emit via `get_logger(__name__)`, which carries the SDK's OTel log
+  bridge (→ Loki) per the project convention — this satisfies FR-CC-4. Added `caplog` tests asserting
+  preflight and exit findings produce log records. (Span-event/metric emission was not added: the SDK's
+  observability convention for advisory findings is the log bridge, not custom spans.)
 
 ---
 
