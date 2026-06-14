@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import tempfile
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Callable, List, Optional, Protocol
 
@@ -85,6 +86,14 @@ class CellResult:
         d = asdict(self)
         d["tokens_per_sec"] = self.tokens_per_sec
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CellResult":
+        """Rebuild a CellResult from its serialized form (drops the computed
+        ``tokens_per_sec`` and any unknown keys). Used to re-load a prior run's
+        cells.json for re-aggregation / re-scoring."""
+        fields = {f.name for f in dataclass_fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in fields})
 
 
 class CellExecutor(Protocol):
@@ -179,7 +188,7 @@ class SubprocessCellExecutor:
                               status=STATUS_FAILED, error=f"seed not found: {seed}")
 
         root = self.workdir_root or Path(tempfile.mkdtemp(prefix="obbench-"))
-        workdir = root / f"{cell.service}-{cell.model.replace(':', '_')}-r{cell.repetition}"
+        workdir = root / sandbox_dir_name(cell.service, cell.model, cell.repetition)
         workdir.mkdir(parents=True, exist_ok=True)
         output = workdir / ".startd8" / "benchmark-output"
 
@@ -267,16 +276,30 @@ class SubprocessCellExecutor:
 
     def _generated_file(self, workdir: Path, service: str) -> Optional[Path]:
         """Resolve the generated service file from the seed's target_files, under workdir."""
-        from ..model_comparison import _load_json
-        seed = _load_json(self.seeds_dir / f"seed-{service}.json") or {}
-        tasks = seed.get("tasks") or []
-        if not tasks:
-            return None
-        targets = (tasks[0].get("config", {}).get("context", {}).get("target_files")) or []
-        if not targets:
-            return None
-        cand = workdir / targets[0]
-        return cand if cand.exists() else None
+        return resolve_generated_file(self.seeds_dir, workdir, service)
+
+
+def resolve_generated_file(seeds_dir: Path, workdir: Path, service: str) -> Optional[Path]:
+    """Resolve a service's primary generated file (the seed's first target_files entry)
+    under ``workdir``. Shared by the live runner and the post-hoc re-scorer so both
+    locate the same file the model was asked to write."""
+    from ..model_comparison import _load_json
+    seed = _load_json(Path(seeds_dir) / f"seed-{service}.json") or {}
+    tasks = seed.get("tasks") or []
+    if not tasks:
+        return None
+    targets = (tasks[0].get("config", {}).get("context", {}).get("target_files")) or []
+    if not targets:
+        return None
+    cand = Path(workdir) / targets[0]
+    return cand if cand.exists() else None
+
+
+def sandbox_dir_name(service: str, model: str, repetition: int) -> str:
+    """The per-cell sandbox directory name used by :class:`SubprocessCellExecutor`
+    (``<service>-<model with ':'→'_'>-r<rep>``). Factored out so the re-scorer can
+    locate a cell's generated workdir without re-running it."""
+    return f"{service}-{model.replace(':', '_')}-r{repetition}"
 
 
 def reclassify_infra_failures(cells: List[CellResult]) -> int:

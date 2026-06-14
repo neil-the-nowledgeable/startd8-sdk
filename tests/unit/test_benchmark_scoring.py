@@ -111,3 +111,69 @@ def test_node_js_broken_is_floored_via_fallback(tmp_path, js_profile):
     cs = score_file(f, js_profile, structural=1.0, run_lint=False)
     assert cs.compile_ok is False
     assert cs.value == COMPILE_FLOOR
+
+
+# --- Java Tier-1 sandbox-safe javac gate + FR-J2 missing-dep classification --
+
+def test_classify_compile_failure_java():
+    """Pure classifier: javac's missing-library markers → 'missing_deps'; a real error → None."""
+    from startd8.benchmark_matrix.scoring import classify_compile_failure
+    assert classify_compile_failure("java", "error: package io.grpc does not exist") == "missing_deps"
+    assert classify_compile_failure("java", "error: cannot find symbol\n  symbol: class Foo") == "missing_deps"
+    assert classify_compile_failure("java", "error: ';' expected") is None      # genuine syntax error
+    assert classify_compile_failure("python", "anything") is None               # no markers for python
+
+
+def test_fallback_syntax_command_java_is_javac():
+    from startd8.benchmark_matrix.scoring import fallback_syntax_command
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    j = resolve_language(["A.java"])
+    cmd = fallback_syntax_command(j, "A.java")
+    assert cmd and cmd[0] == "javac" and "{file}" in cmd
+
+
+requires_javac = pytest.mark.skipif(
+    __import__("shutil").which("javac") is None, reason="javac (JDK) not installed")
+
+
+@pytest.fixture()
+def java_profile():
+    from startd8.languages import LanguageRegistry, resolve_language
+    LanguageRegistry.discover()
+    return resolve_language(["A.java"])
+
+
+@requires_javac
+def test_java_valid_compiles(tmp_path, java_profile):
+    f = tmp_path / "Good.java"
+    f.write_text("public class Good { public static void main(String[] a){ System.out.println(1); } }\n")
+    cs = score_file(f, java_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is True          # real javac compile of a dependency-free file
+    assert cs.degraded is False
+    assert cs.value == pytest.approx(1.0)
+
+
+@requires_javac
+def test_java_syntax_error_is_floored(tmp_path, java_profile):
+    f = tmp_path / "Bad.java"
+    f.write_text("public class Bad { void m({ }\n")   # genuine syntax error
+    cs = score_file(f, java_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is False
+    assert cs.value == COMPILE_FLOOR
+
+
+@requires_javac
+def test_java_missing_deps_degraded_not_floored(tmp_path, java_profile):
+    """FR-J2: a file that only fails because a gRPC-style dependency is absent (no classpath in
+    Tier-1) is degraded — never floored — so the model isn't punished for missing libraries."""
+    f = tmp_path / "Svc.java"
+    f.write_text(
+        "import io.grpc.stub.StreamObserver;\n"
+        "public class Svc { StreamObserver<String> o; }\n"
+    )
+    cs = score_file(f, java_profile, structural=1.0, run_lint=False)
+    assert cs.compile_ok is None          # degraded, NOT compile_ok=False
+    assert cs.degraded is True
+    assert cs.value == pytest.approx(1.0)  # falls back to structural, no penalty
+    assert "FR-J2" in cs.note
