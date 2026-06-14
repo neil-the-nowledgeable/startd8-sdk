@@ -38,19 +38,21 @@ import yaml
 
 # String-valued authorable keys. Each renders into an untracked fragment; archetype/placeholder validity
 # is enforced in render_views (the parser is archetype-blind — it only knows view names). ``title``/
-# ``intro`` → heading fragment; ``empty`` → no-rows fragment (model-compose); ``success``/``error`` →
-# import-flow restore-outcome fragments. ``controls`` is a mapping (handled separately below).
-_PROSE_KEYS = {"title", "intro", "empty", "success", "error"}
+# ``intro`` → heading fragment; ``empty`` → no-rows fragment (model-compose / detail-compose index /
+# rendered-content list); ``complete`` → computed-panel all-signals-met fragment; ``success``/``error``
+# → import-flow restore-outcome fragments. ``controls`` is a mapping (handled separately below).
+_PROSE_KEYS = {"title", "intro", "empty", "complete", "success", "error"}
 _ALLOWED_KEYS = _PROSE_KEYS | {"controls"}
 
 
 @dataclass(frozen=True)
 class ViewProse:
-    """View-chrome copy for one composite view (title/intro = Phase 1; empty/success/error/controls = Phase 2)."""
+    """View-chrome copy for one composite view (title/intro = Phase 1; empty/complete/success/error/controls = Phase 2)."""
 
     title: Optional[str] = None
     intro: Optional[str] = None
     empty: Optional[str] = None
+    complete: Optional[str] = None  # computed-panel all-signals-met state (FR-QW-2); archetype validity in render_views
     success: Optional[str] = None
     error: Optional[str] = None
     controls: Optional[Dict[str, Dict[str, str]]] = None  # control-id -> {label, help?} (validity in render_views)

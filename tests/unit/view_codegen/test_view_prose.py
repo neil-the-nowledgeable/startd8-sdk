@@ -486,3 +486,120 @@ def test_export_controls_only_still_opts_into_landing():
 def test_unknown_export_control_id_loud_fails():
     with pytest.raises(ValueError, match="unknown control-id"):
         render_views(SCHEMA, _EXPORT_VIEWS, None, "full_export:\n  controls: {pdf: x}\n")
+
+
+# --------------------------------------------------------------------------- #
+# FR-QW-1 / FR-QW-2 (Group E) — `empty` extends to the detail-compose pick-an-item
+# index + the rendered-content list; new `complete` key for the computed-panel
+# all-signals-met state. Each renders to its own untracked fragment; byte-identical
+# when absent; off-archetype use loud-fails.
+# --------------------------------------------------------------------------- #
+
+_E_SCHEMA = """
+model Capability {
+  id      String @id @default(cuid())
+  ownerId String @default("local")
+  name    String
+}
+
+model CapabilityOutcome {
+  id           String @id @default(cuid())
+  ownerId      String @default("local")
+  capabilityId String
+  outcomeId    String
+}
+
+model Artifact {
+  id       String @id @default(cuid())
+  ownerId  String @default("local")
+  kind     String
+  dataJson String
+}
+""".strip()
+
+_E_VIEWS = """
+views:
+  - name: pick_one
+    kind: detail-compose
+    route: /pick
+    root: Capability
+    relations:
+      - { name: outcomes, from: CapabilityOutcome, fk: capabilityId }
+  - name: artifact_reader
+    kind: rendered-content
+    root: Artifact
+    content_field: dataJson
+    prose_key: body
+    route: /artifacts
+  - name: completeness_panel
+    kind: computed-panel
+    compute: completeness
+    route: /completeness
+""".strip()
+
+_IDX = "app/templates/views/pick_one_index.html"
+_RC = "app/templates/views/artifact_reader.html"
+_CP = "app/templates/views/completeness_panel.html"
+
+
+def test_group_e_no_prose_is_byte_identical_and_no_new_fragments():
+    base = dict(render_views(_E_SCHEMA, _E_VIEWS))
+    assert dict(render_views(_E_SCHEMA, _E_VIEWS, None, None)) == base
+    assert not any(k.endswith((".empty.html", ".complete.html")) for k in base)
+
+
+def test_empty_on_index_wires_not_roots_include_and_emits_fragment():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, "pick_one:\n  empty: No capabilities yet.\n"))
+    assert out["app/templates/views/_pick_one.empty.html"] == '<p class="empty">No capabilities yet.</p>\n'
+    assert '{% if not roots %}{% include "views/_pick_one.empty.html" %}{% endif %}' in out[_IDX]
+    assert "Nothing here yet — add and confirm" not in out[_IDX]
+
+
+def test_empty_on_rendered_content_overrides_list_not_detail():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, "artifact_reader:\n  empty: No artifacts yet.\n"))
+    assert out["app/templates/views/_artifact_reader.empty.html"] == '<p class="empty">No artifacts yet.</p>\n'
+    assert '{% if not rows %}{% include "views/_artifact_reader.empty.html" %}{% endif %}' in out[_RC]
+    assert "Nothing here yet." not in out[_RC]           # the LIST no-rows literal is overridden
+    assert "Nothing to read yet." in out[_RC]            # the DETAIL no-body literal stays (QW-2, deferred)
+
+
+def test_complete_on_computed_panel_wires_include_and_emits_fragment():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, 'completeness_panel:\n  complete: "You are all set"\n'))
+    assert out["app/templates/views/_completeness_panel.complete.html"] == '<p class="complete">You are all set</p>'
+    assert '{% else %}{% include "views/_completeness_panel.complete.html" %}{% endif %}' in out[_CP]
+    assert "All signals met." not in out[_CP]
+
+
+def test_complete_fragment_escapes_and_is_unowned():
+    out = dict(render_views(_E_SCHEMA, _E_VIEWS, None, 'completeness_panel:\n  complete: "A & B <x>"\n'))
+    frag = out["app/templates/views/_completeness_panel.complete.html"]
+    assert frag == '<p class="complete">A &amp; B &lt;x&gt;</p>'
+    assert "startd8-artifact" not in frag                 # no provenance header ⇒ untracked
+
+
+def test_editing_empty_or_complete_text_does_not_trip_check():
+    p = "pick_one:\n  empty: No capabilities yet.\n"
+    owned = dict(render_views(_E_SCHEMA, _E_VIEWS, None, p))[_IDX]
+    edited = p.replace("No capabilities yet.", "A completely different message")
+    assert dict(render_views(_E_SCHEMA, _E_VIEWS, None, edited))[_IDX] == owned
+    assert views_in_sync(_E_SCHEMA, _E_VIEWS, "proj/" + _IDX, owned, None, edited) is True
+    cp = 'completeness_panel:\n  complete: "All done"\n'
+    owned_cp = dict(render_views(_E_SCHEMA, _E_VIEWS, None, cp))[_CP]
+    edited_cp = cp.replace("All done", "Everything complete")
+    assert dict(render_views(_E_SCHEMA, _E_VIEWS, None, edited_cp))[_CP] == owned_cp
+
+
+def test_complete_parses_as_a_view_prose_field():
+    out = parse_view_prose("completeness_panel:\n  complete: All set.\n")
+    assert out["completeness_panel"] == ViewProse(complete="All set.")
+
+
+def test_complete_on_non_computed_panel_loud_fails():
+    with pytest.raises(ValueError, match="all-signals-met surface"):
+        render_views(_E_SCHEMA, _E_VIEWS, None, "pick_one:\n  complete: x\n")
+
+
+def test_empty_still_loud_fails_on_a_no_surface_archetype():
+    # computed-panel has no no-rows surface (it carries `complete` instead) → `empty` loud-fails.
+    with pytest.raises(ValueError, match="no-rows surface"):
+        render_views(_E_SCHEMA, _E_VIEWS, None, "completeness_panel:\n  empty: x\n")

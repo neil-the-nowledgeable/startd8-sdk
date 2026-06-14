@@ -770,6 +770,18 @@ def _is_model_compose(v: ViewSpec) -> bool:
     return v.kind == "detail-compose" and v.scope == "model"
 
 
+def _is_index_detail_compose(v: ViewSpec) -> bool:
+    """The bare-route ``detail-compose`` that serves a pick-an-item index of roots (query-id form)."""
+    return v.kind == "detail-compose" and "{" not in v.route and not _is_model_compose(v)
+
+
+def _has_empty_surface(v: ViewSpec) -> bool:
+    """Archetypes whose owned template carries a no-rows surface an authored ``empty`` can override
+    (FR-QW-1): a model-scoped detail-compose (``{% if not rows %}``), the detail-compose pick-an-item
+    index (``{% if not roots %}``), and a rendered-content list (``{% if not rows %}``)."""
+    return _is_model_compose(v) or _is_index_detail_compose(v) or v.kind == "rendered-content"
+
+
 def render_view_router(
     views: Tuple[ViewSpec, ...], schema_sha: str, views_sha: str,
     export_landing_views: "frozenset[str]" = frozenset(),
@@ -1044,11 +1056,32 @@ def render_view_empty_fragment(prose) -> str:
     return f'<p class="empty">{html.escape(prose.empty)}</p>\n'
 
 
-def _view_empty_block(v: ViewSpec, default_html: str, has_empty: bool) -> str:
-    """The model-compose no-rows line: include the untracked empty fragment when authored, else today's
-    literal (byte-identical when absent). The ``{% if not rows %}`` guard stays in the owned template."""
+def _view_empty_block(v: ViewSpec, default_html: str, has_empty: bool, guard: str = "not rows") -> str:
+    """A no-rows line: include the untracked empty fragment when authored, else today's literal
+    (byte-identical when absent). The structural ``{% if <guard> %}`` stays in the owned template — the
+    *words* live in the fragment. ``guard`` varies by archetype (``not rows`` for model-compose /
+    rendered-content list; ``not roots`` for the detail-compose pick-an-item index)."""
     if has_empty:
-        return '{% if not rows %}{% include "views/_' + v.module + '.empty.html" %}{% endif %}\n'
+        return '{% if ' + guard + ' %}{% include "views/_' + v.module + '.empty.html" %}{% endif %}\n'
+    return default_html
+
+
+def render_view_complete_fragment(prose) -> str:
+    """The untracked computed-panel all-signals-met fragment (``app/templates/views/_<name>.complete.html``).
+
+    No header ⇒ not drift-tracked. Holds only the escaped ``complete`` copy; the owned template keeps the
+    ``{% if data.nudges %}…{% else %}<include>{% endif %}`` structure, so editing the words only rewrites
+    this fragment ⇒ ``--check`` stays green. Mirrors ``render_view_empty_fragment`` (FR-QW-2)."""
+    import html
+
+    return f'<p class="complete">{html.escape(prose.complete)}</p>'
+
+
+def _view_complete_block(v: ViewSpec, default_html: str, has_complete: bool) -> str:
+    """The computed-panel all-signals-met line (the ``{% else %}`` arm of the nudges check): include the
+    untracked complete fragment when authored, else today's literal (byte-identical when absent)."""
+    if has_complete:
+        return '{% include "views/_' + v.module + '.complete.html" %}'
     return default_html
 
 
@@ -1199,7 +1232,7 @@ def render_import_result_template(v: ViewSpec, schema_sha: str, views_sha: str, 
 
 
 def render_view_index_template(
-    v: ViewSpec, schema_sha: str, views_sha: str, has_prose: bool = False
+    v: ViewSpec, schema_sha: str, views_sha: str, has_prose: bool = False, has_empty: bool = False
 ) -> str:
     """The bare-route pick-an-item index for a query-id detail-compose view (AR-1)."""
     head = (
@@ -1211,13 +1244,16 @@ def render_view_index_template(
         f"# views-sha256: {views_sha}\n"
         "#}\n"
     )
+    empty_default = (
+        "{% if not roots %}<p>Nothing here yet — add and confirm a "
+        f"{v.root} first.</p>{{% endif %}}\n"
+    )
     return head + (
         '{% extends "base.html" %}\n'
         "{% block content %}\n"
         + _view_title_block(v, has_prose)
-        + "{% if not roots %}<p>Nothing here yet — add and confirm a "
-        f"{v.root} first.</p>{{% endif %}}\n"
-        "<ul>\n"
+        + _view_empty_block(v, empty_default, has_empty, guard="not roots")
+        + "<ul>\n"
         "{% for r in roots %}"
         '<li><a href="{{ detail_route }}?id={{ r.id }}">'
         "{{ r.name or r.title or r.headline or r.id }}</a></li>\n"
@@ -1229,7 +1265,7 @@ def render_view_index_template(
 
 def render_view_template(
     v: ViewSpec, schema_sha: str, views_sha: str, schema=None, view_display=None,
-    has_prose: bool = False, has_empty: bool = False,
+    has_prose: bool = False, has_empty: bool = False, has_complete: bool = False,
     control_ids: "frozenset[str]" = frozenset(), help_ids: "frozenset[str]" = frozenset(),
 ) -> str:
     head = (
@@ -1275,9 +1311,11 @@ def render_view_template(
             "{% endif %}\n"
             "</article>\n"
             "{% else %}\n"
-            + _view_title_block(v, has_prose) +
-            "{% if not rows %}<p class=\"empty\">Nothing here yet.</p>{% endif %}\n"
-            "<ul>\n"
+            + _view_title_block(v, has_prose)
+            + _view_empty_block(
+                v, '{% if not rows %}<p class="empty">Nothing here yet.</p>{% endif %}\n', has_empty
+            )
+            + "<ul>\n"
             "{% for r in rows %}"
             '<li><a href="{{ detail_route }}?id={{ r.id }}"><strong>{{ r.kind }}</strong>'
             " — {{ r.preview }}</a></li>\n"
@@ -1327,7 +1365,9 @@ def render_view_template(
             + _view_title_block(v, has_prose) +
             '<p class="score">{{ (data.score * 100) | round | int }}%</p>\n'
             '{% if data.nudges %}<ul class="nudges">{% for n in data.nudges %}<li>{{ n }}</li>{% endfor %}</ul>\n'
-            '{% else %}<p class="complete">All signals met.</p>{% endif %}\n'
+            '{% else %}'
+            + _view_complete_block(v, '<p class="complete">All signals met.</p>', has_complete)
+            + '{% endif %}\n'
             "{% endblock %}\n"
         )
     elif v.kind == "import-flow":  # AR-4: upload form; restore demands the explicit confirm tick
@@ -1849,18 +1889,25 @@ def render_views(
     view_prose = parse_view_prose(
         view_prose_text, known_views=frozenset(v.module for v in views)
     )
-    # Surface guard (loud-fail rather than silently drop authored prose): `empty` only has a clean
-    # no-rows surface on a model-scoped detail-compose today. (A model-scoped export's title/intro DO
-    # have a surface now — the Phase-2 export landing page below; but an export has no row list, so
-    # `empty` on one still fails here.)
+    # Surface guard (loud-fail rather than silently drop authored prose): `empty` only renders where the
+    # owned template has a no-rows surface — a model-scoped detail-compose, the detail-compose pick-an-item
+    # index, or a rendered-content list (FR-QW-1). `complete` only renders on a computed-panel (its
+    # all-signals-met state). (A model-scoped export has title/intro via the landing page below, but no
+    # row list, so `empty` on one still fails here.)
     for v in views:
         p = view_prose.get(v.module)
         if p is None:
             continue
-        if p.empty and not _is_model_compose(v):
+        if p.empty and not _has_empty_surface(v):
             raise ValueError(
                 f"view_prose.yaml: view {v.module!r} uses `empty`, but only a model-scoped "
-                "detail-compose has a no-rows surface today (Phase 2 will add the others)"
+                "detail-compose, a detail-compose pick-an-item index, or a rendered-content list "
+                "has a no-rows surface"
+            )
+        if p.complete and v.kind != "computed-panel":
+            raise ValueError(
+                f"view_prose.yaml: view {v.module!r} uses `complete`, but only a computed-panel "
+                "has an all-signals-met surface"
             )
         if (p.success or p.error) and v.kind != "import-flow":
             raise ValueError(
@@ -1899,6 +1946,7 @@ def render_views(
         # only `empty`, leaving its title literal). Both default off ⇒ byte-identical when absent.
         has_chrome = bool(prose and (prose.title or prose.intro))
         has_empty = bool(prose and prose.empty)
+        has_complete = bool(prose and prose.complete)
         control_ids = frozenset(prose.controls) if (prose and prose.controls) else frozenset()
         help_ids = (
             frozenset(cid for cid, c in prose.controls.items() if c.get("help"))
@@ -1922,6 +1970,7 @@ def render_views(
         out.append((f"app/templates/views/{v.module}.html",
                     render_view_template(v, s_sha, v_sha, schema=schema, view_display=vd,
                                          has_prose=has_chrome, has_empty=has_empty,
+                                         has_complete=has_complete,
                                          control_ids=control_ids, help_ids=help_ids)))
         # Untracked fragments (no header ⇒ not owned files ⇒ skipped by drift/--check).
         if has_chrome:
@@ -1930,6 +1979,9 @@ def render_views(
         if has_empty:
             out.append((f"app/templates/views/_{v.module}.empty.html",
                         render_view_empty_fragment(prose)))
+        if has_complete:
+            out.append((f"app/templates/views/_{v.module}.complete.html",
+                        render_view_complete_fragment(prose)))
         if control_ids:
             out.extend(_control_fragments(v, prose))
         # Import-flow restore outcome copy: an untracked fragment (substituted at request time) + an
@@ -1949,7 +2001,7 @@ def render_views(
         if v.kind == "detail-compose" and "{" not in v.route:
             out.append((
                 f"app/templates/views/{v.module}_index.html",
-                render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome),
+                render_view_index_template(v, s_sha, v_sha, has_prose=has_chrome, has_empty=has_empty),
             ))
     # The router gains a bare HTML landing route only for export views that opt into a landing page
     # (title/intro OR control link-labels), and renders an HTML restore result only for import-flows

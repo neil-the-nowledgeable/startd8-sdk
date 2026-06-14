@@ -301,7 +301,20 @@ pass below.
 
 ### E. Functional quick wins (unblocked by the shipped fragment mechanism)
 
-- **FR-QW-1 — Extend `empty` to the other no-rows surfaces.** The untracked empty-fragment mechanism now
+> **✅ Group E increment 1 DONE (2026-06-13, `feat/view-prose-group-e`).** FR-QW-1 fully + the
+> `complete`-key slice of FR-QW-2 (the scope chosen at the talk-through). `empty` now renders on the
+> detail-compose **pick-an-item index** (`{% if not roots %}`) and the **rendered-content list**
+> (`{% if not rows %}`) in addition to model-compose, via a parameterized `_view_empty_block(guard=…)`
+> + a widened `_has_empty_surface()` guard (computed-panel/export still loud-fail). New **`complete`**
+> key → the computed-panel all-signals-met state (`render_view_complete_fragment` + `_view_complete_block`),
+> its own untracked `_<view>.complete.html` fragment. All byte-identical-when-absent (8 new tests + 88
+> view_codegen green). **Refinement vs the original cite:** the rendered-content has *two* surfaces — the
+> **list** no-rows ("Nothing here yet.") is what `empty` overrides; the **detail** no-body ("Nothing to
+> read yet.", a different semantic) stays literal and is **deferred** to a future `empty_body`-style key.
+> **Deferred (chosen scope):** the index-prompt literal (FR-QW-2 tail) and all of FR-QW-3
+> (validate-success is behavioral, not cosmetic; export per-control `help` slot exists but unwired).
+
+- **FR-QW-1 — Extend `empty` to the other no-rows surfaces. ✅ DONE.** The untracked empty-fragment mechanism now
   exists; extend `empty` from model-compose to the `detail-compose` index "pick-an-item" page
   (`renderers.py:967`) and the `rendered-content` list empty (`:1026`), with the per-archetype guard. *Verify:*
   `empty` on those archetypes renders via a fragment and stays byte-identical when absent; on an archetype
