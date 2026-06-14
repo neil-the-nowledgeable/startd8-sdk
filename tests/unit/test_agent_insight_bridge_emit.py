@@ -134,6 +134,20 @@ def test_summary_and_evidence_are_redacted(bridge):
     assert "/Users/neil/" not in call["evidence"][0].ref
 
 
+def test_emit_decision_carries_tokens(bridge):
+    """T2.2/FR-18: token/cost reach the emitter as gen_ai.usage.* for cost-per-decision."""
+    ok = bridge.emit_decision(
+        "Cut Cursor from Round 1", 0.95,
+        input_tokens=1200, output_tokens=340, model="claude-opus-4-8", provider="anthropic",
+    )
+    assert ok is True
+    call = bridge._emitter.calls[-1]
+    assert call["input_tokens"] == 1200
+    assert call["output_tokens"] == 340
+    assert call["model"] == "claude-opus-4-8"
+    assert call["provider"] == "anthropic"
+
+
 def test_disabled_bridge_returns_false_without_emitter():
     """No contextcore.agent → graceful mock, no raise."""
     b = AgentInsightBridge.__new__(AgentInsightBridge)

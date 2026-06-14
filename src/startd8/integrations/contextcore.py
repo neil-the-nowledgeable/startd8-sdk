@@ -1352,11 +1352,17 @@ class AgentInsightBridge:
         evidence: Optional[List[Dict[str, Any]]] = None,
         audience: Optional[str] = None,
         supersedes: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
     ) -> bool:
         """Emit an agent decision as an insight (``insight.type=decision``).
 
         Args (legacy signature preserved; ``evidence``/``audience``/``supersedes`` added per
-        FR-27b/FR-15/FR-16):
+        FR-27b/FR-15/FR-16; ``input_tokens``/``output_tokens``/``model``/``provider`` added per
+        FR-18/R2-F4 — REQUIRED on the decision path feeding the FR-22 cost-per-decision panel,
+        mapped by ContextCore to ``gen_ai.usage.*``):
             summary: Brief description of the decision made
             confidence: Confidence score (0.0-1.0)
             context: Additional context dictionary (folded into rationale)
@@ -1366,6 +1372,7 @@ class AgentInsightBridge:
             evidence: List of ``{type, ref, description?}`` supporting refs
             audience: ``"agent"`` | ``"human"`` | ``"both"``
             supersedes: ID of an insight this decision overrides
+            input_tokens/output_tokens/model/provider: token/cost attribution for the agent view
         """
         full_context = dict(context or {})
         if alternatives_considered:
@@ -1377,6 +1384,7 @@ class AgentInsightBridge:
         return self._emit(
             "decision", summary, confidence,
             rationale=rationale, evidence=evidence, audience=audience, supersedes=supersedes,
+            input_tokens=input_tokens, output_tokens=output_tokens, model=model, provider=provider,
         )
 
     def emit_lesson(
